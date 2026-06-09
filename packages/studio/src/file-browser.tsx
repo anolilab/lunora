@@ -4,11 +4,13 @@ import type { ChangeEvent, ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Button } from "./components/ui/button";
+import { Checkbox } from "./components/ui/checkbox";
 import { EmptyState } from "./components/ui/empty-state";
 import { Input } from "./components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
 import { ConfirmButton } from "./confirm-button";
 import { FileGallery } from "./file-gallery";
+import { SelectionBar } from "./grid-features";
 import type { TFunction } from "./i18n-context";
 import { useT } from "./i18n-context";
 import { errorMessage, fireAndForget, formatBytes } from "./internal";
@@ -134,7 +136,7 @@ const FolderRow = ({ name, onEnter }: FolderRowProps): ReactElement => {
 
     return (
         <TableRow>
-            <TableCell colSpan={4}>
+            <TableCell colSpan={5}>
                 <button className="inline-flex items-center gap-2 font-mono text-xs outline-none hover:text-foreground focus-visible:text-foreground" data-testid="fb-folder" onClick={enter} type="button">
                     <svg aria-hidden="true" className="size-4 text-muted-foreground" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.6} viewBox="0 0 24 24">
                         <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
@@ -172,8 +174,10 @@ interface FileRowProps {
     readonly object: StorageObject;
     readonly onCopy: (key: string) => void;
     readonly onDelete: (key: string) => void;
+    readonly onToggleSelect: (key: string) => void;
     /** Current folder prefix, stripped from the displayed name (the full key still drives actions). */
     readonly prefix: string;
+    readonly selected: boolean;
     readonly t: TFunction;
 }
 
@@ -183,7 +187,7 @@ interface FileRowProps {
  * `.map(...)` (react-perf). Shows the name relative to the current folder; the
  * full key still scopes the action testids and the copy/delete calls.
  */
-const FileRow = ({ busy, copiedKey, object, onCopy, onDelete, prefix, t }: FileRowProps): ReactElement => {
+const FileRow = ({ busy, copiedKey, object, onCopy, onDelete, onToggleSelect, prefix, selected, t }: FileRowProps): ReactElement => {
     const copy = useCallback((): void => {
         onCopy(object.key);
     }, [onCopy, object.key]);
@@ -192,8 +196,15 @@ const FileRow = ({ busy, copiedKey, object, onCopy, onDelete, prefix, t }: FileR
         onDelete(object.key);
     }, [onDelete, object.key]);
 
+    const toggle = useCallback((): void => {
+        onToggleSelect(object.key);
+    }, [onToggleSelect, object.key]);
+
     return (
         <TableRow data-testid="fb-row">
+            <TableCell className="w-8">
+                <Checkbox aria-label={t("Select row")} checked={selected} data-testid={`storage-select-${object.key}`} onCheckedChange={toggle} />
+            </TableCell>
             <TableCell className="font-mono text-xs">{object.key.slice(prefix.length)}</TableCell>
             <TableCell className="tabular-nums text-muted-foreground">{formatBytes(object.size)}</TableCell>
             <TableCell>{object.httpMetadata?.contentType ?? ""}</TableCell>
@@ -237,6 +248,8 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
     // Client-side sort over the loaded page.
     const [sortKey, setSortKey] = useState<string>("name");
     const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+    // Checkbox selection (object keys) for bulk delete.
+    const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
     const [objects, setObjects] = useState<StorageObject[] | null>(null);
     const [error, setError] = useState<null | string>(null);
     const [busy, setBusy] = useState<boolean>(false);
@@ -289,6 +302,7 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
     const navigate = useCallback(
         (target: string): void => {
             setPrefix(target);
+            setSelected(new Set());
             fireAndForget(list(target, undefined, false));
         },
         [list],
@@ -346,6 +360,55 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
     const onExpiryChange = useCallback((event: ChangeEvent<HTMLSelectElement>): void => {
         setExpiry(Number.parseInt(event.target.value, 10));
     }, []);
+
+    // ── Checkbox selection → bulk delete ─────────────────────────────────────
+    const toggleSelect = useCallback((key: string): void => {
+        setSelected((current) => {
+            const next = new Set(current);
+
+            if (next.has(key)) {
+                next.delete(key);
+            } else {
+                next.add(key);
+            }
+
+            return next;
+        });
+    }, []);
+
+    const clearSelection = useCallback((): void => {
+        setSelected(new Set());
+    }, []);
+
+    // Select-all toggles every loaded file; folders aren't selectable.
+    const allSelected = sortedFiles.length > 0 && sortedFiles.every((object) => selected.has(object.key));
+    const toggleSelectAll = useCallback((): void => {
+        setSelected((current) => (sortedFiles.every((object) => current.has(object.key)) ? new Set() : new Set(sortedFiles.map((object) => object.key))));
+    }, [sortedFiles]);
+
+    // Delete every selected object (one schema-aware call each) then reload + clear.
+    const bulkDelete = useCallback((): void => {
+        setError(null);
+        setBusy(true);
+
+        fireAndForget(
+            (async (): Promise<void> => {
+                try {
+                    for (const key of selected) {
+                        // eslint-disable-next-line no-await-in-loop -- one delete per selected object; sequential so a failure pins the offending key
+                        await client.deleteStorageObject(key);
+                    }
+
+                    await list(prefix, undefined, false);
+                    setSelected(new Set());
+                } catch (error_) {
+                    setError(errorMessage(error_));
+                } finally {
+                    setBusy(false);
+                }
+            })(),
+        );
+    }, [client, list, prefix, selected]);
 
     const onCopy = useCallback(
         (key: string): void => {
@@ -554,6 +617,8 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
                 </div>
             )}
 
+            {selected.size > 0 && <SelectionBar count={selected.size} editable onClear={clearSelection} onDelete={bulkDelete} />}
+
             {error !== null && (
                 <p className="text-sm text-destructive" data-testid="storage-error" role="alert">
                     {error}
@@ -587,6 +652,15 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
                     <Table data-testid="fb-table">
                         <TableHeader>
                             <TableRow>
+                                <TableHead className="w-8">
+                                    <Checkbox
+                                        aria-label={t("Select all rows")}
+                                        checked={allSelected}
+                                        data-testid="storage-select-all"
+                                        indeterminate={selected.size > 0 && !allSelected}
+                                        onCheckedChange={toggleSelectAll}
+                                    />
+                                </TableHead>
                                 <TableHead>{t("key")}</TableHead>
                                 <TableHead>{t("size")}</TableHead>
                                 <TableHead>{t("content-type")}</TableHead>
@@ -598,7 +672,18 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
                                 <FolderRow key={folder} name={folder} onEnter={enterFolder} />
                             ))}
                             {sortedFiles.map((object) => (
-                                <FileRow busy={busy} copiedKey={copiedKey} key={object.key} object={object} onCopy={onCopy} onDelete={onDelete} prefix={prefix} t={t} />
+                                <FileRow
+                                    busy={busy}
+                                    copiedKey={copiedKey}
+                                    key={object.key}
+                                    object={object}
+                                    onCopy={onCopy}
+                                    onDelete={onDelete}
+                                    onToggleSelect={toggleSelect}
+                                    prefix={prefix}
+                                    selected={selected.has(object.key)}
+                                    t={t}
+                                />
                             ))}
                         </TableBody>
                     </Table>
@@ -614,8 +699,10 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
                     onCopy={onCopy}
                     onDelete={onDelete}
                     onEnterFolder={enterFolder}
+                    onToggleSelect={toggleSelect}
                     prefix={prefix}
                     resolveUrl={resolveUrl}
+                    selected={selected}
                     size={thumbSize}
                     t={t}
                 />

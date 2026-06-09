@@ -3,6 +3,7 @@ import type { CSSProperties, ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 
 import { Button } from "./components/ui/button";
+import { Checkbox } from "./components/ui/checkbox";
 import { ConfirmButton } from "./confirm-button";
 import type { TFunction } from "./i18n-context";
 import { fireAndForget, formatBytes } from "./internal";
@@ -87,17 +88,19 @@ interface GalleryTileProps {
     readonly object: StorageObject;
     readonly onCopy: (key: string) => void;
     readonly onDelete: (key: string) => void;
+    readonly onToggleSelect: (key: string) => void;
     readonly prefix: string;
     readonly resolveUrl: (key: string) => Promise<string>;
+    readonly selected: boolean;
     readonly t: TFunction;
 }
 
 /**
- * One gallery tile: a thumbnail, the name relative to the current folder, its
- * size, and copy/delete actions. Each tile binds its own handlers (react-perf),
- * mirroring the list view's file row.
+ * One gallery tile: a thumbnail (with a selection checkbox overlay), the name
+ * relative to the current folder, its size, and copy/delete actions. Each tile
+ * binds its own handlers (react-perf), mirroring the list view's file row.
  */
-const GalleryTile = ({ busy, copiedKey, object, onCopy, onDelete, prefix, resolveUrl, t }: GalleryTileProps): ReactElement => {
+const GalleryTile = ({ busy, copiedKey, object, onCopy, onDelete, onToggleSelect, prefix, resolveUrl, selected, t }: GalleryTileProps): ReactElement => {
     const copy = useCallback((): void => {
         onCopy(object.key);
     }, [onCopy, object.key]);
@@ -106,11 +109,20 @@ const GalleryTile = ({ busy, copiedKey, object, onCopy, onDelete, prefix, resolv
         onDelete(object.key);
     }, [onDelete, object.key]);
 
+    const toggle = useCallback((): void => {
+        onToggleSelect(object.key);
+    }, [onToggleSelect, object.key]);
+
     const name = object.key.slice(prefix.length);
 
     return (
         <div className="flex flex-col gap-1.5" data-testid="fb-tile">
-            <Thumbnail object={object} resolveUrl={resolveUrl} />
+            <div className="relative">
+                <Thumbnail object={object} resolveUrl={resolveUrl} />
+                <span className="absolute left-1.5 top-1.5 rounded bg-background/80 p-0.5">
+                    <Checkbox aria-label={t("Select row")} checked={selected} data-testid={`storage-select-${object.key}`} onCheckedChange={toggle} />
+                </span>
+            </div>
             <div className="min-w-0">
                 <p className="truncate font-mono text-xs" title={name}>
                     {name}
@@ -157,8 +169,10 @@ interface FileGalleryProps {
     readonly onCopy: (key: string) => void;
     readonly onDelete: (key: string) => void;
     readonly onEnterFolder: (name: string) => void;
+    readonly onToggleSelect: (key: string) => void;
     readonly prefix: string;
     readonly resolveUrl: (key: string) => Promise<string>;
+    readonly selected: ReadonlySet<string>;
     /** Tile column width in px — the slider resizes thumbnails live via the grid template. */
     readonly size: number;
     readonly t: TFunction;
@@ -170,7 +184,7 @@ interface FileGalleryProps {
  * the size control re-flows and resizes every thumbnail on the fly (pure CSS — no
  * re-fetch).
  */
-const FileGallery = ({ busy, copiedKey, files, folders, onCopy, onDelete, onEnterFolder, prefix, resolveUrl, size, t }: FileGalleryProps): ReactElement => {
+const FileGallery = ({ busy, copiedKey, files, folders, onCopy, onDelete, onEnterFolder, onToggleSelect, prefix, resolveUrl, selected, size, t }: FileGalleryProps): ReactElement => {
     // The only dynamic style: the column width tracks the size slider.
     // eslint-disable-next-line react-perf/jsx-no-new-object-as-prop -- column width is intrinsically dynamic (the size slider)
     const gridStyle: CSSProperties = { gridTemplateColumns: `repeat(auto-fill, minmax(${size.toString()}px, 1fr))` };
@@ -188,8 +202,10 @@ const FileGallery = ({ busy, copiedKey, files, folders, onCopy, onDelete, onEnte
                     object={object}
                     onCopy={onCopy}
                     onDelete={onDelete}
+                    onToggleSelect={onToggleSelect}
                     prefix={prefix}
                     resolveUrl={resolveUrl}
+                    selected={selected.has(object.key)}
                     t={t}
                 />
             ))}

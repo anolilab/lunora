@@ -179,6 +179,35 @@ describe("fileBrowser", () => {
         expect(screen.getAllByTestId("fb-tile")).toHaveLength(2);
     });
 
+    it("bulk-deletes the selected files", async () => {
+        expect.assertions(2);
+
+        const mock = createClient();
+
+        render(renderBrowser(mock));
+
+        await screen.findByTestId("fb-table");
+
+        // Select every loaded file via the header checkbox.
+        fireEvent.click(screen.getByTestId("storage-select-all"));
+
+        const countBar = await screen.findByTestId("grid-selection-count");
+
+        expect(countBar.textContent).toContain("2 selected");
+
+        // Confirm the bulk delete → one delete per selected key (a.png, b.txt).
+        fireEvent.click(screen.getByTestId("grid-selection-delete"));
+        fireEvent.click(screen.getByTestId("grid-selection-delete-confirm"));
+
+        await waitFor(() => {
+            if (mock.deleteStorageObject.mock.calls.length < 2) {
+                throw new Error("not all deleted yet");
+            }
+        });
+
+        expect(mock.deleteStorageObject.mock.calls.length).toBe(2);
+    });
+
     describe("mutations", () => {
         beforeEach(() => {
             Object.defineProperty(globalThis.navigator, "clipboard", {
