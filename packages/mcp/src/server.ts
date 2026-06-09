@@ -9,7 +9,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 
-import { callTool, TOOL_DEFINITIONS } from "./tools.js";
+import { callTool, TOOL_DEFINITIONS } from "./tools";
 
 /**
  * Resolve the package's real version so the MCP `initialize` handshake reports

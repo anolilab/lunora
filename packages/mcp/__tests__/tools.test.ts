@@ -1,7 +1,7 @@
 import type { CirrusClient } from "@cirrus/client";
 import { describe, expect, it, vi } from "vitest";
 
-import { callTool, TOOL_DEFINITIONS } from "../src/tools.js";
+import { callTool, TOOL_DEFINITIONS } from "../src/tools";
 
 /** Minimal mock exposing only the methods the tools touch. */
 const mockClient = (): {

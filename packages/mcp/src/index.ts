@@ -11,7 +11,7 @@
  * `CIRRUS_ADMIN_TOKEN`) for the stdio transport, or build a server
  * programmatically with `createCirrusMcpServer` and connect any transport.
  */
-export type { CirrusMcpServerOptions } from "./server.js";
-export { connectStdio, createCirrusMcpServer } from "./server.js";
-export type { ToolDefinition, ToolInputSchema, ToolResult } from "./tools.js";
-export { callTool, TOOL_DEFINITIONS } from "./tools.js";
+export type { CirrusMcpServerOptions } from "./server";
+export { connectStdio, createCirrusMcpServer } from "./server";
+export type { ToolDefinition, ToolInputSchema, ToolResult } from "./tools";
+export { callTool, TOOL_DEFINITIONS } from "./tools";

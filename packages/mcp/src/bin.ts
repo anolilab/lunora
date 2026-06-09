@@ -1,4 +1,4 @@
-import { connectStdio } from "./server.js";
+import { connectStdio } from "./server";
 
 /**
  * `cirrus-mcp` entry point. MCP clients spawn this binary and speak JSON-RPC

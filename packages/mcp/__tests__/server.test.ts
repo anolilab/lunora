@@ -3,7 +3,7 @@ import type { CallToolResult, ListToolsResult } from "@modelcontextprotocol/sdk/
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createCirrusMcpServer } from "../src/server.js";
+import { createCirrusMcpServer } from "../src/server";
 
 /** Minimal mock exposing only the methods the tools touch. */
 const mockClient = (): {
