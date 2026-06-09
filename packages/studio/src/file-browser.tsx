@@ -159,6 +159,22 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
         [client],
     );
 
+    // Clear the "Copied" indicator a couple of seconds after a copy, so it reads as
+    // transient feedback rather than a sticky per-row state.
+    useEffect(() => {
+        if (copiedKey === null) {
+            return undefined;
+        }
+
+        const timer = globalThis.setTimeout(() => {
+            setCopiedKey(null);
+        }, 2000);
+
+        return () => {
+            globalThis.clearTimeout(timer);
+        };
+    }, [copiedKey]);
+
     const onDelete = useCallback(
         (key: string): void => {
             setError(null);

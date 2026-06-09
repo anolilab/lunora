@@ -509,33 +509,49 @@ const filterValueText = (value: unknown): string => {
 };
 
 /**
- * Compile one {@link FilterClause} into a parameterised SQL conjunct, or
- * `undefined` to skip it (an unknown column on a non-doc table). The compared
- * expression is the physical column when `column` is one of the table's physical
- * columns, otherwise a `json_extract` of the `__doc__` blob with the JSON path
- * bound as a parameter. The value is always bound, so a clause can never inject SQL.
+ * Resolve a displayed column to its SQL expression plus any bound path params —
+ * the single home for the injection-safe allowlist + bound-path discipline shared
+ * by {@link buildFilterClause} and {@link buildOrderBy}. A physical/meta column
+ * compiles to its quoted identifier (no params); a `__doc__` field to
+ * `json_extract(__doc__, ?)` with the JSON path (`$."field"`) **bound**, never
+ * interpolated. Returns `undefined` for an unknown column on a non-doc table.
  */
-const buildFilterClause = (clause: FilterClause, physicalColumns: string[]): { params: unknown[]; sql: string } | undefined => {
-    const isPhysical = physicalColumns.includes(clause.column);
+const resolveColumnExpression = (column: string, physicalColumns: string[]): undefined | { expression: string; params: unknown[] } => {
+    const isPhysical = physicalColumns.includes(column);
     const isDocumentStored = physicalColumns.includes(DOC_COLUMN);
 
     if (!isPhysical && !isDocumentStored) {
         return undefined;
     }
 
-    // Physical/meta column → quoted identifier; doc field → json_extract with the
-    // path bound (`$."field"`), never interpolated.
-    const columnExpression = isPhysical ? quoteIdentifier(clause.column) : `json_extract(${quoteIdentifier(DOC_COLUMN)}, ?)`;
-    const pathParameters: unknown[] = isPhysical ? [] : [`$."${clause.column.replaceAll('"', '""')}"`];
+    return isPhysical
+        ? { expression: quoteIdentifier(column), params: [] }
+        : { expression: `json_extract(${quoteIdentifier(DOC_COLUMN)}, ?)`, params: [`$."${column.replaceAll('"', '""')}"`] };
+};
+
+/**
+ * Compile one {@link FilterClause} into a parameterised SQL conjunct, or
+ * `undefined` to skip it (an unknown column on a non-doc table). The compared
+ * expression + bound path params come from {@link resolveColumnExpression}; the
+ * value is always bound too, so a clause can never inject SQL.
+ */
+const buildFilterClause = (clause: FilterClause, physicalColumns: string[]): { params: unknown[]; sql: string } | undefined => {
+    const resolved = resolveColumnExpression(clause.column, physicalColumns);
+
+    if (resolved === undefined) {
+        return undefined;
+    }
+
+    const { expression, params: pathParameters } = resolved;
 
     if (clause.operator === "contains") {
         return {
             params: [...pathParameters, `%${escapeLike(filterValueText(clause.value))}%`],
-            sql: String.raw`CAST(${columnExpression} AS TEXT) LIKE ? ESCAPE '\'`,
+            sql: String.raw`CAST(${expression} AS TEXT) LIKE ? ESCAPE '\'`,
         };
     }
 
-    return { params: [...pathParameters, clause.value], sql: `${columnExpression} ${FILTER_SQL_OPERATOR[clause.operator]} ?` };
+    return { params: [...pathParameters, clause.value], sql: `${expression} ${FILTER_SQL_OPERATOR[clause.operator]} ?` };
 };
 
 /**
@@ -586,18 +602,15 @@ const buildOrderBy = (orderBy: OrderByClause | undefined, physicalColumns: strin
         return undefined;
     }
 
-    const isPhysical = physicalColumns.includes(orderBy.column);
-    const isDocumentStored = physicalColumns.includes(DOC_COLUMN);
+    const resolved = resolveColumnExpression(orderBy.column, physicalColumns);
 
-    if (!isPhysical && !isDocumentStored) {
+    if (resolved === undefined) {
         return undefined;
     }
 
-    const columnExpression = isPhysical ? quoteIdentifier(orderBy.column) : `json_extract(${quoteIdentifier(DOC_COLUMN)}, ?)`;
-    const params: unknown[] = isPhysical ? [] : [`$."${orderBy.column.replaceAll('"', '""')}"`];
     const keyword = orderBy.direction === "desc" ? "DESC" : "ASC";
 
-    return { params, sql: `${columnExpression} ${keyword}` };
+    return { params: resolved.params, sql: `${resolved.expression} ${keyword}` };
 };
 
 /**

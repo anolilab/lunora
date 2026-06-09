@@ -2,15 +2,15 @@ import { useCirrus } from "@cirrus/react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 
-import type { SubscriptionConnection, SubscriptionInfo, SubscriptionsResult } from "./admin.js";
-import { ADMIN_FUNCTIONS } from "./admin.js";
-import { Badge } from "./components/ui/badge.js";
-import { Button } from "./components/ui/button.js";
-import { EmptyState } from "./components/ui/empty-state.js";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table.js";
-import { useT } from "./i18n-context.js";
-import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal.js";
-import { ShardInput } from "./shard-input.js";
+import type { SubscriptionConnection, SubscriptionInfo, SubscriptionsResult } from "./admin";
+import { ADMIN_FUNCTIONS } from "./admin";
+import { Badge } from "./components/ui/badge";
+import { Button } from "./components/ui/button";
+import { EmptyState } from "./components/ui/empty-state";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
+import { useT } from "./i18n-context";
+import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal";
+import { ShardInput } from "./shard-input";
 
 interface SubscriptionsPanelProps {
     /** Shard key the panel reports on. Defaults to the root shard. */

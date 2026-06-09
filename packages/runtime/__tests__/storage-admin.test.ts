@@ -205,6 +205,30 @@ describe("createWorker — storage admin upload", () => {
         expect(key).toBe("docs/readme.txt");
         expect({ bytes: new TextDecoder().decode(body), contentType: uploadOptions.contentType }).toEqual({ bytes: "hello", contentType: "text/plain" });
     });
+
+    it("rejects an over-budget upload with 413 before invoking the uploader", async () => {
+        expect.assertions(2);
+
+        const storageUpload = vi.fn<StorageUploadFunction>(async (key: string) => {
+            return { key };
+        });
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageUpload });
+
+        // One byte past the 1 MiB MAX_BODY_BYTES cap.
+        const oversized = "x".repeat(1_048_577);
+        const response = await worker.fetch(
+            new Request("https://app.example/_cirrus/admin/storage?key=docs/big.bin", {
+                body: oversized,
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/octet-stream" },
+                method: "PUT",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(413);
+        expect(storageUpload).not.toHaveBeenCalled();
+    });
 });
 
 describe("createWorker — storage admin signed URL", () => {
