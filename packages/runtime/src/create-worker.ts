@@ -1,3 +1,5 @@
+import type { AuthAdmin, AuthIntrospector } from "./auth-admin-routes";
+import { buildAuthAdminRoutes } from "./auth-admin-routes";
 import type { ConnectorChange, ConnectorSyncPage } from "./connector-format";
 import type { FunctionArgumentDescriptor } from "./describe-args";
 import { describeArguments } from "./describe-args";
@@ -210,48 +212,10 @@ interface GlobalIntrospector {
     readTablePage: (options: { limit?: number; offset?: number; table: string }) => Promise<GlobalTablePage>;
 }
 
-/** A timestamp as better-auth stores it: epoch-ms, an ISO string, or absent. */
-type AuthTimestamp = null | number | string;
-
-/** One authenticated user, as the auth browser surfaces it. Mirrors better-auth's `user` row. */
-interface AuthUser {
-    [key: string]: unknown;
-    createdAt?: AuthTimestamp;
-    email?: null | string;
-    emailVerified?: boolean | null;
-    id: string;
-    image?: null | string;
-    name?: null | string;
-}
-
-/** One auth session, as the auth browser surfaces it. Mirrors better-auth's `session` row. */
-interface AuthSession {
-    [key: string]: unknown;
-    createdAt?: AuthTimestamp;
-    expiresAt?: AuthTimestamp;
-    id: string;
-    ipAddress?: null | string;
-    userAgent?: null | string;
-    userId: string;
-}
-
-/** A page of users or sessions plus the total count, for paginated browsing. */
-interface AuthPage<T> {
-    rows: T[];
-    total: number;
-}
-
-/**
- * Read-only introspector for the auth store's users and sessions, backing the
- * studio's users panel via `GET /_cirrus/admin/auth/users` and
- * `/_cirrus/admin/auth/sessions`. The host wires this to better-auth's tables;
- * the runtime stays free of a hard dependency on `@cirrus/auth`. Omit it and
- * those endpoints respond `AUTH_NOT_CONFIGURED`.
- */
-interface AuthIntrospector {
-    listSessions: (options: { limit?: number; offset?: number; userId?: string }) => Promise<AuthPage<AuthSession>>;
-    listUsers: (options: { limit?: number; offset?: number }) => Promise<AuthPage<AuthUser>>;
-}
+// The auth-admin contract (`AuthAdmin`, the wire-shape rows, capabilities) and
+// its `/_cirrus/admin/auth/*` routes live in `./auth-admin-routes`, keeping the
+// whole user-management plane out of this file. Types are imported at the top
+// and re-exported from the module's export block below.
 
 /**
  * Cron controller handed to the worker's `scheduled()` entry by the Workers
@@ -356,6 +320,16 @@ interface WorkerOptions {
     applyGlobals?: GlobalCdcApplyFunction;
 
     /**
+     * The auth user-management plane backing the studio's users dashboard:
+     * browse via `GET /_cirrus/admin/auth/users` + `/sessions`, and (when the
+     * implementation provides the optional mutations) create/ban/role/revoke/
+     * delete/impersonate via the matching admin-gated `POST /_cirrus/admin/auth/*`
+     * routes. Wire it with `@cirrus/auth`'s `createAuthAdmin(auth)`. Omit it and
+     * every `/auth/*` endpoint responds `AUTH_NOT_CONFIGURED`.
+     */
+    authAdmin?: AuthAdmin;
+
+    /**
      * Base path the auth routes are mounted under (default `/api/auth`). Used
      * to classify which inbound paths are auth ATTEMPTS for the app-level
      * auth-failure SLO signal (PLAN3 §2.3) — see {@link WorkerOptions.authHandler}.
@@ -385,11 +359,11 @@ interface WorkerOptions {
     authHandler?: (request: Request) => Promise<Response | undefined>;
 
     /**
-     * Read-only introspector for the auth store's users and sessions, backing
-     * the studio's users panel via `GET /_cirrus/admin/auth/users` and
-     * `/_cirrus/admin/auth/sessions`. Omit it and those endpoints respond
-     * `AUTH_NOT_CONFIGURED`.
+     * @deprecated Use {@link WorkerOptions.authAdmin} (an {@link AuthAdmin}),
+     * which also lights up the user-management mutation endpoints. Still honored
+     * as a read-only fallback for the browse endpoints.
      */
+
     authIntrospector?: AuthIntrospector;
 
     /**
@@ -703,8 +677,7 @@ const STORAGE_PATH = "/_cirrus/admin/storage";
 const FUNCTIONS_PATH = "/_cirrus/admin/functions";
 const GLOBAL_TABLES_PATH = "/_cirrus/admin/global/tables";
 const GLOBAL_TABLE_PATH = "/_cirrus/admin/global/table";
-const AUTH_USERS_PATH = "/_cirrus/admin/auth/users";
-const AUTH_SESSIONS_PATH = "/_cirrus/admin/auth/sessions";
+// `/_cirrus/admin/auth/*` paths + handlers live in `./auth-admin-routes`.
 
 /**
  * Admin RPCs the migration endpoint is allowed to orchestrate. Spelled out
@@ -2493,35 +2466,6 @@ const createWorker = (
         return Response.json(page, { headers: { "content-type": "application/json" }, status: 200 });
     };
 
-    const handleAuthUsers = async (request: Request): Promise<Response> => {
-        if (request.method !== "GET") {
-            throw new CirrusError("Auth-users endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        const introspector = requireAdminOption(request, options.authIntrospector, {
-            code: "AUTH_NOT_CONFIGURED",
-            message: "auth endpoints require an `authIntrospector` on the worker",
-        });
-
-        return Response.json(await introspector.listUsers(parsePaging(request)), { headers: { "content-type": "application/json" }, status: 200 });
-    };
-
-    const handleAuthSessions = async (request: Request): Promise<Response> => {
-        if (request.method !== "GET") {
-            throw new CirrusError("Auth-sessions endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        const introspector = requireAdminOption(request, options.authIntrospector, {
-            code: "AUTH_NOT_CONFIGURED",
-            message: "auth endpoints require an `authIntrospector` on the worker",
-        });
-
-        const userId = queryParameter(new URL(request.url), "userId");
-        const page = await introspector.listSessions({ ...parsePaging(request), userId });
-
-        return Response.json(page, { headers: { "content-type": "application/json" }, status: 200 });
-    };
-
     const buildHttpActionContext = async (request: Request, env: unknown): Promise<HttpActionContext> => {
         const { claims, headers, userId } = await resolveForwardContext(request, env, options.resolveIdentity);
 
@@ -3053,8 +2997,16 @@ const createWorker = (
         [FUNCTIONS_PATH]: (request) => handleFunctionsList(request),
         [GLOBAL_TABLES_PATH]: (request) => handleGlobalTables(request),
         [GLOBAL_TABLE_PATH]: (request) => handleGlobalTablePage(request),
-        [AUTH_USERS_PATH]: (request) => handleAuthUsers(request),
-        [AUTH_SESSIONS_PATH]: (request) => handleAuthSessions(request),
+        // `/_cirrus/admin/auth/*` — the whole user-management plane, one route per
+        // `AuthAdmin` op, dispatched by the descriptor table in `./auth-admin-routes`.
+        ...buildAuthAdminRoutes({
+            assertAdmin: assertAdminAuthorized,
+            // eslint-disable-next-line sonarjs/deprecation -- `authIntrospector` is the intentional read-only fallback
+            getAuthAdmin: () => options.authAdmin ?? options.authIntrospector,
+            parsePaging,
+            queryParameter,
+            readJsonBody: readJsonBodyWithLimit,
+        }),
     };
 
     const handle = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<Response> => {
@@ -3139,11 +3091,6 @@ const defineRpcEnvelope = (envelope: RpcEnvelope): RpcEnvelope => envelope;
 export { createWorker, defineRpcEnvelope };
 export type {
     AdminTableResolver,
-    AuthIntrospector,
-    AuthPage,
-    AuthSession,
-    AuthTimestamp,
-    AuthUser,
     BackupManifest,
     BackupStore,
     CronHandler,
@@ -3170,3 +3117,15 @@ export type {
     StorageObject,
     WorkerOptions,
 };
+
+export type {
+    AuthAdmin,
+    AuthCapabilities,
+    AuthImpersonation,
+    AuthIntrospector,
+    AuthPage,
+    AuthSession,
+    AuthTimestamp,
+    AuthUser,
+    ListAuthUsersOptions,
+} from "./auth-admin-routes";

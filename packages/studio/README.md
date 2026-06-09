@@ -250,22 +250,31 @@ createWorker({
 });
 ```
 
-### Users & sessions
+### Users, organizations & sessions
 
-`UsersPanel` reads better-auth's `user` / `session` tables (read-only) via the
-client's `listAuthUsers()` / `listAuthSessions()`, hitting the admin-gated
-`/_cirrus/admin/auth/*` endpoints. Build an `authIntrospector` that selects only
-non-sensitive identity columns — never password hashes or tokens:
+The **Users** dashboard and **Organizations** section drive the admin-gated
+`/_cirrus/admin/auth/*` endpoints (browse + create/ban/role/revoke/impersonate/
+delete, plus linked accounts, 2FA, passkeys, and organizations). Wire them with
+`@cirrus/auth`'s `createAuthAdmin(auth)` — a single line that replaces the old
+hand-rolled SQL introspector:
 
 ```ts
+import { createAuthAdmin } from "@cirrus/auth";
+
 createWorker({
     shardDO: env.SHARD,
     adminToken: env.CIRRUS_ADMIN_TOKEN,
-    authIntrospector: {
-        // SELECT id, name, email, emailVerified, createdAt FROM "user" …
-        listUsers: (options) => readUsers(options),
-        // SELECT id, userId, expiresAt, ipAddress, userAgent FROM "session" …
-        listSessions: (options) => readSessions(options),
-    },
+    // Backed by better-auth's adapter; every call is gated by CIRRUS_ADMIN_TOKEN.
+    // Password hashes and session/OAuth tokens are never returned.
+    authAdmin: createAuthAdmin(auth),
 });
 ```
+
+The dashboard is **capability-driven**: it calls `GET /_cirrus/admin/auth/capabilities`
+(derived from the better-auth plugins you enabled) and renders only the surfaces
+that apply — so the Organizations section, 2FA, and passkey panels appear only
+when the `organization()`, `twoFactor()`, and passkey plugins are configured.
+Pass `createAuthAdmin(auth, { features: { … } })` to force a surface off.
+
+> The former read-only `authIntrospector` option still works as a fallback
+> (browse-only), but is deprecated in favour of `authAdmin`.

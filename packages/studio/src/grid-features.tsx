@@ -1,5 +1,5 @@
 import type { Column, Table } from "@tanstack/react-table";
-import type { CSSProperties, KeyboardEvent, MouseEvent, ReactElement } from "react";
+import type { ReactElement } from "react";
 import { useCallback, useState } from "react";
 
 import {
@@ -11,6 +11,7 @@ import {
     DropdownMenuLabel,
     DropdownMenuTrigger,
 } from "./components/ui/dropdown-menu";
+import { ModalShell } from "./components/ui/modal-shell";
 import { ConfirmButton } from "./confirm-button";
 import { useT } from "./i18n-context";
 import { fireAndForget, formatCell } from "./internal";
@@ -215,27 +216,11 @@ const SelectionBar = ({
 
 // ── Cell detail (expand + copy) ─────────────────────────────────────────────────
 
-const OVERLAY_STYLE: CSSProperties = {
-    alignItems: "center",
-    background: "rgba(0,0,0,0.2)",
-    bottom: 0,
-    display: "flex",
-    justifyContent: "center",
-    left: 0,
-    padding: 24,
-    position: "fixed",
-    right: 0,
-    top: 0,
-    zIndex: 1000,
-};
-
 /**
  * A modal panel showing a single cell's full value (the column name as title, the
  * value in a scrollable code block) with a Copy button — the "expand cell" action
- * a dense grid needs so a truncated value is fully readable and copyable. Dismisses
- * on a backdrop click (the overlay swallows clicks bubbling out of the panel via
- * the `target === currentTarget` check), on Escape, or via the Close button — so
- * it's keyboard-accessible without a click handler on the panel.
+ * a dense grid needs so a truncated value is fully readable and copyable. The
+ * backdrop/Escape dismiss is owned by {@link ModalShell}.
  */
 const CellDetailDialog = ({ column, onClose, value }: { readonly column: string; readonly onClose: () => void; readonly value: unknown }): ReactElement => {
     const t = useT();
@@ -254,51 +239,33 @@ const CellDetailDialog = ({ column, onClose, value }: { readonly column: string;
         setCopied(true);
     }, [text]);
 
-    const onOverlayClick = useCallback(
-        (event: MouseEvent<HTMLDivElement>): void => {
-            if (event.target === event.currentTarget) {
-                onClose();
-            }
-        },
-        [onClose],
-    );
-
-    const onOverlayKeyDown = useCallback(
-        (event: KeyboardEvent<HTMLDivElement>): void => {
-            if (event.key === "Escape") {
-                onClose();
-            }
-        },
-        [onClose],
-    );
-
     return (
-        <div data-testid="grid-cell-dialog-overlay" onClick={onOverlayClick} onKeyDown={onOverlayKeyDown} role="presentation" style={OVERLAY_STYLE}>
-            <div
-                aria-label={t("Cell value")}
-                className="flex max-h-[70vh] w-[min(40rem,90vw)] flex-col gap-3 rounded-lg border border-border bg-background p-4 shadow-xl"
-                data-testid="grid-cell-dialog"
-                role="dialog"
-            >
-                <div className="flex items-center justify-between">
-                    <h2 className="truncate font-mono text-sm font-semibold text-foreground">{column}</h2>
-                    <div className="flex items-center gap-1.5">
-                        <button className={CONTROL_BTN} data-testid="grid-cell-copy" onClick={onCopy} type="button">
-                            {copied ? t("Copied") : t("Copy")}
-                        </button>
-                        <button className={CONTROL_BTN} data-testid="grid-cell-close" onClick={onClose} type="button">
-                            {t("Close")}
-                        </button>
-                    </div>
+        <ModalShell
+            className="max-h-[70vh] w-[min(40rem,90vw)]"
+            label={t("Cell value")}
+            onClose={onClose}
+            panelTestId="grid-cell-dialog"
+            testId="grid-cell-dialog-overlay"
+            variant="dialog"
+        >
+            <div className="flex items-center justify-between">
+                <h2 className="truncate font-mono text-sm font-semibold text-foreground">{column}</h2>
+                <div className="flex items-center gap-1.5">
+                    <button className={CONTROL_BTN} data-testid="grid-cell-copy" onClick={onCopy} type="button">
+                        {copied ? t("Copied") : t("Copy")}
+                    </button>
+                    <button className={CONTROL_BTN} data-testid="grid-cell-close" onClick={onClose} type="button">
+                        {t("Close")}
+                    </button>
                 </div>
-                <pre
-                    className="min-h-0 flex-1 overflow-auto rounded-md border border-border bg-muted/30 p-3 font-mono text-xs whitespace-pre-wrap"
-                    data-testid="grid-cell-value"
-                >
-                    {text}
-                </pre>
             </div>
-        </div>
+            <pre
+                className="min-h-0 flex-1 overflow-auto rounded-md border border-border bg-muted/30 p-3 font-mono text-xs whitespace-pre-wrap"
+                data-testid="grid-cell-value"
+            >
+                {text}
+            </pre>
+        </ModalShell>
     );
 };
 

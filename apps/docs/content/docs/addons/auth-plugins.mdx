@@ -68,6 +68,65 @@ That's the whole change — the new tables (`organization`, `member`,
 `invitation`, …) are discovered by `ensureMigrated` next time the worker
 boots.
 
+## Studio user dashboard
+
+The [studio](/docs/addons/studio) ships a full user-management dashboard —
+browse/search users, set roles, ban, revoke sessions, impersonate, create and
+delete, plus an Organizations section and per-user linked-accounts / 2FA /
+passkey panels. Wiring it is **one line**: hand `createWorker` an `authAdmin`
+built from your auth instance.
+
+```ts
+// src/server/index.ts
+import { createAuthAdmin } from "@cirrus/auth";
+
+createWorker({
+    shardDO: env.SHARD,
+    adminToken: env.CIRRUS_ADMIN_TOKEN, // the dashboard's authorization gate
+    authAdmin: createAuthAdmin(auth), // backed by better-auth's adapter
+});
+```
+
+### The dashboard follows your plugins
+
+There is **no studio-side switch** — the plugins you enable in `createAuth(...)`
+are the switch. `createAuthAdmin` reads the enabled plugin set from
+`auth.$context`, the worker exposes a `GET /_cirrus/admin/auth/capabilities`
+endpoint, and the studio renders only the surfaces that apply:
+
+| Enable in `createAuth(...)`       | Dashboard surface that appears                                           |
+| --------------------------------- | ------------------------------------------------------------------------ |
+| `admin()`                         | User actions: role, ban/unban, set password, impersonate, create, delete |
+| `organization()`                  | The **Organizations** section (orgs → members → invitations)             |
+| `twoFactor()`                     | "Disable two-factor" in the user detail drawer                           |
+| `passkey()`                       | The user's passkeys (list + revoke) in the detail drawer                 |
+| _(always — core `account` table)_ | Linked accounts (providers + unlink)                                     |
+
+Turn a plugin off and its surface disappears (the Organizations tab shows an
+"Organizations are not enabled" empty state instead of erroring). Auth-method
+plugins that have no admin entity — `magicLink`, `emailOTP`, `username`,
+`phoneNumber`, … — need no dedicated panel; they show up through the user's
+fields and linked accounts.
+
+### Force a surface off
+
+To hide a surface even when its plugin is enabled, pass a `features` override:
+
+```ts
+authAdmin: createAuthAdmin(auth, { features: { organization: false } }),
+```
+
+### Safe by construction
+
+Every `/_cirrus/admin/auth/*` endpoint is gated by `CIRRUS_ADMIN_TOKEN`, and
+`createAuthAdmin` is a trusted server-side operator — it talks to better-auth's
+adapter directly, so it is **not** an end-user API. Password hashes, session
+tokens, and OAuth access/refresh tokens are stripped from every response; the
+only token ever returned is the one from an explicit **Impersonate**.
+
+> The older read-only `authIntrospector` option still works (browse-only) but
+> is deprecated — prefer `authAdmin`.
+
 ## The `withAuthPlugins` middleware
 
 `@cirrus/auth/middleware` exports a Cirrus-style middleware factory that

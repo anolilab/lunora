@@ -12,6 +12,8 @@ import type { SubscriptionCallback, SubscriptionErrorCallback, SubscriptionState
 import { SubscriptionRegistry } from "./subscription";
 import type {
     ArgsOf,
+    AuthCapabilities,
+    AuthImpersonation,
     AuthPage,
     AuthSession,
     AuthUser,
@@ -69,6 +71,27 @@ const GLOBAL_TABLES_PATH = "/_cirrus/admin/global/tables";
 const GLOBAL_TABLE_PATH = "/_cirrus/admin/global/table";
 const AUTH_USERS_PATH = "/_cirrus/admin/auth/users";
 const AUTH_SESSIONS_PATH = "/_cirrus/admin/auth/sessions";
+const AUTH_CREATE_USER_PATH = "/_cirrus/admin/auth/users/create";
+const AUTH_SET_ROLE_PATH = "/_cirrus/admin/auth/users/role";
+const AUTH_BAN_PATH = "/_cirrus/admin/auth/users/ban";
+const AUTH_UNBAN_PATH = "/_cirrus/admin/auth/users/unban";
+const AUTH_SET_PASSWORD_PATH = "/_cirrus/admin/auth/users/password";
+const AUTH_REMOVE_USER_PATH = "/_cirrus/admin/auth/users/remove";
+const AUTH_IMPERSONATE_PATH = "/_cirrus/admin/auth/users/impersonate";
+const AUTH_REVOKE_SESSION_PATH = "/_cirrus/admin/auth/sessions/revoke";
+const AUTH_REVOKE_SESSIONS_PATH = "/_cirrus/admin/auth/sessions/revoke-all";
+const AUTH_CAPABILITIES_PATH = "/_cirrus/admin/auth/capabilities";
+const AUTH_UPDATE_USER_PATH = "/_cirrus/admin/auth/users/update";
+const AUTH_ACCOUNTS_PATH = "/_cirrus/admin/auth/accounts";
+const AUTH_UNLINK_ACCOUNT_PATH = "/_cirrus/admin/auth/accounts/unlink";
+const AUTH_PASSKEYS_PATH = "/_cirrus/admin/auth/passkeys";
+const AUTH_DELETE_PASSKEY_PATH = "/_cirrus/admin/auth/passkeys/delete";
+const AUTH_DISABLE_2FA_PATH = "/_cirrus/admin/auth/two-factor/disable";
+const AUTH_ORGS_PATH = "/_cirrus/admin/auth/organizations";
+const AUTH_ORG_MEMBERS_PATH = "/_cirrus/admin/auth/organizations/members";
+const AUTH_ORG_INVITATIONS_PATH = "/_cirrus/admin/auth/organizations/invitations";
+const AUTH_REMOVE_MEMBER_PATH = "/_cirrus/admin/auth/organizations/members/remove";
+const AUTH_CANCEL_INVITATION_PATH = "/_cirrus/admin/auth/organizations/invitations/cancel";
 
 /**
  * Default better-auth session endpoint. The worker mounts better-auth at
@@ -890,11 +913,23 @@ class CirrusClient {
     // --- Auth admin ---------------------------------------------------------
 
     /**
-     * List authenticated users, paged. Hits the admin-gated
-     * `GET /_cirrus/admin/auth/users` endpoint — the worker must be built with an
-     * `authIntrospector` and `adminToken`. Powers the studio's users panel.
+     * List authenticated users, paged and optionally searched / filtered / sorted.
+     * Hits the admin-gated `GET /_cirrus/admin/auth/users` endpoint — the worker
+     * must be built with an `authAdmin` and `adminToken`. Powers the studio's
+     * users dashboard.
      */
-    public async listAuthUsers(options: { limit?: number; offset?: number } = {}): Promise<AuthPage<AuthUser>> {
+    public async listAuthUsers(
+        options: {
+            filterField?: string;
+            filterValue?: string;
+            limit?: number;
+            offset?: number;
+            search?: string;
+            searchField?: string;
+            sortBy?: string;
+            sortDirection?: "asc" | "desc";
+        } = {},
+    ): Promise<AuthPage<AuthUser>> {
         if (this.closed) {
             throw new Error("CirrusClient is closed");
         }
@@ -909,9 +944,184 @@ class CirrusClient {
             params.set("offset", String(options.offset));
         }
 
+        if (options.search !== undefined && options.search !== "") {
+            params.set("search", options.search);
+        }
+
+        if (options.searchField !== undefined) {
+            params.set("searchField", options.searchField);
+        }
+
+        if (options.filterField !== undefined) {
+            params.set("filterField", options.filterField);
+        }
+
+        if (options.filterValue !== undefined) {
+            params.set("filterValue", options.filterValue);
+        }
+
+        if (options.sortBy !== undefined) {
+            params.set("sortBy", options.sortBy);
+        }
+
+        if (options.sortDirection !== undefined) {
+            params.set("sortDirection", options.sortDirection);
+        }
+
         const query = params.toString();
 
         return (await this.adminFetch(query === "" ? AUTH_USERS_PATH : `${AUTH_USERS_PATH}?${query}`, "GET")) as AuthPage<AuthUser>;
+    }
+
+    /**
+     * Create a user. Hits the admin-gated `POST /_cirrus/admin/auth/users/create`
+     * endpoint (requires the worker's `authAdmin` to implement `createUser`).
+     * `data` carries any app-defined `user.additionalFields`.
+     */
+    public async createAuthUser(input: {
+        data?: Record<string, unknown>;
+        email: string;
+        name: string;
+        password?: string;
+        role?: string | string[];
+    }): Promise<AuthUser> {
+        return (await this.adminFetch(AUTH_CREATE_USER_PATH, "POST", input)) as AuthUser;
+    }
+
+    /** Set a user's role (string, or array joined comma-wise server-side). */
+    public async setAuthUserRole(input: { role: string | string[]; userId: string }): Promise<AuthUser> {
+        return (await this.adminFetch(AUTH_SET_ROLE_PATH, "POST", input)) as AuthUser;
+    }
+
+    /** Ban a user. `expiresInSeconds` sets a temporary ban; omit it for a permanent one. Revokes the user's live sessions. */
+    public async banAuthUser(input: { expiresInSeconds?: number; reason?: string; userId: string }): Promise<AuthUser> {
+        return (await this.adminFetch(AUTH_BAN_PATH, "POST", input)) as AuthUser;
+    }
+
+    /** Lift a user's ban. */
+    public async unbanAuthUser(input: { userId: string }): Promise<AuthUser> {
+        return (await this.adminFetch(AUTH_UNBAN_PATH, "POST", input)) as AuthUser;
+    }
+
+    /** Set a user's password (admin override — no current-password challenge). */
+    public async setAuthUserPassword(input: { newPassword: string; userId: string }): Promise<void> {
+        await this.adminFetch(AUTH_SET_PASSWORD_PATH, "POST", input);
+    }
+
+    /** Permanently delete a user and revoke their sessions. */
+    public async removeAuthUser(input: { userId: string }): Promise<void> {
+        await this.adminFetch(AUTH_REMOVE_USER_PATH, "POST", input);
+    }
+
+    /**
+     * Mint an impersonation session for a user, returning its bearer `token`.
+     * The caller is responsible for using the token (e.g. setting the session
+     * cookie); the server performs no cookie round-trip.
+     */
+    public async impersonateAuthUser(input: { userId: string }): Promise<AuthImpersonation> {
+        return (await this.adminFetch(AUTH_IMPERSONATE_PATH, "POST", input)) as AuthImpersonation;
+    }
+
+    /** Revoke a single session by its id (force sign-out of one device). */
+    public async revokeAuthSession(input: { sessionId: string }): Promise<void> {
+        await this.adminFetch(AUTH_REVOKE_SESSION_PATH, "POST", input);
+    }
+
+    /** Revoke every session for a user (force sign-out everywhere). */
+    public async revokeAuthUserSessions(input: { userId: string }): Promise<void> {
+        await this.adminFetch(AUTH_REVOKE_SESSIONS_PATH, "POST", input);
+    }
+
+    /**
+     * Report which auth dashboard surfaces are available — derived server-side
+     * from the enabled better-auth plugins. The studio renders only the panels
+     * whose capability is `true`.
+     */
+    public async getAuthCapabilities(): Promise<AuthCapabilities> {
+        return (await this.adminFetch(AUTH_CAPABILITIES_PATH, "GET")) as AuthCapabilities;
+    }
+
+    /** Update a user's fields (name/email/app-defined `additionalFields`). */
+    public async updateAuthUser(input: { data: Record<string, unknown>; userId: string }): Promise<AuthUser> {
+        return (await this.adminFetch(AUTH_UPDATE_USER_PATH, "POST", input)) as AuthUser;
+    }
+
+    /** List a user's linked accounts (credential / OAuth providers). Token material is stripped server-side. */
+    public async listAuthAccounts(input: { userId: string }): Promise<Record<string, unknown>[]> {
+        const query = new URLSearchParams({ userId: input.userId }).toString();
+
+        return (await this.adminFetch(`${AUTH_ACCOUNTS_PATH}?${query}`, "GET")) as Record<string, unknown>[];
+    }
+
+    /** Unlink a linked account from a user. */
+    public async unlinkAuthAccount(input: { accountId: string; userId: string }): Promise<void> {
+        await this.adminFetch(AUTH_UNLINK_ACCOUNT_PATH, "POST", input);
+    }
+
+    /** List a user's registered passkeys (requires the passkey plugin). */
+    public async listAuthPasskeys(input: { userId: string }): Promise<Record<string, unknown>[]> {
+        const query = new URLSearchParams({ userId: input.userId }).toString();
+
+        return (await this.adminFetch(`${AUTH_PASSKEYS_PATH}?${query}`, "GET")) as Record<string, unknown>[];
+    }
+
+    /** Delete a passkey by id (requires the passkey plugin). */
+    public async deleteAuthPasskey(input: { passkeyId: string }): Promise<void> {
+        await this.adminFetch(AUTH_DELETE_PASSKEY_PATH, "POST", input);
+    }
+
+    /** Disable two-factor auth for a user (requires the two-factor plugin). */
+    public async disableAuthTwoFactor(input: { userId: string }): Promise<void> {
+        await this.adminFetch(AUTH_DISABLE_2FA_PATH, "POST", input);
+    }
+
+    /** List organizations, paged (requires the organization plugin). */
+    public async listAuthOrganizations(options: { limit?: number; offset?: number } = {}): Promise<AuthPage<Record<string, unknown>>> {
+        const params = new URLSearchParams();
+
+        if (options.limit !== undefined) {
+            params.set("limit", String(options.limit));
+        }
+
+        if (options.offset !== undefined) {
+            params.set("offset", String(options.offset));
+        }
+
+        const query = params.toString();
+
+        return (await this.adminFetch(query === "" ? AUTH_ORGS_PATH : `${AUTH_ORGS_PATH}?${query}`, "GET")) as AuthPage<Record<string, unknown>>;
+    }
+
+    /** List the members of an organization (requires the organization plugin). */
+    public async listAuthOrgMembers(input: { limit?: number; offset?: number; organizationId: string }): Promise<AuthPage<Record<string, unknown>>> {
+        const params = new URLSearchParams({ organizationId: input.organizationId });
+
+        if (input.limit !== undefined) {
+            params.set("limit", String(input.limit));
+        }
+
+        return (await this.adminFetch(`${AUTH_ORG_MEMBERS_PATH}?${params.toString()}`, "GET")) as AuthPage<Record<string, unknown>>;
+    }
+
+    /** List an organization's pending invitations (requires the organization plugin). */
+    public async listAuthOrgInvitations(input: { limit?: number; offset?: number; organizationId: string }): Promise<AuthPage<Record<string, unknown>>> {
+        const params = new URLSearchParams({ organizationId: input.organizationId });
+
+        if (input.limit !== undefined) {
+            params.set("limit", String(input.limit));
+        }
+
+        return (await this.adminFetch(`${AUTH_ORG_INVITATIONS_PATH}?${params.toString()}`, "GET")) as AuthPage<Record<string, unknown>>;
+    }
+
+    /** Remove a member from an organization. */
+    public async removeAuthOrgMember(input: { memberId: string }): Promise<void> {
+        await this.adminFetch(AUTH_REMOVE_MEMBER_PATH, "POST", input);
+    }
+
+    /** Cancel a pending organization invitation. */
+    public async cancelAuthOrgInvitation(input: { invitationId: string }): Promise<void> {
+        await this.adminFetch(AUTH_CANCEL_INVITATION_PATH, "POST", input);
     }
 
     /** List auth sessions, paged and optionally filtered to one user. */

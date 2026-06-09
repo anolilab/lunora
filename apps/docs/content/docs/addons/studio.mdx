@@ -69,8 +69,10 @@ createWorker({
 });
 ```
 
-`globalIntrospector` (D1 tables) and `authIntrospector` (users/sessions) wire up
-the remaining tabs; see the package README for the full per-tab configuration.
+`globalIntrospector` (D1 tables) and `authAdmin` (the user-management + organization
+dashboard, via `@cirrus/auth`'s `createAuthAdmin(auth)`) wire up the remaining tabs;
+see the package README for the full per-tab configuration. The auth dashboard is
+capability-driven — it shows only the surfaces whose better-auth plugin is enabled.
 Tabs whose data source isn't configured are omitted from the `<Studio>` shell.
 
 ## See also

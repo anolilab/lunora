@@ -2,6 +2,9 @@ export type { AirbyteMessage, ConnectorChange, ConnectorSyncPage, FivetranRespon
 export { toAirbyteMessages, toFivetranResponse } from "./connector-format";
 export type {
     AdminTableResolver,
+    AuthAdmin,
+    AuthCapabilities,
+    AuthImpersonation,
     AuthIntrospector,
     AuthPage,
     AuthSession,
@@ -22,6 +25,7 @@ export type {
     HttpActionContext,
     HttpActionLike,
     HttpRouterLike,
+    ListAuthUsersOptions,
     Route,
     RpcContext,
     RpcEnvelope,

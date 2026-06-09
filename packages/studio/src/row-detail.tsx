@@ -1,6 +1,7 @@
-import type { CSSProperties, KeyboardEvent, MouseEvent, ReactElement } from "react";
+import type { CSSProperties, ReactElement } from "react";
 import { useCallback } from "react";
 
+import { ModalShell } from "./components/ui/modal-shell";
 import { formatCell, formatTimestamp } from "./internal";
 
 interface RowDetailDrawerProps {
@@ -16,28 +17,6 @@ interface RowDetailDrawerProps {
     readonly row: Record<string, unknown>;
 }
 
-const OVERLAY_STYLE: CSSProperties = {
-    background: "rgba(0,0,0,0.2)",
-    bottom: 0,
-    display: "flex",
-    justifyContent: "flex-end",
-    left: 0,
-    position: "fixed",
-    right: 0,
-    top: 0,
-    zIndex: 1000,
-};
-const PANEL_STYLE: CSSProperties = {
-    background: "#fff",
-    borderLeft: "1px solid #d0d7de",
-    boxShadow: "-4px 0 16px rgba(0,0,0,0.08)",
-    boxSizing: "border-box",
-    height: "100%",
-    maxWidth: "100%",
-    overflow: "auto",
-    padding: 16,
-    width: 420,
-};
 const HEAD_STYLE: CSSProperties = { alignItems: "center", display: "flex", justifyContent: "space-between", margin: "0 0 12px" };
 const TITLE_STYLE: CSSProperties = { fontSize: 14, fontWeight: 600, margin: 0 };
 const FIELD_STYLE: CSSProperties = { borderTop: "1px solid #eaeef2", padding: "8px 0" };
@@ -116,46 +95,26 @@ const RowDetailDrawer = ({ columns, onClose, onNavigate, refs, row }: RowDetailD
         [onNavigate, onClose],
     );
 
-    const onOverlayClick = useCallback(
-        (event: MouseEvent<HTMLDivElement>): void => {
-            if (event.target === event.currentTarget) {
-                onClose();
-            }
-        },
-        [onClose],
-    );
-
-    const onOverlayKeyDown = useCallback(
-        (event: KeyboardEvent<HTMLDivElement>): void => {
-            if (event.key === "Escape") {
-                onClose();
-            }
-        },
-        [onClose],
-    );
-
     return (
-        <div data-testid="rd-overlay" onClick={onOverlayClick} onKeyDown={onOverlayKeyDown} role="presentation" style={OVERLAY_STYLE}>
-            <div data-testid="rd-panel" style={PANEL_STYLE}>
-                <div style={HEAD_STYLE}>
-                    <h3 style={TITLE_STYLE}>Row detail</h3>
-                    <button data-testid="rd-close" onClick={onClose} type="button">
-                        Close
-                    </button>
-                </div>
-
-                <dl data-testid="rd-fields">
-                    {columns.map((column) => (
-                        <div data-testid={`rd-field-${column}`} key={column} style={FIELD_STYLE}>
-                            <dt style={KEY_STYLE}>{column}</dt>
-                            <dd style={VALUE_STYLE}>
-                                <FieldValue column={column} onNavigate={navigateAndClose} target={refs?.[column]} value={row[column]} />
-                            </dd>
-                        </div>
-                    ))}
-                </dl>
+        <ModalShell label="Row detail" onClose={onClose} panelTestId="rd-panel" testId="rd-overlay" variant="drawer">
+            <div style={HEAD_STYLE}>
+                <h3 style={TITLE_STYLE}>Row detail</h3>
+                <button data-testid="rd-close" onClick={onClose} type="button">
+                    Close
+                </button>
             </div>
-        </div>
+
+            <dl data-testid="rd-fields">
+                {columns.map((column) => (
+                    <div data-testid={`rd-field-${column}`} key={column} style={FIELD_STYLE}>
+                        <dt style={KEY_STYLE}>{column}</dt>
+                        <dd style={VALUE_STYLE}>
+                            <FieldValue column={column} onNavigate={navigateAndClose} target={refs?.[column]} value={row[column]} />
+                        </dd>
+                    </div>
+                ))}
+            </dl>
+        </ModalShell>
     );
 };
 

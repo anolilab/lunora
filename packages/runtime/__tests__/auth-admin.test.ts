@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { AuthIntrospector, ExecutionContextLike } from "../src/create-worker";
+import type { AuthAdmin, AuthIntrospector, ExecutionContextLike } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
 
@@ -106,5 +106,146 @@ describe("createWorker — auth introspection endpoints", () => {
         );
 
         expect(response.status).toBe(405);
+    });
+});
+
+const USER = { banned: false, email: "a@example.com", id: "u1", role: "user" };
+
+/** A full auth-admin plane with spy-able mutations. */
+const authAdmin = (): AuthAdmin => {
+    return {
+        banUser: vi.fn(async () => {
+            return { ...USER, banned: true };
+        }),
+        createUser: vi.fn(async () => USER),
+        impersonateUser: vi.fn(async () => {
+            return { expiresAt: 1, token: "tok_u1", user: USER };
+        }),
+        listSessions: vi.fn(async () => SESSIONS),
+        listUsers: vi.fn(async () => USERS),
+        removeUser: vi.fn(async () => undefined),
+        revokeUserSession: vi.fn(async () => undefined),
+        revokeUserSessions: vi.fn(async () => undefined),
+        setRole: vi.fn(async () => {
+            return { ...USER, role: "admin" };
+        }),
+        setUserPassword: vi.fn(async () => undefined),
+        unbanUser: vi.fn(async () => USER),
+         
+        capabilities: vi.fn(async () => {return { accounts: true, admin: true, organization: false, passkey: false, twoFactor: false }}),
+    };
+};
+
+const post = (url: string, body: unknown): Request =>
+    new Request(url, { body: JSON.stringify(body), headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" }, method: "POST" });
+
+describe("createWorker — auth admin mutation endpoints", () => {
+    it("forwards search + role filter on the users endpoint", async () => {
+        expect.assertions(1);
+
+        const admin = authAdmin();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: admin, shardDO: noopNamespace });
+
+        await worker.fetch(authed("https://app.example/_cirrus/admin/auth/users?search=ann&filterField=role&filterValue=admin"), {}, fakeContext);
+
+        expect(admin.listUsers).toHaveBeenCalledWith(expect.objectContaining({ filterField: "role", filterValue: "admin", search: "ann" }));
+    });
+
+    it("bans a user via POST and returns the updated row", async () => {
+        expect.assertions(2);
+
+        const admin = authAdmin();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: admin, shardDO: noopNamespace });
+
+        const response = await worker.fetch(post("https://app.example/_cirrus/admin/auth/users/ban", { reason: "spam", userId: "u1" }), {}, fakeContext);
+
+        expect(response.status).toBe(200);
+        expect(admin.banUser).toHaveBeenCalledWith(expect.objectContaining({ reason: "spam", userId: "u1" }));
+    });
+
+    it("revokes a single session by id", async () => {
+        expect.assertions(2);
+
+        const admin = authAdmin();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: admin, shardDO: noopNamespace });
+
+        const response = await worker.fetch(post("https://app.example/_cirrus/admin/auth/sessions/revoke", { sessionId: "s1" }), {}, fakeContext);
+
+        expect(response.status).toBe(200);
+        expect(admin.revokeUserSession).toHaveBeenCalledWith({ sessionId: "s1" });
+    });
+
+    it("rejects a ban without a userId (400 BAD_REQUEST)", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: authAdmin(), shardDO: noopNamespace });
+
+        const response = await worker.fetch(post("https://app.example/_cirrus/admin/auth/users/ban", {}), {}, fakeContext);
+        const body: { error: { code: string } } = await response.json();
+
+        expect(response.status).toBe(400);
+        expect(body.error.code).toBe("BAD_REQUEST");
+    });
+
+    it("rejects a ban without a valid admin bearer (403)", async () => {
+        expect.assertions(1);
+
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: authAdmin(), shardDO: noopNamespace });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_cirrus/admin/auth/users/ban", { body: "{}", headers: { "content-type": "application/json" }, method: "POST" }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(403);
+    });
+
+    it("reports AUTH_OP_NOT_SUPPORTED when the plane omits the mutation", async () => {
+        expect.assertions(2);
+
+        // A read-only introspector satisfies the reads but has no `banUser`.
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, authIntrospector: introspector(), shardDO: noopNamespace });
+
+        const response = await worker.fetch(post("https://app.example/_cirrus/admin/auth/users/ban", { userId: "u1" }), {}, fakeContext);
+        const body: { error: { code: string } } = await response.json();
+
+        expect(response.status).toBe(400);
+        expect(body.error.code).toBe("AUTH_OP_NOT_SUPPORTED");
+    });
+
+    it("rejects a mutation on the wrong method (405)", async () => {
+        expect.assertions(1);
+
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: authAdmin(), shardDO: noopNamespace });
+
+        const response = await worker.fetch(authed("https://app.example/_cirrus/admin/auth/users/ban"), {}, fakeContext);
+
+        expect(response.status).toBe(405);
+    });
+
+    it("returns the plane's capabilities", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: authAdmin(), shardDO: noopNamespace });
+
+        const response = await worker.fetch(authed("https://app.example/_cirrus/admin/auth/capabilities"), {}, fakeContext);
+        const body: { admin: boolean; organization: boolean } = await response.json();
+
+        expect(body.admin).toBe(true);
+        expect(body.organization).toBe(false);
+    });
+
+    it("reports AUTH_OP_NOT_SUPPORTED for a plugin op the plane didn't wire", async () => {
+        expect.assertions(2);
+
+        // `authAdmin()` has no `listOrganizations` (org plugin not configured).
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: authAdmin(), shardDO: noopNamespace });
+
+        const response = await worker.fetch(authed("https://app.example/_cirrus/admin/auth/organizations"), {}, fakeContext);
+        const body: { error: { code: string } } = await response.json();
+
+        expect(response.status).toBe(400);
+        expect(body.error.code).toBe("AUTH_OP_NOT_SUPPORTED");
     });
 });

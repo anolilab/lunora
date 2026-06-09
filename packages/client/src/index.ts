@@ -18,6 +18,8 @@ export type { SubscriptionCallback, SubscriptionError, SubscriptionErrorCallback
 export { SubscriptionRegistry } from "./subscription";
 export type {
     ArgsOf,
+    AuthCapabilities,
+    AuthImpersonation,
     AuthPage,
     AuthSession,
     AuthUser,

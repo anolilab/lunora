@@ -345,30 +345,9 @@ export interface GlobalTablePage {
 /** A nullable timestamp field as better-auth serializes it: epoch-ms, ISO string, or null. */
 export type NullableTimestamp = null | number | string;
 
-/** One authenticated user, from `GET /_cirrus/admin/auth/users`. Mirrors better-auth's `user` row. */
-export interface AuthUser {
-    [key: string]: unknown;
-    createdAt?: NullableTimestamp;
-    email?: null | string;
-    emailVerified?: boolean | null;
-    id: string;
-    image?: null | string;
-    name?: null | string;
-}
-
-/** One auth session, from `GET /_cirrus/admin/auth/sessions`. Mirrors better-auth's `session` row. */
-export interface AuthSession {
-    [key: string]: unknown;
-    createdAt?: NullableTimestamp;
-    expiresAt?: NullableTimestamp;
-    id: string;
-    ipAddress?: null | string;
-    userAgent?: null | string;
-    userId: string;
-}
-
-/** A page of users or sessions plus the total count. */
-export interface AuthPage<T> {
-    rows: T[];
-    total: number;
-}
+// The auth wire-shape types (`AuthUser`/`AuthSession`/`AuthPage`/`AuthImpersonation`/
+// `AuthCapabilities`) are owned by the runtime contract (`@cirrus/runtime`, the
+// package that defines the `/_cirrus/admin/auth/*` endpoints) and re-exported here
+// for SDK consumers — a single source of truth, no hand-kept copies. This is a
+// type-only re-export, so no runtime/worker code is pulled into the browser SDK.
+export type { AuthCapabilities, AuthImpersonation, AuthPage, AuthSession, AuthUser } from "@cirrus/runtime";

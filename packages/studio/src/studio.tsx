@@ -34,6 +34,7 @@ import { fireAndForget } from "./internal";
 import { LogsPanel } from "./logs-panel";
 import { MetricsPanel } from "./metrics-panel";
 import { MigrationsPanel } from "./migrations";
+import { OrganizationsPanel } from "./organizations-panel";
 import { PitrPanel } from "./pitr-panel";
 import type { ScheduledJobsProps } from "./scheduled-jobs";
 import { ScheduledJobs } from "./scheduled-jobs";
@@ -58,6 +59,7 @@ type StudioTab =
     | "logs"
     | "metrics"
     | "migrations"
+    | "organizations"
     | "pitr"
     | "schedule"
     | "schema"
@@ -142,6 +144,7 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
     logs: <path d="M5 6h14M5 10h14M5 14h9M5 18h11" />,
     metrics: <path d="M5 20V10m6.5 10V4M18 20v-7M3 20h18" />,
     migrations: <path d="M4 12a8 8 0 0 1 13.7-5.6L20 8M20 4v4h-4M20 12a8 8 0 0 1-13.7 5.6L4 16m0 4v-4h4" />,
+    organizations: <path d="M3 21V8l6-4 6 4v13M9 21v-5h2v5M15 11h6v10M18 14v.01M18 17v.01M6 9v.01M6 12v.01M6 15v.01" />,
     pitr: <path d="M12 21a9 9 0 1 0-9-9M12 7.5V12l3 2M3 12l-2-2m2 2 2-2" />,
     schedule: <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm0-13.5V12l4 2" />,
     schema: <path d="M4 5h16v14H4V5Zm0 5h16M10 10v9M4 14.5h16" />,
@@ -169,7 +172,7 @@ const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
     { key: "tableEditor", tabs: ["data", "globals"] },
     { key: "sql", tabs: ["sql", "functions"] },
     { key: "database", tabs: ["schema", "migrations", "export", "pitr"] },
-    { key: "auth", tabs: ["users"] },
+    { key: "auth", tabs: ["users", "organizations"] },
     { key: "storage", tabs: ["files"] },
     { key: "reports", tabs: ["metrics", "health"] },
     { key: "advisors", tabs: ["security", "insights"] },
@@ -223,6 +226,7 @@ const TABS = [
     "export",
     "pitr",
     "users",
+    "organizations",
     "files",
     "metrics",
     "health",
@@ -279,6 +283,7 @@ const StudioLayout = (): ReactElement => {
             logs: t("Logs"),
             metrics: t("Metrics"),
             migrations: t("Migrations"),
+            organizations: t("Organizations"),
             pitr: t("Time Travel"),
             schedule: t("Scheduled"),
             schema: t("Schema"),
@@ -319,13 +324,14 @@ const StudioLayout = (): ReactElement => {
             logs: t("A live stream of recent function logs."),
             metrics: t("Per-shard health and aggregate metrics."),
             migrations: t("Review migration status and run them."),
+            organizations: t("Browse and manage organizations, members, and invitations."),
             pitr: t("Restore a shard to a point in the last 30 days."),
             schedule: t("Inspect and cancel scheduled jobs."),
             schema: t("Inspect each table and its columns."),
             security: t("Review admin gates, credentials, and log redaction."),
             settings: t("Read-only deployment config — vars, secrets, and bindings."),
             sql: t("Run read-only SQL against a shard."),
-            users: t("Browse auth users and their active sessions."),
+            users: t("Manage auth users — roles, bans, sessions, and identity."),
         };
     }, [t]);
 
@@ -559,6 +565,7 @@ const buildRouter = ({ basePath, dataEditable = false, functions, initialShardKe
         logs: <LogsPanel initialShardKey={initialShardKey} />,
         metrics: <MetricsPanel initialShardKey={initialShardKey} />,
         migrations: <MigrationsPanel initialShardKey={initialShardKey} />,
+        organizations: <OrganizationsPanel />,
         pitr: <PitrPanel initialShardKey={initialShardKey} />,
         schedule: <ScheduledJobs cancelJob={scheduledCancel} loadJobs={scheduledLoad} />,
         schema: <SchemaRoutePanel initialShardKey={initialShardKey} />,

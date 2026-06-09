@@ -1,14 +1,9 @@
 import type { CirrusAuth } from "@cirrus/auth";
-import { createAuth, ensureMigrated, handleAuthRequest } from "@cirrus/auth";
+import { createAuth, createAuthAdmin, ensureMigrated, handleAuthRequest } from "@cirrus/auth";
+import { admin, organization, passkey, twoFactor } from "@cirrus/auth/plugins";
 import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@cirrus/d1";
 import { createD1CtxDb, listGlobalTables, readGlobalTablePage } from "@cirrus/d1";
-import type {
-    AuthIntrospector,
-    ExecutionContextLike,
-    GlobalIntrospector,
-    ScheduledControllerLike,
-    ShardNamespaceLike,
-} from "@cirrus/runtime";
+import type { ExecutionContextLike, GlobalIntrospector, ScheduledControllerLike, ShardNamespaceLike } from "@cirrus/runtime";
 import { createWorker } from "@cirrus/runtime";
 import type { DurableObjectNamespaceLike } from "@cirrus/scheduler";
 import { createScheduler } from "@cirrus/scheduler";
@@ -53,51 +48,6 @@ const d1Introspector = (database: D1DatabaseLike): GlobalIntrospector => {
     };
 };
 
-/**
- * Read-only auth introspector over better-auth's D1 `user` / `session` tables.
- * Selects only non-sensitive identity columns (never password hashes or tokens),
- * orders newest-first, and clamps the page size. Admin-gated by the runtime.
- */
-const authIntrospector = (database: D1DatabaseLike): AuthIntrospector => {
-    const exec = buildExec(database);
-
-    const page = async <T>(
-        table: string,
-        columns: string,
-        where: string,
-        parameters: ReadonlyArray<unknown>,
-        limit?: number,
-        offset?: number,
-    ): Promise<{ rows: T[]; total: number }> => {
-        const cappedLimit = Math.min(Math.max(Math.trunc(limit ?? 50), 1), 500);
-        const flooredOffset = Math.max(0, Math.trunc(offset ?? 0));
-        const counted = await exec.all(`SELECT COUNT(*) AS c FROM "${table}" ${where}`, parameters);
-        const rows = await exec.all(`SELECT ${columns} FROM "${table}" ${where} ORDER BY "createdAt" DESC LIMIT ? OFFSET ?`, [
-            ...parameters,
-            cappedLimit,
-            flooredOffset,
-        ]);
-
-        return { rows: rows as T[], total: Number(counted[0]?.["c"] ?? 0) };
-    };
-
-    return {
-        listSessions: (options) => {
-            const filtered = options.userId !== undefined && options.userId !== "";
-
-            return page(
-                "session",
-                `"id", "userId", "expiresAt", "ipAddress", "userAgent", "createdAt"`,
-                filtered ? `WHERE "userId" = ?` : "",
-                filtered ? [options.userId] : [],
-                options.limit,
-                options.offset,
-            );
-        },
-        listUsers: (options) => page("user", `"id", "name", "email", "emailVerified", "image", "createdAt"`, "", [], options.limit, options.offset),
-    };
-};
-
 export { SchedulerDO } from "./scheduler-do.js";
 
 interface ShardEnv {
@@ -118,9 +68,7 @@ export const ShardDO = createShardDO({
     d1: (env) => {
         const shardEnv = env as ShardEnv;
 
-        return shardEnv.DB
-            ? createD1CtxDb({ exec: buildExec(shardEnv.DB), schema: schema as unknown as D1CtxDbOptions["schema"] })
-            : undefined;
+        return shardEnv.DB ? createD1CtxDb({ exec: buildExec(shardEnv.DB), schema: schema as unknown as D1CtxDbOptions["schema"] }) : undefined;
     },
     scheduler: (env) => {
         const shardEnv = env as ShardEnv;
@@ -184,6 +132,14 @@ const buildAuth = (env: Env): CirrusAuth => {
         baseURL: env.AUTH_URL,
         database: env.DB as never,
         emailAndPassword: { enabled: true },
+        // The full plugin set the studio's auth dashboard adapts to. Each one
+        // lights up its surface via `createAuthAdmin`'s capability detection:
+        //  - `admin`        → user management (role/ban/impersonate/create/delete)
+        //  - `organization` → the Organizations section (orgs/members/invitations)
+        //  - `twoFactor`    → per-user 2FA disable in the detail drawer
+        //  - `passkey`      → per-user passkey list/revoke in the detail drawer
+        // `ensureMigrated` discovers each plugin's tables on the next boot.
+        plugins: [admin({ defaultRole: "user" }), organization({ allowUserToCreateOrganization: true }), twoFactor(), passkey()],
         secret: env.AUTH_SECRET,
     });
 };
@@ -200,8 +156,11 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
         // The default `authBasePath` (`/api/auth`) matches `handleAuthRequest`,
         // so it's omitted.
         authHandler: (request) => (auth ? handleAuthRequest(auth, request) : Promise.resolve(undefined)),
-        // Exposes /_cirrus/admin/auth/* so the studio can browse users/sessions.
-        authIntrospector: env.DB ? authIntrospector(env.DB as D1DatabaseLike) : undefined,
+        // Exposes /_cirrus/admin/auth/* so the studio's user dashboard can browse
+        // and manage users (create/ban/role/revoke/impersonate/delete). Built from
+        // the same lazy `auth` the `authHandler` uses — non-null here since the
+        // fetch entry builds `auth` before `buildWorker`.
+        authAdmin: auth ? createAuthAdmin(auth) : undefined,
         // Code-first crons: the worker's `scheduled()` entry dispatches every job
         // declared in `cirrus/crons.ts` (compiled into the generated CIRRUS_CRONS
         // map) on its firing trigger. Empty until a `crons.ts` is added.

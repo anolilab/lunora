@@ -1,4 +1,4 @@
-import type { AuthSession, AuthUser } from "@cirrus/client";
+import type { AuthCapabilities, AuthUser } from "@cirrus/client";
 import { useCirrus } from "@cirrus/react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
@@ -6,10 +6,14 @@ import { useCallback, useEffect, useState } from "react";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { EmptyState } from "./components/ui/empty-state";
+import { Input } from "./components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
 import { useT } from "./i18n-context";
 import { errorMessage, fireAndForget, formatTimestamp } from "./internal";
 import { useAutoRefresh } from "./use-auto-refresh";
+import useDebounced from "./use-debounced";
+import { UserCreateDialog } from "./user-create-dialog";
+import { UserDetailDrawer } from "./user-detail-drawer";
 
 interface UsersPanelProps {
     /** Users (and sessions) requested per page. */
@@ -18,12 +22,16 @@ interface UsersPanelProps {
 
 const DEFAULT_PAGE_SIZE = 50;
 
+/** Conservative defaults until `getAuthCapabilities()` resolves: core surfaces on, plugin surfaces off. */
+const DEFAULT_CAPABILITIES: AuthCapabilities = { accounts: true, admin: true, organization: false, passkey: false, twoFactor: false };
+
 /**
- * Read-only browser for the auth store's users and sessions. Lists users via the
- * client's `listAuthUsers()` (the admin-gated `/_cirrus/admin/auth/users`
- * endpoint); selecting a user loads their sessions via `listAuthSessions()`.
- * Gated by the server's `CIRRUS_ADMIN_TOKEN` and an `authIntrospector` on the
- * worker. Surfaces identity metadata only — no password hashes or tokens.
+ * Full user-management dashboard, backed by the admin-gated `/_cirrus/admin/auth/*`
+ * endpoints (the worker must be built with an `authAdmin` and `adminToken`).
+ * Lists users with server-side search + role filter, opens a per-user detail
+ * drawer (all fields, sessions, and admin actions — set role, ban/unban, set
+ * password, impersonate, revoke sessions, delete), and creates users. Surfaces
+ * identity metadata only — never password hashes or session tokens.
  */
 export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {}): ReactElement => {
     const client = useCirrus();
@@ -33,39 +41,47 @@ export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
     const [usersError, setUsersError] = useState<null | string>(null);
     const [auto, setAuto] = useState<boolean>(false);
 
-    const [selectedUser, setSelectedUser] = useState<null | string>(null);
-    const [sessions, setSessions] = useState<AuthSession[] | null>(null);
-    const [sessionsError, setSessionsError] = useState<null | string>(null);
+    const [search, setSearch] = useState<string>("");
+    const [roleFilter, setRoleFilter] = useState<string>("");
+    const debouncedSearch = useDebounced(search);
+
+    const [selectedUserId, setSelectedUserId] = useState<null | string>(null);
+    const [createOpen, setCreateOpen] = useState<boolean>(false);
+    const [capabilities, setCapabilities] = useState<AuthCapabilities>(DEFAULT_CAPABILITIES);
+
+    // Capabilities are fixed per deployment (which plugins are enabled), so fetch once.
+    useEffect(() => {
+        fireAndForget(
+            (async (): Promise<void> => {
+                try {
+                    setCapabilities(await client.getAuthCapabilities());
+                } catch {
+                    // Leave the conservative defaults in place if the endpoint is unavailable.
+                }
+            })(),
+        );
+    }, [client]);
 
     const fetchUsers = useCallback(async (): Promise<void> => {
         setUsersError(null);
 
+        const trimmedSearch = debouncedSearch.trim();
+        const trimmedRole = roleFilter.trim();
+
         try {
-            const page = await client.listAuthUsers({ limit: pageSize });
+            const page = await client.listAuthUsers({
+                filterField: trimmedRole === "" ? undefined : "role",
+                filterValue: trimmedRole === "" ? undefined : trimmedRole,
+                limit: pageSize,
+                search: trimmedSearch === "" ? undefined : trimmedSearch,
+            });
 
             setUsers(page.rows);
         } catch (error_) {
             setUsers(null);
             setUsersError(errorMessage(error_));
         }
-    }, [client, pageSize]);
-
-    const fetchSessions = useCallback(
-        async (userId: string): Promise<void> => {
-            setSessionsError(null);
-            setSelectedUser(userId);
-
-            try {
-                const page = await client.listAuthSessions({ limit: pageSize, userId });
-
-                setSessions(page.rows);
-            } catch (error_) {
-                setSessions(null);
-                setSessionsError(errorMessage(error_));
-            }
-        },
-        [client, pageSize],
-    );
+    }, [client, debouncedSearch, pageSize, roleFilter]);
 
     const reloadUsers = useCallback((): void => {
         fireAndForget(fetchUsers());
@@ -79,20 +95,52 @@ export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
         fireAndForget(fetchUsers());
     }, [fetchUsers]);
 
-    // Auto-refresh: the auth store is HTTP-only (no subscription channel), so
-    // polling is the honest "live" — re-list users to catch new sign-ups /
-    // revoked sessions without a manual reload.
+    // The auth store is HTTP-only (no subscription channel), so polling is the
+    // honest "live" — re-list to catch new sign-ups / bans without a reload.
     useAutoRefresh(() => {
         fireAndForget(fetchUsers());
-
-        if (selectedUser !== null) {
-            fireAndForget(fetchSessions(selectedUser));
-        }
     }, auto);
+
+    // Derive the inspected user from the latest list so the drawer reflects
+    // mutations after a refetch; a deleted user simply drops the drawer.
+    const selectedUser = selectedUserId === null ? null : (users?.find((user) => user.id === selectedUserId) ?? null);
 
     return (
         <div className="flex flex-col gap-4" data-testid="cirrus-users">
             <div className="flex flex-wrap items-center gap-2">
+                <Input
+                    aria-label={t("Search users")}
+                    className="w-56"
+                    data-testid="us-search"
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- admin dev-tool input handler
+                    onChange={(event) => {
+                        setSearch(event.target.value);
+                    }}
+                    placeholder={t("Search by email or name…")}
+                    value={search}
+                />
+                <Input
+                    aria-label={t("Filter by role")}
+                    className="w-40"
+                    data-testid="us-role-filter"
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- admin dev-tool input handler
+                    onChange={(event) => {
+                        setRoleFilter(event.target.value);
+                    }}
+                    placeholder={t("Filter by role")}
+                    value={roleFilter}
+                />
+                <Button
+                    data-testid="us-new"
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- admin dev-tool open handler
+                    onClick={() => {
+                        setCreateOpen(true);
+                    }}
+                    size="sm"
+                    type="button"
+                >
+                    {t("New user")}
+                </Button>
                 <Button data-testid="us-refresh" onClick={reloadUsers} size="sm" type="button" variant="outline">
                     {t("Reload users")}
                 </Button>
@@ -136,6 +184,8 @@ export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
                                 <TableHead>{t("id")}</TableHead>
                                 <TableHead>{t("email")}</TableHead>
                                 <TableHead>{t("name")}</TableHead>
+                                <TableHead>{t("role")}</TableHead>
+                                <TableHead>{t("status")}</TableHead>
                                 <TableHead>{t("verified")}</TableHead>
                                 <TableHead>{t("created")}</TableHead>
                                 <TableHead aria-label={t("Actions")} />
@@ -148,6 +198,16 @@ export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
                                     <TableCell>{user.email ?? ""}</TableCell>
                                     <TableCell>{user.name ?? ""}</TableCell>
                                     <TableCell>
+                                        {typeof user.role === "string" && user.role !== "" ? <Badge variant="secondary">{user.role}</Badge> : ""}
+                                    </TableCell>
+                                    <TableCell>
+                                        {user.banned === true ? (
+                                            <Badge variant="destructive">{t("Banned")}</Badge>
+                                        ) : (
+                                            <Badge variant="outline">{t("Active")}</Badge>
+                                        )}
+                                    </TableCell>
+                                    <TableCell>
                                         {user.emailVerified === true ? (
                                             <Badge variant="secondary">{t("yes")}</Badge>
                                         ) : (
@@ -157,17 +217,16 @@ export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
                                     <TableCell className="text-muted-foreground tabular-nums">{formatTimestamp(user.createdAt)}</TableCell>
                                     <TableCell>
                                         <Button
-                                            aria-pressed={selectedUser === user.id}
-                                            data-testid={`us-sessions-${user.id}`}
-                                            // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row handler closes over user.id; this is an admin dev-tool render path
+                                            data-testid={`us-manage-${user.id}`}
+                                            // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row handler closes over user.id; admin dev-tool path
                                             onClick={() => {
-                                                fireAndForget(fetchSessions(user.id));
+                                                setSelectedUserId(user.id);
                                             }}
                                             size="xs"
                                             type="button"
                                             variant="ghost"
                                         >
-                                            {t("Sessions")}
+                                            {t("Manage")}
                                         </Button>
                                     </TableCell>
                                 </TableRow>
@@ -177,47 +236,26 @@ export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
                 </div>
             )}
 
-            {sessionsError !== null && (
-                <p className="text-sm text-destructive" data-testid="us-sessions-error" role="alert">
-                    {sessionsError}
-                </p>
+            {selectedUser !== null && (
+                <UserDetailDrawer
+                    capabilities={capabilities}
+                    onChanged={reloadUsers}
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- admin dev-tool close handler
+                    onClose={() => {
+                        setSelectedUserId(null);
+                    }}
+                    user={selectedUser}
+                />
             )}
 
-            {sessions !== null && (
-                <div className="flex flex-col gap-2" data-testid="us-sessions">
-                    <h3 className="text-sm font-medium">{t("Sessions for {userId}", { userId: selectedUser })}</h3>
-
-                    {sessions.length === 0 && (
-                        <p className="text-sm text-muted-foreground" data-testid="us-sessions-empty">
-                            {t("No active sessions.")}
-                        </p>
-                    )}
-
-                    {sessions.length > 0 && (
-                        <div className="rounded-md border border-border">
-                            <Table data-testid="us-sessions-table">
-                                <TableHeader>
-                                    <TableRow>
-                                        <TableHead>{t("id")}</TableHead>
-                                        <TableHead>{t("expires")}</TableHead>
-                                        <TableHead>{t("ip")}</TableHead>
-                                        <TableHead>{t("user agent")}</TableHead>
-                                    </TableRow>
-                                </TableHeader>
-                                <TableBody>
-                                    {sessions.map((session) => (
-                                        <TableRow data-testid={`us-session-${session.id}`} key={session.id}>
-                                            <TableCell className="font-mono text-xs">{session.id}</TableCell>
-                                            <TableCell className="text-muted-foreground tabular-nums">{formatTimestamp(session.expiresAt)}</TableCell>
-                                            <TableCell>{session.ipAddress ?? ""}</TableCell>
-                                            <TableCell>{session.userAgent ?? ""}</TableCell>
-                                        </TableRow>
-                                    ))}
-                                </TableBody>
-                            </Table>
-                        </div>
-                    )}
-                </div>
+            {createOpen && (
+                <UserCreateDialog
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- admin dev-tool close handler
+                    onClose={() => {
+                        setCreateOpen(false);
+                    }}
+                    onCreated={reloadUsers}
+                />
             )}
         </div>
     );
