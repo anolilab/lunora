@@ -1,5 +1,5 @@
-import type { CirrusAuth } from "@cirrus/auth";
-import { createAuth, createAuthAdmin, ensureMigrated, handleAuthRequest } from "@cirrus/auth";
+import type { CirrusAuth, CirrusAuthOptions } from "@cirrus/auth";
+import { cirrusAuthAdapter, createAuth, createAuthAdmin, createSqlAuthStore, d1Executor, ensureMigrated, handleAuthRequest } from "@cirrus/auth";
 import { admin, organization, passkey, twoFactor } from "@cirrus/auth/plugins";
 import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@cirrus/d1";
 import { createD1CtxDb, listGlobalTables, readGlobalTablePage } from "@cirrus/d1";
@@ -123,26 +123,52 @@ interface Env {
 let worker: ReturnType<typeof createWorker> | null = null;
 let auth: CirrusAuth | null = null;
 
-const buildAuth = (env: Env): CirrusAuth => {
+/**
+ * Auth config shared by the runtime instance and the migration instance — same
+ * plugins/secret so both describe the identical schema. The full plugin set is
+ * what the studio's auth dashboard adapts to (capability-detected by
+ * `createAuthAdmin`): `admin` → user management; `organization` → the
+ * Organizations section; `twoFactor` → 2FA disable; `passkey` → passkey list.
+ */
+const authOptions = (env: Env): CirrusAuthOptions => {
     if (!env.AUTH_SECRET) {
         throw new Error("AUTH_SECRET is required");
     }
 
-    return createAuth({
+    return {
         baseURL: env.AUTH_URL,
-        database: env.DB as never,
         emailAndPassword: { enabled: true },
-        // The full plugin set the studio's auth dashboard adapts to. Each one
-        // lights up its surface via `createAuthAdmin`'s capability detection:
-        //  - `admin`        → user management (role/ban/impersonate/create/delete)
-        //  - `organization` → the Organizations section (orgs/members/invitations)
-        //  - `twoFactor`    → per-user 2FA disable in the detail drawer
-        //  - `passkey`      → per-user passkey list/revoke in the detail drawer
-        // `ensureMigrated` discovers each plugin's tables on the next boot.
         plugins: [admin({ defaultRole: "user" }), organization({ allowUserToCreateOrganization: true }), twoFactor(), passkey()],
         secret: env.AUTH_SECRET,
-    });
+    };
 };
+
+/**
+ * The runtime auth instance, backed by `@cirrus/auth`'s SQL adapter over D1.
+ *
+ * We deliberately do NOT pass the raw `env.DB` (a D1 binding) as `database`:
+ * better-auth would then resolve its Kysely adapter via a runtime
+ * `await import("better-auth/adapters/kysely-adapter")` inside `auth.$context`,
+ * and that dynamic import never settles under `@cloudflare/vite-plugin`'s worker
+ * module runner — hanging every auth request in dev. Passing an explicit adapter
+ * makes better-auth use it directly and skip that import entirely, so `pnpm dev`
+ * (embedded worker) and a deployed worker behave the same. The SQL store issues
+ * no DDL; table creation stays on the Kysely migration path ({@link migrateAuth}).
+ */
+const buildAuth = (env: Env): CirrusAuth =>
+    createAuth({
+        ...authOptions(env),
+        database: cirrusAuthAdapter(createSqlAuthStore(d1Executor(env.DB as never))),
+    });
+
+/**
+ * A throwaway instance wired to the raw D1 binding, used ONLY to drive
+ * `ensureMigrated` — which compiles + applies the schema via better-auth's
+ * Kysely migrator (the path that creates the tables the SQL adapter then reads
+ * and writes). Its `$context` is never touched, so the dynamic-import hang above
+ * never applies here.
+ */
+const migrateAuth = (env: Env): CirrusAuth => createAuth({ ...authOptions(env), database: env.DB as never });
 
 const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
     createWorker({
@@ -201,7 +227,8 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
                       storageList: storage.list,
                       storageSignedUrl:
                           env.PUBLIC_STORAGE_BASE_URL && env.STORAGE_SECRET
-                              ? (key: string, urlOptions?: { expiresInSeconds?: number }) => storage.getSignedUrl(key, { expiresInSeconds: urlOptions?.expiresInSeconds })
+                              ? (key: string, urlOptions?: { expiresInSeconds?: number }) =>
+                                    storage.getSignedUrl(key, { expiresInSeconds: urlOptions?.expiresInSeconds })
                               : undefined,
                       storageUpload: (key: string, body: ArrayBuffer, options?: { contentType?: string }) => storage.upload(key, body, options),
                   };
@@ -318,11 +345,11 @@ export default {
         if (!auth) {
             auth = buildAuth(env);
 
-            // Apply the better-auth schema lazily on first request. For
-            // production workloads, run `pnpm --filter playground migrate`
-            // ahead of deploy so the first user request doesn't pay the diff
-            // cost.
-            await ensureMigrated(auth);
+            // Apply the better-auth schema lazily on first request, via the raw-D1
+            // (Kysely) migrator — the runtime `auth` uses the SQL adapter, which
+            // issues no DDL. For production, run `pnpm --filter playground migrate`
+            // ahead of deploy so the first user request doesn't pay the diff cost.
+            await ensureMigrated(migrateAuth(env));
         }
 
         // `auth` is now built, so both the worker's `authHandler` and
