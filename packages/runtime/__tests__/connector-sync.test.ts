@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { ConnectorSyncPage } from "../src/connector-format.js";
-import { toAirbyteMessages, toFivetranResponse } from "../src/connector-format.js";
-import type { ExecutionContextLike } from "../src/create-worker.js";
-import { createWorker } from "../src/create-worker.js";
-import type { ShardNamespaceLike } from "../src/resolve-shard.js";
+import type { ConnectorSyncPage } from "../src/connector-format";
+import { toAirbyteMessages, toFivetranResponse } from "../src/connector-format";
+import type { ExecutionContextLike } from "../src/create-worker";
+import { createWorker } from "../src/create-worker";
+import type { ShardNamespaceLike } from "../src/resolve-shard";
 
 const fakeContext: ExecutionContextLike = {
     passThroughOnException: () => undefined,

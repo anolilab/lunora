@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ObservabilityEvent } from "../src/observability.js";
-import type { AnalyticsEngineDataPointLike } from "../src/observability-sinks.js";
-import { analyticsEngineSink, combineSinks, consoleSink, sentrySink, webhookSink } from "../src/observability-sinks.js";
+import type { ObservabilityEvent } from "../src/observability";
+import type { AnalyticsEngineDataPointLike } from "../src/observability-sinks";
+import { analyticsEngineSink, combineSinks, consoleSink, sentrySink, webhookSink } from "../src/observability-sinks";
 
 const okEvent: ObservabilityEvent = { durationMs: 5, functionPath: "messages:list", ok: true, shardKey: "channel-1" };
 const errorEvent: ObservabilityEvent = {

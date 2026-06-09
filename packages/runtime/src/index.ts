@@ -1,5 +1,5 @@
-export type { AirbyteMessage, ConnectorChange, ConnectorSyncPage, FivetranResponse } from "./connector-format.js";
-export { toAirbyteMessages, toFivetranResponse } from "./connector-format.js";
+export type { AirbyteMessage, ConnectorChange, ConnectorSyncPage, FivetranResponse } from "./connector-format";
+export { toAirbyteMessages, toFivetranResponse } from "./connector-format";
 export type {
     AdminTableResolver,
     AuthIntrospector,
@@ -30,24 +30,22 @@ export type {
     StorageListFn,
     StorageObject,
     WorkerOptions,
-} from "./create-worker.js";
-export { createWorker, defineRpcEnvelope } from "./create-worker.js";
-export type { DynamicShardRegistry, DynamicShardRegistryOptions } from "./dynamic-shard-registry.js";
-export { createDynamicShardRegistry, DEFAULT_REGISTRY_CACHE_TTL_MS, SHARD_REGISTRY_DO_NAME } from "./dynamic-shard-registry.js";
-export type { CirrusErrorBody } from "./errors.js";
-export { CirrusError, toErrorResponse } from "./errors.js";
-/* eslint-disable perfectionist/sort-exports -- conflicts with simple-import-sort/exports on the observability/observability-sinks ordering; simple-import-sort's autofix wins, so we follow it and disable perfectionist for these lines */
-export type { ObservabilityEvent, ObservabilitySink } from "./observability.js";
-export { emitRpcEvent } from "./observability.js";
+} from "./create-worker";
+export { createWorker, defineRpcEnvelope } from "./create-worker";
+export type { DynamicShardRegistry, DynamicShardRegistryOptions } from "./dynamic-shard-registry";
+export { createDynamicShardRegistry, DEFAULT_REGISTRY_CACHE_TTL_MS, SHARD_REGISTRY_DO_NAME } from "./dynamic-shard-registry";
+export type { CirrusErrorBody } from "./errors";
+export { CirrusError, toErrorResponse } from "./errors";
+export type { ObservabilityEvent, ObservabilitySink } from "./observability";
+export { emitRpcEvent } from "./observability";
 export type {
     AnalyticsEngineDataPointLike,
     AnalyticsEngineDatasetLike,
     AnalyticsEngineSinkOptions,
     SentrySinkOptions,
     WebhookSinkOptions,
-} from "./observability-sinks.js";
-export { analyticsEngineSink, combineSinks, consoleSink, sentrySink, webhookSink } from "./observability-sinks.js";
-/* eslint-enable perfectionist/sort-exports */
+} from "./observability-sinks";
+export { analyticsEngineSink, combineSinks, consoleSink, sentrySink, webhookSink } from "./observability-sinks";
 export type {
     ExportFanOutRequest,
     ExportFanOutResult,
@@ -66,9 +64,9 @@ export type {
     ShardImportOutcome,
     ShardMigrationOutcome,
     ShardRegistry,
-} from "./query-coordinator.js";
-export { createQueryCoordinator, createStaticShardRegistry, mergeStrategyForAggregate } from "./query-coordinator.js";
-export type { ResolvedShard, ShardNamespaceLike } from "./resolve-shard.js";
-export { resolveShard } from "./resolve-shard.js";
+} from "./query-coordinator";
+export { createQueryCoordinator, createStaticShardRegistry, mergeStrategyForAggregate } from "./query-coordinator";
+export type { ResolvedShard, ShardNamespaceLike } from "./resolve-shard";
+export { resolveShard } from "./resolve-shard";
 
 export const VERSION: string = "0.0.0";

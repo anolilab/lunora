@@ -19,9 +19,9 @@
  * (`createStaticShardRegistry`) here and leave the DO/KV-backed registry
  * for a follow-up once codegen opts schemas into cross-shard call sites.
  */
-import { CirrusError } from "./errors.js";
-import type { ShardNamespaceLike } from "./resolve-shard.js";
-import { resolveShard } from "./resolve-shard.js";
+import { CirrusError } from "./errors";
+import type { ShardNamespaceLike } from "./resolve-shard";
+import { resolveShard } from "./resolve-shard";
 
 /**
  * Source of "which shard keys exist for a given table right now". Returning

@@ -1,7 +1,7 @@
 import { bench, describe } from "vitest";
 
-import { createQueryCoordinator, createStaticShardRegistry } from "../src/query-coordinator.js";
-import type { ShardNamespaceLike } from "../src/resolve-shard.js";
+import { createQueryCoordinator, createStaticShardRegistry } from "../src/query-coordinator";
+import type { ShardNamespaceLike } from "../src/resolve-shard";
 
 /**
  * `orchestrateMigration` and `orchestrateExport` are the QueryCoordinator's

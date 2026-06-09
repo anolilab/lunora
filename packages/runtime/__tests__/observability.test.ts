@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
-import type { ExecutionContextLike } from "../src/create-worker.js";
-import { createWorker } from "../src/create-worker.js";
-import type { ObservabilityEvent, ObservabilitySink } from "../src/observability.js";
-import { emitRpcEvent } from "../src/observability.js";
-import type { QueryCoordinator } from "../src/query-coordinator.js";
-import type { ShardNamespaceLike } from "../src/resolve-shard.js";
+import type { ExecutionContextLike } from "../src/create-worker";
+import { createWorker } from "../src/create-worker";
+import type { ObservabilityEvent, ObservabilitySink } from "../src/observability";
+import { emitRpcEvent } from "../src/observability";
+import type { QueryCoordinator } from "../src/query-coordinator";
+import type { ShardNamespaceLike } from "../src/resolve-shard";
 
 interface ShardSpy {
     namespace: ShardNamespaceLike;

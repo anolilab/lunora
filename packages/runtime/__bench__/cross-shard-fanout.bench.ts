@@ -1,8 +1,8 @@
 import { bench, describe } from "vitest";
 
-import type { FanOutRequest } from "../src/query-coordinator.js";
-import { createQueryCoordinator, createStaticShardRegistry } from "../src/query-coordinator.js";
-import type { ShardNamespaceLike } from "../src/resolve-shard.js";
+import type { FanOutRequest } from "../src/query-coordinator";
+import { createQueryCoordinator, createStaticShardRegistry } from "../src/query-coordinator";
+import type { ShardNamespaceLike } from "../src/resolve-shard";
 
 /**
  * `fanOut` orchestrates a cross-shard read: dispatch in parallel, collect

@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { BackupManifest, BackupStore, ScheduledControllerLike, WorkerOptions } from "../src/create-worker.js";
-import { createWorker } from "../src/create-worker.js";
-import type { QueryCoordinator } from "../src/query-coordinator.js";
-import type { ShardNamespaceLike } from "../src/resolve-shard.js";
+import type { BackupManifest, BackupStore, ScheduledControllerLike, WorkerOptions } from "../src/create-worker";
+import { createWorker } from "../src/create-worker";
+import type { QueryCoordinator } from "../src/query-coordinator";
+import type { ShardNamespaceLike } from "../src/resolve-shard";
 
 const ADMIN_TOKEN = "admin-bear";
 

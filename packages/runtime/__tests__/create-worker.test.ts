@@ -1,9 +1,9 @@
 import { Hono } from "hono";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ExecutionContextLike, HttpActionContext, HttpRouterLike, Route } from "../src/create-worker.js";
-import { createWorker } from "../src/create-worker.js";
-import type { ShardNamespaceLike } from "../src/resolve-shard.js";
+import type { ExecutionContextLike, HttpActionContext, HttpRouterLike, Route } from "../src/create-worker";
+import { createWorker } from "../src/create-worker";
+import type { ShardNamespaceLike } from "../src/resolve-shard";
 
 interface ShardSpy {
     /** Records the (shardKey, forwarded request) for each forward. */

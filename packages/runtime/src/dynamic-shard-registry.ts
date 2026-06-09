@@ -37,8 +37,8 @@
  * coordination across them).
  */
 
-import type { ShardRegistry } from "./query-coordinator.js";
-import type { ShardNamespaceLike } from "./resolve-shard.js";
+import type { ShardRegistry } from "./query-coordinator";
+import type { ShardNamespaceLike } from "./resolve-shard";
 
 /**
  * Conventional DO instance name. Kept in sync with `SHARD_REGISTRY_DO_NAME`

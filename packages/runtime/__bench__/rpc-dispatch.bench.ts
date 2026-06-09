@@ -1,8 +1,8 @@
 import { bench, describe } from "vitest";
 
-import type { ExecutionContextLike } from "../src/create-worker.js";
-import { createWorker } from "../src/create-worker.js";
-import type { ShardNamespaceLike } from "../src/resolve-shard.js";
+import type { ExecutionContextLike } from "../src/create-worker";
+import { createWorker } from "../src/create-worker";
+import type { ShardNamespaceLike } from "../src/resolve-shard";
 
 /**
  * `POST /_cirrus/rpc` is the hot path for every dispatched query/mutation.

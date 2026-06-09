@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { ExecutionContextLike } from "../src/create-worker.js";
-import { createWorker } from "../src/create-worker.js";
-import type { ShardNamespaceLike } from "../src/resolve-shard.js";
+import type { ExecutionContextLike } from "../src/create-worker";
+import { createWorker } from "../src/create-worker";
+import type { ShardNamespaceLike } from "../src/resolve-shard";
 
 interface ShardSpy {
     calls: { body: unknown; shardKey: string }[];

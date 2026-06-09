@@ -9,10 +9,10 @@ import type { DatabaseWriterLike, RunShardExportArgs, RunShardImportArgs, Schema
 import { createShardCtxDb, exportShardRows, importShardRows, runShardMigrations, ShardDO } from "@cirrus/do";
 import { describe, expect, it } from "vitest";
 
-import type { ExecutionContextLike, ShardingInfo } from "../src/create-worker.js";
-import { createWorker } from "../src/create-worker.js";
-import { createQueryCoordinator, createStaticShardRegistry } from "../src/query-coordinator.js";
-import type { ShardNamespaceLike } from "../src/resolve-shard.js";
+import type { ExecutionContextLike, ShardingInfo } from "../src/create-worker";
+import { createWorker } from "../src/create-worker";
+import { createQueryCoordinator, createStaticShardRegistry } from "../src/query-coordinator";
+import type { ShardNamespaceLike } from "../src/resolve-shard";
 
 const ADMIN_TOKEN = "roundtrip-admin";
 

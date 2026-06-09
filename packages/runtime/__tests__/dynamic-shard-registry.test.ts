@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { createDynamicShardRegistry, DEFAULT_REGISTRY_CACHE_TTL_MS, SHARD_REGISTRY_DO_NAME } from "../src/dynamic-shard-registry.js";
-import type { ShardNamespaceLike } from "../src/resolve-shard.js";
+import { createDynamicShardRegistry, DEFAULT_REGISTRY_CACHE_TTL_MS, SHARD_REGISTRY_DO_NAME } from "../src/dynamic-shard-registry";
+import type { ShardNamespaceLike } from "../src/resolve-shard";
 
 /**
  * Minimal in-process implementation of the ShardRegistryDO surface — same

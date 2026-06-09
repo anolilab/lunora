@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { CirrusError, toErrorResponse } from "../src/errors.js";
+import { CirrusError, toErrorResponse } from "../src/errors";
 
 describe("cirrusError", () => {
     it("defaults to 500 INTERNAL when no status is provided", () => {

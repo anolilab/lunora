@@ -1,12 +1,12 @@
-import type { ConnectorChange, ConnectorSyncPage } from "./connector-format.js";
-import type { FunctionArgumentDescriptor } from "./describe-args.js";
-import { describeArguments } from "./describe-args.js";
-import { CirrusError, isStructuralCirrusError, isStructuralConflictError, toErrorResponse } from "./errors.js";
-import type { ObservabilityEvent, ObservabilitySink } from "./observability.js";
-import { emitRpcEvent } from "./observability.js";
-import type { FanOutSpec, QueryCoordinator } from "./query-coordinator.js";
-import type { ResolvedShard, ShardNamespaceLike } from "./resolve-shard.js";
-import { resolveShard } from "./resolve-shard.js";
+import type { ConnectorChange, ConnectorSyncPage } from "./connector-format";
+import type { FunctionArgumentDescriptor } from "./describe-args";
+import { describeArguments } from "./describe-args";
+import { CirrusError, isStructuralCirrusError, isStructuralConflictError, toErrorResponse } from "./errors";
+import type { ObservabilityEvent, ObservabilitySink } from "./observability";
+import { emitRpcEvent } from "./observability";
+import type { FanOutSpec, QueryCoordinator } from "./query-coordinator";
+import type { ResolvedShard, ShardNamespaceLike } from "./resolve-shard";
+import { resolveShard } from "./resolve-shard";
 
 /**
  * Wire-format RPC envelope. Posted to `POST /_cirrus/rpc`.

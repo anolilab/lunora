@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { describeArgument, describeArguments } from "../src/describe-args.js";
+import { describeArgument, describeArguments } from "../src/describe-args";
 
 /** A minimal stand-in for a `v.*` validator: the `kind` tag + reflection `_meta`. */
 const validator = (kind: string, meta?: Record<string, unknown>): { _meta?: Record<string, unknown>; kind: string } => {

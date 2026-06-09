@@ -10,7 +10,7 @@
 import { createExecutionContext, createScheduledController, env, SELF, waitOnExecutionContext } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
-import worker from "./test-worker.js";
+import worker from "./test-worker";
 
 // `env`'s type comes from the ambient `Cloudflare.Env` augmentation in
 // `./env.d.ts`.

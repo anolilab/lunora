@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import type { FanOutRequest } from "../src/query-coordinator.js";
-import { createQueryCoordinator, createStaticShardRegistry, mergeStrategyForAggregate } from "../src/query-coordinator.js";
-import type { ShardNamespaceLike } from "../src/resolve-shard.js";
+import type { FanOutRequest } from "../src/query-coordinator";
+import { createQueryCoordinator, createStaticShardRegistry, mergeStrategyForAggregate } from "../src/query-coordinator";
+import type { ShardNamespaceLike } from "../src/resolve-shard";
 
 /**
  * Cross-shard aggregate merge — `count` / `aggregate({sum/max/min})` /

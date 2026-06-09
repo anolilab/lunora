@@ -18,7 +18,7 @@
  * third party. Scrub or redact before enabling it against an external service
  * if that is a concern.
  */
-import type { ObservabilityEvent, ObservabilitySink } from "./observability.js";
+import type { ObservabilityEvent, ObservabilitySink } from "./observability";
 
 /** Shared shape for sinks that can be limited to error events only. */
 interface OnlyErrorsOption {

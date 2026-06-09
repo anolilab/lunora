@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { createQueryCoordinator, createStaticShardRegistry } from "../src/query-coordinator.js";
-import type { ShardNamespaceLike } from "../src/resolve-shard.js";
+import { createQueryCoordinator, createStaticShardRegistry } from "../src/query-coordinator";
+import type { ShardNamespaceLike } from "../src/resolve-shard";
 
 interface ShardCall {
     body: { args: Record<string, unknown>; functionPath: string };

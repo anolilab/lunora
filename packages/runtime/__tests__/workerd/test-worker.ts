@@ -10,10 +10,10 @@
  */
 import { DurableObject } from "cloudflare:workers";
 
-import type { Route, ScheduledControllerLike } from "../../src/create-worker.js";
-import { createWorker } from "../../src/create-worker.js";
-import { CirrusError } from "../../src/errors.js";
-import type { QueryCoordinator } from "../../src/query-coordinator.js";
+import type { Route, ScheduledControllerLike } from "../../src/create-worker";
+import { createWorker } from "../../src/create-worker";
+import { CirrusError } from "../../src/errors";
+import type { QueryCoordinator } from "../../src/query-coordinator";
 
 interface Env {
     BACKUPS: R2Bucket;

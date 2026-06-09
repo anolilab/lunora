@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 
-import { createWorker, defineRpcEnvelope, VERSION } from "../src/index.js";
+import { createWorker, defineRpcEnvelope, VERSION } from "../src/index";
 
 describe("index", () => {
     it("exports VERSION", () => {
