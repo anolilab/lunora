@@ -134,7 +134,7 @@ describe("dataBrowser", () => {
         await screen.findByText("1-2 of 3");
     });
 
-    it("forwards the shard key when reloading tables", async () => {
+    it("auto-loads tables for the typed shard key (debounced, no manual trigger)", async () => {
         expect.assertions(1);
 
         const mock = createBrowserClient();
@@ -143,12 +143,19 @@ describe("dataBrowser", () => {
 
         await screen.findByTestId("db-table-list");
 
+        // Typing a shard key auto-loads its tables once the input settles — no
+        // "Load tables" button to click.
         fireEvent.change(screen.getByTestId("db-shard-input"), { target: { value: "room-9" } });
-        fireEvent.click(screen.getByTestId("db-load-tables"));
 
         await waitFor(() => {
-            if (mock.query.mock.calls.length <= 1) {
-                throw new Error("tables not reloaded yet");
+            const calls = mock.query.mock.calls.filter(
+                (call) =>
+                    (call[0] as { __cirrusRef: string }).__cirrusRef === ADMIN_FUNCTIONS.listTables &&
+                    (call[2] as { shardKey?: string } | undefined)?.shardKey === "room-9",
+            );
+
+            if (calls.length === 0) {
+                throw new Error("tables not auto-loaded yet");
             }
         });
 

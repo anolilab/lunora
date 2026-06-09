@@ -100,25 +100,16 @@ const rowDocument = (row: TableRow): Record<string, unknown> => {
 };
 
 /**
- * The table-list sidebar header: the storage-tier badge, the shard-key picker,
- * and the "Load tables" trigger, stacked for the narrow full-height rail.
- * Presentational — the parent owns the shard-key state and the load handler.
+ * The table-list sidebar header: the storage-tier badge and the shard-key picker,
+ * stacked for the narrow full-height rail. The table list auto-loads for the
+ * (debounced) shard key — no manual "Load tables" button — with the sidebar's
+ * refresh icon for an on-demand re-fetch. Presentational: the parent owns the
+ * shard-key state.
  */
-const DataBrowserSidebarHeader = ({
-    onLoadTables,
-    onShardChange,
-    shardKey,
-}: {
-    onLoadTables: () => void;
-    onShardChange: (value: string) => void;
-    shardKey: string;
-}): ReactElement => (
+const DataBrowserSidebarHeader = ({ onShardChange, shardKey }: { onShardChange: (value: string) => void; shardKey: string }): ReactElement => (
     <div className="flex shrink-0 flex-col items-start gap-2 border-b border-border p-3">
         <StorageTierBadge tier="shard" />
         <ShardInput onChange={onShardChange} testId="db-shard-input" value={shardKey} />
-        <button className={`${CONTROL_BTN} w-full justify-center`} data-testid="db-load-tables" onClick={onLoadTables} type="button">
-            Load tables
-        </button>
     </div>
 );
 
@@ -315,6 +306,11 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
     const [filter, setFilter] = useState<string>("");
     const search = useDebounced(filter.trim(), 300);
 
+    // The shard key the table list is fetched for, debounced so typing a key
+    // auto-loads its tables once the input settles rather than firing per
+    // keystroke — replacing the old manual "Load tables" button.
+    const debouncedShard = useDebounced(shardKey.trim(), 400);
+
     // Structured column filters. Held in a ref too so `fetchPage` reads the
     // current value without threading them through its five call sites; an effect
     // re-fetches from offset 0 when they change (mirroring the debounced search).
@@ -385,11 +381,14 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
         [client, pageSize],
     );
 
-    // Initial load only. Subsequent reloads are driven by the "Load tables"
-    // button so typing a shard key doesn't fire a request per keystroke.
+    // Auto-load the table list for the (debounced) shard key. Fires once on mount
+    // for the initial shard and again whenever the typed shard key settles, so the
+    // tables appear without a manual trigger; the debounce keeps a half-typed key
+    // from firing a request per keystroke. A manual refresh icon (see `loadTables`)
+    // re-fetches on demand.
     useEffect(() => {
-        fireAndForget(fetchTables(initialShardKey ?? ""));
-    }, [fetchTables, initialShardKey]);
+        fireAndForget(fetchTables(debouncedShard));
+    }, [fetchTables, debouncedShard]);
 
     // Live channel: while toggled on, the server re-pushes the loaded window
     // whenever its table is written (dependency-scoped to that table). Keyed on
@@ -919,7 +918,8 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
     return (
         <div className="flex h-full min-w-0" data-testid="cirrus-data-browser">
             <TableListSidebar
-                header={<DataBrowserSidebarHeader onLoadTables={loadTables} onShardChange={setShardKey} shardKey={shardKey} />}
+                header={<DataBrowserSidebarHeader onShardChange={setShardKey} shardKey={shardKey} />}
+                onReload={loadTables}
                 onSelect={selectTable}
                 prefix="db"
                 selected={selectedTable}
