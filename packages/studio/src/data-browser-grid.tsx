@@ -37,8 +37,25 @@ const ROWS_STYLE: CSSProperties = { width: "100%" };
 const ROW_BASE_STYLE: CSSProperties = { alignItems: "center", display: "flex", left: 0, position: "absolute", top: 0, width: "100%" };
 const HEAD_ROW_STYLE: CSSProperties = { display: "flex", width: "100%" };
 const ACTION_CELL_STYLE: CSSProperties = { flex: "0 0 8.5rem", padding: "0.375rem 0.75rem" };
-/** Fixed-width leading cell holding the row-select checkbox. */
-const SELECT_CELL_STYLE: CSSProperties = { alignItems: "center", display: "flex", flex: "0 0 2.5rem", justifyContent: "center", padding: "0.375rem 0" };
+
+/** Left offset of the first data column once the select column is frozen ahead of it. */
+const PINNED_DATA_LEFT = "2.5rem";
+
+/**
+ * Fixed-width leading cell holding the row-select checkbox. Frozen (`sticky`) at
+ * the left edge so it — and the primary-key column beside it — stay visible while
+ * a wide table scrolls horizontally, matching Supabase/Outerbase.
+ */
+const SELECT_CELL_STYLE: CSSProperties = {
+    alignItems: "center",
+    display: "flex",
+    flex: "0 0 2.5rem",
+    justifyContent: "center",
+    left: 0,
+    padding: "0.375rem 0",
+    position: "sticky",
+    zIndex: 2,
+};
 
 /** A grid cell/header sized to its column's current width (drag-to-resize), out of flex flow. */
 const sizedCellStyle = (width: number): CSSProperties => {
@@ -51,6 +68,15 @@ const sizedCellStyle = (width: number): CSSProperties => {
         whiteSpace: "nowrap",
         width: `${width.toString()}px`,
     };
+};
+
+/**
+ * Style for the first data column when pinned: the {@link sizedCellStyle} base
+ * made `sticky` just right of the frozen select column, so the primary-key column
+ * stays put during horizontal scroll.
+ */
+const pinnedDataCellStyle = (width: number): CSSProperties => {
+    return { ...sizedCellStyle(width), left: PINNED_DATA_LEFT, position: "sticky", zIndex: 2 };
 };
 
 /** Borderless per-row action button (Details / Edit / Delete). */
@@ -322,10 +348,13 @@ const EditableCell = ({ cell, edit }: { cell: Cell<TableRow, unknown>; edit: Gri
 const GridHeaderCell = ({
     draggedRef,
     header,
+    pinned = false,
     table,
 }: {
     draggedRef: React.RefObject<null | string>;
     header: Header<TableRow, unknown>;
+    /** Freeze this header at the left edge (the primary-key column) during horizontal scroll. */
+    pinned?: boolean;
     table: Table<TableRow>;
 }): ReactElement => {
     const onDragStart = useCallback((): void => {
@@ -361,12 +390,12 @@ const GridHeaderCell = ({
 
     return (
         <th
-            className="text-start text-xs font-medium text-muted-foreground"
+            className={`text-start text-xs font-medium text-muted-foreground${pinned ? " border-e border-border bg-muted" : ""}`}
             draggable
             onDragOver={onDragOver}
             onDragStart={onDragStart}
             onDrop={onDrop}
-            style={sizedCellStyle(header.getSize())}
+            style={pinned ? pinnedDataCellStyle(header.getSize()) : sizedCellStyle(header.getSize())}
         >
             <button
                 className="inline-flex max-w-full cursor-grab items-center gap-1 truncate outline-none hover:text-foreground"
@@ -404,7 +433,7 @@ const SelectAllHeaderCell = ({ table }: { table: Table<TableRow> }): ReactElemen
     );
 
     return (
-        <th style={SELECT_CELL_STYLE}>
+        <th className="bg-muted" style={SELECT_CELL_STYLE}>
             <Checkbox
                 aria-label={t("Select all rows")}
                 checked={table.getIsAllRowsSelected()}
@@ -433,7 +462,7 @@ const RowSelectCell = ({ row }: { row: Row<TableRow> }): ReactElement => {
     );
 
     return (
-        <td style={SELECT_CELL_STYLE}>
+        <td className="bg-background" style={SELECT_CELL_STYLE}>
             <Checkbox
                 aria-label={t("Select row")}
                 checked={row.getIsSelected()}
@@ -568,15 +597,21 @@ const DataBrowserTableView = ({
         return (
             <tr className="border-b border-border text-xs transition-colors hover:bg-muted/50" data-testid="db-row" key={tableRow.id} style={rowStyle}>
                 <RowSelectCell row={tableRow} />
-                {tableRow.getVisibleCells().map((cell, colIndex) => (
-                    <td
-                        className={`group/cell truncate font-mono text-muted-foreground${active !== null && active.row === virtualRow.index && active.col === colIndex ? " ring-1 ring-ring ring-inset" : ""}`}
-                        key={cell.id}
-                        style={sizedCellStyle(cell.column.getSize())}
-                    >
-                        <EditableCell cell={cell} edit={edit} />
-                    </td>
-                ))}
+                {tableRow.getVisibleCells().map((cell, colIndex) => {
+                    // The first data column is frozen beside the select column.
+                    const pinned = colIndex === 0;
+                    const ring = active !== null && active.row === virtualRow.index && active.col === colIndex ? " ring-1 ring-ring ring-inset" : "";
+
+                    return (
+                        <td
+                            className={`group/cell truncate font-mono text-muted-foreground${pinned ? " border-e border-border bg-background" : ""}${ring}`}
+                            key={cell.id}
+                            style={pinned ? pinnedDataCellStyle(cell.column.getSize()) : sizedCellStyle(cell.column.getSize())}
+                        >
+                            <EditableCell cell={cell} edit={edit} />
+                        </td>
+                    );
+                })}
                 <td className="flex items-center gap-1" style={ACTION_CELL_STYLE}>
                     <button
                         className={ROW_BTN}
@@ -628,8 +663,8 @@ const DataBrowserTableView = ({
                     <thead className="bg-muted/50">
                         <tr className="border-b border-border" style={HEAD_ROW_STYLE}>
                             <SelectAllHeaderCell table={table} />
-                            {table.getFlatHeaders().map((header) => (
-                                <GridHeaderCell draggedRef={draggedColumn} header={header} key={header.id} table={table} />
+                            {table.getFlatHeaders().map((header, index) => (
+                                <GridHeaderCell draggedRef={draggedColumn} header={header} key={header.id} pinned={index === 0} table={table} />
                             ))}
                             <th aria-label="Row actions" style={ACTION_CELL_STYLE} />
                         </tr>
