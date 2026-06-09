@@ -4,9 +4,9 @@ import { extname, join, relative, sep } from "node:path";
 import type { CallExpression, Identifier, Project, PropertyAccessExpression, SourceFile, Symbol as TsSymbol, Type, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import type { FunctionIR, ValidatorIR } from "./ir.js";
-import { parseObjectShape } from "./parse-validator.js";
-import sanitizeNamespace from "./paths.js";
+import type { FunctionIR, ValidatorIR } from "./ir";
+import { parseObjectShape } from "./parse-validator";
+import sanitizeNamespace from "./paths";
 
 const FUNCTION_KINDS = new Set(["action", "mutation", "query", "stream"]);
 

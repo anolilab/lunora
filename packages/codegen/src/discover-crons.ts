@@ -2,9 +2,9 @@ import { compileCronSchedule, CRON_SCHEDULE_KINDS, isValidCronExpression } from 
 import type { CallExpression, Identifier, ObjectLiteralExpression, Project, PropertyAccessExpression, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { listCirrusSourceFiles } from "./discover-functions.js";
-import type { CronJobIR } from "./ir.js";
-import sanitizeNamespace from "./paths.js";
+import { listCirrusSourceFiles } from "./discover-functions";
+import type { CronJobIR } from "./ir";
+import sanitizeNamespace from "./paths";
 
 /** All builder method names — the structured schedules plus the raw `.cron`. */
 const CRON_METHODS = new Set<string>([...CRON_SCHEDULE_KINDS, "cron"]);

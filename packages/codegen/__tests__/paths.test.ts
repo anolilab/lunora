@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import sanitizeNamespace from "../src/paths.js";
+import sanitizeNamespace from "../src/paths";
 
 describe("sanitizeNamespace", () => {
     it("leaves a top-level file as its own namespace", () => {

@@ -6,8 +6,8 @@
  */
 import { describe, expect, it } from "vitest";
 
-import { emitApi, emitFunctions } from "../src/emit.js";
-import type { FunctionIR } from "../src/ir.js";
+import { emitApi, emitFunctions } from "../src/emit";
+import type { FunctionIR } from "../src/ir";
 
 describe("emitApi", () => {
     it("rewrites `import('./_generated/X')` qualifiers to `import('./X')` so paths resolve inside _generated/", () => {

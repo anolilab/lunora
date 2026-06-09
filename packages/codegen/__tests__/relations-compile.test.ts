@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { Doc_attachments as Document_attachments, Doc_users as Document_users, LoadWith } from "./fixtures/simple/expected/_generated/dataModel.js";
+import type { Doc_attachments as Document_attachments, Doc_users as Document_users, LoadWith } from "./fixtures/simple/expected/_generated/dataModel";
 
 /**
  * Compile-fixture: the assertions below are verified by `tsc` (via `lint:types`),

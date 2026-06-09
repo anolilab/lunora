@@ -1,7 +1,7 @@
 import type { CallExpression, Expression, ObjectLiteralExpression } from "ts-morph";
 import { Node } from "ts-morph";
 
-import type { ColumnMetaIR, ValidatorIR } from "./ir.js";
+import type { ColumnMetaIR, ValidatorIR } from "./ir";
 
 const FIELD_NAME_RE = /^[A-Za-z_$][\w$]*$/u;
 

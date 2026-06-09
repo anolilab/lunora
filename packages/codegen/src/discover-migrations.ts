@@ -3,8 +3,8 @@ import { relative, sep } from "node:path";
 import type { CallExpression, Identifier, ObjectLiteralExpression, Project, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { listCirrusSourceFiles } from "./discover-functions.js";
-import type { MigrationIR } from "./ir.js";
+import { listCirrusSourceFiles } from "./discover-functions";
+import type { MigrationIR } from "./ir";
 
 /**
  * Decide whether a callee identifier refers to `@cirrus/server`'s

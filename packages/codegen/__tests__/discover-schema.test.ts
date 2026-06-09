@@ -1,8 +1,8 @@
 import { Project } from "ts-morph";
 import { describe, expect, it } from "vitest";
 
-import discoverSchema from "../src/discover-schema.js";
-import { emitDataModel } from "../src/emit.js";
+import discoverSchema from "../src/discover-schema";
+import { emitDataModel } from "../src/emit";
 
 /**
  * Build a fresh in-memory project hosting a `schema.ts` with the given source.

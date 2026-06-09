@@ -5,8 +5,8 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import discoverCrons from "../src/discover-crons.js";
-import { emitCrons, emitWranglerCronTriggers } from "../src/emit.js";
+import discoverCrons from "../src/discover-crons";
+import { emitCrons, emitWranglerCronTriggers } from "../src/emit";
 
 let workdir: string;
 

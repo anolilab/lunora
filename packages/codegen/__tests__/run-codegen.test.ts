@@ -5,8 +5,8 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { emitApi, emitDataModel, emitDrizzleSchema, emitFunctions, emitServer, emitShard, runCodegen } from "../src/index.js";
-import type { FunctionIR, SchemaIR } from "../src/ir.js";
+import { emitApi, emitDataModel, emitDrizzleSchema, emitFunctions, emitServer, emitShard, runCodegen } from "../src/index";
+import type { FunctionIR, SchemaIR } from "../src/ir";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "fixtures", "simple");
@@ -185,7 +185,7 @@ describe("run-codegen", () => {
             // The typed `where` DSL is re-exported from the shipped
             // `@cirrus/server/data-model` module; the per-table reader/writer
             // facades are bound to this project's maps.
-             
+
             expect(result.generated.dataModel).toContain('from "@cirrus/server/data-model";');
             expect(result.generated.dataModel).toContain("    Where,\n    WhereOperators,");
             expect(result.generated.dataModel).toContain("export type TableReaderFacade<T extends keyof DataModel> = TableReaderFacadeOf<");
@@ -196,7 +196,6 @@ describe("run-codegen", () => {
             // Typed full-text search support is re-exported (the SearchReader /
             // SearchFilterBuilder bodies live in the shipped module now).
             expect(result.generated.dataModel).toContain("    SearchFilterBuilder,\n    SearchReader,");
-             
         });
 
         it("emits the ctx.orm namespace bound to the shipped facade generics", () => {

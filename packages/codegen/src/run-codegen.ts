@@ -3,11 +3,11 @@ import { dirname, join } from "node:path";
 
 import { Project } from "ts-morph";
 
-import discoverCrons from "./discover-crons.js";
-import { discoverFunctions } from "./discover-functions.js";
-import discoverMigrations from "./discover-migrations.js";
-import discoverSchema from "./discover-schema.js";
-import { emitApi, emitCrons, emitDataModel, emitDrizzleSchema, emitFunctions, emitServer, emitShard, emitWranglerCronTriggers } from "./emit.js";
+import discoverCrons from "./discover-crons";
+import { discoverFunctions } from "./discover-functions";
+import discoverMigrations from "./discover-migrations";
+import discoverSchema from "./discover-schema";
+import { emitApi, emitCrons, emitDataModel, emitDrizzleSchema, emitFunctions, emitServer, emitShard, emitWranglerCronTriggers } from "./emit";
 
 const writeIfChanged = (filePath: string, content: string): void => {
     // Avoid spurious writes (and downstream HMR reloads) when the rendered

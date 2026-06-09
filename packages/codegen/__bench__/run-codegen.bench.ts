@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { bench, describe } from "vitest";
 
-import { runCodegen } from "../src/index.js";
+import { runCodegen } from "../src/index";
 
 /**
  * Codegen runs on every schema/function file save in dev. The Vite plugin's

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { discoverFunctions } from "../src/discover-functions.js";
+import { discoverFunctions } from "../src/discover-functions";
 
 const NAMESPACE_COLLISION_RE = /Namespace collision/u;
 const CURSOR_DOC_ARRAY_RE = /CursorDoc\[\]/u;
