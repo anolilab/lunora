@@ -1,4 +1,4 @@
-import type { CirrusAuth } from "./create-auth.js";
+import type { CirrusAuth } from "./create-auth";
 
 /**
  * Default basePath used by better-auth's client + handler. Override via the

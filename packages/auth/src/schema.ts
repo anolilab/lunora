@@ -4,7 +4,7 @@ import type { ColumnValidator, Validator } from "@cirrus/values";
 import { v } from "@cirrus/values";
 import { getAuthTables } from "better-auth/db";
 
-import type { CirrusAuthOptions } from "./create-auth.js";
+import type { CirrusAuthOptions } from "./create-auth";
 
 /**
  * The better-auth field-attribute shape we read, derived from `getAuthTables`'s

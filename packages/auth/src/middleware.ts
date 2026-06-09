@@ -1,4 +1,4 @@
-import type { CirrusAuth } from "./create-auth.js";
+import type { CirrusAuth } from "./create-auth";
 
 /**
  * Structural mirror of `@cirrus/server`'s `MiddlewareNext` — the continuation

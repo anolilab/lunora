@@ -1,6 +1,6 @@
 import { getMigrations } from "better-auth/db/migration";
 
-import type { CirrusAuth, CirrusAuthOptions } from "./create-auth.js";
+import type { CirrusAuth, CirrusAuthOptions } from "./create-auth";
 
 /**
  * Single-flight cache of in-flight (and completed) migration runs, keyed by the

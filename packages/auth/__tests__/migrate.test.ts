@@ -1,7 +1,7 @@
 import { getMigrations } from "better-auth/db/migration";
 import { describe, expect, it, vi } from "vitest";
 
-import { compileMigrationsSql, ensureMigrated } from "../src/migrate.js";
+import { compileMigrationsSql, ensureMigrated } from "../src/migrate";
 
 vi.mock(import("better-auth/db/migration"), () => {
     return { getMigrations: vi.fn<typeof getMigrations>() };

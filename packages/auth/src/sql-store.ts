@@ -1,4 +1,4 @@
-import type { AuthRow, AuthStore, AuthWhereClause } from "./store.js";
+import type { AuthRow, AuthStore, AuthWhereClause } from "./store";
 
 /** Double-quote a table/column identifier, escaping embedded quotes. */
 const quoteId = (name: string): string => `"${name.replaceAll('"', '""')}"`;

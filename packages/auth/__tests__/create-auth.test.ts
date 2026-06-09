@@ -1,8 +1,8 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 
-import { createAuth } from "../src/create-auth.js";
-import { DEFAULT_AUTH_BASE_PATH, handleAuthRequest } from "../src/handler.js";
-import { sessionPresets } from "../src/session.js";
+import { createAuth } from "../src/create-auth";
+import { DEFAULT_AUTH_BASE_PATH, handleAuthRequest } from "../src/handler";
+import { sessionPresets } from "../src/session";
 
 const SECRET_PATTERN = /secret/i;
 

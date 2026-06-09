@@ -1,8 +1,8 @@
 import { memoryAdapter } from "better-auth/adapters/memory";
 import { beforeEach, describe, expect, it } from "vitest";
 
-import { createAuth } from "../src/create-auth.js";
-import { admin, organization } from "../src/plugins.js";
+import { createAuth } from "../src/create-auth";
+import { admin, organization } from "../src/plugins";
 
 /**
  * Round-trip behaviour for the two highest-value better-auth plugins Cirrus

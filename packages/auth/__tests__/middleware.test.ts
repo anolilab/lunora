@@ -1,9 +1,9 @@
 import { memoryAdapter } from "better-auth/adapters/memory";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
 
-import { createAuth } from "../src/create-auth.js";
-import { withAuthPlugins } from "../src/middleware.js";
-import { admin, organization } from "../src/plugins.js";
+import { createAuth } from "../src/create-auth";
+import { withAuthPlugins } from "../src/middleware";
+import { admin, organization } from "../src/plugins";
 
 /**
  * Behavioural coverage for `withAuthPlugins`. The middleware is tiny — it just

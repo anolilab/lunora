@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { sessionPresets, validateSessionPolicy } from "../src/session.js";
+import { sessionPresets, validateSessionPolicy } from "../src/session";
 
 /**
  * `sessionPresets` and `validateSessionPolicy` are the Cirrus-friendly surface

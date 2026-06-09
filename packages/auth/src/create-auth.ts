@@ -1,7 +1,7 @@
 import type { BetterAuthOptions } from "better-auth";
 import { betterAuth } from "better-auth";
 
-import { validateSessionPolicy } from "./session.js";
+import { validateSessionPolicy } from "./session";
 
 /**
  * Cirrus's options pass straight through to better-auth — the only thing we

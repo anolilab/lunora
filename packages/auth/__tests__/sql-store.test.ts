@@ -3,12 +3,12 @@ import { DatabaseSync } from "node:sqlite";
 import { getAuthTables } from "better-auth/db";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import cirrusAuthAdapter from "../src/adapter.js";
-import { createAuth } from "../src/create-auth.js";
-import type { SqlExecutor } from "../src/sql-store.js";
-import { createSqlAuthStore } from "../src/sql-store.js";
-import type { AuthRow, AuthStore, AuthWhereClause } from "../src/store.js";
-import { createMemoryAuthStore } from "../src/store.js";
+import cirrusAuthAdapter from "../src/adapter";
+import { createAuth } from "../src/create-auth";
+import type { SqlExecutor } from "../src/sql-store";
+import { createSqlAuthStore } from "../src/sql-store";
+import type { AuthRow, AuthStore, AuthWhereClause } from "../src/store";
+import { createMemoryAuthStore } from "../src/store";
 
 const clause = (
     field: string,

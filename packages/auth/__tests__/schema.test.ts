@@ -2,8 +2,8 @@ import { passkey } from "@better-auth/passkey";
 import { admin, jwt, organization, twoFactor, username } from "better-auth/plugins";
 import { describe, expect, it } from "vitest";
 
-import type { CirrusAuthOptions } from "../src/create-auth.js";
-import authTables from "../src/schema.js";
+import type { CirrusAuthOptions } from "../src/create-auth";
+import authTables from "../src/schema";
 
 const baseOptions: CirrusAuthOptions = {
     emailAndPassword: { enabled: true },

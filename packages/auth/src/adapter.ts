@@ -1,7 +1,7 @@
 import type { CustomAdapter } from "better-auth/adapters";
 import { createAdapterFactory } from "better-auth/adapters";
 
-import type { AuthRow, AuthStore } from "./store.js";
+import type { AuthRow, AuthStore } from "./store";
 
 // better-auth's `CustomAdapter` methods are generic over the caller's row type;
 // our store speaks the opaque `AuthRow`. These three name that (necessary)

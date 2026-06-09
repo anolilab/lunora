@@ -17,7 +17,7 @@ import {
     siwe,
     twoFactor,
     username,
-} from "../src/plugins.js";
+} from "../src/plugins";
 
 const plugins = {
     admin,
