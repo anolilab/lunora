@@ -1,0 +1,167 @@
+import type { ReactElement, ReactNode } from "react";
+import { useCallback, useMemo, useState } from "react";
+
+import { Button } from "./components/ui/button";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
+import type { TFunction } from "./i18n-context";
+import { useT } from "./i18n-context";
+
+/** Severity of an advisor row — shared by the Security and Performance advisors. */
+type AdvisorLevel = "error" | "info" | "warning";
+
+/** One finding as a table row, mirroring Supabase's Issue type / Entity / Description columns. */
+interface AdvisorRow {
+    /** Optional inline action (e.g. the "add index" jump) rendered after the description. */
+    readonly action?: ReactNode;
+    readonly description: string;
+    /** The affected function / table / resource, shown in the Entity column. */
+    readonly entity?: string;
+    /** The finding headline, shown in the Issue type column. */
+    readonly issueType: string;
+    /** A stable key for the row. */
+    readonly key: string;
+    readonly level: AdvisorLevel;
+}
+
+interface AdvisorViewProps {
+    /** Error message from the load, if any. */
+    readonly error?: null | string;
+    /** Disables refresh while a load is in flight. */
+    readonly loading?: boolean;
+    readonly onRefresh: () => void;
+    /** Findings to display; `null` before the first load completes. */
+    readonly rows: AdvisorRow[] | null;
+    /** Scopes the `data-testid`s (`{testId}-tab-error`, …). */
+    readonly testId: string;
+    /** Extra toolbar controls rendered left of Refresh (e.g. a shard selector). */
+    readonly toolbar?: ReactNode;
+}
+
+/** The three severity tabs, in Supabase's order. */
+const LEVELS: ReadonlyArray<AdvisorLevel> = ["error", "warning", "info"];
+
+/** Coloured severity dot per level — the flag glyph Supabase uses, simplified. */
+const LEVEL_DOT: Record<AdvisorLevel, string> = {
+    error: "bg-destructive",
+    info: "bg-sky-500",
+    warning: "bg-amber-500",
+};
+
+/** Localized tab label per level. */
+const levelLabel = (t: TFunction, level: AdvisorLevel): string => ({ error: t("Errors"), info: t("Info"), warning: t("Warnings") })[level];
+
+/** Localized "{n} errors / warnings / suggestions" count line per level. */
+const levelCount = (t: TFunction, level: AdvisorLevel, count: number): string =>
+    ({
+        error: t("{count} errors", { count }),
+        info: t("{count} suggestions", { count }),
+        warning: t("{count} warnings", { count }),
+    })[level];
+
+/** Localized per-tab empty-state title. */
+const emptyTitle = (t: TFunction, level: AdvisorLevel): string =>
+    ({ error: t("No errors detected"), info: t("No suggestions"), warning: t("No warnings detected") })[level];
+
+/**
+ * Shared Advisor content — a 1-to-1 of Supabase Studio's Advisor layout: a row of
+ * severity tabs (Errors / Warnings / Info) with per-level counts, a toolbar, and a
+ * three-column table (Issue type / Entity/item / Description) of the active tab's
+ * findings, with a centered per-tab empty state. The Security and Performance
+ * advisors both render through this so they stay visually identical.
+ */
+export const AdvisorView = ({ error = null, loading = false, onRefresh, rows, testId, toolbar }: AdvisorViewProps): ReactElement => {
+    const t = useT();
+    const [active, setActive] = useState<AdvisorLevel>("error");
+
+    const counts = useMemo<Record<AdvisorLevel, number>>(() => {
+        const tally: Record<AdvisorLevel, number> = { error: 0, info: 0, warning: 0 };
+
+        for (const row of rows ?? []) {
+            tally[row.level] += 1;
+        }
+
+        return tally;
+    }, [rows]);
+
+    const visible = useMemo<AdvisorRow[]>(() => (rows ?? []).filter((row) => row.level === active), [rows, active]);
+
+    const selectTab = useCallback((event: React.MouseEvent<HTMLButtonElement>): void => {
+        setActive(event.currentTarget.dataset.level as AdvisorLevel);
+    }, []);
+
+    return (
+        <div className="flex flex-col gap-3" data-testid={testId}>
+            {/* Severity tabs. */}
+            <div className="flex border-b border-border" role="tablist">
+                {LEVELS.map((level) => (
+                    <button
+                        aria-selected={active === level}
+                        className="flex min-w-32 flex-col gap-0.5 border-b-2 border-transparent px-4 py-2 text-start outline-none transition-colors hover:bg-muted/40 focus-visible:bg-muted/40 aria-selected:border-foreground"
+                        data-level={level}
+                        data-testid={`${testId}-tab-${level}`}
+                        key={level}
+                        onClick={selectTab}
+                        role="tab"
+                        type="button"
+                    >
+                        <span className="flex items-center gap-2 text-sm font-medium text-foreground">
+                            <span aria-hidden="true" className={`size-2 rounded-[3px] ${LEVEL_DOT[level]}`} />
+                            {levelLabel(t, level)}
+                        </span>
+                        <span className="ps-4 text-xs text-muted-foreground">{levelCount(t, level, counts[level])}</span>
+                    </button>
+                ))}
+            </div>
+
+            {/* Toolbar. */}
+            <div className="flex flex-wrap items-center gap-2">
+                {toolbar}
+                <Button className="ms-auto" data-testid={`${testId}-refresh`} disabled={loading} onClick={onRefresh} size="sm" type="button" variant="outline">
+                    {t("Refresh")}
+                </Button>
+            </div>
+
+            {error !== null && (
+                <p className="text-sm text-destructive" data-testid={`${testId}-error`} role="alert">
+                    {error}
+                </p>
+            )}
+
+            {/* Findings table for the active tab. */}
+            <div className="overflow-hidden rounded-md border border-border">
+                <Table>
+                    <TableHeader>
+                        <TableRow>
+                            <TableHead>{t("Issue type")}</TableHead>
+                            <TableHead>{t("Entity/item")}</TableHead>
+                            <TableHead>{t("Description")}</TableHead>
+                        </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                        {visible.length === 0 ? (
+                            <TableRow>
+                                <TableCell className="h-40 text-center align-middle text-muted-foreground" colSpan={3} data-testid={`${testId}-empty`}>
+                                    <span className="block text-sm font-medium text-foreground">{emptyTitle(t, active)}</span>
+                                    <span className="block text-sm">{t("Nothing to report for this deployment.")}</span>
+                                </TableCell>
+                            </TableRow>
+                        ) : (
+                            visible.map((row) => (
+                                <TableRow key={row.key}>
+                                    <TableCell className="font-medium text-foreground">{row.issueType}</TableCell>
+                                    <TableCell className="font-mono text-xs text-muted-foreground">{row.entity ?? "—"}</TableCell>
+                                    <TableCell className="text-muted-foreground">
+                                        <span>{row.description}</span>
+                                        {row.action !== undefined && <span className="mt-1.5 flex flex-wrap items-center gap-1.5">{row.action}</span>}
+                                    </TableCell>
+                                </TableRow>
+                            ))
+                        )}
+                    </TableBody>
+                </Table>
+            </div>
+        </div>
+    );
+};
+
+export type { AdvisorLevel, AdvisorRow };

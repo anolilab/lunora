@@ -3,19 +3,18 @@ import { useNavigate } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import type { FunctionCallStat, FunctionStatsResult, ShardMetrics } from "./admin.js";
-import { ADMIN_FUNCTIONS } from "./admin.js";
-import { Badge } from "./components/ui/badge.js";
-import { EmptyState } from "./components/ui/empty-state.js";
-import { Button } from "./components/ui/button.js";
-import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card.js";
-import type { Insight, InsightSeverity } from "./derive-insights.js";
-import { deriveInsights } from "./derive-insights.js";
-import type { TFunction } from "./i18n-context.js";
-import { useT } from "./i18n-context.js";
-import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal.js";
-import { recordShard } from "./shard-history.js";
-import { ShardInput } from "./shard-input.js";
+import type { FunctionCallStat, FunctionStatsResult, ShardMetrics } from "./admin";
+import { ADMIN_FUNCTIONS } from "./admin";
+import type { AdvisorRow } from "./advisor-view";
+import { AdvisorView } from "./advisor-view";
+import { Button } from "./components/ui/button";
+import type { Insight } from "./derive-insights";
+import { deriveInsights } from "./derive-insights";
+import type { TFunction } from "./i18n-context";
+import { useT } from "./i18n-context";
+import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal";
+import { recordShard } from "./shard-history";
+import { ShardInput } from "./shard-input";
 
 interface InsightsPanelProps {
     /** Shard key the snapshots target on first load. Defaults to the root shard. */
@@ -24,13 +23,6 @@ interface InsightsPanelProps {
 
 const GET_FUNCTION_STATS = adminRef(ADMIN_FUNCTIONS.getFunctionStats);
 const GET_METRICS = adminRef(ADMIN_FUNCTIONS.getMetrics);
-
-/** Badge variant per severity — reuses the design system's semantic colours. */
-const SEVERITY_VARIANT: Record<InsightSeverity, "default" | "destructive" | "secondary"> = {
-    error: "destructive",
-    info: "secondary",
-    warning: "default",
-};
 
 /** A 0–1 rate as a one-decimal percentage. */
 const percent = (rate: number): string => `${(rate * 100).toFixed(1)}%`;
@@ -49,7 +41,7 @@ const tableList = (tables: string[]): string => {
     return `${tables.slice(0, -1).join(", ")} and ${last}`;
 };
 
-/** Localized headline per insight kind; the function path (when present) is rendered separately as code. */
+/** Localized headline per insight kind, shown in the Issue type column. */
 const insightTitle = (t: TFunction, insight: Insight): string =>
     ({
         "high-error-rate": t("High error rate"),
@@ -103,18 +95,18 @@ const AddIndexButton = ({ onJump, table }: AddIndexButtonProps): ReactElement =>
 };
 
 /**
- * Read-only Insights overview: pulls the `getMetrics` health snapshot and the
- * `getFunctionStats` per-function table for one shard, then surfaces the issues
- * {@link deriveInsights} detects — low cache hit rate, high eviction, slow
- * functions, and error spikes — sorted worst-first. Both reads are best-effort
- * (either may fail on a missing `CIRRUS_ADMIN_TOKEN` or a cold instance) and the
- * panel still renders whatever it got. A snapshot, not a live feed — press
- * Refresh to re-pull.
+ * The Performance Advisor — a 1-to-1 of Supabase's Performance Advisor: severity
+ * tabs over a findings table (via {@link AdvisorView}). It pulls the `getMetrics`
+ * health snapshot and `getFunctionStats` per-function table for one shard, then
+ * maps the issues {@link deriveInsights} detects (low cache hit rate, high
+ * eviction, slow functions, missing indexes, error spikes) into rows. A
+ * `missing-index` row carries an inline "add the index" jump to the Schema tab.
+ * Both reads are best-effort — one failing still yields the other's insights.
  */
 export const InsightsPanel = ({ initialShardKey }: InsightsPanelProps): ReactElement => {
     const client = useCirrus();
-    const t = useT();
     const navigate = useNavigate();
+    const t = useT();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
     const [metrics, setMetrics] = useState<ShardMetrics | null>(null);
@@ -168,70 +160,26 @@ export const InsightsPanel = ({ initialShardKey }: InsightsPanelProps): ReactEle
 
     const insights = useMemo<Insight[]>(() => deriveInsights(metrics, functions), [metrics, functions]);
 
-    return (
-        <div className="space-y-4" data-testid="cirrus-insights">
-            <div className="flex flex-wrap items-center gap-2">
-                <ShardInput onChange={setShardKey} testId="in-shard-input" value={shardKey} />
-                <Button data-testid="in-refresh" disabled={loading} onClick={onRefresh} size="sm" type="button" variant="outline">
-                    {t("Refresh")}
-                </Button>
-                <Badge data-testid="in-count" variant={insights.length > 0 ? "default" : "outline"}>
-                    {insights.length}
-                </Badge>
-            </div>
+    const rows = useMemo<AdvisorRow[]>(
+        () =>
+            insights.map((insight) => {
+                const tables = insight.kind === "missing-index" ? (insight.tables ?? []) : [];
 
-            {error !== null && (
-                <p className="text-sm text-destructive" data-testid="in-error" role="alert">
-                    {error}
-                </p>
-            )}
-
-            {error === null && insights.length === 0 && (
-                <EmptyState
-                    description={t("Cirrus surfaces slow functions, error spikes, and cache problems here.")}
-                    icon={
-                        <svg aria-hidden="true" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.6} viewBox="0 0 24 24">
-                            <path d="M12 3 4 6v5c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V6l-8-3Z" />
-                            <path d="m9 12 2 2 4-4" />
-                        </svg>
-                    }
-                    testId="in-empty"
-                    title={t("No issues detected.")}
-                />
-            )}
-
-            {insights.length > 0 && (
-                <ul className="space-y-3" data-testid="in-list">
-                    {insights.map((insight) => (
-                        <li key={`${insight.kind}:${insight.fn ?? ""}`}>
-                            <Card className="rounded-md">
-                                <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
-                                    <CardTitle className="flex flex-wrap items-center gap-2 text-sm font-medium">
-                                        {insightTitle(t, insight)}
-                                        {insight.fn !== undefined && <span className="font-mono text-xs text-muted-foreground">{insight.fn}</span>}
-                                    </CardTitle>
-                                    <Badge data-testid={`in-severity-${insight.severity}`} variant={SEVERITY_VARIANT[insight.severity]}>
-                                        {insight.severity}
-                                    </Badge>
-                                </CardHeader>
-                                <CardContent className="space-y-1 text-sm text-muted-foreground">
-                                    <p>{insightDetail(t, insight)}</p>
-                                    {insight.message !== undefined && <p className="font-mono text-xs text-destructive">{insight.message}</p>}
-                                    {insight.kind === "missing-index" && insight.tables !== undefined && insight.tables.length > 0 && (
-                                        <div className="flex flex-wrap items-center gap-1.5 pt-1" data-testid={`in-fix-${insight.fn ?? ""}`}>
-                                            {insight.tables.map((table) => (
-                                                <AddIndexButton key={table} onJump={jumpToSchemaIndex} table={table} />
-                                            ))}
-                                        </div>
-                                    )}
-                                </CardContent>
-                            </Card>
-                        </li>
-                    ))}
-                </ul>
-            )}
-        </div>
+                return {
+                    action: tables.length > 0 ? tables.map((table) => <AddIndexButton key={table} onJump={jumpToSchemaIndex} table={table} />) : undefined,
+                    description: insight.message === undefined ? insightDetail(t, insight) : `${insightDetail(t, insight)} — ${insight.message}`,
+                    entity: insight.fn,
+                    issueType: insightTitle(t, insight),
+                    key: `${insight.kind}:${insight.fn ?? ""}`,
+                    level: insight.severity,
+                };
+            }),
+        [insights, jumpToSchemaIndex, t],
     );
+
+    const toolbar = <ShardInput onChange={setShardKey} testId="in-shard-input" value={shardKey} />;
+
+    return <AdvisorView error={error} loading={loading} onRefresh={onRefresh} rows={rows} testId="cirrus-insights" toolbar={toolbar} />;
 };
 
 export type { InsightsPanelProps };

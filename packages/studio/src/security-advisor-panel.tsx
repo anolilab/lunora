@@ -1,33 +1,28 @@
 import { useCirrus } from "@cirrus/react";
 import type { ReactElement } from "react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
-import type { SecurityAuditResult, SecurityFinding, SecurityFindingLevel } from "./admin";
+import type { SecurityAuditResult, SecurityFinding } from "./admin";
 import { ADMIN_FUNCTIONS } from "./admin";
-import { Badge } from "./components/ui/badge";
-import { Button } from "./components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
-import { EmptyState } from "./components/ui/empty-state";
+import type { AdvisorRow } from "./advisor-view";
+import { AdvisorView } from "./advisor-view";
 import type { TFunction } from "./i18n-context";
 import { useT } from "./i18n-context";
 import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal";
 
 const GET_SECURITY_AUDIT = adminRef(ADMIN_FUNCTIONS.getSecurityAudit);
 
-/** Badge variant per finding level — shared with the Performance Advisor (Insights). */
-const LEVEL_VARIANT: Record<SecurityFindingLevel, "default" | "destructive" | "secondary"> = {
-    error: "destructive",
-    info: "secondary",
-    warning: "default",
-};
-
-/** Localized headline per finding kind; presentation stays out of the server payload. */
+/** Localized headline per finding kind, shown in the Issue type column. */
 const findingTitle = (t: TFunction, finding: SecurityFinding): string =>
     ({
         "admin-token-weak": t("Weak admin token"),
         "dev-args-unredacted": t("Request log keeps un-redacted args"),
         "ws-gate-open": t("Live admin subscriptions are ungated"),
     })[finding.kind];
+
+/** The env binding each finding concerns, shown in the Entity column. */
+const findingEntity = (finding: SecurityFinding): string =>
+    ({ "admin-token-weak": "CIRRUS_ADMIN_TOKEN", "dev-args-unredacted": "request log", "ws-gate-open": "CIRRUS_WS_BEARER" })[finding.kind];
 
 /** Localized one-line explanation + remediation per finding kind. `admin-token-weak` interpolates the offending length. */
 const findingDetail = (t: TFunction, finding: SecurityFinding): string =>
@@ -45,14 +40,13 @@ const findingDetail = (t: TFunction, finding: SecurityFinding): string =>
     })[finding.kind];
 
 /**
- * The Security Advisor: pulls `getSecurityAudit` for the deployment and lists the
- * findings the server derived from the Worker `env` — weak admin token, an open
- * WebSocket gate, and a dev-mode request log that keeps un-redacted args. These
- * are signals only cirrus can surface: Cloudflare's dashboard is infra-level and
- * can't reason about cirrus's admin/WS gates or its log-redaction policy. The
- * audit is deployment-wide (it reads `env`, identical across shards), so it
- * targets the root shard and needs no shard selector. A snapshot, not a live
- * feed — press Refresh to re-pull.
+ * The Security Advisor — a 1-to-1 of Supabase's Security Advisor: severity tabs
+ * (Errors / Warnings / Info) over a findings table. It pulls `getSecurityAudit`
+ * (deployment-wide, so it targets the root shard and needs no shard selector) and
+ * maps each finding the server derived from the Worker `env` — weak admin token,
+ * an open WebSocket gate, a dev-mode request log keeping un-redacted args — into a
+ * row. These are signals only cirrus can surface: Cloudflare's dashboard can't
+ * reason about cirrus's admin/WS gates or its log-redaction policy.
  */
 const SecurityAdvisorPanel = (): ReactElement => {
     const client = useCirrus();
@@ -87,68 +81,23 @@ const SecurityAdvisorPanel = (): ReactElement => {
         fireAndForget(refresh());
     }, [refresh]);
 
-    return (
-        <div className="space-y-4" data-testid="cirrus-security-advisor">
-            <div className="flex flex-wrap items-center gap-2">
-                <Button data-testid="sec-refresh" disabled={loading} onClick={onRefresh} size="sm" type="button" variant="outline">
-                    {t("Refresh")}
-                </Button>
-                {findings !== null && (
-                    <Badge data-testid="sec-count" variant={findings.length > 0 ? "default" : "outline"}>
-                        {findings.length}
-                    </Badge>
-                )}
-            </div>
-
-            {error !== null && (
-                <p className="text-sm text-destructive" data-testid="sec-error" role="alert">
-                    {error}
-                </p>
-            )}
-
-            {error === null && findings !== null && findings.length === 0 && (
-                <EmptyState
-                    description={t("Cirrus checks admin-token strength, the live-subscription gate, and request-log redaction here.")}
-                    icon={
-                        <svg
-                            aria-hidden="true"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={1.6}
-                            viewBox="0 0 24 24"
-                        >
-                            <path d="M12 3 4 6v5c0 5 3.4 8.5 8 10 4.6-1.5 8-5 8-10V6l-8-3Z" />
-                            <path d="m9 12 2 2 4-4" />
-                        </svg>
-                    }
-                    testId="sec-empty"
-                    title={t("No security issues detected.")}
-                />
-            )}
-
-            {error === null && findings !== null && findings.length > 0 && (
-                <ul className="space-y-3" data-testid="sec-list">
-                    {findings.map((finding) => (
-                        <li key={finding.kind}>
-                            <Card className="rounded-md">
-                                <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
-                                    <CardTitle className="text-sm font-medium">{findingTitle(t, finding)}</CardTitle>
-                                    <Badge data-testid={`sec-level-${finding.level}`} variant={LEVEL_VARIANT[finding.level]}>
-                                        {finding.level}
-                                    </Badge>
-                                </CardHeader>
-                                <CardContent className="text-sm text-muted-foreground">
-                                    <p>{findingDetail(t, finding)}</p>
-                                </CardContent>
-                            </Card>
-                        </li>
-                    ))}
-                </ul>
-            )}
-        </div>
+    const rows = useMemo<AdvisorRow[] | null>(
+        () =>
+            findings === null
+                ? null
+                : findings.map((finding) => {
+                      return {
+                          description: findingDetail(t, finding),
+                          entity: findingEntity(finding),
+                          issueType: findingTitle(t, finding),
+                          key: finding.kind,
+                          level: finding.level,
+                      };
+                  }),
+        [findings, t],
     );
+
+    return <AdvisorView error={error} loading={loading} onRefresh={onRefresh} rows={rows} testId="cirrus-security-advisor" />;
 };
 
 export default SecurityAdvisorPanel;
