@@ -291,6 +291,13 @@ export interface StorageObject {
     httpMetadata?: { contentType?: string };
     key: string;
     size: number;
+
+    /**
+     * When the object was stored. R2 emits a `Date`, which JSON-serializes to an
+     * ISO string over the wire; a mock may supply epoch ms — so consumers should
+     * normalise via `new Date(uploaded)`. Absent if the backend didn't report it.
+     */
+    uploaded?: number | string;
 }
 
 /** One page of {@link StorageObject}s plus the cursor to fetch the next, if any. */

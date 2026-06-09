@@ -143,10 +143,40 @@ describe("fileBrowser", () => {
         const lastCall = mock.listStorageObjects.mock.calls.at(-1) as [{ prefix?: string }];
 
         expect(lastCall[0]).toMatchObject({ prefix: "docs/" });
+
         // Inside docs/, guide.md shows as a file named relative to the folder.
         const fileRow = await screen.findByTestId("fb-row");
 
         expect(fileRow.textContent).toContain("guide.md");
+    });
+
+    it("sorts files by a chosen metadata field", async () => {
+        expect.assertions(2);
+
+        render(renderBrowser(createClient()));
+
+        await screen.findByTestId("fb-table");
+
+        // Default name-ascending → a.png before b.txt.
+        expect(screen.getAllByTestId("fb-row")[0]?.textContent).toContain("a.png");
+
+        // Sort by size ascending → the smaller b.txt (12 B) comes first.
+        fireEvent.change(screen.getByTestId("fb-sort"), { target: { value: "size" } });
+
+        expect(screen.getAllByTestId("fb-row")[0]?.textContent).toContain("b.txt");
+    });
+
+    it("switches to the grid view and renders a tile per file", async () => {
+        expect.assertions(2);
+
+        render(renderBrowser(createClient()));
+
+        await screen.findByTestId("fb-table");
+
+        fireEvent.click(screen.getByTestId("fb-view-grid"));
+
+        await expect(screen.findByTestId("fb-gallery")).resolves.toBeDefined();
+        expect(screen.getAllByTestId("fb-tile")).toHaveLength(2);
     });
 
     describe("mutations", () => {

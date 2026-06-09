@@ -452,6 +452,13 @@ const MESSAGE_IDS = [
     "admin",
     // File browser actions.
     "Folder path",
+    "Grid",
+    "Sort",
+    "Name",
+    "Type",
+    "Modified",
+    "Toggle sort direction",
+    "Thumbnail size",
     "Link expiry",
     "15m",
     "1h",

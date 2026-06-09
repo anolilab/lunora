@@ -8,9 +8,53 @@ import { EmptyState } from "./components/ui/empty-state";
 import { Input } from "./components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
 import { ConfirmButton } from "./confirm-button";
+import { FileGallery } from "./file-gallery";
 import type { TFunction } from "./i18n-context";
 import { useT } from "./i18n-context";
 import { errorMessage, fireAndForget, formatBytes } from "./internal";
+
+/** How the file list is laid out. */
+type FileView = "grid" | "list";
+
+/**
+ * The comparable value for an object under a sort key — `size`, `type`, `date`,
+ * `name`, or `tag:NAME` for a user-supplied customMetadata tag. Numbers for
+ * size/date sort numerically; everything else compares as a locale string.
+ */
+// eslint-disable-next-line sonarjs/function-return-type -- numeric keys (size/date) sort numerically, the rest as strings; one comparator handles both
+const fileSortValue = (object: StorageObject, key: string): number | string => {
+    if (key === "size") {
+        return object.size;
+    }
+
+    if (key === "type") {
+        return object.httpMetadata?.contentType ?? "";
+    }
+
+    if (key === "date") {
+        // R2 sends an ISO string, a mock may send epoch ms — `new Date` handles both.
+        return object.uploaded === undefined ? 0 : new Date(object.uploaded).getTime();
+    }
+
+    if (key.startsWith("tag:")) {
+        return object.customMetadata?.[key.slice(4)] ?? "";
+    }
+
+    return object.key;
+};
+
+/** Sort a copy of the files by the chosen metadata key + direction (numeric or locale-aware). */
+const sortFiles = (files: ReadonlyArray<StorageObject>, key: string, direction: "asc" | "desc"): StorageObject[] => {
+    const factor = direction === "desc" ? -1 : 1;
+
+    return files.toSorted((a, b) => {
+        const av = fileSortValue(a, key);
+        const bv = fileSortValue(b, key);
+        const cmp = typeof av === "number" && typeof bv === "number" ? av - bv : String(av).localeCompare(String(bv));
+
+        return cmp * factor;
+    });
+};
 
 /**
  * Split a flat object listing into the immediate folders and files at `prefix` —
@@ -187,6 +231,12 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
     const [prefix, setPrefix] = useState<string>(initialPrefix ?? "");
     // Share-link lifetime (seconds) applied by the per-row "Copy URL" action.
     const [expiry, setExpiry] = useState<number>(3600);
+    // List vs. thumbnail grid; the grid's tile size is resized live by the slider.
+    const [view, setView] = useState<FileView>("list");
+    const [thumbSize, setThumbSize] = useState<number>(128);
+    // Client-side sort over the loaded page.
+    const [sortKey, setSortKey] = useState<string>("name");
+    const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
     const [objects, setObjects] = useState<StorageObject[] | null>(null);
     const [error, setError] = useState<null | string>(null);
     const [busy, setBusy] = useState<boolean>(false);
@@ -253,6 +303,45 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
 
     // Split the loaded keys into the immediate folders + files at this prefix.
     const { files, folders } = useMemo(() => deriveEntries(objects ?? [], prefix), [objects, prefix]);
+
+    // The customMetadata tag keys present across the loaded files — surfaced as
+    // extra sort options ("user-supplied tags").
+    const tagKeys = useMemo<string[]>(() => {
+        const keys = new Set<string>();
+
+        for (const file of files) {
+            for (const key of Object.keys(file.customMetadata ?? {})) {
+                keys.add(key);
+            }
+        }
+
+        return [...keys].toSorted((a, b) => a.localeCompare(b));
+    }, [files]);
+
+    const sortedFiles = useMemo(() => sortFiles(files, sortKey, sortDirection), [files, sortKey, sortDirection]);
+
+    // Resolve a viewable (signed) URL for a thumbnail, at the toolbar's expiry.
+    const resolveUrl = useCallback((key: string): Promise<string> => client.signedStorageUrl(key, expiry), [client, expiry]);
+
+    const showList = useCallback((): void => {
+        setView("list");
+    }, []);
+
+    const showGrid = useCallback((): void => {
+        setView("grid");
+    }, []);
+
+    const onSortKeyChange = useCallback((event: ChangeEvent<HTMLSelectElement>): void => {
+        setSortKey(event.target.value);
+    }, []);
+
+    const toggleSortDirection = useCallback((): void => {
+        setSortDirection((current) => (current === "asc" ? "desc" : "asc"));
+    }, []);
+
+    const onThumbSizeChange = useCallback((event: ChangeEvent<HTMLInputElement>): void => {
+        setThumbSize(Number.parseInt(event.target.value, 10));
+    }, []);
 
     const onExpiryChange = useCallback((event: ChangeEvent<HTMLSelectElement>): void => {
         setExpiry(Number.parseInt(event.target.value, 10));
@@ -393,6 +482,78 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
 
             {objects !== null && <Breadcrumbs onNavigate={navigate} prefix={prefix} t={t} />}
 
+            {objects !== null && objects.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2 text-xs" data-testid="fb-controls">
+                    <div className="inline-flex overflow-hidden rounded-md border border-border">
+                        <button
+                            aria-pressed={view === "list"}
+                            className="px-2 py-1 outline-none transition-colors hover:bg-accent aria-pressed:bg-accent aria-pressed:text-accent-foreground"
+                            data-testid="fb-view-list"
+                            onClick={showList}
+                            type="button"
+                        >
+                            {t("List")}
+                        </button>
+                        <button
+                            aria-pressed={view === "grid"}
+                            className="border-s border-border px-2 py-1 outline-none transition-colors hover:bg-accent aria-pressed:bg-accent aria-pressed:text-accent-foreground"
+                            data-testid="fb-view-grid"
+                            onClick={showGrid}
+                            type="button"
+                        >
+                            {t("Grid")}
+                        </button>
+                    </div>
+
+                    <label className="flex items-center gap-1.5 text-muted-foreground" htmlFor="fb-sort">
+                        {t("Sort")}
+                        <select
+                            className="h-8 rounded-md border border-border bg-background px-1 outline-none focus-visible:border-ring"
+                            data-testid="fb-sort"
+                            id="fb-sort"
+                            onChange={onSortKeyChange}
+                            value={sortKey}
+                        >
+                            <option value="name">{t("Name")}</option>
+                            <option value="size">{t("size")}</option>
+                            <option value="type">{t("Type")}</option>
+                            <option value="date">{t("Modified")}</option>
+                            {tagKeys.map((key) => (
+                                <option key={key} value={`tag:${key}`}>
+                                    {key}
+                                </option>
+                            ))}
+                        </select>
+                    </label>
+                    <button
+                        aria-label={t("Toggle sort direction")}
+                        className="flex size-8 items-center justify-center rounded-md border border-border tabular-nums outline-none transition-colors hover:bg-accent focus-visible:bg-accent"
+                        data-testid="fb-sort-dir"
+                        onClick={toggleSortDirection}
+                        type="button"
+                    >
+                        {sortDirection === "asc" ? "↑" : "↓"}
+                    </button>
+
+                    {view === "grid" && (
+                        <label className="ml-auto flex items-center gap-1.5 text-muted-foreground" htmlFor="fb-thumb-size">
+                            {t("Thumbnail size")}
+                            <input
+                                className="accent-primary"
+                                data-testid="fb-thumb-size"
+                                id="fb-thumb-size"
+                                max={240}
+                                min={80}
+                                onChange={onThumbSizeChange}
+                                step={8}
+                                type="range"
+                                value={thumbSize}
+                            />
+                        </label>
+                    )}
+                </div>
+            )}
+
             {error !== null && (
                 <p className="text-sm text-destructive" data-testid="storage-error" role="alert">
                     {error}
@@ -421,7 +582,7 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
                 />
             )}
 
-            {objects !== null && objects.length > 0 && (
+            {objects !== null && objects.length > 0 && view === "list" && (
                 <div className="rounded-md border border-border">
                     <Table data-testid="fb-table">
                         <TableHeader>
@@ -436,12 +597,28 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
                             {folders.map((folder) => (
                                 <FolderRow key={folder} name={folder} onEnter={enterFolder} />
                             ))}
-                            {files.map((object) => (
+                            {sortedFiles.map((object) => (
                                 <FileRow busy={busy} copiedKey={copiedKey} key={object.key} object={object} onCopy={onCopy} onDelete={onDelete} prefix={prefix} t={t} />
                             ))}
                         </TableBody>
                     </Table>
                 </div>
+            )}
+
+            {objects !== null && objects.length > 0 && view === "grid" && (
+                <FileGallery
+                    busy={busy}
+                    copiedKey={copiedKey}
+                    files={sortedFiles}
+                    folders={folders}
+                    onCopy={onCopy}
+                    onDelete={onDelete}
+                    onEnterFolder={enterFolder}
+                    prefix={prefix}
+                    resolveUrl={resolveUrl}
+                    size={thumbSize}
+                    t={t}
+                />
             )}
 
             {nextCursor !== undefined && (
