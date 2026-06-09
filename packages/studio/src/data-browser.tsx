@@ -1,5 +1,5 @@
 import { useCirrus } from "@cirrus/react";
-import type { ColumnDef, OnChangeFn, Row, SortingState, Table } from "@tanstack/react-table";
+import type { Cell, ColumnDef, OnChangeFn, Row, SortingState, Table } from "@tanstack/react-table";
 import { flexRender, getCoreRowModel, getSortedRowModel, useReactTable } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { CSSProperties, ReactElement } from "react";
@@ -12,11 +12,13 @@ import { ConfirmButton } from "./confirm-button";
 import type { EditableFilter } from "./data-filters";
 import { DataFilters, toFilterClauses } from "./data-filters";
 import { CellValue, GridContainer, GridPagination, TableListSidebar } from "./data-grid";
-import { adminRef, callOptions, fireAndForget } from "./internal";
+import { adminRef, callOptions, fireAndForget, formatCell } from "./internal";
 import { LiveToggle } from "./live-toggle";
 import { RowDetailDrawer } from "./row-detail";
 import { recordShard } from "./shard-history";
 import { ShardInput } from "./shard-input";
+import type { StagedChange, StagedEditsModel } from "./staged-edits";
+import { coerceCellValue, StagedDiffPanel, useStagedEdits } from "./staged-edits";
 import { StorageTierHeader } from "./storage-tier";
 import useDebounced from "./use-debounced";
 import useLiveAdmin from "./use-live-admin";
@@ -82,6 +84,13 @@ const READ_TABLE_PAGE = adminRef(ADMIN_FUNCTIONS.readTablePage);
 const WRITE_ROW = adminRef(ADMIN_FUNCTIONS.writeRow);
 const DELETE_ROWS = adminRef(ADMIN_FUNCTIONS.deleteRows);
 const CLEAR_TABLE = adminRef(ADMIN_FUNCTIONS.clearTable);
+
+/**
+ * Columns that are never inline-editable: the primary-key aliases, the creation
+ * timestamp, and the raw `__doc__` blob. Everything else is a user doc field and
+ * can be edited in place (the edit stages a patch of just that field).
+ */
+const META_COLUMNS = new Set<string>(["__doc__", "__id__", "_creationTime", "_id", "id"]);
 
 /** A loaded row keyed by column name. */
 type TableRow = Record<string, unknown>;
@@ -179,6 +188,145 @@ const sortIndicator = (sorted: "asc" | "desc" | false): string => {
     }
 
     return "";
+};
+
+/**
+ * Inline-edit wiring threaded into every grid cell: whether editing is enabled,
+ * which columns accept it, the cell currently open for editing, the staged-edit
+ * buffer, and the foreign-key context (so ref cells still render as links). Built
+ * by {@link DataBrowser} and passed down to {@link EditableCell}.
+ */
+interface GridEdit {
+    cancelEdit: () => void;
+    editable: boolean;
+    editableColumn: (column: string) => boolean;
+    editingCell: null | { column: string; rowId: string };
+    onNavigateRef: (target: string, id: string) => void;
+    refs: Record<string, string> | undefined;
+    stage: StagedEditsModel["stage"];
+    stagedValue: StagedEditsModel["stagedValue"];
+    startEdit: (rowId: string, column: string) => void;
+}
+
+/**
+ * The text input shown while a cell is being edited. Commits on Enter or blur
+ * (staging the typed value) and cancels on Escape; focuses itself on mount via a
+ * ref (the a11y-friendly stand-in for `autoFocus`).
+ */
+const CellEditor = ({
+    column,
+    initial,
+    onCancel,
+    onCommit,
+    recordId,
+}: {
+    column: string;
+    initial: unknown;
+    onCancel: () => void;
+    onCommit: (raw: string) => void;
+    recordId: string;
+}): ReactElement => {
+    const ref = useRef<HTMLInputElement | null>(null);
+
+    useEffect(() => {
+        ref.current?.select();
+    }, []);
+
+    const onKeyDown = useCallback(
+        (event: React.KeyboardEvent<HTMLInputElement>): void => {
+            if (event.key === "Enter") {
+                event.preventDefault();
+                onCommit(event.currentTarget.value);
+            } else if (event.key === "Escape") {
+                event.preventDefault();
+                onCancel();
+            }
+        },
+        [onCommit, onCancel],
+    );
+
+    const onBlur = useCallback(
+        (event: React.FocusEvent<HTMLInputElement>): void => {
+            onCommit(event.currentTarget.value);
+        },
+        [onCommit],
+    );
+
+    return (
+        <input
+            className="w-full rounded border border-ring bg-background px-1 py-0.5 font-mono text-xs outline-none"
+            data-testid={`db-cell-input-${recordId}-${column}`}
+            defaultValue={formatCell(initial)}
+            onBlur={onBlur}
+            onKeyDown={onKeyDown}
+            ref={ref}
+        />
+    );
+};
+
+/**
+ * One grid body cell. Foreign-key columns render as a navigable {@link RefCell};
+ * an idless row's cells are read-only text; otherwise the cell shows its value
+ * (the staged value, highlighted, when one is pending) and — when the browser is
+ * editable and the column isn't a meta column — double-click opens an inline
+ * {@link CellEditor} that stages the change.
+ */
+const EditableCell = ({ cell, edit }: { cell: Cell<TableRow, unknown>; edit: GridEdit }): ReactElement => {
+    const column = cell.column.id;
+    const rawValue = cell.getValue();
+    const id = rowId(cell.row.original);
+    const target = edit.refs?.[column];
+
+    if (target !== undefined && (typeof rawValue === "string" || typeof rawValue === "number") && String(rawValue) !== "") {
+        return <RefCell column={column} id={String(rawValue)} onNavigate={edit.onNavigateRef} target={target} />;
+    }
+
+    // An idless row can't be addressed for a patch, so its cells are read-only.
+    // Returning early also narrows `id` to a string for the editable path below.
+    if (id === null) {
+        return <CellValue value={rawValue} />;
+    }
+
+    const staged = edit.stagedValue(id, column);
+    const display = staged === undefined ? rawValue : staged.value;
+    const canEdit = edit.editable && edit.editableColumn(column);
+    const isEditing = edit.editingCell !== null && edit.editingCell.rowId === id && edit.editingCell.column === column;
+
+    if (isEditing) {
+        return (
+            <CellEditor
+                column={column}
+                initial={display}
+                onCancel={edit.cancelEdit}
+                // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-cell commit closes over the row id + raw value; admin dev-tool render path
+                onCommit={(raw) => {
+                    edit.stage(id, column, coerceCellValue(raw, rawValue));
+                    edit.cancelEdit();
+                }}
+                recordId={id}
+            />
+        );
+    }
+
+    let cellClass: string | undefined;
+
+    if (staged !== undefined) {
+        cellClass = "rounded bg-amber-500/15 px-1";
+    } else if (canEdit) {
+        cellClass = "cursor-text";
+    }
+
+    const onDoubleClick = canEdit
+        ? (): void => {
+              edit.startEdit(id, column);
+          }
+        : undefined;
+
+    return (
+        <span className={cellClass} data-testid={`db-cell-${id}-${column}`} onDoubleClick={onDoubleClick}>
+            <CellValue value={display} />
+        </span>
+    );
 };
 
 /**
@@ -317,6 +465,7 @@ const DataBrowserRowEditor = ({
  * this stays a pure render of the page's rows.
  */
 const DataBrowserTableView = ({
+    edit,
     editable,
     onDelete,
     onEdit,
@@ -327,6 +476,7 @@ const DataBrowserTableView = ({
     tbodyStyle,
     virtualRows,
 }: {
+    edit: GridEdit;
     editable: boolean;
     onDelete: (id: null | string) => void;
     onEdit: (id: null | string, original: TableRow) => void;
@@ -355,7 +505,7 @@ const DataBrowserTableView = ({
             <tr className="border-b border-border text-xs transition-colors hover:bg-muted/50" data-testid="db-row" key={tableRow.id} style={rowStyle}>
                 {tableRow.getVisibleCells().map((cell) => (
                     <td className="truncate font-mono text-muted-foreground" key={cell.id} style={CELL_STYLE}>
-                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                        <EditableCell cell={cell} edit={edit} />
                     </td>
                 ))}
                 <td className="flex items-center gap-1" style={ACTION_CELL_STYLE}>
@@ -559,10 +709,15 @@ const useDataBrowserTable = (
 interface DataBrowserModel {
     addRow: () => void;
     bulkDelete: () => void;
+    cancelCellEdit: () => void;
     cancelEdit: () => void;
     clearTable: () => void;
     columns: string[];
+    committing: boolean;
+    discardStaged: () => void;
+    editableColumn: (column: string) => boolean;
     editing: null | { docText: string; id: null | string };
+    editingCell: null | { column: string; rowId: string };
     filter: string;
     filters: EditableFilter[];
     goNext: () => void;
@@ -573,6 +728,7 @@ interface DataBrowserModel {
     liveError: string | undefined;
     loadTables: () => void;
     navigateToRef: (target: string, id: string) => void;
+    onCommitStaged: () => void;
     onEditorDocumentChange: (event: React.ChangeEvent<HTMLTextAreaElement>) => void;
     onFilterChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
     onFiltersChange: (filters: EditableFilter[]) => void;
@@ -590,6 +746,10 @@ interface DataBrowserModel {
     shardKey: string;
     showJson: () => void;
     showTable: () => void;
+    stage: StagedEditsModel["stage"];
+    stagedChanges: StagedChange[];
+    stagedValue: StagedEditsModel["stagedValue"];
+    startCellEdit: (rowId: string, column: string) => void;
     table: DataBrowserTableModel;
     tables: TableInfo[] | null;
     tablesError: null | string;
@@ -643,6 +803,13 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
     // rejected write without disturbing the page-read error.
     const [editing, setEditing] = useState<null | { docText: string; id: null | string }>(null);
     const [writeError, setWriteError] = useState<null | string>(null);
+
+    // Inline-edit state: the staged-edit buffer, the cell currently open for
+    // editing, and whether a batch commit is in flight. Edits accumulate in
+    // `stagedEdits` (Outerbase-style) until committed or discarded.
+    const stagedEdits = useStagedEdits();
+    const [editingCell, setEditingCell] = useState<null | { column: string; rowId: string }>(null);
+    const [committing, setCommitting] = useState<boolean>(false);
 
     const { live, liveError, setLiveError, toggle } = useLiveToggle();
 
@@ -742,15 +909,17 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
 
     const selectTable = useCallback(
         (table: string): void => {
-            // A fresh table means the previous sort/search/filters no longer apply.
+            // A fresh table means the previous sort/search/filters/staged edits no longer apply.
             setSorting([]);
             setFilter("");
             setFilters([]);
             filtersRef.current = [];
+            stagedEdits.clear();
+            setEditingCell(null);
             setSelectedTable(table);
             fireAndForget(fetchPage(shardKey, table, 0, ""));
         },
-        [fetchPage, shardKey],
+        [fetchPage, shardKey, stagedEdits],
     );
 
     // Follow a foreign-key cell: switch to the target table and search for the
@@ -780,6 +949,72 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
         },
         [fetchPage, search, selectedTable, shardKey],
     );
+
+    // ── Inline cell editing → staged buffer → preview-diff → commit ──────────
+    const editableColumn = useCallback((column: string): boolean => !META_COLUMNS.has(column), []);
+
+    const startCellEdit = useCallback((targetRow: string, column: string): void => {
+        setEditingCell({ column, rowId: targetRow });
+    }, []);
+
+    const cancelCellEdit = useCallback((): void => {
+        setEditingCell(null);
+    }, []);
+
+    // Commit every staged cell edit as a per-row patch (the writer merges the
+    // changed fields into the existing doc), then reload the page and clear the
+    // buffer. Sequential so a failure pins the offending row.
+    const commitStaged = useCallback(async (): Promise<void> => {
+        if (selectedTable === null) {
+            return;
+        }
+
+        setWriteError(null);
+        setCommitting(true);
+
+        try {
+            for (const [id, columns] of Object.entries(stagedEdits.staged)) {
+                // eslint-disable-next-line no-await-in-loop -- one patch per edited row; sequential so a failure pins the offending row
+                (await client.query(WRITE_ROW, { doc: columns, id, op: "patch", table: selectedTable }, callOptions(shardKey))) as WriteRowResult;
+            }
+
+            stagedEdits.clear();
+            setEditingCell(null);
+            await fetchPage(shardKey, selectedTable, offset, search);
+        } catch (error) {
+            setWriteError((error as Error).message);
+        } finally {
+            setCommitting(false);
+        }
+    }, [client, fetchPage, offset, search, selectedTable, shardKey, stagedEdits]);
+
+    const discardStaged = useCallback((): void => {
+        stagedEdits.clear();
+        setEditingCell(null);
+    }, [stagedEdits]);
+
+    // Resolve the staged buffer against the loaded page for the old→new diff.
+    const stagedChanges = useMemo<StagedChange[]>(() => {
+        const rowsById = new Map<string, TableRow>();
+
+        for (const row of page?.rows ?? []) {
+            const id = rowId(row);
+
+            if (id !== null) {
+                rowsById.set(id, row);
+            }
+        }
+
+        const changes: StagedChange[] = [];
+
+        for (const [id, columns] of Object.entries(stagedEdits.staged)) {
+            for (const [column, newValue] of Object.entries(columns)) {
+                changes.push({ column, newValue, oldValue: rowsById.get(id)?.[column], rowId: id });
+            }
+        }
+
+        return changes;
+    }, [page, stagedEdits.staged]);
 
     // Re-run the server-side search (from offset 0) when the debounced query
     // changes for the loaded table. Skipped until a table is selected, and when
@@ -958,13 +1193,22 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
         [writeRow],
     );
 
+    const onCommitStaged = useCallback((): void => {
+        fireAndForget(commitStaged());
+    }, [commitStaged]);
+
     return {
         addRow,
         bulkDelete,
+        cancelCellEdit,
         cancelEdit,
         clearTable: emptyTable,
         columns: page?.columns ?? [],
+        committing,
+        discardStaged,
+        editableColumn,
         editing,
+        editingCell,
         filter,
         filters,
         goNext,
@@ -975,6 +1219,7 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
         liveError,
         loadTables,
         navigateToRef,
+        onCommitStaged,
         onEditorDocumentChange,
         onFilterChange,
         onFiltersChange: setFilters,
@@ -992,6 +1237,10 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
         shardKey,
         showJson,
         showTable,
+        stage: stagedEdits.stage,
+        stagedChanges,
+        stagedValue: stagedEdits.stagedValue,
+        startCellEdit,
         table,
         tables,
         tablesError,
@@ -1023,10 +1272,15 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
     const {
         addRow,
         bulkDelete,
+        cancelCellEdit,
         cancelEdit,
         clearTable,
         columns,
+        committing,
+        discardStaged,
+        editableColumn,
         editing,
+        editingCell,
         filter,
         filters,
         goNext,
@@ -1037,6 +1291,7 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
         liveError,
         loadTables,
         navigateToRef,
+        onCommitStaged,
         onEditorDocumentChange,
         onFilterChange,
         onFiltersChange,
@@ -1054,6 +1309,10 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
         shardKey,
         showJson,
         showTable,
+        stage,
+        stagedChanges,
+        stagedValue,
+        startCellEdit,
         table,
         tables,
         tablesError,
@@ -1069,6 +1328,21 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
     const closeInspect = useCallback((): void => {
         setInspecting(null);
     }, []);
+
+    // The inline-edit context passed down to every grid cell.
+    const edit = useMemo<GridEdit>(() => {
+        return {
+            cancelEdit: cancelCellEdit,
+            editable,
+            editableColumn,
+            editingCell,
+            onNavigateRef: navigateToRef,
+            refs: page?.refs,
+            stage,
+            stagedValue,
+            startEdit: startCellEdit,
+        };
+    }, [cancelCellEdit, editable, editableColumn, editingCell, navigateToRef, page?.refs, stage, stagedValue, startCellEdit]);
 
     return (
         <div className="flex flex-col gap-4" data-testid="cirrus-data-browser">
@@ -1126,6 +1400,10 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
                                     />
                                 )}
 
+                                {editable && stagedChanges.length > 0 && (
+                                    <StagedDiffPanel changes={stagedChanges} committing={committing} onCommit={onCommitStaged} onDiscard={discardStaged} />
+                                )}
+
                                 {writeError !== null && (
                                     <p className="text-sm text-destructive" data-testid="db-write-error" role="alert">
                                         {writeError}
@@ -1155,6 +1433,7 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
 
                                 {viewMode === "table" && page.rows.length > 0 && (
                                     <DataBrowserTableView
+                                        edit={edit}
                                         editable={editable}
                                         onDelete={onRowDelete}
                                         onEdit={onRowEdit}

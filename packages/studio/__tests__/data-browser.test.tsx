@@ -502,6 +502,41 @@ describe("dataBrowser — editable", () => {
         expect(call[1]).toMatchObject({ doc: { text: "fresh" }, op: "insert", table: "messages" });
     });
 
+    it("stages an inline cell edit and commits it as a patch of just that field", async () => {
+        expect.assertions(2);
+
+        const mock = createEditableClient();
+
+        await openMessages(mock);
+
+        // Double-click the `text` cell of row m1 to open the inline editor, change
+        // the value, and commit the cell with Enter — staging the edit.
+        fireEvent.doubleClick(await screen.findByTestId("db-cell-m1-text"));
+
+        const input = await screen.findByTestId<HTMLInputElement>("db-cell-input-m1-text");
+
+        fireEvent.change(input, { target: { value: "edited" } });
+        fireEvent.keyDown(input, { key: "Enter" });
+
+        // The staged-diff panel surfaces the pending change before any write.
+        const staged = await screen.findByTestId("db-staged");
+
+        expect(staged.textContent).toContain("edited");
+
+        // Commit issues a single patch carrying only the edited field.
+        fireEvent.click(screen.getByTestId("db-staged-commit"));
+
+        await waitFor(() => {
+            if (!mock.query.mock.calls.some((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow)) {
+                throw new Error("writeRow not called yet");
+            }
+        });
+
+        const call = mock.query.mock.calls.find((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow) as [unknown, Record<string, unknown>, unknown];
+
+        expect(call[1]).toMatchObject({ doc: { text: "edited" }, id: "m1", op: "patch", table: "messages" });
+    });
+
     it("reports invalid JSON without calling the server", async () => {
         expect.assertions(2);
 
