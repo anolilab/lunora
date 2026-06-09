@@ -950,6 +950,9 @@ importers:
         specifier: catalog:tooling
         version: 28.0.0
     devDependencies:
+      '@cirrus/do':
+        specifier: workspace:*
+        version: link:../do
       '@cirrus/server':
         specifier: workspace:*
         version: link:../server

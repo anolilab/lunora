@@ -36,6 +36,7 @@
         "ts-morph": "catalog:tooling"
     },
     "devDependencies": {
+        "@cirrus/do": "workspace:*",
         "@cirrus/server": "workspace:*",
         "@cirrus/values": "workspace:*",
         "@types/node": "catalog:types",

@@ -1,4 +1,5 @@
 import type { Finding } from "@cirrus/advisor";
+import type { AdvisoryFinding } from "@cirrus/do";
 
 import type { CronJobIR, FunctionIR, IndexIR, MigrationIR, SchemaIR, TableIR, ValidatorIR } from "./ir";
 import sanitizeNamespace from "./paths";
@@ -996,6 +997,11 @@ const buildTableIndexes = (schema: SchemaIR): Record<string, EmittedTableIndex[]
 };
 
 const emitShard = (schema: SchemaIR, advisories: ReadonlyArray<Finding> = []): string => {
+    // Drift guard + the data we emit: the advisor's `Finding`s must stay
+    // assignable to the DO's `AdvisoryFinding` (the generated `CIRRUS_ADVISORIES`
+    // is typed against it). This assignment fails `tsc` if the two shapes drift —
+    // `@cirrus/do` hand-mirrors `Finding` to avoid depending on `@cirrus/advisor`.
+    const advisoryData: ReadonlyArray<AdvisoryFinding> = advisories;
     const hasVectors = schema.vectorIndexes.length > 0;
     const hasGlobalTables = schema.tables.some((table) => table.shardMode === "global");
     const hasTables = schema.tables.length > 0;
@@ -1218,7 +1224,7 @@ const CIRRUS_TABLE_REFS: Record<string, Record<string, string>> = ${JSON.stringi
 const CIRRUS_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: string; type: "index" | "rank" | "search" | "vector"; unique?: boolean }>> = ${JSON.stringify(tableIndexes, undefined, 4)};
 
 /** Static schema advisories (computed by @cirrus/advisor at codegen time) served via \`__cirrus_admin__:getAdvisories\`. */
-const CIRRUS_ADVISORIES: AdvisoryFinding[] = ${JSON.stringify(advisories, undefined, 4)};
+const CIRRUS_ADVISORIES: AdvisoryFinding[] = ${JSON.stringify(advisoryData, undefined, 4)};
 
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to \`__cdc_log\` on every write (backs streaming export + replay-PITR). */

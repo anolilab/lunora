@@ -5,6 +5,7 @@ import type { DatabaseWriterLike, SchemaLike, SqlExec } from "../src/ctx-db";
 import { applyCdcChanges, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 import type { DataMigrationLike, MigrationRunResult } from "../src/data-migration";
 import { runDataMigration } from "../src/data-migration";
+import type { AdvisoryFinding } from "../src/introspect";
 import { ADMIN_FUNCTIONS } from "../src/introspect";
 import type { RankIndexDefinitionLike } from "../src/rank";
 import { rankKeyFromDoc } from "../src/rank";
@@ -141,6 +142,42 @@ describe("shardDO admin introspection", () => {
         await expect(response.json()).resolves.toEqual({
             result: { indexes: [{ fields: ["author"], name: "by_author", type: "index", unique: true }] },
         });
+    });
+
+    it("reports no advisories from the base hook, and the subclass-declared ones when overridden", async () => {
+        expect.assertions(2);
+
+        // Base ShardDO can't see the user schema, so it reports none.
+        const base = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const baseResponse = await base.fetch(adminRequest(ADMIN_FUNCTIONS.getAdvisories, {}, ADMIN_TOKEN));
+
+        await expect(baseResponse.json()).resolves.toEqual({ result: { advisories: [] } });
+
+        // The codegen subclass overrides `advisories()` with the baked list.
+        const finding: AdvisoryFinding = {
+            cacheKey: "unindexed_foreign_key:posts:authorId",
+            categories: ["PERFORMANCE"],
+            description: "A foreign-key column has no index.",
+            detail: 'Relation "author" on table "posts" references "users" via column "authorId".',
+            facing: "EXTERNAL",
+            level: "INFO",
+            metadata: { table: "posts" },
+            name: "unindexed_foreign_key",
+            remediation: "Add an index leading with the FK column.",
+            title: "Unindexed foreign key",
+        };
+
+        class AdvisedShard extends AdminShard {
+            // eslint-disable-next-line class-methods-use-this -- test stub mirroring the codegen override
+            protected override advisories(): AdvisoryFinding[] {
+                return [finding];
+            }
+        }
+
+        const advised = new AdvisedShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await advised.fetch(adminRequest(ADMIN_FUNCTIONS.getAdvisories, {}, ADMIN_TOKEN));
+
+        await expect(response.json()).resolves.toEqual({ result: { advisories: [finding] } });
     });
 
     it("is disabled (403) when no admin token is configured, even with a bearer", async () => {
