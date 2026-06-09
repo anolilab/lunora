@@ -3,7 +3,7 @@
  * test directly. Rejects path traversal on both `from` and `to`, and newlines in
  * env-var values (which would corrupt the line-oriented `.dev.vars`).
  */
-import type { RegistryBinding, RegistryFile, RegistryManifest } from "./types.js";
+import type { RegistryBinding, RegistryFile, RegistryManifest } from "./types";
 
 /** A CR or LF — illegal in a `.dev.vars` value (it would inject a spurious line). */
 const NEWLINE_PRESENT = /[\r\n]/u;

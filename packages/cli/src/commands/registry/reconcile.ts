@@ -8,11 +8,11 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 import { dirname, join } from "@visulima/path";
 
-import type { Logger } from "../../util/logger.js";
-import type { RegistryLock } from "../../util/registry-lock.js";
-import { hashContent, readLock, recordedHash, recordFile, writeLock } from "../../util/registry-lock.js";
-import { applyItemResources } from "./apply.js";
-import type { ReconcileOptions, ReconcileOutcome, RegistryFile, ResolvedItem } from "./types.js";
+import type { Logger } from "../../util/logger";
+import type { RegistryLock } from "../../util/registry-lock";
+import { hashContent, readLock, recordedHash, recordFile, writeLock } from "../../util/registry-lock";
+import { applyItemResources } from "./apply";
+import type { ReconcileOptions, ReconcileOutcome, RegistryFile, ResolvedItem } from "./types";
 
 /**
  * Reconcile a `schema-extension` file: copy the extension source (if absent)
@@ -35,7 +35,7 @@ const reconcileSchemaExtension = async (
         return { kind: "skipped", path: schemaPath };
     }
 
-    const { insertSchemaExtension } = await import("../../util/insert-schema-extension.js");
+    const { insertSchemaExtension } = await import("../../util/insert-schema-extension");
 
     // The item's `to` points at where its extension *source* lives; copy that
     // (create-if-absent) AND wire it into the shared cirrus/schema.ts.
@@ -71,7 +71,7 @@ const reconcileSchemaExtension = async (
 
 /** Print a `--diff` preview for one whole-file destination; writes nothing. */
 const previewWholeFile = async (file: RegistryFile, current: string, incoming: string, exists: boolean, logger: Logger): Promise<void> => {
-    const { default: renderDiff } = await import("../../util/text-diff.js");
+    const { default: renderDiff } = await import("../../util/text-diff");
     const lines = renderDiff(current, incoming);
 
     if (lines.length === 0) {

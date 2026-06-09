@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { patchViteConfig } from "../../src/util/patch-vite-config.js";
+import { patchViteConfig } from "../../src/util/patch-vite-config";
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 

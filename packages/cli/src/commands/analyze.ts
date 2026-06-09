@@ -2,9 +2,9 @@ import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs"
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
-import type { Logger } from "../util/logger.js";
-import type { SpawnDescriptor, Spawner } from "../util/spawn.js";
-import { defaultSpawner } from "../util/spawn.js";
+import type { Logger } from "../util/logger";
+import type { SpawnDescriptor, Spawner } from "../util/spawn";
+import { defaultSpawner } from "../util/spawn";
 
 interface AnalyzeCommandOptions {
     cwd?: string;

@@ -7,13 +7,13 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 import { join } from "@visulima/path";
 
-import type { Logger } from "../../util/logger.js";
-import { confirmDepMutation } from "./apply.js";
-import { buildRegistryIndex, collectCatalog } from "./catalog.js";
-import reconcileItems from "./reconcile.js";
-import { readManifest, resolveItemDirectory, resolvePlan, resolveRegistryRoot, sourceGateError } from "./resolve.js";
-import type { AddCommandOptions, AddCommandResult, RegistryManifest } from "./types.js";
-import { emptyResult } from "./types.js";
+import type { Logger } from "../../util/logger";
+import { confirmDepMutation } from "./apply";
+import { buildRegistryIndex, collectCatalog } from "./catalog";
+import reconcileItems from "./reconcile";
+import { readManifest, resolveItemDirectory, resolvePlan, resolveRegistryRoot, sourceGateError } from "./resolve";
+import type { AddCommandOptions, AddCommandResult, RegistryManifest } from "./types";
+import { emptyResult } from "./types";
 
 /** Render the human-readable plan for one item. */
 const printPlan = (logger: Logger, manifest: RegistryManifest): void => {

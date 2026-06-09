@@ -4,9 +4,9 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { runAnalyzeCommand } from "../../src/commands/analyze.js";
-import type { Logger } from "../../src/util/logger.js";
-import { createRecordingSpawner } from "../../src/util/spawn.js";
+import { runAnalyzeCommand } from "../../src/commands/analyze";
+import type { Logger } from "../../src/util/logger";
+import { createRecordingSpawner } from "../../src/util/spawn";
 
 interface Recorded {
     errors: string[];

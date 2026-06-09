@@ -10,7 +10,7 @@ import { join } from "node:path";
 
 import { runCodegen } from "@cirrus/codegen";
 
-import type { Logger } from "./logger.js";
+import type { Logger } from "./logger";
 
 const DEFAULT_DEBOUNCE_MS = 100;
 

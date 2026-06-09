@@ -8,10 +8,10 @@ import { bold, cyan, dim } from "@visulima/colorize";
 // only evaluated when the command that needs them actually runs. Eagerly
 // importing them here would tax every invocation (`cirrus --help`, `-v`,
 // `dev`, `env`, ...) with the full command-module graph at process start.
-import type { BackupSubcommand } from "./commands/backup.js";
-import type { EnvSubcommand } from "./commands/env.js";
-import type { Template } from "./commands/init.js";
-import { createLogger } from "./util/logger.js";
+import type { BackupSubcommand } from "./commands/backup";
+import type { EnvSubcommand } from "./commands/env";
+import type { Template } from "./commands/init";
+import { createLogger } from "./util/logger";
 
 const COMMANDS = [
     "init",
@@ -224,7 +224,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
             const from = typeof parsed.from === "string" && parsed.from.length > 0 ? parsed.from : undefined;
             const source = typeof parsed.source === "string" && parsed.source.length > 0 ? parsed.source : undefined;
 
-            const { runInitCommand } = await import("./commands/init.js");
+            const { runInitCommand } = await import("./commands/init");
             const result = await runInitCommand({
                 allowUnsafeSource: parsed.allowUnsafeSource === true,
                 cwd,
@@ -280,7 +280,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
             const source = toStringOrUndefined(parsed.source);
             const out = toStringOrUndefined(parsed.out);
 
-            const { runAddCommand, runBuildIndexCommand, runRegistryViewCommand } = await import("./commands/registry/index.js");
+            const { runAddCommand, runBuildIndexCommand, runRegistryViewCommand } = await import("./commands/registry/index");
 
             if (subcommand === "add") {
                 const result = await runAddCommand({
@@ -347,7 +347,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
     cli.addCommand({
         description: "Run the dev stack: wrangler worker + studio + codegen watch",
         execute: async ({ options: parsed }) => {
-            const { runDevCommand } = await import("./commands/dev.js");
+            const { runDevCommand } = await import("./commands/dev");
             const result = await runDevCommand({
                 codegen: parsed.noCodegen === true ? false : undefined,
                 cwd,
@@ -372,7 +372,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
         description: "Run codegen for cirrus/ functions and schema",
         execute: async () => {
             try {
-                const { runCodegenCommand } = await import("./commands/codegen.js");
+                const { runCodegenCommand } = await import("./commands/codegen");
 
                 runCodegenCommand({ cwd, logger });
                 exitCode.value = 0;
@@ -387,7 +387,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
     cli.addCommand({
         description: "Codegen, validate wrangler, then wrangler deploy",
         execute: async ({ options: parsed }) => {
-            const { runDeployCommand } = await import("./commands/deploy.js");
+            const { runDeployCommand } = await import("./commands/deploy");
             const result = await runDeployCommand({
                 cwd,
                 env: toStringOrUndefined(parsed.env),
@@ -411,7 +411,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
     cli.addCommand({
         description: "Run codegen + binding reconcile + wrangler validation (no Vite) — for CI",
         execute: async () => {
-            const { runPrepareCommand } = await import("./commands/prepare.js");
+            const { runPrepareCommand } = await import("./commands/prepare");
             const result = await runPrepareCommand({ cwd, logger });
 
             exitCode.value = result.code;
@@ -423,7 +423,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
         argument: { description: "Worker name (defaults to wrangler config)", name: "worker", type: String },
         description: "Stream live logs from a deployed Worker via wrangler tail",
         execute: async ({ argument, options: parsed }) => {
-            const { runLogsCommand } = await import("./commands/logs.js");
+            const { runLogsCommand } = await import("./commands/logs");
             const result = await runLogsCommand({
                 cwd,
                 env: toStringOrUndefined(parsed.env),
@@ -459,7 +459,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
             }
 
             try {
-                const { runBackupCommand } = await import("./commands/backup.js");
+                const { runBackupCommand } = await import("./commands/backup");
                 const result = await runBackupCommand({
                     at: toStringOrUndefined(parsed.at),
                     bookmark: toStringOrUndefined(parsed.bookmark),
@@ -514,7 +514,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
             }
 
             try {
-                const { runRpcCommand } = await import("./commands/run.js");
+                const { runRpcCommand } = await import("./commands/run");
                 const result = await runRpcCommand({
                     args: toStringOrUndefined(parsed.args),
                     cwd,
@@ -541,7 +541,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
     cli.addCommand({
         description: "Clear local Miniflare state (and .cirrus-cache with --all)",
         execute: async ({ options: parsed }) => {
-            const { runResetCommand } = await import("./commands/reset.js");
+            const { runResetCommand } = await import("./commands/reset");
             const result = await runResetCommand({
                 all: parsed.all === true,
                 cwd,
@@ -565,7 +565,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
             const sub = argument[0];
 
             if (sub === "generate") {
-                const { runMigrateGenerateCommand } = await import("./commands/migrate.js");
+                const { runMigrateGenerateCommand } = await import("./commands/migrate");
                 const result = runMigrateGenerateCommand({ cwd, logger, name: argument[1] ?? toStringOrUndefined(parsed.name) });
 
                 exitCode.value = result.code;
@@ -583,7 +583,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
                     return;
                 }
 
-                const { runMigrateCreateCommand } = await import("./commands/migrate.js");
+                const { runMigrateCreateCommand } = await import("./commands/migrate");
                 const result = runMigrateCreateCommand({ cwd, logger, name, table: toStringOrUndefined(parsed.table) });
 
                 exitCode.value = result.code;
@@ -602,7 +602,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
                 }
 
                 try {
-                    const { runMigrateDataCommand } = await import("./commands/migrate.js");
+                    const { runMigrateDataCommand } = await import("./commands/migrate");
                     const result = await runMigrateDataCommand({
                         batchSize: toNumberOrUndefined(parsed.batchSize),
                         cwd,
@@ -649,7 +649,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
         execute: async ({ argument, options: parsed }) => {
             try {
                 const out = argument[0] ?? toStringOrUndefined(parsed.out);
-                const { runExportCommand } = await import("./commands/data-transfer.js");
+                const { runExportCommand } = await import("./commands/data-transfer");
                 const result = await runExportCommand({
                     cwd,
                     logger,
@@ -690,7 +690,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
             }
 
             try {
-                const { runImportCommand } = await import("./commands/data-transfer.js");
+                const { runImportCommand } = await import("./commands/data-transfer");
                 const result = await runImportCommand({
                     batchSize: toNumberOrUndefined(parsed.batchSize),
                     cwd,
@@ -721,7 +721,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
     cli.addCommand({
         description: "Validate wrangler.jsonc + codegen dry-run + tsc --noEmit (no files written)",
         execute: async ({ options: parsed }) => {
-            const { runVerifyCommand } = await import("./commands/verify.js");
+            const { runVerifyCommand } = await import("./commands/verify");
             const result = await runVerifyCommand({ cwd, logger, typecheck: parsed.noTypecheck === true ? false : undefined });
 
             exitCode.value = result.code;
@@ -733,7 +733,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
     cli.addCommand({
         description: "Print resolved project config: @cirrus/* versions, wrangler summary, schema overview",
         execute: async ({ options: parsed }) => {
-            const { runInfoCommand } = await import("./commands/info.js");
+            const { runInfoCommand } = await import("./commands/info");
             const result = runInfoCommand({ cwd, json: parsed.json === true, logger });
 
             exitCode.value = result.code;
@@ -756,7 +756,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
             }
 
             try {
-                const { runEnvCommand } = await import("./commands/env.js");
+                const { runEnvCommand } = await import("./commands/env");
                 const result = await runEnvCommand({
                     cwd,
                     key: argument[1],
@@ -784,7 +784,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
         description: "Run wrangler dry-run and report bundle size, top modules, and _generated files",
         execute: async ({ options: parsed }) => {
             try {
-                const { runAnalyzeCommand } = await import("./commands/analyze.js");
+                const { runAnalyzeCommand } = await import("./commands/analyze");
                 const result = await runAnalyzeCommand({ cwd, json: parsed.json === true, logger });
 
                 exitCode.value = result.code;
@@ -801,7 +801,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
         description: "Open the Cirrus studio in your browser (local dev by default, --remote for production)",
         execute: async ({ options: parsed }) => {
             try {
-                const { runViewCommand } = await import("./commands/view.js");
+                const { runViewCommand } = await import("./commands/view");
                 const result = await runViewCommand({ cwd, logger, remote: parsed.remote === true });
 
                 exitCode.value = result.code;
@@ -819,7 +819,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
         description: "Open the Cirrus docs in your browser (optional [section] path)",
         execute: async ({ argument }) => {
             try {
-                const { runDocsCommand } = await import("./commands/docs.js");
+                const { runDocsCommand } = await import("./commands/docs");
                 const result = await runDocsCommand({ logger, section: argument[0] });
 
                 exitCode.value = result.code;

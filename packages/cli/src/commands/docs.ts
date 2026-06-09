@@ -1,7 +1,7 @@
 /* eslint-disable unicorn/prevent-abbreviations -- "docs" is the user-facing CLI command name (cirrus docs); renaming the identifiers would diverge from the command users type */
-import type { Logger } from "../util/logger.js";
-import type { OpenUrlOptions } from "../util/open-url.js";
-import { openUrl } from "../util/open-url.js";
+import type { Logger } from "../util/logger";
+import type { OpenUrlOptions } from "../util/open-url";
+import { openUrl } from "../util/open-url";
 
 interface DocsCommandOptions {
     logger: Logger;

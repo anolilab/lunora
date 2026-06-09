@@ -10,8 +10,8 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { runAddCommand, runBuildIndexCommand, runRegistryViewCommand } from "../../src/commands/registry/index.js";
-import type { Logger } from "../../src/util/logger.js";
+import { runAddCommand, runBuildIndexCommand, runRegistryViewCommand } from "../../src/commands/registry/index";
+import type { Logger } from "../../src/util/logger";
 
 const capturingLogger = (): { lines: string[]; logger: Logger } => {
     const lines: string[] = [];

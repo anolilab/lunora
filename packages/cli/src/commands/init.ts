@@ -6,8 +6,8 @@ import { walkSync } from "@visulima/fs";
 import { dirname, join, relative, resolve } from "@visulima/path";
 import { downloadTemplate } from "giget";
 
-import type { Logger } from "../util/logger.js";
-import { patchViteConfig } from "../util/patch-vite-config.js";
+import type { Logger } from "../util/logger";
+import { patchViteConfig } from "../util/patch-vite-config";
 
 type Template = "next" | "standalone" | "tanstack-start" | "vite";
 

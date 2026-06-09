@@ -20,7 +20,7 @@
  * Heavy deps (giget, ts-morph, jsonc-parser) load lazily inside the functions
  * that need them, so e.g. `registry list` never pulls ts-morph.
  */
-export { buildRegistryIndex } from "./catalog.js";
-export { runAddCommand, runBuildIndexCommand, runListCommand, runRegistryViewCommand } from "./commands.js";
-export { default as parseManifest } from "./manifest.js";
-export type { AddCommandOptions, AddCommandResult, RegistryBinding, RegistryEnvVariable, RegistryFile, RegistryManifest } from "./types.js";
+export { buildRegistryIndex } from "./catalog";
+export { runAddCommand, runBuildIndexCommand, runListCommand, runRegistryViewCommand } from "./commands";
+export { default as parseManifest } from "./manifest";
+export type { AddCommandOptions, AddCommandResult, RegistryBinding, RegistryEnvVariable, RegistryFile, RegistryManifest } from "./types";

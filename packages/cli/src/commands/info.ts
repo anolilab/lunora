@@ -6,7 +6,7 @@ import { discoverSchema } from "@cirrus/codegen";
 import { parse as parseJsonc } from "jsonc-parser";
 import { Project } from "ts-morph";
 
-import type { Logger } from "../util/logger.js";
+import type { Logger } from "../util/logger";
 
 interface InfoCommandOptions {
     cwd?: string;

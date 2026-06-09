@@ -8,9 +8,9 @@ import { tmpdir } from "node:os";
 
 import { join } from "@visulima/path";
 
-import type { Logger } from "../../util/logger.js";
-import parseManifest from "./manifest.js";
-import type { AddCommandOptions, RegistryManifest, ResolvedItem } from "./types.js";
+import type { Logger } from "../../util/logger";
+import parseManifest from "./manifest";
+import type { AddCommandOptions, RegistryManifest, ResolvedItem } from "./types";
 
 const DEFAULT_SOURCE_BASE = "gh:anolilab/cirrus/registry";
 const DEFAULT_SOURCE_REF = "alpha";

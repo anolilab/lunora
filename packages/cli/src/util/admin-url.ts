@@ -1,4 +1,4 @@
-import type { Logger } from "./logger.js";
+import type { Logger } from "./logger";
 
 /** Hosts we treat as local — the admin bearer may transit cleartext to these. */
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "::1", "[::1]", "localhost"]);

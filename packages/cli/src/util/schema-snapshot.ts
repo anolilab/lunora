@@ -7,8 +7,8 @@
  */
 import type { SchemaIR, ValidatorIR } from "@cirrus/codegen";
 
-import type { ColumnSnapshot, IndexSnapshot, SchemaSnapshot, TableSnapshot } from "./migration-diff.js";
-import { validatorKindToSqlType } from "./migration-diff.js";
+import type { ColumnSnapshot, IndexSnapshot, SchemaSnapshot, TableSnapshot } from "./migration-diff";
+import { validatorKindToSqlType } from "./migration-diff";
 
 const validatorToColumn = (validator: ValidatorIR): ColumnSnapshot => {
     if (validator.kind === "optional" && validator.inner) {

@@ -9,8 +9,8 @@ import { createInterface } from "node:readline";
 
 import { join } from "@visulima/path";
 
-import type { Logger } from "../../util/logger.js";
-import type { AddCommandOptions, RegistryBinding, RegistryEnvVariable, RegistryManifest } from "./types.js";
+import type { Logger } from "../../util/logger";
+import type { AddCommandOptions, RegistryBinding, RegistryEnvVariable, RegistryManifest } from "./types";
 
 /** Splits `.dev.vars` text into lines (CRLF or LF). */
 const NEWLINE_SPLIT = /\r?\n/u;

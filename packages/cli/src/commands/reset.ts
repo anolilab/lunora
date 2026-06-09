@@ -3,7 +3,7 @@ import { createInterface } from "node:readline";
 
 import { join } from "@visulima/path";
 
-import type { Logger } from "../util/logger.js";
+import type { Logger } from "../util/logger";
 
 interface ResetCommandOptions {
     all?: boolean;

@@ -3,9 +3,9 @@ import { join } from "node:path";
 
 import { parse as parseJsonc } from "jsonc-parser";
 
-import type { Logger } from "../util/logger.js";
-import type { OpenUrlOptions } from "../util/open-url.js";
-import { openUrl } from "../util/open-url.js";
+import type { Logger } from "../util/logger";
+import type { OpenUrlOptions } from "../util/open-url";
+import { openUrl } from "../util/open-url";
 
 interface ViewCommandOptions {
     cwd?: string;

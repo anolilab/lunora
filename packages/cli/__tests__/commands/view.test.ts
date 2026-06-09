@@ -4,8 +4,8 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { runViewCommand } from "../../src/commands/view.js";
-import type { Logger } from "../../src/util/logger.js";
+import { runViewCommand } from "../../src/commands/view";
+import type { Logger } from "../../src/util/logger";
 
 interface Recorded {
     errors: string[];

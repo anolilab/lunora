@@ -1,28 +1,28 @@
-export type { CommandName, RunCliOptions } from "./cli.js";
-export { COMMANDS, runCli, VERSION } from "./cli.js";
-export { runCodegenCommand } from "./commands/codegen.js";
-export type { ExportCommandOptions, ExportCommandResult, ImportCommandOptions, ImportCommandResult, StreamingFetchLike } from "./commands/data-transfer.js";
-export { DEFAULT_IMPORT_BATCH_SIZE, runExportCommand, runImportCommand } from "./commands/data-transfer.js";
-export type { DeployCommandOptions, DeployCommandResult } from "./commands/deploy.js";
-export { runDeployCommand } from "./commands/deploy.js";
-export type { DevCommandOptions, DevCommandPlan } from "./commands/dev.js";
-export { planDevCommand, runDevCommand } from "./commands/dev.js";
-export type { InitCommandOptions, InitCommandResult, Template } from "./commands/init.js";
-export { runInitCommand } from "./commands/init.js";
-export type { MigrateGenerateCommandOptions, MigrateGenerateCommandResult } from "./commands/migrate.js";
-export { runMigrateGenerateCommand } from "./commands/migrate.js";
-export type { AddCommandOptions, AddCommandResult, RegistryBinding, RegistryFile, RegistryManifest } from "./commands/registry/index.js";
-export { buildRegistryIndex, parseManifest, runAddCommand, runBuildIndexCommand, runRegistryViewCommand } from "./commands/registry/index.js";
-export type { ResetCommandOptions, ResetCommandResult } from "./commands/reset.js";
-export { runResetCommand } from "./commands/reset.js";
-export type { FetchLike, RunCommandOptions, RunCommandResult } from "./commands/run.js";
-export { runRpcCommand } from "./commands/run.js";
-export { default as parseArgs } from "./util/args.js";
-export type { InsertSchemaExtensionResult } from "./util/insert-schema-extension.js";
-export { insertSchemaExtension } from "./util/insert-schema-extension.js";
-export type { Logger } from "./util/logger.js";
-export { createLogger, pail } from "./util/logger.js";
-export type { ColumnSnapshot, DiffEntry, IndexSnapshot, SchemaDiff, SchemaSnapshot, TableSnapshot, UnsupportedEntry } from "./util/migration-diff.js";
+export type { CommandName, RunCliOptions } from "./cli";
+export { COMMANDS, runCli, VERSION } from "./cli";
+export { runCodegenCommand } from "./commands/codegen";
+export type { ExportCommandOptions, ExportCommandResult, ImportCommandOptions, ImportCommandResult, StreamingFetchLike } from "./commands/data-transfer";
+export { DEFAULT_IMPORT_BATCH_SIZE, runExportCommand, runImportCommand } from "./commands/data-transfer";
+export type { DeployCommandOptions, DeployCommandResult } from "./commands/deploy";
+export { runDeployCommand } from "./commands/deploy";
+export type { DevCommandOptions, DevCommandPlan } from "./commands/dev";
+export { planDevCommand, runDevCommand } from "./commands/dev";
+export type { InitCommandOptions, InitCommandResult, Template } from "./commands/init";
+export { runInitCommand } from "./commands/init";
+export type { MigrateGenerateCommandOptions, MigrateGenerateCommandResult } from "./commands/migrate";
+export { runMigrateGenerateCommand } from "./commands/migrate";
+export type { AddCommandOptions, AddCommandResult, RegistryBinding, RegistryFile, RegistryManifest } from "./commands/registry/index";
+export { buildRegistryIndex, parseManifest, runAddCommand, runBuildIndexCommand, runRegistryViewCommand } from "./commands/registry/index";
+export type { ResetCommandOptions, ResetCommandResult } from "./commands/reset";
+export { runResetCommand } from "./commands/reset";
+export type { FetchLike, RunCommandOptions, RunCommandResult } from "./commands/run";
+export { runRpcCommand } from "./commands/run";
+export { default as parseArgs } from "./util/args";
+export type { InsertSchemaExtensionResult } from "./util/insert-schema-extension";
+export { insertSchemaExtension } from "./util/insert-schema-extension";
+export type { Logger } from "./util/logger";
+export { createLogger, pail } from "./util/logger";
+export type { ColumnSnapshot, DiffEntry, IndexSnapshot, SchemaDiff, SchemaSnapshot, TableSnapshot, UnsupportedEntry } from "./util/migration-diff";
 export {
     diffSnapshots,
     renderAddColumn,
@@ -32,9 +32,9 @@ export {
     renderDropTable,
     renderMigrationFile,
     validatorKindToSqlType,
-} from "./util/migration-diff.js";
-export { default as schemaIrToSnapshot } from "./util/schema-snapshot.js";
-export type { RecordedSpawn, SpawnDescriptor, Spawner, SpawnResult } from "./util/spawn.js";
-export { createRecordingSpawner, defaultSpawner } from "./util/spawn.js";
-export type { WranglerValidationOptions, WranglerValidationReport, WranglerValidationResult } from "./util/wrangler-validator.js";
-export { REQUIRED_COMPATIBILITY_DATE, REQUIRED_FLAG, validateWrangler, validateWranglerConfig } from "./util/wrangler-validator.js";
+} from "./util/migration-diff";
+export { default as schemaIrToSnapshot } from "./util/schema-snapshot";
+export type { RecordedSpawn, SpawnDescriptor, Spawner, SpawnResult } from "./util/spawn";
+export { createRecordingSpawner, defaultSpawner } from "./util/spawn";
+export type { WranglerValidationOptions, WranglerValidationReport, WranglerValidationResult } from "./util/wrangler-validator";
+export { REQUIRED_COMPATIBILITY_DATE, REQUIRED_FLAG, validateWrangler, validateWranglerConfig } from "./util/wrangler-validator";

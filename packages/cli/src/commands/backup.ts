@@ -17,11 +17,11 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import resolveAdminBaseUrl from "../util/admin-url.js";
-import type { Logger } from "../util/logger.js";
-import type { StreamingFetchLike } from "./data-transfer.js";
-import { runExportCommand, runImportCommand } from "./data-transfer.js";
-import type { FetchLike } from "./run.js";
+import resolveAdminBaseUrl from "../util/admin-url";
+import type { Logger } from "../util/logger";
+import type { StreamingFetchLike } from "./data-transfer";
+import { runExportCommand, runImportCommand } from "./data-transfer";
+import type { FetchLike } from "./run";
 
 /** Default directory (relative to cwd) backups and their manifest live in. */
 const DEFAULT_BACKUP_DIR = ".cirrus-backups";

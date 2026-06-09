@@ -3,7 +3,7 @@
  * add|list|view|build`). The manifest shape mirrors `registry.json`; the option
  * / result types are shared across the four command orchestrators.
  */
-import type { Logger } from "../../util/logger.js";
+import type { Logger } from "../../util/logger";
 
 /** A single file the item scaffolds into the project. */
 interface RegistryFile {

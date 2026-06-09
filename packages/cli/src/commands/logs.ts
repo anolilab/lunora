@@ -1,6 +1,6 @@
-import type { Logger } from "../util/logger.js";
-import type { SpawnDescriptor, Spawner } from "../util/spawn.js";
-import { defaultSpawner } from "../util/spawn.js";
+import type { Logger } from "../util/logger";
+import type { SpawnDescriptor, Spawner } from "../util/spawn";
+import { defaultSpawner } from "../util/spawn";
 
 /** Output formats `wrangler tail` understands. */
 const LOG_FORMATS = new Set(["json", "pretty"]);

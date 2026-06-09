@@ -3,10 +3,10 @@ import { join } from "node:path";
 
 import { runCodegen } from "@cirrus/codegen";
 
-import type { Logger } from "../util/logger.js";
-import type { Spawner } from "../util/spawn.js";
-import { defaultSpawner } from "../util/spawn.js";
-import { validateWrangler } from "../util/wrangler-validator.js";
+import type { Logger } from "../util/logger";
+import type { Spawner } from "../util/spawn";
+import { defaultSpawner } from "../util/spawn";
+import { validateWrangler } from "../util/wrangler-validator";
 
 interface VerifyCommandOptions {
     cwd?: string;

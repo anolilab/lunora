@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { runLogsCommand } from "../../src/commands/logs.js";
-import type { Logger } from "../../src/util/logger.js";
-import { createRecordingSpawner } from "../../src/util/spawn.js";
+import { runLogsCommand } from "../../src/commands/logs";
+import type { Logger } from "../../src/util/logger";
+import { createRecordingSpawner } from "../../src/util/spawn";
 
 const silentLogger = (): { errors: string[]; logger: Logger } => {
     const errors: string[] = [];

@@ -1,4 +1,4 @@
-import type { Logger } from "../util/logger.js";
+import type { Logger } from "../util/logger";
 
 type FetchLike = (
     input: string,

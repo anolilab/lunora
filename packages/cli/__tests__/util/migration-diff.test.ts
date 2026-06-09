@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import type { SchemaSnapshot } from "../../src/util/migration-diff.js";
+import type { SchemaSnapshot } from "../../src/util/migration-diff";
 import {
     diffSnapshots,
     renderAddColumn,
@@ -10,7 +10,7 @@ import {
     renderDropTable,
     renderMigrationFile,
     validatorKindToSqlType,
-} from "../../src/util/migration-diff.js";
+} from "../../src/util/migration-diff";
 
 const snapshot = (tables: SchemaSnapshot["tables"]): SchemaSnapshot => {
     return { tables, version: 1 };

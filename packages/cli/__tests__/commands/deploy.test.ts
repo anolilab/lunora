@@ -5,10 +5,10 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { runDeployCommand } from "../../src/commands/deploy.js";
-import type { FetchLike } from "../../src/commands/run.js";
-import type { Logger } from "../../src/util/logger.js";
-import { createRecordingSpawner } from "../../src/util/spawn.js";
+import { runDeployCommand } from "../../src/commands/deploy";
+import type { FetchLike } from "../../src/commands/run";
+import type { Logger } from "../../src/util/logger";
+import { createRecordingSpawner } from "../../src/util/spawn";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "..", "..", "..", "codegen", "__tests__", "fixtures", "simple");

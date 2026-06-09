@@ -5,9 +5,9 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { runVerifyCommand } from "../../src/commands/verify.js";
-import type { Logger } from "../../src/util/logger.js";
-import { createRecordingSpawner } from "../../src/util/spawn.js";
+import { runVerifyCommand } from "../../src/commands/verify";
+import type { Logger } from "../../src/util/logger";
+import { createRecordingSpawner } from "../../src/util/spawn";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "..", "..", "..", "codegen", "__tests__", "fixtures", "simple");

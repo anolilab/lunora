@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { insertSchemaExtension } from "../../src/util/insert-schema-extension.js";
+import { insertSchemaExtension } from "../../src/util/insert-schema-extension";
 
 // The `if (!result.ok)` guards below narrow the `{ ok: true } | { ok: false }`
 // discriminated union for type-safe `.text` access — they are not test-logic

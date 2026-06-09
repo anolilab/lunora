@@ -7,8 +7,8 @@
 import { runCodegen } from "@cirrus/codegen";
 import { inferCirrusBindings, reconcileWranglerBindings } from "@cirrus/config";
 
-import type { Logger } from "../util/logger.js";
-import { validateWrangler } from "../util/wrangler-validator.js";
+import type { Logger } from "../util/logger";
+import { validateWrangler } from "../util/wrangler-validator";
 
 interface PrepareCommandOptions {
     cwd?: string;

@@ -4,9 +4,9 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { StreamingFetchLike } from "../../src/commands/data-transfer.js";
-import { runExportCommand, runImportCommand } from "../../src/commands/data-transfer.js";
-import type { Logger } from "../../src/util/logger.js";
+import type { StreamingFetchLike } from "../../src/commands/data-transfer";
+import { runExportCommand, runImportCommand } from "../../src/commands/data-transfer";
+import type { Logger } from "../../src/util/logger";
 
 const silentLogger = (): Logger => {
     return {

@@ -4,10 +4,10 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { runBackupCommand } from "../../src/commands/backup.js";
-import type { StreamingFetchLike } from "../../src/commands/data-transfer.js";
-import type { FetchLike } from "../../src/commands/run.js";
-import type { Logger } from "../../src/util/logger.js";
+import { runBackupCommand } from "../../src/commands/backup";
+import type { StreamingFetchLike } from "../../src/commands/data-transfer";
+import type { FetchLike } from "../../src/commands/run";
+import type { Logger } from "../../src/util/logger";
 
 const capturingLogger = (): { logger: Logger; logs: string[] } => {
     const logs: string[] = [];

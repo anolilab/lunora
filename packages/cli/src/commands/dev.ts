@@ -1,13 +1,13 @@
 import type { ChildProcess } from "node:child_process";
 import { spawn as nodeSpawn } from "node:child_process";
 
-import type { CodegenWatcherHandle } from "../util/codegen-watch.js";
-import { startCodegenWatch } from "../util/codegen-watch.js";
-import { detectPackageManager, execArgsFor } from "../util/detect-package-manager.js";
-import type { Logger } from "../util/logger.js";
-import type { SpawnDescriptor } from "../util/spawn.js";
-import type { StudioServerHandle } from "../util/studio-server.js";
-import { startStudioServer } from "../util/studio-server.js";
+import type { CodegenWatcherHandle } from "../util/codegen-watch";
+import { startCodegenWatch } from "../util/codegen-watch";
+import { detectPackageManager, execArgsFor } from "../util/detect-package-manager";
+import type { Logger } from "../util/logger";
+import type { SpawnDescriptor } from "../util/spawn";
+import type { StudioServerHandle } from "../util/studio-server";
+import { startStudioServer } from "../util/studio-server";
 
 /** Default port the embedded studio server listens on (the URL you open). */
 const DEFAULT_STUDIO_PORT = 6173;

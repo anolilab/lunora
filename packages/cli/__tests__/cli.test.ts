@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { BOOLEAN_OPTIONS, COMMANDS, runCli } from "../src/cli.js";
+import { BOOLEAN_OPTIONS, COMMANDS, runCli } from "../src/cli";
 
 const testDirectory = dirname(fileURLToPath(import.meta.url));
 const templatesRoot = resolve(testDirectory, "..", "..", "..", "templates");

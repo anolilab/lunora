@@ -1,6 +1,6 @@
 import { runCodegen } from "@cirrus/codegen";
 
-import type { Logger } from "../util/logger.js";
+import type { Logger } from "../util/logger";
 
 /** Cloudflare caps a Worker at 3 Cron Triggers (distinct cron expressions). */
 const CRON_TRIGGER_LIMIT = 3;

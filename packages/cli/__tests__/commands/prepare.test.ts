@@ -5,8 +5,8 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { runPrepareCommand } from "../../src/commands/prepare.js";
-import type { Logger } from "../../src/util/logger.js";
+import { runPrepareCommand } from "../../src/commands/prepare";
+import type { Logger } from "../../src/util/logger";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "..", "..", "..", "codegen", "__tests__", "fixtures", "simple");

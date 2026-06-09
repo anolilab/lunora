@@ -1,9 +1,9 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import type { Logger } from "../util/logger.js";
-import type { SpawnDescriptor, Spawner } from "../util/spawn.js";
-import { defaultSpawner } from "../util/spawn.js";
+import type { Logger } from "../util/logger";
+import type { SpawnDescriptor, Spawner } from "../util/spawn";
+import { defaultSpawner } from "../util/spawn";
 
 type EnvSubcommand = "get" | "list" | "push" | "set" | "unset";
 

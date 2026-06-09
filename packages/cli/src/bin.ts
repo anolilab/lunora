@@ -1,4 +1,4 @@
-import { runCli } from "./cli.js";
+import { runCli } from "./cli";
 
 /**
  * `cirrus` binary entry point. packem builds this to `dist/bin.mjs` (with a

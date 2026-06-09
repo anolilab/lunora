@@ -7,7 +7,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 
 import { join } from "@visulima/path";
 
-import parseManifest from "./manifest.js";
+import parseManifest from "./manifest";
 
 /** One catalog entry as `cirrus registry list` reports it. */
 interface CatalogItem {

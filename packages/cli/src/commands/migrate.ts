@@ -12,12 +12,12 @@ import { discoverMigrations, discoverSchema } from "@cirrus/codegen";
 import { join } from "@visulima/path";
 import { Project } from "ts-morph";
 
-import resolveAdminBaseUrl from "../util/admin-url.js";
-import type { Logger } from "../util/logger.js";
-import type { SchemaSnapshot } from "../util/migration-diff.js";
-import { diffSnapshots, renderMigrationFile } from "../util/migration-diff.js";
-import schemaIrToSnapshot from "../util/schema-snapshot.js";
-import type { FetchLike } from "./run.js";
+import resolveAdminBaseUrl from "../util/admin-url";
+import type { Logger } from "../util/logger";
+import type { SchemaSnapshot } from "../util/migration-diff";
+import { diffSnapshots, renderMigrationFile } from "../util/migration-diff";
+import schemaIrToSnapshot from "../util/schema-snapshot";
+import type { FetchLike } from "./run";
 
 interface MigrateGenerateCommandOptions {
     cwd?: string;

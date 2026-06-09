@@ -13,9 +13,9 @@
 import { createReadStream, createWriteStream } from "node:fs";
 import { stat, unlink } from "node:fs/promises";
 
-import resolveAdminBaseUrl from "../util/admin-url.js";
-import type { Logger } from "../util/logger.js";
-import type { FetchLike } from "./run.js";
+import resolveAdminBaseUrl from "../util/admin-url";
+import type { Logger } from "../util/logger";
+import type { FetchLike } from "./run";
 
 const EXPORT_ENDPOINT_PATH = "/_cirrus/admin/export";
 const IMPORT_ENDPOINT_PATH = "/_cirrus/admin/import";

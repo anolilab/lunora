@@ -2,13 +2,13 @@ import { runCodegen } from "@cirrus/codegen";
 import { findWranglerFile, inferCirrusBindings, readWranglerJsonc, reconcileWranglerBindings } from "@cirrus/config";
 import { Spinner } from "@visulima/pail/spinner";
 
-import type { Logger } from "../util/logger.js";
-import type { SpawnDescriptor, Spawner } from "../util/spawn.js";
-import { defaultSpawner } from "../util/spawn.js";
-import { validateWrangler } from "../util/wrangler-validator.js";
-import type { MigrateDataCommandOptions } from "./migrate.js";
-import { runMigrateDataCommand } from "./migrate.js";
-import type { FetchLike } from "./run.js";
+import type { Logger } from "../util/logger";
+import type { SpawnDescriptor, Spawner } from "../util/spawn";
+import { defaultSpawner } from "../util/spawn";
+import { validateWrangler } from "../util/wrangler-validator";
+import type { MigrateDataCommandOptions } from "./migrate";
+import { runMigrateDataCommand } from "./migrate";
+import type { FetchLike } from "./run";
 
 /** Placeholder written by `reconcileWranglerBindings` for auto-provisioned D1 bindings. */
 const D1_PLACEHOLDER_ID = "<replace-with-d1-create-id>";
