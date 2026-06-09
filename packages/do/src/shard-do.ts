@@ -2,31 +2,32 @@ import type { DurableObjectStorage } from "@cloudflare/workers-types";
 import type { DrizzleSqliteDODatabase } from "drizzle-orm/durable-sqlite";
 import { drizzle as drizzleDO } from "drizzle-orm/durable-sqlite";
 
-import type { ExportRow, ImportShardResult } from "./admin-export-import.js";
-import { parseExportShardArgs, parseImportShardArgs } from "./admin-export-import.js";
-import { appendAuditEntry, ensureAuditTable, readAuditLog } from "./audit-log.js";
-import type { AuthMetrics } from "./auth-metrics.js";
-import { readAuthMetrics, recordAuthEvent } from "./auth-metrics.js";
-import type { CdcChange, SqlExec } from "./ctx-db.js";
-import { CDC_LOG_TABLE, readCdcChanges } from "./ctx-db.js";
-import type { MigrationDirection, MigrationRunResult } from "./data-migration.js";
-import { DATA_MIGRATION_STATE_TABLE, readMigrationStatus } from "./data-migration.js";
-import type { DependencyTracker } from "./dependency-tracker.js";
-import { createDependencyTracker, SCAN_DEP, tableFromDepKey } from "./dependency-tracker.js";
-import type { FunctionMetricBucket } from "./function-metrics.js";
-import { mergeScanAttribution, readFunctionMetricBuckets, readFunctionMetrics, readFunctionMetricsTotals, recordFunctionMetric } from "./function-metrics.js";
-import type { AuditLogResult, FilterClause, FilterOperator, FunctionCallStat, FunctionStatsResult, TableIndexInfo } from "./introspect.js";
-import { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, MAX_PAGE_SIZE, readTablePage, selectMatchingIds } from "./introspect.js";
-import { LogBuffer } from "./log-buffer.js";
-import { armRestore, readBookmark } from "./pitr.js";
-import type { ReactiveCacheOptions } from "./reactive-cache.js";
-import { ReactiveCache, reactiveCacheKey } from "./reactive-cache.js";
-import type { AppendRequestLogEntry, RequestLogResult, RequestLogWriteOptions } from "./request-log.js";
-import { appendRequestLogEntry, emitRequestLogEvent, ensureRequestLogTable, readRequestLog } from "./request-log.js";
-import { buildSettings, isDevEnvironment } from "./settings.js";
-import type { TransactionSqlLike } from "./transaction.js";
-import { ConflictError } from "./transaction.js";
-import type { MutationDelta, RpcRequest, SocketAttachment, SubscriptionEnvelope, SubscriptionQuery } from "./types.js";
+import type { ExportRow, ImportShardResult } from "./admin-export-import";
+import { parseExportShardArgs, parseImportShardArgs } from "./admin-export-import";
+import { appendAuditEntry, ensureAuditTable, readAuditLog } from "./audit-log";
+import type { AuthMetrics } from "./auth-metrics";
+import { readAuthMetrics, recordAuthEvent } from "./auth-metrics";
+import type { CdcChange, SqlExec } from "./ctx-db";
+import { CDC_LOG_TABLE, readCdcChanges } from "./ctx-db";
+import type { MigrationDirection, MigrationRunResult } from "./data-migration";
+import { DATA_MIGRATION_STATE_TABLE, readMigrationStatus } from "./data-migration";
+import type { DependencyTracker } from "./dependency-tracker";
+import { createDependencyTracker, SCAN_DEP, tableFromDepKey } from "./dependency-tracker";
+import type { FunctionMetricBucket } from "./function-metrics";
+import { mergeScanAttribution, readFunctionMetricBuckets, readFunctionMetrics, readFunctionMetricsTotals, recordFunctionMetric } from "./function-metrics";
+import type { AuditLogResult, FilterClause, FilterOperator, FunctionCallStat, FunctionStatsResult, TableIndexInfo } from "./introspect";
+import { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, MAX_PAGE_SIZE, readTablePage, selectMatchingIds } from "./introspect";
+import { LogBuffer } from "./log-buffer";
+import { armRestore, readBookmark } from "./pitr";
+import type { ReactiveCacheOptions } from "./reactive-cache";
+import { ReactiveCache, reactiveCacheKey } from "./reactive-cache";
+import type { AppendRequestLogEntry, RequestLogResult, RequestLogWriteOptions } from "./request-log";
+import { appendRequestLogEntry, emitRequestLogEvent, ensureRequestLogTable, readRequestLog } from "./request-log";
+import { buildSecurityAudit } from "./security-audit";
+import { buildSettings, isDevEnvironment } from "./settings";
+import type { TransactionSqlLike } from "./transaction";
+import { ConflictError } from "./transaction";
+import type { MutationDelta, RpcRequest, SocketAttachment, SubscriptionEnvelope, SubscriptionQuery } from "./types";
 
 /**
  * Client→server text frame the runtime answers with {@link WS_KEEPALIVE_PONG}
@@ -2682,6 +2683,13 @@ abstract class ShardDO {
             // Read-only deployment config derived from the Worker `env`; string
             // values are masked server-side, so no raw secret crosses the wire.
             return buildSettings(this.env);
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.getSecurityAudit) {
+            // Deployment-level security findings derived from the Worker `env`
+            // (admin-token strength, WS gate, request-log redaction) — the
+            // Security Advisor's signal. No raw secret crosses the wire.
+            return buildSecurityAudit(this.env);
         }
 
         return undefined;

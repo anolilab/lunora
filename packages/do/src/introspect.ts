@@ -1,4 +1,4 @@
-import type { SqlExec } from "./ctx-db.js";
+import type { SqlExec } from "./ctx-db";
 
 /**
  * Reserved `functionPath` prefix for admin introspection RPCs. These travel
@@ -28,6 +28,7 @@ const ADMIN_FUNCTIONS = {
     getMetrics: "__cirrus_admin__:getMetrics",
     getPitrBookmark: "__cirrus_admin__:getPitrBookmark",
     getRequestLog: "__cirrus_admin__:getRequestLog",
+    getSecurityAudit: "__cirrus_admin__:getSecurityAudit",
     getSettings: "__cirrus_admin__:getSettings",
     importShard: "__cirrus_admin__:importShard",
     listTables: "__cirrus_admin__:listTables",
@@ -453,11 +454,7 @@ const buildFilterClause = (clause: FilterClause, physicalColumns: string[]): { p
  * column — for doc-stored tables `__doc__` holds every field value, so this
  * still covers all user fields.
  */
-const buildTablePredicate = (
-    columns: string[],
-    needle: string,
-    filters: FilterClause[] | undefined,
-): undefined | { parameters: unknown[]; where: string } => {
+const buildTablePredicate = (columns: string[], needle: string, filters: FilterClause[] | undefined): undefined | { parameters: unknown[]; where: string } => {
     const conjuncts: string[] = [];
     const parameters: unknown[] = [];
 

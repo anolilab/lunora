@@ -6,7 +6,7 @@ export type {
     ImportShardAdminArgs,
     ImportShardArgs,
     ImportShardResult,
-} from "./admin-export-import.js";
+} from "./admin-export-import";
 export {
     exportShardRows,
     exportShardTable,
@@ -15,9 +15,9 @@ export {
     parseImportShardArgs,
     selectExportTables,
     validateImportRow,
-} from "./admin-export-import.js";
-export type { AggregateTally } from "./aggregate-tally.js";
-export { aggregateTableName, coerceAggregateNumber, encodeAggregateKey, foldAggregateTally, readAggregateValue } from "./aggregate-tally.js";
+} from "./admin-export-import";
+export type { AggregateTally } from "./aggregate-tally";
+export { aggregateTableName, coerceAggregateNumber, encodeAggregateKey, foldAggregateTally, readAggregateValue } from "./aggregate-tally";
 export type {
     AggregateIndexDefinitionLike,
     AggregateOp,
@@ -26,16 +26,9 @@ export type {
     GroupByEntry,
     GroupByOptions,
     RestrictableQueryOptions,
-} from "./aggregates.js";
-export {
-    CountRlsUnsupportedError,
-    mergeWhere,
-    planAggregateLookup,
-    selectIndexForAggregate,
-    selectIndexForCount,
-    selectIndexForGroupBy,
-} from "./aggregates.js";
-export type { AuthMetrics, AuthMetricsBucket, RecordAuthEventInput } from "./auth-metrics.js";
+} from "./aggregates";
+export { CountRlsUnsupportedError, mergeWhere, planAggregateLookup, selectIndexForAggregate, selectIndexForCount, selectIndexForGroupBy } from "./aggregates";
+export type { AuthMetrics, AuthMetricsBucket, RecordAuthEventInput } from "./auth-metrics";
 export {
     AUTH_METRICS_BUCKET_MS,
     AUTH_METRICS_BUCKET_RETENTION,
@@ -44,7 +37,7 @@ export {
     ensureAuthMetricsTables,
     readAuthMetrics,
     recordAuthEvent,
-} from "./auth-metrics.js";
+} from "./auth-metrics";
 export type {
     BroadcastDelta,
     CdcChange,
@@ -67,7 +60,7 @@ export type {
     ValidatorLike,
     WriteEvent,
     WriteHook,
-} from "./ctx-db.js";
+} from "./ctx-db";
 export {
     applyCdcChanges,
     backfillAggregateIndexes,
@@ -79,7 +72,7 @@ export {
     readCdcChanges,
     runShardMigrations,
     trimCdcChanges,
-} from "./ctx-db.js";
+} from "./ctx-db";
 export type {
     DataMigrationDocument,
     DataMigrationLike,
@@ -89,11 +82,11 @@ export type {
     MigrationStatus,
     MigrationStatusRow,
     RunDataMigrationOptions,
-} from "./data-migration.js";
-export { DATA_MIGRATION_STATE_TABLE, readMigrationStatus, runDataMigration } from "./data-migration.js";
-export type { DependencyTracker } from "./dependency-tracker.js";
-export { createDependencyTracker, depKey, SCAN_DEP } from "./dependency-tracker.js";
-export type { FunctionMetricBucket, RecordFunctionMetricInput } from "./function-metrics.js";
+} from "./data-migration";
+export { DATA_MIGRATION_STATE_TABLE, readMigrationStatus, runDataMigration } from "./data-migration";
+export type { DependencyTracker } from "./dependency-tracker";
+export { createDependencyTracker, depKey, SCAN_DEP } from "./dependency-tracker";
+export type { FunctionMetricBucket, RecordFunctionMetricInput } from "./function-metrics";
 export {
     ensureFunctionMetricsTables,
     FUNCTION_METRICS_BUCKET_MS,
@@ -104,7 +97,7 @@ export {
     readFunctionMetrics,
     readFunctionMetricsTotals,
     recordFunctionMetric,
-} from "./function-metrics.js";
+} from "./function-metrics";
 export type {
     AuditEntry,
     AuditLogResult,
@@ -120,24 +113,26 @@ export type {
     TableIndexInfo,
     TableInfo,
     TablePage,
-} from "./introspect.js";
-export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage, selectMatchingIds } from "./introspect.js";
-export type { LogEntry, LogLevel } from "./log-buffer.js";
-export { LogBuffer } from "./log-buffer.js";
-export { default as NotFoundError } from "./not-found-error.js";
-export type { PitrBookmarkResult, PitrRestoreArgs, PitrRestoreResult, PitrStorage } from "./pitr.js";
-export { armRestore, readBookmark } from "./pitr.js";
-export type { OrderByInput, OrderKey, QueryArgs, QueryPage, SortDirection } from "./query-args.js";
-export { buildSeekWhere, compileOrderBy, decodeCursor, encodeCursor, normalizeOrderKeys } from "./query-args.js";
-export type { RankDirection, RankIndexDefinitionLike, RankOptions, RankPage, RankPageOptions, RankResult, RankSortKeyLike } from "./rank.js";
-export { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "./rank.js";
-export type { CacheEntry, ReactiveCacheOptions } from "./reactive-cache.js";
-export { ReactiveCache, reactiveCacheKey, stableStringify } from "./reactive-cache.js";
-export type { ApplyOnDeleteOptions, NestedWith, OnDeleteActionLike, RelationDefinitionLike, ResolveWithOptions, WithInput } from "./relations.js";
-export { applyOnDelete, resolveWith, runRowValidators } from "./relations.js";
-export { buildFtsMatch, ftsTableName, scoreDocument, stringifySearchText, tokenizeSearch } from "./search-text.js";
-export type { SessionRecord } from "./session-do.js";
-export { SESSION_DO_TTL_DEFAULT, SessionDO } from "./session-do.js";
+} from "./introspect";
+export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage, selectMatchingIds } from "./introspect";
+export type { LogEntry, LogLevel } from "./log-buffer";
+export { LogBuffer } from "./log-buffer";
+export { default as NotFoundError } from "./not-found-error";
+export type { PitrBookmarkResult, PitrRestoreArgs, PitrRestoreResult, PitrStorage } from "./pitr";
+export { armRestore, readBookmark } from "./pitr";
+export type { OrderByInput, OrderKey, QueryArgs, QueryPage, SortDirection } from "./query-args";
+export { buildSeekWhere, compileOrderBy, decodeCursor, encodeCursor, normalizeOrderKeys } from "./query-args";
+export type { RankDirection, RankIndexDefinitionLike, RankOptions, RankPage, RankPageOptions, RankResult, RankSortKeyLike } from "./rank";
+export { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
+export type { CacheEntry, ReactiveCacheOptions } from "./reactive-cache";
+export { ReactiveCache, reactiveCacheKey, stableStringify } from "./reactive-cache";
+export type { ApplyOnDeleteOptions, NestedWith, OnDeleteActionLike, RelationDefinitionLike, ResolveWithOptions, WithInput } from "./relations";
+export { applyOnDelete, resolveWith, runRowValidators } from "./relations";
+export { buildFtsMatch, ftsTableName, scoreDocument, stringifySearchText, tokenizeSearch } from "./search-text";
+export type { SecurityAuditResult, SecurityFinding, SecurityFindingKind, SecurityFindingLevel } from "./security-audit";
+export { buildSecurityAudit, MIN_ADMIN_TOKEN_LENGTH } from "./security-audit";
+export type { SessionRecord } from "./session-do";
+export { SESSION_DO_TTL_DEFAULT, SessionDO } from "./session-do";
 export type {
     HibernatableWebSocket,
     RunShardApplyCdcArgs,
@@ -153,9 +148,9 @@ export type {
     ShardDOOptions,
     ShardDOState,
     SubscriptionOutcome,
-} from "./shard-do.js";
-export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO, subscriptionListDeltas } from "./shard-do.js";
-export { SHARD_REGISTRY_DO_NAME, ShardRegistryDO } from "./shard-registry-do.js";
+} from "./shard-do";
+export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO, subscriptionListDeltas } from "./shard-do";
+export { SHARD_REGISTRY_DO_NAME, ShardRegistryDO } from "./shard-registry-do";
 export type {
     ScheduledFunctionDoc,
     SystemDatabaseReader,
@@ -165,10 +160,10 @@ export type {
     SystemReaderSchedulerLike,
     SystemReaderStorageLike,
     SystemTableName,
-} from "./system-reader.js";
-export { createSystemReader } from "./system-reader.js";
-export type { TransactionSqlLike } from "./transaction.js";
-export { ConflictError } from "./transaction.js";
+} from "./system-reader";
+export { createSystemReader } from "./system-reader";
+export type { TransactionSqlLike } from "./transaction";
+export { ConflictError } from "./transaction";
 export type {
     RunTriggersOptions,
     SchedulerLike,
@@ -177,8 +172,8 @@ export type {
     TriggerEventLike,
     TriggerOpLike,
     TriggerTimingLike,
-} from "./triggers.js";
-export { hasTrigger, runTriggers } from "./triggers.js";
-export type { MutationDelta, RpcRequest, SocketAttachment, SubscriptionEnvelope, SubscriptionQuery } from "./types.js";
-export type { CompiledWhere, FieldOperators, FieldRef, SerializeValue, WhereCompilerStrategy, WhereInput } from "./where-clause-compiler.js";
-export { compileWhere } from "./where-clause-compiler.js";
+} from "./triggers";
+export { hasTrigger, runTriggers } from "./triggers";
+export type { MutationDelta, RpcRequest, SocketAttachment, SubscriptionEnvelope, SubscriptionQuery } from "./types";
+export type { CompiledWhere, FieldOperators, FieldRef, SerializeValue, WhereCompilerStrategy, WhereInput } from "./where-clause-compiler";
+export { compileWhere } from "./where-clause-compiler";
