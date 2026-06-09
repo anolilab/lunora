@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
-import createMailer from "../src/create-mailer.js";
-import { consumeQueuedSend } from "../src/queue.js";
-import type { Mailer, MailTransport, SendPayload } from "../src/types.js";
+import createMailer from "../src/create-mailer";
+import { consumeQueuedSend } from "../src/queue";
+import type { Mailer, MailTransport, SendPayload } from "../src/types";
 
 const captureTransport = (): { sent: SendPayload[]; transport: MailTransport } => {
     const sent: SendPayload[] = [];

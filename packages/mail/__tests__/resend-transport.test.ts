@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import createMailer from "../src/create-mailer.js";
+import createMailer from "../src/create-mailer";
 
 // Drive the private Resend transport's error-mapping branches by faking the
 // underlying @visulima/email provider. Each test swaps `sendEmail`'s result.

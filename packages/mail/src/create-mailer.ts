@@ -1,8 +1,8 @@
 import { resendProvider } from "@visulima/email/providers/resend";
 
-import { toQueuedPayload } from "./queue.js";
-import renderEmail from "./render.js";
-import type { CirrusMailOptions, Mailer, MailTransport, SendOptions, SendPayload } from "./types.js";
+import { toQueuedPayload } from "./queue";
+import renderEmail from "./render";
+import type { CirrusMailOptions, Mailer, MailTransport, SendOptions, SendPayload } from "./types";
 
 /** RFC 5321 caps the entire mailbox path at 320 chars; reject anything longer. */
 const MAX_EMAIL_LENGTH = 320;

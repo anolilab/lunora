@@ -1,4 +1,4 @@
-import type { Mailer, SendOptions } from "./types.js";
+import type { Mailer, SendOptions } from "./types";
 
 /** Serializable representation of a `SendOptions` payload — drops the `react` field. */
 export interface QueuedSend {
@@ -138,4 +138,4 @@ export const consumeQueuedSend = async (mailer: Mailer, payload: unknown): Promi
     return mailer.send(options);
 };
 
-export { type QueueLike } from "./types.js";
+export { type QueueLike } from "./types";

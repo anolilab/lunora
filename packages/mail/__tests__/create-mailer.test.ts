@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import createMailer from "../src/create-mailer.js";
-import type { MailTransport, QueueLike, SendPayload } from "../src/types.js";
+import createMailer from "../src/create-mailer";
+import type { MailTransport, QueueLike, SendPayload } from "../src/types";
 
 const FROM_PATTERN = /from/;
 const API_KEY_PATTERN = /apiKey/;
