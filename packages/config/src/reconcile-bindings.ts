@@ -47,6 +47,7 @@ interface WranglerShape {
     durable_objects?: { bindings?: ReadonlyArray<DurableObjectBinding> };
     migrations?: ReadonlyArray<MigrationEntry>;
     name?: string;
+    r2_buckets?: ReadonlyArray<{ binding?: string }>;
 }
 
 interface ReconcileBindingsResult {
@@ -67,18 +68,30 @@ interface ReconcileStep {
     text: string;
 }
 
-/** Hints for capabilities used but not safely auto-provisionable. */
-const collectWarnings = (inferred: InferredBindings): string[] => {
+/**
+ * Hints for capabilities used but not safely auto-provisionable — only emitted
+ * when the corresponding binding is actually **missing**. `parsed` (the existing
+ * `wrangler.jsonc`, when one was read) suppresses a hint whose binding is already
+ * configured, so a correctly-wired project starts the dev server clean.
+ *
+ * Storage is silent once any `r2_buckets` binding exists (cirrus can't pick the bucket name, but if one is already declared there's nothing to add). Auth is silent once sessions have a store — a `DB` D1 binding (the default, D1-backed) or an exported `SessionDO` (DO-backed); only a project with neither has nowhere to put sessions, so only that case warns. Scheduler keys on the `SchedulerDO` export, the safe binding signal.
+ */
+const collectWarnings = (inferred: InferredBindings, parsed?: WranglerShape): string[] => {
     const exported = new Set(inferred.durableObjects.map((object) => object.className));
     const warnings: string[] = [];
 
-    if (inferred.usesStorage) {
+    const hasR2Bucket = (parsed?.r2_buckets?.length ?? 0) > 0;
+    // A `DB` binding already present, or a `.global()` schema that will have one
+    // reconciled in, means D1-backed sessions are viable.
+    const hasSessionStore = (parsed?.d1_databases?.some((binding) => binding.binding === "DB") ?? false) || inferred.needsD1;
+
+    if (inferred.usesStorage && !hasR2Bucket) {
         warnings.push(
             "@cirrus/storage is used but R2 bucket bindings have user-defined names; add an r2_buckets entry and pass env.<BINDING> to createStorage().",
         );
     }
 
-    if (inferred.usesAuth && !exported.has("SessionDO")) {
+    if (inferred.usesAuth && !exported.has("SessionDO") && !hasSessionStore) {
         warnings.push(
             "@cirrus/auth is used but the worker entry exports no SessionDO; sessions are D1-backed, or export SessionDO to enable DO-backed sessions.",
         );
@@ -166,17 +179,20 @@ const reconcileD1 = (text: string, parsed: WranglerShape): ReconcileStep => {
  */
 const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindings): ReconcileBindingsResult => {
     const wranglerPath = findWranglerFile(projectRoot);
-    const warnings = collectWarnings(inferred);
 
     if (!wranglerPath) {
-        return { added: [], changed: false, reason: "wrangler.jsonc not found", warnings };
+        // No config to inspect — emit the raw capability hints unfiltered.
+        return { added: [], changed: false, reason: "wrangler.jsonc not found", warnings: collectWarnings(inferred) };
     }
 
     const { parsed, text: original } = readWranglerJsonc<WranglerShape>(wranglerPath);
 
     if (parsed === undefined) {
-        return { added: [], changed: false, reason: `failed to parse ${wranglerPath} as JSONC`, warnings, wranglerPath };
+        return { added: [], changed: false, reason: `failed to parse ${wranglerPath} as JSONC`, warnings: collectWarnings(inferred), wranglerPath };
     }
+
+    // Hints are filtered against the existing config so a wired-up project is quiet.
+    const warnings = collectWarnings(inferred, parsed);
 
     // Each step rewrites `text` but reads the original `parsed`; this is only
     // safe because the steps touch disjoint top-level keys (durable_objects /

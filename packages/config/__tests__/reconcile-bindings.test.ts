@@ -144,6 +144,48 @@ describe("reconcileWranglerBindings", () => {
         expect(readConfig().durable_objects.bindings.some((binding: { name: string }) => binding.name === "SESSION")).toBe(false);
     });
 
+    it("does not warn about storage when an r2_buckets binding already exists", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(root, "wrangler.jsonc"),
+            `{
+    "name": "cirrus-app",
+    "compatibility_date": "2026-04-07",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "r2_buckets": [{ "binding": "FILES", "bucket_name": "app-files" }],
+}
+`,
+            "utf8",
+        );
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesStorage: true }));
+
+        expect(result.warnings.join(" ")).not.toMatch(/r2_buckets/u);
+    });
+
+    it("does not warn about auth when a DB binding already backs sessions", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(root, "wrangler.jsonc"),
+            `{
+    "name": "cirrus-app",
+    "compatibility_date": "2026-04-07",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "real-id" }],
+}
+`,
+            "utf8",
+        );
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesAuth: true }));
+
+        expect(result.warnings.join(" ")).not.toMatch(/SessionDO/u);
+    });
+
     it("reports a missing wrangler file without throwing", () => {
         expect.assertions(2);
 
