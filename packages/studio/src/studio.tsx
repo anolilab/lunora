@@ -40,6 +40,7 @@ import { ScheduledJobs } from "./scheduled-jobs";
 import { SchemaViewer } from "./schema-viewer";
 import SecurityAdvisorPanel from "./security-advisor-panel";
 import { SettingsPanel } from "./settings-panel";
+import { SqlEditorPanel } from "./sql-editor-panel";
 import type { FunctionDescriptor } from "./types";
 import { UsersPanel } from "./users-panel";
 
@@ -62,6 +63,7 @@ type StudioTab =
     | "schema"
     | "security"
     | "settings"
+    | "sql"
     | "users";
 
 interface StudioProps {
@@ -143,6 +145,7 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
     pitr: <path d="M12 21a9 9 0 1 0-9-9M12 7.5V12l3 2M3 12l-2-2m2 2 2-2" />,
     schedule: <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm0-13.5V12l4 2" />,
     schema: <path d="M4 5h16v14H4V5Zm0 5h16M10 10v9M4 14.5h16" />,
+    sql: <path d="M4 5h16v14H4V5Zm3 4 3 3-3 3m6 0h4" />,
     security: <path d="M12 3 5 6v5c0 4.5 3 7.8 7 9 4-1.2 7-4.5 7-9V6l-7-3Zm-2.5 8.5 2 2 4-4" />,
     settings: (
         <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm7.4-3a7.4 7.4 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7.3 7.3 0 0 0-2-1.2l-.4-2.6H10.5l-.4 2.6a7.3 7.3 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6a7.4 7.4 0 0 0 0 2.4l-2 1.6 2 3.4 2.4-1a7.3 7.3 0 0 0 2 1.2l.4 2.6h3.6l.4-2.6a7.3 7.3 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6a7.4 7.4 0 0 0 .1-1.2Z" />
@@ -164,7 +167,7 @@ type NavGroup = { readonly key: NavGroupKey; readonly tabs: ReadonlyArray<Studio
 const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
     { key: "home", tabs: ["home"] },
     { key: "tableEditor", tabs: ["data", "globals"] },
-    { key: "sql", tabs: ["functions"] },
+    { key: "sql", tabs: ["sql", "functions"] },
     { key: "database", tabs: ["schema", "migrations", "export", "pitr"] },
     { key: "auth", tabs: ["users"] },
     { key: "storage", tabs: ["files"] },
@@ -213,6 +216,7 @@ const TABS = [
     "home",
     "data",
     "globals",
+    "sql",
     "functions",
     "schema",
     "migrations",
@@ -272,6 +276,7 @@ const StudioLayout = (): ReactElement => {
             schema: t("Schema"),
             security: t("Security"),
             settings: t("Settings"),
+            sql: t("SQL editor"),
             users: t("Users"),
         };
     }, [t]);
@@ -311,6 +316,7 @@ const StudioLayout = (): ReactElement => {
             schema: t("Inspect each table and its columns."),
             security: t("Review admin gates, credentials, and log redaction."),
             settings: t("Read-only deployment config — vars, secrets, and bindings."),
+            sql: t("Run read-only SQL against a shard."),
             users: t("Browse auth users and their active sessions."),
         };
     }, [t]);
@@ -548,6 +554,7 @@ const buildRouter = ({ basePath, dataEditable = false, functions, initialShardKe
         schema: <SchemaRoutePanel initialShardKey={initialShardKey} />,
         security: <SecurityAdvisorPanel />,
         settings: <SettingsPanel initialShardKey={initialShardKey} />,
+        sql: <SqlEditorPanel initialShardKey={initialShardKey} />,
         users: <UsersPanel />,
     };
 

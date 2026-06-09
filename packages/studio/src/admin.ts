@@ -21,6 +21,7 @@ export const ADMIN_FUNCTIONS = {
     clearTable: "__cirrus_admin__:clearTable",
     deleteRows: "__cirrus_admin__:deleteRows",
     exportShard: "__cirrus_admin__:exportShard",
+    getAdvisories: "__cirrus_admin__:getAdvisories",
     getAuditLog: "__cirrus_admin__:getAuditLog",
     getAuthMetrics: "__cirrus_admin__:getAuthMetrics",
     getFunctionStats: "__cirrus_admin__:getFunctionStats",
@@ -37,6 +38,7 @@ export const ADMIN_FUNCTIONS = {
     pitrRestore: "__cirrus_admin__:pitrRestore",
     readTablePage: "__cirrus_admin__:readTablePage",
     runMigration: "__cirrus_admin__:runMigration",
+    runSql: "__cirrus_admin__:runSql",
     writeRow: "__cirrus_admin__:writeRow",
 } as const;
 
@@ -242,6 +244,32 @@ export interface TableIndexesResult {
     indexes: TableIndexInfo[];
 }
 
+/** Severity of a static schema advisory (the advisor's `Level`, lowercased to match the studio's tab levels). */
+export type AdvisoryLevel = "ERROR" | "INFO" | "WARN";
+
+/**
+ * One static schema advisory, mirroring `@cirrus/advisor`'s `Finding` (served by
+ * `__cirrus_admin__:getAdvisories`). These are codegen-time lints baked into the
+ * deployed worker — they refresh on every codegen run (dev: on save; prod: on deploy).
+ */
+export interface AdvisoryFinding {
+    cacheKey: string;
+    categories: string[];
+    description: string;
+    detail: string;
+    facing: "EXTERNAL" | "INTERNAL";
+    level: AdvisoryLevel;
+    metadata: Record<string, unknown>;
+    name: string;
+    remediation: string;
+    title: string;
+}
+
+/** Payload of a `__cirrus_admin__:getAdvisories` call, mirroring `@cirrus/do`'s `AdvisoriesResult`. */
+export interface AdvisoriesResult {
+    advisories: AdvisoryFinding[];
+}
+
 /** Severity of a buffered log entry, mirroring `@cirrus/do`'s `LogLevel`. */
 export type LogLevel = "debug" | "error" | "info" | "warn";
 
@@ -416,6 +444,18 @@ export interface SecurityFinding {
 /** Payload of a `__cirrus_admin__:getSecurityAudit` call, mirroring `@cirrus/do`'s `SecurityAuditResult`: every finding, worst-first. */
 export interface SecurityAuditResult {
     findings: SecurityFinding[];
+}
+
+/**
+ * Payload of a `__cirrus_admin__:runSql` call, mirroring `@cirrus/do`'s
+ * `SqlConsoleResult`: a read-only query's `columns` (from the first row), the
+ * (capped) `rows`, the true `rowCount`, and whether the rows were `truncated`.
+ */
+export interface SqlConsoleResult {
+    columns: string[];
+    rowCount: number;
+    rows: Record<string, unknown>[];
+    truncated: boolean;
 }
 
 /**

@@ -91,6 +91,8 @@ export type { SettingsPanelProps } from "./settings-panel";
 export { SettingsPanel } from "./settings-panel";
 export type { ShardInputProps } from "./shard-input";
 export { ShardInput } from "./shard-input";
+export type { SqlEditorPanelProps } from "./sql-editor-panel";
+export { SqlEditorPanel } from "./sql-editor-panel";
 export type { StudioProps, StudioTab } from "./studio";
 export { Studio } from "./studio";
 export { default as STUDIO_ROOT_CLASS } from "./theme-constants";

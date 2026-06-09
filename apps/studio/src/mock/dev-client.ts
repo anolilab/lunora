@@ -208,6 +208,18 @@ const dataFor = (reference: string, args: unknown): unknown => {
                 ],
             };
         }
+        case ADMIN_FUNCTIONS.runSql: {
+            return {
+                columns: ["id", "author", "body"],
+                rowCount: 3,
+                rows: [
+                    { author: "ada", body: "Pushed the new shard router 🚀", id: "msg_01H9" },
+                    { author: "grace", body: "Reviewed — looks great, merging.", id: "msg_01H8" },
+                    { author: "lin", body: "Anyone seeing slow reads on us-east?", id: "msg_01H7" },
+                ],
+                truncated: false,
+            };
+        }
         case ADMIN_FUNCTIONS.listTableIndexes: {
             return { indexes: [{ fields: ["createdAt"], name: "by_createdAt", type: "index" }] };
         }

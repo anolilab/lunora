@@ -271,6 +271,15 @@ const MESSAGE_IDS = [
     "Connection, health, and advisor summary for your deployment.",
     "Collapse sidebar",
     "Expand sidebar",
+    // SQL editor panel.
+    "SQL editor",
+    "Run read-only SQL against a shard.",
+    "Run ⌘↵",
+    "SQL query",
+    "Read-only — only SELECT, WITH, and EXPLAIN queries run here.",
+    "{count} rows",
+    "Showing the first {max} of {count} rows.",
+    "No rows returned.",
     // Command palette.
     "Command palette",
     "No results.",
