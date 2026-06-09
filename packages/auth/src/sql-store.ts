@@ -170,9 +170,11 @@ export const createSqlAuthStore = (executor: SqlExecutor): AuthStore => {
         },
         count: async (model, where) => {
             const fragment = compileWhere(where);
-            const [row] = await executor.all(`SELECT COUNT(*) AS count FROM ${quoteId(model)}${whereSuffix(fragment)}`, fragment.params);
+            // `__count` rather than `count` so the alias can't collide with a real
+            // column named `count`.
+            const [row] = await executor.all(`SELECT COUNT(*) AS __count FROM ${quoteId(model)}${whereSuffix(fragment)}`, fragment.params);
 
-            return Number(row?.["count"] ?? 0);
+            return Number(row?.["__count"] ?? 0);
         },
         create: async (model, data) => {
             const columns = Object.keys(data);
@@ -206,32 +208,31 @@ export const createSqlAuthStore = (executor: SqlExecutor): AuthStore => {
             return executor.all(sql, fragment.params);
         },
         remove: async (model, where) => {
-            const matched = await selectRows(model, where);
             const fragment = compileWhere(where);
+            // DELETE … RETURNING finds and deletes in one statement, so the count
+            // is exactly the rows removed — no read-then-delete drift.
+            const deleted = await executor.all(`DELETE FROM ${quoteId(model)}${whereSuffix(fragment)} RETURNING *`, fragment.params);
 
-            await executor.run(`DELETE FROM ${quoteId(model)}${whereSuffix(fragment)}`, fragment.params);
-
-            return matched.length;
+            return deleted.length;
         },
         update: async (model, where, values) => {
-            const matched = await selectRows(model, where);
+            const columns = Object.keys(values);
 
-            if (matched.length === 0) {
-                return [];
+            // An empty patch can't form a valid `SET`; return the matching rows unchanged.
+            if (columns.length === 0) {
+                return selectRows(model, where);
             }
 
-            const columns = Object.keys(values);
             const assignments = columns.map((column) => `${quoteId(column)} = ?`).join(", ");
             const fragment = compileWhere(where);
 
-            await executor.run(`UPDATE ${quoteId(model)} SET ${assignments}${whereSuffix(fragment)}`, [
+            // UPDATE … RETURNING applies the patch and hands back the post-update
+            // rows in one statement — the result reflects committed DB state, not a
+            // client-side merge of a separate pre-update read.
+            return executor.all(`UPDATE ${quoteId(model)} SET ${assignments}${whereSuffix(fragment)} RETURNING *`, [
                 ...columns.map((column) => values[column]),
                 ...fragment.params,
             ]);
-
-            return matched.map((row) => {
-                return { ...row, ...values };
-            });
         },
     };
 };
