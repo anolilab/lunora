@@ -1,6 +1,8 @@
 import type { ChildProcess } from "node:child_process";
 import { spawn as nodeSpawn } from "node:child_process";
 
+import { createConfirm, ensureDevVariables } from "@cirrus/config";
+
 import type { CodegenWatcherHandle } from "../util/codegen-watch";
 import { startCodegenWatch } from "../util/codegen-watch";
 import { detectPackageManager, execArgsFor } from "../util/detect-package-manager";
@@ -30,6 +32,8 @@ interface DevCommandOptions {
     /** Disable the codegen watch loop. */
     codegen?: boolean;
     cwd?: string;
+    /** Injection seam for tests — defaults to the real `.dev.vars` scaffolder. */
+    ensureEnv?: typeof ensureDevVariables;
     logger: Logger;
     /** Studio server port. */
     port?: number;
@@ -164,6 +168,21 @@ const teardown = async (handles: Teardown): Promise<void> => {
 };
 
 /**
+ * Offer to scaffold `.dev.vars` before the worker starts — otherwise it throws
+ * on the first required secret (e.g. `AUTH_SECRET is required`). Non-interactive
+ * runs (CI) decline silently rather than block on a prompt.
+ */
+const offerDevVariablesScaffold = async (options: DevCommandOptions, cwd: string): Promise<void> => {
+    await (options.ensureEnv ?? ensureDevVariables)({
+        confirm: createConfirm(),
+        cwd,
+        info: (message) => {
+            options.logger.info(message);
+        },
+    });
+};
+
+/**
  * Start codegen watch + the studio server, spawn `wrangler dev`, print the
  * banner, and resolve when the worker exits or the user interrupts — tearing
  * down the sibling servers either way. The three side-effecting pieces (worker,
@@ -174,6 +193,8 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
     const { logger } = options;
     const cwd = plan.wrangler.cwd ?? process.cwd();
     const handles: Teardown = {};
+
+    await offerDevVariablesScaffold(options, cwd);
 
     logger.info("starting wrangler dev + studio");
 

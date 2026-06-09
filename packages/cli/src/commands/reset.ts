@@ -1,6 +1,6 @@
 import { existsSync, rmSync } from "node:fs";
-import { createInterface } from "node:readline";
 
+import { promptYesNo } from "@cirrus/config";
 import { join } from "@visulima/path";
 
 import type { Logger } from "../util/logger";
@@ -19,24 +19,6 @@ interface ResetCommandResult {
     code: number;
     removed: ReadonlyArray<string>;
 }
-
-const promptYesNo = async (prompt: string): Promise<boolean> => {
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-
-    try {
-        const answer = await new Promise<string>((resolve) => {
-            rl.question(prompt, (input) => {
-                resolve(input);
-            });
-        });
-
-        const normalised = answer.trim().toLowerCase();
-
-        return normalised === "y" || normalised === "yes";
-    } finally {
-        rl.close();
-    }
-};
 
 const runResetCommand = async (options: ResetCommandOptions): Promise<ResetCommandResult> => {
     const cwd = options.cwd ?? process.cwd();

@@ -30,6 +30,27 @@ no separate API service, no platform sign-up.
 
 ## Secrets
 
+### Locally
+
+Local secrets live in `.dev.vars` (gitignored), which `wrangler dev` and the
+Vite dev server load automatically. Commit a `.dev.vars.example` listing the
+keys your worker needs:
+
+```bash
+# .dev.vars.example
+AUTH_SECRET="replace-with-openssl-rand-hex-32"
+AUTH_URL="http://localhost:5173"
+STORAGE_SECRET="replace-with-openssl-rand-hex-32"
+```
+
+When you run `cirrus dev` (or start Vite) without a `.dev.vars`, Cirrus offers
+to generate one from the example — secret-looking placeholders (`*_SECRET`,
+`*_TOKEN`, …) are filled with fresh random values, everything else is copied
+verbatim. Non-interactive runs (CI) skip the prompt. You can also manage keys
+by hand with `cirrus env set <KEY> <VALUE>` / `cirrus env list`.
+
+### In production
+
 Set with `wrangler secret put`:
 
 ```bash
@@ -37,6 +58,8 @@ wrangler secret put AUTH_SECRET
 wrangler secret put RESEND_API_KEY
 wrangler secret put STORAGE_SECRET
 ```
+
+Or push everything from `.dev.vars` at once with `cirrus env push --yes`.
 
 Cirrus never logs secret values; the `wrangler-validator` plugin warns if a
 binding marked `secret: true` in your schema is missing from your secret list.

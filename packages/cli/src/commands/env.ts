@@ -1,6 +1,8 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { DEV_VARS_FILE, DEV_VARS_KEY_PATTERN, parseDevVariableEntries } from "@cirrus/config";
+
 import type { Logger } from "../util/logger";
 import type { SpawnDescriptor, Spawner } from "../util/spawn";
 import { defaultSpawner } from "../util/spawn";
@@ -27,51 +29,18 @@ interface EnvCommandResult {
     descriptors: ReadonlyArray<SpawnDescriptor>;
 }
 
-const DEV_VARS_FILE = ".dev.vars";
-
-const KEY_PATTERN = /^[A-Za-z_]\w*$/u;
-
-const NEWLINE_SPLIT = /\r?\n/u;
-
 const NEWLINE_PRESENT = /[\r\n]/u;
 
 interface ParsedLine {
     key: string;
-    quoted: boolean;
     value: string;
 }
 
 const parseDevVariables = (content: string): Map<string, ParsedLine> => {
     const map = new Map<string, ParsedLine>();
 
-    for (const rawLine of content.split(NEWLINE_SPLIT)) {
-        const line = rawLine.trim();
-
-        if (line === "" || line.startsWith("#")) {
-            continue;
-        }
-
-        const eq = line.indexOf("=");
-
-        if (eq <= 0) {
-            continue;
-        }
-
-        const key = line.slice(0, eq).trim();
-
-        if (!KEY_PATTERN.test(key)) {
-            continue;
-        }
-
-        let value = line.slice(eq + 1).trim();
-        let quoted = false;
-
-        if ((value.startsWith('"') && value.endsWith('"') && value.length >= 2) || (value.startsWith("'") && value.endsWith("'") && value.length >= 2)) {
-            quoted = true;
-            value = value.slice(1, -1);
-        }
-
-        map.set(key, { key, quoted, value });
+    for (const entry of parseDevVariableEntries(content)) {
+        map.set(entry.key, entry);
     }
 
     return map;
@@ -162,7 +131,7 @@ const runEnvSet = (context: EnvContext): EnvCommandResult => {
         return { code: 1, descriptors: [] };
     }
 
-    if (!KEY_PATTERN.test(options.key)) {
+    if (!DEV_VARS_KEY_PATTERN.test(options.key)) {
         logger.error(`env: invalid key "${options.key}" — must match [A-Za-z_][A-Za-z0-9_]*`);
 
         return { code: 1, descriptors: [] };
@@ -174,7 +143,7 @@ const runEnvSet = (context: EnvContext): EnvCommandResult => {
         return { code: 1, descriptors: [] };
     }
 
-    // `.dev.vars` is a line-oriented format and parseDevVars splits on
+    // `.dev.vars` is a line-oriented format and parseDevVariables splits on
     // newlines; a value containing CR/LF would corrupt the round-trip and
     // could inject spurious vars. Reject rather than silently mangle.
     if (NEWLINE_PRESENT.test(options.value)) {
@@ -185,7 +154,7 @@ const runEnvSet = (context: EnvContext): EnvCommandResult => {
 
     const map = loadDevVariables(devVariablesPath);
 
-    map.set(options.key, { key: options.key, quoted: true, value: options.value });
+    map.set(options.key, { key: options.key, value: options.value });
     writeFileSync(devVariablesPath, serializeDevVariables(map), "utf8");
     logger.success(`env: set ${options.key} (${redact(options.value)}) in ${DEV_VARS_FILE}`);
 
