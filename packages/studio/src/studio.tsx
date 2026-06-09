@@ -234,6 +234,13 @@ const TABS = [
     "settings",
 ] as const;
 
+/**
+ * Tabs that own the full panel height (a flush full-height table/query sidebar +
+ * an internally-scrolling grid), rather than the default top-aligned, page-scrolled
+ * content. The Table editor and SQL editor render as full-height database consoles.
+ */
+const FULL_HEIGHT_TABS = new Set<StudioTab>(["sql"]);
+
 /** Resolve the active tab from a router pathname (`/logs` → `logs`); unknown paths fall back to `home`. */
 const tabFromPathname = (pathname: string): StudioTab => {
     // Use the last non-empty segment so this holds whether or not the router's
@@ -254,6 +261,7 @@ const StudioLayout = (): ReactElement => {
     const navigate = useNavigate();
     const pathname = useRouterState({ select: (state) => state.location.pathname });
     const current = tabFromPathname(pathname);
+    const fullHeight = FULL_HEIGHT_TABS.has(current);
 
     // Memoised on `t` (stable per locale) so the maps re-localise when the active
     // locale changes but aren't rebuilt on every unrelated render.
@@ -455,15 +463,17 @@ const StudioLayout = (): ReactElement => {
                 </div>
             </div>
 
-            <div className="flex min-w-0 flex-col overflow-auto bg-background" data-testid="dash-panel" role="tabpanel">
+            <div className="flex min-w-0 flex-col overflow-hidden bg-background" data-testid="dash-panel" role="tabpanel">
                 {/* Page header per section — a Studio-style title bar. */}
                 <header className="flex shrink-0 flex-col gap-0.5 border-b border-border px-6 py-4">
                     <h1 className="text-lg font-semibold tracking-tight text-foreground">{tabLabel[current]}</h1>
                     <p className="text-sm text-muted-foreground">{tabDescription[current]}</p>
                 </header>
                 {/* Key the boundary by tab so one panel throwing doesn't blank the
-                    shell, and switching tabs clears a prior panel's error. */}
-                <div className="min-w-0 flex-1 p-6">
+                    shell, and switching tabs clears a prior panel's error. Full-height
+                    tabs (Table/SQL editor) own the height and scroll internally; the
+                    rest get the default padded, page-scrolled content area. */}
+                <div className={fullHeight ? "flex min-w-0 flex-1 flex-col overflow-hidden" : "min-w-0 flex-1 overflow-auto p-6"}>
                     <ErrorBoundary
                         fallbackTitle={t("{title} failed", { title: tabLabel[current] })}
                         key={current}

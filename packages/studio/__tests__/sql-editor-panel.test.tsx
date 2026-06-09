@@ -1,7 +1,7 @@
 import { CirrusProvider } from "@cirrus/react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { ADMIN_FUNCTIONS } from "../src/admin";
 import { SqlEditorPanel } from "../src/sql-editor-panel";
@@ -15,6 +15,10 @@ const renderPanel = (mock: MockClientHooks): ReactElement => (
 );
 
 describe("sqlEditorPanel", () => {
+    afterEach(() => {
+        localStorage.clear();
+    });
+
     it("runs a query and renders the result rows + count", async () => {
         expect.assertions(2);
 
@@ -54,5 +58,26 @@ describe("sqlEditorPanel", () => {
         const error = await screen.findByTestId("sql-error");
 
         expect(error.textContent).toContain("read-only");
+    });
+
+    it("creates a saved query in the PRIVATE list from New query", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({
+            query: () => {
+                return { columns: [], rowCount: 0, rows: [], truncated: false };
+            },
+        });
+
+        render(renderPanel(mock));
+
+        // Empty to start, then New query adds an entry to the PRIVATE list.
+        expect(screen.getByTestId("sql-private-empty")).toBeDefined();
+
+        fireEvent.click(screen.getByTestId("sql-new"));
+
+        const list = await screen.findByTestId("sql-private");
+
+        expect(list.textContent).toContain("Untitled query");
     });
 });
