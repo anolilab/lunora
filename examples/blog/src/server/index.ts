@@ -1,5 +1,5 @@
 import type { CirrusAuth } from "@cirrus/auth";
-import { createAuth, ensureMigrated, handleAuthRequest } from "@cirrus/auth";
+import { cirrusAuthAdapter, createAuth, createSqlAuthStore, d1Executor, ensureMigrated, handleAuthRequest } from "@cirrus/auth";
 import type { ExecutionContextLike, Route, ShardNamespaceLike } from "@cirrus/runtime";
 import { createWorker } from "@cirrus/runtime";
 import { createScheduler, type DurableObjectNamespaceLike } from "@cirrus/scheduler";
@@ -61,18 +61,26 @@ let authReady: Promise<CirrusAuth> | null = null;
  * (`@cirrus/auth`), sharded function dispatch from `@cirrus/runtime`, and
  * D1-backed user storage.
  */
-const buildAuth = (env: Env): CirrusAuth => {
+const authOptions = (env: Env): Parameters<typeof createAuth>[0] => {
     if (!env.AUTH_SECRET) {
         throw new Error("AUTH_SECRET is required");
     }
 
-    return createAuth({
+    return {
         baseURL: env.AUTH_URL,
-        database: env.DB as never,
         emailAndPassword: { enabled: true },
         secret: env.AUTH_SECRET,
-    });
+    };
 };
+
+// Runtime auth via the SQL adapter — passing raw D1 makes better-auth resolve
+// its Kysely adapter through a runtime `await import(...)` in `auth.$context`
+// that hangs under `@cloudflare/vite-plugin`'s worker module runner (`pnpm dev`).
+// An explicit adapter skips that import; dev matches a deployed worker.
+const buildAuth = (env: Env): CirrusAuth => createAuth({ ...authOptions(env), database: cirrusAuthAdapter(createSqlAuthStore(d1Executor(env.DB as never))) });
+
+// Raw-D1 instance used only to drive `ensureMigrated` (Kysely migrator → tables).
+const buildMigrationAuth = (env: Env): CirrusAuth => createAuth({ ...authOptions(env), database: env.DB as never });
 
 const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
     createWorker({
@@ -98,7 +106,7 @@ export default {
         // migration is still in flight.
         authReady ??= (async () => {
             auth = buildAuth(env);
-            await ensureMigrated(auth);
+            await ensureMigrated(buildMigrationAuth(env));
 
             return auth;
         })();

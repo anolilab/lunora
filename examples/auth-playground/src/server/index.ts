@@ -3,7 +3,7 @@ import type { ExecutionContextLike, ShardNamespaceLike } from "@cirrus/runtime";
 import { createWorker } from "@cirrus/runtime";
 
 import { createShardDO } from "../../cirrus/_generated/shard.js";
-import { buildAuth } from "../../cirrus/auth.js";
+import { buildAuth, buildMigrationAuth } from "../../cirrus/auth.js";
 
 export const ShardDO = createShardDO();
 
@@ -25,19 +25,19 @@ let authInstance: ReturnType<typeof buildAuth> | null = null;
  *    own router (sign-up, sign-in, OAuth callbacks, org/admin endpoints).
  * 2. Everything else — falls through to Cirrus's RPC + HTTP-action surface.
  *
- * `ensureMigrated` runs better-auth's migration sweep against the configured
- * D1 binding. It is idempotent and cheap (just a schema diff) so calling it
- * per request inside dev is fine; for production prefer `compileMigrationsSql`
+ * `ensureMigrated` runs better-auth's migration sweep against the raw D1 binding
+ * (the Kysely migrator that creates the tables the runtime SQL adapter then uses)
+ * once, on the first request. For production prefer `compileMigrationsSql`
  * + `wrangler d1 execute` at deploy time.
  */
 export default {
     async fetch(request: Request, env: Env, ctx: ExecutionContextLike): Promise<Response> {
         if (!authInstance) {
             authInstance = buildAuth({ AUTH_SECRET: env.AUTH_SECRET, DB: env.DB });
-        }
 
-        // Idempotent — `ensureMigrated` caches per-options after the first run.
-        await ensureMigrated(authInstance);
+            // Create tables via the raw-D1 Kysely migrator (the runtime adapter issues no DDL).
+            await ensureMigrated(buildMigrationAuth({ AUTH_SECRET: env.AUTH_SECRET, DB: env.DB }));
+        }
 
         const authResponse = await handleAuthRequest(authInstance, request);
 
