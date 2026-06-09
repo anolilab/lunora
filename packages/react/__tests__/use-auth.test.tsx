@@ -3,9 +3,9 @@ import type { ReactElement } from "react";
 import { useEffect } from "react";
 import { describe, expect, it } from "vitest";
 
-import { CirrusProvider } from "../src/cirrus-provider.js";
-import useAuth from "../src/use-auth.js";
-import { createMockClient } from "./mock-client.js";
+import { CirrusProvider } from "../src/cirrus-provider";
+import useAuth from "../src/use-auth";
+import { createMockClient } from "./mock-client";
 
 let setTokenHandle: ((token: string | null) => void) | undefined;
 

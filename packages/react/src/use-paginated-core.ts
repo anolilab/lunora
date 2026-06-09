@@ -5,10 +5,10 @@ import type { QueryKey } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
-import { cirrusQueryKey, getSubscriptionRegistry, serializeQueryKey } from "./cache.js";
-import { useCirrus } from "./cirrus-provider.js";
-import type { PaginationResult, PaginationStatus } from "./types.js";
-import useLazyRef from "./use-lazy-ref.js";
+import { cirrusQueryKey, getSubscriptionRegistry, serializeQueryKey } from "./cache";
+import { useCirrus } from "./cirrus-provider";
+import type { PaginationResult, PaginationStatus } from "./types";
+import useLazyRef from "./use-lazy-ref";
 
 /**
  * Shared mechanics for Cirrus's Convex-parity *reactive* pagination, driving

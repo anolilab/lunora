@@ -4,9 +4,9 @@ import type { ReactElement } from "react";
 import { renderToString } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { CirrusProvider } from "../src/cirrus-provider.js";
-import usePreloadedQuery from "../src/use-preloaded-query.js";
-import { createMockClient } from "./mock-client.js";
+import { CirrusProvider } from "../src/cirrus-provider";
+import usePreloadedQuery from "../src/use-preloaded-query";
+import { createMockClient } from "./mock-client";
 
 const preloaded = <T,>(functionPath: string, value: T, args: Record<string, unknown> = {}): Preloaded<T> => {
     return {

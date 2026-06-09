@@ -4,12 +4,12 @@ import { render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import { CirrusProvider } from "../src/cirrus-provider.js";
-import { cirrusQueryKey } from "../src/query-key.js";
-import { cirrusQueryOptions } from "../src/query-options.js";
-import { createServerClient, fetchAction, fetchMutation, fetchQuery, prefetchQuery, preloadedQueryResult, preloadQuery } from "../src/server.js";
-import useQuery from "../src/use-query.js";
-import { createMockClient } from "./mock-client.js";
+import { CirrusProvider } from "../src/cirrus-provider";
+import { cirrusQueryKey } from "../src/query-key";
+import { cirrusQueryOptions } from "../src/query-options";
+import { createServerClient, fetchAction, fetchMutation, fetchQuery, prefetchQuery, preloadedQueryResult, preloadQuery } from "../src/server";
+import useQuery from "../src/use-query";
+import { createMockClient } from "./mock-client";
 
 /** A typed query reference so `useQuery` infers args/return without casts. */
 const queryRef = <Args extends Record<string, unknown>, Return>(path: string): FunctionReference<"query", Args, Return> => {

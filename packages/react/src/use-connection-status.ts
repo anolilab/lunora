@@ -3,7 +3,7 @@
 import type { ConnectionStatus } from "@cirrus/client";
 import { useSyncExternalStore } from "react";
 
-import { useCirrus } from "./cirrus-provider.js";
+import { useCirrus } from "./cirrus-provider";
 
 /**
  * Reactive view of the client's aggregate live-socket status across all shard

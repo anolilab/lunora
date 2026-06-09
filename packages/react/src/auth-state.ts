@@ -2,7 +2,7 @@
 
 import { useSyncExternalStore } from "react";
 
-import useAuth from "./use-auth.js";
+import useAuth from "./use-auth";
 
 /**
  * Resolved auth-gate state. `isLoading` covers the window before the client has

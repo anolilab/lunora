@@ -6,13 +6,13 @@
 // Client Components. In a Next.js / RSC app, import these from your own
 // `"use client"` files (see the provider/hook examples in the docs); server-side
 // data loading lives in the socket-free `@cirrus/react/server` entry.
-export { Authenticated, AuthLoading, Unauthenticated } from "./auth-gates.js";
-export type { AuthState } from "./auth-state.js";
-export { useAuthState } from "./auth-state.js";
-export type { CirrusProviderProps } from "./cirrus-provider.js";
-export { CirrusProvider, useCirrus } from "./cirrus-provider.js";
-export type { CirrusQueryOptions } from "./query-options.js";
-export { cirrusQueryOptions } from "./query-options.js";
+export { Authenticated, AuthLoading, Unauthenticated } from "./auth-gates";
+export type { AuthState } from "./auth-state";
+export { useAuthState } from "./auth-state";
+export type { CirrusProviderProps } from "./cirrus-provider";
+export { CirrusProvider, useCirrus } from "./cirrus-provider";
+export type { CirrusQueryOptions } from "./query-options";
+export { cirrusQueryOptions } from "./query-options";
 export type {
     ArgsOf,
     CirrusClient,
@@ -32,20 +32,20 @@ export type {
     UseQueryOptions,
     User,
     UseSubscriptionResult,
-} from "./types.js";
-export { default as useAuth } from "./use-auth.js";
-export { default as useConnectionStatus } from "./use-connection-status.js";
-export { default as useInfiniteQuery } from "./use-infinite-query.js";
-export type { MutationHook } from "./use-mutation.js";
-export { useMutation } from "./use-mutation.js";
-export type { PageItemOf, PaginatedArgs } from "./use-paginated-query.js";
-export { usePaginatedQuery } from "./use-paginated-query.js";
-export { default as usePreloadedQuery } from "./use-preloaded-query.js";
-export type { HeartbeatReference, ListPresentReference, UsePresenceOptions, UsePresenceResult } from "./use-presence.js";
-export { usePresence } from "./use-presence.js";
-export { default as useQuery } from "./use-query.js";
-export type { UseRateLimitOptions, UseRateLimitResult } from "./use-rate-limit.js";
-export { useRateLimit } from "./use-rate-limit.js";
-export type { UseStreamOptions, UseStreamResult, UseStreamStatus } from "./use-stream.js";
-export { useStream } from "./use-stream.js";
-export { default as useSubscription } from "./use-subscription.js";
+} from "./types";
+export { default as useAuth } from "./use-auth";
+export { default as useConnectionStatus } from "./use-connection-status";
+export { default as useInfiniteQuery } from "./use-infinite-query";
+export type { MutationHook } from "./use-mutation";
+export { useMutation } from "./use-mutation";
+export type { PageItemOf, PaginatedArgs } from "./use-paginated-query";
+export { usePaginatedQuery } from "./use-paginated-query";
+export { default as usePreloadedQuery } from "./use-preloaded-query";
+export type { HeartbeatReference, ListPresentReference, UsePresenceOptions, UsePresenceResult } from "./use-presence";
+export { usePresence } from "./use-presence";
+export { default as useQuery } from "./use-query";
+export type { UseRateLimitOptions, UseRateLimitResult } from "./use-rate-limit";
+export { useRateLimit } from "./use-rate-limit";
+export type { UseStreamOptions, UseStreamResult, UseStreamStatus } from "./use-stream";
+export { useStream } from "./use-stream";
+export { default as useSubscription } from "./use-subscription";

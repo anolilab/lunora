@@ -4,8 +4,8 @@ import type { FunctionReference, Preloaded } from "@cirrus/client";
 import { useQuery as useTanStackQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
 
-import { cirrusQueryKey, getSubscriptionRegistry, serializeQueryKey } from "./cache.js";
-import { useCirrus } from "./cirrus-provider.js";
+import { cirrusQueryKey, getSubscriptionRegistry, serializeQueryKey } from "./cache";
+import { useCirrus } from "./cirrus-provider";
 
 /**
  * Hydrate a query from a {@link Preloaded} token produced by `preloadQuery`

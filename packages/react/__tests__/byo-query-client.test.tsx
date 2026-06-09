@@ -4,9 +4,9 @@ import { render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
-import { CirrusProvider } from "../src/cirrus-provider.js";
-import useQuery from "../src/use-query.js";
-import { createMockClient } from "./mock-client.js";
+import { CirrusProvider } from "../src/cirrus-provider";
+import useQuery from "../src/use-query";
+import { createMockClient } from "./mock-client";
 
 const makeRef = (reference: string): FunctionReference => {
     return { __cirrusRef: reference };

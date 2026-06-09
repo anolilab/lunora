@@ -3,9 +3,9 @@
 import type { FunctionReference } from "@cirrus/client";
 import { useCallback, useEffect, useRef } from "react";
 
-import type { UseInfiniteQueryOptions, UseInfiniteQueryResult } from "./types.js";
-import { usePaginatedCore } from "./use-paginated-core.js";
-import type { PageItemOf, PaginatedArgs } from "./use-paginated-query.js";
+import type { UseInfiniteQueryOptions, UseInfiniteQueryResult } from "./types";
+import { usePaginatedCore } from "./use-paginated-core";
+import type { PageItemOf, PaginatedArgs } from "./use-paginated-query";
 
 /**
  * Subscribe to a reactively-paginated query and expose its pages discretely.

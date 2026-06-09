@@ -4,8 +4,8 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import { CirrusProvider } from "../src/cirrus-provider.js";
-import { useStream } from "../src/use-stream.js";
+import { CirrusProvider } from "../src/cirrus-provider";
+import { useStream } from "../src/use-stream";
 
 const makeRef = (reference: string): FunctionReference<"stream"> => {
     return { __cirrusRef: reference };

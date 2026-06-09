@@ -3,9 +3,9 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import { CirrusProvider } from "../src/cirrus-provider.js";
-import useSubscription from "../src/use-subscription.js";
-import { createMockClient } from "./mock-client.js";
+import { CirrusProvider } from "../src/cirrus-provider";
+import useSubscription from "../src/use-subscription";
+import { createMockClient } from "./mock-client";
 
 const makeRef = (ref: string): FunctionReference => {
     return { __cirrusRef: ref };

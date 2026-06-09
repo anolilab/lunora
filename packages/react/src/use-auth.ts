@@ -2,8 +2,8 @@
 
 import { useSyncExternalStore } from "react";
 
-import { useCirrus } from "./cirrus-provider.js";
-import type { CirrusClient, UseAuthResult, User } from "./types.js";
+import { useCirrus } from "./cirrus-provider";
+import type { CirrusClient, UseAuthResult, User } from "./types";
 
 /**
  * Per-client identity store. The authenticated user lives on the shared

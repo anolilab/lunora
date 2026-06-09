@@ -1,7 +1,7 @@
 import type { ArgsOf, CirrusClient, FunctionReference, ReturnOf } from "@cirrus/client";
 import type { QueryKey } from "@tanstack/react-query";
 
-import { cirrusQueryKey } from "./query-key.js";
+import { cirrusQueryKey } from "./query-key";
 
 /**
  * Pure, transport-free adapter between a Cirrus function reference and a

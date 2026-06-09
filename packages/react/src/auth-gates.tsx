@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 
-import { useAuthState } from "./auth-state.js";
+import { useAuthState } from "./auth-state";
 
 interface AuthGateProps {
     children: ReactNode;

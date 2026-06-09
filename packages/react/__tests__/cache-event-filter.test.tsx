@@ -5,9 +5,9 @@ import type { ReactElement } from "react";
 import { useRef } from "react";
 import { describe, expect, it } from "vitest";
 
-import { CirrusProvider } from "../src/cirrus-provider.js";
-import { usePaginatedQuery } from "../src/use-paginated-query.js";
-import { createMockClient } from "./mock-client.js";
+import { CirrusProvider } from "../src/cirrus-provider";
+import { usePaginatedQuery } from "../src/use-paginated-query";
+import { createMockClient } from "./mock-client";
 
 const makeRef = (ref: string): FunctionReference => {
     return { __cirrusRef: ref };

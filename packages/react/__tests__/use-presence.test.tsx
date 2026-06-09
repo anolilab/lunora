@@ -3,10 +3,10 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { CirrusProvider } from "../src/cirrus-provider.js";
-import type { HeartbeatReference, ListPresentReference } from "../src/use-presence.js";
-import { usePresence } from "../src/use-presence.js";
-import { createMockClient } from "./mock-client.js";
+import { CirrusProvider } from "../src/cirrus-provider";
+import type { HeartbeatReference, ListPresentReference } from "../src/use-presence";
+import { usePresence } from "../src/use-presence";
+import { createMockClient } from "./mock-client";
 
 const HEARTBEAT = { __cirrusRef: "presence:heartbeat" } as unknown as HeartbeatReference;
 const LIST_PRESENT = { __cirrusRef: "presence:listPresent" } as unknown as ListPresentReference;

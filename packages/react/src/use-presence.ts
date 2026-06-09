@@ -3,7 +3,7 @@
 import type { ArgsOf, FunctionReference, ReturnOf } from "@cirrus/client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { useCirrus } from "./cirrus-provider.js";
+import { useCirrus } from "./cirrus-provider";
 
 /**
  * `usePresence` — collaborative-awareness hook, the client half of the

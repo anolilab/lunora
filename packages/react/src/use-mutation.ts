@@ -4,8 +4,8 @@ import type { ArgsOf, FunctionReference, OptimisticUpdate, ReturnOf } from "@cir
 import { useMutation as useTanStackMutation } from "@tanstack/react-query";
 import { useCallback, useRef, useState } from "react";
 
-import { useCirrus } from "./cirrus-provider.js";
-import type { UseMutationCallOptions } from "./types.js";
+import { useCirrus } from "./cirrus-provider";
+import type { UseMutationCallOptions } from "./types";
 
 type CallOptions<F extends FunctionReference> = UseMutationCallOptions<unknown, unknown, ArgsOf<F>>;
 type MutateVariables<F extends FunctionReference> = { args: ArgsOf<F>; options?: CallOptions<F> };
@@ -78,10 +78,7 @@ const useMutation = <F extends FunctionReference>(function_: F): MutationHook<F>
     // `mutateAsync`/`reset` are referentially stable across renders.
     const { data, error, isError, mutateAsync, reset } = mutation;
 
-    const mutate = useCallback(
-        (args: ArgsOf<F>, options?: CallOptions<F>): Promise<ReturnOf<F>> => mutateAsync({ args, options }),
-        [mutateAsync],
-    );
+    const mutate = useCallback((args: ArgsOf<F>, options?: CallOptions<F>): Promise<ReturnOf<F>> => mutateAsync({ args, options }), [mutateAsync]);
 
     const withOptimisticUpdate = useCallback(
         (update: OptimisticUpdate<ArgsOf<F>>): MutationHook<F> => {

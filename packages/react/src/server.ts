@@ -2,7 +2,7 @@ import type { ArgsOf, FunctionReference, ReturnOf } from "@cirrus/client";
 import { CirrusClient } from "@cirrus/client";
 import type { QueryClient } from "@tanstack/react-query";
 
-import { cirrusQueryKey } from "./query-key.js";
+import { cirrusQueryKey } from "./query-key";
 
 /**
  * Server-side data-loading helpers for React Server Components.
@@ -147,8 +147,8 @@ export const fetchAction = async <F extends FunctionReference>(
 
 // The TanStack options factory is transport-free, so it works server-side too:
 // `await queryClient.ensureQueryData(cirrusQueryOptions(serverClient, fn, args))`.
-export type { CirrusQueryOptions } from "./query-options.js";
-export { cirrusQueryOptions } from "./query-options.js";
+export type { CirrusQueryOptions } from "./query-options";
+export { cirrusQueryOptions } from "./query-options";
 export type { ArgsOf, FunctionReference, Preloaded, ReturnOf } from "@cirrus/client";
 // Re-exported so callers can do all server-side data loading from one import.
 // `preloadQuery`/`preloadedQueryResult` are the explicit-token flow; `dehydrate`

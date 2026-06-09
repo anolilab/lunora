@@ -1,7 +1,7 @@
 import type { QueryCacheNotifyEvent, QueryKey } from "@tanstack/react-query";
 import { bench, describe } from "vitest";
 
-import { cirrusQueryKey, serializeQueryKey } from "../src/query-key.js";
+import { cirrusQueryKey, serializeQueryKey } from "../src/query-key";
 
 /**
  * `usePaginatedQuery` / `useInfiniteQuery` each subscribe to the *whole*

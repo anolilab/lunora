@@ -3,8 +3,8 @@
 import type { ArgsOf, FunctionReference, ReturnOf } from "@cirrus/client";
 import { useEffect, useReducer, useRef } from "react";
 
-import { useCirrus } from "./cirrus-provider.js";
-import { stableStringify } from "./query-key.js";
+import { useCirrus } from "./cirrus-provider";
+import { stableStringify } from "./query-key";
 
 /** The lifecycle of a stream the hook is observing. */
 type UseStreamStatus = "complete" | "error" | "idle" | "streaming";

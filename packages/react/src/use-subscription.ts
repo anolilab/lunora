@@ -3,9 +3,9 @@
 import type { ArgsOf, FunctionReference, ReturnOf } from "@cirrus/client";
 import { useEffect, useRef, useState } from "react";
 
-import { useCirrus } from "./cirrus-provider.js";
-import { stableStringify } from "./query-key.js";
-import type { UseQueryOptions, UseSubscriptionResult } from "./types.js";
+import { useCirrus } from "./cirrus-provider";
+import { stableStringify } from "./query-key";
+import type { UseQueryOptions, UseSubscriptionResult } from "./types";
 
 /**
  * Subscribe to a real-time stream from the server. Unlike `useQuery`, this

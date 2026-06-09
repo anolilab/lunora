@@ -2,8 +2,8 @@ import { render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
-import { CirrusProvider, useCirrus } from "../src/cirrus-provider.js";
-import { createMockClient } from "./mock-client.js";
+import { CirrusProvider, useCirrus } from "../src/cirrus-provider";
+import { createMockClient } from "./mock-client";
 
 const Probe = (): ReactElement => {
     const client = useCirrus();

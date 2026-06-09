@@ -3,8 +3,8 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import { CirrusProvider } from "../src/cirrus-provider.js";
-import { usePaginatedQuery } from "../src/use-paginated-query.js";
+import { CirrusProvider } from "../src/cirrus-provider";
+import { usePaginatedQuery } from "../src/use-paginated-query";
 
 const makeRef = (ref: string): FunctionReference => {
     return { __cirrusRef: ref };

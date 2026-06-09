@@ -3,9 +3,9 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import { CirrusProvider } from "../src/cirrus-provider.js";
-import { useMutation } from "../src/use-mutation.js";
-import { createMockClient } from "./mock-client.js";
+import { CirrusProvider } from "../src/cirrus-provider";
+import { useMutation } from "../src/use-mutation";
+import { createMockClient } from "./mock-client";
 
 const makeRef = (ref: string): FunctionReference => {
     return { __cirrusRef: ref };

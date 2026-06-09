@@ -3,10 +3,10 @@ import type { ReactElement } from "react";
 import { useEffect } from "react";
 import { describe, expect, it } from "vitest";
 
-import { Authenticated, AuthLoading, Unauthenticated } from "../src/auth-gates.js";
-import { CirrusProvider } from "../src/cirrus-provider.js";
-import useAuth from "../src/use-auth.js";
-import { createMockClient } from "./mock-client.js";
+import { Authenticated, AuthLoading, Unauthenticated } from "../src/auth-gates";
+import { CirrusProvider } from "../src/cirrus-provider";
+import useAuth from "../src/use-auth";
+import { createMockClient } from "./mock-client";
 
 let setTokenHandle: ((token: string | null) => void) | undefined;
 

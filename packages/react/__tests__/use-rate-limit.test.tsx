@@ -3,8 +3,8 @@ import type { ReactElement } from "react";
 import { useEffect } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { UseRateLimitResult } from "../src/use-rate-limit.js";
-import { useRateLimit } from "../src/use-rate-limit.js";
+import type { UseRateLimitResult } from "../src/use-rate-limit";
+import { useRateLimit } from "../src/use-rate-limit";
 
 const clock = { now: 0 };
 let handle: UseRateLimitResult;

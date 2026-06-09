@@ -1,7 +1,7 @@
 import type { CirrusClient, FunctionReference, Unsubscribe } from "@cirrus/client";
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 
-import { keyHash } from "./query-key.js";
+import { keyHash } from "./query-key";
 
 /**
  * Per-key bookkeeping: a single WS subscription is shared across every hook
@@ -131,4 +131,4 @@ const getSubscriptionRegistry = (client: CirrusClient): CirrusSubscriptionRegist
 };
 
 export { CirrusSubscriptionRegistry, getSubscriptionRegistry };
-export { cirrusQueryKey, serializeQueryKey } from "./query-key.js";
+export { cirrusQueryKey, serializeQueryKey } from "./query-key";
