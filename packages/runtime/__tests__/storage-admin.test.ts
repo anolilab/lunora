@@ -267,6 +267,26 @@ describe("createWorker — storage admin signed URL", () => {
 
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toEqual({ key: "avatars/a.png", url: "https://cdn.example/avatars/a.png?sig=abc" });
-        expect(storageSignedUrl).toHaveBeenCalledWith("avatars/a.png");
+        // No `expiresIn` query → the host gets `undefined` (its own default applies).
+        expect(storageSignedUrl).toHaveBeenCalledWith("avatars/a.png", { expiresInSeconds: undefined });
+    });
+
+    it("forwards a positive expiresIn as the share-link lifetime", async () => {
+        expect.assertions(2);
+
+        const storageSignedUrl = vi.fn<StorageSignedUrlFunction>(async (key: string) => `https://cdn.example/${key}?sig=abc`);
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageSignedUrl });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_cirrus/admin/storage/url?key=a.png&expiresIn=900", {
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "GET",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+        expect(storageSignedUrl).toHaveBeenCalledWith("a.png", { expiresInSeconds: 900 });
     });
 });

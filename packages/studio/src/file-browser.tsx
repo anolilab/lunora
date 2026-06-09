@@ -185,6 +185,8 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
     const client = useCirrus();
 
     const [prefix, setPrefix] = useState<string>(initialPrefix ?? "");
+    // Share-link lifetime (seconds) applied by the per-row "Copy URL" action.
+    const [expiry, setExpiry] = useState<number>(3600);
     const [objects, setObjects] = useState<StorageObject[] | null>(null);
     const [error, setError] = useState<null | string>(null);
     const [busy, setBusy] = useState<boolean>(false);
@@ -252,6 +254,10 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
     // Split the loaded keys into the immediate folders + files at this prefix.
     const { files, folders } = useMemo(() => deriveEntries(objects ?? [], prefix), [objects, prefix]);
 
+    const onExpiryChange = useCallback((event: ChangeEvent<HTMLSelectElement>): void => {
+        setExpiry(Number.parseInt(event.target.value, 10));
+    }, []);
+
     const onCopy = useCallback(
         (key: string): void => {
             setError(null);
@@ -259,7 +265,7 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
             fireAndForget(
                 (async (): Promise<void> => {
                     try {
-                        const url = await client.signedStorageUrl(key);
+                        const url = await client.signedStorageUrl(key, expiry);
 
                         await copyToClipboard(url);
                         setCopiedKey(key);
@@ -269,7 +275,7 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
                 })(),
             );
         },
-        [client],
+        [client, expiry],
     );
 
     // Clear the "Copied" indicator a couple of seconds after a copy, so it reads as
@@ -368,6 +374,21 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
                     {busy ? t("Uploading…") : t("Upload")}
                 </Button>
                 <input className="hidden" data-testid="storage-file-input" onChange={onFileChange} ref={fileInputRef} type="file" />
+                <label className="ml-auto flex items-center gap-1.5 text-xs text-muted-foreground" htmlFor="storage-expiry">
+                    {t("Link expiry")}
+                    <select
+                        className="h-8 rounded-md border border-border bg-background px-1 tabular-nums outline-none focus-visible:border-ring"
+                        data-testid="storage-expiry"
+                        id="storage-expiry"
+                        onChange={onExpiryChange}
+                        value={expiry}
+                    >
+                        <option value={900}>{t("15m")}</option>
+                        <option value={3600}>{t("1h")}</option>
+                        <option value={86_400}>{t("24h")}</option>
+                        <option value={604_800}>{t("7d")}</option>
+                    </select>
+                </label>
             </div>
 
             {objects !== null && <Breadcrumbs onNavigate={navigate} prefix={prefix} t={t} />}

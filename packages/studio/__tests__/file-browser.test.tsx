@@ -208,7 +208,8 @@ describe("fileBrowser", () => {
                 }
             });
 
-            expect(mock.signedStorageUrl).toHaveBeenCalledWith("a.png");
+            // The copy action requests a link with the toolbar's default 1h lifetime.
+            expect(mock.signedStorageUrl).toHaveBeenCalledWith("a.png", 3600);
             expect(writeText).toHaveBeenCalledWith("https://mock.example/a.png?sig=test");
         });
     });

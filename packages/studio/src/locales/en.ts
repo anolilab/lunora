@@ -452,6 +452,11 @@ const MESSAGE_IDS = [
     "admin",
     // File browser actions.
     "Folder path",
+    "Link expiry",
+    "15m",
+    "1h",
+    "24h",
+    "7d",
     "Upload",
     "Uploading…",
     "Copy URL",

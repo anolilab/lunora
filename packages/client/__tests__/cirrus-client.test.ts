@@ -1289,6 +1289,26 @@ describe("cirrusClient", () => {
             expect(init.method).toBe("GET");
         });
 
+        it("signedStorageUrl forwards an expiresIn query when given a lifetime", async () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ key: "a.png", url: "https://cdn.example/a.png?sig=x" }));
+
+            const client = new CirrusClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            await client.signedStorageUrl("a.png", 900);
+
+            const [requestUrl] = fetchMock.mock.calls[0] as unknown as [string];
+            const parsed = new URL(requestUrl);
+
+            expect(parsed.searchParams.get("key")).toBe("a.png");
+            expect(parsed.searchParams.get("expiresIn")).toBe("900");
+        });
+
         it("signedStorageUrl throws when the endpoint returns no url", async () => {
             expect.assertions(1);
 

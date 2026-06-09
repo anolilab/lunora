@@ -915,14 +915,16 @@ class CirrusClient {
      * Build a (signed or public) URL for one object. Hits the admin-gated
      * `GET /_cirrus/admin/storage/url?key=…` endpoint — the worker must be built
      * with a `storageSignedUrl` function and `adminToken`. Powers the studio
-     * file browser's copy-URL action; resolves the URL string.
+     * file browser's copy-URL action; resolves the URL string. An optional
+     * `expiresInSeconds` requests a share-link lifetime (the host clamps it).
      */
-    public async signedStorageUrl(key: string): Promise<string> {
+    public async signedStorageUrl(key: string, expiresInSeconds?: number): Promise<string> {
         if (this.closed) {
             throw new Error("CirrusClient is closed");
         }
 
-        const path = `${STORAGE_URL_PATH}?key=${encodeURIComponent(key)}`;
+        const expiryQuery = expiresInSeconds === undefined ? "" : `&expiresIn=${encodeURIComponent(expiresInSeconds.toString())}`;
+        const path = `${STORAGE_URL_PATH}?key=${encodeURIComponent(key)}${expiryQuery}`;
         const body = (await this.adminFetch(path, "GET")) as { url?: string };
 
         if (typeof body.url !== "string") {

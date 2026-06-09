@@ -208,10 +208,11 @@ type StorageUploadFunction = (
 
 /**
  * Mints a (signed or public) URL for one object so the admin file browser can
- * offer a "copy URL" action. Structurally compatible with `@cirrus/storage`'s
- * `Storage["getSignedUrl"]` / `Storage["getUrl"]`.
+ * offer a "copy URL" action. The optional `expiresInSeconds` lets the caller pick
+ * a share-link lifetime (the host clamps it). Structurally compatible with
+ * `@cirrus/storage`'s `Storage["getSignedUrl"]` / `Storage["getUrl"]`.
  */
-type StorageSignedUrlFunction = (key: string) => Promise<string> | string;
+type StorageSignedUrlFunction = (key: string, options?: { expiresInSeconds?: number }) => Promise<string> | string;
 
 /** One `.global()` table plus its row count. Mirrors `@cirrus/d1`'s `GlobalTableInfo`. */
 interface GlobalTableInfo {
@@ -2580,8 +2581,13 @@ const createWorker = (
             message: "storage URL endpoint requires a `storageSignedUrl` function on the worker",
         });
 
-        const key = requireStorageKey(new URL(request.url));
-        const signedUrl = await storageSignedUrl(key);
+        const url = new URL(request.url);
+        const key = requireStorageKey(url);
+        // Optional share-link lifetime; a non-numeric/absent value leaves the host's
+        // default. The host (`@cirrus/storage`) clamps the value to its allowed range.
+        const expiresInRaw = Number(queryParameter(url, "expiresIn") ?? "");
+        const expiresInSeconds = Number.isFinite(expiresInRaw) && expiresInRaw > 0 ? expiresInRaw : undefined;
+        const signedUrl = await storageSignedUrl(key, { expiresInSeconds });
 
         return Response.json({ key, url: signedUrl }, { headers: { "content-type": "application/json" }, status: 200 });
     };

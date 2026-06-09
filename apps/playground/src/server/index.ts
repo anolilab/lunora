@@ -199,7 +199,10 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
                   return {
                       storageDelete: storage.delete,
                       storageList: storage.list,
-                      storageSignedUrl: env.PUBLIC_STORAGE_BASE_URL && env.STORAGE_SECRET ? (key: string) => storage.getSignedUrl(key) : undefined,
+                      storageSignedUrl:
+                          env.PUBLIC_STORAGE_BASE_URL && env.STORAGE_SECRET
+                              ? (key: string, urlOptions?: { expiresInSeconds?: number }) => storage.getSignedUrl(key, { expiresInSeconds: urlOptions?.expiresInSeconds })
+                              : undefined,
                       storageUpload: (key: string, body: ArrayBuffer, options?: { contentType?: string }) => storage.upload(key, body, options),
                   };
               })()
