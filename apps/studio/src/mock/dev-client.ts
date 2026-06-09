@@ -226,12 +226,12 @@ const dataFor = (reference: string, args: unknown): unknown => {
         }
         case ADMIN_FUNCTIONS.runSql: {
             return {
-                columns: ["id", "author", "body"],
+                columns: ["author", "messages", "reactions"],
                 rowCount: 3,
                 rows: [
-                    { author: "ada", body: "Pushed the new shard router 🚀", id: "msg_01H9" },
-                    { author: "grace", body: "Reviewed — looks great, merging.", id: "msg_01H8" },
-                    { author: "lin", body: "Anyone seeing slow reads on us-east?", id: "msg_01H7" },
+                    { author: "ada", messages: 42, reactions: 128 },
+                    { author: "grace", messages: 31, reactions: 96 },
+                    { author: "lin", messages: 18, reactions: 54 },
                 ],
                 truncated: false,
             };

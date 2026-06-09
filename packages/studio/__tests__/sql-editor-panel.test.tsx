@@ -1,5 +1,5 @@
 import { CirrusProvider } from "@cirrus/react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -79,5 +79,43 @@ describe("sqlEditorPanel", () => {
         const list = await screen.findByTestId("sql-private");
 
         expect(list.textContent).toContain("Untitled query");
+    });
+
+    it("charts a numeric result and exposes an export menu", async () => {
+        expect.assertions(3);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.runSql) {
+                    return {
+                        columns: ["author", "count"],
+                        rowCount: 2,
+                        rows: [
+                            { author: "ada", count: 5 },
+                            { author: "grace", count: 3 },
+                        ],
+                        truncated: false,
+                    };
+                }
+
+                throw new Error(`unexpected ${reference}`);
+            },
+        });
+
+        render(renderPanel(mock));
+
+        fireEvent.click(screen.getByTestId("sql-run"));
+        await screen.findByTestId("sql-rows");
+
+        // A result with a numeric column surfaces the Export menu.
+        expect(screen.getByTestId("grid-export")).toBeDefined();
+
+        // The Chart tab plots one bar per row (numeric `count` against `author`).
+        fireEvent.click(screen.getByTestId("sql-tab-chart"));
+
+        const chart = await screen.findByTestId("sql-chart");
+
+        expect(within(chart).getAllByTestId("sql-chart-bar")).toHaveLength(2);
+        expect(chart.textContent).toContain("ada");
     });
 });

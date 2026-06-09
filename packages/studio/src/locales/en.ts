@@ -291,6 +291,8 @@ const MESSAGE_IDS = [
     "No saved queries yet — they save to this browser as you type.",
     "Results",
     "Explain",
+    "Chart",
+    "No numeric column to chart.",
     "Click Run to execute your query.",
     // Data-grid features (export, columns, selection, cell expand).
     "Columns",

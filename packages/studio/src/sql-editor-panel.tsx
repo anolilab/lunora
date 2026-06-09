@@ -6,8 +6,10 @@ import type { SqlConsoleResult } from "./admin";
 import { ADMIN_FUNCTIONS } from "./admin";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
 import { CellValue } from "./data-grid";
+import { ExportMenu } from "./grid-features";
 import { useT } from "./i18n-context";
 import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal";
+import SqlResultChart from "./result-chart";
 import { recordShard } from "./shard-history";
 import { ShardInput } from "./shard-input";
 
@@ -34,7 +36,7 @@ const STORAGE_KEY = "cirrus-studio-sql-queries";
 /** Line-number gutter sizing, aligned to the editor textarea's padding + line height. */
 const GUTTER_STYLE: CSSProperties = { minWidth: "2.75rem", paddingInline: "0.5rem" };
 /** Which results sub-pane is shown. */
-type ResultTab = "explain" | "results";
+type ResultTab = "chart" | "explain" | "results";
 
 const TEMPLATES: ReadonlyArray<QueryTemplate> = [
     { label: "List tables", sql: "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name;" },
@@ -308,6 +310,10 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         fireAndForget(run("explain"));
     }, [run]);
 
+    const showChart = useCallback((): void => {
+        setTab("chart");
+    }, []);
+
     const filtered = useMemo<SavedQuery[]>(() => {
         const needle = search.trim().toLowerCase();
 
@@ -439,10 +445,14 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                         <button className={tabClass(tab === "results")} data-testid="sql-tab-results" onClick={showResults} type="button">
                             {t("Results")}
                         </button>
+                        <button className={tabClass(tab === "chart")} data-testid="sql-tab-chart" onClick={showChart} type="button">
+                            {t("Chart")}
+                        </button>
                         <button className={tabClass(tab === "explain")} data-testid="sql-tab-explain" onClick={showExplain} type="button">
                             {t("Explain")}
                         </button>
                         <div className="ms-auto flex items-center gap-2">
+                            {result !== null && result.columns.length > 0 && <ExportMenu columns={result.columns} name="query-result" rows={result.rows} />}
                             <ShardInput onChange={setShardKey} testId="sql-shard-input" value={shardKey} />
                             <button
                                 className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground outline-none transition-colors hover:bg-primary/90 focus-visible:bg-primary/90 disabled:pointer-events-none disabled:opacity-50"
@@ -476,7 +486,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
                         {error === null && result !== null && (
                             <div data-testid="sql-result">
-                                <SqlResultTable result={result} />
+                                {tab === "chart" ? <SqlResultChart result={result} /> : <SqlResultTable result={result} />}
                                 <p className="border-t border-border px-3 py-1.5 text-xs text-muted-foreground" data-testid="sql-count">
                                     {result.truncated
                                         ? t("Showing the first {max} of {count} rows.", { count: result.rowCount, max: result.rows.length })
