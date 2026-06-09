@@ -1,5 +1,5 @@
-import type { CirrusClient } from "./cirrus-client.js";
-import type { ArgsOf, FunctionReference, Preloaded, ReturnOf } from "./types.js";
+import type { CirrusClient } from "./cirrus-client";
+import type { ArgsOf, FunctionReference, Preloaded, ReturnOf } from "./types";
 
 /**
  * Run a query once on the server (during SSR) and capture its result in a

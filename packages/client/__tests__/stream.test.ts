@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { CirrusClient } from "../src/cirrus-client.js";
-import { createStream, DEFAULT_MAX_BUFFER } from "../src/stream.js";
-import type { FunctionReference } from "../src/types.js";
+import { CirrusClient } from "../src/cirrus-client";
+import { createStream, DEFAULT_MAX_BUFFER } from "../src/stream";
+import type { FunctionReference } from "../src/types";
 
 // --- Mock WebSocket ---------------------------------------------------------
 

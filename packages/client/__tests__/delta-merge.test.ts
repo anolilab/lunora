@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { MutationDelta } from "../src/delta-merge.js";
-import { applyDelta, isMutationDelta } from "../src/delta-merge.js";
+import type { MutationDelta } from "../src/delta-merge";
+import { applyDelta, isMutationDelta } from "../src/delta-merge";
 
 const row = (id: string, extra: Record<string, unknown> = {}): Record<string, unknown> => {
     return { _id: id, ...extra };

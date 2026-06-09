@@ -1,5 +1,5 @@
-import type { SubscriptionRegistry, SubscriptionState } from "./subscription.js";
-import type { ArgsOf, FunctionReference, ReturnOf } from "./types.js";
+import type { SubscriptionRegistry, SubscriptionState } from "./subscription";
+import type { ArgsOf, FunctionReference, ReturnOf } from "./types";
 
 /**
  * Read/write handle over the client's live query cache, handed to a mutation's

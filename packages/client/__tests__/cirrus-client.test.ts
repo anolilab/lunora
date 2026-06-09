@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { CirrusClient } from "../src/cirrus-client.js";
-import type { OptimisticUpdate } from "../src/local-store.js";
-import { createInMemoryPersistence } from "../src/persistence.js";
-import type { FunctionReference } from "../src/types.js";
+import { CirrusClient } from "../src/cirrus-client";
+import type { OptimisticUpdate } from "../src/local-store";
+import { createInMemoryPersistence } from "../src/persistence";
+import type { FunctionReference } from "../src/types";
 
 const flushMicrotasks = (): Promise<void> =>
     new Promise((resolve) => {

@@ -1,4 +1,4 @@
-import type { OfflineQueueOptions, PersistenceAdapter } from "./types.js";
+import type { OfflineQueueOptions, PersistenceAdapter } from "./types";
 
 interface QueuedMutation<T = unknown> {
     readonly args: Record<string, unknown>;

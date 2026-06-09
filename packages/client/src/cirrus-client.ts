@@ -1,15 +1,15 @@
-import createInMemoryBookmarkStorage from "./bookmark.js";
-import { applyDelta, isMutationDelta } from "./delta-merge.js";
-import type { OptimisticUpdate } from "./local-store.js";
-import { createLocalStore } from "./local-store.js";
-import type { QueuedMutation } from "./offline-queue.js";
-import { OfflineQueue } from "./offline-queue.js";
-import type { ReconnectCalculator } from "./reconnect.js";
-import { createReconnect } from "./reconnect.js";
-import type { StreamHandle, StreamIterable } from "./stream.js";
-import { createStream } from "./stream.js";
-import type { SubscriptionCallback, SubscriptionErrorCallback, SubscriptionState } from "./subscription.js";
-import { SubscriptionRegistry } from "./subscription.js";
+import createInMemoryBookmarkStorage from "./bookmark";
+import { applyDelta, isMutationDelta } from "./delta-merge";
+import type { OptimisticUpdate } from "./local-store";
+import { createLocalStore } from "./local-store";
+import type { QueuedMutation } from "./offline-queue";
+import { OfflineQueue } from "./offline-queue";
+import type { ReconnectCalculator } from "./reconnect";
+import { createReconnect } from "./reconnect";
+import type { StreamHandle, StreamIterable } from "./stream";
+import { createStream } from "./stream";
+import type { SubscriptionCallback, SubscriptionErrorCallback, SubscriptionState } from "./subscription";
+import { SubscriptionRegistry } from "./subscription";
 import type {
     ArgsOf,
     AuthPage,
@@ -35,7 +35,7 @@ import type {
     StorageObject,
     Unsubscribe,
     User,
-} from "./types.js";
+} from "./types";
 
 const RPC_PATH = "/_cirrus/rpc";
 const WS_PATH = "/_cirrus/ws";

@@ -1,4 +1,4 @@
-import type { FunctionReference } from "./types.js";
+import type { FunctionReference } from "./types";
 
 export type SubscriptionCallback = (data: unknown) => void;
 

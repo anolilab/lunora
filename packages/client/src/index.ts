@@ -1,21 +1,21 @@
-export { default as createInMemoryBookmarkStorage } from "./bookmark.js";
-export type { ConnectionStatus } from "./cirrus-client.js";
-export { CirrusClient } from "./cirrus-client.js";
-export type { MutationDelta } from "./delta-merge.js";
-export { applyDelta, isMutationDelta } from "./delta-merge.js";
-export type { OptimisticLocalStore, OptimisticUpdate } from "./local-store.js";
-export { createLocalStore } from "./local-store.js";
-export type { QueuedMutation } from "./offline-queue.js";
-export { OfflineQueue } from "./offline-queue.js";
-export type { IndexedDbPersistenceOptions } from "./persistence.js";
-export { createIndexedDbPersistence, createInMemoryPersistence } from "./persistence.js";
-export { preloadedQueryResult, preloadQuery } from "./preload.js";
-export type { ReconnectCalculator } from "./reconnect.js";
-export { createReconnect } from "./reconnect.js";
-export type { StreamHandle, StreamIterable } from "./stream.js";
-export { createStream, DEFAULT_MAX_BUFFER } from "./stream.js";
-export type { SubscriptionCallback, SubscriptionError, SubscriptionErrorCallback, SubscriptionState } from "./subscription.js";
-export { SubscriptionRegistry } from "./subscription.js";
+export { default as createInMemoryBookmarkStorage } from "./bookmark";
+export type { ConnectionStatus } from "./cirrus-client";
+export { CirrusClient } from "./cirrus-client";
+export type { MutationDelta } from "./delta-merge";
+export { applyDelta, isMutationDelta } from "./delta-merge";
+export type { OptimisticLocalStore, OptimisticUpdate } from "./local-store";
+export { createLocalStore } from "./local-store";
+export type { QueuedMutation } from "./offline-queue";
+export { OfflineQueue } from "./offline-queue";
+export type { IndexedDbPersistenceOptions } from "./persistence";
+export { createIndexedDbPersistence, createInMemoryPersistence } from "./persistence";
+export { preloadedQueryResult, preloadQuery } from "./preload";
+export type { ReconnectCalculator } from "./reconnect";
+export { createReconnect } from "./reconnect";
+export type { StreamHandle, StreamIterable } from "./stream";
+export { createStream, DEFAULT_MAX_BUFFER } from "./stream";
+export type { SubscriptionCallback, SubscriptionError, SubscriptionErrorCallback, SubscriptionState } from "./subscription";
+export { SubscriptionRegistry } from "./subscription";
 export type {
     ArgsOf,
     AuthPage,
@@ -45,4 +45,4 @@ export type {
     StorageObject,
     Unsubscribe,
     User,
-} from "./types.js";
+} from "./types";

@@ -1,4 +1,4 @@
-import type { BookmarkStorage } from "./types.js";
+import type { BookmarkStorage } from "./types";
 
 /** Default in-memory bookmark store. Survives the lifetime of the client. */
 const createInMemoryBookmarkStorage = (): BookmarkStorage => {

@@ -1,8 +1,8 @@
 import { IDBFactory } from "fake-indexeddb";
 import { describe, expect, it } from "vitest";
 
-import { createIndexedDbPersistence as createIndexedDatabasePersistence, createInMemoryPersistence } from "../src/persistence.js";
-import type { PersistedMutation, PersistenceAdapter } from "../src/types.js";
+import { createIndexedDbPersistence as createIndexedDatabasePersistence, createInMemoryPersistence } from "../src/persistence";
+import type { PersistedMutation, PersistenceAdapter } from "../src/types";
 
 const mutation = (id: string, overrides: Partial<PersistedMutation> = {}): PersistedMutation => {
     return {

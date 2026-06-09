@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { createReconnect } from "../src/reconnect.js";
+import { createReconnect } from "../src/reconnect";
 
 describe("createReconnect", () => {
     it("doubles delay each attempt without jitter", () => {

@@ -1,4 +1,4 @@
-import type { PersistedMutation, PersistenceAdapter } from "./types.js";
+import type { PersistedMutation, PersistenceAdapter } from "./types";
 
 /**
  * In-memory {@link PersistenceAdapter}. Doesn't survive a reload — it exists so

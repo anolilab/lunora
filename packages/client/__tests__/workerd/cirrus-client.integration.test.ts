@@ -13,9 +13,9 @@
 import { env, runInDurableObject, SELF } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 
-import { CirrusClient } from "../../src/cirrus-client.js";
-import type { FunctionReference } from "../../src/types.js";
-import type { TestShardDO } from "./test-worker.js";
+import { CirrusClient } from "../../src/cirrus-client";
+import type { FunctionReference } from "../../src/types";
+import type { TestShardDO } from "./test-worker";
 
 const ref = <Args = unknown, Return = unknown>(name: string): FunctionReference<"query" | "mutation", Args, Return> => {
     return {

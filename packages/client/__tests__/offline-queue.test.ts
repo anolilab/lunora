@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { OfflineQueue } from "../src/offline-queue.js";
-import { createInMemoryPersistence } from "../src/persistence.js";
+import { OfflineQueue } from "../src/offline-queue";
+import { createInMemoryPersistence } from "../src/persistence";
 
 describe("offlineQueue", () => {
     it("fIFO drain order", () => {

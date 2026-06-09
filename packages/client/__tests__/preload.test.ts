@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { CirrusClient } from "../src/cirrus-client.js";
-import { preloadedQueryResult, preloadQuery } from "../src/preload.js";
-import type { FunctionReference, Preloaded } from "../src/types.js";
+import { CirrusClient } from "../src/cirrus-client";
+import { preloadedQueryResult, preloadQuery } from "../src/preload";
+import type { FunctionReference, Preloaded } from "../src/types";
 
 const fnRef = (ref: string): FunctionReference => {
     return { __cirrusRef: ref };

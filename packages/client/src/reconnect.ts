@@ -1,4 +1,4 @@
-import type { ReconnectOptions } from "./types.js";
+import type { ReconnectOptions } from "./types";
 
 /**
  * Exponential backoff calculator with optional jitter.
