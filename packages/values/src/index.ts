@@ -1,5 +1,5 @@
-export type { ValidationPath } from "./errors.js";
-export { describeValue, formatPath, ValidationError } from "./errors.js";
+export type { ValidationPath } from "./errors";
+export { describeValue, formatPath, ValidationError } from "./errors";
 export type {
     Column,
     ColumnMeta,
@@ -13,7 +13,7 @@ export type {
     TimestampColumnValidator,
     Validator,
     ValidatorKind,
-} from "./v.js";
-export { v } from "./v.js";
+} from "./v";
+export { v } from "./v";
 
 export const VERSION = "0.0.0";

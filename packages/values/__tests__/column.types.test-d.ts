@@ -3,8 +3,8 @@
  * `__tests__/**` include. Asserts the insert/select type divergence produced by
  * the column-modifier API (`.default`, `.$defaultFn`, `.unique`, `.nullable`).
  */
-import type { Id, InferInsert, InferSelect, InsertShape, SelectShape } from "../src/index.js";
-import { v } from "../src/index.js";
+import type { Id, InferInsert, InferSelect, InsertShape, SelectShape } from "../src/index";
+import { v } from "../src/index";
 
 type Assert<T extends true> = T;
 // The canonical type-equality idiom: the single-use `<T>()` params are

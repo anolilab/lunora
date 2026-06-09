@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { Id, Infer } from "../src/index.js";
-import { v, ValidationError } from "../src/index.js";
+import type { Id, Infer } from "../src/index";
+import { v, ValidationError } from "../src/index";
 
 type Assert<T extends true> = T;
 // The canonical type-equality idiom: the single-use `<T>()` params are

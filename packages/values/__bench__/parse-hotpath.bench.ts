@@ -1,6 +1,6 @@
 import { bench, describe } from "vitest";
 
-import { v } from "../src/v.js";
+import { v } from "../src/v";
 
 /*
  * Old-vs-new contrast for the parse hot-path optimizations:

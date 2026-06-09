@@ -1,6 +1,6 @@
 import { bench, describe } from "vitest";
 
-import { v } from "../src/v.js";
+import { v } from "../src/v";
 
 /**
  * Validators sit on the per-RPC critical path: every incoming `args` record

@@ -1,4 +1,4 @@
-import { describeValue, formatPath, ValidationError } from "./errors.js";
+import { describeValue, formatPath, ValidationError } from "./errors";
 
 /** Branded id type, e.g. `Id&lt;"users">`. */
 type Id<TableName extends string> = string & { readonly __table: TableName };
