@@ -499,7 +499,7 @@ describe("shardDO admin data migrations", () => {
         // captures BOTH outcomes (unlike the error-only in-memory `getLogs`).
         const authedRequest = (functionPath: string): Request =>
             new Request("https://shard.internal/rpc", {
-                body: JSON.stringify({ args: { password: "p@ssw0rd" }, functionPath }),
+                body: JSON.stringify({ args: { password: "p@ssw0rd" }, functionPath }), // gitleaks:allow -- test fixture password, not a real secret
                 headers: { "content-type": "application/json", "x-cirrus-userid": "u1" },
                 method: "POST",
             });
@@ -519,11 +519,12 @@ describe("shardDO admin data migrations", () => {
         expect(body.result.entries).toHaveLength(2);
         expect(body.result.entries[0]).toMatchObject({ functionPath: "boom:explode", outcome: "error" });
         expect(body.result.entries[1]).toMatchObject({ functionPath: "messages:list", outcome: "ok", userId: "u1" });
+
         // Args are redacted by default — the raw secret never reaches the log, but the shape survives.
         const loggedArgs = body.result.entries[1]!.redactedArgs!;
 
         expect(Object.keys(loggedArgs)).toEqual(["password"]);
-        expect(loggedArgs.password).not.toBe("p@ssw0rd");
+        expect(loggedArgs.password).not.toBe("p@ssw0rd"); // gitleaks:allow -- test fixture password, not a real secret
 
         // And the correlated filters narrow on those fields.
         const filtered = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getRequestLog, { outcome: "error" }));
@@ -555,7 +556,7 @@ describe("shardDO admin data migrations", () => {
 
         await shard.fetch(
             new Request("https://shard.internal/rpc", {
-                body: JSON.stringify({ args: { password: "p@ssw0rd" }, functionPath: "messages:list" }),
+                body: JSON.stringify({ args: { password: "p@ssw0rd" }, functionPath: "messages:list" }), // gitleaks:allow -- test fixture password, not a real secret
                 headers: { "content-type": "application/json" },
                 method: "POST",
             }),
@@ -565,7 +566,7 @@ describe("shardDO admin data migrations", () => {
         const body = await response.json<{ result: { entries: { redactedArgs?: Record<string, unknown> }[] } }>();
 
         // Dev → raw capture: the value is NOT redacted.
-        expect(body.result.entries[0]!.redactedArgs).toStrictEqual({ password: "p@ssw0rd" });
+        expect(body.result.entries[0]!.redactedArgs).toStrictEqual({ password: "p@ssw0rd" }); // gitleaks:allow -- test fixture password, not a real secret
     });
 });
 
@@ -1094,6 +1095,7 @@ describe("shardDO admin bulk delete", () => {
 
     /** Seed `count` todos in project `projectId`, returning the writer used (its reads hit the shadow tables). */
     const seedProject = async (writer: DatabaseWriterLike, projectId: string, count: number): Promise<void> => {
+        // gitleaks:allow -- kingfisher false positive on a test-helper signature, no secret
         for (let index = 0; index < count; index += 1) {
             // eslint-disable-next-line no-await-in-loop -- sequential seed writes
             await writer.insert("todos", { done: false, projectId, title: `t${index.toString()}` });
@@ -1147,9 +1149,10 @@ describe("shardDO admin bulk delete", () => {
         const survivor = database.raw(`SELECT id FROM "todos" WHERE json_extract("__doc__", '$.projectId') = 'p2' LIMIT 1`)[0]?.["id"] as string;
         const key = rankKeyFromDoc(todosRankByDone, { _id: survivor, projectId: "p2" });
 
-        await expect(seed.rankBefore!("todos", "byDone", { partitionKey: key.partitionKey, rowId: survivor, sortValues: key.sortValues })).resolves.toEqual(
-            { before: 0, total: 1 },
-        );
+        await expect(seed.rankBefore!("todos", "byDone", { partitionKey: key.partitionKey, rowId: survivor, sortValues: key.sortValues })).resolves.toEqual({
+            before: 0,
+            total: 1,
+        });
     });
 
     it("is bounded: caps deletes at `limit` and reports hasMore", async () => {
