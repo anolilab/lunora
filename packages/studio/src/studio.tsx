@@ -42,6 +42,7 @@ import { SchemaViewer } from "./schema-viewer";
 import SecurityAdvisorPanel from "./security-advisor-panel";
 import { SettingsPanel } from "./settings-panel";
 import { SqlEditorPanel } from "./sql-editor-panel";
+import SubscriptionsPanel from "./subscriptions-panel";
 import type { FunctionDescriptor } from "./types";
 import { UsersPanel } from "./users-panel";
 
@@ -61,6 +62,7 @@ type StudioTab =
     | "migrations"
     | "organizations"
     | "pitr"
+    | "realtime"
     | "schedule"
     | "schema"
     | "security"
@@ -146,6 +148,7 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
     migrations: <path d="M4 12a8 8 0 0 1 13.7-5.6L20 8M20 4v4h-4M20 12a8 8 0 0 1-13.7 5.6L4 16m0 4v-4h4" />,
     organizations: <path d="M3 21V8l6-4 6 4v13M9 21v-5h2v5M15 11h6v10M18 14v.01M18 17v.01M6 9v.01M6 12v.01M6 15v.01" />,
     pitr: <path d="M12 21a9 9 0 1 0-9-9M12 7.5V12l3 2M3 12l-2-2m2 2 2-2" />,
+    realtime: <path d="M5 12a7 7 0 0 1 14 0M8 12a4 4 0 0 1 8 0M12 12v8m0-8a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" />,
     schedule: <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm0-13.5V12l4 2" />,
     schema: <path d="M4 5h16v14H4V5Zm0 5h16M10 10v9M4 14.5h16" />,
     sql: <path d="M4 5h16v14H4V5Zm3 4 3 3-3 3m6 0h4" />,
@@ -176,7 +179,7 @@ const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
     { key: "storage", tabs: ["files"] },
     { key: "reports", tabs: ["metrics", "health"] },
     { key: "advisors", tabs: ["security", "insights"] },
-    { key: "logs", tabs: ["logs", "audit", "schedule"] },
+    { key: "logs", tabs: ["logs", "audit", "schedule", "realtime"] },
     { key: "settings", tabs: ["settings"] },
 ];
 
@@ -233,6 +236,7 @@ const TABS = [
     "security",
     "insights",
     "logs",
+    "realtime",
     "audit",
     "schedule",
     "settings",
@@ -285,6 +289,7 @@ const StudioLayout = (): ReactElement => {
             migrations: t("Migrations"),
             organizations: t("Organizations"),
             pitr: t("Time Travel"),
+            realtime: t("Realtime"),
             schedule: t("Scheduled"),
             schema: t("Schema"),
             security: t("Security"),
@@ -326,6 +331,7 @@ const StudioLayout = (): ReactElement => {
             migrations: t("Review migration status and run them."),
             organizations: t("Browse and manage organizations, members, and invitations."),
             pitr: t("Restore a shard to a point in the last 30 days."),
+            realtime: t("Active WebSocket subscriptions on this shard."),
             schedule: t("Inspect and cancel scheduled jobs."),
             schema: t("Inspect each table and its columns."),
             security: t("Review admin gates, credentials, and log redaction."),
@@ -567,6 +573,7 @@ const buildRouter = ({ basePath, dataEditable = false, functions, initialShardKe
         migrations: <MigrationsPanel initialShardKey={initialShardKey} />,
         organizations: <OrganizationsPanel />,
         pitr: <PitrPanel initialShardKey={initialShardKey} />,
+        realtime: <SubscriptionsPanel initialShardKey={initialShardKey} />,
         schedule: <ScheduledJobs cancelJob={scheduledCancel} loadJobs={scheduledLoad} />,
         schema: <SchemaRoutePanel initialShardKey={initialShardKey} />,
         security: <SecurityAdvisorPanel />,

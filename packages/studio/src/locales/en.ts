@@ -442,6 +442,14 @@ const MESSAGE_IDS = [
     "Browse and manage organizations, members, and invitations.",
     "Reload",
     "Manage auth users — roles, bans, sessions, and identity.",
+    // Realtime subscriptions panel.
+    "Realtime",
+    "Active WebSocket subscriptions on this shard.",
+    "{count} connections",
+    "{count} subscriptions",
+    "No active subscriptions.",
+    "Connection",
+    "admin",
 ] as const;
 
 /** A known studio message id — one of the entries in {@link MESSAGE_IDS}. */

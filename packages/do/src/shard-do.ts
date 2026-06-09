@@ -15,8 +15,8 @@ import type { DependencyTracker } from "./dependency-tracker";
 import { createDependencyTracker, SCAN_DEP, tableFromDepKey } from "./dependency-tracker";
 import type { FunctionMetricBucket } from "./function-metrics";
 import { mergeScanAttribution, readFunctionMetricBuckets, readFunctionMetrics, readFunctionMetricsTotals, recordFunctionMetric } from "./function-metrics";
-import type { AdvisoryFinding, AuditLogResult, FilterClause, FilterOperator, FunctionCallStat, FunctionStatsResult, OrderByClause, TableIndexInfo } from "./introspect";
-import { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, MAX_PAGE_SIZE, readTablePage, selectMatchingIds } from "./introspect";
+import type { AdvisoryFinding, AuditLogResult, FilterClause, FilterOperator, FunctionCallStat, FunctionStatsResult, OrderByClause, SubscriptionsResult, TableIndexInfo } from "./introspect";
+import { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, MAX_PAGE_SIZE, readTablePage, selectMatchingIds, summarizeSubscriptions } from "./introspect";
 import { LogBuffer } from "./log-buffer";
 import { armRestore, readBookmark } from "./pitr";
 import type { ReactiveCacheOptions } from "./reactive-cache";
@@ -2772,6 +2772,10 @@ abstract class ShardDO {
             return this.collectFunctionStats();
         }
 
+        if (functionPath === ADMIN_FUNCTIONS.listSubscriptions) {
+            return this.collectSubscriptions();
+        }
+
         if (functionPath === ADMIN_FUNCTIONS.getLogs) {
             return { entries: this.logs.entries() };
         }
@@ -2797,6 +2801,17 @@ abstract class ShardDO {
         }
 
         return undefined;
+    }
+
+    /**
+     * Enumerate every connected WebSocket and the subscriptions it tracks for
+     * the `__cirrus_admin__:listSubscriptions` realtime inspector. Reads each
+     * socket's hibernation attachment (admin flag + live `subs` map) and folds
+     * them into a {@link SubscriptionsResult} via {@link summarizeSubscriptions}.
+     * Read-only: it touches no SQLite and mutates no socket state.
+     */
+    private collectSubscriptions(): SubscriptionsResult {
+        return summarizeSubscriptions(this.state.getWebSockets().map((ws) => this.readAttachment(ws)));
     }
 
     /** Resolve a `getAuditLog` admin read, parsing the optional `limit`/`sinceSeq` cursor args and ensuring the reserved table first. */

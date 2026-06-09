@@ -25,6 +25,7 @@ export const ADMIN_FUNCTIONS = {
     getAuditLog: "__cirrus_admin__:getAuditLog",
     getAuthMetrics: "__cirrus_admin__:getAuthMetrics",
     getFunctionStats: "__cirrus_admin__:getFunctionStats",
+    listSubscriptions: "__cirrus_admin__:listSubscriptions",
     listTableIndexes: "__cirrus_admin__:listTableIndexes",
     getLogs: "__cirrus_admin__:getLogs",
     getMetrics: "__cirrus_admin__:getMetrics",
@@ -310,6 +311,43 @@ export interface AuditEntry {
 /** Payload of a `__cirrus_admin__:getAuditLog` call: the recorded entries, newest first. */
 export interface AuditLogResult {
     entries: AuditEntry[];
+}
+
+/**
+ * One live subscription tracked on a shard's WebSocket, returned by
+ * `__cirrus_admin__:listSubscriptions` and mirroring `@cirrus/do`'s
+ * `SubscriptionInfo`. `functionPath` is the `&lt;file>:&lt;function>` query re-run on
+ * a matching write (absent on legacy delta-only subscriptions), `table` the
+ * table the raw-delta fan-out matches, and `args` the query args.
+ */
+export interface SubscriptionInfo {
+    args?: Record<string, unknown>;
+    functionPath?: string;
+    table?: string;
+}
+
+/**
+ * One connected WebSocket and the subscriptions it tracks, mirroring
+ * `@cirrus/do`'s `SubscriptionConnection`. `id` is the socket's index within a
+ * single read (a label, not a durable identifier); `admin` is `true` when the
+ * socket upgraded with the admin token.
+ */
+export interface SubscriptionConnection {
+    admin: boolean;
+    id: number;
+    subscriptions: SubscriptionInfo[];
+}
+
+/**
+ * Payload of a `__cirrus_admin__:listSubscriptions` call, mirroring `@cirrus/do`'s
+ * `SubscriptionsResult`: a read-only snapshot of every connected socket and its
+ * subscriptions, plus aggregate counts. Derived live from the shard's sockets —
+ * nothing durable.
+ */
+export interface SubscriptionsResult {
+    connections: SubscriptionConnection[];
+    totalConnections: number;
+    totalSubscriptions: number;
 }
 
 /** Outcome of one dispatch in the request log, mirroring `@cirrus/do`'s `RequestOutcome`. */

@@ -24,6 +24,7 @@ const ADMIN_FUNCTIONS = {
     getAuditLog: "__cirrus_admin__:getAuditLog",
     getAuthMetrics: "__cirrus_admin__:getAuthMetrics",
     getFunctionStats: "__cirrus_admin__:getFunctionStats",
+    listSubscriptions: "__cirrus_admin__:listSubscriptions",
     listTableIndexes: "__cirrus_admin__:listTableIndexes",
     getLogs: "__cirrus_admin__:getLogs",
     getMetrics: "__cirrus_admin__:getMetrics",
@@ -77,6 +78,42 @@ interface AuditEntry {
 /** Payload of a `__cirrus_admin__:getAuditLog` call: the recorded entries, newest first. */
 interface AuditLogResult {
     entries: AuditEntry[];
+}
+
+/**
+ * One live subscription tracked on a shard's WebSocket, as surfaced by
+ * `__cirrus_admin__:listSubscriptions`. Mirrors the persisted `SubscriptionQuery`
+ * attachment shape: `functionPath` is the `&lt;file>:&lt;function>` query re-run on a
+ * matching write (absent on legacy delta-only subscriptions), `table` is the
+ * table the raw-delta fan-out matches against, and `args` are the query args.
+ */
+interface SubscriptionInfo {
+    args?: Record<string, unknown>;
+    functionPath?: string;
+    table?: string;
+}
+
+/**
+ * One connected WebSocket on the shard and the subscriptions it tracks. `id` is
+ * the socket's index in `getWebSockets()` order (a stable label within a single
+ * read, not a durable identifier), `admin` is `true` when the socket upgraded
+ * with the admin token, and `subscriptions` enumerates its live subscriptions.
+ */
+interface SubscriptionConnection {
+    admin: boolean;
+    id: number;
+    subscriptions: SubscriptionInfo[];
+}
+
+/**
+ * Payload of a `__cirrus_admin__:listSubscriptions` call: a read-only snapshot of
+ * every connected socket and its subscriptions, plus aggregate counts. Derived
+ * live from `getWebSockets()` + each socket's attachment — nothing durable.
+ */
+interface SubscriptionsResult {
+    connections: SubscriptionConnection[];
+    totalConnections: number;
+    totalSubscriptions: number;
 }
 
 /**
@@ -671,7 +708,39 @@ const selectMatchingIds = (sql: SqlExec, options: SelectMatchingIdsOptions): { h
     return { hasMore, ids };
 };
 
-export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, MAX_PAGE_SIZE, readTablePage, selectMatchingIds };
+/**
+ * One socket's attachment as seen by {@link summarizeSubscriptions} — the same
+ * shape `ShardDO.readAttachment` returns (`./types`' `SocketAttachment`),
+ * narrowed here to just the fields the summary needs so this stays a pure,
+ * harness-testable function with no dependency on the DO runtime.
+ */
+interface SocketAttachmentLike {
+    admin?: boolean;
+    subs?: Record<string, SubscriptionInfo>;
+}
+
+/**
+ * Fold a per-socket list of attachments into the {@link SubscriptionsResult} the
+ * data browser renders: one {@link SubscriptionConnection} per socket (index =
+ * `id`, `admin` from the attachment, `subscriptions` = the attachment's `subs`
+ * values), plus the socket count and the summed subscription count. Pure — the
+ * DO method just feeds it `getWebSockets().map(readAttachment)`.
+ */
+const summarizeSubscriptions = (attachments: SocketAttachmentLike[]): SubscriptionsResult => {
+    const connections: SubscriptionConnection[] = attachments.map((attachment, id) => {
+        const subscriptions = Object.values(attachment.subs ?? {}).map((sub): SubscriptionInfo => {
+            return { args: sub.args, functionPath: sub.functionPath, table: sub.table };
+        });
+
+        return { admin: attachment.admin === true, id, subscriptions };
+    });
+
+    const totalSubscriptions = connections.reduce((sum, connection) => sum + connection.subscriptions.length, 0);
+
+    return { connections, totalConnections: connections.length, totalSubscriptions };
+};
+
+export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, MAX_PAGE_SIZE, readTablePage, selectMatchingIds, summarizeSubscriptions };
 export type {
     AdvisoriesResult,
     AdvisoryFinding,
@@ -690,6 +759,9 @@ export type {
     SettingKind,
     SettingsResult,
     SortDirection,
+    SubscriptionConnection,
+    SubscriptionInfo,
+    SubscriptionsResult,
     TableIndexesResult,
     TableIndexInfo,
     TableInfo,

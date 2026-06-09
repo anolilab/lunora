@@ -175,6 +175,28 @@ const dataFor = (reference: string, args: unknown): unknown => {
                 ],
             };
         }
+        case ADMIN_FUNCTIONS.listSubscriptions: {
+            return {
+                connections: [
+                    {
+                        admin: false,
+                        id: 0,
+                        subscriptions: [
+                            { args: { room: "general" }, functionPath: "messages:list", table: "messages" },
+                            { args: { limit: 50 }, functionPath: "presence:list", table: "presence" },
+                        ],
+                    },
+                    {
+                        admin: false,
+                        id: 1,
+                        subscriptions: [{ args: { since: now - 60_000 }, functionPath: "feed:recent", table: "posts" }],
+                    },
+                    { admin: true, id: 2, subscriptions: [{ functionPath: "__cirrus_admin__:getMetrics" }] },
+                ],
+                totalConnections: 3,
+                totalSubscriptions: 4,
+            };
+        }
         case ADMIN_FUNCTIONS.getRequestLog: {
             return {
                 entries: [

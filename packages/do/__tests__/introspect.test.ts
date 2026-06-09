@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { listTables, readTablePage, selectMatchingIds } from "../src/introspect";
+import { listTables, readTablePage, selectMatchingIds, summarizeSubscriptions } from "../src/introspect";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 describe("introspect", () => {
@@ -383,6 +383,65 @@ describe("introspect", () => {
 
             expect(() => selectMatchingIds(database.sql, { table: "nope" })).toThrow(/unknown table/u);
             expect(() => selectMatchingIds(database.sql, { table: "_cf_KV" })).toThrow(/unknown table/u);
+        });
+    });
+
+    describe("summarizeSubscriptions", () => {
+        it("returns an empty result with zeroed totals for no sockets", () => {
+            expect.assertions(1);
+
+            expect(summarizeSubscriptions([])).toEqual({ connections: [], totalConnections: 0, totalSubscriptions: 0 });
+        });
+
+        it("builds one connection per socket with index ids, admin flags, and subscription details", () => {
+            expect.assertions(1);
+
+            const result = summarizeSubscriptions([
+                {
+                    admin: true,
+                    subs: {
+                        "sub-1": { args: { room: "general" }, functionPath: "messages:list", table: "messages" },
+                    },
+                },
+                {
+                    subs: {
+                        "sub-a": { functionPath: "presence:list", table: "presence" },
+                        "sub-b": { args: { since: 5 }, functionPath: "feed:recent", table: "posts" },
+                    },
+                },
+                { subs: {} },
+            ]);
+
+            expect(result).toEqual({
+                connections: [
+                    {
+                        admin: true,
+                        id: 0,
+                        subscriptions: [{ args: { room: "general" }, functionPath: "messages:list", table: "messages" }],
+                    },
+                    {
+                        admin: false,
+                        id: 1,
+                        subscriptions: [
+                            { args: undefined, functionPath: "presence:list", table: "presence" },
+                            { args: { since: 5 }, functionPath: "feed:recent", table: "posts" },
+                        ],
+                    },
+                    { admin: false, id: 2, subscriptions: [] },
+                ],
+                totalConnections: 3,
+                totalSubscriptions: 3,
+            });
+        });
+
+        it("treats a missing subs map as no subscriptions", () => {
+            expect.assertions(1);
+
+            expect(summarizeSubscriptions([{ admin: false }])).toEqual({
+                connections: [{ admin: false, id: 0, subscriptions: [] }],
+                totalConnections: 1,
+                totalSubscriptions: 0,
+            });
         });
     });
 });

@@ -19,6 +19,7 @@ import type {
     ShardDOState,
 } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
+import type { SocketAttachment } from "../src/types";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
@@ -277,6 +278,61 @@ describe("shardDO admin introspection", () => {
 
         expect(response.status).toBe(404);
         await expect(response.json()).resolves.toMatchObject({ error: { code: "UNKNOWN_ADMIN_OP" } });
+    });
+
+    it("listSubscriptions enumerates connected sockets, their subs, and aggregate counts", async () => {
+        expect.assertions(2);
+
+        // A socket whose attachment is read back via `deserializeAttachment`,
+        // mirroring the workerd hibernation surface `readAttachment` uses.
+        const makeSocket = (attachment: SocketAttachment): WebSocket =>
+            ({ deserializeAttachment: () => attachment }) as unknown as WebSocket;
+
+        const sockets: WebSocket[] = [
+            makeSocket({ admin: true, subs: { "s-1": { args: { room: "general" }, functionPath: "messages:list", table: "messages" } } }),
+            makeSocket({
+                subs: {
+                    "s-a": { functionPath: "presence:list", table: "presence" },
+                    "s-b": { args: { since: 5 }, functionPath: "feed:recent", table: "posts" },
+                },
+            }),
+            makeSocket({ subs: {} }),
+        ];
+        const socketState: ShardDOState = { ...state, getWebSockets: () => sockets };
+        const shard = new AdminShard(socketState, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.listSubscriptions, {}, ADMIN_TOKEN));
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({
+            result: {
+                connections: [
+                    { admin: true, id: 0, subscriptions: [{ args: { room: "general" }, functionPath: "messages:list", table: "messages" }] },
+                    {
+                        admin: false,
+                        id: 1,
+                        subscriptions: [
+                            { functionPath: "presence:list", table: "presence" },
+                            { args: { since: 5 }, functionPath: "feed:recent", table: "posts" },
+                        ],
+                    },
+                    { admin: false, id: 2, subscriptions: [] },
+                ],
+                totalConnections: 3,
+                totalSubscriptions: 3,
+            },
+        });
+    });
+
+    it("listSubscriptions returns an empty, zeroed result when no sockets are connected", async () => {
+        expect.assertions(2);
+
+        const shard = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.listSubscriptions, {}, ADMIN_TOKEN));
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({ result: { connections: [], totalConnections: 0, totalSubscriptions: 0 } });
     });
 
     it("recordAuthEvent then getAuthMetrics round-trips the app-level auth-failure signal", async () => {
