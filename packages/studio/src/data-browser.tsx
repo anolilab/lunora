@@ -1,5 +1,5 @@
 import { useCirrus } from "@cirrus/react";
-import type { Cell, ColumnDef, OnChangeFn, Row, SortingState, Table } from "@tanstack/react-table";
+import type { Cell, ColumnDef, Header, OnChangeFn, Row, SortingState, Table } from "@tanstack/react-table";
 import { flexRender, getCoreRowModel, getSortedRowModel, useReactTable } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { CSSProperties, ReactElement } from "react";
@@ -61,15 +61,20 @@ const ROWS_STYLE: CSSProperties = { width: "100%" };
 // model so columns stay aligned.
 const ROW_BASE_STYLE: CSSProperties = { alignItems: "center", display: "flex", left: 0, position: "absolute", top: 0, width: "100%" };
 const HEAD_ROW_STYLE: CSSProperties = { display: "flex", width: "100%" };
-const CELL_STYLE: CSSProperties = {
-    flex: "1 1 0",
-    minWidth: 0,
-    overflow: "hidden",
-    padding: "0.375rem 0.75rem",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-};
 const ACTION_CELL_STYLE: CSSProperties = { flex: "0 0 8.5rem", padding: "0.375rem 0.75rem" };
+
+/** A grid cell/header sized to its column's current width (drag-to-resize), out of flex flow. */
+const sizedCellStyle = (width: number): CSSProperties => {
+    return {
+        flex: "0 0 auto",
+        overflow: "hidden",
+        padding: "0.375rem 0.75rem",
+        position: "relative",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+        width: `${width.toString()}px`,
+    };
+};
 
 /** Shared Supabase-style control-button class for the toolbar/grid actions. */
 const CONTROL_BTN =
@@ -458,11 +463,87 @@ const DataBrowserRowEditor = ({
 );
 
 /**
- * The virtualized table: sortable header derived from react-table's flat
- * headers, plus the windowed rows positioned absolutely inside a full-height
- * tbody. All model state (`table`, `tableRows`, `virtualRows`, `tbodyStyle`,
- * `scrollRef`) is owned by the parent; edit/delete are surfaced as callbacks so
- * this stays a pure render of the page's rows.
+ * One grid column header: the sort toggle, a drag handle for reordering (native
+ * HTML5 drag → `table.setColumnOrder`), and a right-edge resize grip wired to
+ * TanStack's resize handler. `draggedRef` carries the column id being dragged
+ * between the source's `dragstart` and the target's `drop`.
+ */
+const GridHeaderCell = ({
+    draggedRef,
+    header,
+    table,
+}: {
+    draggedRef: React.RefObject<null | string>;
+    header: Header<TableRow, unknown>;
+    table: Table<TableRow>;
+}): ReactElement => {
+    const onDragStart = useCallback((): void => {
+        // eslint-disable-next-line no-param-reassign -- a ref's `.current` is mutable by design; it carries the drag source across handlers
+        draggedRef.current = header.column.id;
+    }, [draggedRef, header.column.id]);
+
+    const onDragOver = useCallback((event: React.DragEvent<HTMLTableCellElement>): void => {
+        event.preventDefault();
+    }, []);
+
+    const onDrop = useCallback((): void => {
+        const from = draggedRef.current;
+        const to = header.column.id;
+
+        // eslint-disable-next-line no-param-reassign -- clearing the drag ref after the drop; refs are mutable by design
+        draggedRef.current = null;
+
+        if (from === null || from === to) {
+            return;
+        }
+
+        // TanStack's columnOrder starts empty (default order); seed from the live
+        // leaf columns so "drop before target" places `from` correctly on the first drag.
+        const current = table.getState().columnOrder;
+        const base = current.length > 0 ? current : table.getAllLeafColumns().map((column) => column.id);
+        const order = base.filter((id) => id !== from);
+        const insertAt = order.indexOf(to);
+
+        order.splice(insertAt === -1 ? order.length : insertAt, 0, from);
+        table.setColumnOrder(order);
+    }, [draggedRef, header.column.id, table]);
+
+    return (
+        <th
+            className="text-start text-xs font-medium text-muted-foreground"
+            draggable
+            onDragOver={onDragOver}
+            onDragStart={onDragStart}
+            onDrop={onDrop}
+            style={sizedCellStyle(header.getSize())}
+        >
+            <button
+                className="inline-flex max-w-full cursor-grab items-center gap-1 truncate outline-none hover:text-foreground"
+                data-testid={`db-sort-${header.column.id}`}
+                onClick={header.column.getToggleSortingHandler()}
+                type="button"
+            >
+                {flexRender(header.column.columnDef.header, header.getContext())}
+                {sortIndicator(header.column.getIsSorted())}
+            </button>
+            <span
+                aria-hidden="true"
+                className="absolute inset-y-0 end-0 w-1 cursor-col-resize touch-none select-none hover:bg-ring/60 data-[resizing=true]:bg-ring"
+                data-resizing={header.column.getIsResizing()}
+                data-testid={`db-resize-${header.column.id}`}
+                onMouseDown={header.getResizeHandler()}
+                onTouchStart={header.getResizeHandler()}
+            />
+        </th>
+    );
+};
+
+/**
+ * The virtualized table: a sortable, resizable, reorderable header derived from
+ * react-table's flat headers, plus the windowed rows positioned absolutely inside
+ * a full-height tbody. All model state (`table`, `tableRows`, `virtualRows`,
+ * `tbodyStyle`, `scrollRef`) is owned by the parent; edit/delete are surfaced as
+ * callbacks so this stays a pure render of the page's rows.
  */
 const DataBrowserTableView = ({
     edit,
@@ -471,6 +552,7 @@ const DataBrowserTableView = ({
     onEdit,
     onInspect,
     scrollRef,
+    scrollToIndex,
     table,
     tableRows,
     tbodyStyle,
@@ -482,11 +564,85 @@ const DataBrowserTableView = ({
     onEdit: (id: null | string, original: TableRow) => void;
     onInspect: (original: TableRow) => void;
     scrollRef: React.RefObject<HTMLDivElement | null>;
+    scrollToIndex: (index: number) => void;
     table: Table<TableRow>;
     tableRows: Row<TableRow>[];
     tbodyStyle: CSSProperties;
     virtualRows: { index: number; size: number; start: number }[];
 }): ReactElement => {
+    // Carries the column id being dragged between a header's dragstart and the
+    // drop target's drop, for reordering.
+    const draggedColumn = useRef<null | string>(null);
+
+    // The keyboard-focused cell (row index + visible-column index). Arrow keys
+    // move it; Enter opens the inline editor for an editable cell.
+    const [active, setActive] = useState<null | { col: number; row: number }>(null);
+    const columnCount = table.getVisibleLeafColumns().length;
+
+    const onGridKeyDown = useCallback(
+        (event: React.KeyboardEvent<HTMLDivElement>): void => {
+            if (!["ArrowDown", "ArrowLeft", "ArrowRight", "ArrowUp", "Enter"].includes(event.key)) {
+                return;
+            }
+
+            event.preventDefault();
+            const current = active ?? { col: 0, row: 0 };
+
+            if (event.key === "Enter") {
+                const row = tableRows[current.row];
+                const column = table.getVisibleLeafColumns()[current.col];
+
+                if (row !== undefined && column !== undefined) {
+                    const id = rowId(row.original);
+
+                    if (id !== null && edit.editableColumn(column.id)) {
+                        edit.startEdit(id, column.id);
+                    }
+                }
+
+                setActive(current);
+
+                return;
+            }
+
+            let { col, row } = current;
+
+            switch (event.key) {
+                case "ArrowDown": {
+                    row = Math.min(row + 1, tableRows.length - 1);
+
+                    break;
+                }
+                case "ArrowRight": {
+                    col = Math.min(col + 1, columnCount - 1);
+
+                    break;
+                }
+                case "ArrowUp": {
+                    row = Math.max(row - 1, 0);
+
+                    break;
+                }
+                default: {
+                    // ArrowLeft
+                    col = Math.max(col - 1, 0);
+
+                    break;
+                }
+            }
+
+            setActive({ col, row });
+        },
+        [active, columnCount, edit, table, tableRows],
+    );
+
+    // Keep the focused row in view as it moves past the virtual window's edge.
+    useEffect(() => {
+        if (active !== null) {
+            scrollToIndex(active.row);
+        }
+    }, [active, scrollToIndex]);
+
     const renderRow = (virtualRow: { index: number; size: number; start: number }): ReactElement => {
         const tableRow = tableRows[virtualRow.index] as Row<TableRow>;
         const { original } = tableRow;
@@ -503,8 +659,12 @@ const DataBrowserTableView = ({
 
         return (
             <tr className="border-b border-border text-xs transition-colors hover:bg-muted/50" data-testid="db-row" key={tableRow.id} style={rowStyle}>
-                {tableRow.getVisibleCells().map((cell) => (
-                    <td className="truncate font-mono text-muted-foreground" key={cell.id} style={CELL_STYLE}>
+                {tableRow.getVisibleCells().map((cell, colIndex) => (
+                    <td
+                        className={`truncate font-mono text-muted-foreground${active !== null && active.row === virtualRow.index && active.col === colIndex ? " ring-1 ring-ring ring-inset" : ""}`}
+                        key={cell.id}
+                        style={sizedCellStyle(cell.column.getSize())}
+                    >
                         <EditableCell cell={cell} edit={edit} />
                     </td>
                 ))}
@@ -554,22 +714,12 @@ const DataBrowserTableView = ({
 
     return (
         <GridContainer>
-            <div data-testid="db-scroll" ref={scrollRef} style={SCROLL_STYLE}>
+            <div data-testid="db-scroll" onKeyDown={onGridKeyDown} ref={scrollRef} role="grid" style={SCROLL_STYLE} tabIndex={0}>
                 <table className="w-full text-xs" data-testid="db-rows" style={ROWS_STYLE}>
                     <thead className="bg-muted/50">
                         <tr className="border-b border-border" style={HEAD_ROW_STYLE}>
                             {table.getFlatHeaders().map((header) => (
-                                <th className="text-start text-xs font-medium text-muted-foreground" key={header.id} style={CELL_STYLE}>
-                                    <button
-                                        className="inline-flex items-center gap-1 outline-none hover:text-foreground"
-                                        data-testid={`db-sort-${header.column.id}`}
-                                        onClick={header.column.getToggleSortingHandler()}
-                                        type="button"
-                                    >
-                                        {flexRender(header.column.columnDef.header, header.getContext())}
-                                        {sortIndicator(header.column.getIsSorted())}
-                                    </button>
-                                </th>
+                                <GridHeaderCell draggedRef={draggedColumn} header={header} key={header.id} table={table} />
                             ))}
                             <th aria-label="Row actions" style={ACTION_CELL_STYLE} />
                         </tr>
@@ -584,6 +734,7 @@ const DataBrowserTableView = ({
 /** What {@link useDataBrowserTable} hands back to the component. */
 interface DataBrowserTableModel {
     scrollRef: React.RefObject<HTMLDivElement | null>;
+    scrollToIndex: (index: number) => void;
     table: Table<TableRow>;
     tableRows: Row<TableRow>[];
     tbodyStyle: CSSProperties;
@@ -640,10 +791,16 @@ const useDataBrowserTable = (
     const data = useMemo<TableRow[]>(() => rows ?? [], [rows]);
 
     // Search is server-side now (see the debounced `search` effect); the table
-    // model only owns page-local sorting over the already-filtered page.
+    // model owns page-local sorting over the already-filtered page. Column order
+    // (drag-to-reorder) and sizing (drag-to-resize) are managed internally by
+    // TanStack — a stale order referencing a previous table's columns is simply
+    // ignored, so the columns fall back to default order on a fresh table.
     const table = useReactTable<TableRow>({
+        columnResizeMode: "onChange",
         columns: columnDefs,
         data,
+        defaultColumn: { minSize: 80, size: 200 },
+        enableColumnResizing: true,
         getCoreRowModel: getCoreRowModel(),
         getSortedRowModel: getSortedRowModel(),
         onSortingChange,
@@ -693,6 +850,13 @@ const useDataBrowserTable = (
         overscan: 8,
     });
 
+    const scrollToIndex = useCallback(
+        (index: number): void => {
+            virtualizer.scrollToIndex(index);
+        },
+        [virtualizer],
+    );
+
     const virtualRows = virtualizer.getVirtualItems();
     const totalSize = virtualizer.getTotalSize();
     // The tbody spans the full virtual height so the scrollbar reflects all rows
@@ -702,7 +866,7 @@ const useDataBrowserTable = (
 
     const tbodyStyle: CSSProperties = { display: "block", height: `${totalSize.toString()}px`, position: "relative" };
 
-    return { scrollRef, table, tableRows, tbodyStyle, virtualRows };
+    return { scrollRef, scrollToIndex, table, tableRows, tbodyStyle, virtualRows };
 };
 
 /** Everything {@link useDataBrowser} exposes to the {@link DataBrowser} render. */
@@ -1439,6 +1603,7 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
                                         onEdit={onRowEdit}
                                         onInspect={setInspecting}
                                         scrollRef={table.scrollRef}
+                                        scrollToIndex={table.scrollToIndex}
                                         table={table.table}
                                         tableRows={table.tableRows}
                                         tbodyStyle={table.tbodyStyle}
