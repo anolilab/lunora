@@ -3,17 +3,41 @@ import type { AuthRow, AuthStore, AuthWhereClause } from "./adapter.js";
 /** Double-quote a table/column identifier, escaping embedded quotes. */
 const quoteId = (name: string): string => `"${name.replaceAll('"', '""')}"`;
 
-/** Escape LIKE wildcards so a literal value can't act as a pattern. Paired with `ESCAPE '\'`. */
-const escapeLike = (value: string): string => value.replaceAll(/[\\%_]/gu, (character) => `\\${character}`);
-
 interface SqlFragment {
     params: unknown[];
     sql: string;
 }
 
-/** A `LIKE ? ESCAPE '\'` fragment binding `pattern` — shared by contains/starts_with/ends_with. */
-const likeFragment = (column: string, pattern: string): SqlFragment => {
-    return { params: [pattern], sql: String.raw`${column} LIKE ? ESCAPE '\'` };
+/** A fragment that never matches — mirrors the in-memory evaluator returning `false`. */
+const NEVER: SqlFragment = { params: [], sql: "0" };
+
+/** `column`, lower-cased when `insensitive`; the placeholder gets the same treatment. */
+const sided = (column: string, insensitive: boolean): { column: string; placeholder: string } =>
+    insensitive ? { column: `LOWER(${column})`, placeholder: "LOWER(?)" } : { column, placeholder: "?" };
+
+/**
+ * `contains`/`starts_with`/`ends_with` via `instr`/`substr` rather than `LIKE`,
+ * so the match is **case-sensitive by default** (honouring `mode`, like the
+ * in-memory store) instead of `LIKE`'s ASCII-case-insensitivity. A non-string
+ * value never matches — same as the in-memory `matchesPattern`.
+ */
+const patternFragment = (column: string, value: unknown, operator: "contains" | "ends_with" | "starts_with", insensitive: boolean): SqlFragment => {
+    if (typeof value !== "string") {
+        return NEVER;
+    }
+
+    const side = sided(column, insensitive);
+
+    if (operator === "contains") {
+        return { params: [value], sql: `instr(${side.column}, ${side.placeholder}) > 0` };
+    }
+
+    if (operator === "starts_with") {
+        return { params: [value], sql: `instr(${side.column}, ${side.placeholder}) = 1` };
+    }
+
+    // ends_with: compare the trailing `length(value)` characters.
+    return { params: [value, value], sql: `substr(${side.column}, -length(?)) = ${side.placeholder}` };
 };
 
 /** `=`/`&lt;>` equality (or `IS [NOT] NULL`), with optional case folding. `negated` flips it to `ne`. */
@@ -22,20 +46,24 @@ const equalityFragment = (column: string, value: unknown, insensitive: boolean, 
         return { params: [], sql: `${column} IS ${negated ? "NOT " : ""}NULL` };
     }
 
+    const side = sided(column, insensitive);
     const symbol = negated ? "<>" : "=";
 
-    return insensitive ? { params: [value], sql: `LOWER(${column}) ${symbol} LOWER(?)` } : { params: [value], sql: `${column} ${symbol} ?` };
+    return { params: [value], sql: `${side.column} ${symbol} ${side.placeholder}` };
 };
 
-/** `IN`/`NOT IN` over an array. An empty `IN ()` matches nothing; an empty `NOT IN ()` excludes nothing. */
-const inFragment = (column: string, value: unknown, negated: boolean): SqlFragment => {
+/** `IN`/`NOT IN` over an array, with optional case folding. Empty `IN ()` matches nothing; empty `NOT IN ()` excludes nothing. */
+const inFragment = (column: string, value: unknown, negated: boolean, insensitive: boolean): SqlFragment => {
     const values: unknown[] = Array.isArray(value) ? value : [];
 
     if (values.length === 0) {
         return { params: [], sql: negated ? "1" : "0" };
     }
 
-    return { params: [...values], sql: `${column} ${negated ? "NOT IN" : "IN"} (${values.map(() => "?").join(", ")})` };
+    const side = sided(column, insensitive);
+    const placeholders = values.map(() => side.placeholder).join(", ");
+
+    return { params: [...values], sql: `${side.column} ${negated ? "NOT IN" : "IN"} (${placeholders})` };
 };
 
 /** Compile one better-auth clause to a parameterized SQL fragment. */
@@ -45,14 +73,10 @@ const compileClause = (clause: AuthWhereClause): SqlFragment => {
     const insensitive = mode === "insensitive";
 
     switch (operator) {
-        // LIKE is case-insensitive for ASCII in SQLite, so pattern operators are
-        // case-insensitive in this store regardless of `mode` — only relevant to
-        // search-style queries, never the credential path.
-        case "contains": {
-            return likeFragment(column, `%${escapeLike(String(value))}%`);
-        }
-        case "ends_with": {
-            return likeFragment(column, `%${escapeLike(String(value))}`);
+        case "contains":
+        case "ends_with":
+        case "starts_with": {
+            return patternFragment(column, value, operator, insensitive);
         }
         case "gt": {
             return { params: [value], sql: `${column} > ?` };
@@ -61,7 +85,7 @@ const compileClause = (clause: AuthWhereClause): SqlFragment => {
             return { params: [value], sql: `${column} >= ?` };
         }
         case "in": {
-            return inFragment(column, value, false);
+            return inFragment(column, value, false, insensitive);
         }
         case "lt": {
             return { params: [value], sql: `${column} < ?` };
@@ -73,10 +97,7 @@ const compileClause = (clause: AuthWhereClause): SqlFragment => {
             return equalityFragment(column, value, insensitive, true);
         }
         case "not_in": {
-            return inFragment(column, value, true);
-        }
-        case "starts_with": {
-            return likeFragment(column, `${escapeLike(String(value))}%`);
+            return inFragment(column, value, true, insensitive);
         }
         // "eq" and the default: null-aware equality.
         default: {
@@ -144,6 +165,13 @@ export interface SqlExecutor {
  * const store = createSqlAuthStore(d1Executor(env.DB));
  * const auth = createAuth({ secret: env.AUTH_SECRET, database: cirrusAuthAdapter(store) });
  * ```
+ *
+ * Clause semantics match `createMemoryAuthStore` (operator parity is
+ * covered by a cross-store agreement test) with one unavoidable caveat:
+ * case-**insensitive** matching uses SQLite's ASCII-only `LOWER()`, whereas the
+ * in-memory store uses JS full-Unicode `toLowerCase()`. They agree on ASCII
+ * (emails, ids, tokens — the credential path); they can differ only for
+ * case-insensitive comparison of non-ASCII text.
  */
 export const createSqlAuthStore = (executor: SqlExecutor): AuthStore => {
     const selectRows = (model: string, where: ReadonlyArray<AuthWhereClause>): Promise<AuthRow[]> => {
@@ -190,22 +218,27 @@ export const createSqlAuthStore = (executor: SqlExecutor): AuthStore => {
         },
         read: async (model, query) => {
             const fragment = compileWhere(query.where);
+            const parameters = [...fragment.params];
             let sql = `SELECT * FROM ${quoteId(model)}${whereSuffix(fragment)}`;
 
             if (query.sortBy) {
                 sql += ` ORDER BY ${quoteId(query.sortBy.field)} ${query.sortBy.direction === "asc" ? "ASC" : "DESC"}`;
             }
 
+            // Bind LIMIT/OFFSET as parameters too, so nothing but quoted identifiers
+            // and `?` placeholders ever reaches SQL. SQLite needs a LIMIT before
+            // OFFSET; `-1` means "no limit".
             if (query.limit !== undefined) {
-                sql += ` LIMIT ${String(Math.trunc(query.limit))}`;
+                sql += " LIMIT ?";
+                parameters.push(Math.trunc(query.limit));
             }
 
             if (query.offset) {
-                // SQLite requires a LIMIT before OFFSET; `-1` means "no limit".
-                sql += `${query.limit === undefined ? " LIMIT -1" : ""} OFFSET ${String(Math.trunc(query.offset))}`;
+                sql += `${query.limit === undefined ? " LIMIT -1" : ""} OFFSET ?`;
+                parameters.push(Math.trunc(query.offset));
             }
 
-            return executor.all(sql, fragment.params);
+            return executor.all(sql, parameters);
         },
         remove: async (model, where) => {
             const fragment = compileWhere(where);

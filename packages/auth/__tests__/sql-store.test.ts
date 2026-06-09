@@ -3,8 +3,8 @@ import { DatabaseSync } from "node:sqlite";
 import { getAuthTables } from "better-auth/db";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { AuthWhereClause } from "../src/adapter.js";
-import { cirrusAuthAdapter } from "../src/adapter.js";
+import type { AuthRow, AuthStore, AuthWhereClause } from "../src/adapter.js";
+import { cirrusAuthAdapter, createMemoryAuthStore } from "../src/adapter.js";
 import { createAuth } from "../src/create-auth.js";
 import type { SqlExecutor } from "../src/sql-store.js";
 import { createSqlAuthStore } from "../src/sql-store.js";
@@ -221,5 +221,78 @@ describe("createSqlAuthStore — better-auth end to end on SQLite", () => {
         await auth.api.signUpEmail(signUp);
 
         await expect(auth.api.signInEmail({ body: { email, password: `${password}-wrong` } })).rejects.toThrow(/invalid|password|credential/iu);
+    });
+});
+
+describe("memory and SQL stores agree on the clause matrix", () => {
+    // Identical ASCII fixture in both stores; every clause below must select the
+    // same id set from each. Guards against the two operator implementations
+    // (in-memory `matchesWhere` vs SQL `compileWhere`) drifting — the trap a
+    // single-store test can't catch.
+    const rows: AuthRow[] = [
+        { age: 30, email: "Ada@Example.com", id: "u1", role: "admin" },
+        { age: 20, email: "bob@example.com", id: "u2", role: "user" },
+
+        { age: 20, email: "cy@example.com", id: "u3", role: null },
+    ];
+
+    const matrix: { expected: string[]; name: string; where: AuthWhereClause[] }[] = [
+        { expected: ["u1"], name: "eq", where: [clause("id", "u1")] },
+        { expected: ["u2", "u3"], name: "ne", where: [clause("id", "u1", "ne")] },
+        { expected: ["u1", "u2"], name: "in", where: [clause("id", ["u1", "u2"], "in")] },
+        { expected: ["u2", "u3"], name: "not_in", where: [clause("id", ["u1"], "not_in")] },
+
+        { expected: ["u3"], name: "eq null", where: [clause("role", null)] },
+
+        { expected: ["u1", "u2"], name: "ne null", where: [clause("role", null, "ne")] },
+        { expected: ["u1"], name: "gt", where: [clause("age", 20, "gt")] },
+        { expected: ["u1", "u2", "u3"], name: "gte", where: [clause("age", 20, "gte")] },
+        { expected: ["u2", "u3"], name: "lt", where: [clause("age", 30, "lt")] },
+        { expected: ["u2", "u3"], name: "contains sensitive", where: [clause("email", "example", "contains")] },
+        { expected: ["u1", "u2", "u3"], name: "contains insensitive", where: [{ ...clause("email", "example", "contains"), mode: "insensitive" }] },
+        { expected: [], name: "starts_with sensitive (case mismatch)", where: [clause("email", "ada", "starts_with")] },
+        { expected: ["u1"], name: "starts_with insensitive", where: [{ ...clause("email", "ada", "starts_with"), mode: "insensitive" }] },
+        { expected: ["u1", "u2", "u3"], name: "ends_with", where: [clause("email", ".com", "ends_with")] },
+        { expected: [], name: "ends_with sensitive (case mismatch)", where: [clause("email", ".COM", "ends_with")] },
+        { expected: [], name: "contains non-string value", where: [clause("email", 123, "contains")] },
+        { expected: ["u1"], name: "eq insensitive", where: [{ ...clause("email", "ada@example.com"), mode: "insensitive" }] },
+        { expected: [], name: "eq sensitive (case mismatch)", where: [clause("email", "ada@example.com")] },
+        { expected: ["u2"], name: "AND fold", where: [clause("role", "user"), clause("age", 20)] },
+        { expected: ["u1", "u2", "u3"], name: "OR fold", where: [clause("id", "u1"), clause("age", 20, "eq", "OR")] },
+    ];
+
+    const idsFrom = async (store: AuthStore, where: AuthWhereClause[]): Promise<string[]> => {
+        const found = await store.read("members", { where });
+
+        return found.map((row) => String(row.id)).toSorted((a, b) => a.localeCompare(b));
+    };
+
+    it("selects the same rows in both stores for every operator and fold", async () => {
+        expect.hasAssertions();
+
+        const db = new DatabaseSync(":memory:");
+        db.exec(`CREATE TABLE "members" ("id" TEXT PRIMARY KEY, "email" TEXT, "role" TEXT, "age" REAL)`);
+        const sqlStore = createSqlAuthStore(executorFor(db));
+        const memoryStore = createMemoryAuthStore();
+
+        await Promise.all(rows.flatMap((row) => [sqlStore.create("members", row), memoryStore.create("members", row)]));
+
+        const results = await Promise.all(
+            matrix.map(async (entry) => {
+                return {
+                    entry,
+                    memoryIds: await idsFrom(memoryStore, entry.where),
+                    sqlIds: await idsFrom(sqlStore, entry.where),
+                };
+            }),
+        );
+
+        for (const { entry, memoryIds, sqlIds } of results) {
+            // Both stores agree with each other AND with the hand-computed expectation.
+            expect(sqlIds, entry.name).toEqual(entry.expected);
+            expect(memoryIds, entry.name).toEqual(entry.expected);
+        }
+
+        db.close();
     });
 });
