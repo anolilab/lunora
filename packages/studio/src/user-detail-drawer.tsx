@@ -63,18 +63,28 @@ export const UserDetailDrawer = ({ capabilities, onChanged, onClose, user }: Use
     const [impersonationToken, setImpersonationToken] = useState<null | string>(null);
     const [confirmDelete, setConfirmDelete] = useState<boolean>(false);
 
-    /** Run a mutation: clear errors, mark busy, then on success bump `version` (refetch related panels) + notify the list. */
+    /**
+     * Run a mutation under one busy/error model. On success it bumps `version`
+     * (so the related panels refetch) and notifies the list via `onChanged` —
+     * unless `refresh: false` (for read-only actions like impersonate that don't
+     * change the list). `onResult` receives the action's return value.
+     */
     const runAction = useCallback(
-        (action: () => Promise<void>): void => {
+        <T,>(action: () => Promise<T>, options?: { onResult?: (result: T) => void; refresh?: boolean }): void => {
             fireAndForget(
                 (async (): Promise<void> => {
                     setBusy(true);
                     setActionError(null);
 
                     try {
-                        await action();
-                        setVersion((value) => value + 1);
-                        onChanged();
+                        const result = await action();
+
+                        if (options?.refresh !== false) {
+                            setVersion((value) => value + 1);
+                            onChanged();
+                        }
+
+                        options?.onResult?.(result);
                     } catch (error_) {
                         setActionError(errorMessage(error_));
                     } finally {
@@ -100,8 +110,14 @@ export const UserDetailDrawer = ({ capabilities, onChanged, onClose, user }: Use
     }, []);
 
     const onSetRole = useCallback((): void => {
+        const role = roleInput.trim();
+
+        if (role === "") {
+            return;
+        }
+
         runAction(async () => {
-            await client.setAuthUserRole({ role: roleInput.trim(), userId: user.id });
+            await client.setAuthUserRole({ role, userId: user.id });
         });
     }, [client, roleInput, runAction, user.id]);
 
@@ -128,23 +144,14 @@ export const UserDetailDrawer = ({ capabilities, onChanged, onClose, user }: Use
     }, [client, newPassword, runAction, user.id]);
 
     const onImpersonate = useCallback((): void => {
-        fireAndForget(
-            (async (): Promise<void> => {
-                setBusy(true);
-                setActionError(null);
-
-                try {
-                    const result = await client.impersonateAuthUser({ userId: user.id });
-
-                    setImpersonationToken(result.token);
-                } catch (error_) {
-                    setActionError(errorMessage(error_));
-                } finally {
-                    setBusy(false);
-                }
-            })(),
-        );
-    }, [client, user.id]);
+        // `refresh: false` — impersonation mints a token but doesn't change the list.
+        runAction(() => client.impersonateAuthUser({ userId: user.id }), {
+            onResult: (result) => {
+                setImpersonationToken(result.token);
+            },
+            refresh: false,
+        });
+    }, [client, runAction, user.id]);
 
     const onRevokeAll = useCallback((): void => {
         runAction(async () => {
@@ -191,87 +198,96 @@ export const UserDetailDrawer = ({ capabilities, onChanged, onClose, user }: Use
                 </p>
             )}
 
-            {/* --- Actions ----------------------------------------------------- */}
-            <div className="flex flex-col gap-3 rounded-md border border-border p-3">
-                <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">{t("Actions")}</h3>
+            {/* --- Actions (admin() plugin) — gated so a deployment without it doesn't show ops that 404 --- */}
+            {capabilities.admin && (
+                <div className="flex flex-col gap-3 rounded-md border border-border p-3">
+                    <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">{t("Actions")}</h3>
 
-                <div className="flex items-end gap-2">
-                    <div className="flex flex-1 flex-col gap-1">
-                        <Label htmlFor="ud-role">{t("Role")}</Label>
-                        <Input data-testid="ud-role-input" id="ud-role" onChange={onRoleInputChange} value={roleInput} />
-                    </div>
-                    <Button data-testid="ud-set-role" disabled={busy} onClick={onSetRole} size="sm" type="button" variant="outline">
-                        {t("Set role")}
-                    </Button>
-                </div>
-
-                {banned ? (
-                    <Button data-testid="ud-unban" disabled={busy} onClick={onUnban} size="sm" type="button" variant="outline">
-                        {t("Unban")}
-                    </Button>
-                ) : (
                     <div className="flex items-end gap-2">
                         <div className="flex flex-1 flex-col gap-1">
-                            <Label htmlFor="ud-ban-reason">{t("Ban reason (optional)")}</Label>
-                            <Input data-testid="ud-ban-reason" id="ud-ban-reason" onChange={onBanReasonChange} value={banReason} />
+                            <Label htmlFor="ud-role">{t("Role")}</Label>
+                            <Input data-testid="ud-role-input" id="ud-role" onChange={onRoleInputChange} value={roleInput} />
                         </div>
-                        <div className="flex w-24 flex-col gap-1">
-                            <Label htmlFor="ud-ban-days">{t("Days")}</Label>
-                            <Input data-testid="ud-ban-days" id="ud-ban-days" onChange={onBanDaysChange} type="number" value={banDays} />
-                        </div>
-                        <Button data-testid="ud-ban" disabled={busy} onClick={onBan} size="sm" type="button" variant="destructive">
-                            {t("Ban user")}
+                        <Button
+                            data-testid="ud-set-role"
+                            disabled={busy || roleInput.trim() === ""}
+                            onClick={onSetRole}
+                            size="sm"
+                            type="button"
+                            variant="outline"
+                        >
+                            {t("Set role")}
                         </Button>
                     </div>
-                )}
 
-                <div className="flex items-end gap-2">
-                    <div className="flex flex-1 flex-col gap-1">
-                        <Label htmlFor="ud-password">{t("New password")}</Label>
-                        <Input data-testid="ud-password" id="ud-password" onChange={onNewPasswordChange} type="password" value={newPassword} />
-                    </div>
-                    <Button
-                        data-testid="ud-set-password"
-                        disabled={busy || newPassword === ""}
-                        onClick={onSetPassword}
-                        size="sm"
-                        type="button"
-                        variant="outline"
-                    >
-                        {t("Set password")}
-                    </Button>
-                </div>
-
-                <div className="flex flex-wrap gap-2">
-                    <Button data-testid="ud-impersonate" disabled={busy} onClick={onImpersonate} size="sm" type="button" variant="outline">
-                        {t("Impersonate")}
-                    </Button>
-                    <Button data-testid="ud-revoke-all" disabled={busy} onClick={onRevokeAll} size="sm" type="button" variant="outline">
-                        {t("Revoke all sessions")}
-                    </Button>
-                    {confirmDelete ? (
-                        <>
-                            <Button data-testid="ud-delete-confirm" disabled={busy} onClick={onDelete} size="sm" type="button" variant="destructive">
-                                {t("Confirm delete")}
-                            </Button>
-                            <Button data-testid="ud-delete-cancel" onClick={onCancelDelete} size="sm" type="button" variant="ghost">
-                                {t("Cancel")}
-                            </Button>
-                        </>
+                    {banned ? (
+                        <Button data-testid="ud-unban" disabled={busy} onClick={onUnban} size="sm" type="button" variant="outline">
+                            {t("Unban")}
+                        </Button>
                     ) : (
-                        <Button data-testid="ud-delete" disabled={busy} onClick={onConfirmDelete} size="sm" type="button" variant="destructive">
-                            {t("Delete user")}
+                        <div className="flex items-end gap-2">
+                            <div className="flex flex-1 flex-col gap-1">
+                                <Label htmlFor="ud-ban-reason">{t("Ban reason (optional)")}</Label>
+                                <Input data-testid="ud-ban-reason" id="ud-ban-reason" onChange={onBanReasonChange} value={banReason} />
+                            </div>
+                            <div className="flex w-24 flex-col gap-1">
+                                <Label htmlFor="ud-ban-days">{t("Days")}</Label>
+                                <Input data-testid="ud-ban-days" id="ud-ban-days" onChange={onBanDaysChange} type="number" value={banDays} />
+                            </div>
+                            <Button data-testid="ud-ban" disabled={busy} onClick={onBan} size="sm" type="button" variant="destructive">
+                                {t("Ban user")}
+                            </Button>
+                        </div>
+                    )}
+
+                    <div className="flex items-end gap-2">
+                        <div className="flex flex-1 flex-col gap-1">
+                            <Label htmlFor="ud-password">{t("New password")}</Label>
+                            <Input data-testid="ud-password" id="ud-password" onChange={onNewPasswordChange} type="password" value={newPassword} />
+                        </div>
+                        <Button
+                            data-testid="ud-set-password"
+                            disabled={busy || newPassword === ""}
+                            onClick={onSetPassword}
+                            size="sm"
+                            type="button"
+                            variant="outline"
+                        >
+                            {t("Set password")}
                         </Button>
+                    </div>
+
+                    <div className="flex flex-wrap gap-2">
+                        <Button data-testid="ud-impersonate" disabled={busy} onClick={onImpersonate} size="sm" type="button" variant="outline">
+                            {t("Impersonate")}
+                        </Button>
+                        <Button data-testid="ud-revoke-all" disabled={busy} onClick={onRevokeAll} size="sm" type="button" variant="outline">
+                            {t("Revoke all sessions")}
+                        </Button>
+                        {confirmDelete ? (
+                            <>
+                                <Button data-testid="ud-delete-confirm" disabled={busy} onClick={onDelete} size="sm" type="button" variant="destructive">
+                                    {t("Confirm delete")}
+                                </Button>
+                                <Button data-testid="ud-delete-cancel" onClick={onCancelDelete} size="sm" type="button" variant="ghost">
+                                    {t("Cancel")}
+                                </Button>
+                            </>
+                        ) : (
+                            <Button data-testid="ud-delete" disabled={busy} onClick={onConfirmDelete} size="sm" type="button" variant="destructive">
+                                {t("Delete user")}
+                            </Button>
+                        )}
+                    </div>
+
+                    {impersonationToken !== null && (
+                        <div className="flex flex-col gap-1" data-testid="ud-impersonation">
+                            <Label htmlFor="ud-token">{t("Impersonation token")}</Label>
+                            <Input data-testid="ud-token" id="ud-token" readOnly value={impersonationToken} />
+                        </div>
                     )}
                 </div>
-
-                {impersonationToken !== null && (
-                    <div className="flex flex-col gap-1" data-testid="ud-impersonation">
-                        <Label htmlFor="ud-token">{t("Impersonation token")}</Label>
-                        <Input data-testid="ud-token" id="ud-token" readOnly value={impersonationToken} />
-                    </div>
-                )}
-            </div>
+            )}
 
             {/* --- Related data (capability-gated) ----------------------------- */}
             <UserSessionsPanel busy={busy} runAction={runAction} userId={user.id} version={version} />

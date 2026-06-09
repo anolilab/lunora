@@ -97,6 +97,10 @@ interface AuthAdmin {
     listMembers?: (options: { limit?: number; offset?: number; organizationId: string }) => Promise<AuthPage<Record<string, unknown>>>;
     listOrganizations?: (options: { limit?: number; offset?: number }) => Promise<AuthPage<Record<string, unknown>>>;
     listPasskeys?: (input: { userId: string }) => Promise<Record<string, unknown>[]>;
+    // `listUsers`/`listSessions` are the only required members: they're the
+    // read-only browse surface that even a deprecated `authIntrospector`
+    // (`Pick<AuthAdmin, "listUsers" | "listSessions">`) must provide. Every other
+    // op is optional and guarded at dispatch (`AUTH_OP_NOT_SUPPORTED`).
     listSessions: (options: { limit?: number; offset?: number; userId?: string }) => Promise<AuthPage<AuthSession>>;
     listUsers: (options: ListAuthUsersOptions) => Promise<AuthPage<AuthUser>>;
     removeMember?: (input: { memberId: string }) => Promise<void>;
@@ -270,6 +274,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         method: "listInvitations",
     },
 
+    // --- mutations (POST) -------------------------------------------------------
     [`${AUTH_BASE}/users/create`]: {
         build: ({ body }) => {
             return {
@@ -303,7 +308,9 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
         build: ({ body }) => {
             const role = parseRoleInput(body["role"]);
 
-            if (role === undefined) {
+            // Reject a missing role AND an empty/whitespace one — `setRole("")` would
+            // otherwise clear the user's role rather than being a no-op.
+            if (role === undefined || (typeof role === "string" && role.trim() === "")) {
                 throw new CirrusError("`role` is required", { code: "BAD_REQUEST", status: 400 });
             }
 

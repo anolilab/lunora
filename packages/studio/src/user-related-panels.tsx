@@ -6,17 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Button } from "./components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
 import { useT } from "./i18n-context";
-import { errorMessage, fireAndForget, formatTimestamp } from "./internal";
-
-/** Stringify a raw (unknown) column value for display without risking `[object Object]`. */
-const text = (value: unknown): string => {
-    if (value === null || value === undefined) {
-        return "";
-    }
-
-    // eslint-disable-next-line @typescript-eslint/no-base-to-string -- the object case is handled above; the rest are scalars
-    return typeof value === "object" ? JSON.stringify(value) : String(value);
-};
+import { errorMessage, fireAndForget, formatCell, formatTimestamp } from "./internal";
 
 /** Run a mutation through the drawer's shared busy/error model, then bump the version so every related panel refetches. */
 type RunAction = (action: () => Promise<void>) => void;
@@ -182,11 +172,11 @@ export const UserAccountsPanel = ({ busy, runAction, userId, version }: RelatedP
                         </TableHeader>
                         <TableBody>
                             {accounts.map((account) => {
-                                const id = text(account["id"]);
+                                const id = formatCell(account["id"]);
 
                                 return (
                                     <TableRow data-testid={`ud-account-${id}`} key={id}>
-                                        <TableCell>{text(account["providerId"])}</TableCell>
+                                        <TableCell>{formatCell(account["providerId"])}</TableCell>
                                         <TableCell className="text-muted-foreground tabular-nums">{formatTimestamp(account["createdAt"] as number)}</TableCell>
                                         <TableCell>
                                             <Button
@@ -278,11 +268,11 @@ export const UserSecurityPanel = ({
                         </TableHeader>
                         <TableBody>
                             {passkeys.map((passkey) => {
-                                const id = text(passkey["id"]);
+                                const id = formatCell(passkey["id"]);
 
                                 return (
                                     <TableRow data-testid={`ud-passkey-${id}`} key={id}>
-                                        <TableCell>{text(passkey["name"]) || id}</TableCell>
+                                        <TableCell>{formatCell(passkey["name"]) || id}</TableCell>
                                         <TableCell className="text-muted-foreground tabular-nums">{formatTimestamp(passkey["createdAt"] as number)}</TableCell>
                                         <TableCell>
                                             <Button

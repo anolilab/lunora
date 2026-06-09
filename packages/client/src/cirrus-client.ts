@@ -194,6 +194,21 @@ const joinUrl = (base: string, path: string): string => {
     return `${trimmed}${path}`;
 };
 
+/** A path with the non-empty entries of `params` appended as a query string (omitting `?` when none apply). */
+const withQuery = (path: string, params: Record<string, number | string | undefined>): string => {
+    const search = new URLSearchParams();
+
+    for (const [key, value] of Object.entries(params)) {
+        if (value !== undefined && value !== "") {
+            search.set(key, String(value));
+        }
+    }
+
+    const query = search.toString();
+
+    return query === "" ? path : `${path}?${query}`;
+};
+
 /** Map a shard key to its connection-map key (the default shard uses `""`). */
 const connectionKey = (shardKey: string | undefined): string => shardKey ?? "";
 
@@ -993,43 +1008,18 @@ class CirrusClient {
             throw new Error("CirrusClient is closed");
         }
 
-        const params = new URLSearchParams();
+        const path = withQuery(AUTH_USERS_PATH, {
+            filterField: options.filterField,
+            filterValue: options.filterValue,
+            limit: options.limit,
+            offset: options.offset,
+            search: options.search,
+            searchField: options.searchField,
+            sortBy: options.sortBy,
+            sortDirection: options.sortDirection,
+        });
 
-        if (options.limit !== undefined) {
-            params.set("limit", String(options.limit));
-        }
-
-        if (options.offset !== undefined) {
-            params.set("offset", String(options.offset));
-        }
-
-        if (options.search !== undefined && options.search !== "") {
-            params.set("search", options.search);
-        }
-
-        if (options.searchField !== undefined) {
-            params.set("searchField", options.searchField);
-        }
-
-        if (options.filterField !== undefined) {
-            params.set("filterField", options.filterField);
-        }
-
-        if (options.filterValue !== undefined) {
-            params.set("filterValue", options.filterValue);
-        }
-
-        if (options.sortBy !== undefined) {
-            params.set("sortBy", options.sortBy);
-        }
-
-        if (options.sortDirection !== undefined) {
-            params.set("sortDirection", options.sortDirection);
-        }
-
-        const query = params.toString();
-
-        return (await this.adminFetch(query === "" ? AUTH_USERS_PATH : `${AUTH_USERS_PATH}?${query}`, "GET")) as AuthPage<AuthUser>;
+        return (await this.adminFetch(path, "GET")) as AuthPage<AuthUser>;
     }
 
     /**
@@ -1107,9 +1097,7 @@ class CirrusClient {
 
     /** List a user's linked accounts (credential / OAuth providers). Token material is stripped server-side. */
     public async listAuthAccounts(input: { userId: string }): Promise<Record<string, unknown>[]> {
-        const query = new URLSearchParams({ userId: input.userId }).toString();
-
-        return (await this.adminFetch(`${AUTH_ACCOUNTS_PATH}?${query}`, "GET")) as Record<string, unknown>[];
+        return (await this.adminFetch(withQuery(AUTH_ACCOUNTS_PATH, { userId: input.userId }), "GET")) as Record<string, unknown>[];
     }
 
     /** Unlink a linked account from a user. */
@@ -1119,9 +1107,7 @@ class CirrusClient {
 
     /** List a user's registered passkeys (requires the passkey plugin). */
     public async listAuthPasskeys(input: { userId: string }): Promise<Record<string, unknown>[]> {
-        const query = new URLSearchParams({ userId: input.userId }).toString();
-
-        return (await this.adminFetch(`${AUTH_PASSKEYS_PATH}?${query}`, "GET")) as Record<string, unknown>[];
+        return (await this.adminFetch(withQuery(AUTH_PASSKEYS_PATH, { userId: input.userId }), "GET")) as Record<string, unknown>[];
     }
 
     /** Delete a passkey by id (requires the passkey plugin). */
@@ -1136,41 +1122,21 @@ class CirrusClient {
 
     /** List organizations, paged (requires the organization plugin). */
     public async listAuthOrganizations(options: { limit?: number; offset?: number } = {}): Promise<AuthPage<Record<string, unknown>>> {
-        const params = new URLSearchParams();
-
-        if (options.limit !== undefined) {
-            params.set("limit", String(options.limit));
-        }
-
-        if (options.offset !== undefined) {
-            params.set("offset", String(options.offset));
-        }
-
-        const query = params.toString();
-
-        return (await this.adminFetch(query === "" ? AUTH_ORGS_PATH : `${AUTH_ORGS_PATH}?${query}`, "GET")) as AuthPage<Record<string, unknown>>;
+        return (await this.adminFetch(withQuery(AUTH_ORGS_PATH, { limit: options.limit, offset: options.offset }), "GET")) as AuthPage<Record<string, unknown>>;
     }
 
     /** List the members of an organization (requires the organization plugin). */
     public async listAuthOrgMembers(input: { limit?: number; offset?: number; organizationId: string }): Promise<AuthPage<Record<string, unknown>>> {
-        const params = new URLSearchParams({ organizationId: input.organizationId });
+        const path = withQuery(AUTH_ORG_MEMBERS_PATH, { limit: input.limit, offset: input.offset, organizationId: input.organizationId });
 
-        if (input.limit !== undefined) {
-            params.set("limit", String(input.limit));
-        }
-
-        return (await this.adminFetch(`${AUTH_ORG_MEMBERS_PATH}?${params.toString()}`, "GET")) as AuthPage<Record<string, unknown>>;
+        return (await this.adminFetch(path, "GET")) as AuthPage<Record<string, unknown>>;
     }
 
     /** List an organization's pending invitations (requires the organization plugin). */
     public async listAuthOrgInvitations(input: { limit?: number; offset?: number; organizationId: string }): Promise<AuthPage<Record<string, unknown>>> {
-        const params = new URLSearchParams({ organizationId: input.organizationId });
+        const path = withQuery(AUTH_ORG_INVITATIONS_PATH, { limit: input.limit, offset: input.offset, organizationId: input.organizationId });
 
-        if (input.limit !== undefined) {
-            params.set("limit", String(input.limit));
-        }
-
-        return (await this.adminFetch(`${AUTH_ORG_INVITATIONS_PATH}?${params.toString()}`, "GET")) as AuthPage<Record<string, unknown>>;
+        return (await this.adminFetch(path, "GET")) as AuthPage<Record<string, unknown>>;
     }
 
     /** Remove a member from an organization. */

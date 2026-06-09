@@ -1,4 +1,4 @@
-import type { AuthCapabilities, AuthUser } from "@cirrus/client";
+import type { AuthUser } from "@cirrus/client";
 import { useCirrus } from "@cirrus/react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
@@ -10,6 +10,7 @@ import { Input } from "./components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
 import { useT } from "./i18n-context";
 import { errorMessage, fireAndForget, formatTimestamp } from "./internal";
+import { useAuthCapabilities } from "./use-auth-capabilities";
 import { useAutoRefresh } from "./use-auto-refresh";
 import useDebounced from "./use-debounced";
 import { UserCreateDialog } from "./user-create-dialog";
@@ -21,9 +22,6 @@ interface UsersPanelProps {
 }
 
 const DEFAULT_PAGE_SIZE = 50;
-
-/** Conservative defaults until `getAuthCapabilities()` resolves: core surfaces on, plugin surfaces off. */
-const DEFAULT_CAPABILITIES: AuthCapabilities = { accounts: true, admin: true, organization: false, passkey: false, twoFactor: false };
 
 /**
  * Full user-management dashboard, backed by the admin-gated `/_cirrus/admin/auth/*`
@@ -47,20 +45,7 @@ export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
 
     const [selectedUserId, setSelectedUserId] = useState<null | string>(null);
     const [createOpen, setCreateOpen] = useState<boolean>(false);
-    const [capabilities, setCapabilities] = useState<AuthCapabilities>(DEFAULT_CAPABILITIES);
-
-    // Capabilities are fixed per deployment (which plugins are enabled), so fetch once.
-    useEffect(() => {
-        fireAndForget(
-            (async (): Promise<void> => {
-                try {
-                    setCapabilities(await client.getAuthCapabilities());
-                } catch {
-                    // Leave the conservative defaults in place if the endpoint is unavailable.
-                }
-            })(),
-        );
-    }, [client]);
+    const { capabilities } = useAuthCapabilities();
 
     const fetchUsers = useCallback(async (): Promise<void> => {
         setUsersError(null);
