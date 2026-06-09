@@ -237,6 +237,7 @@ interface DataBrowserModel {
     bulkDelete: () => void;
     cancelCellEdit: () => void;
     cancelEdit: () => void;
+    changePageSize: (size: number) => void;
     clearTable: () => void;
     columns: string[];
     committing: boolean;
@@ -250,6 +251,7 @@ interface DataBrowserModel {
     goPrevious: () => void;
     hasNext: boolean;
     hasPrevious: boolean;
+    jumpToPage: (page: number) => void;
     live: boolean;
     liveError: string | undefined;
     loadTables: () => void;
@@ -263,6 +265,7 @@ interface DataBrowserModel {
     onRowEdit: (id: null | string, original: TableRow) => void;
     page: TablePage | null;
     pageError: null | string;
+    pageSize: number;
     rangeEnd: number;
     rangeStart: number;
     refreshPage: () => void;
@@ -294,8 +297,12 @@ interface DataBrowserModel {
  * from the component so behavior, fetch sequencing, and effect dependencies are
  * unchanged — the component below is now just markup wiring.
  */
-const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string | undefined; pageSize: number }): DataBrowserModel => {
+const useDataBrowser = ({ initialShardKey, pageSize: initialPageSize }: { initialShardKey: string | undefined; pageSize: number }): DataBrowserModel => {
     const client = useCirrus();
+
+    // Rows-per-page is user-adjustable (the pagination footer's selector); the
+    // prop seeds the initial value. Changing it re-fetches the first page.
+    const [pageSize, setPageSize] = useState<number>(initialPageSize);
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
     const [tables, setTables] = useState<TableInfo[] | null>(null);
@@ -359,6 +366,7 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
     const [loaded, setLoaded] = useState<null | {
         filters: EditableFilter[];
         offset: number;
+        pageSize: number;
         search: string;
         shard: string;
         sort: SortingState;
@@ -405,7 +413,7 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
 
                 setPage(result);
                 setOffset(nextOffset);
-                setLoaded({ filters: activeFilters, offset: nextOffset, search: searchQuery, shard, sort: activeSort, table });
+                setLoaded({ filters: activeFilters, offset: nextOffset, pageSize, search: searchQuery, shard, sort: activeSort, table });
             } catch (error) {
                 setPage(null);
                 setPageError((error as Error).message);
@@ -611,6 +619,19 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
         fireAndForget(fetchPage(shardKey, selectedTable, 0, search));
     }, [sorting, selectedTable, shardKey, loaded, search, fetchPage]);
 
+    // Re-run from offset 0 when the rows-per-page changes for the loaded table —
+    // the window size changed, so the current offset may no longer be valid. Same
+    // guarded shape as the sort/filter effects (`loaded.pageSize` tracks the size
+    // the page was fetched at, so a table switch doesn't double-fetch).
+    useEffect(() => {
+        // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- reacting to a changed page size (a value, not a discrete event) is the correct pattern, mirroring the sort/filter effects above.
+        if (selectedTable === null || loaded === null || loaded.pageSize === pageSize) {
+            return;
+        }
+
+        fireAndForget(fetchPage(shardKey, selectedTable, 0, search));
+    }, [pageSize, selectedTable, shardKey, loaded, search, fetchPage]);
+
     // Issue a writeRow op then reload the current page so the change shows. A
     // delete passes no doc; insert (id === "") / patch carry the JSON draft.
     const writeRow = useCallback(
@@ -751,6 +772,22 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
         goToPage(offset + pageSize);
     }, [goToPage, offset, pageSize]);
 
+    // Jump to a 1-based page: translate to an offset at the current page size. The
+    // footer clamps the input, but floor at 0 defensively.
+    const jumpToPage = useCallback(
+        (targetPage: number): void => {
+            goToPage(Math.max(0, (targetPage - 1) * pageSize));
+        },
+        [goToPage, pageSize],
+    );
+
+    // Change rows-per-page; the guarded effect above re-fetches the first page at
+    // the new size.
+    const changePageSize = useCallback((size: number): void => {
+        setPageSize(size);
+        setOffset(0);
+    }, []);
+
     const onRowEdit = useCallback((id: null | string, original: TableRow): void => {
         setWriteError(null);
         setEditing({ docText: JSON.stringify(rowDocument(original), null, 2), id });
@@ -806,6 +843,7 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
         bulkDelete,
         cancelCellEdit,
         cancelEdit,
+        changePageSize,
         clearTable: emptyTable,
         columns: page?.columns ?? [],
         committing,
@@ -819,6 +857,7 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
         goPrevious,
         hasNext,
         hasPrevious,
+        jumpToPage,
         live,
         liveError,
         loadTables,
@@ -832,6 +871,7 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
         onRowEdit,
         page,
         pageError,
+        pageSize,
         rangeEnd,
         rangeStart,
         refreshPage,
@@ -873,12 +913,13 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
  * touches the server — pagination still flows through `readTablePage`. All of
  * that state lives in {@link useDataBrowser}; this component is just the markup.
  */
-export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFAULT_PAGE_SIZE }: DataBrowserProps): ReactElement => {
+export const DataBrowser = ({ editable = false, initialShardKey, pageSize: initialPageSize = DEFAULT_PAGE_SIZE }: DataBrowserProps): ReactElement => {
     const {
         addRow,
         bulkDelete,
         cancelCellEdit,
         cancelEdit,
+        changePageSize,
         clearTable,
         columns,
         committing,
@@ -892,6 +933,7 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
         goPrevious,
         hasNext,
         hasPrevious,
+        jumpToPage,
         live,
         liveError,
         loadTables,
@@ -905,6 +947,7 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
         onRowEdit,
         page,
         pageError,
+        pageSize,
         rangeEnd,
         rangeStart,
         refreshPage,
@@ -926,7 +969,7 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
         total,
         viewMode,
         writeError,
-    } = useDataBrowser({ initialShardKey, pageSize });
+    } = useDataBrowser({ initialShardKey, pageSize: initialPageSize });
 
     // The row whose full document the detail drawer is showing, if any. Pure
     // view state — kept out of the data hook since it touches no fetch logic.
@@ -1094,8 +1137,11 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize = DEFA
                             <GridPagination
                                 hasNext={hasNext}
                                 hasPrevious={hasPrevious}
+                                onJumpToPage={jumpToPage}
                                 onNext={goNext}
+                                onPageSizeChange={changePageSize}
                                 onPrevious={goPrevious}
+                                pageSize={pageSize}
                                 prefix="db"
                                 rangeEnd={rangeEnd}
                                 rangeStart={rangeStart}

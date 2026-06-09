@@ -37,7 +37,7 @@ const rowKey = (row: Record<string, unknown>, index: number): string => {
  * table sidebar + a bordered grid with a paginated footer — and gated by the
  * server's `CIRRUS_ADMIN_TOKEN`.
  */
-export const GlobalDataBrowser = ({ pageSize = DEFAULT_PAGE_SIZE }: GlobalDataBrowserProps = {}): ReactElement => {
+export const GlobalDataBrowser = ({ pageSize: initialPageSize = DEFAULT_PAGE_SIZE }: GlobalDataBrowserProps = {}): ReactElement => {
     const client = useCirrus();
     const t = useT();
 
@@ -46,6 +46,8 @@ export const GlobalDataBrowser = ({ pageSize = DEFAULT_PAGE_SIZE }: GlobalDataBr
 
     const [selectedTable, setSelectedTable] = useState<null | string>(null);
     const [offset, setOffset] = useState<number>(0);
+    // Rows-per-page is user-adjustable via the footer's selector; the prop seeds it.
+    const [pageSize, setPageSize] = useState<number>(initialPageSize);
     const [page, setPage] = useState<GlobalTablePage | null>(null);
     const [pageError, setPageError] = useState<null | string>(null);
 
@@ -61,11 +63,11 @@ export const GlobalDataBrowser = ({ pageSize = DEFAULT_PAGE_SIZE }: GlobalDataBr
     }, [client]);
 
     const fetchPage = useCallback(
-        async (table: string, nextOffset: number): Promise<void> => {
+        async (table: string, nextOffset: number, limit: number = pageSize): Promise<void> => {
             setPageError(null);
 
             try {
-                const result = await client.readGlobalTablePage({ limit: pageSize, offset: nextOffset, table });
+                const result = await client.readGlobalTablePage({ limit, offset: nextOffset, table });
 
                 setPage(result);
                 setOffset(nextOffset);
@@ -117,6 +119,26 @@ export const GlobalDataBrowser = ({ pageSize = DEFAULT_PAGE_SIZE }: GlobalDataBr
     const goNext = useCallback((): void => {
         goToPage(offset + pageSize);
     }, [goToPage, offset, pageSize]);
+
+    const jumpToPage = useCallback(
+        (targetPage: number): void => {
+            goToPage(Math.max(0, (targetPage - 1) * pageSize));
+        },
+        [goToPage, pageSize],
+    );
+
+    // Change rows-per-page and re-read the first page at the new size (passed
+    // explicitly so it doesn't wait for the state-updated closure).
+    const changePageSize = useCallback(
+        (size: number): void => {
+            setPageSize(size);
+
+            if (selectedTable !== null) {
+                fireAndForget(fetchPage(selectedTable, 0, size));
+            }
+        },
+        [fetchPage, selectedTable],
+    );
 
     return (
         <div className="flex h-full min-w-0" data-testid="cirrus-global-data-browser">
@@ -207,8 +229,11 @@ export const GlobalDataBrowser = ({ pageSize = DEFAULT_PAGE_SIZE }: GlobalDataBr
                             <GridPagination
                                 hasNext={hasNext}
                                 hasPrevious={hasPrevious}
+                                onJumpToPage={jumpToPage}
                                 onNext={goNext}
+                                onPageSizeChange={changePageSize}
                                 onPrevious={goPrevious}
+                                pageSize={pageSize}
                                 prefix="gdb"
                                 rangeEnd={rangeEnd}
                                 rangeStart={rangeStart}

@@ -145,6 +145,55 @@ describe("dataBrowser", () => {
         await screen.findByText("1-2 of 3");
     });
 
+    it("jumps straight to a page via the page-jump input", async () => {
+        expect.assertions(1);
+
+        const mock = createBrowserClient();
+
+        render(renderBrowser(mock, { pageSize: 2 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByText("1-2 of 3");
+
+        // Type page 2 and commit with Enter → offset jumps to (2-1)*2 = 2.
+        fireEvent.keyDown(screen.getByTestId("db-page-jump"), { key: "Enter", target: { value: "2" } });
+
+        await screen.findByText("3-3 of 3");
+
+        expect(screen.getAllByTestId("db-row")).toHaveLength(1);
+    });
+
+    it("changes rows-per-page and re-fetches with the new limit", async () => {
+        expect.assertions(1);
+
+        const mock = createBrowserClient();
+
+        render(renderBrowser(mock, { pageSize: 50 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-rows");
+
+        fireEvent.change(screen.getByTestId("db-page-size"), { target: { value: "25" } });
+
+        await waitFor(() => {
+            const lastPage = mock.query.mock.calls.findLast((call) => (call[0] as { __cirrusRef: string }).__cirrusRef === ADMIN_FUNCTIONS.readTablePage) as [
+                unknown,
+                { limit?: number },
+            ];
+
+            if (lastPage[1].limit !== 25) {
+                throw new Error(`expected limit 25, saw ${String(lastPage[1].limit)}`);
+            }
+        });
+
+        const lastPage = mock.query.mock.calls.findLast((call) => (call[0] as { __cirrusRef: string }).__cirrusRef === ADMIN_FUNCTIONS.readTablePage) as [
+            unknown,
+            { limit?: number },
+        ];
+
+        expect(lastPage[1].limit).toBe(25);
+    });
+
     it("auto-loads tables for the typed shard key (debounced, no manual trigger)", async () => {
         expect.assertions(1);
 
