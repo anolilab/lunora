@@ -1,7 +1,7 @@
 # Cirrus Component Registry — `cirrus registry` (spec + status)
 
 > Written 2026-06-06. The concrete plan for Cirrus's "component" story, resolving
-> [`CONVEX-PARITY.md`](./CONVEX-PARITY.md) gap **#5**. Expands [`PLAN2.md`](./PLAN2.md) §3.6.
+> [`CONVEX-PARITY.md`](./CONVEX-PARITY.md) gap **#5**. (Expanded the retired PLAN2 §3.6 — the `add` registry — now shipped; see git history.)
 >
 > **Decision:** Cirrus does **not** build Convex-style sandboxed runtime components. It
 > builds the **kitcn/shadcn registry model** — `cirrus add <name>` scaffolds _user-owned_

@@ -1,10 +1,10 @@
 # Cirrus — Plan 3: Studio & Observability (Beat Cloudflare)
 
-> Written 2026-06-06. The live roadmap for Cirrus's app-aware studio. Where
-> [`PLAN.md`](./PLAN.md) / [`PLAN2.md`](./PLAN2.md) built the **framework** (runtime,
-> data layer, Convex/kitcn parity — now essentially complete), this plan covers the
-> **studio/observability layer** that differentiates Cirrus from the Cloudflare
-> studio. Grounded in the live source (`packages/studio/src/*`, the
+> Written 2026-06-06. The live roadmap for Cirrus's app-aware studio. Where the
+> earlier framework plans built the **framework** (runtime, data layer,
+> Convex/kitcn parity — now complete; those plans have been retired, see git
+> history), this plan covers the **studio/observability layer** that
+> differentiates Cirrus from the Cloudflare studio. Grounded in the live source (`packages/studio/src/*`, the
 > `__cirrus_admin__:*` RPC layer in `@cirrus/do`) and two strategy docs:
 > [`STUDIO-VS-CLOUDFLARE.md`](./STUDIO-VS-CLOUDFLARE.md) (what to own / beat /
 > hand-off) and [`ECOSYSTEM-BORROW.md`](./ECOSYSTEM-BORROW.md) (what to copy / learn).
@@ -205,8 +205,8 @@ create|list|pitr|restore` CLI, and the **Time Travel** studio panel (`pitr-panel
   Time Travel is handed off (see `CLOUDFLARE-REUSE-AUDIT.md` #2).
 - **External integrations** (Sentry/Datadog/Axiom) — defer to CF Logpush + the 3.3 event
   emission rather than building per-vendor adapters in the studio.
-- **TanStack Query adapter** for the studio's own data fetching — open decision
-  (carried from PLAN2 #20); the bespoke admin hooks work today.
+- **TanStack Query adapter** for the studio's own data fetching — open decision;
+  the bespoke admin hooks work today.
 
 ---
 
