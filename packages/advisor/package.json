@@ -1,12 +1,8 @@
 {
-    "name": "@cirrus/codegen",
+    "name": "@cirrus/advisor",
     "version": "0.0.0",
+    "description": "Schema & runtime lints (splinter-style advisors) for Cirrus",
     "license": "FSL-1.1-Apache-2.0",
-    "files": [
-        "dist",
-        "README.md",
-        "LICENSE.md"
-    ],
     "type": "module",
     "sideEffects": false,
     "main": "./dist/index.mjs",
@@ -19,6 +15,11 @@
         },
         "./package.json": "./package.json"
     },
+    "files": [
+        "dist",
+        "README.md",
+        "LICENSE.md"
+    ],
     "scripts": {
         "build": "pnpm exec packem build --development",
         "build:prod": "pnpm exec packem build --production",
@@ -27,20 +28,15 @@
         "lint:prettier": "prettier --check .",
         "lint:prettier:fix": "prettier --write .",
         "lint:types": "tsc --noEmit",
-        "test": "vitest run",
-        "bench": "vitest bench --run"
+        "test": "vitest run"
     },
     "dependencies": {
-        "@cirrus/advisor": "workspace:*",
-        "@cirrus/scheduler": "workspace:*",
-        "ts-morph": "catalog:tooling"
+        "@cirrus/server": "workspace:*"
     },
     "devDependencies": {
-        "@cirrus/server": "workspace:*",
         "@cirrus/values": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
-        "drizzle-orm": "catalog:drizzle",
         "esbuild": "catalog:build",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"

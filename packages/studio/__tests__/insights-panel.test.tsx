@@ -2,7 +2,7 @@ import { CirrusProvider } from "@cirrus/react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import type { FunctionStatsResult, ShardMetrics } from "../src/admin";
+import type { AdvisoryFinding, FunctionStatsResult, ShardMetrics } from "../src/admin";
 import { ADMIN_FUNCTIONS } from "../src/admin";
 import { InsightsPanel } from "../src/insights-panel";
 import type { MockClientHooks } from "./mock-client";
@@ -57,7 +57,21 @@ const SCAN_STATS: FunctionStatsResult = {
 
 const EMPTY_STATS: FunctionStatsResult = { functions: [], sinceMs: 1_700_000_000_000 };
 
-const createClient = (metrics: ShardMetrics, stats: FunctionStatsResult): MockClientHooks =>
+/** One static schema advisory (codegen-time lint) the DO serves via getAdvisories. */
+const FK_ADVISORY: AdvisoryFinding = {
+    cacheKey: "unindexed_foreign_key:posts:authorId",
+    categories: ["PERFORMANCE"],
+    description: "A foreign-key column has no index.",
+    detail: 'Relation "author" on table "posts" references "users" via column "authorId", which is not the leading column of any index.',
+    facing: "EXTERNAL",
+    level: "INFO",
+    metadata: { table: "posts" },
+    name: "unindexed_foreign_key",
+    remediation: 'Add a secondary index leading with the FK column, e.g. `.index("byAuthorId", ["authorId"])`.',
+    title: "Unindexed foreign key",
+};
+
+const createClient = (metrics: ShardMetrics, stats: FunctionStatsResult, advisories: AdvisoryFinding[] = []): MockClientHooks =>
     createMockClient({
         query: (reference): unknown => {
             if (reference === ADMIN_FUNCTIONS.getMetrics) {
@@ -66,6 +80,10 @@ const createClient = (metrics: ShardMetrics, stats: FunctionStatsResult): MockCl
 
             if (reference === ADMIN_FUNCTIONS.getFunctionStats) {
                 return stats;
+            }
+
+            if (reference === ADMIN_FUNCTIONS.getAdvisories) {
+                return { advisories };
             }
 
             throw new Error(`unexpected ${reference}`);
@@ -114,6 +132,60 @@ describe("insightsPanel", () => {
         const addIndex = await screen.findByTestId("in-add-index-posts");
 
         expect(addIndex.textContent).toContain("Add index on posts");
+    });
+
+    it("renders a static schema advisory from getAdvisories on the Info tab", async () => {
+        expect.assertions(2);
+
+        render(renderPanel(createClient(HEALTHY, EMPTY_STATS, [FK_ADVISORY])));
+
+        // unindexed_foreign_key is INFO-severity → the Info tab.
+        fireEvent.click(await screen.findByTestId("cirrus-insights-tab-info"));
+        await screen.findByText("Unindexed foreign key");
+
+        const view = screen.getByTestId("cirrus-insights");
+
+        expect(view.textContent).toContain("Unindexed foreign key");
+        // The advisory names the offending table.
+        expect(view.textContent).toContain("posts");
+    });
+
+    it("auto-refreshes advisories when the tab regains focus (no manual Refresh)", async () => {
+        expect.assertions(2);
+
+        let advisories: AdvisoryFinding[] = [];
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.getMetrics) {
+                    return HEALTHY;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.getFunctionStats) {
+                    return EMPTY_STATS;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.getAdvisories) {
+                    return { advisories };
+                }
+
+                throw new Error(`unexpected ${reference}`);
+            },
+        });
+
+        render(renderPanel(mock));
+
+        // Nothing initially.
+        fireEvent.click(await screen.findByTestId("cirrus-insights-tab-info"));
+
+        expect(screen.queryByText("Unindexed foreign key")).toBeNull();
+
+        // A schema save adds the advisory; tabbing back refetches it in.
+        advisories = [FK_ADVISORY];
+        fireEvent(document, new Event("visibilitychange"));
+
+        await screen.findByText("Unindexed foreign key");
+
+        expect(screen.getByTestId("cirrus-insights").textContent).toContain("Unindexed foreign key");
     });
 
     it("shows the per-tab empty state when nothing is wrong", async () => {

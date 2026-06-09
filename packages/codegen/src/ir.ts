@@ -178,6 +178,25 @@ export interface CronJobIR {
     name: string;
 }
 
+/**
+ * A `ctx.db.query("table")…` read discovered in a function body, reduced to what
+ * the `filter_without_index` advisor lint needs: which table, whether the chain
+ * narrows with an index, and whether it filters. `table` is `""` when the
+ * `query(...)` argument is not a string literal (a dynamic table — not lintable).
+ */
+export interface QueryReadIR {
+    /** Source file relative to `&lt;projectRoot>/cirrus/`, without extension. */
+    file: string;
+    /** The chain calls `.filter(...)`. */
+    hasFilter: boolean;
+    /** The chain narrows with `.withIndex(...)` or `.withSearchIndex(...)`. */
+    hasIndex: boolean;
+    /** 1-based line of the `query(...)` call. */
+    line: number;
+    /** Queried table name, or `""` when the argument is not a string literal. */
+    table: string;
+}
+
 export interface ProjectIR {
     crons: ReadonlyArray<CronJobIR>;
     functions: ReadonlyArray<FunctionIR>;

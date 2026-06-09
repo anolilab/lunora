@@ -1,11 +1,14 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+import type { Finding } from "@cirrus/advisor";
 import { Project } from "ts-morph";
 
+import { lintSchema } from "./advisor";
 import discoverCrons from "./discover-crons";
 import { discoverFunctions } from "./discover-functions";
 import discoverMigrations from "./discover-migrations";
+import discoverQueries from "./discover-queries";
 import discoverSchema from "./discover-schema";
 import { emitApi, emitCrons, emitDataModel, emitDrizzleSchema, emitFunctions, emitServer, emitShard, emitWranglerCronTriggers } from "./emit";
 
@@ -68,11 +71,20 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const migrations = discoverMigrations(project, cirrusDirectory);
     const crons = discoverCrons(project, cirrusDirectory);
 
+    // Static advisories (unindexed FKs, redundant indexes, unknown index/relation
+    // fields, filter-without-index, …). Cheap, derived from the schema + the
+    // discovered query reads, and run here so a problem surfaces at codegen time
+    // — before it ships. Opt out via `lint: false`. Presentation is the caller's
+    // job: the result carries the findings and each caller surfaces them through
+    // its own channel (the CLI logger, the vite overlay, the studio Advisors
+    // table) rather than this library printing.
+    const advisories = options.lint === false ? [] : lintSchema(schema, discoverQueries(project, cirrusDirectory));
+
     const dataModelContent = emitDataModel(schema);
     const apiContent = emitApi(functions);
     const serverContent = emitServer();
     const functionsContent = emitFunctions(functions, migrations);
-    const shardContent = emitShard(schema);
+    const shardContent = emitShard(schema, advisories);
     const cronsContent = emitCrons(crons);
     const drizzleFiles = emitDrizzleSchema(schema);
 
@@ -94,6 +106,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     }
 
     return {
+        advisories,
         cronTriggers: emitWranglerCronTriggers(crons),
         generated: {
             api: apiContent,
@@ -119,11 +132,28 @@ export interface CodegenOptions {
      * `outputDirectory` is still the path that *would* have been written.
      */
     dryRun?: boolean;
+
+    /**
+     * Run the static schema advisor (unindexed FKs, …) during codegen.
+     * Defaults to `true`. When `false`, `CodegenResult.advisories` is empty.
+     * Computed regardless of `dryRun`; codegen never prints them — see
+     * {@link CodegenResult.advisories}.
+     */
+    lint?: boolean;
     /** Project root containing the `cirrus/` directory. */
     projectRoot: string;
 }
 
 export interface CodegenResult {
+    /**
+     * Static schema advisor findings (e.g. unindexed foreign keys) produced
+     * this run. Empty when `lint` is `false` or the schema is clean. Codegen
+     * does not print these itself — each caller presents them through its own
+     * channel (the CLI logger, the vite overlay, the studio Advisors table).
+     * `formatAdvisories` is exported for a plain multi-line rendering.
+     */
+    advisories: ReadonlyArray<Finding>;
+
     /**
      * Deduplicated cron schedules discovered from `cronJobs()` definitions —
      * the array the vite plugin reconciles into `wrangler.jsonc`'s

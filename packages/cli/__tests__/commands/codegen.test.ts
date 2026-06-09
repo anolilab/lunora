@@ -76,8 +76,13 @@ describe("cirrus codegen", () => {
 
             runCodegenCommand({ cwd: workdir, logger: { ...silentLogger(), warn: (message) => warnings.push(message) } });
 
-            expect(warnings).toHaveLength(1);
-            expect(warnings[0]).toContain("Cron Triggers per Worker");
+            // Filtered to the cron warning specifically — the fixture also emits a
+            // schema advisory (see the advisory test below), so a raw count would
+            // couple this cron assertion to unrelated advisor output.
+            const cronWarnings = warnings.filter((message) => message.includes("Cron Triggers per Worker"));
+
+            expect(cronWarnings).toHaveLength(1);
+            expect(cronWarnings[0]).toContain("Cron Triggers per Worker");
         });
 
         it("does not warn at the cron-trigger limit", () => {
@@ -89,7 +94,23 @@ describe("cirrus codegen", () => {
 
             runCodegenCommand({ cwd: workdir, logger: { ...silentLogger(), warn: (message) => warnings.push(message) } });
 
-            expect(warnings).toHaveLength(0);
+            expect(warnings.filter((message) => message.includes("Cron Triggers per Worker"))).toHaveLength(0);
+        });
+
+        it("surfaces static schema advisories (unindexed foreign key)", () => {
+            expect.assertions(3);
+
+            const warnings: string[] = [];
+
+            // The `simple` fixture's `attachments.ownerId` is a `one`-relation FK
+            // with no covering index, so the static advisor flags it.
+            runCodegenCommand({ cwd: workdir, logger: { ...silentLogger(), warn: (message) => warnings.push(message) } });
+
+            const advisoryWarnings = warnings.filter((message) => message.includes("unindexed_foreign_key"));
+
+            expect(advisoryWarnings).toHaveLength(1);
+            expect(advisoryWarnings[0]).toContain("attachments");
+            expect(advisoryWarnings[0]).toContain("advisory");
         });
     });
 });

@@ -13,7 +13,9 @@ const workdir = mkdtempSync(join(tmpdir(), "cirrus-capture-"));
 
 cpSync(join(fixtureRoot, "cirrus"), join(workdir, "cirrus"), { recursive: true });
 
-const result = runCodegen({ projectRoot: workdir });
+// `lint: false` keeps `CIRRUS_ADVISORIES` empty in the captured fixture so the
+// snapshot stays decoupled from advisor behaviour — matches the snapshot test.
+const result = runCodegen({ lint: false, projectRoot: workdir });
 const expectedDirectory = join(fixtureRoot, "expected", "_generated");
 
 mkdirSync(expectedDirectory, { recursive: true });

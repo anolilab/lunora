@@ -74,6 +74,13 @@ const runCodegenSafely = (
             logger.warn(`[cirrus] cron trigger sync skipped: ${message}`);
         }
 
+        // Surface static schema advisories (unindexed FKs, …) in the dev/build
+        // log. Codegen returns them without printing; the richer error-overlay
+        // presentation is a later step.
+        for (const advisory of result.advisories) {
+            logger.warn(`[cirrus] schema advisory [${advisory.level}] ${advisory.name}: ${advisory.detail} — ${advisory.remediation}`);
+        }
+
         return resolve(result.outputDirectory);
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);

@@ -314,7 +314,11 @@ describe("run-codegen", () => {
         it("output matches committed expected/ files (snapshot)", () => {
             expect.assertions(7);
 
-            const result = runCodegen({ projectRoot: workdir });
+            // `lint: false` keeps the emitted `CIRRUS_ADVISORIES` empty so the
+            // snapshot stays decoupled from advisor behaviour (a lint change
+            // would otherwise churn the fixture). The advisory data path is
+            // covered separately below.
+            const result = runCodegen({ lint: false, projectRoot: workdir });
 
             const expectedApi = readFileSync(join(expectedDirectory, "api.ts"), "utf8");
             const expectedServer = readFileSync(join(expectedDirectory, "server.ts"), "utf8");

@@ -1,3 +1,5 @@
+import type { Finding } from "@cirrus/advisor";
+
 import type { CronJobIR, FunctionIR, IndexIR, MigrationIR, SchemaIR, TableIR, ValidatorIR } from "./ir";
 import sanitizeNamespace from "./paths";
 
@@ -993,7 +995,7 @@ const buildTableIndexes = (schema: SchemaIR): Record<string, EmittedTableIndex[]
     return byTable;
 };
 
-const emitShard = (schema: SchemaIR): string => {
+const emitShard = (schema: SchemaIR, advisories: ReadonlyArray<Finding> = []): string => {
     const hasVectors = schema.vectorIndexes.length > 0;
     const hasGlobalTables = schema.tables.some((table) => table.shardMode === "global");
     const hasTables = schema.tables.length > 0;
@@ -1004,6 +1006,7 @@ const emitShard = (schema: SchemaIR): string => {
     // SearchFilterBuilderLike/…) are no longer imported here — `bindTableFacade`
     // (from `@cirrus/server`) now owns the per-table accessor binding.
     const doTypeImports = [
+        "AdvisoryFinding",
         "DatabaseWriterLike",
         "DataMigrationLike",
         "MigrationRunResult",
@@ -1214,6 +1217,9 @@ const CIRRUS_TABLE_REFS: Record<string, Record<string, string>> = ${JSON.stringi
 /** Declared indexes per table (secondary, search, rank, vector) for the schema viewer. */
 const CIRRUS_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: string; type: "index" | "rank" | "search" | "vector"; unique?: boolean }>> = ${JSON.stringify(tableIndexes, undefined, 4)};
 
+/** Static schema advisories (computed by @cirrus/advisor at codegen time) served via \`__cirrus_admin__:getAdvisories\`. */
+const CIRRUS_ADVISORIES: AdvisoryFinding[] = ${JSON.stringify(advisories, undefined, 4)};
+
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to \`__cdc_log\` on every write (backs streaming export + replay-PITR). */
     cdc?: boolean;
@@ -1356,6 +1362,10 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
         protected override tableIndexes(table: string): Array<{ fields: string[]; name: string; type: "index" | "rank" | "search" | "vector"; unique?: boolean }> {
             return CIRRUS_TABLE_INDEXES[table] ?? [];
+        }
+
+        protected override advisories(): AdvisoryFinding[] {
+            return CIRRUS_ADVISORIES;
         }
 
         protected override async runShardDataMigration(args: RunShardMigrationArgs): Promise<MigrationRunResult> {

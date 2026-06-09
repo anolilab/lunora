@@ -3,7 +3,7 @@ import { useNavigate } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import type { FunctionCallStat, FunctionStatsResult, ShardMetrics } from "./admin";
+import type { AdvisoriesResult, AdvisoryFinding, FunctionCallStat, FunctionStatsResult, ShardMetrics } from "./admin";
 import { ADMIN_FUNCTIONS } from "./admin";
 import type { AdvisorRow } from "./advisor-view";
 import { AdvisorView } from "./advisor-view";
@@ -21,8 +21,25 @@ interface InsightsPanelProps {
     readonly initialShardKey?: string;
 }
 
+const GET_ADVISORIES = adminRef(ADMIN_FUNCTIONS.getAdvisories);
 const GET_FUNCTION_STATS = adminRef(ADMIN_FUNCTIONS.getFunctionStats);
 const GET_METRICS = adminRef(ADMIN_FUNCTIONS.getMetrics);
+
+/** Map the advisor's severity onto the studio's tab levels. */
+const ADVISORY_LEVEL = { ERROR: "error", INFO: "info", WARN: "warning" } as const;
+
+/** Turn one static schema advisory into an Advisor table row (codegen-time lints, alongside the runtime insights). */
+const advisoryRow = (finding: AdvisoryFinding): AdvisorRow => {
+    const table = typeof finding.metadata["table"] === "string" ? finding.metadata["table"] : undefined;
+
+    return {
+        description: `${finding.detail} ${finding.remediation}`,
+        entity: table,
+        issueType: finding.title,
+        key: finding.cacheKey,
+        level: ADVISORY_LEVEL[finding.level],
+    };
+};
 
 /** A 0–1 rate as a one-decimal percentage. */
 const percent = (rate: number): string => `${(rate * 100).toFixed(1)}%`;
@@ -111,6 +128,7 @@ export const InsightsPanel = ({ initialShardKey }: InsightsPanelProps): ReactEle
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
     const [metrics, setMetrics] = useState<ShardMetrics | null>(null);
     const [functions, setFunctions] = useState<FunctionCallStat[] | null>(null);
+    const [advisories, setAdvisories] = useState<AdvisoryFinding[] | null>(null);
     const [error, setError] = useState<null | string>(null);
     const [loading, setLoading] = useState<boolean>(false);
 
@@ -118,13 +136,16 @@ export const InsightsPanel = ({ initialShardKey }: InsightsPanelProps): ReactEle
         async (shard: string): Promise<void> => {
             setLoading(true);
 
-            const [snapshot, stats] = await Promise.allSettled([
+            const [snapshot, stats, advisorySnapshot] = await Promise.allSettled([
                 client.query(GET_METRICS, {}, callOptions(shard)) as Promise<ShardMetrics>,
                 client.query(GET_FUNCTION_STATS, {}, callOptions(shard)) as Promise<FunctionStatsResult>,
+                client.query(GET_ADVISORIES, {}, callOptions(shard)) as Promise<AdvisoriesResult>,
             ]);
 
-            // Surface an error only when BOTH reads fail — a partial snapshot
-            // still yields useful insights, so one failure shouldn't blank it.
+            // Surface an error only when BOTH runtime reads fail — a partial
+            // snapshot still yields useful insights, so one failure shouldn't
+            // blank it. The static advisories are additive: a worker that
+            // predates the RPC simply reports none, never an error.
             if (snapshot.status === "rejected" && stats.status === "rejected") {
                 setError(errorMessage(snapshot.reason));
             } else {
@@ -134,6 +155,7 @@ export const InsightsPanel = ({ initialShardKey }: InsightsPanelProps): ReactEle
 
             setMetrics(snapshot.status === "fulfilled" ? snapshot.value : null);
             setFunctions(stats.status === "fulfilled" ? stats.value.functions : null);
+            setAdvisories(advisorySnapshot.status === "fulfilled" ? advisorySnapshot.value.advisories : null);
             setLoading(false);
         },
         [client],
@@ -142,6 +164,25 @@ export const InsightsPanel = ({ initialShardKey }: InsightsPanelProps): ReactEle
     useEffect(() => {
         fireAndForget(refresh(initialShardKey ?? ""));
     }, [refresh, initialShardKey]);
+
+    // Auto-refresh when the tab regains focus. The studio is a standalone app
+    // (not a Vite HMR client), so it can't hear codegen reloads directly — but
+    // tabbing back from your editor after a schema save (by which point the dev
+    // worker has reloaded with the new `CIRRUS_ADVISORIES`) re-pulls everything,
+    // so advisories land fresh without a manual Refresh.
+    useEffect(() => {
+        const onVisible = (): void => {
+            if (document.visibilityState === "visible") {
+                fireAndForget(refresh(shardKey));
+            }
+        };
+
+        document.addEventListener("visibilitychange", onVisible);
+
+        return () => {
+            document.removeEventListener("visibilitychange", onVisible);
+        };
+    }, [refresh, shardKey]);
 
     const onRefresh = useCallback((): void => {
         fireAndForget(refresh(shardKey));
@@ -160,22 +201,24 @@ export const InsightsPanel = ({ initialShardKey }: InsightsPanelProps): ReactEle
 
     const insights = useMemo<Insight[]>(() => deriveInsights(metrics, functions), [metrics, functions]);
 
-    const rows = useMemo<AdvisorRow[]>(
-        () =>
-            insights.map((insight) => {
-                const tables = insight.kind === "missing-index" ? (insight.tables ?? []) : [];
+    const rows = useMemo<AdvisorRow[]>(() => {
+        const insightRows = insights.map((insight) => {
+            const tables = insight.kind === "missing-index" ? (insight.tables ?? []) : [];
 
-                return {
-                    action: tables.length > 0 ? tables.map((table) => <AddIndexButton key={table} onJump={jumpToSchemaIndex} table={table} />) : undefined,
-                    description: insight.message === undefined ? insightDetail(t, insight) : `${insightDetail(t, insight)} — ${insight.message}`,
-                    entity: insight.fn,
-                    issueType: insightTitle(t, insight),
-                    key: `${insight.kind}:${insight.fn ?? ""}`,
-                    level: insight.severity,
-                };
-            }),
-        [insights, jumpToSchemaIndex, t],
-    );
+            return {
+                action: tables.length > 0 ? tables.map((table) => <AddIndexButton key={table} onJump={jumpToSchemaIndex} table={table} />) : undefined,
+                description: insight.message === undefined ? insightDetail(t, insight) : `${insightDetail(t, insight)} — ${insight.message}`,
+                entity: insight.fn,
+                issueType: insightTitle(t, insight),
+                key: `${insight.kind}:${insight.fn ?? ""}`,
+                level: insight.severity,
+            };
+        });
+
+        // Static schema advisories (codegen-time lints) first, then the runtime
+        // insights. The severity tabs in AdvisorView regroup them by level.
+        return [...(advisories ?? []).map((finding) => advisoryRow(finding)), ...insightRows];
+    }, [advisories, insights, jumpToSchemaIndex, t]);
 
     const toolbar = <ShardInput onChange={setShardKey} testId="in-shard-input" value={shardKey} />;
 

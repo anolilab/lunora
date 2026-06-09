@@ -10,20 +10,23 @@ import { createTemplate } from "@visulima/vis/generate";
 
 import { dashCase, isPackageName } from "./_helpers/case.js";
 
+// ESM-only: every @cirrus/* package ships ESM with no CommonJS output. Do not
+// reintroduce `main: index.cjs`, an `exports.require` condition, or a packem
+// `cjsInterop`/`requireCJS` block — see CLAUDE.md ("ESM-only packages").
 const pkgJson = (name: string, description: string): string => `{
     "name": "@cirrus/${name}",
     "version": "0.0.0",
     "description": "${description}",
+    "license": "FSL-1.1-Apache-2.0",
     "type": "module",
     "sideEffects": false,
-    "main": "./dist/index.cjs",
+    "main": "./dist/index.mjs",
     "module": "./dist/index.mjs",
     "types": "./dist/index.d.ts",
     "exports": {
         ".": {
             "types": "./dist/index.d.ts",
-            "import": "./dist/index.mjs",
-            "require": "./dist/index.cjs"
+            "import": "./dist/index.mjs"
         },
         "./package.json": "./package.json"
     },
@@ -33,8 +36,12 @@ const pkgJson = (name: string, description: string): string => `{
         "LICENSE.md"
     ],
     "scripts": {
-        "build": "packem build",
-        "build:prod": "packem build",
+        "build": "pnpm exec packem build --development",
+        "build:prod": "pnpm exec packem build --production",
+        "lint:eslint": "eslint .",
+        "lint:eslint:fix": "eslint . --fix",
+        "lint:prettier": "prettier --check .",
+        "lint:prettier:fix": "prettier --write .",
         "lint:types": "tsc --noEmit",
         "test": "vitest run"
     },
@@ -44,6 +51,9 @@ const pkgJson = (name: string, description: string): string => `{
         "esbuild": "catalog:build",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.10.0"
     }
 }
 `;
@@ -65,27 +75,89 @@ const vitestConfig = `import { defineConfig } from "vitest/config";
 export default defineConfig({ test: { environment: "node" } });
 `;
 
+// ESM-only build: no `cjsInterop` and no `rollup.requireCJS` block, so packem
+// emits only .mjs / .d.mts / .d.ts (never .cjs / .d.cts).
 const packemConfig = `import type { BuildConfig } from "@visulima/packem/config";
 import { defineConfig } from "@visulima/packem/config";
 import transformer from "@visulima/packem/transformer/esbuild";
 
 // eslint-disable-next-line import/no-unused-modules -- consumed by packem CLI
 export default defineConfig({
+    runtime: "node",
+    failOnWarn: false,
     rollup: {
         dts: {
-            oxc: false,
+            oxc: true,
         },
         license: {
             path: "./LICENSE.md",
         },
-        requireCJS: {
-            builtinNodeModules: true,
-        },
     },
     transformer,
-    cjsInterop: true,
-    failOnWarn: false,
 }) as BuildConfig;
+`;
+
+// Self-contained flat config, mirroring every other @cirrus/* package (no
+// shared local preset — each package owns its own setup on top of
+// @anolilab/eslint-config). Without this the generated `lint:eslint` script
+// (`eslint .`) can't find a config and errors out.
+const eslintConfig = `import { createConfig } from "@anolilab/eslint-config";
+
+// Self-contained flat config for this package. Each package owns its own setup
+// (no shared local preset); rules build on @anolilab/eslint-config.
+export default createConfig(
+    {
+        // Enable type-aware linting and let @anolilab read the tsconfig. Type-aware
+        // rules (no-unsafe-*, no-unnecessary-condition, require-await) only run with
+        // real type info; without tsconfigPath they silently misfire.
+        typescript: { tsconfigPath: "tsconfig.json" },
+        // Prettier owns formatting; disable @stylistic to avoid the two-formatter ping-pong.
+        stylistic: false,
+        ignores: [
+            "**/dist/**",
+            "**/node_modules/**",
+            "**/_generated/**",
+            "**/__fixtures__/**",
+            "**/fixtures/**",
+            "**/coverage/**",
+            "**/*.md/**",
+            "**/vitest.config.ts",
+            "**/packem.config.ts",
+            "**/package.json",
+            "**/tsconfig*.json",
+            "**/README.md",
+            "**/prettier.config.js",
+            "**/eslint.config.js",
+        ],
+    },
+    // Test files: relax rules that are noisy or inappropriate in test code. Source
+    // files still enforce all of these.
+    {
+        files: ["**/__tests__/**/*.{ts,tsx}", "**/*.test.{ts,tsx}", "**/*.spec.{ts,tsx}"],
+        rules: {
+            "@typescript-eslint/naming-convention": "off",
+            "@typescript-eslint/no-explicit-any": "off",
+            "@typescript-eslint/no-non-null-assertion": "off",
+            "@typescript-eslint/no-unnecessary-condition": "off",
+            "@typescript-eslint/require-await": "off",
+            "import/no-extraneous-dependencies": "off",
+            "unicorn/no-null": "off",
+            "unicorn/prevent-abbreviations": "off",
+            "vitest/prefer-expect-assertions": "off",
+        },
+    },
+    // Behavior-breaking autofixers — kept off (not style). sort-objects reorders the
+    // keys of canonical/wire objects, changing bytes on the wire and breaking
+    // order-sensitive tests.
+    {
+        rules: {
+            "perfectionist/sort-objects": "off",
+        },
+    },
+);
+`;
+
+const prettierConfig = `export { default } from "../../prettier.config.js";
 `;
 
 const projectJson = (name: string, category: string): string => `{
@@ -192,8 +264,10 @@ export default createTemplate({
             files: {
                 [pkgName]: {
                     ".releaserc.json": releaseRc,
+                    "eslint.config.js": eslintConfig,
                     "package.json": pkgJson(pkgName, description),
                     "packem.config.ts": packemConfig,
+                    "prettier.config.js": prettierConfig,
                     "project.json": projectJson(pkgName, category),
                     "README.md": readme(pkgName, description),
                     src: { "index.ts": indexTs(pkgName, description) },
@@ -201,7 +275,12 @@ export default createTemplate({
                     "vitest.config.ts": vitestConfig,
                 },
             },
-            suggestions: ["Next steps:", "  pnpm install", `  pnpm --filter @cirrus/${pkgName} test`],
+            suggestions: [
+                "Next steps:",
+                `  cp packages/config/LICENSE.md packages/${pkgName}/LICENSE.md   # packem + package.json "files" expect it`,
+                "  pnpm install",
+                `  pnpm --filter @cirrus/${pkgName} test`,
+            ],
         };
     },
 });

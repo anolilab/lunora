@@ -17,6 +17,16 @@ export const runCodegenCommand = (options: CodegenCommandOptions): { outputDirec
 
     options.logger.success(`codegen wrote dataModel.ts, api.ts, server.ts to ${result.outputDirectory}`);
 
+    // Static schema advisories (unindexed FKs, …). Surface each with its
+    // remediation so the warning is actionable; one grouped `warn` keeps it in
+    // line with the cron-trigger warning below.
+    if (result.advisories.length > 0) {
+        const count = result.advisories.length;
+        const lines = result.advisories.map((advisory) => `  [${advisory.level}] ${advisory.name} — ${advisory.detail}\n      ↳ ${advisory.remediation}`);
+
+        options.logger.warn(`${count.toString()} schema ${count === 1 ? "advisory" : "advisories"}:\n${lines.join("\n")}`);
+    }
+
     // Distinct cron expressions map 1:1 to wrangler `triggers.crons`; Cloudflare
     // caps a Worker at CRON_TRIGGER_LIMIT of them. Jobs sharing an expression
     // count once, so this fires only on genuinely distinct over-scheduling.
