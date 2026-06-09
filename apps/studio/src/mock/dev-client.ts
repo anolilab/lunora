@@ -107,7 +107,23 @@ const dataFor = (reference: string, args: unknown): unknown => {
             return TABLES;
         }
         case ADMIN_FUNCTIONS.readTablePage: {
-            return PAGES[argument.table ?? "messages"] ?? { columns: [], rows: [], total: 0 };
+            const page = PAGES[argument.table ?? "messages"] ?? { columns: [], rows: [], total: 0 };
+            const { orderBy } = (args ?? {}) as { orderBy?: { column: string; direction: "asc" | "desc" } };
+
+            if (orderBy === undefined) {
+                return page;
+            }
+
+            // Apply the server-side sort so the mock reflects header-click ordering.
+            const rows = page.rows.toSorted((first, second) => {
+                const a = first[orderBy.column];
+                const b = second[orderBy.column];
+                const cmp = typeof a === "number" && typeof b === "number" ? a - b : String(a).localeCompare(String(b));
+
+                return orderBy.direction === "desc" ? -cmp : cmp;
+            });
+
+            return { ...page, rows };
         }
         case ADMIN_FUNCTIONS.migrationStatus: {
             return { migrations: [] };

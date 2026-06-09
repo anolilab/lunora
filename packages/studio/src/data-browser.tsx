@@ -44,6 +44,17 @@ const DEFAULT_PAGE_SIZE = 50;
 const NO_TABLES: ReadonlyArray<TableInfo> = [];
 
 /**
+ * Convert TanStack's sorting state into the `readTablePage` `orderBy` arg. The
+ * grid sorts by a single column, so only the first sort entry is used; an empty
+ * state (no active sort) maps to `undefined` → the server's natural order.
+ */
+const toOrderBy = (sorting: SortingState): undefined | { column: string; direction: "asc" | "desc" } => {
+    const first = sorting[0];
+
+    return first === undefined ? undefined : { column: first.id, direction: first.desc ? "desc" : "asc" };
+};
+
+/**
  * Hard ceiling on the number of bounded server `deleteRows`/`clearTable` calls
  * one bulk action loops through, so "delete matching" / "clear table" can never
  * run unbounded. Each call deletes up to the server's per-call cap (500 rows)
@@ -319,6 +330,13 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
 
     filtersRef.current = filters;
 
+    // Sorting is server-side: `fetchPage` reads the current sort off this ref (so
+    // it need not thread through every call site) and an effect re-fetches from
+    // offset 0 when it changes, mirroring the filters handling.
+    const sortingRef = useRef<SortingState>(sorting);
+
+    sortingRef.current = sorting;
+
     // Edit state: the row being edited (its id, or `""` for a new insert) and
     // the JSON-doc draft. `null` when no editor is open. `writeError` surfaces a
     // rejected write without disturbing the page-read error.
@@ -338,7 +356,14 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
     // loads (in fetchPage), so the live subscription follows what's displayed —
     // not the shard-key input as it's typed, nor a table selection whose offset
     // reset hasn't landed yet. Keyed independently of `shardKey`/`offset` state.
-    const [loaded, setLoaded] = useState<null | { filters: EditableFilter[]; offset: number; search: string; shard: string; table: string }>(null);
+    const [loaded, setLoaded] = useState<null | {
+        filters: EditableFilter[];
+        offset: number;
+        search: string;
+        shard: string;
+        sort: SortingState;
+        table: string;
+    }>(null);
 
     const fetchTables = useCallback(
         async (shard: string): Promise<void> => {
@@ -362,17 +387,25 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
             setPageError(null);
 
             const activeFilters = filtersRef.current;
+            const activeSort = sortingRef.current;
 
             try {
                 const result = (await client.query(
                     READ_TABLE_PAGE,
-                    { filters: toFilterClauses(activeFilters), limit: pageSize, offset: nextOffset, search: searchQuery, table },
+                    {
+                        filters: toFilterClauses(activeFilters),
+                        limit: pageSize,
+                        offset: nextOffset,
+                        orderBy: toOrderBy(activeSort),
+                        search: searchQuery,
+                        table,
+                    },
                     callOptions(shard),
                 )) as TablePage;
 
                 setPage(result);
                 setOffset(nextOffset);
-                setLoaded({ filters: activeFilters, offset: nextOffset, search: searchQuery, shard, table });
+                setLoaded({ filters: activeFilters, offset: nextOffset, search: searchQuery, shard, sort: activeSort, table });
             } catch (error) {
                 setPage(null);
                 setPageError((error as Error).message);
@@ -401,6 +434,7 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
             filters: toFilterClauses(loaded?.filters ?? []),
             limit: pageSize,
             offset: loaded?.offset ?? 0,
+            orderBy: toOrderBy(loaded?.sort ?? []),
             search: loaded?.search ?? "",
             table: loaded?.table ?? "",
         },
@@ -564,6 +598,18 @@ const useDataBrowser = ({ initialShardKey, pageSize }: { initialShardKey: string
 
         fireAndForget(fetchPage(shardKey, selectedTable, 0, search));
     }, [filters, selectedTable, shardKey, loaded, search, fetchPage]);
+
+    // Re-run from offset 0 when the sort changes for the loaded table — sorting is
+    // server-side, so a header click re-fetches the whole table in the new order
+    // rather than reordering only the loaded page. Same shape as the filters effect.
+    useEffect(() => {
+        // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- reacting to a changed sort (a value, not a discrete event) is the correct pattern, mirroring the filters effect above.
+        if (selectedTable === null || loaded === null || loaded.sort === sorting) {
+            return;
+        }
+
+        fireAndForget(fetchPage(shardKey, selectedTable, 0, search));
+    }, [sorting, selectedTable, shardKey, loaded, search, fetchPage]);
 
     // Issue a writeRow op then reload the current page so the change shows. A
     // delete passes no doc; insert (id === "") / patch carry the JSON draft.

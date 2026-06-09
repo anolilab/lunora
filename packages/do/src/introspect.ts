@@ -283,6 +283,21 @@ interface FilterClause {
     value?: unknown;
 }
 
+/** Sort direction for an {@link OrderByClause}. */
+type SortDirection = "asc" | "desc";
+
+/**
+ * A server-side sort over one displayed column. `column` resolves the same way a
+ * {@link FilterClause}'s does — a physical/meta column orders by its identifier, a
+ * `__doc__` field orders by a bound `json_extract` path — so the whole table is
+ * ordered before the page is windowed, not just the loaded rows. `direction` is a
+ * fixed ASC/DESC keyword, so nothing here can inject SQL.
+ */
+interface OrderByClause {
+    column: string;
+    direction: SortDirection;
+}
+
 interface ReadTablePageOptions {
     /**
      * Structured column filters, AND-combined with each other and with `search`.
@@ -293,6 +308,13 @@ interface ReadTablePageOptions {
     filters?: FilterClause[];
     limit?: number;
     offset?: number;
+
+    /**
+     * Server-side sort over one displayed column. Applied to the whole filtered
+     * table before windowing, so paging through a sorted view stays correct.
+     * Omitted → natural (insertion) order.
+     */
+    orderBy?: OrderByClause;
 
     /**
      * Foreign-key map (doc field → target table) from the schema, echoed back on
@@ -515,6 +537,33 @@ const buildTablePredicate = (columns: string[], needle: string, filters: FilterC
 };
 
 /**
+ * Build the `ORDER BY` fragment for a server-side sort. Resolves the displayed
+ * column exactly as {@link buildFilterClause} does — a physical/meta column orders
+ * by its quoted identifier, a `__doc__` field by a bound `json_extract` path
+ * (never interpolated) — and appends a fixed ASC/DESC keyword. An unknown column
+ * yields `undefined` (the read falls back to natural order). SQL-injection-safe by
+ * the same allowlist + bound-path discipline as the filter builder.
+ */
+const buildOrderBy = (orderBy: OrderByClause | undefined, physicalColumns: string[]): undefined | { params: unknown[]; sql: string } => {
+    if (orderBy === undefined) {
+        return undefined;
+    }
+
+    const isPhysical = physicalColumns.includes(orderBy.column);
+    const isDocumentStored = physicalColumns.includes(DOC_COLUMN);
+
+    if (!isPhysical && !isDocumentStored) {
+        return undefined;
+    }
+
+    const columnExpression = isPhysical ? quoteIdentifier(orderBy.column) : `json_extract(${quoteIdentifier(DOC_COLUMN)}, ?)`;
+    const params: unknown[] = isPhysical ? [] : [`$."${orderBy.column.replaceAll('"', '""')}"`];
+    const keyword = orderBy.direction === "desc" ? "DESC" : "ASC";
+
+    return { params, sql: `${columnExpression} ${keyword}` };
+};
+
+/**
  * Read a page of rows from one user table. The table name is validated against
  * the live `sqlite_master` allowlist (and rejected if it is internal or
  * unknown) before it is ever interpolated into SQL, so this cannot be coerced
@@ -559,18 +608,21 @@ const readTablePage = (sql: SqlExec, options: ReadTablePageOptions): TablePage =
     };
 
     const predicate = buildTablePredicate(columns, needle, options.filters);
+    const order = buildOrderBy(options.orderBy, columns);
 
-    // No predicates: a plain windowed read against the full row count.
-    if (predicate === undefined) {
-        const total = countRows(sql, quoted);
-        const rawRows = sql.exec(`SELECT * FROM ${quoted} LIMIT ? OFFSET ?`, limit, offset).toArray();
+    // Assemble WHERE / ORDER BY fragments and their bound params in SQL order
+    // (where params, then order-by path params, then limit/offset). The COUNT is
+    // order-independent, so it omits the ORDER BY clause and its params.
+    const whereSql = predicate === undefined ? "" : ` WHERE ${predicate.where}`;
+    const orderSql = order === undefined ? "" : ` ORDER BY ${order.sql}`;
+    const whereParams = predicate?.parameters ?? [];
+    const orderParams = order?.params ?? [];
 
-        return withReferences({ ...expandDocumentRows(columns, rawRows), total });
-    }
-
-    const { parameters, where } = predicate;
-    const total = Number(sql.exec<{ c: number | bigint }>(`SELECT COUNT(*) AS c FROM ${quoted} WHERE ${where}`, ...parameters).one().c);
-    const rawRows = sql.exec(`SELECT * FROM ${quoted} WHERE ${where} LIMIT ? OFFSET ?`, ...parameters, limit, offset).toArray();
+    const total =
+        predicate === undefined
+            ? countRows(sql, quoted)
+            : Number(sql.exec<{ c: number | bigint }>(`SELECT COUNT(*) AS c FROM ${quoted}${whereSql}`, ...whereParams).one().c);
+    const rawRows = sql.exec(`SELECT * FROM ${quoted}${whereSql}${orderSql} LIMIT ? OFFSET ?`, ...whereParams, ...orderParams, limit, offset).toArray();
 
     return withReferences({ ...expandDocumentRows(columns, rawRows), total });
 };
@@ -631,11 +683,13 @@ export type {
     FunctionCallStat,
     FunctionScanAttribution,
     FunctionStatsResult,
+    OrderByClause,
     ReadTablePageOptions,
     SelectMatchingIdsOptions,
     SettingEntry,
     SettingKind,
     SettingsResult,
+    SortDirection,
     TableIndexesResult,
     TableIndexInfo,
     TableInfo,

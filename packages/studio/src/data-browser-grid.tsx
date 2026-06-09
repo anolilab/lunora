@@ -711,6 +711,10 @@ const useDataBrowserTable = (page: TablePage | null, sorting: SortingState, onSo
         getCoreRowModel: getCoreRowModel(),
         getRowId: (row, index) => rowId(row) ?? `row-${index.toString()}`,
         getSortedRowModel: getSortedRowModel(),
+        // Sorting is server-side: the page arrives already ordered, so the table
+        // must not re-sort it. The header still toggles `sorting`, which the data
+        // browser forwards to `readTablePage` as `orderBy`.
+        manualSorting: true,
         onColumnVisibilityChange: setColumnVisibility,
         onRowSelectionChange: setRowSelection,
         onSortingChange,

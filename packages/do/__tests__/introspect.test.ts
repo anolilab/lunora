@@ -80,6 +80,45 @@ describe("introspect", () => {
             expect(page.rows).toHaveLength(3);
         });
 
+        it("orders by a physical column ascending and descending", () => {
+            expect.assertions(2);
+
+            const asc = readTablePage(database.sql, { orderBy: { column: "text", direction: "asc" }, table: "messages" });
+            const desc = readTablePage(database.sql, { orderBy: { column: "votes", direction: "desc" }, table: "messages" });
+
+            expect(asc.rows.map((row) => row["text"])).toEqual(["again", "hello", "world"]);
+            expect(desc.rows.map((row) => row["__id__"])).toEqual(["m1", "m2", "m3"]);
+        });
+
+        it("orders over the WHOLE table before windowing (sort, then limit/offset)", () => {
+            expect.assertions(1);
+
+            const page = readTablePage(database.sql, { limit: 1, offset: 0, orderBy: { column: "votes", direction: "desc" }, table: "messages" });
+
+            // Highest votes (m1=3) wins the first page even though it's the first
+            // physical row only by coincidence — the sort runs before the window.
+            expect(page.rows).toEqual([{ __id__: "m1", text: "hello", votes: 3 }]);
+        });
+
+        it("ignores an orderBy referencing an unknown column (natural order)", () => {
+            expect.assertions(1);
+
+            const page = readTablePage(database.sql, { orderBy: { column: "nope", direction: "asc" }, table: "messages" });
+
+            expect(page.rows.map((row) => row["__id__"])).toEqual(["m1", "m2", "m3"]);
+        });
+
+        it("orders by a __doc__ field via json_extract", () => {
+            expect.assertions(1);
+
+            database.raw(`CREATE TABLE "docs" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER, "__doc__" TEXT)`);
+            database.raw(`INSERT INTO "docs" VALUES ('d1', 1, '{"title":"gamma"}'), ('d2', 2, '{"title":"alpha"}'), ('d3', 3, '{"title":"beta"}')`);
+
+            const page = readTablePage(database.sql, { orderBy: { column: "title", direction: "asc" }, table: "docs" });
+
+            expect(page.rows.map((row) => row["title"])).toEqual(["alpha", "beta", "gamma"]);
+        });
+
         it("rejects an unknown table", () => {
             expect.assertions(1);
 

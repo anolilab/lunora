@@ -23,6 +23,7 @@ const MESSAGE_ROWS = [
 interface PageArgs {
     limit?: number;
     offset?: number;
+    orderBy?: { column: string; direction: "asc" | "desc" };
     search?: string;
     table: string;
 }
@@ -35,7 +36,7 @@ const createBrowserClient = (): MockClientHooks =>
                 return TABLES;
             }
 
-            const { limit = 50, offset = 0, search = "", table } = args as PageArgs;
+            const { limit = 50, offset = 0, orderBy, search = "", table } = args as PageArgs;
 
             if (table !== "messages") {
                 throw new Error(`unknown table: ${table}`);
@@ -46,7 +47,17 @@ const createBrowserClient = (): MockClientHooks =>
             const matched =
                 needle === "" ? MESSAGE_ROWS : MESSAGE_ROWS.filter((row) => Object.values(row).some((value) => value.toLowerCase().includes(needle)));
 
-            return { columns: ["__id__", "text"], rows: matched.slice(offset, offset + limit), total: matched.length };
+            // Mirror the server's whole-table sort (orderBy) before windowing.
+            const ordered =
+                orderBy === undefined
+                    ? matched
+                    : matched.toSorted((a, b) => {
+                          const cmp = a[orderBy.column as keyof typeof a].localeCompare(b[orderBy.column as keyof typeof b]);
+
+                          return orderBy.direction === "desc" ? -cmp : cmp;
+                      });
+
+            return { columns: ["__id__", "text"], rows: ordered.slice(offset, offset + limit), total: ordered.length };
         },
     });
 
@@ -234,7 +245,17 @@ describe("dataBrowser", () => {
     // Cell 0 is the row-select checkbox, cell 1 the `__id__` column, cell 2 the `text` value.
     const rowTexts = (): string[] => screen.getAllByTestId("db-row").map((row) => within(row).getAllByRole("cell")[2]?.textContent ?? "");
 
-    it("sorts a column ascending then descending on repeated clicks", async () => {
+    // Wait for the grid rows to settle into an expected order (server-side sort
+    // re-fetches the page asynchronously, so the new order isn't synchronous).
+    const expectRowOrder = async (order: string[]): Promise<void> => {
+        await waitFor(() => {
+            if (rowTexts().join("|") !== order.join("|")) {
+                throw new Error(`rows not ${order.join(",")} yet (saw ${rowTexts().join(",")})`);
+            }
+        });
+    };
+
+    it("sorts a column ascending then descending on repeated clicks (server-side)", async () => {
         expect.assertions(3);
 
         const mock = createBrowserClient();
@@ -248,13 +269,15 @@ describe("dataBrowser", () => {
         // Unsorted: rows arrive in page (document) order.
         expect(rowTexts()).toEqual(["hello", "world", "again"]);
 
-        // First click sorts ascending by the `text` column.
+        // First click sorts ascending by the `text` column — re-fetched from the server.
         fireEvent.click(screen.getByTestId("db-sort-text"));
+        await expectRowOrder(["again", "hello", "world"]);
 
         expect(rowTexts()).toEqual(["again", "hello", "world"]);
 
         // Second click flips to descending.
         fireEvent.click(screen.getByTestId("db-sort-text"));
+        await expectRowOrder(["world", "hello", "again"]);
 
         expect(rowTexts()).toEqual(["world", "hello", "again"]);
     });
@@ -271,12 +294,14 @@ describe("dataBrowser", () => {
         await screen.findByTestId("db-rows");
 
         fireEvent.click(screen.getByTestId("db-sort-text"));
+        await expectRowOrder(["again", "hello", "world"]);
 
         expect(rowTexts()).toEqual(["again", "hello", "world"]);
 
         // asc -> desc -> unsorted restores document order.
         fireEvent.click(screen.getByTestId("db-sort-text"));
         fireEvent.click(screen.getByTestId("db-sort-text"));
+        await expectRowOrder(["hello", "world", "again"]);
 
         expect(rowTexts()).toEqual(["hello", "world", "again"]);
     });
@@ -339,7 +364,7 @@ describe("dataBrowser", () => {
         expect(rowTexts()).toEqual(["hello", "world"]);
     });
 
-    it("re-fetches from the server when searching, but not when sorting", async () => {
+    it("re-fetches from the server with an orderBy arg when sorting", async () => {
         expect.assertions(2);
 
         const mock = createBrowserClient();
@@ -353,23 +378,27 @@ describe("dataBrowser", () => {
         const pageCalls = (): number =>
             mock.query.mock.calls.filter((call) => (call[0] as { __cirrusRef: string }).__cirrusRef === ADMIN_FUNCTIONS.readTablePage).length;
 
-        // Sorting is page-local — no server round-trip.
+        // Sorting is server-side — clicking a header re-fetches the whole table in
+        // the new order (so paging through a sorted view stays correct).
         const beforeSort = pageCalls();
 
         fireEvent.click(screen.getByTestId("db-sort-text"));
 
-        expect(pageCalls()).toBe(beforeSort);
-
-        // Searching IS server-side — it re-fetches (whole-table filter).
-        fireEvent.change(screen.getByTestId("db-filter"), { target: { value: "or" } });
-
         await waitFor(() => {
             if (pageCalls() <= beforeSort) {
-                throw new Error("search did not refetch yet");
+                throw new Error("sort did not refetch yet");
             }
         });
 
         expect(pageCalls()).toBeGreaterThan(beforeSort);
+
+        // The re-fetch carries the orderBy for the clicked column, ascending first.
+        const sortCall = mock.query.mock.calls.findLast((call) => (call[0] as { __cirrusRef: string }).__cirrusRef === ADMIN_FUNCTIONS.readTablePage) as [
+            unknown,
+            { orderBy?: { column: string; direction: string } },
+        ];
+
+        expect(sortCall[1].orderBy).toEqual({ column: "text", direction: "asc" });
     });
 
     it("virtualizes a large page so the DOM row count stays bounded", async () => {
