@@ -18,6 +18,7 @@ import { AuditPanel } from "./audit-panel";
 import type { CommandItem } from "./command-palette";
 import { CommandPalette } from "./command-palette";
 import { Skeleton } from "./components/ui/skeleton";
+import DashboardsPanel from "./dashboards-panel";
 import { DataBrowser } from "./data-browser";
 import { ErrorBoundary } from "./error-boundary";
 import { ExportImportPanel } from "./export-import";
@@ -49,6 +50,7 @@ import { UsersPanel } from "./users-panel";
 /** Identifier for each built-in studio tab. */
 type StudioTab =
     | "audit"
+    | "dashboards"
     | "data"
     | "export"
     | "files"
@@ -133,6 +135,7 @@ type NavGroupKey = "advisors" | "auth" | "database" | "home" | "logs" | "reports
  */
 const TAB_ICONS: Record<StudioTab, ReactNode> = {
     audit: <path d="M7 4h7l4 4v11a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Zm6 0v5h5M9 13h6M9 16h6M9 10h2" />,
+    dashboards: <path d="M4 5h7v6H4V5Zm9 0h7v4h-7V5ZM4 14h7v5H4v-5Zm9-1h7v6h-7v-6Z" />,
     data: (
         <path d="M5 6c0-1.4 3.1-2.5 7-2.5s7 1.1 7 2.5-3.1 2.5-7 2.5S5 7.4 5 6Zm0 0v12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5V6M5 12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5" />
     ),
@@ -177,7 +180,7 @@ const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
     { key: "database", tabs: ["schema", "migrations", "export", "pitr"] },
     { key: "auth", tabs: ["users", "organizations"] },
     { key: "storage", tabs: ["files"] },
-    { key: "reports", tabs: ["metrics", "health"] },
+    { key: "reports", tabs: ["dashboards", "metrics", "health"] },
     { key: "advisors", tabs: ["security", "insights"] },
     { key: "logs", tabs: ["logs", "audit", "schedule", "realtime"] },
     { key: "settings", tabs: ["settings"] },
@@ -231,6 +234,7 @@ const TABS = [
     "users",
     "organizations",
     "files",
+    "dashboards",
     "metrics",
     "health",
     "security",
@@ -276,6 +280,7 @@ const StudioLayout = (): ReactElement => {
     const tabLabel = useMemo<Record<StudioTab, string>>(() => {
         return {
             audit: t("Audit"),
+            dashboards: t("Dashboards"),
             data: t("Data"),
             export: t("Export / Import"),
             files: t("Files"),
@@ -318,6 +323,7 @@ const StudioLayout = (): ReactElement => {
     const tabDescription = useMemo<Record<StudioTab, string>>(() => {
         return {
             audit: t("A durable log of admin state-changing operations."),
+            dashboards: t("Chart widgets backed by saved read-only SQL queries."),
             data: t("Browse and edit rows in your shard tables."),
             export: t("Export a shard to NDJSON, or import rows from it."),
             files: t("Browse objects in your R2 storage buckets."),
@@ -555,6 +561,7 @@ const buildRouter = ({ basePath, dataEditable = false, functions, initialShardKe
 
     const panels: Record<StudioTab, ReactElement> = {
         audit: <AuditPanel initialShardKey={initialShardKey} />,
+        dashboards: <DashboardsPanel initialShardKey={initialShardKey} />,
         data: <DataBrowser editable={dataEditable} initialShardKey={initialShardKey} />,
         export: <ExportImportPanel initialShardKey={initialShardKey} />,
         files: <FileBrowser />,
