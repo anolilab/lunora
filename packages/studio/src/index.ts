@@ -35,6 +35,8 @@ export type {
     WriteRowResult,
 } from "./admin";
 export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS } from "./admin";
+export type { ApiDocsPanelProps } from "./api-docs-panel";
+export { default as ApiDocsPanel } from "./api-docs-panel";
 export type { StudioAppProps } from "./app";
 export { StudioApp } from "./app";
 export type { AuditPanelProps } from "./audit-panel";

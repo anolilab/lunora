@@ -14,6 +14,8 @@ import {
 import type { ReactElement, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+// eslint-disable-next-line unicorn/prevent-abbreviations -- matches the panel's exported default name (the studio's "API" tab)
+import ApiDocsPanel from "./api-docs-panel";
 import { AuditPanel } from "./audit-panel";
 import type { CommandItem } from "./command-palette";
 import { CommandPalette } from "./command-palette";
@@ -49,6 +51,7 @@ import { UsersPanel } from "./users-panel";
 
 /** Identifier for each built-in studio tab. */
 type StudioTab =
+    | "api"
     | "audit"
     | "dashboards"
     | "data"
@@ -134,6 +137,7 @@ type NavGroupKey = "advisors" | "auth" | "database" | "home" | "logs" | "reports
  * from the active/hover nav state in the scoped stylesheet.
  */
 const TAB_ICONS: Record<StudioTab, ReactNode> = {
+    api: <path d="m9 8-4 4 4 4m6-8 4 4-4 4M13 5l-2 14" />,
     audit: <path d="M7 4h7l4 4v11a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Zm6 0v5h5M9 13h6M9 16h6M9 10h2" />,
     dashboards: <path d="M4 5h7v6H4V5Zm9 0h7v4h-7V5ZM4 14h7v5H4v-5Zm9-1h7v6h-7v-6Z" />,
     data: (
@@ -176,7 +180,7 @@ type NavGroup = { readonly key: NavGroupKey; readonly tabs: ReadonlyArray<Studio
 const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
     { key: "home", tabs: ["home"] },
     { key: "tableEditor", tabs: ["data", "globals"] },
-    { key: "sql", tabs: ["sql", "functions"] },
+    { key: "sql", tabs: ["sql", "functions", "api"] },
     { key: "database", tabs: ["schema", "migrations", "export", "pitr"] },
     { key: "auth", tabs: ["users", "organizations"] },
     { key: "storage", tabs: ["files"] },
@@ -227,6 +231,7 @@ const TABS = [
     "globals",
     "sql",
     "functions",
+    "api",
     "schema",
     "migrations",
     "export",
@@ -279,6 +284,7 @@ const StudioLayout = (): ReactElement => {
     // locale changes but aren't rebuilt on every unrelated render.
     const tabLabel = useMemo<Record<StudioTab, string>>(() => {
         return {
+            api: t("API"),
             audit: t("Audit"),
             dashboards: t("Dashboards"),
             data: t("Data"),
@@ -322,6 +328,7 @@ const StudioLayout = (): ReactElement => {
     // One-line section descriptions for the page header.
     const tabDescription = useMemo<Record<StudioTab, string>>(() => {
         return {
+            api: t("Copy-paste snippets for calling your functions and tables."),
             audit: t("A durable log of admin state-changing operations."),
             dashboards: t("Chart widgets backed by saved read-only SQL queries."),
             data: t("Browse and edit rows in your shard tables."),
@@ -560,6 +567,7 @@ const buildRouter = ({ basePath, dataEditable = false, functions, initialShardKe
     const rootRoute = createRootRoute({ component: StudioLayout });
 
     const panels: Record<StudioTab, ReactElement> = {
+        api: <ApiDocsPanel functions={functions} initialShardKey={initialShardKey} />,
         audit: <AuditPanel initialShardKey={initialShardKey} />,
         dashboards: <DashboardsPanel initialShardKey={initialShardKey} />,
         data: <DataBrowser editable={dataEditable} initialShardKey={initialShardKey} />,
