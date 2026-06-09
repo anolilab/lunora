@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { RateLimiter } from "../src/rate-limiter.js";
-import { createMemoryStore, createSqlStore } from "../src/store.js";
-import createSqliteSql from "./_helpers/node-sqlite.js";
+import { RateLimiter } from "../src/rate-limiter";
+import { createMemoryStore, createSqlStore } from "../src/store";
+import createSqliteSql from "./_helpers/node-sqlite";
 
 describe("memory store", () => {
     it("round-trips and deletes values", async () => {

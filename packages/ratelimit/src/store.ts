@@ -1,6 +1,6 @@
 import type { Id } from "@cirrus/values";
 
-import type { RateLimitStore, RateLimitValue } from "./types.js";
+import type { RateLimitStore, RateLimitValue } from "./types";
 
 /**
  * In-memory store. State lives for the lifetime of the process (or, inside a

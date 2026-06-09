@@ -1,8 +1,8 @@
 import { initCirrus } from "@cirrus/server";
 import { describe, expect, it } from "vitest";
 
-import { ratelimitPlugin } from "../src/plugin.js";
-import { RateLimiter } from "../src/rate-limiter.js";
+import { ratelimitPlugin } from "../src/plugin";
+import { RateLimiter } from "../src/rate-limiter";
 
 const makeLimiter = (): RateLimiter =>
     new RateLimiter({

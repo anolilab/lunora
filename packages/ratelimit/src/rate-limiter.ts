@@ -1,7 +1,7 @@
-import { availableAt, evaluate } from "./algorithms.js";
-import RateLimitError from "./error.js";
-import { createMemoryStore } from "./store.js";
-import type { RateLimitArgs, RateLimitConfig, RateLimitConfigMap, RateLimitStatus, RateLimitStore } from "./types.js";
+import { availableAt, evaluate } from "./algorithms";
+import RateLimitError from "./error";
+import { createMemoryStore } from "./store";
+import type { RateLimitArgs, RateLimitConfig, RateLimitConfigMap, RateLimitStatus, RateLimitStore } from "./types";
 
 interface RateLimiterOptions<Names extends string> {
     config: RateLimitConfigMap<Names>;

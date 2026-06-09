@@ -1,4 +1,4 @@
-import type { RateLimitConfig, RateLimitStatus, RateLimitValue } from "./types.js";
+import type { RateLimitConfig, RateLimitStatus, RateLimitValue } from "./types";
 
 /** Inputs to {@link evaluate}. */
 interface EvaluateOptions {

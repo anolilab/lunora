@@ -1,8 +1,8 @@
 import type { Middleware, MiddlewareNext } from "@cirrus/server";
 import { describe, expect, it } from "vitest";
 
-import { rateLimit } from "../src/middleware.js";
-import { RateLimiter } from "../src/rate-limiter.js";
+import { rateLimit } from "../src/middleware";
+import { RateLimiter } from "../src/rate-limiter";
 
 interface Context {
     userId?: string;

@@ -1,7 +1,7 @@
 import { bench, describe } from "vitest";
 
-import type { RateLimitConfigMap } from "../src/index.js";
-import { RateLimiter } from "../src/index.js";
+import type { RateLimitConfigMap } from "../src/index";
+import { RateLimiter } from "../src/index";
 
 /**
  * `getValue()` returns the units admittable right now for a `(name, key)`

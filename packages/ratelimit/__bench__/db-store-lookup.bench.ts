@@ -1,8 +1,8 @@
 import type { Id } from "@cirrus/values";
 import { bench, describe } from "vitest";
 
-import type { RateLimitDb, RateLimitDbIndexRange, RateLimitDbQuery, RateLimitStore } from "../src/index.js";
-import { createDbStore } from "../src/index.js";
+import type { RateLimitDb, RateLimitDbIndexRange, RateLimitDbQuery, RateLimitStore } from "../src/index";
+import { createDbStore } from "../src/index";
 
 /**
  * The DB-backed store's consuming hot path is get() → set() under the DO input

@@ -1,7 +1,7 @@
 import type { Middleware } from "@cirrus/server";
 
-import type { RateLimiter } from "./rate-limiter.js";
-import type { RateLimitReason } from "./types.js";
+import type { RateLimiter } from "./rate-limiter";
+import type { RateLimitReason } from "./types";
 
 /**
  * Either a fixed {@link RateLimiter} or a function that derives one from `ctx`

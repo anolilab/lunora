@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { availableAt, evaluate } from "../src/algorithms.js";
-import type { RateLimitConfig } from "../src/types.js";
+import { availableAt, evaluate } from "../src/algorithms";
+import type { RateLimitConfig } from "../src/types";
 
 const tokenBucket: RateLimitConfig = { kind: "token bucket", period: 1000, rate: 10 };
 const fixedWindow: RateLimitConfig = { kind: "fixed window", period: 1000, rate: 5 };

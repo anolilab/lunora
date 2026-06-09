@@ -1,7 +1,7 @@
 import { bench, describe } from "vitest";
 
-import type { RateLimitConfigMap } from "../src/index.js";
-import { RateLimiter } from "../src/index.js";
+import type { RateLimitConfigMap } from "../src/index";
+import { RateLimiter } from "../src/index";
 
 /**
  * `limit()` is the consumer side — every request a procedure gates pays

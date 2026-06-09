@@ -1,7 +1,7 @@
 import type { Plugin } from "@cirrus/server";
 
-import type { LimiterResolver } from "./middleware.js";
-import type { RateLimiter } from "./rate-limiter.js";
+import type { LimiterResolver } from "./middleware";
+import type { RateLimiter } from "./rate-limiter";
 
 /** Context shape the plugin middleware widens to: a `ratelimit` limiter on `ctx.api`. */
 export interface RatelimitApiContext<Context> {

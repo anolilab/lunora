@@ -1,4 +1,4 @@
-import type { RateLimitReason, RateLimitStatus } from "./types.js";
+import type { RateLimitReason, RateLimitStatus } from "./types";
 
 const describe = (status: RateLimitStatus): string => {
     if (status.reason === "deny") {

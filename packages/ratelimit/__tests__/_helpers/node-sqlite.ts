@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 
-import type { SqlLike } from "../../src/store.js";
+import type { SqlLike } from "../../src/store";
 
 /**
  * Adapts Node's `node:sqlite` engine to the {@link SqlLike} surface the SQL

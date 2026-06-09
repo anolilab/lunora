@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import RateLimitError from "../src/error.js";
-import { RateLimiter } from "../src/rate-limiter.js";
-import type { RateLimitConfigMap } from "../src/types.js";
+import RateLimitError from "../src/error";
+import { RateLimiter } from "../src/rate-limiter";
+import type { RateLimitConfigMap } from "../src/types";
 
 const NOT_CONFIGURED_RE = /not configured/;
 const POSITIVE_INTEGER_RE = /positive integer/;
