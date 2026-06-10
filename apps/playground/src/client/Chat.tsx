@@ -5,24 +5,24 @@ import type { CSSProperties, ReactElement } from "react";
 import { useEffect, useState } from "react";
 
 import type { Id } from "../../cirrus/_generated/dataModel.js";
+import { clearDraft, getDraftsCollection, writeDraft } from "./drafts-store.js";
 import { getMessagesStore } from "./messages-store.js";
 
 /** Hoisted so the literal isn't reallocated (and re-flagged) per render. */
 const LAYOUT_STYLE: CSSProperties = { display: "grid", gap: 16, gridTemplateColumns: "240px 1fr", padding: 16 };
 
 /**
- * Channel list + message list demo.
- *
- * Messages run entirely through the TanStack DB data layer (`messages-store.ts`):
- * reads via a live-synced collection, writes via the offline-transactions outbox
- * (optimistic insert → durable, retried send → superseded by the synced server
- * row on ack). Channels stay on `useQuery` (a global read-only list).
+ * Channel list + message list demo, running entirely on the TanStack DB data
+ * layer: live-synced collections for channels/messages/users, the
+ * offline-transactions outbox for writes, and a client-only localStorage
+ * collection for per-channel drafts (survives reload, syncs across tabs).
  */
 export const Chat = (): ReactElement => {
     const [activeChannel, setActiveChannel] = useState<Id<"channels"> | null>(null);
-    const [draft, setDraft] = useState("");
     const [pendingIds, setPendingIds] = useState<ReadonlySet<string>>(() => new Set());
     const [sync, setSync] = useState({ online: true, pending: 0 });
+
+    const drafts = getDraftsCollection();
 
     const client = useCirrus();
     const { user } = useAuth();
@@ -76,6 +76,10 @@ export const Chat = (): ReactElement => {
         [store],
     );
 
+    // The active channel's draft, read live from the localStorage collection.
+    const { data: draftRows } = useLiveQuery((q) => q.from({ draft: drafts }), [drafts]);
+    const draft = activeChannel ? (draftRows.find((row) => row.channelId === activeChannel)?.text ?? "") : "";
+
     const handleSend = (): void => {
         if (!activeChannel || draft.trim() === "") {
             return;
@@ -101,7 +105,7 @@ export const Chat = (): ReactElement => {
             // Rejection already surfaced as a rolled-back optimistic insert; the
             // `finally` cleared the pending marker, so nothing more to do here.
         });
-        setDraft("");
+        clearDraft(activeChannel);
     };
 
     return (
@@ -160,7 +164,9 @@ export const Chat = (): ReactElement => {
                     <input
                         disabled={!activeChannel}
                         onChange={(event) => {
-                            setDraft(event.target.value);
+                            if (activeChannel) {
+                                writeDraft(activeChannel, event.target.value);
+                            }
                         }}
                         placeholder="Type a message…"
                         value={draft}
