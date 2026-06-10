@@ -1,0 +1,71 @@
+import type { ArgsOf, FunctionReference, ReturnOf } from "@cirrus/client";
+import type { Accessor } from "solid-js";
+import { createEffect, createSignal, on, onCleanup } from "solid-js";
+
+import { useCirrus } from "./context";
+
+export interface CreateQueryOptions {
+    /** Route to a specific shard when the target function is `.shardBy(...)`-partitioned. */
+    shardKey?: string;
+}
+
+/**
+ * Subscribe to a server query and return a reactive accessor of its value.
+ *
+ * The accessor reads `undefined` until the first server frame lands, then
+ * updates on every delta the WebSocket pushes — Solid's fine-grained signals
+ * mean only the components that read the accessor re-render, which maps cleanly
+ * onto Cirrus's per-subscription delta model.
+ *
+ * `args` may be a plain value or an accessor; passing an accessor makes the
+ * subscription reactive — when the args change the old subscription is torn down
+ * (via `onCleanup`) and a fresh one opens for the new args. Pass `"skip"` (or an
+ * accessor returning `"skip"`) to short-circuit: no network call, no socket.
+ *
+ * ```tsx
+ * const messages = createQuery(api.messages.list, () => ({ channelId: channelId() }));
+ * return &lt;For each={messages()?.messages}>{(m) => &lt;li>{m.text}&lt;/li>}&lt;/For>;
+ * ```
+ */
+export const createQuery = <F extends FunctionReference>(
+    function_: F,
+    args: (ArgsOf<F> | "skip") | Accessor<ArgsOf<F> | "skip">,
+    options: CreateQueryOptions = {},
+): Accessor<ReturnOf<F> | undefined> => {
+    const client = useCirrus();
+    const { shardKey } = options;
+
+    const [value, setValue] = createSignal<ReturnOf<F> | undefined>(undefined);
+
+    const resolveArgs = (): ArgsOf<F> | "skip" => (typeof args === "function" ? (args as Accessor<ArgsOf<F> | "skip">)() : args);
+
+    // `on(resolveArgs, …)` re-runs the body whenever the args accessor changes,
+    // tearing down the previous subscription via `onCleanup` before opening the
+    // next. A static (non-accessor) `args` resolves once and never re-runs.
+    createEffect(
+        on(resolveArgs, (current) => {
+            if (current === "skip") {
+                // Functional form: a function-valued result would otherwise be
+                // mistaken for an updater by Solid's setter overload.
+                setValue(() => undefined as ReturnOf<F> | undefined);
+
+                return;
+            }
+
+            const unsubscribe = client.subscribe<F>(
+                function_,
+                current,
+                (next) => {
+                    // Solid stores functions as-is, so wrap to set the accessor to a
+                    // (possibly function-valued) server result without invoking it.
+                    setValue(() => next);
+                },
+                { shardKey },
+            );
+
+            onCleanup(unsubscribe);
+        }),
+    );
+
+    return value;
+};

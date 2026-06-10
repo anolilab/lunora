@@ -1,0 +1,7 @@
+node_modules
+.output
+.vinxi
+dist
+.wrangler
+.cirrus-cache
+cirrus/_generated

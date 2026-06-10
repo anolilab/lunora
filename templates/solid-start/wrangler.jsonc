@@ -1,0 +1,9 @@
+{
+    "name": "{{name}}",
+    "main": "src/server.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
+    },
+}
