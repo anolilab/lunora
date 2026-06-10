@@ -2,7 +2,7 @@ import type { Cell, ColumnDef, Header, OnChangeFn, Row, RowSelectionState, Sorti
 import { flexRender, getCoreRowModel, getSortedRowModel, useReactTable } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { CSSProperties, ReactElement } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { TablePage } from "./admin";
 import { Checkbox } from "./components/ui/checkbox";
@@ -115,7 +115,7 @@ const rowKey = (row: TableRow, index: number): string => rowId(row) ?? `row-${in
  * scope so the column-def `cell` renderer stays a flat callback instead of
  * nesting another arrow for the click handler.
  */
-const RefCell = ({
+const RefCell = memo(({
     column,
     id,
     onNavigate,
@@ -135,7 +135,7 @@ const RefCell = ({
             {id} ↗
         </button>
     );
-};
+});
 
 /** The header glyph for a column given react-table's sort state: ` ▲`, ` ▼`, or empty. */
 const sortIndicator = (sorted: "asc" | "desc" | false): string => {
@@ -179,7 +179,7 @@ const EXPAND_BTN =
  * Extracted so it binds its own `useCallback` closing over the column + value
  * rather than a fresh inline arrow per cell.
  */
-const CellExpandButton = ({
+const CellExpandButton = memo(({
     column,
     onExpand,
     value,
@@ -208,7 +208,7 @@ const CellExpandButton = ({
             </svg>
         </button>
     );
-};
+});
 
 /**
  * The text input shown while a cell is being edited. Commits on Enter or blur
@@ -273,7 +273,7 @@ const CellEditor = ({
  * editable and the column isn't a meta column — double-click opens an inline
  * {@link CellEditor} that stages the change.
  */
-const EditableCell = ({ cell, edit }: { cell: Cell<TableRow, unknown>; edit: GridEdit }): ReactElement => {
+const EditableCell = memo(({ cell, edit }: { cell: Cell<TableRow, unknown>; edit: GridEdit }): ReactElement => {
     const column = cell.column.id;
     const rawValue = cell.getValue();
     const id = rowId(cell.row.original);
@@ -337,7 +337,7 @@ const EditableCell = ({ cell, edit }: { cell: Cell<TableRow, unknown>; edit: Gri
             <CellExpandButton column={column} onExpand={edit.onExpandCell} value={display} />
         </>
     );
-};
+});
 
 /**
  * One grid column header: the sort toggle, a drag handle for reordering (native

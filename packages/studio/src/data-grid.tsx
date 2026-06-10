@@ -1,5 +1,5 @@
 import type { ReactElement, ReactNode } from "react";
-import { useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useState } from "react";
 
 import { useT } from "./i18n-context";
 import { formatCell } from "./internal";
@@ -10,13 +10,13 @@ import { formatCell } from "./internal";
  * string), everything else goes through {@link formatCell}. The raw text is set as
  * the cell `title` so a truncated value is recoverable on hover.
  */
-const CellValue = ({ value }: { readonly value: unknown }): ReactElement => {
+const CellValue = memo(({ value }: { readonly value: unknown }): ReactElement => {
     if (value === null || value === undefined) {
         return <span className="text-muted-foreground/50 italic">NULL</span>;
     }
 
     return <span title={formatCell(value)}>{formatCell(value)}</span>;
-};
+});
 
 /** One row in the table sidebar: a table name and its current row count. */
 interface TableListItem {
