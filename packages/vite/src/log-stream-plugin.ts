@@ -29,12 +29,16 @@ import type { Plugin } from "vite";
 /** Marker present in every cirrus event line, derived from the shared source tag (`JSON.stringify` emits no spaces around the colon). */
 const CIRRUS_MARKER = `"source":"${CIRRUS_EVENT_SOURCE}"`;
 
-/** SGR escape sequences, applied only when the target stream is a TTY. */
+/**
+ * SGR escape sequences, applied only when the target stream is a TTY. Each must
+ * begin with the ESC control byte (`\u001B`) — without it the terminal prints
+ * the literal `[31m` text instead of colourising.
+ */
 const ANSI = {
-    error: "[31m",
-    info: "[36m",
-    reset: "[0m",
-    warn: "[33m",
+    error: "\u001B[31m",
+    info: "\u001B[36m",
+    reset: "\u001B[0m",
+    warn: "\u001B[33m",
 } as const;
 
 /** A patchable byte stream — the structural subset of `tty.WriteStream` we touch. */

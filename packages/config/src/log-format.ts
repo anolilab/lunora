@@ -32,6 +32,14 @@ interface CirrusFormattedLine {
 /** Stable `source` tag every cirrus console event carries. Mirrors `REQUEST_LOG_EVENT_SOURCE` in `@cirrus/do`. */
 const CIRRUS_EVENT_SOURCE = "cirrus";
 
+/**
+ * Internal name of the unnamed default Durable Object (the single-DO topology).
+ * Mirrors `ROOT_SHARD_NAME` in `@cirrus/do`. A dispatch against it is *not*
+ * sharded from the developer's point of view, so the formatter treats this
+ * sentinel as "no shard" and never appends a noisy `@__root__` suffix.
+ */
+const ROOT_SHARD_NAME = "__root__";
+
 /** Raw shape of a parsed cirrus event line; fields are validated before use. */
 interface CirrusEvent {
     cacheHit?: unknown;
@@ -96,11 +104,15 @@ const parseCirrusEvent = (line: string): CirrusEvent | undefined => {
     return event.source === CIRRUS_EVENT_SOURCE ? event : undefined;
 };
 
-/** Attribution label: `function@shard` when a shard key is present, else the bare function path. */
+/**
+ * Attribution label: `function@shard` when a *real* shard key is present, else
+ * the bare function path. The default single-DO root ({@link ROOT_SHARD_NAME})
+ * is treated as no shard so the common case reads `function`, not `function@__root__`.
+ */
 const labelFor = (functionPath: string, event: CirrusEvent): string => {
     const shard = asString(event.shard);
 
-    return shard === "" ? functionPath : `${functionPath}@${shard}`;
+    return shard === "" || shard === ROOT_SHARD_NAME ? functionPath : `${functionPath}@${shard}`;
 };
 
 /** Format a `type: "request"` dispatch summary. */

@@ -19,13 +19,14 @@ const runConfigureServer = (server: ViteDevServer): void => {
  * that mock, write `lines`, then restore via the server `close` handler. Returns
  * everything the underlying (captured) write received.
  */
-const captureStdout = (lines: string[]): string[] => {
+const captureStdout = (lines: string[], { tty = false }: { tty?: boolean } = {}): string[] => {
     const received: string[] = [];
     const realWrite = process.stdout.write.bind(process.stdout);
     const realIsTTY = process.stdout.isTTY;
 
-    // Non-TTY → no ANSI, so assertions can match plain text.
-    process.stdout.isTTY = false;
+    // Default non-TTY → no ANSI, so assertions can match plain text; pass
+    // `{ tty: true }` to exercise the colourised path.
+    process.stdout.isTTY = tty;
     process.stdout.write = (chunk: unknown): boolean => {
         received.push(typeof chunk === "string" ? chunk : String(chunk));
 
@@ -70,6 +71,17 @@ describe("logStreamPlugin", () => {
         const received = captureStdout([`${logLine}\n`]);
 
         expect(received.join("")).toBe("[cirrus] messages:list  hi\n");
+    });
+
+    it("wraps the tag in a real SGR escape sequence on a TTY", () => {
+        expect.assertions(2);
+
+        const received = captureStdout([`${logLine}\n`], { tty: true }).join("");
+
+        // The cyan (info) tag must use the actual ESC control byte (\u001B), not
+        // the bare `[36m` text — the regression that printed literal escapes.
+        expect(received).toBe("\u001B[36m[cirrus]\u001B[0m messages:list  hi\n");
+        expect(received).toContain("\u001B[");
     });
 
     it("passes non-cirrus output through unchanged", () => {

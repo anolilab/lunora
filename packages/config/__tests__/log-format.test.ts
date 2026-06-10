@@ -64,6 +64,14 @@ describe("formatCirrusEvent", () => {
                 "messages:list@room-9  hi",
             );
         });
+
+        it("omits the default single-DO root sentinel from the label", () => {
+            expect.assertions(1);
+
+            expect(formatCirrusEvent(event({ function: "messages:list", level: "info", message: "hi", shard: "__root__", type: "log" }))?.text).toBe(
+                "messages:list  hi",
+            );
+        });
     });
 
     describe("request events", () => {
@@ -106,6 +114,14 @@ describe("formatCirrusEvent", () => {
 
             expect(formatCirrusEvent(event({ durationMs: 2, function: "m:send", outcome: "ok", shard: "tenant-7", type: "request" }))?.text).toBe(
                 "m:send@tenant-7  ok  2ms",
+            );
+        });
+
+        it("omits the default single-DO root sentinel from the dispatch label", () => {
+            expect.assertions(1);
+
+            expect(formatCirrusEvent(event({ durationMs: 2, function: "m:send", outcome: "ok", shard: "__root__", type: "request" }))?.text).toBe(
+                "m:send  ok  2ms",
             );
         });
     });
