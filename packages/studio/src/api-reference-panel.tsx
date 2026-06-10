@@ -47,10 +47,18 @@ const classifySpec = (spec: unknown): SpecFetchState<OpenApiDocument> => {
  */
 const SCALAR_THEME_CSS = `
 .scalar-app {
-    /* Fill the bounded panel viewport so Scalar runs its own internal layout —
-       a sticky operation sidebar + an independently scrolling content column —
-       instead of growing the page and scrolling its sidebar out of view. */
-    height: 100%;
+    /* Bind Scalar to the panel box so it runs its own internal layout — a pinned,
+       independently-scrolling operation sidebar + a scrolling content column —
+       rather than sizing itself to 100dvh (taller than an embedded panel, so the
+       sidebar scrolls out of view). Absolute-fill the (relative, bounded) wrapper:
+       a percentage height wouldn't resolve through the flex chain, and min-height:0
+       defeats the grid's default min-content floor. */
+    position: absolute !important;
+    inset: 0 !important;
+    min-height: 0 !important;
+    /* Scalar hard-codes the content grid track to 100dvh; retrack it to fill the
+       panel box so the sidebar + content fit (and clip nothing) at any panel size. */
+    grid-template-rows: auto minmax(0, 1fr) auto !important;
     --scalar-font: inherit;
     --scalar-background-1: var(--background);
     --scalar-background-2: var(--sidebar);
@@ -67,6 +75,25 @@ const SCALAR_THEME_CSS = `
 }
 .scalar-api-reference {
     background: var(--background);
+}
+/* The operation sidebar stays pinned and scrolls its own nav within the panel
+   (min-height:0 lets it shrink to the panel box instead of its 100dvh default). */
+.scalar-app aside {
+    height: 100% !important;
+    min-height: 0 !important;
+    overflow-y: auto !important;
+}
+/* The rendered reference (operations) scrolls within the panel, so the sidebar
+   stays put and the studio chrome never moves. */
+.scalar-app .references-rendered {
+    min-height: 0 !important;
+    overflow-y: auto !important;
+}
+/* Hide the introduction's "Client Libraries" card (the large client-logo grid).
+   The studio's Snippets sub-view already covers per-function client usage, so the
+   reference's logo showcase is redundant noise. */
+.scalar-app .scalar-reference-intro-clients {
+    display: none;
 }
 `;
 
@@ -169,7 +196,7 @@ const ApiReferencePanel = ({ spec: inlineSpec }: ApiReferencePanelProps): ReactE
     }
 
     return (
-        <div className="min-h-0 flex-1 overflow-hidden" data-testid="api-reference">
+        <div className="relative min-h-0 flex-1 overflow-hidden" data-testid="api-reference">
             <ApiReferenceReact configuration={configuration as AnyApiReferenceConfiguration} />
         </div>
     );

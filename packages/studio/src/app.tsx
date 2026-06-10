@@ -234,6 +234,8 @@ const StudioAppBody = ({ basePath, clearToken, studio, onToggleTheme, onTokenCha
                     dataEditable={studio?.dataEditable}
                     functions={studio?.functions}
                     initialShardKey={studio?.initialShardKey}
+                    openApiSpec={studio?.openApiSpec}
+                    openRpcSpec={studio?.openRpcSpec}
                     scheduledCancel={studio?.scheduledCancel}
                     scheduledLoad={studio?.scheduledLoad}
                 />
