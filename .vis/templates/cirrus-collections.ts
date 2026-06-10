@@ -1,52 +1,80 @@
 /**
  * `vis generate cirrus-collections` — scaffold `cirrus/collections.ts`, a
- * `@cirrus/db` `defineCollections` call pre-filled from the schema.
+ * `@cirrus/db` `defineCollections` call pre-filled from the schema (+ the
+ * generated `api.ts` when present).
  *
  * Reads are wired by convention (`api.<table>.list`) and sharded tables get a
- * `scopeBy`, both derived from `schema.ts`. The app-specific `insert` binding
- * (which mutation persists the row, and how the optimistic row maps to its args)
- * is emitted as a commented template per writable table, since codegen can't
- * safely guess a mutation's auth-scoped argument shape.
+ * `scopeBy`. When the generated `api.ts` is available, a table whose namespace
+ * has a conventional insert mutation (`create`/`send`/`add`/`insert`) gets a
+ * complete, compiling `insert` binding — `toArgs` mapped from the mutation's real
+ * arguments, `optimistic` typed as `Omit<Doc, meta>`. Without `api.ts` (codegen
+ * not yet run) the `insert` is emitted as a commented template to complete.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { createTemplate } from "@visulima/vis/generate";
 
-import { parseSchemaTables, type SchemaTable } from "./_helpers/parse-schema.js";
+import type { ApiNamespace } from "./_helpers/parse-api.js";
+import { parseApiNamespaces } from "./_helpers/parse-api.js";
+import type { SchemaTable } from "./_helpers/parse-schema.js";
+import { parseSchemaTables } from "./_helpers/parse-schema.js";
 
-/** Render one table's entry in the `defineCollections({ … })` object. */
-const renderTable = (table: SchemaTable): string => {
+/** Mutation names that, by convention, persist a new row into their table. */
+const INSERT_MUTATION_NAMES = new Set(["add", "create", "insert", "send"]);
+
+/** Build the `toArgs` body from an insert mutation's argument names (`id` → `row._id`). */
+const renderToArgs = (args: string[]): string => {
+    const pairs = args.map((argument) => (argument === "id" ? "id: row._id" : `${argument}: row.${argument}`));
+
+    return `{ ${pairs.join(", ")} }`;
+};
+
+/** Render one table's entry, using the api namespace (when known) to wire writes. */
+const renderTable = (table: SchemaTable, namespace: ApiNamespace | undefined): string => {
     const lines: string[] = [`        ${table.name}: {`, `            list: api.${table.name}.list,`];
 
     if (table.shardBy !== undefined) {
         lines.push(`            scopeBy: ${JSON.stringify(table.shardBy)},`);
     }
 
-    // A commented `insert` template — uncomment + adjust which fields the mutation
-    // actually accepts (server-derived columns like `userId`/`createdAt` usually
-    // come from auth/defaults, not the action input).
-    const inputColumns = table.columns.length > 0 ? table.columns.join(", ") : "/* … */";
+    const insertMutation = namespace?.functions.find((function_) => function_.kind === "mutation" && INSERT_MUTATION_NAMES.has(function_.name));
 
-    lines.push(
-        `            // To make ${table.name} writable through the offline outbox, fill in:`,
-        `            // insert: {`,
-        `            //     mutation: api.${table.name}.create,`,
-        `            //     optimistic: (input: { ${inputColumns} }, id) => ({`,
-        `            //         _id: id as Id<${JSON.stringify(table.name)}>,`,
-        `            //         _creationTime: Date.now(),`,
-        ...table.columns.map((column) => `            //         ${column}: input.${column},`),
-        `            //     }),`,
-        `            //     toArgs: (row) => ({ id: row._id /* , …the fields the mutation accepts */ }),`,
-        `            // },`,
-        `        },`,
-    );
+    if (insertMutation) {
+        // We know the mutation and its real args — emit a complete, typed binding.
+        lines.push(
+            `            insert: {`,
+            `                mutation: api.${table.name}.${insertMutation.name},`,
+            `                optimistic: (input: Omit<Doc<${JSON.stringify(table.name)}>, "_id" | "_creationTime">, id) => ({`,
+            `                    _id: id as Id<${JSON.stringify(table.name)}>,`,
+            `                    _creationTime: Date.now(),`,
+            `                    ...input,`,
+            `                }),`,
+            `                toArgs: (row) => (${renderToArgs(insertMutation.args)}),`,
+            `            },`,
+        );
+    } else if (namespace === undefined) {
+        // No api.ts yet — emit a template listing the table's columns.
+        const inputColumns = table.columns.length > 0 ? table.columns.join(", ") : "/* … */";
+
+        lines.push(
+            `            // To make ${table.name} writable, run codegen then re-generate, or fill in:`,
+            `            // insert: {`,
+            `            //     mutation: api.${table.name}.create,`,
+            `            //     optimistic: (input: { ${inputColumns} }, id) => ({ _id: id as Id<${JSON.stringify(table.name)}>, _creationTime: Date.now(), ...input }),`,
+            `            //     toArgs: (row) => ({ id: row._id /* , …the fields the mutation accepts */ }),`,
+            `            // },`,
+        );
+    }
+
+    lines.push(`        },`);
 
     return lines.join("\n");
 };
 
-const renderCollectionsFile = (tables: SchemaTable[]): string => {
-    const entries = tables.map((table) => renderTable(table)).join("\n");
+const renderCollectionsFile = (tables: SchemaTable[], namespaces: ApiNamespace[]): string => {
+    const byName = new Map(namespaces.map((namespace) => [namespace.name, namespace]));
+    const entries = tables.map((table) => renderTable(table, byName.get(table.name))).join("\n");
 
     return `import { defineCollections } from "@cirrus/db";
 import type { CirrusClient } from "@cirrus/react";
@@ -58,9 +86,10 @@ import type { Doc, Id } from "./_generated/dataModel.js";
 /**
  * Generated by \`vis generate cirrus-collections\` — edit freely.
  *
- * Reads are wired by convention (\`api.<table>.list\`); sharded tables expose a
- * \`scopeBy\`. Uncomment + complete an \`insert\` binding to make a table writable
- * through the offline outbox. Pass your \`CirrusClient\` (from the provider).
+ * Reads are wired from each table's \`list\` query; sharded tables expose a
+ * \`scopeBy\`. Writable tables carry an \`insert\` binding through the offline
+ * outbox. Pass your \`CirrusClient\` (from the provider) to get the live
+ * collections + actions.
  */
 export const createCollections = (client: CirrusClient) =>
     defineCollections(client, {
@@ -88,12 +117,24 @@ export default createTemplate({
             throw new Error(`no tables found in ${schemaPath} — is it a defineSchema({ … }) with table entries?`);
         }
 
+        const apiPath = join(builtins.dest_dir, "cirrus", "_generated", "api.ts");
+        const namespaces = existsSync(apiPath) ? parseApiNamespaces(readFileSync(apiPath, "utf8")) : [];
+
+        const writable = tables.filter((table) =>
+            namespaces
+                .find((namespace) => namespace.name === table.name)
+                ?.functions.some((function_) => function_.kind === "mutation" && INSERT_MUTATION_NAMES.has(function_.name)),
+        );
+
         return {
-            files: { cirrus: { "collections.ts": renderCollectionsFile(tables) } },
+            files: { cirrus: { "collections.ts": renderCollectionsFile(tables, namespaces) } },
             filesMeta: { "cirrus/collections.ts": { force: true } },
             suggestions: [
                 `Scaffolded cirrus/collections.ts for ${tables.length} table(s): ${tables.map((table) => table.name).join(", ")}.`,
-                "Uncomment + complete the `insert` blocks for tables you write to, then call `createCollections(client)`.",
+                namespaces.length === 0
+                    ? "Run `cirrus codegen` then re-generate to auto-wire write actions from your mutations."
+                    : `Wired write actions for: ${writable.map((table) => table.name).join(", ") || "(none — no conventional insert mutations found)"}.`,
+                "Then call `createCollections(client)` from your app.",
             ],
         };
     },
