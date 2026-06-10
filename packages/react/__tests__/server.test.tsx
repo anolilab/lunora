@@ -7,7 +7,18 @@ import { describe, expect, it, vi } from "vitest";
 import { CirrusProvider } from "../src/cirrus-provider";
 import { cirrusQueryKey } from "../src/query-key";
 import { cirrusQueryOptions } from "../src/query-options";
-import { createServerClient, fetchAction, fetchMutation, fetchQuery, prefetchQuery, preloadedQueryResult, preloadQuery } from "../src/server";
+import {
+    createServerClient,
+    deserializePreloaded,
+    fetchAction,
+    fetchMutation,
+    fetchQuery,
+    getServerSession,
+    prefetchQuery,
+    preloadedQueryResult,
+    preloadQuery,
+    serializePreloaded,
+} from "../src/server";
 import useQuery from "../src/use-query";
 import { createMockClient } from "./mock-client";
 
@@ -225,5 +236,50 @@ describe("preloadQuery (server re-export)", () => {
         expect(token.__cirrusPreloaded).toBe(true);
         expect(token.functionPath).toBe("posts:count");
         expect(preloadedQueryResult(token)).toStrictEqual({ count: 3 });
+    });
+});
+
+describe("@cirrus/ssr re-exports (one server entry)", () => {
+    it("createServerClient is sourced from @cirrus/ssr and runs RPC against the url", async () => {
+        expect.assertions(2);
+
+        const fetchImpl = mockFetch({ count: 11 });
+        const client = createServerClient({ fetch: fetchImpl as unknown as typeof fetch, url: "https://app.example.dev" });
+
+        const value = await client.query(queryRef<Record<string, never>, { count: number }>("posts:count"), {});
+
+        expect(value).toStrictEqual({ count: 11 });
+
+        const [url] = fetchImpl.mock.calls[0]!;
+
+        expect(url).toBe("https://app.example.dev/_cirrus/rpc");
+    });
+
+    it("getServerSession resolves the session from the request headers via auth.api.getSession", async () => {
+        expect.assertions(2);
+
+        const session = { session: { id: "s1" }, user: { id: "u1" } };
+        // The forwarded request's cookie reaches better-auth unchanged.
+        const getSession = vi.fn<(input: { headers: Headers }) => Promise<typeof session | null>>(async ({ headers }) =>
+            headers.get("cookie") === "sid=abc" ? session : null,
+        );
+        const auth = { api: { getSession } };
+
+        const request = new Request("https://app.example.dev", { headers: { cookie: "sid=abc" } });
+        const resolved = await getServerSession(request, auth);
+
+        expect(resolved).toStrictEqual(session);
+        expect(getSession).toHaveBeenCalledTimes(1);
+    });
+
+    it("serializePreloaded / deserializePreloaded round-trip a Preloaded token (script-safe)", () => {
+        expect.assertions(2);
+
+        const token = { __cirrusPreloaded: true as const, args: {}, functionPath: "posts:list", value: { html: "<b>x</b>" } };
+        const serialized = serializePreloaded(token);
+
+        // The `<` is escaped so the payload is safe to inline in a <script> tag.
+        expect(serialized).not.toContain("<");
+        expect(deserializePreloaded(serialized)).toStrictEqual(token);
     });
 });

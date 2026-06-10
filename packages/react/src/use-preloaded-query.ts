@@ -57,4 +57,18 @@ const usePreloadedQuery = <T>(preloaded: Preloaded<T>): T => {
     return data ?? value;
 };
 
+/**
+ * The PLAN4 §1 framework-neutral name for the preloaded-hydration handoff:
+ * `hydratePreloaded(preloaded)` seeds the SSR value on the first paint, then
+ * attaches a live WS subscription on mount. It is a thin alias of
+ * {@link usePreloadedQuery} so the React adapter exposes the same
+ * `hydratePreloaded` primitive every other adapter (Solid, Svelte, Vue) will,
+ * while existing callers of `usePreloadedQuery` keep working unchanged.
+ *
+ * It carries React's Rules-of-Hooks contract (it calls hooks internally), so
+ * call it like a hook — at the top level of a component, unconditionally.
+ */
+const hydratePreloaded = <T>(preloaded: Preloaded<T>): T => usePreloadedQuery(preloaded);
+
+export { hydratePreloaded };
 export default usePreloadedQuery;

@@ -1226,6 +1226,9 @@ importers:
       '@cirrus/ratelimit':
         specifier: workspace:*
         version: link:../ratelimit
+      '@cirrus/ssr':
+        specifier: workspace:*
+        version: link:../ssr
     devDependencies:
       '@babel/core':
         specifier: catalog:build

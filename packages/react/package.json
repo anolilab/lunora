@@ -36,7 +36,8 @@
     },
     "dependencies": {
         "@cirrus/client": "workspace:*",
-        "@cirrus/ratelimit": "workspace:*"
+        "@cirrus/ratelimit": "workspace:*",
+        "@cirrus/ssr": "workspace:*"
     },
     "devDependencies": {
         "@babel/core": "catalog:build",

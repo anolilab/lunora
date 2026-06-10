@@ -5,7 +5,7 @@ import { renderToString } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import { CirrusProvider } from "../src/cirrus-provider";
-import usePreloadedQuery from "../src/use-preloaded-query";
+import usePreloadedQuery, { hydratePreloaded } from "../src/use-preloaded-query";
 import { createMockClient } from "./mock-client";
 
 const preloaded = <T,>(functionPath: string, value: T, args: Record<string, unknown> = {}): Preloaded<T> => {
@@ -89,6 +89,78 @@ describe("usePreloadedQuery", () => {
         // before matching the preloaded value the server snapshot produced.
         expect(view.replaceAll("&quot;", '"')).toContain(JSON.stringify({ count: 42 }));
         // No effects run during SSR, so neither transport is touched.
+        expect(mock.query).not.toHaveBeenCalled();
+        expect(mock.subscribe).not.toHaveBeenCalled();
+    });
+});
+
+describe("hydratePreloaded (PLAN4 §1 alias)", () => {
+    const HydrateDisplay = ({ token }: { token: Preloaded }): ReactElement => {
+        const data = hydratePreloaded(token);
+
+        return <div data-testid="hydrate">{JSON.stringify(data)}</div>;
+    };
+
+    it("seeds the SSR value on first paint with no loading flash and no fetch", () => {
+        expect.assertions(2);
+
+        // A sentinel the query would return if it ran — it must never appear.
+        const mock = createMockClient(() => {
+            return { count: 999 };
+        });
+
+        render(
+            <CirrusProvider client={mock.asClient}>
+                <HydrateDisplay token={preloaded("posts:list", { count: 7 })} />
+            </CirrusProvider>,
+        );
+
+        expect(screen.getByTestId("hydrate").textContent).toBe(JSON.stringify({ count: 7 }));
+        expect(mock.query).not.toHaveBeenCalled();
+    });
+
+    it("attaches a live subscription after mount so server pushes update the value", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient(() => {
+            return { count: 1 };
+        });
+
+        render(
+            <CirrusProvider client={mock.asClient}>
+                <HydrateDisplay token={preloaded("posts:list", { count: 1 })} />
+            </CirrusProvider>,
+        );
+
+        await waitFor(() => {
+            expect(mock.subscribe).toHaveBeenCalledTimes(1);
+        });
+
+        expect(mock.query).not.toHaveBeenCalled();
+
+        await act(async () => {
+            mock.emit("posts:list", { count: 9 });
+        });
+
+        await waitFor(() => {
+            expect(screen.getByTestId("hydrate").textContent).toBe(JSON.stringify({ count: 9 }));
+        });
+    });
+
+    it("server-renders the preloaded value (SSR, no effects, no transport touched)", () => {
+        expect.assertions(3);
+
+        const mock = createMockClient(() => {
+            return { count: 1 };
+        });
+
+        const view = renderToString(
+            <CirrusProvider client={mock.asClient}>
+                <HydrateDisplay token={preloaded("posts:list", { count: 42 })} />
+            </CirrusProvider>,
+        );
+
+        expect(view.replaceAll("&quot;", '"')).toContain(JSON.stringify({ count: 42 }));
         expect(mock.query).not.toHaveBeenCalled();
         expect(mock.subscribe).not.toHaveBeenCalled();
     });

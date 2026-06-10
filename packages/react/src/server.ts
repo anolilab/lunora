@@ -1,5 +1,6 @@
-import type { ArgsOf, FunctionReference, ReturnOf } from "@cirrus/client";
-import { CirrusClient } from "@cirrus/client";
+import type { ArgsOf, CirrusClient, FunctionReference, ReturnOf } from "@cirrus/client";
+import type { ServerClientOptions } from "@cirrus/ssr";
+import { createServerClient } from "@cirrus/ssr";
 import type { QueryClient } from "@tanstack/react-query";
 
 import { cirrusQueryKey } from "./query-key";
@@ -22,49 +23,10 @@ import { cirrusQueryKey } from "./query-key";
  * `usePreloadedQuery`.
  */
 
-/** Options accepted by `createServerClient`. */
-export interface ServerClientOptions {
-    /**
-     * `fetch` implementation used for HTTP RPC. Defaults to the ambient global
-     * `fetch` (present in Node 18+, Workers, and the Next.js server runtime).
-     * Pass one explicitly to forward cookies/headers or to use an instrumented
-     * fetch.
-     */
-    fetch?: typeof fetch;
-
-    /**
-     * Bearer token sent as `Authorization: Bearer &lt;token>` on every RPC. In an
-     * RSC you typically read this from the request (e.g. a cookie via
-     * `next/headers`) and pass it here so the server-side load runs as the
-     * signed-in user.
-     */
-    token?: string;
-
-    /** Base URL of the deployed Cirrus worker, e.g. `https://app.example.workers.dev`. */
-    url: string;
-}
-
-/**
- * Build a request-scoped `CirrusClient` for use inside a Server Component. RSC
- * data loading only ever calls `.query()` (HTTP RPC over `fetch`); a
- * `CirrusClient` opens a socket lazily on `.subscribe()`/`.stream()` and those
- * are never called server-side, so no live connection is established even if the
- * server runtime happens to expose a global `WebSocket`.
- *
- * Create one per request rather than sharing a module-level instance: the bearer
- * token (and any forwarded cookies in `fetch`) are per-user, and a shared client
- * would leak one request's identity into another.
- */
-export const createServerClient = (options: ServerClientOptions): CirrusClient => {
-    // `fetch` falls back to the ambient global inside CirrusClient when omitted.
-    const client = new CirrusClient({ fetch: options.fetch, url: options.url });
-
-    if (options.token !== undefined) {
-        client.setAuthToken(options.token);
-    }
-
-    return client;
-};
+// The TanStack options factory is transport-free, so it works server-side too:
+// `await queryClient.ensureQueryData(cirrusQueryOptions(serverClient, fn, args))`.
+export type { CirrusQueryOptions } from "./query-options";
+export { cirrusQueryOptions } from "./query-options";
 
 /**
  * Run a query on the server and seed `queryClient` with the result under the
@@ -145,14 +107,20 @@ export const fetchAction = async <F extends FunctionReference>(
     callOptions: ServerCallOptions = {},
 ): Promise<ReturnOf<F>> => createServerClient(options).action<F>(function_, args, { shardKey: callOptions.shardKey });
 
-// The TanStack options factory is transport-free, so it works server-side too:
-// `await queryClient.ensureQueryData(cirrusQueryOptions(serverClient, fn, args))`.
-export type { CirrusQueryOptions } from "./query-options";
-export { cirrusQueryOptions } from "./query-options";
 export type { ArgsOf, FunctionReference, Preloaded, ReturnOf } from "@cirrus/client";
 // Re-exported so callers can do all server-side data loading from one import.
 // `preloadQuery`/`preloadedQueryResult` are the explicit-token flow; `dehydrate`
 // is a pure serializer (server-safe); `HydrationBoundary` carries its own client
 // boundary from TanStack, so re-exporting it here is just a convenience pass-through.
 export { preloadedQueryResult, preloadQuery } from "@cirrus/client";
+// `createServerClient`/`ServerClientOptions` are sourced from `@cirrus/ssr`, the
+// framework-neutral home of the server contract, so there is one implementation
+// shared across every adapter. They are re-exported (not re-implemented) here so
+// existing `import { createServerClient } from "@cirrus/react/server"` keeps
+// working unchanged — same name, same signature. `getServerSession`, the
+// `serializePreloaded`/`deserializePreloaded` dehydrate helpers, and
+// `preloadQuery` are re-exported too so a React SSR loader can get everything it
+// needs from this one entry.
+export type { AuthLike, HeadersSource, ServerClientOptions, ServerSession } from "@cirrus/ssr";
+export { createServerClient, deserializePreloaded, getServerSession, serializePreloaded } from "@cirrus/ssr";
 export { dehydrate, HydrationBoundary } from "@tanstack/react-query";
