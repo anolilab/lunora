@@ -23,7 +23,6 @@ import type {
     RankIndexDefinitionLike,
     RankPage,
     RankResult,
-    RestrictableQueryOptions,
     SchedulerLike,
     SchemaLike,
     TableDefinitionLike,
@@ -37,6 +36,7 @@ import type {
     WhereInput,
 } from "@cirrus/do";
 import {
+    aggregateSqlFunction,
     aggregateTableName,
     applyOnDelete,
     assertValidClientId,
@@ -55,7 +55,9 @@ import {
     ftsTableName,
     hasTrigger,
     matchesRankStaticWhere,
+    matchesStaticWhere,
     mergeWhere,
+    normalizeCountArgument,
     normalizeIdStructurally,
     normalizeOrderKeys,
     NotFoundError,
@@ -73,6 +75,7 @@ import {
     selectIndexForGroupBy,
     sortColumnName,
     stringifySearchText,
+    throwingScheduler,
     tokenizeSearch,
 } from "@cirrus/do";
 
@@ -115,36 +118,6 @@ interface D1ContextDatabaseOptions {
 /** Cap on re-entrant trigger writes before we treat it as a self-triggering loop. */
 const MAX_TRIGGER_DEPTH = 50;
 
-/** Default `ctx.scheduler` when none is configured: any use throws a clear error. */
-const throwingScheduler: SchedulerLike = {
-    runAfter: () => {
-        throw new Error("ctx.scheduler: no scheduler configured for triggers. Pass `scheduler` to createD1CtxDb().");
-    },
-    runAt: () => {
-        throw new Error("ctx.scheduler: no scheduler configured for triggers. Pass `scheduler` to createD1CtxDb().");
-    },
-};
-
-/**
- * Closed allowlist mapping each reducer `op` to the literal SQL function it may
- * emit. `AggregateOp` is a compile-time type only — a caller reaching the
- * runtime with an off-list `op` (forged wire payload, `as any`) would otherwise
- * have it concatenated straight into the SQL string. Routing every reducer
- * through this table guarantees only a known function name reaches the query.
- */
-const AGGREGATE_SQL_FUNCTION: Record<string, string> = { avg: "AVG", count: "COUNT", max: "MAX", min: "MIN", sum: "SUM" };
-
-/** Resolve a reducer `op` to its SQL function, throwing on an off-allowlist op. */
-const aggregateSqlFunction = (op: string): string => {
-    const sqlFunction = AGGREGATE_SQL_FUNCTION[op];
-
-    if (sqlFunction === undefined) {
-        throw new Error(`unknown aggregate op "${op}": expected one of ${Object.keys(AGGREGATE_SQL_FUNCTION).join(", ")}`);
-    }
-
-    return sqlFunction;
-};
-
 /**
  * Structural shape of a `.searchIndex()` declaration. Kept local (not imported
  * from `@cirrus/do`) because that file owns the FTS surface and doesn't export
@@ -155,61 +128,6 @@ interface SearchIndexDefinitionLike {
     readonly filterFields?: ReadonlyArray<string>;
     readonly name: string;
 }
-
-/**
- * Cheap predicate test against a flat literal `where` baked into an
- * `aggregateIndex.where`. Mirrors the DO helper.
- */
-const matchesStaticWhere = (document: Record<string, unknown>, predicate: Record<string, unknown>): boolean => {
-    for (const [field, expected] of Object.entries(predicate)) {
-        const actual = document[field];
-
-        if (expected !== null && typeof expected === "object" && !Array.isArray(expected)) {
-            const operatorKeys = Object.keys(expected);
-
-            if (operatorKeys.length === 1 && operatorKeys[0] === "eq") {
-                if (actual !== (expected as { eq: unknown }).eq) {
-                    return false;
-                }
-
-                continue;
-            }
-
-            return false;
-        }
-
-        if (actual !== expected) {
-            return false;
-        }
-    }
-
-    return true;
-};
-
-/** Marker keys that distinguish a restrictable count-options object from a plain where input. */
-const COUNT_OPTION_KEYS = new Set(["baseWhere", "restrictsCounts", "where"]);
-
-const normalizeCountArgument = (argument: RestrictableQueryOptions | undefined | WhereInput): RestrictableQueryOptions => {
-    if (argument === undefined) {
-        return {};
-    }
-
-    if (typeof argument !== "object" || Array.isArray(argument)) {
-        return { where: argument as WhereInput };
-    }
-
-    const keys = Object.keys(argument);
-
-    if (keys.length === 0) {
-        return {};
-    }
-
-    if (keys.every((key) => COUNT_OPTION_KEYS.has(key))) {
-        return argument as RestrictableQueryOptions;
-    }
-
-    return { where: argument as WhereInput };
-};
 
 /** Map a JS value onto its SQLite storage form — SQLite has no boolean, so true/false → 1/0. */
 const serializeColumnValue = (value: unknown): unknown => {
