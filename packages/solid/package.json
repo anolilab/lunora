@@ -39,10 +39,12 @@
         "@cirrus/ssr": "workspace:*"
     },
     "devDependencies": {
+        "@babel/core": "catalog:build",
         "@solidjs/testing-library": "catalog:frontend",
         "@testing-library/jest-dom": "catalog:frontend",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
+        "babel-preset-solid": "catalog:build",
         "esbuild": "catalog:build",
         "jsdom": "catalog:frontend",
         "solid-js": "catalog:frontend",

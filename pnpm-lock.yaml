@@ -25,6 +25,9 @@ catalogs:
     babel-plugin-react-compiler:
       specifier: ^19.1.0-rc.2
       version: 19.1.0-rc.3
+    babel-preset-solid:
+      specifier: ^1.9.12
+      version: 1.9.12
     esbuild:
       specifier: ^0.28.0
       version: 0.28.0
@@ -1400,6 +1403,9 @@ importers:
         specifier: workspace:*
         version: link:../ssr
     devDependencies:
+      '@babel/core':
+        specifier: catalog:build
+        version: 7.29.7
       '@solidjs/testing-library':
         specifier: catalog:frontend
         version: 0.8.10(solid-js@1.9.13)
@@ -1412,6 +1418,9 @@ importers:
       '@visulima/packem':
         specifier: catalog:build
         version: 2.0.0-alpha.87(@babel/core@7.29.7)(@csstools/css-parser-algorithms@4.0.0(@csstools/css-tokenizer@4.0.0))(@csstools/css-tokenizer@4.0.0)(@csstools/postcss-slow-plugins@2.0.0(postcss@8.5.15))(@tailwindcss/node@4.3.0)(@tailwindcss/oxide@4.3.0)(@ts-macro/tsc@0.3.7(rollup@4.60.1))(@visulima/css-style-inject@1.0.0-alpha.17)(@visulima/find-cache-dir@3.0.0-alpha.9)(@visulima/packem-rollup@1.0.0-alpha.72(@ts-macro/tsc@0.3.7(rollup@4.60.1))(esbuild@0.28.0)(ini@7.0.0)(json5@2.2.3)(jsonc-parser@3.3.1)(rolldown@1.0.3)(rollup@4.60.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.2)(esbuild@0.28.0)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))(yaml@2.9.0))(esbuild@0.28.0)(github-slugger@2.0.0)(ini@7.0.0)(json5@2.2.3)(jsonc-parser@3.3.1)(lightningcss@1.32.0)(package-manager-detector@1.6.0)(picomatch@4.0.4)(postcss@8.5.15)(rolldown@1.0.3)(rollup@4.60.1)(typescript@6.0.3)(yaml@2.9.0)
+      babel-preset-solid:
+        specifier: catalog:build
+        version: 1.9.12(@babel/core@7.29.7)(solid-js@1.9.13)
       esbuild:
         specifier: catalog:build
         version: 0.28.0

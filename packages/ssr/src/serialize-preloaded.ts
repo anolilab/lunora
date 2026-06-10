@@ -12,7 +12,7 @@ import type { Preloaded } from "@cirrus/client";
  * The `&lt;` is escaped to `&lt;` so the payload is safe to inline inside a
  * `&lt;script>` tag without a stray `&lt;/script>` (or `&lt;!--`) prematurely closing
  * it — the standard XSS-safe script-embedding precaution. This escaping is NOT
- * sufficient for an HTML *attribute* sink (which also needs the quote and `&`
+ * sufficient for an HTML *attribute* sink (which also needs the quote and `&amp;`
  * characters escaped); embed the output in a raw-text script element, not a
  * data attribute.
  */

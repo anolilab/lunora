@@ -16,6 +16,7 @@ export interface MutationHandle<F extends FunctionReference> {
     data: Readable<ReturnOf<F> | undefined>;
     /** The latest invocation's error, or `undefined`. */
     error: Readable<Error | undefined>;
+
     /**
      * Run the mutation. Resolves with the server result and rejects on failure
      * (errors propagate — there is no swallowing). Optimistic updates passed in
@@ -23,6 +24,7 @@ export interface MutationHandle<F extends FunctionReference> {
      * subscriptions, exactly as in the React adapter.
      */
     mutate: (args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>>) => Promise<ReturnOf<F>>;
+
     /**
      * `true` while any invocation from this handle is in flight. Ref-counted, so
      * overlapping calls compose and it only flips back to `false` once the last
@@ -51,13 +53,17 @@ export function mutation<F extends FunctionReference>(clientOrFunction: CirrusCl
     const client = hasExplicitClient ? (clientOrFunction as CirrusClient) : getCirrusClient();
     const functionRef = (hasExplicitClient ? maybeFunction : clientOrFunction) as F;
 
-    const data = writable<ReturnOf<F> | undefined>(undefined);
-    const error = writable<Error | undefined>(undefined);
+    const data = writable<ReturnOf<F> | undefined>();
+    const error = writable<Error | undefined>();
     const pending = writable(false);
 
     const mutate = createMutationRunner<F>(client, functionRef, {
-        setError: (next) => error.set(next),
-        setPending: (next) => pending.set(next),
+        setError: (next) => {
+            error.set(next);
+        },
+        setPending: (next) => {
+            pending.set(next);
+        },
         setResult: (result) => {
             data.set(result);
             error.set(undefined);
