@@ -4,6 +4,7 @@ import type { Plugin } from "vite";
 
 import codegenPlugin from "./codegen-plugin";
 import devVariablesPlugin from "./dev-variables-plugin";
+import { createCommandProbe, withDevWorkerEnv } from "./dev-worker-env";
 import logStreamPlugin from "./log-stream-plugin";
 import { studioPlugin } from "./studio-plugin";
 import type { CirrusPluginOptions, CirrusPlugins, CloudflarePluginOptions, OverlayPluginOptions, ResolvedCirrusPluginOptions } from "./types";
@@ -62,9 +63,12 @@ const resolveOptions = (options: CirrusPluginOptions | undefined): ResolvedCirru
  */
 const cirrus = (options?: CirrusPluginOptions): CirrusPlugins => {
     const resolved = resolveOptions(options);
+    // Captures `serve` vs `build` so the dev worker var below is injected only
+    // in `vite`, never a production build. `enforce: "pre"` → captured first.
+    const { isServe, plugin: commandProbe } = createCommandProbe();
     // `devVariablesPlugin` is `enforce: "pre"` + `apply: "serve"`: it offers to
     // scaffold `.dev.vars` before `@cloudflare/vite-plugin` boots the worker.
-    const plugins: Plugin[] = [devVariablesPlugin(resolved), codegenPlugin(resolved), logStreamPlugin()];
+    const plugins: Plugin[] = [commandProbe, devVariablesPlugin(resolved), codegenPlugin(resolved), logStreamPlugin()];
 
     if (resolved.studio) {
         plugins.push(studioPlugin());
@@ -82,7 +86,7 @@ const cirrus = (options?: CirrusPluginOptions): CirrusPlugins => {
         // Wrap the Cloudflare plugins' startup hooks so a Worker-entry evaluation
         // failure (e.g. a circular import in `cirrus/`) surfaces an actionable
         // hint instead of a bare, file-less `runner-worker` TypeError.
-        plugins.push(...withWorkerStartupHint(cloudflare(resolved.cloudflare)));
+        plugins.push(...withWorkerStartupHint(cloudflare(withDevWorkerEnv(resolved.cloudflare, isServe))));
     }
 
     return plugins;
@@ -94,6 +98,7 @@ export { default as codegenPlugin } from "./codegen-plugin";
 export type { ReconcileResult } from "./cron-sync";
 export { reconcileWranglerCrons } from "./cron-sync";
 export { default as devVariablesPlugin } from "./dev-variables-plugin";
+export { createCommandProbe, DEV_WORKER_ENV_VALUE, DEV_WORKER_ENV_VAR, withDevWorkerEnv } from "./dev-worker-env";
 export { default as logStreamPlugin } from "./log-stream-plugin";
 export { buildStudioUrl, STUDIO_PATH, studioPlugin } from "./studio-plugin";
 export type { CirrusPluginOptions, CirrusPlugins, CloudflarePluginOptions, OverlayPluginOptions, ResolvedCirrusPluginOptions } from "./types";

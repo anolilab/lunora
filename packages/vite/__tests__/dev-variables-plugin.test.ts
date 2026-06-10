@@ -60,13 +60,16 @@ describe("devVariablesPlugin", () => {
         expect(existsSync(join(dir, ".dev.vars"))).toBe(false);
     });
 
-    it("is included first in the cirrus() plugin array", () => {
-        expect.assertions(2);
+    it("is among the leading plugins so it scaffolds `.dev.vars` before the worker boots", () => {
+        expect.assertions(3);
 
         const plugins = cirrus({ cloudflare: false, overlay: false, projectRoot: dir, validateWrangler: false });
         const names = plugins.map((plugin) => plugin.name);
 
+        // The command probe leads (it must capture serve/build first); dev-vars
+        // follows, still ahead of codegen and the worker plugins.
+        expect(names[0]).toBe("cirrus:command-probe");
         expect(names).toContain("cirrus:dev-vars");
-        expect(names[0]).toBe("cirrus:dev-vars");
+        expect(names.indexOf("cirrus:dev-vars")).toBeLessThan(names.indexOf("cirrus:codegen"));
     });
 });

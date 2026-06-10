@@ -72,7 +72,12 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
     const cwd = options.cwd ?? process.cwd();
     const workerPort = options.workerPort ?? DEFAULT_WORKER_PORT;
     const manager = detectPackageManager(cwd);
-    const exec = execArgsFor(manager, "wrangler", ["dev", "--port", String(workerPort)]);
+    // `--var WORKER_ENV:development` flags the worker as a dev deployment so the
+    // runtime streams every RPC dispatch summary to the terminal by default
+    // (`@cirrus/do`'s `isDevEnvironment`). `wrangler dev` only — never `deploy` —
+    // so it can't leak into production; a `WORKER_ENV` in wrangler config / a
+    // `--var` the user passes still wins. Mirrors the Vite plugin's injection.
+    const exec = execArgsFor(manager, "wrangler", ["dev", "--port", String(workerPort), "--var", "WORKER_ENV:development"]);
 
     return {
         codegenEnabled: options.codegen !== false,

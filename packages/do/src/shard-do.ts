@@ -15,7 +15,17 @@ import type { DependencyTracker } from "./dependency-tracker";
 import { createDependencyTracker, SCAN_DEP, tableFromDepKey } from "./dependency-tracker";
 import type { FunctionMetricBucket } from "./function-metrics";
 import { mergeScanAttribution, readFunctionMetricBuckets, readFunctionMetrics, readFunctionMetricsTotals, recordFunctionMetric } from "./function-metrics";
-import type { AdvisoryFinding, AuditLogResult, FilterClause, FilterOperator, FunctionCallStat, FunctionStatsResult, OrderByClause, SubscriptionsResult, TableIndexInfo } from "./introspect";
+import type {
+    AdvisoryFinding,
+    AuditLogResult,
+    FilterClause,
+    FilterOperator,
+    FunctionCallStat,
+    FunctionStatsResult,
+    OrderByClause,
+    SubscriptionsResult,
+    TableIndexInfo,
+} from "./introspect";
 import { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, MAX_PAGE_SIZE, readTablePage, selectMatchingIds, summarizeSubscriptions } from "./introspect";
 import { LogBuffer } from "./log-buffer";
 import { armRestore, readBookmark } from "./pitr";
@@ -837,6 +847,27 @@ const parsePositiveInt = (raw: string | undefined): number | undefined => {
     const value = Number.parseInt(raw, 10);
 
     return Number.isFinite(value) && value > 0 ? value : undefined;
+};
+
+/**
+ * Resolve the per-dispatch console-stream toggle (`CIRRUS_REQUEST_LOG_EMIT`).
+ * An explicit `"1"`/`"true"` forces it on and `"0"`/`"false"` forces it off
+ * (even in dev); when the var is unset/empty it falls back to `devDefault` —
+ * which the caller passes as {@link isDevEnvironment}, so a dev deployment
+ * streams every successful dispatch by default while production stays quiet
+ * unless an operator opts in. (Errors always stream regardless — see
+ * `recordRequestLog`.)
+ */
+const parseEmit = (raw: string | undefined, devDefault: boolean): boolean => {
+    if (raw === "1" || raw === "true") {
+        return true;
+    }
+
+    if (raw === "0" || raw === "false") {
+        return false;
+    }
+
+    return devDefault;
 };
 
 /** Parse a 0..1 sample rate (`CIRRUS_REQUEST_LOG_SAMPLE`); clamped to `[0, 1]`, defaulting to `1` (record all) when unset/invalid. */
@@ -1663,7 +1694,8 @@ abstract class ShardDO {
                 findings.push({
                     cacheKey: `unused_index:${table}:${index.name}`,
                     categories: ["PERFORMANCE"],
-                    description: "A declared index has not been exercised by any query since this shard instance started. An unused index costs storage and is maintained on every write for no read benefit.",
+                    description:
+                        "A declared index has not been exercised by any query since this shard instance started. An unused index costs storage and is maintained on every write for no read benefit.",
                     detail: `Index "${index.name}" on table "${table}" has not been used since this instance woke, though other indexes on "${table}" have — it may be redundant.`,
                     facing: "INTERNAL",
                     level: "INFO",
@@ -2693,8 +2725,11 @@ abstract class ShardDO {
      * in production (`isDevEnvironment`) — default redacted.
      *
      * `emit`: also stream each entry as a console event for CF Workers Logs /
-     * Logpush (`CIRRUS_REQUEST_LOG_EMIT` = `"1"`/`"true"`) — default off, since a
-     * line per dispatch is real log volume an operator should choose to stream.
+     * Logpush (and the dev-server terminal). Explicit `CIRRUS_REQUEST_LOG_EMIT`
+     * (`"1"`/`"true"` vs `"0"`/`"false"`) always wins; unset, it defaults to
+     * `isDevEnvironment` — ON in dev so a developer sees every dispatch, OFF in
+     * production where a line per dispatch is log volume an operator opts into.
+     * Errors stream regardless (see `recordRequestLog`).
      *
      * `retention`: durable-row cap override (`CIRRUS_REQUEST_LOG_RETENTION`);
      * `undefined` falls back to the module default.
@@ -2707,7 +2742,7 @@ abstract class ShardDO {
 
         return {
             captureRaw: isDevEnvironment(this.env),
-            emit: env.CIRRUS_REQUEST_LOG_EMIT === "1" || env.CIRRUS_REQUEST_LOG_EMIT === "true",
+            emit: parseEmit(env.CIRRUS_REQUEST_LOG_EMIT, isDevEnvironment(this.env)),
             retention: parsePositiveInt(env.CIRRUS_REQUEST_LOG_RETENTION),
             sampleRate: parseSampleRate(env.CIRRUS_REQUEST_LOG_SAMPLE),
         };

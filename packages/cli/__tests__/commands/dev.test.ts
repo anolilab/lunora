@@ -41,6 +41,15 @@ describe("cirrus dev", () => {
             expect(plan.studioEnabled).toBe(true);
         });
 
+        it("flags the worker as a dev deployment via `--var WORKER_ENV:development`", () => {
+            expect.assertions(1);
+
+            const plan = planDevCommand({ cwd: workdir, logger: silentLogger() });
+
+            // So the runtime streams every RPC dispatch summary in dev by default.
+            expect(plan.wrangler.args.join(" ")).toContain("--var WORKER_ENV:development");
+        });
+
         it("defaults the worker to :8787 and the studio to :6173", () => {
             expect.assertions(3);
 

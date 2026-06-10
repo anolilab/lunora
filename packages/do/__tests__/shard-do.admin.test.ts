@@ -780,6 +780,33 @@ describe("shardDO admin data migrations", () => {
         vi.restoreAllMocks();
     });
 
+    it("streams a successful dispatch by default in a dev environment (WORKER_ENV)", async () => {
+        expect.assertions(1);
+
+        const log = vi.spyOn(console, "log").mockImplementation(() => {});
+        // No CIRRUS_REQUEST_LOG_EMIT — the dev env (set by `cirrus dev` / the Vite plugin) flips it on.
+        const dev = new CountingShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN, WORKER_ENV: "development" });
+
+        await dev.fetch(userRequest("messages:list"));
+
+        expect(cirrusRequestEvents(log)).toHaveLength(1);
+
+        vi.restoreAllMocks();
+    });
+
+    it("lets an explicit CIRRUS_REQUEST_LOG_EMIT=false silence summaries even in dev", async () => {
+        expect.assertions(1);
+
+        const log = vi.spyOn(console, "log").mockImplementation(() => {});
+        const dev = new CountingShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN, CIRRUS_REQUEST_LOG_EMIT: "false", WORKER_ENV: "development" });
+
+        await dev.fetch(userRequest("messages:list"));
+
+        expect(cirrusRequestEvents(log)).toHaveLength(0);
+
+        vi.restoreAllMocks();
+    });
+
     it("recordUserLog buffers the line, emits a console event, and forwards to the sink", async () => {
         expect.assertions(5);
 
