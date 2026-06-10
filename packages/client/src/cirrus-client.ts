@@ -3,7 +3,7 @@ import { applyDelta, isMutationDelta } from "./delta-merge";
 import type { OptimisticUpdate } from "./local-store";
 import { createLocalStore } from "./local-store";
 import type { QueuedMutation } from "./offline-queue";
-import { OfflineQueue } from "./offline-queue";
+import { OfflineQueue, reportPersistenceError } from "./offline-queue";
 import type { ReconnectCalculator } from "./reconnect";
 import { createReconnect } from "./reconnect";
 import type { StreamHandle, StreamIterable } from "./stream";
@@ -25,6 +25,7 @@ import type {
     GlobalTableInfo,
     GlobalTablePage,
     PersistenceAdapter,
+    PersistenceErrorContext,
     ReconnectOptions,
     ReturnOf,
     RpcResponseBody,
@@ -375,6 +376,8 @@ class CirrusClient {
 
     private readonly offlineQueue: OfflineQueue;
 
+    private readonly onPersistenceError: ((context: PersistenceErrorContext) => void) | undefined;
+
     private readonly persistence: PersistenceAdapter | undefined;
 
     private readonly subscriptions = new SubscriptionRegistry();
@@ -432,6 +435,7 @@ class CirrusClient {
         this.reconnectOptions = options.reconnect;
         this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
         this.persistence = options.persistence;
+        this.onPersistenceError = options.offlineQueue?.onPersistenceError;
         this.offlineQueue = new OfflineQueue(options.offlineQueue, options.persistence);
 
         if (this.persistence) {
@@ -2098,7 +2102,9 @@ class CirrusClient {
 
     private unpersist(id: string | undefined): void {
         if (id) {
-            this.persistence?.remove(id).catch(() => undefined);
+            this.persistence?.remove(id).catch((error: unknown) => {
+                reportPersistenceError(this.onPersistenceError, "remove", error, id);
+            });
         }
     }
 

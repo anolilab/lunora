@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { OfflineQueue } from "../src/offline-queue";
 import { createInMemoryPersistence } from "../src/persistence";
+import type { PersistenceErrorContext } from "../src/types";
 
 describe("offlineQueue", () => {
     it("fIFO drain order", () => {
@@ -173,5 +174,108 @@ describe("offlineQueue — persistence", () => {
 
         expect(queue.size).toBe(0);
         await expect(persistence.load()).resolves.toHaveLength(1);
+    });
+});
+
+describe("offlineQueue — persistence error reporting", () => {
+    it("append failure invokes onPersistenceError handler with operation 'append'", async () => {
+        expect.assertions(3);
+
+        const appendError = new Error("quota");
+        const faultyPersistence = {
+            ...createInMemoryPersistence(),
+            append: () => Promise.reject(appendError),
+        };
+        const handler = vi.fn<(context: PersistenceErrorContext) => void>();
+        const queue = new OfflineQueue({ onPersistenceError: handler }, faultyPersistence);
+
+        queue.enqueue({ args: {}, functionPath: "posts:create", reject: () => undefined, resolve: () => undefined });
+
+        // Allow the rejected promise microtask to settle
+        await Promise.resolve();
+
+        expect(handler).toHaveBeenCalledTimes(1);
+        expect(handler.mock.calls[0]?.[0]?.operation).toBe("append");
+        expect(handler.mock.calls[0]?.[0]?.error).toBe(appendError);
+    });
+
+    it("append failure passes the assigned mutationId to the handler", async () => {
+        expect.assertions(2);
+
+        const faultyPersistence = {
+            ...createInMemoryPersistence(),
+            append: () => Promise.reject(new Error("quota")),
+        };
+        const handler = vi.fn<(context: PersistenceErrorContext) => void>();
+        const queue = new OfflineQueue({ onPersistenceError: handler }, faultyPersistence);
+
+        queue.enqueue({ args: {}, functionPath: "posts:create", reject: () => undefined, resolve: () => undefined });
+
+        await Promise.resolve();
+
+        expect(handler).toHaveBeenCalledTimes(1);
+        expect(handler.mock.calls[0]?.[0]?.mutationId).toBeTypeOf("string");
+    });
+
+    it("append failure falls back to console.warn when no handler is configured", async () => {
+        expect.assertions(2);
+
+        const appendError = new Error("quota");
+        const faultyPersistence = {
+            ...createInMemoryPersistence(),
+            append: () => Promise.reject(appendError),
+        };
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        try {
+            const queue = new OfflineQueue({}, faultyPersistence);
+
+            queue.enqueue({ args: {}, functionPath: "posts:create", reject: () => undefined, resolve: () => undefined });
+
+            await Promise.resolve();
+
+            expect(warnSpy).toHaveBeenCalledTimes(1);
+            expect(warnSpy.mock.calls[0]?.[0]).toContain("[cirrus] offline-queue persistence append failed");
+        } finally {
+            warnSpy.mockRestore();
+        }
+    });
+
+    it("happy path does not invoke the handler when append succeeds", async () => {
+        expect.assertions(1);
+
+        const persistence = createInMemoryPersistence();
+        const handler = vi.fn<(context: PersistenceErrorContext) => void>();
+        const queue = new OfflineQueue({ onPersistenceError: handler }, persistence);
+
+        queue.enqueue({ args: {}, functionPath: "posts:create", reject: () => undefined, resolve: () => undefined });
+
+        await Promise.resolve();
+
+        expect(handler).not.toHaveBeenCalled();
+    });
+
+    it("overflow remove failure invokes handler with operation 'remove'", async () => {
+        expect.assertions(2);
+
+        const removeError = new Error("remove failed");
+        const faultyPersistence = {
+            ...createInMemoryPersistence(),
+            remove: () => Promise.reject(removeError),
+        };
+        const handler = vi.fn<(context: PersistenceErrorContext) => void>();
+        const queue = new OfflineQueue({ maxItems: 1, onPersistenceError: handler }, faultyPersistence);
+
+        queue.enqueue({ args: {}, functionPath: "old", reject: () => undefined, resolve: () => undefined });
+        queue.enqueue({ args: {}, functionPath: "new", reject: () => undefined, resolve: () => undefined });
+
+        // Allow both the append and remove promise rejections to settle
+        await Promise.resolve();
+        await Promise.resolve();
+
+        const removeCalls = handler.mock.calls.filter((call) => call[0]?.operation === "remove");
+
+        expect(removeCalls).toHaveLength(1);
+        expect(removeCalls[0]?.[0]?.error).toBe(removeError);
     });
 });
