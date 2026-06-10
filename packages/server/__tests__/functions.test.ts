@@ -7,6 +7,7 @@ const makeQueryContext = (): QueryContext => {
     return {
         auth: { getIdentity: async () => null, userId: null },
         db: {} as QueryContext["db"],
+        log: {} as QueryContext["log"],
         runQuery: vi.fn<QueryContext["runQuery"]>() as QueryContext["runQuery"],
         storage: {} as QueryContext["storage"],
         vectors: {} as QueryContext["vectors"],
@@ -17,6 +18,7 @@ const makeMutationContext = (): MutationContext => {
     return {
         auth: { getIdentity: async () => null, userId: null },
         db: {} as MutationContext["db"],
+        log: {} as MutationContext["log"],
         runMutation: vi.fn<MutationContext["runMutation"]>() as MutationContext["runMutation"],
         runQuery: vi.fn<MutationContext["runQuery"]>() as MutationContext["runQuery"],
         scheduler: {} as MutationContext["scheduler"],
@@ -30,6 +32,7 @@ const makeActionContext = (): ActionContext => {
         auth: { getIdentity: async () => null, userId: null },
         db: {} as ActionContext["db"],
         fetch: globalThis.fetch,
+        log: {} as ActionContext["log"],
         runAction: vi.fn<ActionContext["runAction"]>() as ActionContext["runAction"],
         runMutation: vi.fn<ActionContext["runMutation"]>() as ActionContext["runMutation"],
         runQuery: vi.fn<ActionContext["runQuery"]>() as ActionContext["runQuery"],

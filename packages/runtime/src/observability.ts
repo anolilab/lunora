@@ -51,11 +51,47 @@ export interface ObservabilityEvent {
     shardKey?: string;
 }
 
+/** Severity of a {@link LogEvent}, mirroring the usual console levels. */
+export type LogLevel = "debug" | "error" | "info" | "log" | "warn";
+
+/**
+ * One application log line emitted from a function handler via `ctx.log`.
+ *
+ * Unlike {@link ObservabilityEvent} (one summary per dispatch), a `LogEvent`
+ * is produced for each `ctx.log.*` call, carrying the human-readable `message`
+ * (the args joined for display) plus the structured `args` array for sinks that
+ * want the raw values. `functionPath` attributes the line to the handler that
+ * emitted it; `shardKey`/`userId` mirror the dispatch context.
+ *
+ * This is how `ctx.log` reaches a destination in production: wire a sink's
+ * {@link ObservabilitySink.onLog} and route it wherever you ship logs. In dev
+ * the runtime also emits these to `console` so the CLI / Vite plugin can format
+ * them in the terminal.
+ */
+export interface LogEvent {
+    /** Raw arguments passed to the `ctx.log.*` call, in order. */
+    args: unknown[];
+    /** Function path that emitted the line, e.g. `"messages:list"`. */
+    functionPath: string;
+    /** Severity the line was logged at. */
+    level: LogLevel;
+    /** Display string — the args rendered and space-joined. */
+    message: string;
+    /** Shard key for single-shard calls; absent for the unnamed root DO. */
+    shardKey?: string;
+    /** Wall-clock millis when the line was emitted. */
+    ts: number;
+    /** Acting userId, or absent when anonymous. */
+    userId?: string;
+}
+
 /**
  * The hook contract. Methods are optional so a sink can opt into only the
  * events it cares about; the runtime no-ops the others.
  */
 export interface ObservabilitySink {
+    /** Invoked once per `ctx.log.*` call from a function handler. */
+    onLog?: (event: LogEvent) => void;
     /** Invoked once per dispatched RPC (single-shard or fan-out). */
     onRpc?: (event: ObservabilityEvent) => void;
 }
@@ -77,5 +113,22 @@ export const emitRpcEvent = (sink: ObservabilitySink | undefined, event: Observa
         // deliberately do not console.error here either: in a Workers runtime
         // that would propagate to the platform's error log and create the
         // same noise loop the swallow exists to avoid.
+    }
+};
+
+/**
+ * Invoke `sink.onLog` with the given log event, swallowing any error the sink
+ * throws. The same failure model as {@link emitRpcEvent}: a buggy log sink must
+ * never break the handler that emitted the line.
+ */
+export const emitLogEvent = (sink: ObservabilitySink | undefined, event: LogEvent): void => {
+    if (!sink?.onLog) {
+        return;
+    }
+
+    try {
+        sink.onLog(event);
+    } catch {
+        // Swallow — see emitRpcEvent.
     }
 };

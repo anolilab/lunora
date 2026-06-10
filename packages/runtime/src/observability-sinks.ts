@@ -18,7 +18,7 @@
  * third party. Scrub or redact before enabling it against an external service
  * if that is a concern.
  */
-import type { ObservabilityEvent, ObservabilitySink } from "./observability";
+import type { LogEvent, ObservabilityEvent, ObservabilitySink } from "./observability";
 
 /** Shared shape for sinks that can be limited to error events only. */
 interface OnlyErrorsOption {
@@ -82,6 +82,17 @@ export const consoleSink = (options: OnlyErrorsOption = {}): ObservabilitySink =
     const { onlyErrors } = options;
 
     return {
+        onLog: (event) => {
+            // `onlyErrors` filters the RPC summary stream; application log lines
+            // are emitted whole so a developer still sees their `ctx.log` output.
+            if (event.level === "error") {
+                // eslint-disable-next-line no-console
+                console.error("[cirrus:log]", event.functionPath, event.message);
+            } else {
+                // eslint-disable-next-line no-console
+                console.log("[cirrus:log]", event.functionPath, event.message);
+            }
+        },
         onRpc: (event) => {
             if (shouldSkip(event, onlyErrors)) {
                 return;
@@ -304,6 +315,19 @@ export const analyticsEngineSink = (options: AnalyticsEngineSinkOptions): Observ
  */
 export const combineSinks = (...sinks: ObservabilitySink[]): ObservabilitySink => {
     return {
+        onLog: (event: LogEvent) => {
+            for (const sink of sinks) {
+                if (!sink.onLog) {
+                    continue;
+                }
+
+                try {
+                    sink.onLog(event);
+                } catch {
+                    // Isolate failures so one bad sink doesn't starve the rest.
+                }
+            }
+        },
         onRpc: (event) => {
             for (const sink of sinks) {
                 if (!sink.onRpc) {

@@ -284,6 +284,100 @@ const emitRequestLogEvent = (entry: AppendRequestLogEntry, options: RequestLogWr
     }
 };
 
+/** Severity of a `ctx.log.*` call, mirroring the console method names (`log` is the default level, distinct from `info`). */
+type ContextLogLevel = "debug" | "error" | "info" | "log" | "warn";
+
+/** Stable `type` tag distinguishing a per-call application-log event from the per-dispatch `"request"` event; both share `source: "cirrus"`. */
+const LOG_EVENT_TYPE = "log";
+
+/** The fields {@link emitLogEvent} ships for one `ctx.log.*` call. */
+interface LogEventInput {
+    /** Raw arguments passed to the call, in order. */
+    args: unknown[];
+    /** Function that emitted the line, e.g. `messages:list`. */
+    functionPath: string;
+    /** Severity the line was logged at. */
+    level: ContextLogLevel;
+    /** Display string — the args rendered and space-joined (see {@link renderLogMessage}). */
+    message: string;
+    /** Shard key (DO id name), or `undefined` for the unnamed root DO. */
+    shardKey?: string;
+    /** Wall-clock millis when the line was emitted. */
+    ts: number;
+    /** Acting userId, or `undefined` when anonymous. */
+    userId?: string;
+}
+
+/**
+ * Render `ctx.log.*` arguments into a single display string, the way `console`
+ * does: strings pass through verbatim; everything else is JSON-serialised (with
+ * a `String()` fallback for a circular/unserialisable value so rendering never
+ * throws). Values are space-joined. This rendered string is what the dev-server
+ * terminal shows; the structured `args` array travels alongside it for sinks
+ * that want the raw values.
+ */
+const renderLogMessage = (args: unknown[]): string =>
+    args
+        .map((value) => {
+            if (typeof value === "string") {
+                return value;
+            }
+
+            try {
+                // `JSON.stringify` is typed `=> string` but returns `undefined`
+                // for a function/symbol/undefined value — fall back to `String`.
+                const json = JSON.stringify(value) as string | undefined;
+
+                return json ?? String(value);
+            } catch {
+                return String(value);
+            }
+        })
+        .join(" ");
+
+/**
+ * Emit one application-log event from a `ctx.log.*` call to `console`, tagged
+ * `{ source: "cirrus", type: "log" }` so the CLI / Vite formatter can pretty-print
+ * it in the dev terminal and a Logpush/SIEM consumer can filter it out of the
+ * raw Workers-trace firehose.
+ *
+ * Only the rendered `message` is emitted here, NOT the structured `args` array:
+ * the console event rides CF Workers Logs / Logpush to prod, and shipping raw,
+ * un-redacted arg objects on a `source: "cirrus"` line a SIEM is told to trust
+ * would be a surprising PII/secret surface. The raw `args` stay on the in-process
+ * `sink.onLog` path (`recordUserLog`), which the operator opts into and controls.
+ * `message` already carries the developer's rendered values, exactly like a raw
+ * `console.log` line.
+ *
+ * `error`/`warn` go to `console.error`/`console.warn` (so they surface at the
+ * right level in the trace); every other level to `console.log`. The serialised
+ * fields are a string + primitives, so `JSON.stringify` can't throw on a circular
+ * arg here (the rendering already happened in `renderLogMessage`).
+ */
+const emitLogEvent = (input: LogEventInput): void => {
+    const line = JSON.stringify({
+        function: input.functionPath,
+        level: input.level,
+        message: input.message,
+        shard: input.shardKey,
+        source: REQUEST_LOG_EVENT_SOURCE,
+        ts: input.ts,
+        type: LOG_EVENT_TYPE,
+        userId: input.userId,
+    });
+
+    if (input.level === "error") {
+        // eslint-disable-next-line no-console -- intentional structured ctx.log event emission into CF Workers Logs / Logpush; error level.
+        console.error(line);
+    } else if (input.level === "warn") {
+        // eslint-disable-next-line no-console -- intentional structured ctx.log event emission into CF Workers Logs / Logpush; warn level.
+        console.warn(line);
+    } else {
+        // eslint-disable-next-line no-console -- intentional structured ctx.log event emission into CF Workers Logs / Logpush.
+        console.log(line);
+    }
+};
+
 /** Escape LIKE wildcards so a literal `%`/`_`/`\` in a filter matches itself (paired with `ESCAPE '\'`). */
 const escapeLike = (value: string): string => value.replaceAll(/[\\%_]/g, (character) => `\\${character}`);
 
@@ -411,5 +505,5 @@ const readRequestLog = (sql: SqlExec, options: ReadRequestLogOptions = {}): Requ
     });
 };
 
-export { appendRequestLogEntry, emitRequestLogEvent, ensureRequestLogTable, readRequestLog, redactArgs, REQUEST_LOG_RETENTION, REQUEST_LOG_TABLE };
-export type { AppendRequestLogEntry, ReadRequestLogOptions, RequestLogEntry, RequestLogResult, RequestLogWriteOptions, RequestOutcome };
+export { appendRequestLogEntry, emitLogEvent, emitRequestLogEvent, ensureRequestLogTable, readRequestLog, redactArgs, renderLogMessage, REQUEST_LOG_RETENTION, REQUEST_LOG_TABLE };
+export type { AppendRequestLogEntry, ContextLogLevel, LogEventInput, ReadRequestLogOptions, RequestLogEntry, RequestLogResult, RequestLogWriteOptions, RequestOutcome };

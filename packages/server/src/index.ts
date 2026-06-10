@@ -63,6 +63,7 @@ export type {
     AnyApi,
     ArgsValidator,
     AuthState,
+    CirrusLogger,
     DatabaseReader,
     DatabaseWriter,
     FunctionKind,

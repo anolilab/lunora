@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AggregateIndexDefinitionLike } from "../src/aggregates";
 import type { DatabaseWriterLike, SchemaLike, SqlExec } from "../src/ctx-db";
@@ -47,6 +47,22 @@ class CountingShard extends ShardDO {
         }
 
         return { ok: true };
+    }
+}
+
+/**
+ * Exposes the protected `recordUserLog` so the `ctx.log` capture path — buffer
+ * push, console event, optional sink — can be driven directly the way the
+ * codegen-generated `buildCtx` logger closure drives it.
+ */
+class LoggingShard extends ShardDO {
+    // eslint-disable-next-line class-methods-use-this -- override stub; this shard exists only to expose recordUserLog
+    public override async handleRpc(): Promise<unknown> {
+        return { ok: true };
+    }
+
+    public log(functionPath: string, level: "error" | "info" | "log" | "warn", args: unknown[], sink?: Parameters<LoggingShard["recordUserLog"]>[3]): void {
+        this.recordUserLog(functionPath, level, args, sink);
     }
 }
 
@@ -714,6 +730,107 @@ describe("shardDO admin data migrations", () => {
 
         // Dev → raw capture: the value is NOT redacted.
         expect(body.result.entries[0]!.redactedArgs).toStrictEqual({ password: "p@ssw0rd" }); // gitleaks:allow -- test fixture password, not a real secret
+    });
+
+    /** Collect the parsed cirrus `type: "request"` events among a console spy's calls. */
+    const cirrusRequestEvents = (spy: { mock: { calls: unknown[][] } }): Record<string, unknown>[] =>
+        spy.mock.calls
+            .map((call) => {
+                try {
+                    return JSON.parse(String(call[0])) as Record<string, unknown>;
+                } catch {
+                    return undefined;
+                }
+            })
+            .filter((event): event is Record<string, unknown> => event?.source === "cirrus" && event.type === "request");
+
+    it("always streams an error dispatch to console.error even without the emit flag", async () => {
+        expect.assertions(2);
+
+        const error = vi.spyOn(console, "error").mockImplementation(() => {});
+        const shard = new CountingShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        await shard.fetch(userRequest("boom:explode"));
+
+        const events = cirrusRequestEvents(error);
+
+        expect(events).toHaveLength(1);
+        expect(events[0]).toMatchObject({ function: "boom:explode", outcome: "error" });
+
+        vi.restoreAllMocks();
+    });
+
+    it("does NOT stream a successful dispatch to console unless CIRRUS_REQUEST_LOG_EMIT is set", async () => {
+        expect.assertions(2);
+
+        const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+        const quiet = new CountingShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        await quiet.fetch(userRequest("messages:list"));
+
+        expect(cirrusRequestEvents(log)).toHaveLength(0);
+
+        const loud = new CountingShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN, CIRRUS_REQUEST_LOG_EMIT: "1" });
+
+        await loud.fetch(userRequest("messages:list"));
+
+        expect(cirrusRequestEvents(log)).toHaveLength(1);
+
+        vi.restoreAllMocks();
+    });
+
+    it("recordUserLog buffers the line, emits a console event, and forwards to the sink", async () => {
+        expect.assertions(5);
+
+        const log = vi.spyOn(console, "log").mockImplementation(() => {});
+        const seen: { args: unknown[]; functionPath: string; level: string; message: string }[] = [];
+        const shard = new LoggingShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        shard.log("messages:list", "info", ["loaded", { count: 3 }], { onLog: (event) => seen.push(event) });
+
+        // Forwarded to the programmatic sink, args un-redacted, attributed.
+        expect(seen).toStrictEqual([
+            { args: ["loaded", { count: 3 }], functionPath: "messages:list", level: "info", message: 'loaded {"count":3}', shardKey: undefined, ts: expect.any(Number), userId: undefined },
+        ]);
+
+        // Structured console event for the dev terminal / Workers Logs.
+        const events = log.mock.calls
+            .map((call) => {
+                try {
+                    return JSON.parse(String(call[0])) as Record<string, unknown>;
+                } catch {
+                    return undefined;
+                }
+            })
+            .filter((event): event is Record<string, unknown> => event?.source === "cirrus" && event.type === "log");
+
+        expect(events).toHaveLength(1);
+        expect(events[0]).toMatchObject({ function: "messages:list", level: "info", message: 'loaded {"count":3}' });
+
+        vi.restoreAllMocks();
+
+        // Buffered for the studio Logs panel via the admin getLogs RPC.
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getLogs, {}));
+        const body = await response.json<{ result: { entries: { functionPath: string; level: string; message: string }[] } }>();
+
+        expect(body.result.entries).toHaveLength(1);
+        expect(body.result.entries[0]).toMatchObject({ functionPath: "messages:list", level: "info", message: 'loaded {"count":3}' });
+    });
+
+    it("folds the bare `log` level onto info for the studio buffer", async () => {
+        expect.assertions(1);
+
+        vi.spyOn(console, "log").mockImplementation(() => {});
+        const shard = new LoggingShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        shard.log("a:b", "log", ["hi"]);
+        vi.restoreAllMocks();
+
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getLogs, {}));
+        const body = await response.json<{ result: { entries: { level: string }[] } }>();
+
+        expect(body.result.entries[0]!.level).toBe("info");
     });
 });
 

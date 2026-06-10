@@ -21,8 +21,8 @@ import { LogBuffer } from "./log-buffer";
 import { armRestore, readBookmark } from "./pitr";
 import type { ReactiveCacheOptions } from "./reactive-cache";
 import { ReactiveCache, reactiveCacheKey } from "./reactive-cache";
-import type { AppendRequestLogEntry, RequestLogResult, RequestLogWriteOptions } from "./request-log";
-import { appendRequestLogEntry, emitRequestLogEvent, ensureRequestLogTable, readRequestLog } from "./request-log";
+import type { AppendRequestLogEntry, ContextLogLevel, LogEventInput, RequestLogResult, RequestLogWriteOptions } from "./request-log";
+import { appendRequestLogEntry, emitLogEvent, emitRequestLogEvent, ensureRequestLogTable, readRequestLog, renderLogMessage } from "./request-log";
 import { buildSecurityAudit } from "./security-audit";
 import { buildSettings, isDevEnvironment } from "./settings";
 import { runReadonlySql } from "./sql-console";
@@ -40,6 +40,18 @@ import type { MutationDelta, RpcRequest, SocketAttachment, SubscriptionEnvelope,
 const WS_KEEPALIVE_PING = "cirrus-ping";
 /** Canned reply the runtime returns for {@link WS_KEEPALIVE_PING}; never reaches a message handler. */
 const WS_KEEPALIVE_PONG = "cirrus-pong";
+
+/**
+ * Optional programmatic log sink, resolved from `createShardDO({ observability })`.
+ * Structurally a subset of `@cirrus/runtime`'s `ObservabilitySink`, so a user can
+ * pass the SAME sink object to `createWorker` (which drives `onRpc`) and
+ * `createShardDO` (which drives `onLog` from `ctx.log`). Typed structurally so
+ * `@cirrus/do` takes no dependency on `@cirrus/runtime`; the event is the same
+ * {@link LogEventInput} shape `emitLogEvent` consumes, built once per call.
+ */
+interface LogSink {
+    onLog?: (event: LogEventInput) => void;
+}
 
 /**
  * Minimal projection of `DurableObjectState` that the ShardDO base requires.
@@ -2076,6 +2088,57 @@ abstract class ShardDO {
     }
 
     /**
+     * Record one `ctx.log.*` call from a handler. Invoked by the generated
+     * `buildCtx` logger closure, which supplies the executing `functionPath` and
+     * the sink resolved from `createShardDO({ observability })` (if any).
+     *
+     * Three destinations, each best-effort so a logging call can NEVER turn a
+     * served request into a failed one. First, the in-memory {@link LogBuffer}
+     * that powers the studio's live Logs panel (it resets on hibernation, like
+     * the metrics counters). Second, a structured `{ source: "cirrus", type:
+     * "log" }` console event that rides CF Workers Logs / Logpush to prod sinks
+     * and is pretty-printed by the CLI / Vite dev-server formatter in the
+     * terminal. Third, the optional programmatic `sink.onLog` — the in-process
+     * hook for users who route logs themselves (webhook/Sentry/etc.), mirroring
+     * `onRpc`.
+     *
+     * Unlike request-log args, `ctx.log` args are NOT redacted: the developer
+     * chose to log them, exactly like a raw `console.log`.
+     */
+    protected recordUserLog(functionPath: string, level: ContextLogLevel, args: unknown[], sink?: LogSink): void {
+        // One canonical event built once, fed to all three destinations. Only the
+        // console event drops `args` (see emitLogEvent); the buffer and sink get
+        // the full payload.
+        const event: LogEventInput = {
+            args,
+            functionPath,
+            level,
+            message: renderLogMessage(args),
+            shardKey: this.state.id?.name,
+            ts: Date.now(),
+            userId: this.getCurrentUserId(),
+        };
+
+        // The LogBuffer enum has no distinct `log` level; fold it into `info`
+        // (console.log is informational), keeping the panel's level set stable.
+        this.logs.push({ functionPath, level: level === "log" ? "info" : level, message: event.message, timestamp: event.ts });
+
+        try {
+            emitLogEvent(event);
+        } catch {
+            // Best-effort: never let log emission fail the handler.
+        }
+
+        if (sink?.onLog) {
+            try {
+                sink.onLog(event);
+            } catch {
+                // A buggy log sink must not break the handler — see emitLogEvent.
+            }
+        }
+    }
+
+    /**
      * Run a subscription query body with the per-request identity forced to
      * anonymous, then restore the prior values.
      *
@@ -2609,7 +2672,12 @@ abstract class ShardDO {
             // Best-effort: never let request-log persistence fail the request.
         }
 
-        if (config.emit) {
+        // Errors are always streamed to `console` (rare, high-value — they ride
+        // CF Workers Logs at error level and the dev-server formats them in the
+        // terminal), redacted in prod like any other event. The full per-dispatch
+        // summary stream (successful OKs too) stays opt-in behind
+        // `CIRRUS_REQUEST_LOG_EMIT` so a hot shard doesn't emit a line per call.
+        if (config.emit || outcome === "error") {
             try {
                 emitRequestLogEvent(entry, writeOptions);
             } catch {
@@ -3348,6 +3416,7 @@ abstract class ShardDO {
 export { ROOT_DO_SIZE_WARN_BYTES, ROOT_SHARD_NAME, ShardDO, subscriptionListDeltas };
 export type {
     HibernatableWebSocket,
+    LogSink,
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,
     RunShardBulkDeleteArgs,

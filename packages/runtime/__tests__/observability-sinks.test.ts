@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ObservabilityEvent } from "../src/observability";
+import type { LogEvent, ObservabilityEvent } from "../src/observability";
 import type { AnalyticsEngineDataPointLike } from "../src/observability-sinks";
 import { analyticsEngineSink, combineSinks, consoleSink, sentrySink, webhookSink } from "../src/observability-sinks";
 
@@ -49,6 +49,28 @@ describe("observability-sinks", () => {
 
             expect(log).not.toHaveBeenCalled();
             expect(error).toHaveBeenCalledTimes(1);
+        });
+
+        it("logs ctx.log events, routing error level to console.error and others to console.log", () => {
+            expect.assertions(2);
+
+            const sink = consoleSink();
+
+            sink.onLog!({ args: ["hi"], functionPath: "messages:list", level: "info", message: "hi", ts: 1 });
+            sink.onLog!({ args: ["boom"], functionPath: "messages:send", level: "error", message: "boom", ts: 2 });
+
+            expect(log).toHaveBeenCalledWith("[cirrus:log]", "messages:list", "hi");
+            expect(error).toHaveBeenCalledWith("[cirrus:log]", "messages:send", "boom");
+        });
+
+        it("emits log events even when onlyErrors filters the rpc stream", () => {
+            expect.assertions(1);
+
+            const sink = consoleSink({ onlyErrors: true });
+
+            sink.onLog!({ args: [], functionPath: "a:b", level: "info", message: "still shown", ts: 1 });
+
+            expect(log).toHaveBeenCalledWith("[cirrus:log]", "a:b", "still shown");
         });
     });
 
@@ -294,6 +316,27 @@ describe("observability-sinks", () => {
             sink.onRpc!(okEvent);
 
             expect(b).toHaveBeenCalledWith(okEvent);
+        });
+
+        it("fans out log events to every child, isolating a thrower", () => {
+            expect.assertions(2);
+
+            const good = vi.fn<(event: LogEvent) => void>();
+            const sink = combineSinks(
+                {
+                    onLog: () => {
+                        throw new Error("bad log sink");
+                    },
+                },
+                { onLog: good },
+            );
+
+            const logEvent: LogEvent = { args: [], functionPath: "a:b", level: "info", message: "m", ts: 1 };
+
+            expect(() => {
+                sink.onLog!(logEvent);
+            }).not.toThrow();
+            expect(good).toHaveBeenCalledWith(logEvent);
         });
     });
 

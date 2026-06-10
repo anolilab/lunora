@@ -1015,6 +1015,7 @@ const emitShard = (schema: SchemaIR, advisories: ReadonlyArray<Finding> = []): s
         "AdvisoryFinding",
         "DatabaseWriterLike",
         "DataMigrationLike",
+        "LogSink",
         "MigrationRunResult",
         "RunShardApplyCdcArgs",
         "RunShardMigrationArgs",
@@ -1236,6 +1237,8 @@ const CIRRUS_ADVISORIES: AdvisoryFinding[] = ${JSON.stringify(advisoryData, unde
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to \`__cdc_log\` on every write (backs streaming export + replay-PITR). */
     cdc?: boolean;
+    /** Optional telemetry sink. When supplied, each \`ctx.log.*\` call is forwarded to \`sink.onLog\`. Pass the SAME sink you give \`createWorker({ observability })\` (which drives \`onRpc\`) to route both RPC and log events. */
+    observability?: (env: Record<string, unknown>) => LogSink | undefined;
     scheduler?: (env: Record<string, unknown>) => unknown;
     storage?: (env: Record<string, unknown>) => unknown;${vectorsConfigField}${d1ConfigField}
 }
@@ -1336,7 +1339,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
             this.ensureMigrated();
 
-            return registered.handler(this.buildCtx(), args);
+            return registered.handler(this.buildCtx({ functionPath }), args);
         }
 
         protected override async executeSubscription(functionPath: string, args: Record<string, unknown>): Promise<{ result: unknown; tables: Set<string> } | null> {
@@ -1349,7 +1352,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             this.ensureMigrated();
 
             const tables = new Set<string>();
-            const ctx = this.buildCtx({ onRead: (table) => tables.add(table) });
+            const ctx = this.buildCtx({ functionPath, onRead: (table) => tables.add(table) });
             const result = await registered.handler(ctx, args);
 
             return { result, tables };
@@ -1365,7 +1368,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             this.ensureMigrated();
 
             return {
-                iterator: (signal) => (registered.handler as (context: unknown, args: Record<string, unknown>, signal: AbortSignal) => AsyncIterable<unknown>)(this.buildCtx(), args, signal),
+                iterator: (signal) => (registered.handler as (context: unknown, args: Record<string, unknown>, signal: AbortSignal) => AsyncIterable<unknown>)(this.buildCtx({ functionPath }), args, signal),
             };
         }
 
@@ -1570,7 +1573,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             this.migrated = true;
         }
 
-        private buildCtx(options: { onRead?: (table: string) => void } = {}): unknown {
+        private buildCtx(options: { functionPath?: string; onRead?: (table: string) => void } = {}): unknown {
             const env = (this.env ?? {}) as Record<string, unknown>;
             const userId = this.getCurrentUserId();
             const identity = this.getCurrentIdentity();
@@ -1583,13 +1586,28 @@ ${vectorsBuild}
             const storage = (config.storage?.(env) ?? storageStub) as unknown as SystemReaderStorageLike;
 ${globalDatabaseLine}            const db: DatabaseWriterLike = createShardCtxDb(${databaseOptions});
 ${facadeBlock}
+            // \`ctx.log\`: each call is captured + attributed to the executing
+            // function and routed to the optional \`observability\` sink. The DO base
+            // also buffers it (studio Logs panel) and emits a structured console
+            // event the dev-server formats in the terminal.
+            const observability = config.observability?.(env);
+            const logFunctionPath = options.functionPath ?? "";
+            const log = {
+                debug: (...args: unknown[]) => { this.recordUserLog(logFunctionPath, "debug", args, observability); },
+                error: (...args: unknown[]) => { this.recordUserLog(logFunctionPath, "error", args, observability); },
+                info: (...args: unknown[]) => { this.recordUserLog(logFunctionPath, "info", args, observability); },
+                log: (...args: unknown[]) => { this.recordUserLog(logFunctionPath, "log", args, observability); },
+                warn: (...args: unknown[]) => { this.recordUserLog(logFunctionPath, "warn", args, observability); },
+            };
+
             const ctx: Record<string, unknown> = {
                 auth: {
                     getIdentity: async () => identity ?? null,
                     userId: userId ?? null,
                 },
                 db,
-                fetch: globalThis.fetch.bind(globalThis),${ormContextField}
+                fetch: globalThis.fetch.bind(globalThis),
+                log,${ormContextField}
                 scheduler,
                 storage,${vectorsContextField}
             };

@@ -4,6 +4,7 @@ import type { Plugin } from "vite";
 
 import codegenPlugin from "./codegen-plugin";
 import devVariablesPlugin from "./dev-variables-plugin";
+import logStreamPlugin from "./log-stream-plugin";
 import { studioPlugin } from "./studio-plugin";
 import type { CirrusPluginOptions, CirrusPlugins, CloudflarePluginOptions, OverlayPluginOptions, ResolvedCirrusPluginOptions } from "./types";
 import { withWorkerStartupHint } from "./worker-startup-hint";
@@ -63,7 +64,7 @@ const cirrus = (options?: CirrusPluginOptions): CirrusPlugins => {
     const resolved = resolveOptions(options);
     // `devVariablesPlugin` is `enforce: "pre"` + `apply: "serve"`: it offers to
     // scaffold `.dev.vars` before `@cloudflare/vite-plugin` boots the worker.
-    const plugins: Plugin[] = [devVariablesPlugin(resolved), codegenPlugin(resolved)];
+    const plugins: Plugin[] = [devVariablesPlugin(resolved), codegenPlugin(resolved), logStreamPlugin()];
 
     if (resolved.studio) {
         plugins.push(studioPlugin());
@@ -93,6 +94,7 @@ export { default as codegenPlugin } from "./codegen-plugin";
 export type { ReconcileResult } from "./cron-sync";
 export { reconcileWranglerCrons } from "./cron-sync";
 export { default as devVariablesPlugin } from "./dev-variables-plugin";
+export { default as logStreamPlugin } from "./log-stream-plugin";
 export { buildStudioUrl, STUDIO_PATH, studioPlugin } from "./studio-plugin";
 export type { CirrusPluginOptions, CirrusPlugins, CloudflarePluginOptions, OverlayPluginOptions, ResolvedCirrusPluginOptions } from "./types";
 export { augmentWorkerStartupError, isWorkerEntryEvalError, withWorkerStartupHint, WORKER_STARTUP_HINT } from "./worker-startup-hint";

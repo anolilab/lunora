@@ -132,6 +132,7 @@ export type { CacheEntry, ReactiveCacheOptions } from "./reactive-cache";
 export { ReactiveCache, reactiveCacheKey, stableStringify } from "./reactive-cache";
 export type { ApplyOnDeleteOptions, NestedWith, OnDeleteActionLike, RelationDefinitionLike, ResolveWithOptions, WithInput } from "./relations";
 export { applyOnDelete, resolveWith, runRowValidators } from "./relations";
+export type { LogEventInput } from "./request-log";
 export { buildFtsMatch, ftsTableName, scoreDocument, stringifySearchText, tokenizeSearch } from "./search-text";
 export type { SecurityAuditResult, SecurityFinding, SecurityFindingKind, SecurityFindingLevel } from "./security-audit";
 export { buildSecurityAudit, MIN_ADMIN_TOKEN_LENGTH } from "./security-audit";
@@ -139,6 +140,7 @@ export type { SessionRecord } from "./session-do";
 export { SESSION_DO_TTL_DEFAULT, SessionDO } from "./session-do";
 export type {
     HibernatableWebSocket,
+    LogSink,
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,
     RunShardBulkDeleteArgs,

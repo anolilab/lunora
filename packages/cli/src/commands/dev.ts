@@ -1,7 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { spawn as nodeSpawn } from "node:child_process";
 
-import { createConfirm, ensureDevVariables } from "@cirrus/config";
+import { createConfirm, ensureDevVariables, formatCirrusEvent } from "@cirrus/config";
 
 import type { ApiSpec } from "../util/api-spec";
 import type { CodegenWatcherHandle } from "../util/codegen-watch";
@@ -84,32 +84,71 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
     };
 };
 
-/** Pipe a child's stdout/stderr through the logger, tagged by name. */
-const pipeChildOutput = (child: ChildProcess, tag: string, logger: Logger): void => {
-    const onLine = (chunk: Buffer, kind: "stderr" | "stdout"): void => {
-        const text = chunk.toString("utf8").trimEnd();
+/**
+ * Emit one already-split output line. A Cirrus structured event
+ * (`source: "cirrus"`) is rewritten as a tagged, attributed `[cirrus]` line at
+ * its own severity; everything else passes through tagged with the child's name
+ * (`[wrangler]`), stderr at warn level.
+ */
+const emitChildLine = (line: string, tag: string, kind: "stderr" | "stdout", logger: Logger): void => {
+    if (line.length === 0) {
+        return;
+    }
 
-        if (text.length === 0) {
+    const formatted = formatCirrusEvent(line);
+
+    if (formatted) {
+        // `formatted.level` is exactly the `error | info | warn` union of the
+        // logger's channels, so index straight into it — no branch ladder.
+        logger[formatted.level](`[cirrus] ${formatted.text}`);
+
+        return;
+    }
+
+    const prefixed = `[${tag}] ${line}`;
+
+    if (kind === "stderr") {
+        logger.warn(prefixed);
+    } else {
+        logger.info(prefixed);
+    }
+};
+
+/**
+ * Pipe a child's stdout/stderr through the logger, tagged by name, recognising
+ * and reformatting Cirrus structured log events along the way. Output is
+ * line-buffered per stream so a structured event split across two `data` chunks
+ * is still parsed as one line; the trailing partial is flushed on stream end.
+ */
+const pipeChildOutput = (child: ChildProcess, tag: string, logger: Logger): void => {
+    const pumpStream = (stream: NodeJS.ReadableStream | null, kind: "stderr" | "stdout"): void => {
+        if (!stream) {
             return;
         }
 
-        for (const line of text.split("\n")) {
-            const prefixed = `[${tag}] ${line}`;
+        let buffer = "";
 
-            if (kind === "stderr") {
-                logger.warn(prefixed);
-            } else {
-                logger.info(prefixed);
+        stream.on("data", (chunk: Buffer) => {
+            buffer += chunk.toString("utf8");
+
+            const lines = buffer.split("\n");
+
+            // Keep the last element as the (possibly incomplete) pending line.
+            buffer = lines.pop() ?? "";
+
+            for (const line of lines) {
+                emitChildLine(line.trimEnd(), tag, kind, logger);
             }
-        }
+        });
+
+        stream.on("end", () => {
+            emitChildLine(buffer.trimEnd(), tag, kind, logger);
+            buffer = "";
+        });
     };
 
-    child.stdout?.on("data", (chunk: Buffer) => {
-        onLine(chunk, "stdout");
-    });
-    child.stderr?.on("data", (chunk: Buffer) => {
-        onLine(chunk, "stderr");
-    });
+    pumpStream(child.stdout, "stdout");
+    pumpStream(child.stderr, "stderr");
 };
 
 /** Real worker spawner: runs the descriptor as a child and pipes its output through the logger. */

@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 
 import type { ExecutionContextLike } from "../src/create-worker";
 import { createWorker } from "../src/create-worker";
-import type { ObservabilityEvent, ObservabilitySink } from "../src/observability";
-import { emitRpcEvent } from "../src/observability";
+import type { LogEvent, ObservabilityEvent, ObservabilitySink } from "../src/observability";
+import { emitLogEvent, emitRpcEvent } from "../src/observability";
 import type { QueryCoordinator } from "../src/query-coordinator";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
 
@@ -95,6 +95,52 @@ describe("observabilitySink", () => {
             emitRpcEvent(sink, { durationMs: 42, functionPath: "messages:list", ok: true, shardKey: "channel-1" });
 
             expect(events).toEqual([{ durationMs: 42, functionPath: "messages:list", ok: true, shardKey: "channel-1" }]);
+        });
+    });
+
+    describe("emitLogEvent", () => {
+        const logEvent: LogEvent = { args: ["hi"], functionPath: "messages:list", level: "info", message: "hi", ts: 1 };
+
+        it("no-ops when the sink or onLog is missing", () => {
+            expect.assertions(2);
+
+            expect(() => {
+                emitLogEvent(undefined, logEvent);
+            }).not.toThrow();
+            expect(() => {
+                emitLogEvent({}, logEvent);
+            }).not.toThrow();
+        });
+
+        it("swallows a throwing onLog callback", () => {
+            expect.assertions(1);
+
+            const sink: ObservabilitySink = {
+                onLog: () => {
+                    throw new Error("log sink exploded");
+                },
+            };
+
+            expect(() => {
+                emitLogEvent(sink, logEvent);
+            }).not.toThrow();
+        });
+
+        it("forwards the event when onLog is set", () => {
+            expect.assertions(1);
+
+            const seen: LogEvent[] = [];
+
+            emitLogEvent(
+                {
+                    onLog: (event) => {
+                        seen.push(event);
+                    },
+                },
+                logEvent,
+            );
+
+            expect(seen).toEqual([logEvent]);
         });
     });
 

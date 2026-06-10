@@ -2,10 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
     appendRequestLogEntry,
+    emitLogEvent,
     emitRequestLogEvent,
     ensureRequestLogTable,
     readRequestLog,
     redactArgs,
+    renderLogMessage,
     REQUEST_LOG_RETENTION,
     REQUEST_LOG_TABLE,
 } from "../src/request-log";
@@ -290,5 +292,61 @@ describe("emitRequestLogEvent (PLAN3 §3.3 Logpush emit)", () => {
         expect(error).toHaveBeenCalledTimes(1);
 
         expect(JSON.parse(error.mock.calls.at(0)?.at(0) as string)).toMatchObject({ error: "boom", outcome: "error" });
+    });
+});
+
+describe("renderLogMessage", () => {
+    it("passes strings through verbatim and JSON-serialises other values, space-joined", () => {
+        expect.assertions(1);
+
+        expect(renderLogMessage(["loaded", 3, { id: "x" }, true])).toBe('loaded 3 {"id":"x"} true');
+    });
+
+    it("falls back to String() for an unserialisable (circular) value rather than throwing", () => {
+        expect.assertions(1);
+
+        const circular: Record<string, unknown> = {};
+        circular.self = circular;
+
+        expect(() => renderLogMessage([circular])).not.toThrow();
+    });
+});
+
+describe("emitLogEvent (ctx.log → console)", () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it("emits the rendered message but NOT the raw args (no secret leak into Workers Logs)", () => {
+        expect.assertions(4);
+
+        const log = vi.spyOn(console, "log").mockImplementation(() => {});
+
+        emitLogEvent({ args: ["hello", { token: "s3cr3t" }], functionPath: "messages:list", level: "info", message: 'hello {"token":"s3cr3t"}', shardKey: "room-9", ts: 1000, userId: "user-1" });
+
+        expect(log).toHaveBeenCalledTimes(1);
+
+        const line = log.mock.calls.at(0)?.at(0) as string;
+        const event = JSON.parse(line) as Record<string, unknown>;
+
+        expect(event).toMatchObject({ function: "messages:list", level: "info", message: 'hello {"token":"s3cr3t"}', shard: "room-9", source: "cirrus", type: "log", userId: "user-1" });
+        // The structured `args` array is deliberately omitted from the console event;
+        // it stays on the opt-in `onLog` sink. (The secret is still in `message` here
+        // because the developer chose to log the object — same as a raw console.log.)
+        expect(event.args).toBeUndefined();
+        expect(Object.keys(event)).not.toContain("args");
+    });
+
+    it("routes error to console.error and warn to console.warn", () => {
+        expect.assertions(2);
+
+        const error = vi.spyOn(console, "error").mockImplementation(() => {});
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        emitLogEvent({ args: [], functionPath: "a:b", level: "error", message: "boom", ts: 1 });
+        emitLogEvent({ args: [], functionPath: "a:b", level: "warn", message: "careful", ts: 2 });
+
+        expect(error).toHaveBeenCalledTimes(1);
+        expect(warn).toHaveBeenCalledTimes(1);
     });
 });

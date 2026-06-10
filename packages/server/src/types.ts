@@ -794,10 +794,38 @@ interface VectorSearch extends VectorSearchReader {
     upsertNow: (indexName: string, input: VectorUpsertInput) => Promise<void>;
 }
 
+/**
+ * Structured logger on every function `ctx`. Each call emits one attributed log
+ * line — tagged with the function path on the server — that flows to an
+ * `ObservabilitySink`'s `onLog` (where you route it in production) and, in
+ * development, to the dev server terminal via the CLI / Vite plugin formatter.
+ * Mirrors the `console` method names so it's a drop-in for `console.log` inside a
+ * handler, but with attribution and a routable transport.
+ *
+ * Accepts any number of values per call, exactly like `console`; objects are
+ * rendered into the human-readable message. The raw, un-rendered arguments are
+ * preserved ONLY on the in-process `onLog` sink (which you opt into and control);
+ * the rendered message — not the structured args — is what reaches the dev
+ * terminal and the platform's Workers Logs.
+ *
+ * Attribution follows the dispatched function: a log emitted inside an internal
+ * function invoked via `ctx.runQuery`/`runMutation`/`runAction` is attributed to
+ * the outer request entrypoint, since the composed call reuses its context.
+ */
+interface CirrusLogger {
+    readonly debug: (...args: unknown[]) => void;
+    readonly error: (...args: unknown[]) => void;
+    readonly info: (...args: unknown[]) => void;
+    readonly log: (...args: unknown[]) => void;
+    readonly warn: (...args: unknown[]) => void;
+}
+
 // eslint-disable-next-line unicorn/prevent-abbreviations -- public API name re-exported by src/index.ts; renaming would break consumers
 interface QueryCtx {
     readonly auth: AuthState;
     readonly db: DatabaseReader;
+    /** Structured, function-attributed logger; see {@link CirrusLogger}. */
+    readonly log: CirrusLogger;
 
     /**
      * Compose a read-only subquery in-process, reusing this query's read
@@ -816,6 +844,8 @@ interface QueryCtx {
 interface MutationCtx {
     readonly auth: AuthState;
     readonly db: DatabaseWriter;
+    /** Structured, function-attributed logger; see {@link CirrusLogger}. */
+    readonly log: CirrusLogger;
 
     /**
      * Compose a submutation in-process, reusing this mutation's `db` writer.
@@ -844,6 +874,8 @@ interface ActionCtx {
     readonly auth: AuthState;
     readonly db: DatabaseWriter;
     readonly fetch: typeof globalThis.fetch;
+    /** Structured, function-attributed logger; see {@link CirrusLogger}. */
+    readonly log: CirrusLogger;
     readonly runAction: <A extends ArgsValidator, R>(reference: RegisteredAction<A, R>, args: InferArgs<A>) => Promise<R>;
     readonly runMutation: <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>) => Promise<R>;
     readonly runQuery: <A extends ArgsValidator, R>(reference: RegisteredQuery<A, R>, args: InferArgs<A>) => Promise<R>;
@@ -906,6 +938,7 @@ export type {
     AnyApi,
     ArgsValidator,
     AuthState,
+    CirrusLogger,
     DatabaseReader,
     DatabaseWriter,
     FunctionKind,
