@@ -76,6 +76,9 @@ catalogs:
       specifier: ^1.60.0
       version: 1.60.0
   frontend:
+    '@solidjs/testing-library':
+      specifier: ^0.8.10
+      version: 0.8.10
     '@tanstack/db':
       specifier: ^0.6.8
       version: 0.6.8
@@ -100,6 +103,9 @@ catalogs:
     '@testing-library/dom':
       specifier: ^10.4.1
       version: 10.4.1
+    '@testing-library/jest-dom':
+      specifier: ^6.9.1
+      version: 6.9.1
     '@testing-library/react':
       specifier: ^16.3.2
       version: 16.3.2
@@ -112,6 +118,18 @@ catalogs:
     jsdom:
       specifier: ^29.1.1
       version: 29.1.1
+    solid-js:
+      specifier: ^1.9.13
+      version: 1.9.13
+    svelte:
+      specifier: ^5.56.3
+      version: 5.56.3
+    vite-plugin-solid:
+      specifier: ^2.11.12
+      version: 2.11.12
+    vue:
+      specifier: ^3.5.13
+      version: 3.5.35
   http:
     hono:
       specifier: ^4.12.25
@@ -1378,12 +1396,15 @@ importers:
       '@cirrus/client':
         specifier: workspace:*
         version: link:../client
+      '@cirrus/ssr':
+        specifier: workspace:*
+        version: link:../ssr
     devDependencies:
       '@solidjs/testing-library':
-        specifier: ^0.8.10
+        specifier: catalog:frontend
         version: 0.8.10(solid-js@1.9.13)
       '@testing-library/jest-dom':
-        specifier: ^6.9.1
+        specifier: catalog:frontend
         version: 6.9.1
       '@types/node':
         specifier: catalog:types
@@ -1398,13 +1419,13 @@ importers:
         specifier: catalog:frontend
         version: 29.1.1(@noble/hashes@2.2.0)
       solid-js:
-        specifier: ^1.9.13
+        specifier: catalog:frontend
         version: 1.9.13
       typescript:
         specifier: catalog:tsc
         version: 6.0.3
       vite-plugin-solid:
-        specifier: ^2.11.12
+        specifier: catalog:frontend
         version: 2.11.12(@testing-library/jest-dom@6.9.1)(solid-js@1.9.13)(vite@8.0.16(@types/node@25.9.2)(esbuild@0.28.0)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
       vitest:
         specifier: catalog:test
@@ -1577,6 +1598,9 @@ importers:
       '@cirrus/client':
         specifier: workspace:*
         version: link:../client
+      '@cirrus/ssr':
+        specifier: workspace:*
+        version: link:../ssr
     devDependencies:
       '@types/node':
         specifier: catalog:types
@@ -1588,7 +1612,7 @@ importers:
         specifier: catalog:build
         version: 0.28.0
       svelte:
-        specifier: ^5.56.3
+        specifier: catalog:frontend
         version: 5.56.3(@typescript-eslint/types@8.61.0)
       typescript:
         specifier: catalog:tsc
@@ -1696,6 +1720,9 @@ importers:
       '@cirrus/client':
         specifier: workspace:*
         version: link:../client
+      '@cirrus/ssr':
+        specifier: workspace:*
+        version: link:../ssr
     devDependencies:
       '@types/node':
         specifier: catalog:types
@@ -1713,7 +1740,7 @@ importers:
         specifier: catalog:test
         version: 4.1.8(@opentelemetry/api@1.9.1)(@types/node@25.9.2)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.16(@types/node@25.9.2)(esbuild@0.28.0)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
       vue:
-        specifier: ^3.5.13
+        specifier: catalog:frontend
         version: 3.5.35(typescript@6.0.3)
 
   tests/e2e:

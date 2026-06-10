@@ -1,5 +1,6 @@
 import type { CirrusClient } from "@cirrus/client";
 import type { JSX } from "solid-js";
+import { createComponent } from "solid-js";
 
 import { CirrusContext } from "./context";
 
@@ -33,9 +34,18 @@ export interface CirrusProviderProps {
  *     &lt;/CirrusProvider>
  * ), root);
  * ```
+ *
+ * Written with `createComponent` rather than JSX (what JSX compiles to) so the
+ * package stays a plain-`.ts` build — no Solid JSX transform needed to bundle
+ * the library's multiple entry points. `client` is read through a getter so
+ * Solid tracks it: swapping the prop re-provides the new value to descendants.
  */
-export const CirrusProvider = (props: CirrusProviderProps): JSX.Element => (
-    // `props.client` is read lazily inside the JSX so Solid tracks it: swapping
-    // the client prop re-provides the new value to descendants.
-    <CirrusContext.Provider value={props.client}>{props.children}</CirrusContext.Provider>
-);
+export const CirrusProvider = (props: CirrusProviderProps): JSX.Element =>
+    createComponent(CirrusContext.Provider, {
+        get children() {
+            return props.children;
+        },
+        get value() {
+            return props.client;
+        },
+    });

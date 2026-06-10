@@ -11,14 +11,15 @@
  * no loading flash — then attach the live subscription; the client half of
  * PLAN4's "your loaders are live" reactive-loader handoff).
  *
- * Server-side preloading (`createServerClient`, `preloadQuery`) lives in
- * `@cirrus/client` and is framework-neutral — call it from your SolidStart route
- * loader and hand the resulting `Preloaded` token to `hydratePreloaded`.
+ * Server-side preloading (`createServerClient`, `preloadQuery`) lives in the
+ * socket-free `@cirrus/solid/server` entry (a re-export of `@cirrus/ssr`, the
+ * framework-neutral server contract) — call it from your SolidStart route loader
+ * and hand the resulting `Preloaded` token to `hydratePreloaded`.
  */
 export type { CirrusProviderProps } from "./cirrus-provider";
 export { CirrusProvider } from "./cirrus-provider";
 export { CirrusContext, useCirrus } from "./context";
-export type { CreateMutationCallOptions, MutationClient, MutationHandle } from "./create-mutation";
+export type { MutationClient, MutationHandle } from "./create-mutation";
 export { createMutation, createMutationForClient } from "./create-mutation";
 export type { CreateQueryOptions } from "./create-query";
 export { createQuery } from "./create-query";

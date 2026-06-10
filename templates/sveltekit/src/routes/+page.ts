@@ -1,5 +1,5 @@
-import type { Preloaded, ReturnOf } from "@cirrus/client";
-import { createServerClient, preloadQuery } from "@cirrus/client";
+import type { Preloaded, ReturnOf } from "@cirrus/svelte/server";
+import { createServerClient, preloadQuery } from "@cirrus/svelte/server";
 
 import { api } from "../../cirrus/_generated/api";
 import type { PageLoad } from "./$types";

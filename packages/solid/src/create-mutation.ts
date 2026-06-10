@@ -1,28 +1,9 @@
-import type { ArgsOf, FunctionReference, OptimisticUpdate, ReturnOf } from "@cirrus/client";
+import type { ArgsOf, FunctionReference, MutationCallOptions, ReturnOf } from "@cirrus/client";
+import { createMutationRunner } from "@cirrus/client";
 import type { Accessor } from "solid-js";
 import { createSignal } from "solid-js";
 
 import { useCirrus } from "./context";
-
-/** Per-call options forwarded straight to `client.mutation`. */
-export interface CreateMutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unknown> {
-    /**
-     * Single-subscription optimistic transform. Receives the matching
-     * subscription's current value and returns the value to show until the
-     * server confirms; rolled back on failure.
-     */
-    optimistic?: (current: TCurrent | undefined) => TValue;
-
-    /**
-     * Convex-parity multi-query optimistic update over the live subscription
-     * cache. One mutation can patch many subscribed queries at once; every write
-     * is rolled back atomically if the mutation rejects.
-     */
-    optimisticUpdate?: OptimisticUpdate<TArgs>;
-
-    /** Route to a specific shard when the target mutation is `.shardBy(...)`-partitioned. */
-    shardKey?: string;
-}
 
 export interface MutationHandle<F extends FunctionReference> {
     /** The latest invocation's resolved value, or `undefined` before the first success. */
@@ -30,7 +11,7 @@ export interface MutationHandle<F extends FunctionReference> {
     /** The latest invocation's error, or `undefined`. */
     error: Accessor<Error | undefined>;
     /** Invoke the mutation. Resolves with the server result; rejects on failure. */
-    mutate: (args: ArgsOf<F>, options?: CreateMutationCallOptions<unknown, unknown, ArgsOf<F>>) => Promise<ReturnOf<F>>;
+    mutate: (args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>>) => Promise<ReturnOf<F>>;
     /** `true` while any invocation from this handle is in flight (ref-counted, so overlapping calls compose). */
     pending: Accessor<boolean>;
     /** Clear `data`/`error` back to idle. */
@@ -43,44 +24,30 @@ export interface MutationHandle<F extends FunctionReference> {
  * in tests without constructing a full `CirrusClient`.
  */
 export interface MutationClient<F extends FunctionReference> {
-    mutation: (function_: F, args: ArgsOf<F>, options?: CreateMutationCallOptions<unknown, unknown, ArgsOf<F>>) => Promise<ReturnOf<F>>;
+    mutation: (function_: F, args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>>) => Promise<ReturnOf<F>>;
 }
 
 /**
  * Build a mutation handle bound to an explicit client. Internal seam used by the
  * provider-bound {@link createMutation}; exported for tests that inject a stub.
+ * The ref-counted pending + error-normalize orchestration is the shared
+ * `createMutationRunner` from `@cirrus/client`; only the reactive sinks (Solid
+ * signals) are adapter-specific.
  */
 export const createMutationForClient = <F extends FunctionReference>(client: MutationClient<F>, function_: F): MutationHandle<F> => {
     const [data, setData] = createSignal<ReturnOf<F> | undefined>(undefined);
     const [error, setError] = createSignal<Error | undefined>(undefined);
     const [pending, setPending] = createSignal(false);
 
-    // Ref-counted across overlapping calls of this handle instance.
-    let inFlight = 0;
-
-    const mutate = async (args: ArgsOf<F>, options?: CreateMutationCallOptions<unknown, unknown, ArgsOf<F>>): Promise<ReturnOf<F>> => {
-        inFlight += 1;
-        setPending(true);
-
-        try {
-            const result = await client.mutation(function_, args, options);
-
+    const mutate = createMutationRunner(client, function_, {
+        setError,
+        setPending,
+        setResult: (result) => {
             // Wrap in a thunk so a function-valued server result is stored, not invoked.
             setData(() => result);
             setError(undefined);
-
-            return result;
-        } catch (error_) {
-            const normalized = error_ instanceof Error ? error_ : new Error(String(error_));
-
-            setError(normalized);
-
-            throw normalized;
-        } finally {
-            inFlight -= 1;
-            setPending(inFlight > 0);
-        }
-    };
+        },
+    });
 
     const reset = (): void => {
         setData(() => undefined);
