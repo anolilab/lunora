@@ -11,6 +11,8 @@ const run = (schema: ReturnType<typeof defineSchema>) => unindexedForeignKey.run
 
 describe("unindexed_foreign_key", () => {
     it("flags a `one`-relation FK column with no index", () => {
+        expect.assertions(2);
+
         const schema = defineSchema({
             posts: defineTable({ authorId: v.id("users"), title: v.string() }).relations((r) => {
                 return {
@@ -38,6 +40,8 @@ describe("unindexed_foreign_key", () => {
     });
 
     it("passes when an index leads with the FK column", () => {
+        expect.assertions(1);
+
         const schema = defineSchema({
             posts: defineTable({ authorId: v.id("users"), title: v.string() })
                 .index("byAuthorId", ["authorId"])
@@ -51,6 +55,8 @@ describe("unindexed_foreign_key", () => {
     });
 
     it("passes when the FK is the leading column of a composite index", () => {
+        expect.assertions(1);
+
         const schema = defineSchema({
             posts: defineTable({ authorId: v.id("users"), createdAt: v.number() })
                 .index("byAuthorCreated", ["authorId", "createdAt"])
@@ -64,6 +70,8 @@ describe("unindexed_foreign_key", () => {
     });
 
     it("flags an FK that is only a trailing column (leftmost-prefix rule)", () => {
+        expect.assertions(1);
+
         const schema = defineSchema({
             posts: defineTable({ authorId: v.id("users"), createdAt: v.number() })
                 .index("byCreatedAuthor", ["createdAt", "authorId"])
@@ -77,6 +85,8 @@ describe("unindexed_foreign_key", () => {
     });
 
     it("ignores `many` relations (their FK lives on the other table)", () => {
+        expect.assertions(1);
+
         const schema = defineSchema({
             posts: defineTable({ authorId: v.id("users"), title: v.string() }),
             users: users().relations((r) => {
@@ -90,6 +100,8 @@ describe("unindexed_foreign_key", () => {
 
 describe("runAdvisor", () => {
     it("runs the static lints and returns their findings", () => {
+        expect.assertions(3);
+
         const schema = fromServerSchema(
             defineSchema({
                 posts: defineTable({ authorId: v.id("users") }).relations((r) => {

@@ -17,11 +17,15 @@ const run = (authApiCalls?: AdvisorAuthApiCall[]) => authApiCallWithoutHeaders.r
 
 describe("auth_api_call_without_headers", () => {
     it("finds nothing when no authApi call evidence is supplied (runtime caller)", () => {
+        expect.assertions(1);
+
         // A runtime caller (no codegen feeder) must not flag anything.
         expect(run()).toHaveLength(0);
     });
 
     it("flags a call with hasHeaders: false", () => {
+        expect.assertions(2);
+
         const calls: AdvisorAuthApiCall[] = [
             { exportName: "createOrg", file: "orgs", hasHeaders: false, line: 10, method: "createOrganization" },
         ];
@@ -38,6 +42,8 @@ describe("auth_api_call_without_headers", () => {
     });
 
     it("does not flag a call with hasHeaders: true", () => {
+        expect.assertions(1);
+
         const calls: AdvisorAuthApiCall[] = [
             { exportName: "createOrg", file: "orgs", hasHeaders: true, line: 10, method: "createOrganization" },
         ];
@@ -46,6 +52,8 @@ describe("auth_api_call_without_headers", () => {
     });
 
     it("produces two findings with distinct cacheKeys for two violating calls", () => {
+        expect.assertions(3);
+
         const calls: AdvisorAuthApiCall[] = [
             { exportName: "banSomeone", file: "admin", hasHeaders: false, line: 5, method: "banUser" },
             { exportName: "promoteUser", file: "admin", hasHeaders: false, line: 20, method: "setRole" },

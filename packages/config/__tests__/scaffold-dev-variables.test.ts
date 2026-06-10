@@ -5,10 +5,25 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { ScaffoldPlan } from "../src/scaffold-dev-variables";
 import { ensureDevVariables, planDevVariablesAugment, planDevVariablesScaffold } from "../src/scaffold-dev-variables";
 
 /** Deterministic stand-in for `crypto.randomBytes(n).toString("hex")`. */
 const fixedHex = (bytes: number): string => "a".repeat(bytes * 2);
+
+/** The `confirm` dependency signature, for typing `vi.fn()` mocks. */
+type Confirm = (message: string) => Promise<boolean>;
+
+/**
+ * Narrow a {@link ScaffoldPlan} to its `generate` variant, failing the test
+ * unconditionally if it isn't. Keeps the status check out of the test body so
+ * the discriminant assertion stays unconditional.
+ */
+const generatePlan = (plan: ScaffoldPlan): Extract<ScaffoldPlan, { status: "generate" }> => {
+    expect(plan.status).toBe("generate");
+
+    return plan as Extract<ScaffoldPlan, { status: "generate" }>;
+};
 
 const EXAMPLE = `# Local dev secrets (gitignored).
 # Generate a strong secret with: openssl rand -hex 32
@@ -40,13 +55,9 @@ describe("planDevVariablesScaffold", () => {
     });
 
     it("fills secret-like placeholders with random hex and lists the generated keys", () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
-        const plan = planDevVariablesScaffold({ devVarsExists: false, exampleContent: EXAMPLE, randomHex: fixedHex });
-
-        if (plan.status !== "generate") {
-            throw new Error(`expected "generate", got "${plan.status}"`);
-        }
+        const plan = generatePlan(planDevVariablesScaffold({ devVarsExists: false, exampleContent: EXAMPLE, randomHex: fixedHex }));
 
         expect(plan.generatedKeys).toStrictEqual(["AUTH_SECRET", "STORAGE_SECRET", "CIRRUS_ADMIN_TOKEN"]);
         // Secret keys get a fresh 64-char hex value.
@@ -57,34 +68,30 @@ describe("planDevVariablesScaffold", () => {
     });
 
     it("catches common placeholder conventions beyond the example's own (todo / placeholder / change_this)", () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
-        const plan = planDevVariablesScaffold({
-            devVarsExists: false,
-            exampleContent: 'AUTH_SECRET="TODO"\nAPI_KEY="PLACEHOLDER"\nWEBHOOK_TOKEN="CHANGE_THIS"\n',
-            randomHex: fixedHex,
-        });
-
-        if (plan.status !== "generate") {
-            throw new Error(`expected "generate", got "${plan.status}"`);
-        }
+        const plan = generatePlan(
+            planDevVariablesScaffold({
+                devVarsExists: false,
+                exampleContent: 'AUTH_SECRET="TODO"\nAPI_KEY="PLACEHOLDER"\nWEBHOOK_TOKEN="CHANGE_THIS"\n',
+                randomHex: fixedHex,
+            }),
+        );
 
         // All three are placeholders for secret-like keys → all regenerated.
         expect(plan.generatedKeys).toStrictEqual(["AUTH_SECRET", "API_KEY", "WEBHOOK_TOKEN"]);
     });
 
     it("leaves a secret-like key alone when the example already pins a real value", () => {
-        expect.assertions(2);
+        expect.assertions(3);
 
-        const plan = planDevVariablesScaffold({
-            devVarsExists: false,
-            exampleContent: 'SHARED_TOKEN="abc123def456"\n',
-            randomHex: fixedHex,
-        });
-
-        if (plan.status !== "generate") {
-            throw new Error(`expected "generate", got "${plan.status}"`);
-        }
+        const plan = generatePlan(
+            planDevVariablesScaffold({
+                devVarsExists: false,
+                exampleContent: 'SHARED_TOKEN="abc123def456"\n',
+                randomHex: fixedHex,
+            }),
+        );
 
         expect(plan.generatedKeys).toStrictEqual([]);
         expect(plan.content).toContain('SHARED_TOKEN="abc123def456"');
@@ -143,7 +150,7 @@ describe("ensureDevVariables", () => {
         );
         writeFileSync(join(dir, ".dev.vars.example"), EXAMPLE, "utf8");
 
-        const confirm = vi.fn(async () => true);
+        const confirm = vi.fn<Confirm>(async () => true);
         const result = await ensureDevVariables({ confirm, cwd: dir, info: () => undefined, randomHex: fixedHex });
 
         expect(result.status).toBe("exists");
@@ -182,7 +189,7 @@ describe("ensureDevVariables", () => {
     it("stays silent when there is no example", async () => {
         expect.assertions(2);
 
-        const confirm = vi.fn(async () => true);
+        const confirm = vi.fn<Confirm>(async () => true);
         const result = await ensureDevVariables({ confirm, cwd: dir, info: () => undefined });
 
         expect(result.status).toBe("no-example");
@@ -206,7 +213,7 @@ describe("ensureDevVariables", () => {
 
         writeFileSync(join(dir, ".dev.vars.example"), EXAMPLE, "utf8");
 
-        const confirm = vi.fn(async () => false);
+        const confirm = vi.fn<Confirm>(async () => false);
         const result = await ensureDevVariables({ confirm, cwd: dir, info: () => undefined, randomHex: fixedHex, yes: true });
 
         expect(result.status).toBe("generated");
