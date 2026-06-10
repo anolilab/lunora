@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 
-import { createWorker, defineRpcEnvelope, VERSION } from "../src/index";
+import { composeWorker, createWorker, defineRpcEnvelope, VERSION } from "../src/index";
 
 describe("index", () => {
     it("exports VERSION", () => {
@@ -15,5 +15,13 @@ describe("index", () => {
         expectTypeOf(createWorker).toBeFunction();
 
         expect(defineRpcEnvelope({ functionPath: "x:y" })).toEqual({ functionPath: "x:y" });
+    });
+
+    it("exports the composeWorker composition helper", () => {
+        expect.assertions(1);
+
+        expectTypeOf(composeWorker).toBeFunction();
+
+        expect(typeof composeWorker).toBe("function");
     });
 });

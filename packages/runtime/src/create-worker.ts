@@ -2814,7 +2814,31 @@ const createWorker = (
         // hono then matches/dispatches and returns its own response (incl. 404).
         const httpContext = await buildHttpActionContext(request, env);
 
-        return options.httpRouter.fetch(request, { ...(env as object), __cirrusCtx: httpContext }, context);
+        // TODO(PLAN4 M2): in-process serverQuery fast-path — when the SSR loader
+        // runs inside this same worker it should reach Cirrus through `createCaller`
+        // (generated in `_generated/functions.ts`) and skip the network hop to
+        // `/_cirrus/rpc`. Deferred per M0-LIVE-LOADER-FINDINGS.md §3 (#3) pending
+        // benchmarking; today every SSR read still forwards over RPC.
+
+        // Error isolation (PLAN4 §1, §2.2): the `httpRouter` is the meta-framework
+        // SSR handler, the LOWEST-priority matcher — it only runs after auth,
+        // explicit routes, and the reserved `/_cirrus/*` endpoints have all
+        // declined. A framework SSR render that THROWS must not propagate past
+        // this seam: containing it here (rather than letting it bubble to the
+        // top-level fetch catch) keeps a render fault framed as a plain 500 from
+        // the SSR plane and guarantees it can never interfere with the realtime
+        // plane. Reserved `/_cirrus/*` requests are dispatched ahead of this call
+        // and on independent fetch invocations, so a single failed SSR render
+        // leaves queries / mutations / subscriptions (`/_cirrus/rpc`, `/_cirrus/ws`)
+        // fully serviceable.
+        try {
+            return await options.httpRouter.fetch(request, { ...(env as object), __cirrusCtx: httpContext }, context);
+        } catch (error: unknown) {
+            // eslint-disable-next-line no-console -- surface the SSR render fault server-side; the client gets a generic 500, never the raw message
+            console.error("[cirrus] httpRouter (SSR) handler threw:", error);
+
+            return new Response("Internal Server Error", { status: 500 });
+        }
     };
 
     const handleWebSocketUpgrade = async (request: Request, env: unknown, url: URL): Promise<Response> => {
@@ -3385,10 +3409,47 @@ const createWorker = (
     };
 };
 
+/**
+ * Compose a meta-framework SSR handler and Cirrus into a single Cloudflare
+ * Worker (PLAN4 §1, §2.2). Thin sugar over {@link createWorker} — a
+ * near-pass-through whose value is naming and a documented, framework-neutral
+ * entrypoint, so a template reads cleanly:
+ *
+ * ```ts
+ * import { composeWorker } from "@cirrus/runtime";
+ *
+ * export default composeWorker({
+ *   httpRouter: ssrHandler, // TanStack Start / React Router / SolidStart / …
+ *   shardDO: env.SHARD,
+ *   auth,
+ * });
+ * ```
+ *
+ * `httpRouter` is *any* meta-framework SSR handler — structurally an
+ * {@link HttpRouterLike} (`{ fetch(request, env?, ctx?) }`). It is the
+ * lowest-priority matcher: the worker dispatches auth (`/api/auth/*`), explicit
+ * {@link WorkerOptions.routes}, and the reserved realtime endpoints
+ * (`/_cirrus/rpc`, `/_cirrus/ws`, `/_cirrus/admin/*`) first, then falls through
+ * to `httpRouter.fetch` for everything else. An SSR render that throws is
+ * contained at that seam and surfaced as a plain 500 — it can never take down
+ * the realtime plane (see `dispatchHttpRoute`). The two flows share one worker
+ * but never collide.
+ *
+ * The signature is identical to {@link createWorker}; pass exactly the same
+ * options. Prefer this name in framework templates to make the composition
+ * intent explicit.
+ */
+const composeWorker = (
+    options: WorkerOptions,
+): {
+    fetch: (request: Request, env: unknown, context: ExecutionContextLike) => Promise<Response>;
+    scheduled: (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike) => Promise<void>;
+} => createWorker(options);
+
 /** Re-exported helper so callers can roundtrip envelopes in tests. */
 const defineRpcEnvelope = (envelope: RpcEnvelope): RpcEnvelope => envelope;
 
-export { createWorker, defineRpcEnvelope };
+export { composeWorker, createWorker, defineRpcEnvelope };
 export type {
     AdminTableResolver,
     BackupManifest,

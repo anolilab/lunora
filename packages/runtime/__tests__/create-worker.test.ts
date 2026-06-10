@@ -2,7 +2,7 @@ import { Hono } from "hono";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ExecutionContextLike, HttpActionContext, HttpRouterLike, Route } from "../src/create-worker";
-import { createWorker } from "../src/create-worker";
+import { composeWorker, createWorker } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
 
 interface ShardSpy {
@@ -815,6 +815,87 @@ describe("createWorker — HTTP actions", () => {
         expect(res.status).toBe(200);
         expect(action).not.toHaveBeenCalled();
         expect(shard.calls).toHaveLength(1);
+    });
+});
+
+describe("composeWorker — meta-framework composition (PLAN4 §2.2)", () => {
+    let shard: ShardSpy;
+
+    beforeEach(() => {
+        shard = createShardSpy();
+    });
+
+    it("routes /_cirrus/* to Cirrus rather than the httpRouter", async () => {
+        expect.assertions(3);
+
+        const ssr = vi.fn<() => Response>(() => new Response("ssr"));
+
+        const worker = composeWorker({
+            httpRouter: honoApp((app) => app.all("*", ssr)),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(
+            new Request("https://app.example/_cirrus/rpc", { body: JSON.stringify({ args: {}, functionPath: "x:y" }), method: "POST" }),
+            {},
+            fakeContext,
+        );
+
+        expect(res.status).toBe(200);
+        expect(ssr).not.toHaveBeenCalled();
+        expect(shard.calls).toHaveLength(1);
+    });
+
+    it("falls through a non-reserved path to the httpRouter SSR handler", async () => {
+        expect.assertions(3);
+
+        const worker = composeWorker({
+            httpRouter: honoApp((app) => app.get("/about", () => new Response("rendered", { status: 200 }))),
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(new Request("https://app.example/about"), {}, fakeContext);
+
+        expect(res.status).toBe(200);
+        await expect(res.text()).resolves.toBe("rendered");
+        expect(shard.calls).toHaveLength(0);
+    });
+
+    it("isolates a throwing SSR render as a 500 while /_cirrus/* stays serviceable", async () => {
+        expect.assertions(4);
+
+        // Swallow the expected server-side log so the deliberate throw doesn't
+        // spam the test output.
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+        const worker = composeWorker({
+            httpRouter: honoApp((app) =>
+                app.get("/boom", () => {
+                    throw new Error("SSR render exploded");
+                }),
+            ),
+            shardDO: shard.namespace,
+        });
+
+        // A throwing SSR render is contained at the seam and surfaced as a 500 —
+        // the raw message is never echoed to the client.
+        const ssrRes = await worker.fetch(new Request("https://app.example/boom"), {}, fakeContext);
+
+        expect(ssrRes.status).toBe(500);
+        await expect(ssrRes.text()).resolves.not.toContain("SSR render exploded");
+
+        // The SAME worker still services the realtime plane: a subsequent
+        // /_cirrus/rpc request forwards to the shard and succeeds.
+        const rpcRes = await worker.fetch(
+            new Request("https://app.example/_cirrus/rpc", { body: JSON.stringify({ args: {}, functionPath: "x:y" }), method: "POST" }),
+            {},
+            fakeContext,
+        );
+
+        expect(rpcRes.status).toBe(200);
+        expect(shard.calls).toHaveLength(1);
+
+        errorSpy.mockRestore();
     });
 });
 
