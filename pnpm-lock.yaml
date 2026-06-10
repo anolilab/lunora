@@ -1738,6 +1738,9 @@ importers:
       '@cirrus/client':
         specifier: workspace:*
         version: link:../client
+      '@cirrus/runtime':
+        specifier: workspace:*
+        version: link:../runtime
       '@cirrus/ssr':
         specifier: workspace:*
         version: link:../ssr
