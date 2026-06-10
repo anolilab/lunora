@@ -97,6 +97,8 @@ const VERSION = "0.0.0";
 export { default as codegenPlugin } from "./codegen-plugin";
 export type { ReconcileResult } from "./cron-sync";
 export { reconcileWranglerCrons } from "./cron-sync";
+export type { DetectFrameworkResult, Framework, FrameworkClass } from "./detect-framework";
+export { detectFramework } from "./detect-framework";
 export { default as devVariablesPlugin } from "./dev-variables-plugin";
 export { createCommandProbe, DEV_WORKER_ENV_VALUE, DEV_WORKER_ENV_VAR, withDevWorkerEnv } from "./dev-worker-env";
 export { default as logStreamPlugin } from "./log-stream-plugin";
