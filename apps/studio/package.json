@@ -22,6 +22,7 @@
         "shadcn": "catalog:ui"
     },
     "devDependencies": {
+        "@scalar/api-reference-react": "catalog:ui",
         "@tailwindcss/vite": "catalog:vite",
         "@types/node": "catalog:types",
         "@types/react": "catalog:frontend",

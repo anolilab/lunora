@@ -335,6 +335,25 @@ export const createDevMockClient = (): CirrusClient =>
             ],
             total: 42,
         }),
+        fetchOpenApi: async (): Promise<unknown> => ({
+            info: { title: "Cirrus API (mock)", version: "0.0.0" },
+            openapi: "3.1.0",
+            paths: {
+                "/_cirrus/rpc#messages:list": { post: { operationId: "messages:list", responses: { default: { description: "RPC error." } }, summary: "query messages:list", tags: ["messages"] } },
+                "/_cirrus/rpc#messages:send": { post: { operationId: "messages:send", responses: { default: { description: "RPC error." } }, summary: "mutation messages:send", tags: ["messages"] } },
+                "/_cirrus/rpc#posts:publish": { post: { operationId: "posts:publish", responses: { default: { description: "RPC error." } }, summary: "mutation posts:publish", tags: ["posts"] } },
+            },
+            tags: [{ name: "messages" }, { name: "posts" }],
+        }),
+        fetchOpenRpc: async (): Promise<unknown> => ({
+            info: { title: "Cirrus RPC (mock)", version: "0.0.0" },
+            methods: [
+                { name: "messages:list", params: [{ name: "args", schema: { properties: { channelId: { type: "string" }, limit: { type: "number" } }, required: ["channelId"], type: "object" } }], result: { name: "result", schema: {} }, "x-cirrus-function-kind": "query", "x-tags": [{ name: "messages" }] },
+                { name: "messages:send", params: [{ name: "args", schema: { properties: { text: { type: "string" } }, required: ["text"], type: "object" } }], result: { name: "result", schema: {} }, "x-cirrus-function-kind": "mutation", "x-tags": [{ name: "messages" }] },
+                { name: "posts:publish", params: [{ name: "args", schema: { properties: { id: { type: "string" } }, required: ["id"], type: "object" } }], result: { name: "result", schema: {} }, "x-cirrus-function-kind": "mutation", "x-tags": [{ name: "posts" }] },
+            ],
+            openrpc: "1.3.2",
+        }),
         listFunctions: async (): Promise<unknown> => [
             { kind: "query", path: "messages:list" },
             { kind: "mutation", path: "messages:send" },
