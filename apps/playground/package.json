@@ -19,6 +19,7 @@
         "@cirrus/auth": "workspace:*",
         "@cirrus/client": "workspace:*",
         "@cirrus/d1": "workspace:*",
+        "@cirrus/db": "workspace:0.0.0",
         "@cirrus/do": "workspace:*",
         "@cirrus/react": "workspace:*",
         "@cirrus/runtime": "workspace:*",

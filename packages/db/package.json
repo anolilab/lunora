@@ -1,0 +1,52 @@
+{
+    "name": "@cirrus/db",
+    "version": "0.0.0",
+    "description": "TanStack DB binding: typed, live-synced collections and a durable offline outbox over the Cirrus client",
+    "license": "FSL-1.1-Apache-2.0",
+    "type": "module",
+    "sideEffects": false,
+    "main": "./dist/index.mjs",
+    "module": "./dist/index.mjs",
+    "types": "./dist/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/index.d.ts",
+            "import": "./dist/index.mjs"
+        },
+        "./package.json": "./package.json"
+    },
+    "files": [
+        "dist",
+        "README.md",
+        "LICENSE.md"
+    ],
+    "scripts": {
+        "build": "pnpm exec packem build --development",
+        "build:prod": "pnpm exec packem build --production",
+        "lint:eslint": "eslint .",
+        "lint:eslint:fix": "eslint . --fix",
+        "lint:prettier": "prettier --check .",
+        "lint:prettier:fix": "prettier --write .",
+        "lint:types": "tsc --noEmit",
+        "test": "vitest run"
+    },
+    "dependencies": {
+        "@cirrus/client": "workspace:*"
+    },
+    "peerDependencies": {
+        "@tanstack/db": "^0.6.0",
+        "@tanstack/offline-transactions": "^1.0.0"
+    },
+    "devDependencies": {
+        "@tanstack/db": "0.6.8",
+        "@tanstack/offline-transactions": "1.0.33",
+        "@types/node": "catalog:types",
+        "@visulima/packem": "catalog:build",
+        "esbuild": "catalog:build",
+        "typescript": "catalog:tsc",
+        "vitest": "catalog:test"
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.10.0"
+    }
+}

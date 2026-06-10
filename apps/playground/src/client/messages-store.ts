@@ -1,8 +1,7 @@
+import { defineCollections } from "@cirrus/db";
 import type { CirrusClient } from "@cirrus/react";
 import type { Collection, Transaction } from "@tanstack/db";
-import { BTreeIndex, createCollection } from "@tanstack/db";
-import type { OfflineExecutor, OnlineDetector } from "@tanstack/offline-transactions";
-import { NonRetriableError, startOfflineExecutor } from "@tanstack/offline-transactions";
+import type { OfflineExecutor } from "@tanstack/offline-transactions";
 
 import { api } from "../../cirrus/_generated/api.js";
 // eslint-disable-next-line unicorn/prevent-abbreviations -- "Doc" is the generated dataModel type name; aliasing it breaks codegen
@@ -12,308 +11,92 @@ import type { Doc, Id } from "../../cirrus/_generated/dataModel.js";
 export type UserRow = Pick<Doc<"users">, "_id" | "name">;
 
 /**
- * Messages data layer, built entirely on TanStack DB + its offline-transactions
- * outbox — the maintained, tested machinery — rather than `@cirrus/client`'s
- * bespoke optimistic/offline queue.
- *
- *   - **Reads**: a `messages` collection synced from the Cirrus live subscription
- *     for the *active* channel, plus a `users` collection mirrored from D1. The UI
- *     joins and sorts them with TanStack DB's incremental live-query engine.
- *   - **Writes**: a `createOfflineAction` whose `onMutate` inserts the optimistic
- *     row and whose named `mutationFn` performs the Cirrus mutation. The executor
- *     persists each send to a durable outbox (IndexedDB) and retries it with
- *     backoff until the browser is back online — so an offline send is never lost,
- *     and is superseded by the synced server row on success (key match via the
- *     client-generated id).
+ * The chat data layer — channels/messages/users live collections plus the
+ * offline outbox — declared in one `defineCollections` call from `@cirrus/db`.
+ * All the sync glue (snapshot diffing, scoped subscriptions, the executor, the
+ * retry-vs-rollback policy, the online detector, client-id generation) lives in
+ * the package; this file only names the tables and their optimistic shapes.
  */
 export interface MessagesStore {
     channelsCollection: Collection<Doc<"channels">, string>;
     collection: Collection<Doc<"messages">, string>;
     /** Optimistically create a channel through the durable outbox. */
-    createChannel: (input: { createdBy: Id<"users">; name: string }) => { id: Id<"channels">; transaction: Transaction };
+    createChannel: (input: { createdBy: Id<"users">; name: string }) => { id: string; transaction: Transaction };
     executor: OfflineExecutor;
     /** Optimistically send a message; returns the client id + its transaction. */
-    send: (input: { channelId: Id<"channels">; text: string; userId: Id<"users"> }) => { id: Id<"messages">; transaction: Transaction };
+    send: (input: { channelId: Id<"channels">; text: string; userId: Id<"users"> }) => { id: string; transaction: Transaction };
     /** Point the live subscription at a channel (or `null` to detach). */
     setActiveChannel: (channelId: Id<"channels"> | null) => void;
     usersCollection: Collection<UserRow, string>;
 }
 
-/** A TanStack DB sync write channel (the subset `makeDiffEmit` drives). */
-interface SyncWriter<T extends object> {
-    begin: () => void;
-    commit: () => void;
-    write: (message: { type: "insert" | "update"; value: T } | { key: string; type: "delete" }) => void;
-}
-
-/**
- * Build an `emit(next)` that diffs a desired keyed snapshot into a collection's
- * sync channel — only changed rows are written, so a reconnect or channel switch
- * never churns the synced view out from under a pending optimistic row. Tracks
- * the last-synced base in `synced`.
- */
-const makeDiffEmit =
-    <T extends object>(synced: Map<string, T>, writer: SyncWriter<T>) =>
-    (next: Map<string, T>): void => {
-        writer.begin();
-
-        for (const [key, value] of next) {
-            const previous = synced.get(key);
-
-            if (previous === undefined) {
-                writer.write({ type: "insert", value });
-            } else if (JSON.stringify(previous) !== JSON.stringify(value)) {
-                writer.write({ type: "update", value });
-            }
-        }
-
-        for (const key of synced.keys()) {
-            if (!next.has(key)) {
-                writer.write({ key, type: "delete" });
-            }
-        }
-
-        writer.commit();
-        synced.clear();
-
-        for (const [key, value] of next) {
-            synced.set(key, value);
-        }
-    };
-
-/**
- * An "always attempt" online detector. We deliberately don't trust
- * `navigator.onLine`: Playwright's `setOffline` doesn't reliably toggle it (or
- * fire `online`/`offline` events) across browsers — Firefox in particular leaves
- * it stuck, which would freeze the outbox. Instead the executor always tries the
- * send and the `mutationFn`'s network-error retry (with backoff) handles real
- * offline; the periodic tick nudges the executor to drain the outbox so a queued
- * send replays promptly once connectivity returns.
- */
-const createOptimisticOnlineDetector = (): OnlineDetector => {
-    let interval: ReturnType<typeof setInterval> | undefined;
-
-    return {
-        dispose: () => {
-            if (interval) {
-                clearInterval(interval);
-            }
-        },
-        isOnline: () => true,
-        notifyOnline: () => {
-            /* no external online signal — see the comment above */
-        },
-        subscribe: (callback) => {
-            interval = setInterval(callback, 1000);
-
-            return () => {
-                if (interval) {
-                    clearInterval(interval);
-                }
-            };
-        },
-    };
-};
-
-/**
- * Run a Cirrus mutation under the outbox's retry policy: a network failure
- * (`TypeError`) stays retryable so the outbox replays it with backoff once the
- * browser is back online; a server rejection becomes a `NonRetriableError` so the
- * executor stops and TanStack DB rolls the optimistic insert back.
- */
-const runOutboxMutation = async (mutate: () => Promise<unknown>): Promise<void> => {
-    try {
-        await mutate();
-    } catch (error) {
-        if (error instanceof TypeError) {
-            throw error;
-        }
-
-        throw new NonRetriableError(error instanceof Error ? error.message : String(error));
-    }
-};
-
 let store: MessagesStore | undefined;
 
 /**
- * Build the singleton messages store over a `CirrusClient`. Idempotent — the
- * first call wins, so every component shares one collection set + outbox.
+ * Build the singleton chat store over a `CirrusClient`. Idempotent — the first
+ * call wins, so every component shares one collection set + outbox.
  */
 export const getMessagesStore = (client: CirrusClient): MessagesStore => {
     if (store) {
         return store;
     }
 
-    // --- messages: synced for the active channel -------------------------------
-    const messagesSynced = new Map<string, Doc<"messages">>();
-    let emit: ((rows: Map<string, Doc<"messages">>) => void) | undefined;
-    let unsubscribe: (() => void) | undefined;
+    const now = (): number => Date.now();
 
-    const collection = createCollection<Doc<"messages">, string>({
-        // Auto-build ordered (B-tree) indexes for the live query's predicates —
-        // the `userId` join key and the `createdAt` sort — so they stay fast as the
-        // channel's history grows instead of full-scanning every update.
-        autoIndex: "eager",
-        defaultIndexType: BTreeIndex,
-        getKey: (message) => message._id,
-        id: "messages",
-        sync: {
-            sync: (writer) => {
-                emit = makeDiffEmit(messagesSynced, writer);
-                writer.markReady();
-
-                return () => {
-                    emit = undefined;
-                };
+    const database = defineCollections(client, {
+        channels: {
+            insert: {
+                mutation: api.channels.create,
+                optimistic: (input: { createdBy: Id<"users">; name: string }, id) => {
+                    return {
+                        _creationTime: now(),
+                        _id: id as Id<"channels">,
+                        createdAt: now(),
+                        createdBy: input.createdBy,
+                        name: input.name,
+                    };
+                },
+                toArgs: (row) => {
+                    return { id: row._id, name: row.name };
+                },
             },
+            list: api.channels.list,
         },
-    });
-
-    // --- users: mirrored from D1 (static, app-wide) ----------------------------
-    const usersSynced = new Map<string, UserRow>();
-
-    const usersCollection = createCollection<UserRow, string>({
-        // Index the join key (`_id`) so the `messages ⨝ users` lookup is O(log n).
-        autoIndex: "eager",
-        defaultIndexType: BTreeIndex,
-        getKey: (user) => user._id,
-        id: "users",
-        sync: {
-            sync: (writer) => {
-                const usersEmit = makeDiffEmit(usersSynced, writer);
-                const unsub = client.subscribe(api.users.list, {}, (rows) => {
-                    usersEmit(new Map(rows.map((user) => [user._id, user])));
-                    writer.markReady();
-                });
-
-                return () => {
-                    unsub();
-                };
+        messages: {
+            insert: {
+                mutation: api.messages.send,
+                optimistic: (input: { channelId: Id<"channels">; text: string; userId: Id<"users"> }, id) => {
+                    return {
+                        _creationTime: now(),
+                        _id: id as Id<"messages">,
+                        channelId: input.channelId,
+                        createdAt: now(),
+                        text: input.text,
+                        userId: input.userId,
+                    };
+                },
+                toArgs: (row) => {
+                    return { channelId: row.channelId, id: row._id, text: row.text };
+                },
             },
+            list: api.messages.list,
+            scopeBy: "channelId",
+        },
+        users: {
+            list: api.users.list,
         },
     });
-
-    // --- channels: mirrored from D1 (static, app-wide) -------------------------
-    const channelsSynced = new Map<string, Doc<"channels">>();
-
-    const channelsCollection = createCollection<Doc<"channels">, string>({
-        autoIndex: "eager",
-        defaultIndexType: BTreeIndex,
-        getKey: (channel) => channel._id,
-        id: "channels",
-        sync: {
-            sync: (writer) => {
-                const channelsEmit = makeDiffEmit(channelsSynced, writer);
-                const unsub = client.subscribe(api.channels.list, {}, (rows) => {
-                    channelsEmit(new Map(rows.map((channel) => [channel._id, channel])));
-                    writer.markReady();
-                });
-
-                return () => {
-                    unsub();
-                };
-            },
-        },
-    });
-
-    // --- writes: durable, retried outbox ---------------------------------------
-    const executor = startOfflineExecutor({
-        collections: { channels: channelsCollection, messages: collection },
-        onlineDetector: createOptimisticOnlineDetector(),
-        mutationFns: {
-            createChannel: async ({ transaction }) => {
-                for (const mutation of transaction.mutations) {
-                    const document = mutation.modified as unknown as Doc<"channels">;
-
-                    // eslint-disable-next-line no-await-in-loop -- sequential keeps the outbox's FIFO ordering
-                    await runOutboxMutation(() => client.mutation(api.channels.create, { id: document._id, name: document.name }));
-                }
-            },
-            sendMessage: async ({ transaction }) => {
-                for (const mutation of transaction.mutations) {
-                    const document = mutation.modified as unknown as Doc<"messages">;
-
-                    // eslint-disable-next-line no-await-in-loop -- sequential keeps the outbox's FIFO ordering
-                    await runOutboxMutation(() =>
-                        client.mutation(api.messages.send, {
-                            channelId: document.channelId,
-                            id: document._id,
-                            text: document.text,
-                        }),
-                    );
-                }
-            },
-        },
-    });
-
-    const sendAction = executor.createOfflineAction<{ channelId: Id<"channels">; id: Id<"messages">; text: string; userId: Id<"users"> }>({
-        mutationFnName: "sendMessage",
-        onMutate: ({ channelId, id, text, userId }) => {
-            collection.insert({
-                _creationTime: Date.now(),
-                _id: id,
-                channelId,
-                createdAt: Date.now(),
-                text,
-                userId,
-            });
-        },
-    });
-
-    const createChannelAction = executor.createOfflineAction<{ createdBy: Id<"users">; id: Id<"channels">; name: string }>({
-        mutationFnName: "createChannel",
-        onMutate: ({ createdBy, id, name }) => {
-            channelsCollection.insert({
-                _creationTime: Date.now(),
-                _id: id,
-                createdAt: Date.now(),
-                createdBy,
-                name,
-            });
-        },
-    });
-
-    const setActiveChannel = (channelId: Id<"channels"> | null): void => {
-        unsubscribe?.();
-        unsubscribe = undefined;
-        // Clear the previous channel's rows from the synced view.
-        emit?.(new Map());
-
-        if (!channelId) {
-            return;
-        }
-
-        unsubscribe = client.subscribe(api.messages.list, { channelId }, (rows) => {
-            const next = new Map<string, Doc<"messages">>();
-
-            for (const row of rows) {
-                next.set(row._id, row);
-            }
-
-            emit?.(next);
-        });
-    };
 
     store = {
-        channelsCollection,
-        collection,
-        createChannel: ({ createdBy, name }) => {
-            // eslint-disable-next-line n/no-unsupported-features/node-builtins -- browser client code; `crypto.randomUUID` is available in all supported browsers
-            const id = crypto.randomUUID() as Id<"channels">;
-            const transaction = createChannelAction({ createdBy, id, name });
-
-            return { id, transaction };
+        channelsCollection: database.collections.channels,
+        collection: database.collections.messages,
+        createChannel: (input) => database.actions.channels(input),
+        executor: database.executor,
+        send: (input) => database.actions.messages(input),
+        setActiveChannel: (channelId) => {
+            database.scope.messages(channelId ? { channelId } : undefined);
         },
-        executor,
-        send: ({ channelId, text, userId }) => {
-            // eslint-disable-next-line n/no-unsupported-features/node-builtins -- browser client code; `crypto.randomUUID` is available in all supported browsers
-            const id = crypto.randomUUID() as Id<"messages">;
-            const transaction = sendAction({ channelId, id, text, userId });
-
-            return { id, transaction };
-        },
-        setActiveChannel,
-        usersCollection,
+        usersCollection: database.collections.users,
     };
 
     return store;

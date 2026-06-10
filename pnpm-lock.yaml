@@ -439,6 +439,9 @@ importers:
       '@cirrus/d1':
         specifier: workspace:*
         version: link:../../packages/d1
+      '@cirrus/db':
+        specifier: workspace:0.0.0
+        version: link:../../packages/db
       '@cirrus/do':
         specifier: workspace:*
         version: link:../../packages/do
@@ -1057,6 +1060,34 @@ importers:
       wrangler:
         specifier: catalog:cloudflare
         version: 4.98.0(@cloudflare/workers-types@4.20260607.1)
+
+  packages/db:
+    dependencies:
+      '@cirrus/client':
+        specifier: workspace:*
+        version: link:../client
+    devDependencies:
+      '@tanstack/db':
+        specifier: 0.6.8
+        version: 0.6.8(typescript@6.0.3)
+      '@tanstack/offline-transactions':
+        specifier: 1.0.33
+        version: 1.0.33(typescript@6.0.3)
+      '@types/node':
+        specifier: catalog:types
+        version: 25.9.2
+      '@visulima/packem':
+        specifier: catalog:build
+        version: 2.0.0-alpha.87(@babel/core@7.29.7)(@csstools/css-parser-algorithms@4.0.0(@csstools/css-tokenizer@4.0.0))(@csstools/css-tokenizer@4.0.0)(@csstools/postcss-slow-plugins@2.0.0(postcss@8.5.15))(@tailwindcss/node@4.3.0)(@tailwindcss/oxide@4.3.0)(@ts-macro/tsc@0.3.7(rollup@4.60.1))(@visulima/css-style-inject@1.0.0-alpha.17)(@visulima/find-cache-dir@3.0.0-alpha.9)(@visulima/packem-rollup@1.0.0-alpha.72(@ts-macro/tsc@0.3.7(rollup@4.60.1))(esbuild@0.28.0)(ini@7.0.0)(json5@2.2.3)(jsonc-parser@3.3.1)(rolldown@1.0.3)(rollup@4.60.1)(typescript@6.0.3)(vite@8.0.16(@types/node@25.9.2)(esbuild@0.28.0)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))(yaml@2.9.0))(esbuild@0.28.0)(github-slugger@2.0.0)(ini@7.0.0)(json5@2.2.3)(jsonc-parser@3.3.1)(lightningcss@1.32.0)(package-manager-detector@1.6.0)(picomatch@4.0.4)(postcss@8.5.15)(rolldown@1.0.3)(rollup@4.60.1)(typescript@6.0.3)(yaml@2.9.0)
+      esbuild:
+        specifier: catalog:build
+        version: 0.28.0
+      typescript:
+        specifier: catalog:tsc
+        version: 6.0.3
+      vitest:
+        specifier: catalog:test
+        version: 4.1.8(@opentelemetry/api@1.9.1)(@types/node@25.9.2)(jsdom@29.1.1(@noble/hashes@2.2.0))(msw@2.14.6(@types/node@25.9.2)(typescript@6.0.3))(vite@8.0.16(@types/node@25.9.2)(esbuild@0.28.0)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
 
   packages/do:
     dependencies:
