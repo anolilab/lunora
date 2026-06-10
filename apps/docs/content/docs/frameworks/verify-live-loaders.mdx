@@ -1,0 +1,123 @@
+---
+title: Manual end-to-end verification
+description: How to actually prove live loaders work — scaffold, SSR-curl the preloaded value, two-tab live update.
+---
+
+The reactive-loader contract is covered by unit tests in `@cirrus/react`
+(`preloadQuery` produces a serializable token, `usePreloadedQuery` seeds the SSR
+value with no flash and attaches the live subscription, `renderToString` contains
+the value). But the **full** proof — browser → SSR worker → live WebSocket
+update — needs a scaffolded, running app, which can't be assembled inside the
+monorepo. This page is the honest manual procedure to prove it yourself.
+
+> This is the procedure from the M0 live-loader spike, generalized across
+> frameworks. It is the "how to actually prove live loaders work" checklist, not
+> an automated test.
+
+## What you're proving
+
+Three claims, in order:
+
+1. **SSR preload** — the route loader runs the Cirrus query on the server and the
+   result is in the **raw HTML** (before any JS runs), not just after hydration.
+2. **No flash** — the first client paint shows the preloaded value with no
+   loading spinner and no refetch.
+3. **Live update** — a write from one tab pushes over `/_cirrus/ws` and updates a
+   second tab with no page reload.
+
+## 1. Scaffold
+
+Pick the template for your framework. TanStack Start (class A) is the proven
+path; the others are scaffoldable and in progress (see
+[Bring your framework](/docs/frameworks/bring-your-framework) for status).
+
+```bash
+cirrus init demo-app -t tanstack-start   # class A — proven end-to-end
+# or, for an existing app:
+#   cd my-existing-app && cirrus init --here
+cd demo-app
+pnpm install
+```
+
+`cirrus init --here` detects your framework, patches the config, scaffolds
+`cirrus/`, and prints the per-framework adapter + worker-composition steps you
+still need to wire by hand. Complete those before running `dev`.
+
+## 2. Dev
+
+```bash
+pnpm dev   # starts wrangler + the Vite dev server (default http://localhost:5173)
+```
+
+For class-A frameworks this is one Vite/Miniflare dev server running both the SSR
+handler and Cirrus realtime. For class-B frameworks (SvelteKit / Nuxt / Astro)
+this is the framework's own dev server with Cirrus realtime composed in — verify
+the `/_cirrus/ws` endpoint responds under it.
+
+## 3. Prove SSR preload (curl the raw HTML)
+
+The decisive test: the preloaded value must be in the HTML **the server sends**,
+not injected by client JS. `curl` runs no JavaScript, so whatever it sees is pure
+SSR output.
+
+```bash
+curl -s http://localhost:5173/ | grep -i "channelId\|messages"
+```
+
+You should see the seeded query response — the `channelId` / `messages` payload —
+embedded in the HTML (typically inside the framework's dehydration `<script>`
+tag, e.g. `__cirrusPreloaded`). If `curl` shows the value, SSR preload works. If
+it only appears after the page hydrates in a browser, the loader is **not** doing
+server-side preload.
+
+## 4. Prove the live subscription attaches
+
+1. Open `http://localhost:5173/` in a browser.
+2. Open DevTools → **Network → WS**.
+3. Confirm a WebSocket connection to **`/_cirrus/ws`** is established after the
+   page loads. This is the live subscription that `usePreloadedQuery` (or your
+   adapter's equivalent) attaches in an effect after mount.
+
+There should be **no** XHR/fetch refetch of the query on first paint — the value
+came from the SSR HTML via `initialData`, and `staleTime: Infinity` means it is
+never refetched. The WebSocket is the only freshness signal.
+
+## 5. Prove live update (two tabs)
+
+1. Open the same URL in **two** browser tabs (A and B).
+2. In tab **A**, submit a message (the sample template has a send form wired to
+   `useMutation(api.messages.send)`).
+3. In tab **B**, the message list updates **without a page reload**.
+
+The path being proven: mutation in A → `/_cirrus/rpc` → `ShardDO` writes and
+broadcasts a delta → `/_cirrus/ws` push to B → the adapter applies the delta via
+`setQueryData` → re-render. No polling, no manual refresh.
+
+## Identity check (optional, with auth)
+
+If your app uses `@cirrus/auth`, confirm SSR and the socket run as the **same**
+user:
+
+- Sign in, then `curl` with the session cookie:
+  `curl -s --cookie "<your-session-cookie>" http://localhost:5173/` should return
+  the **signed-in** user's data.
+- In the browser, the WebSocket upgrade to `/_cirrus/ws` carries the same cookie
+  automatically, so the subscription resumes the same identity with no token
+  exchange. See [Reactive loaders → Identity continuity](/docs/frameworks/reactive-loaders).
+
+## What "pass" looks like
+
+| Step | Pass criterion                                                        |
+| ---- | --------------------------------------------------------------------- |
+| 3    | `curl` (no JS) shows the preloaded query value in the raw HTML        |
+| 4    | a `/_cirrus/ws` WebSocket opens after load; no query refetch on paint |
+| 5    | a write in tab A updates tab B with no reload                         |
+
+If all three pass, the live-loader contract holds for your framework: SSR data
+that hydrates into a live subscription with no flash.
+
+## See also
+
+- [Reactive loaders](/docs/frameworks/reactive-loaders) — the contract being verified
+- [Bring your framework](/docs/frameworks/bring-your-framework) — per-framework status
+- [Deploy your framework](/docs/frameworks/deploy) — shipping the composed worker

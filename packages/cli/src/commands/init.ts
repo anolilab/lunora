@@ -6,6 +6,8 @@ import { walkSync } from "@visulima/fs";
 import { dirname, join, relative, resolve } from "@visulima/path";
 import { downloadTemplate } from "giget";
 
+import type { DetectedFramework, FrameworkDetection } from "../util/detect-framework";
+import { detectFramework } from "../util/detect-framework";
 import type { Logger } from "../util/logger";
 import { patchViteConfig } from "../util/patch-vite-config";
 
@@ -64,6 +66,37 @@ const MINIMAL_VITE_CONFIG = `import { defineConfig } from "vite";
 import { cirrus } from "@cirrus/vite";
 
 export default defineConfig({ plugins: [cirrus()] });
+`;
+
+/** Sample `cirrus/schema.ts` written when scaffolding Cirrus into an existing app. */
+const SAMPLE_SCHEMA = `import { defineSchema, defineTable, v } from "@cirrus/server";
+
+export default defineSchema({
+    messages: defineTable({
+        channelId: v.id("channels"),
+        text: v.string(),
+    })
+        .shardBy("channelId")
+        .index("by_channel", ["channelId"]),
+});
+`;
+
+/** Sample `cirrus/messages.ts` (one query + one mutation) written alongside the schema. */
+const SAMPLE_FUNCTION = `import { mutation, query, v } from "@cirrus/server";
+
+export const list = query({
+    args: { channelId: v.id("channels"), limit: v.optional(v.number()) },
+    handler: async (_context, args) => {
+        return { channelId: args.channelId, limit: args.limit ?? 50, messages: [] };
+    },
+});
+
+export const send = mutation({
+    args: { channelId: v.id("channels"), text: v.string() },
+    handler: async (_context, args) => {
+        return { channelId: args.channelId, text: args.text };
+    },
+});
 `;
 
 const DEFAULT_SOURCE_BASE = "gh:anolilab/cirrus/templates";
@@ -325,27 +358,152 @@ const patchExistingViteConfig = (viteConfigPath: string, cwd: string, logger: Lo
 };
 
 /**
- * In-place mode: configure Cirrus into an existing project at `cwd`. Probes
- * for a vite config, patches it if found, or creates a minimal one otherwise.
- * Returns `{ code: 0 }` on success, `{ code: 1 }` on hard failure.
+ * Scaffold `cirrus/{schema,messages}.ts` into `cwd` when absent. Idempotent:
+ * an existing `cirrus/schema.ts` is left untouched and reported, so re-running
+ * `cirrus init --here` never double-patches the schema. Returns the list of
+ * files actually written (empty when the directory already had a schema).
  */
-const runInPlaceInit = (cwd: string, logger: Logger): InitCommandResult => {
-    let viteConfigPath: string | undefined;
+const scaffoldCirrusDirectory = (cwd: string, logger: Logger): ReadonlyArray<string> => {
+    const cirrusDirectory = join(cwd, "cirrus");
+    const schemaPath = join(cirrusDirectory, "schema.ts");
 
+    if (existsSync(schemaPath)) {
+        logger.info(`cirrus/ already present — left ${schemaPath} untouched`);
+
+        return [];
+    }
+
+    const written: string[] = [];
+
+    try {
+        mkdirSync(cirrusDirectory, { recursive: true });
+        writeFileSync(schemaPath, SAMPLE_SCHEMA, "utf8");
+        written.push(schemaPath);
+
+        const functionPath = join(cirrusDirectory, "messages.ts");
+
+        // The function file is only written when missing so a hand-edited one is
+        // never clobbered on a re-run.
+        if (!existsSync(functionPath)) {
+            writeFileSync(functionPath, SAMPLE_FUNCTION, "utf8");
+            written.push(functionPath);
+        }
+
+        logger.success(`scaffolded cirrus/ (${String(written.length)} file(s))`);
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+
+        logger.error(`init --here: could not scaffold cirrus/: ${message}`);
+    }
+
+    return written;
+};
+
+/**
+ * Per-framework "next steps" copy printed after the in-place patch. Each entry
+ * names the idiomatic Cirrus adapter to install and the composition wiring
+ * the user must add by hand (worker `httpRouter` for class A, hook-injection for
+ * class B). This is the honest "auto-patched vs instructed" boundary: the CLI
+ * scaffolds `cirrus/` and patches the Vite config; the provider + worker
+ * composition is printed for the user to wire because it is framework-specific
+ * and lives in files the CLI does not own.
+ */
+const printFrameworkNextSteps = (detection: FrameworkDetection, logger: Logger): void => {
+    const { adapter, class: frameworkClass, framework } = detection;
+
+    logger.info("");
+    logger.info(`detected framework: ${framework} (class ${frameworkClass})`);
+    logger.info("next steps:");
+    logger.info(`  1. install the adapter:  pnpm add ${adapter} @cirrus/client @cirrus/runtime @cirrus/server`);
+    logger.info("  2. run codegen:          cirrus codegen");
+
+    if (frameworkClass === "A") {
+        // Class A — Cirrus owns the worker entry: drop the framework SSR handler
+        // into createWorker({ httpRouter }).
+        logger.info("  3. compose one worker:   wrap your worker entry with");
+        logger.info("       createWorker({ httpRouter: <your framework SSR handler>, shardDO: ShardDO, ... })");
+        logger.info(`  4. add the provider:     mount the ${adapter} provider in your root layout/route`);
+        logger.info("  5. make a loader live:   preloadQuery() in a loader, usePreloadedQuery() in the component");
+        logger.info("     see https://cirrus.dev/docs/frameworks/reactive-loaders");
+    } else if (frameworkClass === "B") {
+        // Class B — the framework owns its CF adapter: Cirrus realtime is injected
+        // into the framework's server entry/hooks; it keeps the rest.
+        logger.info("  3. inject Cirrus:        mount Cirrus realtime under /_cirrus/* in your server hook");
+        logger.info(`       (${framework} owns its Cloudflare adapter — Cirrus composes into its server entry)`);
+        logger.info(`  4. add the provider:     mount the ${adapter} provider in your root layout`);
+        logger.info("  5. read the guide:       https://cirrus.dev/docs/frameworks/deploy");
+    } else {
+        // Class C — SPA / SSR-less: client adapter + standalone Cirrus worker.
+        logger.info("  3. add the provider:     wrap your app with the CirrusProvider from @cirrus/react");
+        logger.info("  4. read the guide:       https://cirrus.dev/docs/frameworks/bring-your-framework");
+    }
+
+    logger.info("");
+};
+
+/** The Vite-config probe shared by the in-place path. Returns the first existing config, or undefined. */
+const findExistingViteConfig = (cwd: string): string | undefined => {
     for (const candidate of VITE_CONFIG_CANDIDATES) {
         const full = join(cwd, candidate);
 
         if (existsSync(full)) {
-            viteConfigPath = full;
-            break;
+            return full;
         }
     }
 
+    return undefined;
+};
+
+/**
+ * Patch (or create) the project's Vite config for the in-place path, skipping
+ * the work for class-B frameworks that ship their own Cloudflare adapter and
+ * wire Cirrus through their server entry rather than a `cirrus()` Vite plugin.
+ * Returns the InitCommandResult so a hard write failure aborts the whole run.
+ */
+const patchOrCreateViteConfig = (cwd: string, framework: DetectedFramework, logger: Logger): InitCommandResult => {
+    const viteConfigPath = findExistingViteConfig(cwd);
+
     if (viteConfigPath === undefined) {
+        // SvelteKit/Nuxt own their build via their own config; don't drop a
+        // standalone vite.config.ts on them. They get cirrus/ + instructions only.
+        if (framework === "sveltekit" || framework === "nuxt" || framework === "astro") {
+            logger.info(`no Vite config found — ${framework} wires Cirrus through its server entry (see next steps)`);
+
+            return { code: 0, files: [], target: cwd };
+        }
+
         return createMinimalViteConfig(cwd, logger);
     }
 
     return patchExistingViteConfig(viteConfigPath, cwd, logger);
+};
+
+/**
+ * In-place mode: configure Cirrus into an existing project at `cwd`. Detects the
+ * meta-framework from `package.json`, patches/creates the Vite config where
+ * applicable, scaffolds `cirrus/` (schema + sample function) idempotently, and
+ * prints framework-specific next steps (adapter install + provider/worker
+ * wiring). Re-running is a no-op for already-patched pieces.
+ *
+ * Auto-patched: the Vite config (class A/C) and the `cirrus/` scaffold.
+ * Instructed: the adapter dependency, the provider mount, and the worker
+ * `httpRouter` composition (class A) / hook injection (class B) — these live in
+ * framework-owned files, so the CLI prints precise steps instead of guessing.
+ */
+const runInPlaceInit = (cwd: string, logger: Logger): InitCommandResult => {
+    const detection = detectFramework(cwd);
+
+    const viteResult = patchOrCreateViteConfig(cwd, detection.framework, logger);
+
+    if (viteResult.code !== 0) {
+        return viteResult;
+    }
+
+    const scaffolded = scaffoldCirrusDirectory(cwd, logger);
+
+    printFrameworkNextSteps(detection, logger);
+
+    return { code: 0, files: [...viteResult.files, ...scaffolded], target: cwd };
 };
 
 const runInitCommand = async (options: InitCommandOptions): Promise<InitCommandResult> => {

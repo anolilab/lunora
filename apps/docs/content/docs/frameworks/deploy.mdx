@@ -1,0 +1,131 @@
+---
+title: Deploy your framework
+description: One worker, one deploy — how a composed Cirrus + meta-framework app ships to Cloudflare.
+---
+
+A Cirrus + meta-framework app is **one Cloudflare Worker**. Your framework's
+pages, API routes, and SSR loaders share the same Worker that serves Cirrus
+realtime — there is no second service to provision and no second deploy to
+coordinate. This page covers how the single-worker bundle is assembled per
+framework class and how it ships.
+
+> **One worker, one deploy.** Your loaders and your live subscriptions run in the
+> same process, behind the same domain.
+
+For the framework-neutral deploy mechanics (`wrangler.jsonc` bindings, secrets,
+`cirrus deploy`, log tailing) see the [Deployment](/docs/deployment) reference.
+This page is the framework-composition layer on top of it.
+
+## One worker, two dispatch flows
+
+However your app is composed, the resulting Worker dispatches by path:
+
+1. `/api/auth/*` → `@cirrus/auth`
+2. explicit routes → webhooks / callbacks
+3. **everything else** → your framework's SSR handler
+4. `/_cirrus/rpc` → query / mutation RPC
+5. `/_cirrus/ws` → subscriptions / deltas
+6. `/_cirrus/admin/*` → studio / observability
+
+Cirrus realtime lives under the reserved `/_cirrus/*` namespace, so it never
+collides with your framework's routes, and a 500 from SSR does not take down the
+realtime endpoints. See [Bring your framework](/docs/frameworks/bring-your-framework)
+for the request-resolution detail.
+
+## Class A — Cirrus owns the worker entry
+
+**TanStack Start, React Router (Vite), SolidStart.** These are Vite-native, so
+Cirrus owns the Worker entry and drops the framework's SSR handler straight into
+`createWorker({ httpRouter })`. One Vite build, one bundle, one `main`.
+
+```ts
+// src/server.ts — the wrangler `main`
+import { createWorker } from "@cirrus/runtime";
+
+import { ShardDO } from "@cirrus/do";
+import { ssrHandler } from "./framework-entry"; // your framework's SSR fetch handler
+
+export default createWorker({
+    httpRouter: ssrHandler, // pages / API / SSR loaders
+    shardDO: ShardDO,
+    // auth, scheduler, … as needed
+});
+
+export { ShardDO };
+```
+
+```jsonc
+// wrangler.jsonc
+{
+    "name": "my-app",
+    "main": "src/server.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat", "web_socket_auto_reply_to_close"],
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+}
+```
+
+Deploy is the standard flow:
+
+```bash
+pnpm cirrus deploy   # codegen → D1 migrations → wrangler deploy
+```
+
+Because the SSR handler and Cirrus run in the **same** Worker, an SSR loader can
+call Cirrus over a same-process loopback (`/_cirrus/rpc`) with near-zero latency.
+An in-process `serverQuery` fast-path that skips even the loopback is in progress
+(see [Reactive loaders](/docs/frameworks/reactive-loaders)).
+
+## Class B — the framework owns the CF adapter
+
+**SvelteKit, Nuxt, Astro.** These ship their own Cloudflare adapter and build
+their own Worker, so Cirrus does **not** take over the entry. Instead the Cirrus
+worker composition is injected into the framework's server entry / hooks: Cirrus
+realtime mounts under `/_cirrus/*`, and the framework keeps everything else.
+
+- **SvelteKit** — `@sveltejs/adapter-cloudflare` builds the Worker; the Cirrus
+  realtime handler is composed in via the server `handle` hook (the `@cirrus/svelte`
+  adapter ships a `withCirrus()`-style wrapper). `ShardDO` and the migrations are
+  declared in the adapter's `wrangler.jsonc`.
+- **Nuxt** — Nitro's `cloudflare-module` preset builds the Worker; Cirrus is
+  composed into the Nitro server entry, with `ShardDO` exported from the same
+  module.
+- **Astro** — `@astrojs/cloudflare` builds the Worker; Cirrus mounts under
+  `/_cirrus/*` from the Astro middleware / server entry.
+
+The deploy command is still the framework's own build plus `wrangler deploy`. The
+one thing you must reconcile by hand for class B today is that the **Durable
+Object class and its migration** (`ShardDO`, `new_sqlite_classes`) are declared in
+the framework adapter's `wrangler.jsonc`, because the framework — not Cirrus —
+owns that file.
+
+> **Status — be honest about the tier.** Class-A deploy (TanStack Start) is
+> proven. Class-B composition (SvelteKit / Nuxt / Astro) is **preview**: the
+> templates and adapters exist, but the hook-injection + single-bundle deploy has
+> not been run end-to-end in production. Treat the class-B steps above as the
+> intended shape, and verify against your framework's current Cloudflare adapter
+> when you scaffold.
+
+## Class C — SPA / SSR-less
+
+A standalone SPA (the `vite` / `standalone` templates) deploys as a Cirrus Worker
+with no SSR loaders — the client adapter opens the live subscription on the
+client. This is the original Cirrus deploy and is fully shipped; see
+[Deployment](/docs/deployment).
+
+## Wrangler reconciliation
+
+Cirrus's Vite plugin reconciles the bindings it needs (`SHARD`, `SESSION`,
+`SCHEDULER`, `DB`) into `wrangler.jsonc` and validates the result. For class-A
+apps the Cirrus plugin owns the config; for class-B apps it runs in
+`cloudflare: false` mode alongside the framework's plugin and validates the
+framework-owned config rather than taking it over. Automatic framework detection
+and full one-worker emit for class-A frameworks are in progress.
+
+## See also
+
+- [Deployment](/docs/deployment) — bindings, secrets, `cirrus deploy`, log tailing
+- [Bring your framework](/docs/frameworks/bring-your-framework) — the composition matrix
+- [Manual end-to-end verification](/docs/frameworks/verify-live-loaders) — prove live loaders work
+- [@cirrus/runtime](/docs/api/runtime) — `createWorker`, the `httpRouter` seam
