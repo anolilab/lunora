@@ -22,7 +22,10 @@ const filterGroups = (groups: ApiTagGroup[], query: string): ApiTagGroup[] => {
 
     return groups
         .map((group): ApiTagGroup => {
-            return { ...group, operations: group.operations.filter((operation) => `${operation.summary} ${operation.operationId}`.toLowerCase().includes(needle)) };
+            return {
+                ...group,
+                operations: group.operations.filter((operation) => `${operation.summary} ${operation.operationId}`.toLowerCase().includes(needle)),
+            };
         })
         .filter((group) => group.operations.length > 0);
 };
@@ -73,7 +76,11 @@ const ReferenceView = ({ model }: ReferenceViewProps): ReactElement => {
             <nav aria-label={t("API operations")} className="flex min-h-0 flex-col overflow-y-auto border-r border-border" data-testid="api-reference-nav">
                 <div className="sticky top-0 z-10 border-b border-border bg-sidebar/80 p-2 backdrop-blur">
                     <div className="relative">
-                        <HugeiconsIcon className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground" icon={Search01Icon} strokeWidth={2} />
+                        <HugeiconsIcon
+                            className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted-foreground"
+                            icon={Search01Icon}
+                            strokeWidth={2}
+                        />
                         <Input className="h-7 pl-7" data-testid="api-filter" onChange={onFilterChange} placeholder={t("Filter operations")} value={filter} />
                     </div>
                 </div>

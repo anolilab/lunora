@@ -61,7 +61,7 @@ const ApiReferencePanel = ({ spec: inlineSpec }: ApiReferencePanelProps): ReactE
 
     if (state.kind === "loading") {
         return (
-            <div className="space-y-4" data-testid="api-reference-loading">
+            <div className="flex flex-col gap-4" data-testid="api-reference-loading">
                 <Skeleton className="h-8 w-48" />
                 <Skeleton className="h-64 w-full" />
             </div>

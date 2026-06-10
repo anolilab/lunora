@@ -536,7 +536,9 @@ const MESSAGE_IDS = [
     "No example for this response.",
     "Error",
     "{ms} ms",
-    "relation: {table}",
+    "Range",
+    "Value in",
+    "relation",
     // API tab — spec format switch + OpenRPC reference sub-view.
     "API spec format",
     "OpenAPI",
