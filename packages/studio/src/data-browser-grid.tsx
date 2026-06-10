@@ -575,9 +575,11 @@ const DataBrowserTableView = ({
 
     // Keep the focused row in view as it moves past the virtual window's edge.
     useEffect(() => {
+        /* eslint-disable react-you-might-not-need-an-effect/no-event-handler, react-you-might-not-need-an-effect/no-pass-live-state-to-parent -- scroll-sync effect: drives the virtualizer's imperative scrollToIndex from the committed `active` cell so the focused row is rendered before we scroll to it, and so programmatic `active` changes (not just keydown) stay in view */
         if (active !== null) {
             scrollToIndex(active.row);
         }
+        /* eslint-enable react-you-might-not-need-an-effect/no-event-handler, react-you-might-not-need-an-effect/no-pass-live-state-to-parent */
     }, [active, scrollToIndex]);
 
     const renderRow = (virtualRow: { index: number; size: number; start: number }): ReactElement => {

@@ -43,6 +43,8 @@ describe("usersPanel", () => {
     });
 
     it("forwards a debounced search to listAuthUsers", async () => {
+        expect.assertions(1);
+
         const mock = createUsersClient();
 
         render(renderPanel(mock));
@@ -51,11 +53,17 @@ describe("usersPanel", () => {
         fireEvent.change(screen.getByTestId("us-search"), { target: { value: "ann" } });
 
         await waitFor(() => {
-            expect(mock.listAuthUsers).toHaveBeenCalledWith(expect.objectContaining({ search: "ann" }));
+            if (!mock.listAuthUsers.mock.calls.some(([options]) => (options as { search?: string }).search === "ann")) {
+                throw new Error("search not forwarded yet");
+            }
         });
+
+        expect(mock.listAuthUsers).toHaveBeenCalledWith(expect.objectContaining({ search: "ann" }));
     });
 
     it("forwards a role filter to listAuthUsers", async () => {
+        expect.assertions(1);
+
         const mock = createUsersClient();
 
         render(renderPanel(mock));
@@ -64,8 +72,12 @@ describe("usersPanel", () => {
         fireEvent.change(screen.getByTestId("us-role-filter"), { target: { value: "admin" } });
 
         await waitFor(() => {
-            expect(mock.listAuthUsers).toHaveBeenCalledWith(expect.objectContaining({ filterField: "role", filterValue: "admin" }));
+            if (!mock.listAuthUsers.mock.calls.some(([options]) => (options as { filterValue?: string }).filterValue === "admin")) {
+                throw new Error("role filter not forwarded yet");
+            }
         });
+
+        expect(mock.listAuthUsers).toHaveBeenCalledWith(expect.objectContaining({ filterField: "role", filterValue: "admin" }));
     });
 
     it("opens the detail drawer and loads the user's sessions", async () => {
@@ -84,6 +96,8 @@ describe("usersPanel", () => {
     });
 
     it("bans a user from the drawer and refetches", async () => {
+        expect.assertions(2);
+
         const mock = createUsersClient();
 
         render(renderPanel(mock));
@@ -96,14 +110,23 @@ describe("usersPanel", () => {
         fireEvent.click(screen.getByTestId("ud-ban"));
 
         await waitFor(() => {
-            expect(mock.banAuthUser).toHaveBeenCalledWith(expect.objectContaining({ userId: "u1" }));
+            if (mock.banAuthUser.mock.calls.length === 0) {
+                throw new Error("ban not invoked yet");
+            }
         });
         await waitFor(() => {
-            expect(mock.listAuthUsers.mock.calls.length).toBeGreaterThan(callsBefore);
+            if (mock.listAuthUsers.mock.calls.length <= callsBefore) {
+                throw new Error("users not refetched yet");
+            }
         });
+
+        expect(mock.banAuthUser).toHaveBeenCalledWith(expect.objectContaining({ userId: "u1" }));
+        expect(mock.listAuthUsers.mock.calls.length).toBeGreaterThan(callsBefore);
     });
 
     it("unbans an already-banned user from the drawer", async () => {
+        expect.assertions(1);
+
         const mock = createUsersClient();
 
         render(renderPanel(mock));
@@ -112,8 +135,12 @@ describe("usersPanel", () => {
         fireEvent.click(await screen.findByTestId("ud-unban"));
 
         await waitFor(() => {
-            expect(mock.unbanAuthUser).toHaveBeenCalledWith({ userId: "u2" });
+            if (mock.unbanAuthUser.mock.calls.length === 0) {
+                throw new Error("unban not invoked yet");
+            }
         });
+
+        expect(mock.unbanAuthUser).toHaveBeenCalledWith({ userId: "u2" });
     });
 
     it("surfaces an impersonation token", async () => {
@@ -132,6 +159,8 @@ describe("usersPanel", () => {
     });
 
     it("creates a user via the dialog", async () => {
+        expect.assertions(1);
+
         const mock = createUsersClient();
 
         render(renderPanel(mock));
@@ -143,8 +172,12 @@ describe("usersPanel", () => {
         fireEvent.click(screen.getByTestId("uc-submit"));
 
         await waitFor(() => {
-            expect(mock.createAuthUser).toHaveBeenCalledWith(expect.objectContaining({ email: "c@example.com", name: "Cara" }));
+            if (mock.createAuthUser.mock.calls.length === 0) {
+                throw new Error("create not invoked yet");
+            }
         });
+
+        expect(mock.createAuthUser).toHaveBeenCalledWith(expect.objectContaining({ email: "c@example.com", name: "Cara" }));
     });
 
     it("surfaces a users-listing error", async () => {

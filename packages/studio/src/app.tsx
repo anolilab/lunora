@@ -309,6 +309,7 @@ export const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClien
     // caller, so it's left alone.
     useEffect(
         () => (): void => {
+            // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- resource-cleanup effect: closes the owned client's sockets/streams/timers on unmount or when client/baseUrl changes; an injected client is caller-owned so it's left alone
             if (injectedClient === undefined) {
                 client.close();
             }

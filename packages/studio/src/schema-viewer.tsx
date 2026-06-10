@@ -217,6 +217,7 @@ export const SchemaViewer = ({ initialShardKey, initialTable }: SchemaViewerProp
     const appliedTable = useRef<string | undefined>(undefined);
 
     useEffect(() => {
+        /* eslint-disable react-you-might-not-need-an-effect/no-event-handler -- deep-link sync: expand the `initialTable` navigation prop once the async-loaded `tables` arrive; there's no render-time data and no user event to hook into, and the ref guards against re-firing */
         if (initialTable === undefined || tables === null || appliedTable.current === initialTable) {
             return;
         }
@@ -225,6 +226,7 @@ export const SchemaViewer = ({ initialShardKey, initialTable }: SchemaViewerProp
             appliedTable.current = initialTable;
             fireAndForget(toggle(initialTable));
         }
+        /* eslint-enable react-you-might-not-need-an-effect/no-event-handler */
     }, [initialTable, tables, toggle]);
 
     // Probe each shard table's `refs` (one row apiece) and collect the foreign-key

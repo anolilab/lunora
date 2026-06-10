@@ -1161,7 +1161,7 @@ describe("dataBrowser — structured filters and bulk delete", () => {
     it("expands a cell to show its full value and copies it", async () => {
         expect.assertions(3);
 
-        const writeText = vi.fn().mockResolvedValue(undefined);
+        const writeText = vi.fn<(text: string) => Promise<void>>().mockResolvedValue(undefined);
 
         Object.defineProperty(globalThis.navigator, "clipboard", { configurable: true, value: { writeText } });
 

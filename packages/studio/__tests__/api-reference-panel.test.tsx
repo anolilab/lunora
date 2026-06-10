@@ -56,7 +56,7 @@ describe("apiReferencePanel", () => {
 
         render(renderPanel(mock, SPEC_WITH_PATHS));
 
-        expect(await screen.findByTestId("scalar-stub")).toBeDefined();
+        await expect(screen.findByTestId("scalar-stub")).resolves.toBeDefined();
         // The inline path never hits the client's fetch accessor.
         expect(mock.fetchOpenApi).not.toHaveBeenCalled();
     });
@@ -68,7 +68,7 @@ describe("apiReferencePanel", () => {
 
         render(renderPanel(mock));
 
-        expect(await screen.findByTestId("api-reference-empty")).toBeDefined();
+        await expect(screen.findByTestId("api-reference-empty")).resolves.toBeDefined();
     });
 
     it("shows an error state when the fetch fails", async () => {

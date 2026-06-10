@@ -218,6 +218,7 @@ export const UserSecurityPanel = ({
     const [passkeys, setPasskeys] = useState<Record<string, unknown>[] | null>(null);
 
     useEffect(() => {
+        // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- capability-gated data load: fetch the user's passkeys when the `capabilities.passkey` prop is enabled, re-running on userId/version (refetch token); async fetch, not derivable during render and not a user event
         if (!capabilities.passkey) {
             return;
         }

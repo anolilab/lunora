@@ -261,7 +261,7 @@ describe("fileBrowser", () => {
             }
         });
 
-        expect(mock.deleteStorageObject.mock.calls.length).toBe(2);
+        expect(mock.deleteStorageObject).toHaveBeenCalledTimes(2);
     });
 
     describe("mutations", () => {

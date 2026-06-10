@@ -134,47 +134,49 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
 
     // Auth-admin mutations: simple resolved stubs (the dashboard's actions refetch
     // on success, so the returned shape only needs to satisfy the call site).
-    const createAuthUser = vi.fn(async (input: { email: string; name: string }) => {
+    const createAuthUser = vi.fn<(input: { email: string; name: string }) => Promise<{ email: string; id: string; name: string }>>(async (input) => {
         return { id: "usr_new", ...input };
     });
-    const setAuthUserRole = vi.fn(async (input: { role: string; userId: string }) => {
+    const setAuthUserRole = vi.fn<(input: { role: string; userId: string }) => Promise<{ id: string; role: string }>>(async (input) => {
         return { id: input.userId, role: input.role };
     });
-    const banAuthUser = vi.fn(async (input: { userId: string }) => {
+    const banAuthUser = vi.fn<(input: { userId: string }) => Promise<{ banned: boolean; id: string }>>(async (input) => {
         return { banned: true, id: input.userId };
     });
-    const unbanAuthUser = vi.fn(async (input: { userId: string }) => {
+    const unbanAuthUser = vi.fn<(input: { userId: string }) => Promise<{ banned: boolean; id: string }>>(async (input) => {
         return { banned: false, id: input.userId };
     });
-    const setAuthUserPassword = vi.fn(async () => undefined);
-    const removeAuthUser = vi.fn(async () => undefined);
-    const impersonateAuthUser = vi.fn(async (input: { userId: string }) => {
+    const setAuthUserPassword = vi.fn<() => Promise<undefined>>(async () => undefined);
+    const removeAuthUser = vi.fn<() => Promise<undefined>>(async () => undefined);
+    const impersonateAuthUser = vi.fn<(input: { userId: string }) => Promise<{ token: string; user: { id: string } }>>(async (input) => {
         return { token: `tok_${input.userId}`, user: { id: input.userId } };
     });
-    const revokeAuthSession = vi.fn(async () => undefined);
-    const revokeAuthUserSessions = vi.fn(async () => undefined);
-    const getAuthCapabilities = vi.fn(async () => {
-        return { accounts: true, admin: true, organization: false, passkey: false, twoFactor: false };
-    });
-    const updateAuthUser = vi.fn(async (input: { userId: string }) => {
+    const revokeAuthSession = vi.fn<() => Promise<undefined>>(async () => undefined);
+    const revokeAuthUserSessions = vi.fn<() => Promise<undefined>>(async () => undefined);
+    const getAuthCapabilities = vi.fn<() => Promise<{ accounts: boolean; admin: boolean; organization: boolean; passkey: boolean; twoFactor: boolean }>>(
+        async () => {
+            return { accounts: true, admin: true, organization: false, passkey: false, twoFactor: false };
+        },
+    );
+    const updateAuthUser = vi.fn<(input: { userId: string }) => Promise<{ id: string }>>(async (input) => {
         return { id: input.userId };
     });
-    const listAuthAccounts = vi.fn(async () => [] as Record<string, unknown>[]);
-    const unlinkAuthAccount = vi.fn(async () => undefined);
-    const listAuthPasskeys = vi.fn(async () => [] as Record<string, unknown>[]);
-    const deleteAuthPasskey = vi.fn(async () => undefined);
-    const disableAuthTwoFactor = vi.fn(async () => undefined);
-    const listAuthOrganizations = vi.fn(async () => {
+    const listAuthAccounts = vi.fn<() => Promise<Record<string, unknown>[]>>(async () => [] as Record<string, unknown>[]);
+    const unlinkAuthAccount = vi.fn<() => Promise<undefined>>(async () => undefined);
+    const listAuthPasskeys = vi.fn<() => Promise<Record<string, unknown>[]>>(async () => [] as Record<string, unknown>[]);
+    const deleteAuthPasskey = vi.fn<() => Promise<undefined>>(async () => undefined);
+    const disableAuthTwoFactor = vi.fn<() => Promise<undefined>>(async () => undefined);
+    const listAuthOrganizations = vi.fn<() => Promise<{ rows: Record<string, unknown>[]; total: number }>>(async () => {
         return { rows: [] as Record<string, unknown>[], total: 0 };
     });
-    const listAuthOrgMembers = vi.fn(async () => {
+    const listAuthOrgMembers = vi.fn<() => Promise<{ rows: Record<string, unknown>[]; total: number }>>(async () => {
         return { rows: [] as Record<string, unknown>[], total: 0 };
     });
-    const listAuthOrgInvitations = vi.fn(async () => {
+    const listAuthOrgInvitations = vi.fn<() => Promise<{ rows: Record<string, unknown>[]; total: number }>>(async () => {
         return { rows: [] as Record<string, unknown>[], total: 0 };
     });
-    const removeAuthOrgMember = vi.fn(async () => undefined);
-    const cancelAuthOrgInvitation = vi.fn(async () => undefined);
+    const removeAuthOrgMember = vi.fn<() => Promise<undefined>>(async () => undefined);
+    const cancelAuthOrgInvitation = vi.fn<() => Promise<undefined>>(async () => undefined);
 
     // Live-subscription registry: `subscribe` records each value + error
     // callback by functionPath; `emit` / `emitError` fan out to those callbacks

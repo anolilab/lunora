@@ -69,4 +69,5 @@ await build({
     logLevel: "info",
 });
 
+// eslint-disable-next-line no-console -- build-script progress output
 console.log(`build-standalone: NODE_ENV=${nodeEnv}`);

@@ -131,6 +131,7 @@ export const OrganizationsPanel = (): ReactElement => {
     }, [capabilities.organization, client]);
 
     useEffect(() => {
+        // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- data-load effect: refetch members + invitations whenever the selected org (or the `version` refetch token) changes; selection can change programmatically and the async fetch must follow the committed `selected` state
         if (selected === null) {
             return;
         }
@@ -250,7 +251,9 @@ export const OrganizationsPanel = (): ReactElement => {
                                                 aria-pressed={selected === id}
                                                 data-testid={`org-select-${id}`}
                                                 // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row handler; admin dev-tool path
-                                                onClick={() => { onSelectOrg(id); }}
+                                                onClick={() => {
+                                                    onSelectOrg(id);
+                                                }}
                                                 size="xs"
                                                 type="button"
                                                 variant="ghost"
