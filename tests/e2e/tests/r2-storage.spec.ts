@@ -22,7 +22,7 @@ test("upload returns a signed URL and the URL serves the bytes back", async ({ u
     const rpcResponse = await user.request.post(`/_cirrus/rpc`, {
         data: {
             args: { contentType: "image/png", key: "profile" },
-            function: "avatars:uploadAvatar",
+            functionPath: "avatars:uploadAvatar",
         },
     });
 
@@ -42,7 +42,9 @@ test("upload returns a signed URL and the URL serves the bytes back", async ({ u
     // Put bytes at the signed URL — Miniflare validates the signature.
     const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     const putResponse = await user.request.fetch(url, {
-        data: png,
+        // `Buffer`, not the raw `Uint8Array` — Playwright JSON-serializes a plain
+        // typed array, which would corrupt the binary body.
+        data: Buffer.from(png),
         headers: { "content-type": "image/png" },
         method: "PUT",
     });
@@ -51,7 +53,7 @@ test("upload returns a signed URL and the URL serves the bytes back", async ({ u
 
     // Now fetch back via the GET signed URL.
     const getRpc = await user.request.post(`/_cirrus/rpc`, {
-        data: { args: { userId: user.email }, function: "avatars:getAvatar" },
+        data: { args: {}, functionPath: "avatars:getAvatar" },
     });
 
     const getBody = (await getRpc.json()) as { result?: { url?: string } };
@@ -99,9 +101,11 @@ test("signed URL returns 403 after expiry", async ({ user }) => {
         throw new Error("no signed url");
     }
 
-    // Wait past the 1s expiry. Hard sleep is necessary here — the *point*
-    // of the test is the clock-based invalidation.
-    await new Promise((resolve) => setTimeout(resolve, 1300));
+    // Wait well past the 1s expiry. The signed `exp` is a whole-second boundary
+    // (`floor(now)+1`), so a 1.3s wait can land *on* the boundary and read as
+    // still-valid; 2.3s clears it deterministically. Hard sleep is necessary —
+    // the point of the test is the clock-based invalidation.
+    await new Promise((resolve) => setTimeout(resolve, 2300));
 
     const expired = await user.request.get(url);
 

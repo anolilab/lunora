@@ -20,7 +20,7 @@ import { test as base, request as requestApi } from "@playwright/test";
  *     shouldn't re-test that flow — they want a deterministic logged-in user
  *     in O(1) steps.
  */
-const WORKER_URL = process.env.CIRRUS_E2E_WORKER_URL ?? "http://localhost:8787";
+const WORKER_URL = process.env.CIRRUS_E2E_WORKER_URL ?? "http://localhost:5173";
 
 export interface TestUser {
     readonly email: string;
@@ -88,7 +88,10 @@ export const test = base.extend<CirrusFixtures>({
         const email = `e2e+${slug}-${Date.now()}@cirrus.test`;
         const password = "test-password-1234"; // gitleaks:allow
         const name = `e2e ${slug}`;
-        const request = await requestApi.newContext({ baseURL: WORKER_URL });
+        // Real browsers send an `Origin` header; Playwright's API context does
+        // not. better-auth's CSRF check requires it, so set a trusted one (the
+        // worker origin) for these setup-only API calls.
+        const request = await requestApi.newContext({ baseURL: WORKER_URL, extraHTTPHeaders: { Origin: WORKER_URL } });
 
         await signUp(request, email, password, name);
 

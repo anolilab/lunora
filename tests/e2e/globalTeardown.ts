@@ -1,11 +1,14 @@
 import type { ChildProcess } from "node:child_process";
+import { rmSync, writeFileSync } from "node:fs";
 
 import type { FullConfig } from "@playwright/test";
 
+import { DEV_VARS_PATH } from "./globalSetup";
+
 /**
- * Tear down whatever `globalSetup.ts` spun up. SIGTERM gives wrangler a
- * chance to flush Miniflare state to disk; we follow up with SIGKILL after
- * a short grace period so a hung child can't block CI.
+ * Tear down whatever `globalSetup.ts` spun up. SIGTERM gives Miniflare a
+ * chance to flush state to disk; we follow up with SIGKILL after a short
+ * grace period so a hung child can't block CI.
  */
 const killProc = async (name: string, proc: ChildProcess): Promise<void> => {
     if (proc.killed) {
@@ -33,16 +36,32 @@ const killProc = async (name: string, proc: ChildProcess): Promise<void> => {
     }
 };
 
-const globalTeardown = async (_config: FullConfig): Promise<void> => {
-    const procs = globalThis.CIRRUS_E2E_PROCS;
+/** Put the developer's `.dev.vars` back (or remove the one we wrote, if none existed). */
+const restoreDevVars = (): void => {
+    const backup = globalThis.CIRRUS_E2E_DEV_VARS_BACKUP;
 
-    if (!procs?.length) {
+    if (backup === undefined) {
         return;
     }
 
-    await Promise.all(procs.map(async ({ name, proc }) => killProc(name, proc)));
+    if (backup === null) {
+        rmSync(DEV_VARS_PATH, { force: true });
+    } else {
+        writeFileSync(DEV_VARS_PATH, backup, "utf8");
+    }
 
-    globalThis.CIRRUS_E2E_PROCS = undefined;
+    globalThis.CIRRUS_E2E_DEV_VARS_BACKUP = undefined;
+};
+
+const globalTeardown = async (_config: FullConfig): Promise<void> => {
+    const procs = globalThis.CIRRUS_E2E_PROCS;
+
+    if (procs?.length) {
+        await Promise.all(procs.map(async ({ name, proc }) => killProc(name, proc)));
+        globalThis.CIRRUS_E2E_PROCS = undefined;
+    }
+
+    restoreDevVars();
 };
 
 export default globalTeardown;

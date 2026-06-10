@@ -20,7 +20,7 @@ test("messages.list(channelA) doesn't see channel B's messages, and vice versa",
     // better-auth session cookie travels with `user.request`.
     const rpc = async (functionPath: string, args: Record<string, unknown>): Promise<unknown> => {
         const response = await user.request.post(`/_cirrus/rpc`, {
-            data: { args, function: functionPath },
+            data: { args, functionPath },
         });
 
         if (!response.ok()) {
@@ -60,7 +60,7 @@ test("messages.list(channelA) doesn't see channel B's messages, and vice versa",
 test("both channels run independently — a thrown error in A doesn't kill B", async ({ user }) => {
     const rpc = async (functionPath: string, args: Record<string, unknown>): Promise<unknown> => {
         const response = await user.request.post(`/_cirrus/rpc`, {
-            data: { args, function: functionPath },
+            data: { args, functionPath },
         });
 
         const body = (await response.json()) as { error?: { code: string }; result?: unknown };
@@ -71,10 +71,12 @@ test("both channels run independently — a thrown error in A doesn't kill B", a
     const channelA = (await rpc("channels:create", { name: "shard-iso-A" })) as string;
     const channelB = (await rpc("channels:create", { name: "shard-iso-B" })) as string;
 
-    // Force an error on channel A by sending into a non-existent channel id —
-    // the routing logic should isolate the failure to the A shard.
+    // Force a failed write on channel A: a wrong-typed `text` fails arg
+    // validation with a 4xx. (Sending to a *non-existent* channel id wouldn't
+    // error — `shardBy` mints a shard on demand.) The point is resilience: a
+    // rejected request must not poison the worker so B's writes still land.
     const bogusResponse = await user.request.post(`/_cirrus/rpc`, {
-        data: { args: { channelId: "channels_does_not_exist", text: "boom" }, function: "messages:send" },
+        data: { args: { channelId: channelA, text: 123 }, functionPath: "messages:send" },
     });
 
     // We don't care which error code — only that B still works after.
