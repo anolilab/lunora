@@ -18,11 +18,15 @@ pnpm dev
 
 - `cirrus/schema.ts` + `cirrus/messages.ts` — a sharded `messages` table with a
   sample `list` query and `send` mutation.
+- `src/worker.ts` — the **single-worker entry**: wraps SvelteKit's
+  Cloudflare-adapter handler with `withCirrus` (see below) and re-exports the
+  generated `ShardDO`.
 - `src/routes/+layout.svelte` — publishes the `CirrusClient` on Svelte context
-  with `setCirrusClient` (the provider).
+  with `setCirrusClient` (the provider), pointed at the **same origin**.
 - `src/routes/+page.ts` — a universal `load` that calls `preloadQuery` through a
   request-scoped `createServerClient`, forwarding SvelteKit's `fetch` for
-  same-origin session continuity.
+  same-origin session continuity. Because Cirrus is mounted in the same worker,
+  it is a same-origin loopback.
 - `src/routes/+page.svelte` — uses `hydratePreloaded(data.preloaded)` for the
   SSR-seed-to-live handoff and `mutation(api.messages.send)` for optimistic writes.
 
@@ -31,34 +35,58 @@ pnpm dev
 - `@sveltejs/kit` — the meta-framework (file-based routing + load functions)
 - `svelte` (5) — runes/stores UI runtime
 - `@cirrus/svelte` — live stores, optimistic mutations, `hydratePreloaded`
+- `@cirrus/svelte/worker` — `withCirrus` single-worker composition
 - `@cirrus/*` — the realtime backend on Cloudflare Workers + Durable Objects
 
 ---
 
-## Class-B composition (mounting Cirrus realtime under `/_cirrus/*` inside SvelteKit's adapter) is wired in PLAN4 M4 — TODO
+## Class-B composition: one worker, Cirrus mounted under `/_cirrus/*`
 
 SvelteKit is a **Class-B** framework: it owns its own Cloudflare adapter
 (`@sveltejs/adapter-cloudflare`) and builds its own server worker. So unlike the
 Class-A frameworks (TanStack Start, SolidStart), Cirrus does **not** own the
-worker entry here — it must be **injected into SvelteKit's** server build rather
-than fighting it.
+worker entry — it **injects** its realtime plane into the very worker SvelteKit
+emits.
 
-The intended approach (PLAN4 M4):
+How it's wired here:
 
-- Ship a `withCirrus()`-style wrapper from `@cirrus/svelte` (or `@cirrus/vite`)
-  that hook-injects Cirrus's worker composition into SvelteKit's generated
-  Cloudflare server entry — the way void does framework wiring via
-  hook-injection plugins.
-- The composed single worker reserves `/_cirrus/*` for Cirrus realtime
-  (`/_cirrus/rpc`, `/_cirrus/ws`, `/_cirrus/admin/*`) and forwards **everything
-  else** to SvelteKit's SSR handler. The two dispatch flows never collide:
-  pages/API/SSR → SvelteKit; queries/mutations/subscriptions → `/_cirrus/*`.
-- With that in place the `+page.ts` loader's `preloadQuery` becomes a
-  **same-origin loopback** (and can take the in-process `serverQuery` fast-path),
-  and the client subscription resumes the same cookie-based identity on the same
-  origin — no separate worker, one deploy.
+- **`svelte.config.js`** uses `@sveltejs/adapter-cloudflare`, which builds
+  SvelteKit's SSR into `.svelte-kit/cloudflare/_worker.js`.
+- **`src/worker.ts`** imports that emitted handler and wraps it with
+  `withCirrus` from `@cirrus/svelte/worker`:
 
-Until M4 lands, run the Cirrus worker as a standalone worker (the current
-default) and point `VITE_CIRRUS_URL` at it; the adapter surface above
-(`setCirrusClient` / `query` / `mutation` / `hydratePreloaded`) is unchanged
-once composition is wired.
+    ```ts
+    import { withCirrus } from "@cirrus/svelte/worker";
+    import svelteKitWorker from "../.svelte-kit/cloudflare/_worker.js";
+    import { createShardDO } from "../cirrus/_generated/shard.js";
+
+    export const ShardDO = createShardDO();
+
+    export default withCirrus(svelteKitWorker, (env) => ({
+        shardDO: env.SHARD,
+        // …auth, routes, functions, openApiSpec
+    }));
+    ```
+
+- **`wrangler.jsonc`**'s `main` points at `src/worker.ts` (not at SvelteKit's
+  emitted `_worker.js`), and binds the `SHARD` Durable Object. One Worker bundles
+  both planes — no double-bundling the DO class.
+
+The composed worker reserves `/_cirrus/*` for Cirrus realtime (`/_cirrus/rpc`,
+`/_cirrus/ws`, `/_cirrus/admin/*`) and forwards **everything else** to
+SvelteKit's SSR handler. The two dispatch flows never collide: pages/API/SSR →
+SvelteKit; queries/mutations/subscriptions → `/_cirrus/*`. A SvelteKit render
+that throws is contained at the seam as a plain 500 and can never take down
+`/_cirrus/*`.
+
+Because it's one worker, the `+page.ts` loader's `preloadQuery` is a
+**same-origin loopback** and the client subscription resumes the same
+cookie-based identity on the same origin — no separate worker, one deploy. Set
+`VITE_CIRRUS_URL` only if you deliberately split Cirrus out to a standalone
+worker.
+
+> Status: the `withCirrus` composition is unit/contract-proven in
+> `@cirrus/svelte` (`packages/svelte/__tests__/worker.test.ts`). The
+> `@sveltejs/adapter-cloudflare` build itself isn't exercised in this repo, so
+> the `src/worker.ts` / `wrangler.jsonc` wiring above is a scaffold to run
+> against a real `vite build` + `wrangler deploy`.

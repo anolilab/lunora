@@ -21,13 +21,17 @@ const channelId = "channel:demo" as const;
  * on the messages table, so the HTTP RPC routes to the correct Durable Object
  * shard server-side (PLAN4 open question #6).
  *
- * The worker URL points at the Cirrus worker. Under the **Class-B** composition
- * wired in PLAN4 M4 (see README), the Cirrus worker is mounted under `/_cirrus/*`
- * inside SvelteKit's own Cloudflare adapter, so this becomes a same-origin
- * loopback call.
+ * The call is **same-origin**: under the Class-B composition (`src/worker.ts`'s
+ * `withCirrus`), Cirrus realtime is mounted under `/_cirrus/*` inside SvelteKit's
+ * OWN Cloudflare worker, so an empty `url` base resolves `/_cirrus/rpc` against
+ * the request origin via SvelteKit's `fetch` — a same-origin loopback, no second
+ * worker and no CORS. Set `VITE_CIRRUS_URL` only if you split Cirrus out to a
+ * standalone worker.
  */
 export const load: PageLoad = async ({ fetch }) => {
-    const url = import.meta.env.VITE_CIRRUS_URL ?? "http://localhost:8787";
+    // "" → same-origin: `joinUrl("", "/_cirrus/rpc")` is `/_cirrus/rpc`, which
+    // SvelteKit's `fetch` resolves against the request origin on the server.
+    const url = import.meta.env.VITE_CIRRUS_URL ?? "";
     const client = createServerClient({ fetch, url });
 
     const preloaded = await preloadQuery(client, api.messages.list, { channelId }, { shardKey: channelId });
