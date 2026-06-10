@@ -11,6 +11,7 @@ export type {
     AuthUser,
     BackupManifest,
     BackupStore,
+    CirrusWorker,
     CronHandler,
     CronJobDispatch,
     ExecutionContextLike,
