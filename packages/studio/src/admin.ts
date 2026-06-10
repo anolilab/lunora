@@ -40,6 +40,7 @@ export const ADMIN_FUNCTIONS = {
     readTablePage: "__cirrus_admin__:readTablePage",
     runMigration: "__cirrus_admin__:runMigration",
     runSql: "__cirrus_admin__:runSql",
+    storageReferences: "__cirrus_admin__:storageReferences",
     writeRow: "__cirrus_admin__:writeRow",
 } as const;
 
@@ -542,6 +543,32 @@ export interface TablePage {
     refs?: Record<string, string>;
     rows: Record<string, unknown>[];
     total: number;
+}
+
+/**
+ * One row that references a stored R2 object through a `v.storage()` column,
+ * mirroring `@cirrus/do`'s `StorageReference`. `id` is the owning row's primary
+ * key, `table`/`column` locate the reference — enough for the file browser to
+ * deep-link from a file to the record that owns it.
+ */
+export interface StorageReference {
+    column: string;
+    id: string;
+    table: string;
+}
+
+/**
+ * Payload of a `__cirrus_admin__:storageReferences` call, mirroring `@cirrus/do`'s
+ * `StorageReferenceResult` — the file browser's records↔files join (PLAN3 §1.3).
+ * `storageColumns` is the schema's declared `v.storage()` columns (`{ table:
+ * [field, …] }`), so the UI can tell "this app models no storage refs" apart from
+ * "this object is orphaned"; `references` maps each requested object key to the
+ * rows that reference it. A key mapped to an empty array is an **orphan** on the
+ * queried shard — no row points at it.
+ */
+export interface StorageReferenceResult {
+    references: Record<string, StorageReference[]>;
+    storageColumns: Record<string, string[]>;
 }
 
 /** Direction a data migration is run in. Mirrors `@cirrus/do`. */

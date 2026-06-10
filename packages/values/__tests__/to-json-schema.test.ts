@@ -53,6 +53,12 @@ describe("toJsonSchema", () => {
             expect(toJsonSchema(v.literal("admin"))).toStrictEqual({ const: "admin" });
             expect(toJsonSchema(v.literal(42))).toStrictEqual({ const: 42 });
         });
+
+        it("marks a storage key as a string with the cirrus-storage extension", () => {
+            expect.assertions(1);
+
+            expect(toJsonSchema(v.storage())).toStrictEqual({ description: "storage object key", type: "string", "x-cirrus-storage": true });
+        });
     });
 
     describe("composites", () => {

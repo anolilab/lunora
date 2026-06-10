@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { listTables, readTablePage, selectMatchingIds, summarizeSubscriptions } from "../src/introspect";
+import { findStorageReferences, listTables, readTablePage, selectMatchingIds, summarizeSubscriptions } from "../src/introspect";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 describe("introspect", () => {
@@ -383,6 +383,69 @@ describe("introspect", () => {
 
             expect(() => selectMatchingIds(database.sql, { table: "nope" })).toThrow(/unknown table/u);
             expect(() => selectMatchingIds(database.sql, { table: "_cf_KV" })).toThrow(/unknown table/u);
+        });
+    });
+
+    describe("findStorageReferences", () => {
+        beforeEach(() => {
+            // Two canonical shard-shaped tables: `avatars` stores its key in the
+            // `__doc__` blob, `banners` in a physical column — exercising both
+            // resolution paths.
+            database.raw(`CREATE TABLE "avatars" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "__doc__" TEXT NOT NULL)`);
+            database.raw(
+                `INSERT INTO "avatars" VALUES ('a1', 1, '{"fileKey":"u/1.png"}'), ('a2', 2, '{"fileKey":"u/2.png"}'), ('a3', 3, '{"fileKey":"u/1.png"}')`,
+            );
+            database.raw(`CREATE TABLE "banners" ("id" TEXT PRIMARY KEY, "image" TEXT)`);
+            database.raw(`INSERT INTO "banners" VALUES ('b1', 'u/2.png')`);
+        });
+
+        it("maps each key to every row that references it (doc-stored column)", () => {
+            expect.assertions(2);
+
+            const { references } = findStorageReferences(database.sql, { avatars: ["fileKey"] }, ["u/1.png", "u/2.png"]);
+
+            expect([...references["u/1.png"]].toSorted((a, b) => a.id.localeCompare(b.id))).toEqual([
+                { column: "fileKey", id: "a1", table: "avatars" },
+                { column: "fileKey", id: "a3", table: "avatars" },
+            ]);
+            expect(references["u/2.png"]).toEqual([{ column: "fileKey", id: "a2", table: "avatars" }]);
+        });
+
+        it("resolves a physical (non-doc) storage column too", () => {
+            expect.assertions(1);
+
+            const { references } = findStorageReferences(database.sql, { banners: ["image"] }, ["u/2.png"]);
+
+            expect(references["u/2.png"]).toEqual([{ column: "image", id: "b1", table: "banners" }]);
+        });
+
+        it("seeds every requested key, leaving an unreferenced key an empty array (orphan)", () => {
+            expect.assertions(2);
+
+            const { references } = findStorageReferences(database.sql, { avatars: ["fileKey"] }, ["u/1.png", "orphan.png"]);
+
+            expect(references["orphan.png"]).toEqual([]);
+            expect(Object.keys(references).toSorted((a, b) => a.localeCompare(b))).toEqual(["orphan.png", "u/1.png"]);
+        });
+
+        it("echoes the declared storage columns and short-circuits on no keys", () => {
+            expect.assertions(2);
+
+            const result = findStorageReferences(database.sql, { avatars: ["fileKey"] }, []);
+
+            expect(result.references).toEqual({});
+            expect(result.storageColumns).toEqual({ avatars: ["fileKey"] });
+        });
+
+        it("skips unknown/internal tables in the map without throwing", () => {
+            expect.assertions(1);
+
+            const { references } = findStorageReferences(database.sql, { _cf_KV: ["image"], avatars: ["fileKey"], nope: ["x"] }, ["u/1.png"]);
+
+            expect(references["u/1.png"]).toEqual([
+                { column: "fileKey", id: "a1", table: "avatars" },
+                { column: "fileKey", id: "a3", table: "avatars" },
+            ]);
         });
     });
 

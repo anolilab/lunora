@@ -4,6 +4,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { ADMIN_FUNCTIONS } from "../src/admin";
 import { FileBrowser } from "../src/file-browser";
 import type { MockClientHooks } from "./mock-client";
 import { createMockClient } from "./mock-client";
@@ -262,6 +263,40 @@ describe("fileBrowser", () => {
         });
 
         expect(mock.deleteStorageObject).toHaveBeenCalledTimes(2);
+    });
+
+    it("joins records to files: a used-by badge for an owned object and an orphan badge for an unreferenced one", async () => {
+        expect.assertions(3);
+
+        const REFERENCED_PAGE: StorageListPage = {
+            objects: [
+                { etag: "r1", key: "owned.png", size: 10 },
+                { etag: "r2", key: "orphan.png", size: 20 },
+            ],
+        };
+        const mock = createMockClient({
+            listStorageObjects: (): StorageListPage => REFERENCED_PAGE,
+            query: (reference): unknown =>
+                reference === ADMIN_FUNCTIONS.storageReferences
+                    ? {
+                          references: { "orphan.png": [], "owned.png": [{ column: "avatar", id: "u1", table: "users" }] },
+                          storageColumns: { users: ["avatar"] },
+                      }
+                    : undefined,
+        });
+
+        render(renderBrowser(mock));
+
+        await screen.findByTestId("fb-table");
+
+        // The owned object shows a "1 record" used-by badge titled with its owner.
+        const usedBy = await screen.findByTestId("storage-refs-owned.png");
+
+        expect(usedBy.textContent).toContain("1 record");
+        expect(usedBy.getAttribute("title")).toContain("users·u1");
+
+        // The unreferenced object is flagged as an orphan.
+        expect(screen.getByTestId("storage-orphan-orphan.png").textContent).toContain("Orphan");
     });
 
     describe("mutations", () => {

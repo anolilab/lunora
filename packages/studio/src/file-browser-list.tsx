@@ -2,27 +2,30 @@ import type { StorageObject } from "@cirrus/client";
 import type { ReactElement } from "react";
 import { useCallback } from "react";
 
+import type { StorageReference } from "./admin";
 import { Checkbox } from "./components/ui/checkbox";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
 import type { FileItemHandlers } from "./file-item";
-import { FileActions, FileSelect, useFileItem } from "./file-item";
+import { FileActions, FileReferences, FileSelect, useFileItem } from "./file-item";
 import type { TFunction } from "./i18n-context";
 import { formatBytes } from "./internal";
 
 interface FolderRowProps {
+    /** Total table columns to span — varies with the optional "used by" column. */
+    readonly colSpan: number;
     readonly name: string;
     readonly onEnter: (name: string) => void;
 }
 
 /** One folder row — a folder glyph + name; clicking descends into it. */
-const FolderRow = ({ name, onEnter }: FolderRowProps): ReactElement => {
+const FolderRow = ({ colSpan, name, onEnter }: FolderRowProps): ReactElement => {
     const enter = useCallback((): void => {
         onEnter(name);
     }, [name, onEnter]);
 
     return (
         <TableRow>
-            <TableCell colSpan={5}>
+            <TableCell colSpan={colSpan}>
                 <button
                     className="inline-flex items-center gap-2 font-mono text-xs outline-none hover:text-foreground focus-visible:text-foreground"
                     data-testid="fb-folder"
@@ -55,7 +58,11 @@ interface FileRowProps {
     readonly object: StorageObject;
     /** Current folder prefix, stripped from the displayed name (the full key still drives actions). */
     readonly prefix: string;
+    /** Rows that reference this object (via a `v.storage()` column); `undefined` while resolving. */
+    readonly references: ReadonlyArray<StorageReference> | undefined;
     readonly selected: boolean;
+    /** Whether the schema models storage refs at all — gates the "used by" cell. */
+    readonly showReferences: boolean;
     readonly t: TFunction;
 }
 
@@ -66,7 +73,7 @@ interface FileRowProps {
  * the testids stay identical between list and grid. The name shows relative to
  * the current folder; the full key still scopes everything.
  */
-const FileRow = ({ busy, copiedKey, handlers, object, prefix, selected, t }: FileRowProps): ReactElement => {
+const FileRow = ({ busy, copiedKey, handlers, object, prefix, references, selected, showReferences, t }: FileRowProps): ReactElement => {
     const { copy, download, name, remove, toggle } = useFileItem(object, prefix, handlers);
 
     return (
@@ -77,6 +84,11 @@ const FileRow = ({ busy, copiedKey, handlers, object, prefix, selected, t }: Fil
             <TableCell className="font-mono text-xs">{name}</TableCell>
             <TableCell className="tabular-nums text-muted-foreground">{formatBytes(object.size)}</TableCell>
             <TableCell>{object.httpMetadata?.contentType ?? ""}</TableCell>
+            {showReferences && (
+                <TableCell>
+                    <FileReferences objectKey={object.key} references={references} t={t} />
+                </TableCell>
+            )}
             <TableCell className="text-right">
                 <span className="inline-flex items-center gap-1">
                     <FileActions
@@ -103,7 +115,11 @@ interface FileBrowserListProps {
     readonly handlers: FileItemHandlers;
     readonly onEnterFolder: (name: string) => void;
     readonly prefix: string;
+    /** Rows referencing each object key (via a `v.storage()` column), keyed by key. */
+    readonly references: Readonly<Record<string, ReadonlyArray<StorageReference>>>;
     readonly selected: ReadonlySet<string>;
+    /** Whether the schema declares any `v.storage()` columns — gates the "used by" column. */
+    readonly showReferences: boolean;
     readonly someSelected: boolean;
     readonly t: TFunction;
     readonly toggleSelectAll: () => void;
@@ -123,7 +139,9 @@ const FileBrowserList = ({
     handlers,
     onEnterFolder,
     prefix,
+    references,
     selected,
+    showReferences,
     someSelected,
     t,
     toggleSelectAll,
@@ -144,12 +162,13 @@ const FileBrowserList = ({
                     <TableHead>{t("key")}</TableHead>
                     <TableHead>{t("size")}</TableHead>
                     <TableHead>{t("content-type")}</TableHead>
+                    {showReferences && <TableHead>{t("used by")}</TableHead>}
                     <TableHead aria-label={t("Actions")} />
                 </TableRow>
             </TableHeader>
             <TableBody>
                 {folders.map((folder) => (
-                    <FolderRow key={folder} name={folder} onEnter={onEnterFolder} />
+                    <FolderRow colSpan={showReferences ? 6 : 5} key={folder} name={folder} onEnter={onEnterFolder} />
                 ))}
                 {files.map((object) => (
                     <FileRow
@@ -159,7 +178,9 @@ const FileBrowserList = ({
                         key={object.key}
                         object={object}
                         prefix={prefix}
+                        references={references[object.key]}
                         selected={selected.has(object.key)}
+                        showReferences={showReferences}
                         t={t}
                     />
                 ))}

@@ -48,6 +48,8 @@ const SCALAR_TYPE_BY_KIND: Record<string, string> = {
     date: "number",
     null: "null",
     number: "number",
+    // The key of a stored R2 object — a string; the distinction is semantic only.
+    storage: "string",
     string: "string",
     timestamp: "number",
 };
@@ -954,6 +956,37 @@ const buildTableReferences = (schema: SchemaIR): Record<string, Record<string, s
     return references;
 };
 
+/**
+ * Storage-column map per table for the file browser: `{ table: [field, …] }` for
+ * every field declared `v.storage(...)` (unwrapping `v.optional(...)`). The
+ * generated shard hands this to the base `storageColumns` hook so the admin
+ * `storageReferences` read can join R2 objects back to the rows that own them
+ * (and flag orphans — objects no row references). Only scalar storage columns
+ * are emitted; an array-of-storage field can't be matched by an equality scan,
+ * so it is skipped here.
+ */
+const buildStorageColumns = (schema: SchemaIR): Record<string, string[]> => {
+    const byTable: Record<string, string[]> = {};
+
+    for (const table of schema.tables) {
+        const fields: string[] = [];
+
+        for (const [field, validator] of Object.entries(table.shape)) {
+            const resolved = validator.kind === "optional" && validator.inner ? validator.inner : validator;
+
+            if (resolved.kind === "storage") {
+                fields.push(field);
+            }
+        }
+
+        if (fields.length > 0) {
+            byTable[table.name] = fields;
+        }
+    }
+
+    return byTable;
+};
+
 /** One flattened index entry per table, mirroring `@cirrus/do`'s `TableIndexInfo`. */
 interface EmittedTableIndex {
     fields: string[];
@@ -1007,6 +1040,7 @@ const emitShard = (schema: SchemaIR, advisories: ReadonlyArray<Finding> = []): s
     const hasTables = schema.tables.length > 0;
     const tableReferences = buildTableReferences(schema);
     const tableIndexes = buildTableIndexes(schema);
+    const storageColumns = buildStorageColumns(schema);
 
     // The facade option types (AggregateOptions/QueryArgs/RestrictableQueryOptions/
     // SearchFilterBuilderLike/…) are no longer imported here — `bindTableFacade`
@@ -1231,6 +1265,9 @@ const CIRRUS_TABLE_REFS: Record<string, Record<string, string>> = ${JSON.stringi
 /** Declared indexes per table (secondary, search, rank, vector) for the schema viewer. */
 const CIRRUS_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: string; type: "index" | "rank" | "search" | "vector"; unique?: boolean }>> = ${JSON.stringify(tableIndexes, undefined, 4)};
 
+/** Storage-key columns per table (\`v.storage(...)\` fields) for the file browser's records↔files join. */
+const CIRRUS_STORAGE_COLUMNS: Record<string, string[]> = ${JSON.stringify(storageColumns, undefined, 4)};
+
 /** Static schema advisories (computed by @cirrus/advisor at codegen time) served via \`__cirrus_admin__:getAdvisories\`. */
 const CIRRUS_ADVISORIES: AdvisoryFinding[] = ${JSON.stringify(advisoryData, undefined, 4)};
 
@@ -1378,6 +1415,10 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
         protected override tableIndexes(table: string): Array<{ fields: string[]; name: string; type: "index" | "rank" | "search" | "vector"; unique?: boolean }> {
             return CIRRUS_TABLE_INDEXES[table] ?? [];
+        }
+
+        protected override storageColumns(): Record<string, string[]> {
+            return CIRRUS_STORAGE_COLUMNS;
         }
 
         protected override advisories(): AdvisoryFinding[] {
@@ -1696,6 +1737,7 @@ const validatorToDrizzleColumn = (validator: ValidatorIR): DrizzleColumn => {
 
             return { ...inner, notNull: false };
         }
+        case "storage":
         case "string": {
             return { builder: "text", notNull: true };
         }

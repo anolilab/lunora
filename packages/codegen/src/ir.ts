@@ -16,6 +16,8 @@ export interface ColumnMetaIR {
 
 /** Reflective representation of a single validator call from the schema. */
 export interface ValidatorIR {
+    /** For `v.storage(bucket?)` — the named typed bucket the object key lives in, when given. */
+    bucket?: string;
     /** Column modifiers (`.unique()`, `.default()`, `.nullable()`, …) when present. */
     column?: ColumnMetaIR;
     /** For `v.optional(inner)` / `v.array(inner)`. */

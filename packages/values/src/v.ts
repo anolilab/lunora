@@ -60,6 +60,7 @@ type ValidatorKind =
     | "object"
     | "optional"
     | "record"
+    | "storage"
     | "string"
     | "timestamp"
     | "union";
@@ -463,6 +464,30 @@ const id = <TableName extends string>(tableName: TableName): ColumnValidator<Id<
         ),
     );
 
+/**
+ * A reference to a stored R2 object: the column holds the object's **key** (a
+ * string), the same key `@cirrus/storage` puts/gets by. Functionally it parses
+ * like `v.string()`, but the distinct `"storage"` kind lets codegen and the
+ * studio join the data model to R2 — the file browser uses it to show which
+ * record owns a file and to flag orphaned objects no row references. The
+ * optional `bucket` names the typed bucket the key lives in (for app-context
+ * signed URLs); omit it for the app's default bucket.
+ */
+const storage = (bucket?: string): ColumnValidator<string, string> =>
+    asColumn(
+        createValidator<string>(
+            "storage",
+            (value, context) => {
+                if (typeof value !== "string") {
+                    fail(context, "storage object key (string)", value);
+                }
+
+                return value;
+            },
+            bucket === undefined ? undefined : { bucket },
+        ),
+    );
+
 const literal = <T extends bigint | boolean | number | string | null>(literalValue: T): ColumnValidator<T, T> =>
     asColumn(
         createValidator<T>(
@@ -690,6 +715,7 @@ const v: {
     object: typeof objectValidator;
     optional: typeof optional;
     record: typeof record;
+    storage: typeof storage;
     string: typeof string;
     timestamp: typeof timestamp;
     union: typeof union;
@@ -707,6 +733,7 @@ const v: {
     object: objectValidator,
     optional,
     record,
+    storage,
     string,
     timestamp,
     union,

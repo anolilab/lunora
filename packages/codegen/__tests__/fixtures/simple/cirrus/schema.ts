@@ -21,11 +21,12 @@ export const schema = defineSchema({
             attachments: r.many("attachments", { field: "ownerId" }),
         })),
 
-    // Coverage table — exercises the drizzle emitter's optional/array/bigint/bytes
-    // branches. Not used by any function; the codegen tests just assert that the
-    // emitted columns match the expected drizzle shapes.
+    // Coverage table — exercises the drizzle emitter's optional/array/bigint/bytes/
+    // storage branches. Not used by any function; the codegen tests just assert that
+    // the emitted columns match the expected drizzle shapes.
     attachments: defineTable({
         bytes: v.bytes(),
+        fileKey: v.storage(),
         ownerId: v.id("users"),
         size: v.bigint(),
         tags: v.array(v.string()),

@@ -526,13 +526,14 @@ const MESSAGE_IDS = [
     "No operations match your filter.",
     "Try it",
     "Request arguments",
-    "Responses",
+    "Response body",
     "Response",
+    "application/json",
     "Arguments (JSON)",
     "Send",
     "Sending…",
     "Send a request to see the response.",
-    "200 OK",
+    "No example for this response.",
     "Error",
     "{ms} ms",
     "relation: {table}",
@@ -548,6 +549,13 @@ const MESSAGE_IDS = [
     "Couldn't load the OpenRPC spec: {message}",
     "No OpenRPC spec configured",
     "Run `cirrus codegen --api-spec openrpc` and wire `_generated/openrpc.json` to the worker to render the OpenRPC reference here.",
+    // File browser — records↔files join (PLAN3 §1.3).
+    "used by",
+    "Orphan",
+    "1 record",
+    "{count} records",
+    "References shard",
+    "Which shard's records are checked for references to these files. Empty = root shard.",
 ] as const;
 
 /** A known studio message id — one of the entries in {@link MESSAGE_IDS}. */

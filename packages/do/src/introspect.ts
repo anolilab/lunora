@@ -41,6 +41,7 @@ const ADMIN_FUNCTIONS = {
     recordAuthEvent: "__cirrus_admin__:recordAuthEvent",
     runMigration: "__cirrus_admin__:runMigration",
     runSql: "__cirrus_admin__:runSql",
+    storageReferences: "__cirrus_admin__:storageReferences",
     writeRow: "__cirrus_admin__:writeRow",
 } as const;
 
@@ -721,6 +722,95 @@ const selectMatchingIds = (sql: SqlExec, options: SelectMatchingIdsOptions): { h
     return { hasMore, ids };
 };
 
+/** One row that references a stored R2 object through a `v.storage()` column. */
+interface StorageReference {
+    /** The `v.storage()` column the key was found in. */
+    column: string;
+    /** Primary key (`id`) of the owning row. */
+    id: string;
+    /** The table the owning row lives in. */
+    table: string;
+}
+
+/**
+ * Result of {@link findStorageReferences}: the schema's declared storage columns
+ * (so a UI can tell "the app models no storage refs" apart from "this object is
+ * orphaned"), plus, for each requested key, the rows that reference it. A key
+ * mapped to an empty array is an **orphan** on this shard — no row points at it.
+ */
+interface StorageReferenceResult {
+    references: Record<string, StorageReference[]>;
+    storageColumns: Record<string, string[]>;
+}
+
+/**
+ * Build the reverse index from R2 object key → the rows that reference it, for the
+ * file browser's records↔files join (PLAN3 §1.3). `storageColumns` is the
+ * schema-derived `{ table: [field, …] }` map the codegen subclass supplies (empty
+ * for the base, schema-free DO); `keys` are the object keys the caller is
+ * displaying (a single page of the bucket). Every requested key is seeded to an
+ * empty array, so a key that stays empty is an orphan (no owning row on this
+ * shard). Scans only the declared storage columns — never the whole shard — and
+ * resolves each column to its physical/`__doc__` expression with the same
+ * injection-safe, bound-parameter discipline as {@link readTablePage}.
+ */
+const findStorageReferences = (sql: SqlExec, storageColumns: Record<string, string[]>, keys: string[]): StorageReferenceResult => {
+    const references: Record<string, StorageReference[]> = {};
+
+    // Seed every requested key so the caller can distinguish orphan (empty) from
+    // not-requested (absent), and cap the IN-list so a huge page can't bloat the
+    // query — keys beyond the cap simply aren't resolved this call.
+    const scanned = keys.slice(0, MAX_PAGE_SIZE);
+
+    for (const key of scanned) {
+        references[key] = [];
+    }
+
+    if (scanned.length === 0) {
+        return { references, storageColumns };
+    }
+
+    const placeholders = scanned.map(() => "?").join(", ");
+
+    for (const [table, columns] of Object.entries(storageColumns)) {
+        if (isInternalTable(table) || !tableExists(sql, table)) {
+            continue;
+        }
+
+        const quoted = quoteIdentifier(table);
+        const physicalColumns = sql
+            .exec<{ name: string }>(`PRAGMA table_info(${quoted})`)
+            .toArray()
+            .map((column) => column.name);
+
+        for (const column of columns) {
+            const resolved = resolveColumnExpression(column, physicalColumns);
+
+            if (resolved === undefined) {
+                continue;
+            }
+
+            // The column expression appears twice (SELECT … AS ref, then WHERE …
+            // IN), so its bound path params are supplied twice, ahead of the key
+            // list — matching the SQL textual order.
+            const rows = sql
+                .exec<{ id: string; ref: string }>(
+                    `SELECT id, ${resolved.expression} AS ref FROM ${quoted} WHERE ${resolved.expression} IN (${placeholders})`,
+                    ...resolved.params,
+                    ...resolved.params,
+                    ...scanned,
+                )
+                .toArray();
+
+            for (const row of rows) {
+                references[row.ref]?.push({ column, id: row.id, table });
+            }
+        }
+    }
+
+    return { references, storageColumns };
+};
+
 /**
  * One socket's attachment as seen by {@link summarizeSubscriptions} — the same
  * shape `ShardDO.readAttachment` returns (`./types`' `SocketAttachment`),
@@ -753,7 +843,7 @@ const summarizeSubscriptions = (attachments: SocketAttachmentLike[]): Subscripti
     return { connections, totalConnections: connections.length, totalSubscriptions };
 };
 
-export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, MAX_PAGE_SIZE, readTablePage, selectMatchingIds, summarizeSubscriptions };
+export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, findStorageReferences, listTables, MAX_PAGE_SIZE, readTablePage, selectMatchingIds, summarizeSubscriptions };
 export type {
     AdvisoriesResult,
     AdvisoryFinding,
@@ -772,6 +862,8 @@ export type {
     SettingKind,
     SettingsResult,
     SortDirection,
+    StorageReference,
+    StorageReferenceResult,
     SubscriptionConnection,
     SubscriptionInfo,
     SubscriptionsResult,

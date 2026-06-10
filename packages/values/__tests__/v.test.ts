@@ -206,6 +206,31 @@ describe("id", () => {
     });
 });
 
+describe("storage", () => {
+    it("parses an object key as a string and tags itself kind \"storage\"", () => {
+        expect.assertions(2);
+
+        const validator = v.storage();
+
+        expect(validator.parse("avatars/u1.png")).toBe("avatars/u1.png");
+        expect(validator.kind).toBe("storage");
+    });
+
+    it("rejects a non-string key", () => {
+        expect.assertions(1);
+
+        expect(() => v.storage().parse(42)).toThrow(ValidationError);
+    });
+
+    it("carries the optional bucket name in its meta", () => {
+        expect.assertions(1);
+
+        const { bucket } = (v.storage("avatars") as unknown as { _meta: { bucket?: string } })._meta;
+
+        expect(bucket).toBe("avatars");
+    });
+});
+
 describe("time validators", () => {
     it("timestamp and date parse epoch-millisecond numbers and reject the rest", () => {
         expect.assertions(5);

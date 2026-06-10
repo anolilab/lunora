@@ -131,6 +131,9 @@ const jsonSchemaFromNode = <TNode>(node: TNode, reader: SchemaNodeReader<TNode>)
 
                 return { additionalProperties: value === undefined ? {} : jsonSchemaFromNode(value, reader), type: "object" };
             }
+            case "storage": {
+                return { description: "storage object key", type: "string", "x-cirrus-storage": true };
+            }
             case "string": {
                 return { type: "string" };
             }

@@ -26,7 +26,7 @@ import type {
     SubscriptionsResult,
     TableIndexInfo,
 } from "./introspect";
-import { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, MAX_PAGE_SIZE, readTablePage, selectMatchingIds, summarizeSubscriptions } from "./introspect";
+import { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, findStorageReferences, listTables, MAX_PAGE_SIZE, readTablePage, selectMatchingIds, summarizeSubscriptions } from "./introspect";
 import { LogBuffer } from "./log-buffer";
 import { armRestore, readBookmark } from "./pitr";
 import type { ReactiveCacheOptions } from "./reactive-cache";
@@ -1658,6 +1658,19 @@ abstract class ShardDO {
     }
 
     /**
+     * Storage-key columns per table (`{ table: [field, …] }`) — every field
+     * declared `v.storage(...)` in the schema, so the admin `storageReferences`
+     * read can join R2 objects back to the rows that own them (and flag orphans).
+     * Like {@link tableRefs}, the base class can't see the user's `schema.ts`, so
+     * it reports none; the codegen subclass overrides this with the schema-derived
+     * map.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this with the generated storage-column map
+    protected storageColumns(): Record<string, string[]> {
+        return {};
+    }
+
+    /**
      * Static schema advisories for this deployment, surfaced via
      * `__cirrus_admin__:getAdvisories`. Computed by `@cirrus/advisor` at codegen
      * time (the only place the schema + query reads are both available) and
@@ -2849,8 +2862,26 @@ abstract class ShardDO {
             return { result: { migrations: readMigrationStatus(sql, id) }, tables: new Set([ADMIN_WILDCARD]) };
         }
 
+        if (functionPath === ADMIN_FUNCTIONS.storageReferences) {
+            return this.readAdminStorageReferences(sql, args);
+        }
+
         // eslint-disable-next-line unicorn/no-null -- `null` signals "not a recognized admin read", matching the subscription-outcome contract codegen subclasses implement
         return null;
+    }
+
+    /**
+     * Resolve a `storageReferences` admin read — the file browser's records↔files
+     * join: given the object keys on the page, return the rows that reference each
+     * (via a `v.storage()` column) plus the schema's declared storage columns.
+     * Scans only those columns through {@link findStorageReferences}. Carries the
+     * {@link ADMIN_WILDCARD} (it spans every storage table) so a live subscription
+     * re-runs on any write.
+     */
+    private readAdminStorageReferences(sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } {
+        const keys = Array.isArray(args["keys"]) ? args["keys"].filter((key): key is string => typeof key === "string") : [];
+
+        return { result: findStorageReferences(sql, this.storageColumns(), keys), tables: new Set([ADMIN_WILDCARD]) };
     }
 
     /**

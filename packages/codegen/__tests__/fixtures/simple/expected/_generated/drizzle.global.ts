@@ -18,6 +18,7 @@ export const attachments = sqliteTable("attachments", {
     _id: text("_id").primaryKey(),
     _creationTime: integer("_creationTime").notNull(),
     bytes: blob("bytes", { mode: "buffer" }).notNull(),
+    fileKey: text("fileKey").notNull(),
     ownerId: text("ownerId").references(() => users._id).notNull(),
     size: blob("size", { mode: "bigint" }).notNull(),
     tags: text("tags", { mode: "json" }).$type<Array<string>>().notNull(),

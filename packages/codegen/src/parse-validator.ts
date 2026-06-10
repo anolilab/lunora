@@ -152,6 +152,10 @@ const parseBuilderMember = (member: string, args: ReadonlyArray<Node>): Validato
             };
         }
 
+        case "storage": {
+            return first && Node.isStringLiteral(first) ? { bucket: first.getLiteralText(), kind: "storage" } : { kind: "storage" };
+        }
+
         case "union": {
             return {
                 kind: "union",

@@ -10,6 +10,7 @@ import type { FileItemHandlers } from "./file-item";
 import { SelectionBar } from "./grid-features";
 import type { TFunction } from "./i18n-context";
 import { useT } from "./i18n-context";
+import { ShardInput } from "./shard-input";
 import { useFileBrowser } from "./use-file-browser";
 
 interface FileBrowserProps {
@@ -150,6 +151,18 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
                 />
             )}
 
+            {vm.hasStorageColumns && (
+                <div className="flex flex-wrap items-center gap-2" data-testid="fb-references-shard">
+                    <label className="text-xs text-muted-foreground" htmlFor="fb-reference-shard-input">
+                        {t("References shard")}
+                    </label>
+                    <ShardInput id="fb-reference-shard-input" onChange={vm.setReferenceShard} testId="fb-reference-shard-input" value={vm.referenceShard} />
+                    <span className="text-xs text-muted-foreground">
+                        {t("Which shard's records are checked for references to these files. Empty = root shard.")}
+                    </span>
+                </div>
+            )}
+
             {vm.selected.size > 0 && <SelectionBar count={vm.selected.size} editable onClear={vm.clearSelection} onDelete={vm.bulkDelete} />}
 
             {vm.error !== undefined && (
@@ -190,7 +203,9 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
                     handlers={handlers}
                     onEnterFolder={vm.enterFolder}
                     prefix={vm.prefix}
+                    references={vm.references}
                     selected={vm.selected}
+                    showReferences={vm.hasStorageColumns}
                     someSelected={vm.someSelected}
                     t={t}
                     toggleSelectAll={vm.toggleSelectAll}

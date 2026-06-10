@@ -2,10 +2,14 @@ import type { StorageObject } from "@cirrus/client";
 import { useCirrus } from "@cirrus/react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { errorMessage, fireAndForget } from "./internal";
+import type { StorageReference, StorageReferenceResult } from "./admin";
+import { ADMIN_FUNCTIONS } from "./admin";
+import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal";
 import { DEFAULT_SHARE_LIFETIME, deriveEntries, sortFiles } from "./storage-entries";
 import type { KeySelection } from "./use-key-selection";
 import { useKeySelection } from "./use-key-selection";
+
+const STORAGE_REFERENCES = adminRef(ADMIN_FUNCTIONS.storageReferences);
 
 /** How the file list is laid out. */
 type FileView = "grid" | "list";
@@ -33,6 +37,13 @@ interface FileBrowserModel {
     readonly folders: ReadonlyArray<string>;
     /** Whether the loaded listing has any objects (drives empty-state vs. controls). */
     readonly hasObjects: boolean;
+
+    /**
+     * Whether the schema declares any `v.storage()` columns — i.e. the app models
+     * records↔files joins at all. Drives whether the "Used by" / orphan UI shows
+     * (an app with no storage columns never sees a misleading "Orphan" badge).
+     */
+    readonly hasStorageColumns: boolean;
     readonly listFirst: () => void;
     /** Whether any rows have loaded (drives the breadcrumbs / empty-state gating). */
     readonly loaded: boolean;
@@ -48,10 +59,15 @@ interface FileBrowserModel {
     readonly onThumbSizeChange: (size: number) => void;
     /** The currently-loaded prefix used to slice names + derive folders. */
     readonly prefix: string;
+    /** Rows that reference each loaded object key (via a `v.storage()` column); empty array = orphan on this shard. */
+    readonly references: Readonly<Record<string, ReadonlyArray<StorageReference>>>;
+    /** The shard whose `v.storage()` columns are scanned for references; empty = root shard. */
+    readonly referenceShard: string;
     /** Resolve a thumbnail URL at a fixed TTL (independent of `expiry`). */
     readonly resolveUrl: (key: string) => Promise<string>;
     readonly selected: ReadonlySet<string>;
     readonly setDraftPrefix: (prefix: string) => void;
+    readonly setReferenceShard: (shard: string) => void;
     readonly showGrid: () => void;
     readonly showList: () => void;
     readonly someSelected: boolean;
@@ -131,6 +147,11 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
     const [copiedKey, setCopiedKey] = useState<string | undefined>(undefined);
     // Cursor stack so "Next" walks forward and we can show whether more remain.
     const [nextCursor, setNextCursor] = useState<string | undefined>(undefined);
+    // The records↔files join (PLAN3 §1.3): which rows reference each loaded object
+    // key, scanned on `referenceShard` (empty = root shard, the default topology).
+    const [referenceShard, setReferenceShard] = useState<string>("");
+    const [references, setReferences] = useState<Record<string, StorageReference[]>>({});
+    const [hasStorageColumns, setHasStorageColumns] = useState<boolean>(false);
 
     const list = useCallback(
         async (searchPrefix: string, cursor: string | undefined, append: boolean): Promise<void> => {
@@ -177,6 +198,50 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
     }, [files]);
 
     const sortedFiles = useMemo(() => sortFiles(files, sortKey, sortDirection), [files, sortKey, sortDirection]);
+
+    // A re-sort-stable signature of the loaded object keys, so toggling the sort
+    // order never re-fetches the (order-independent) reference index.
+    const keysSignature = useMemo(() => [...new Set(sortedFiles.map((file) => file.key))].toSorted((a, b) => a.localeCompare(b)).join("\n"), [sortedFiles]);
+
+    // Resolve the records↔files join for the loaded keys against `referenceShard`.
+    // Best-effort: a worker that predates the feature (or a closed admin gate)
+    // throws, which we treat as "no storage columns" so the file browser degrades
+    // to its plain listing instead of surfacing an error.
+    useEffect(() => {
+        const keys = keysSignature === "" ? [] : keysSignature.split("\n");
+
+        if (keys.length === 0) {
+            setReferences({});
+
+            return undefined;
+        }
+
+        // A mutable flag (not a narrowed `let`) so the async closure's checks read
+        // the latest value after the cleanup runs on unmount / dep change.
+        const live = { current: true };
+
+        fireAndForget(
+            (async (): Promise<void> => {
+                try {
+                    const result = (await client.query(STORAGE_REFERENCES, { keys }, callOptions(referenceShard))) as Partial<StorageReferenceResult>;
+
+                    if (live.current) {
+                        setReferences(result.references ?? {});
+                        setHasStorageColumns(Object.keys(result.storageColumns ?? {}).length > 0);
+                    }
+                } catch {
+                    if (live.current) {
+                        setReferences({});
+                        setHasStorageColumns(false);
+                    }
+                }
+            })(),
+        );
+
+        return () => {
+            live.current = false;
+        };
+    }, [client, keysSignature, referenceShard]);
 
     const keyOf = useCallback((object: StorageObject): string => object.key, []);
     const {
@@ -388,6 +453,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
         files: sortedFiles,
         folders,
         hasObjects: objects !== undefined && objects.length > 0,
+        hasStorageColumns,
         listFirst,
         loaded: objects !== undefined,
         loadMore,
@@ -401,9 +467,12 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
         onSortKeyChange,
         onThumbSizeChange,
         prefix,
+        referenceShard,
+        references,
         resolveUrl,
         selected,
         setDraftPrefix,
+        setReferenceShard,
         showGrid,
         showList,
         someSelected,

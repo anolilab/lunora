@@ -2,6 +2,8 @@ import type { StorageObject } from "@cirrus/client";
 import type { ReactElement } from "react";
 import { useCallback } from "react";
 
+import type { StorageReference } from "./admin";
+import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Checkbox } from "./components/ui/checkbox";
 import { ConfirmButton } from "./confirm-button";
@@ -100,6 +102,44 @@ const FileActions = ({ busy, buttonClassName, copied, objectKey, onCopy, onDelet
     </>
 );
 
+interface FileReferencesProps {
+    /** The object key — scopes the testid. */
+    readonly objectKey: string;
+    /** Rows that reference this object (via a `v.storage()` column). `undefined` = not yet resolved. */
+    readonly references: ReadonlyArray<StorageReference> | undefined;
+    readonly t: TFunction;
+}
+
+/**
+ * The records↔files join indicator for one object (PLAN3 §1.3): a muted "used by
+ * N" badge when one or more rows reference the object (titled with each owning
+ * `table·id`, the join CF structurally cannot show), or an "Orphan" badge when no
+ * row on the queried shard references it. Renders nothing while references are
+ * still resolving (`undefined`), so the cell stays empty rather than flashing a
+ * false orphan.
+ */
+const FileReferences = ({ objectKey, references, t }: FileReferencesProps): null | ReactElement => {
+    if (references === undefined) {
+        return null;
+    }
+
+    if (references.length === 0) {
+        return (
+            <Badge className="border-amber-500/40 text-amber-600 dark:text-amber-400" data-testid={`storage-orphan-${objectKey}`} variant="outline">
+                {t("Orphan")}
+            </Badge>
+        );
+    }
+
+    const owners = references.map((reference) => `${reference.table}·${reference.id}`).join("\n");
+
+    return (
+        <Badge data-testid={`storage-refs-${objectKey}`} title={owners} variant="secondary">
+            {references.length === 1 ? t("1 record") : t("{count} records", { count: references.length })}
+        </Badge>
+    );
+};
+
 interface FileSelectProps {
     readonly objectKey: string;
     readonly onToggle: () => void;
@@ -112,5 +152,5 @@ const FileSelect = ({ objectKey, onToggle, selected, t }: FileSelectProps): Reac
     <Checkbox aria-label={t("Select row")} checked={selected} data-testid={`storage-select-${objectKey}`} onCheckedChange={onToggle} />
 );
 
-export { FileActions, FileSelect, useFileItem };
+export { FileActions, FileReferences, FileSelect, useFileItem };
 export type { FileItemHandlers };

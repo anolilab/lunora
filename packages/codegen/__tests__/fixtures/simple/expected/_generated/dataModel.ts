@@ -53,6 +53,7 @@ export interface Doc_attachments {
     _id: Id<"attachments">;
     _creationTime: number;
     bytes: ArrayBuffer;
+    fileKey: string;
     ownerId: Id<"users">;
     size: bigint;
     tags: Array<string>;
@@ -120,6 +121,7 @@ export interface Insert_attachments {
     _id?: Id<"attachments">;
     _creationTime?: number;
     bytes: ArrayBuffer;
+    fileKey: string;
     ownerId: Id<"users">;
     size: bigint;
     tags: Array<string>;

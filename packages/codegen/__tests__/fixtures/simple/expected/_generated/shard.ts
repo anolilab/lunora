@@ -55,6 +55,13 @@ const CIRRUS_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: strin
     ]
 };
 
+/** Storage-key columns per table (`v.storage(...)` fields) for the file browser's records↔files join. */
+const CIRRUS_STORAGE_COLUMNS: Record<string, string[]> = {
+    "attachments": [
+        "fileKey"
+    ]
+};
+
 /** Static schema advisories (computed by @cirrus/advisor at codegen time) served via `__cirrus_admin__:getAdvisories`. */
 const CIRRUS_ADVISORIES: AdvisoryFinding[] = [];
 
@@ -251,6 +258,10 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
         protected override tableIndexes(table: string): Array<{ fields: string[]; name: string; type: "index" | "rank" | "search" | "vector"; unique?: boolean }> {
             return CIRRUS_TABLE_INDEXES[table] ?? [];
+        }
+
+        protected override storageColumns(): Record<string, string[]> {
+            return CIRRUS_STORAGE_COLUMNS;
         }
 
         protected override advisories(): AdvisoryFinding[] {
