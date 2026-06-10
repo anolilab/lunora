@@ -1737,8 +1737,15 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
         runSql(sql, `DELETE FROM ${quoteIdentifier(aggTable)}`);
 
-        for (const [encoded, tally] of tallies) {
-            runSql(sql, `INSERT INTO ${quoteIdentifier(aggTable)} ("__key__", "__value__", "__count__") VALUES (?, ?, ?)`, encoded, tally.value, tally.count);
+        const CHUNK_ROWS = 32; // 3 params/row → 96 bound params, under SQLite's per-statement cap
+        const entries = [...tallies];
+
+        for (let start = 0; start < entries.length; start += CHUNK_ROWS) {
+            const chunk = entries.slice(start, start + CHUNK_ROWS);
+            const placeholders = chunk.map(() => "(?, ?, ?)").join(", ");
+            const params = chunk.flatMap(([encoded, tally]) => [encoded, tally.value, tally.count]);
+
+            runSql(sql, `INSERT INTO ${quoteIdentifier(aggTable)} ("__key__", "__value__", "__count__") VALUES ${placeholders}`, ...params);
         }
 
         backfilled.add(cacheKey);
