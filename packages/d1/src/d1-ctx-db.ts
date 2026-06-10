@@ -39,6 +39,7 @@ import type {
 import {
     aggregateTableName,
     applyOnDelete,
+    assertValidClientId,
     buildFtsMatch,
     buildSeekWhere,
     coerceAggregateNumber,
@@ -2401,12 +2402,13 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
         /**
          * Insert a document. A client-chosen `_id` is **ignored** by default —
          * a caller able to pick its own id can collide with peer rows, defeat
-         * unique constraints, and forge references in foreign tables. Only the
-         * dev/admin import path (which round-trips a trusted snapshot) may opt
-         * in via `options.allowExplicitId`, in which case a string `_id` on
-         * `document` is used as the row's primary key. The default mutation
-         * path always generates a fresh id even if a handler forwards a raw
-         * client payload.
+         * unique constraints, and forge references in foreign tables.
+         *
+         * Two opt-ins override that: a validated `options.clientId` (public —
+         * a UUID an optimistic client supplies so a sync engine can reconcile by
+         * key) or `options.allowExplicitId` (the trusted dev/admin import path,
+         * honoring a verbatim `_id` on `document`). Otherwise a fresh id is
+         * minted even if a handler forwards a raw client payload.
          */
         async insert(tableName, document, insertOptions) {
             const definition = schema.tables[tableName];
@@ -2425,8 +2427,21 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             // post-default row so a defaulted value still passes its checks.
             runRowValidators(definition, withDefaults);
 
-            const usedExplicitId = Boolean(insertOptions?.allowExplicitId) && typeof withDefaults["_id"] === "string";
-            const id = usedExplicitId ? (withDefaults["_id"] as string) : generateId();
+            let id: string;
+            // Whether the id was pinned by the caller (validated `clientId` or the
+            // trusted-import `allowExplicitId`) rather than freshly minted — drives
+            // the tableName-cache pin below.
+            let usedExplicitId = true;
+
+            if (insertOptions?.clientId !== undefined) {
+                assertValidClientId(insertOptions.clientId);
+                id = insertOptions.clientId;
+            } else if (insertOptions?.allowExplicitId && typeof withDefaults["_id"] === "string") {
+                id = withDefaults["_id"];
+            } else {
+                id = generateId();
+                usedExplicitId = false;
+            }
             const creationTime = typeof withDefaults["_creationTime"] === "number" ? withDefaults["_creationTime"] : clock();
 
             const documentWithMeta: Record<string, unknown> = { ...withDefaults, _creationTime: creationTime, _id: id };

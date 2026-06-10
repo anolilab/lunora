@@ -169,6 +169,30 @@ type Clock = () => number;
 /** Pluggable ID minter — defaults to `crypto.randomUUID()`. */
 type IdGenerator = () => string;
 
+/**
+ * A v1–v8 UUID, the only shape a client may supply as a row id. Anchored and
+ * case-insensitive so a caller can't smuggle a structured key (e.g. a
+ * cross-table reference or an index-defeating value) past the check.
+ */
+const CLIENT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+
+/**
+ * Validate a client-supplied row id, throwing on a bad shape.
+ *
+ * Client ids let an optimistic UI key a row *before* the server responds, so a
+ * sync engine (e.g. a TanStack DB collection) can reconcile the optimistic row
+ * with the persisted one by matching keys. That power is why a raw client id is
+ * otherwise refused: an unconstrained id could collide with a peer row, defeat a
+ * unique index, or forge a cross-table reference. Requiring a UUID makes the id
+ * unguessable and fixed-shape; the primary-key constraint still enforces actual
+ * uniqueness at insert time — this only gates the *shape*.
+ */
+export const assertValidClientId = (clientId: string): void => {
+    if (!CLIENT_ID_PATTERN.test(clientId)) {
+        throw new Error(`invalid clientId ${JSON.stringify(clientId)}: a client-supplied row id must be a UUID`);
+    }
+};
+
 /** A single committed row mutation, surfaced to {@link CtxDbOptions.onWrite}. */
 interface WriteEvent {
     doc?: Record<string, unknown>;
@@ -359,12 +383,18 @@ interface DatabaseWriterLike {
      *
      * Security: a client-chosen `_id` is **ignored** by default — a caller
      * able to pick its own id could collide with peer rows, defeat unique
-     * constraints, or forge cross-table references. Only the dev/admin import
-     * path (which round-trips a trusted snapshot) may opt in via
-     * `options.allowExplicitId`, in which case a string `_id` on `document`
-     * becomes the row's primary key.
+     * constraints, or forge cross-table references.
+     *
+     * Two opt-ins override the default fresh-id behavior:
+     * - `options.clientId` — the **public, validated** path: a UUID supplied by
+     *   the caller (e.g. an optimistic client) becomes the row's primary key.
+     *   Validated for shape via {@link assertValidClientId}; uniqueness is still
+     *   enforced by the primary-key constraint.
+     * - `options.allowExplicitId` — the internal **trusted-import** path (dev/admin
+     *   snapshot round-trip), which honors a string `_id` on `document` verbatim,
+     *   no shape check.
      */
-    insert: (tableName: string, document: Record<string, unknown>, options?: { allowExplicitId?: boolean }) => Promise<string>;
+    insert: (tableName: string, document: Record<string, unknown>, options?: { allowExplicitId?: boolean; clientId?: string }) => Promise<string>;
 
     /**
      * Validate an untrusted `id` against the structural shape of an id for
@@ -2743,10 +2773,21 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // post-default row so a defaulted value still passes its checks.
             runRowValidators(definition, withDefaults);
 
-            // A client-chosen `_id` is only honored on the trusted dev/admin
-            // import path (`allowExplicitId`); the default mutation path always
-            // generates a fresh id even if a handler forwards a raw payload.
-            const id = insertOptions?.allowExplicitId && typeof withDefaults["_id"] === "string" ? withDefaults["_id"] : generateId();
+            // A client-chosen id is honored two ways: a validated `clientId`
+            // (public, UUID-shaped — keys an optimistic row before the server
+            // responds) or the trusted-import `allowExplicitId` (verbatim `_id`).
+            // Otherwise the default mutation path mints a fresh id, ignoring any
+            // `_id` a handler forwards on the raw payload.
+            let id: string;
+
+            if (insertOptions?.clientId !== undefined) {
+                assertValidClientId(insertOptions.clientId);
+                id = insertOptions.clientId;
+            } else if (insertOptions?.allowExplicitId && typeof withDefaults["_id"] === "string") {
+                id = withDefaults["_id"];
+            } else {
+                id = generateId();
+            }
             const creationTime = typeof withDefaults["_creationTime"] === "number" ? withDefaults["_creationTime"] : clock();
 
             const documentWithMeta: Record<string, unknown> = { ...withDefaults, _creationTime: creationTime, _id: id };

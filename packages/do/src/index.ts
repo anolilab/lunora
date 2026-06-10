@@ -63,6 +63,7 @@ export type {
 } from "./ctx-db";
 export {
     applyCdcChanges,
+    assertValidClientId,
     backfillAggregateIndexes,
     backfillRankIndexes,
     CDC_LOG_TABLE,

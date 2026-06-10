@@ -421,7 +421,15 @@ interface SearchFilterBuilder {
 
 interface DatabaseWriter extends DatabaseReader {
     delete: <T extends string>(id: Id<T>) => Promise<void>;
-    insert: <T extends string>(tableName: T, document: Record<string, unknown>) => Promise<Id<T>>;
+    /**
+     * Insert a document, returning its server id.
+     *
+     * Pass `options.clientId` (a UUID) to key the row yourself — for an
+     * optimistic client that needs the persisted row to match the key it
+     * already rendered. It's validated for shape and still subject to the
+     * primary-key uniqueness constraint; omit it and the server mints the id.
+     */
+    insert: <T extends string>(tableName: T, document: Record<string, unknown>, options?: { clientId?: string }) => Promise<Id<T>>;
     patch: <T extends string>(id: Id<T>, patch: Record<string, unknown>) => Promise<void>;
     replace: <T extends string>(id: Id<T>, document: Record<string, unknown>) => Promise<void>;
 }
