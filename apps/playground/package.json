@@ -28,9 +28,9 @@
         "@cirrus/storage": "workspace:*",
         "@cirrus/studio": "workspace:*",
         "@cirrus/vite": "workspace:*",
-        "@tanstack/db": "0.6.8",
-        "@tanstack/offline-transactions": "1.0.33",
-        "@tanstack/react-db": "0.1.86",
+        "@tanstack/db": "catalog:frontend",
+        "@tanstack/offline-transactions": "catalog:frontend",
+        "@tanstack/react-db": "catalog:frontend",
         "better-auth": "catalog:auth",
         "react": "catalog:frontend",
         "react-dom": "catalog:frontend"

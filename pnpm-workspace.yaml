@@ -105,6 +105,9 @@ catalogs:
     shadcn: ^4.10.0
     tailwind-merge: ^3.6.0
   frontend:
+    "@tanstack/db": ^0.6.8
+    "@tanstack/offline-transactions": ^1.0.33
+    "@tanstack/react-db": ^0.1.86
     "@tanstack/react-query": ^5.101.0
     "@tanstack/react-router": ^1.170.15
     "@tanstack/react-table": ^8.21.3
