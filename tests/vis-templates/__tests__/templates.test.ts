@@ -58,12 +58,20 @@ const templateNames = listDirectories(TEMPLATES_DIR);
 const allDeps = (pkg: PackageJson): Record<string, string> => ({ ...pkg.dependencies, ...pkg.devDependencies });
 
 /**
- * Parse the leading major from a caret/tilde range like `^6.3.0` or `~4.99.0`.
- * Returns `null` for ranges we don't enforce a major on (e.g. `^0.x` libs whose
- * 0-majors aren't semver-stable, or OR-ranges).
+ * Parse the leading major from a single caret/tilde range like `^6.3.0`,
+ * `~4.99.0`, or a bare `^7`. Returns `null` for shapes we don't enforce a major
+ * on — an OR-range (`^5 || ^6`), a wildcard, or anything not starting with a
+ * numeric major — so the caller can skip rather than misread it.
  */
 const leadingMajor = (range: string): number | null => {
-    const match = /^[\^~]?(\d+)\./.exec(range.trim());
+    const trimmed = range.trim();
+
+    // OR-ranges encode multi-major support deliberately; don't pick one major.
+    if (trimmed.includes("||")) {
+        return null;
+    }
+
+    const match = /^[\^~]?(\d+)(?:[.\s]|$)/.exec(trimmed);
 
     if (!match) {
         return null;
