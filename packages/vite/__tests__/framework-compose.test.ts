@@ -144,6 +144,49 @@ describe("framework-compose", () => {
             expect(new Set(names).size).toBe(names.length);
         });
 
+        it("wires the framework-compose plugin into the resolved pipeline for a class-A project", async () => {
+            expect.hasAssertions();
+
+            // A class-A signature (`@tanstack/react-start`) in package.json drives
+            // `detectFramework` → class A, which is what arms the compose plugin's
+            // virtual-entry resolver. We keep `cloudflare: false` so the heavy CF
+            // plugin doesn't boot a worker here; the compose plugin is still added
+            // to the pipeline (it is a normal Vite plugin), proving it participates
+            // in the same `resolveConfig`/dev pipeline that drives HMR.
+            writeFileSync(
+                join(workdir, "package.json"),
+                JSON.stringify({ devDependencies: { "@tanstack/react-start": "^1.0.0" }, name: "class-a-app" }),
+                "utf8",
+            );
+
+            const cirrusPlugins = cirrus({
+                cloudflare: false,
+                overlay: false,
+                projectRoot: workdir,
+                validateWrangler: true,
+            });
+
+            const resolved = await resolveConfig(
+                {
+                    configFile: false,
+                    plugins: [...tanstackStartLike(), ...cirrusPlugins],
+                    root: workdir,
+                },
+                "serve",
+            );
+
+            const names = resolved.plugins.map((plugin) => plugin.name);
+
+            // The compose plugin is present alongside the framework + the rest of
+            // the Cirrus pipeline. Because the composed worker is an ordinary
+            // module entry resolved by this plugin, `@cloudflare/vite-plugin` HMRs
+            // it exactly like a hand-written entry (PLAN4 M5 risk #5) — no special
+            // dev path is introduced.
+            expect(names).toContain("cirrus:framework-compose");
+            expect(names).toContain("tanstack-start");
+            expect(new Set(names).size).toBe(names.length);
+        });
+
         it("wranglerValidator configResolved still fires inside a framework pipeline", async () => {
             expect.assertions(1);
 
