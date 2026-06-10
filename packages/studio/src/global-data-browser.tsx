@@ -8,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { CellValue, GridContainer, GridPagination, TableListSidebar } from "./data-grid";
 import { useT } from "./i18n-context";
 import { errorMessage, fireAndForget } from "./internal";
+import { CLOUDFLARE_D1_URL } from "./lib/cf-links";
 import { StorageTierBadge } from "./storage-tier";
 
 interface GlobalDataBrowserProps {
@@ -144,8 +145,17 @@ export const GlobalDataBrowser = ({ pageSize: initialPageSize = DEFAULT_PAGE_SIZ
         <div className="flex h-full min-w-0" data-testid="cirrus-global-data-browser">
             <TableListSidebar
                 header={
-                    <div className="flex shrink-0 items-center border-b border-border p-3">
+                    <div className="flex shrink-0 items-center gap-2 border-b border-border p-3">
                         <StorageTierBadge tier="global" />
+                        <a
+                            className="ml-auto text-sm text-primary underline-offset-4 hover:underline"
+                            data-testid="gdb-cf-link"
+                            href={CLOUDFLARE_D1_URL}
+                            rel="noreferrer"
+                            target="_blank"
+                        >
+                            {t("Open in Cloudflare")}
+                        </a>
                     </div>
                 }
                 onReload={reloadTables}

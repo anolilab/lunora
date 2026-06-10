@@ -9,6 +9,7 @@ import { Button } from "./components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
 import { useT } from "./i18n-context";
 import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal";
+import { CLOUDFLARE_WORKERS_URL } from "./lib/cf-links";
 
 interface SettingsPanelProps {
     /** Shard key the settings read targets on first load. Defaults to the root shard. */
@@ -16,9 +17,6 @@ interface SettingsPanelProps {
 }
 
 const GET_SETTINGS = adminRef(ADMIN_FUNCTIONS.getSettings);
-
-/** Cloudflare dashboard — the infra plane where bindings and secrets are actually edited. */
-const CLOUDFLARE_STUDIO_URL = "https://dash.cloudflare.com/?to=/:account/workers-and-pages";
 
 /** Badge tone per setting kind, so secrets read as the most guarded. */
 const KIND_VARIANT: Record<SettingEntry["kind"], "destructive" | "outline" | "secondary"> = {
@@ -109,7 +107,7 @@ export const SettingsPanel = ({ initialShardKey }: SettingsPanelProps): ReactEle
                 <a
                     className="text-sm text-primary underline-offset-4 hover:underline"
                     data-testid="set-cf-link"
-                    href={CLOUDFLARE_STUDIO_URL}
+                    href={CLOUDFLARE_WORKERS_URL}
                     rel="noreferrer"
                     target="_blank"
                 >

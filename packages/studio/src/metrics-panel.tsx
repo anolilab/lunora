@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
 import { useT } from "./i18n-context";
 import { adminRef, callOptions, errorMessage, fireAndForget, formatBytes } from "./internal";
+import { CLOUDFLARE_DURABLE_OBJECTS_URL } from "./lib/cf-links";
 import { LiveToggle } from "./live-toggle";
 import type { ShardMetricsResult } from "./metrics-aggregate";
 import { aggregateMetrics, shardsToAggregate } from "./metrics-aggregate";
@@ -267,6 +268,15 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
                         {t("Hide")}
                     </Button>
                 )}
+                <a
+                    className="text-sm text-primary underline-offset-4 hover:underline"
+                    data-testid="mt-cf-link"
+                    href={CLOUDFLARE_DURABLE_OBJECTS_URL}
+                    rel="noreferrer"
+                    target="_blank"
+                >
+                    {t("Open in Cloudflare")}
+                </a>
             </div>
 
             <div className="flex items-center gap-3 text-sm text-muted-foreground" data-testid="mt-trend">

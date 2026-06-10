@@ -4,6 +4,7 @@ import { useCallback } from "react";
 import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
 import type { TFunction } from "./i18n-context";
+import { CLOUDFLARE_R2_URL } from "./lib/cf-links";
 import { SHARE_LIFETIMES } from "./storage-entries";
 import type { FileView } from "./use-file-browser";
 
@@ -84,6 +85,15 @@ const FileBrowserToolbar = ({
                     ))}
                 </select>
             </label>
+            <a
+                className="text-sm text-primary underline-offset-4 hover:underline"
+                data-testid="fb-cf-link"
+                href={CLOUDFLARE_R2_URL}
+                rel="noreferrer"
+                target="_blank"
+            >
+                {t("Open in Cloudflare")}
+            </a>
         </div>
     );
 };
