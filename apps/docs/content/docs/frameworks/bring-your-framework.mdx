@@ -57,11 +57,11 @@ handler does not take down the realtime endpoints.
 How a framework composes with Cirrus depends on who owns the worker entry. This
 mirrors void's class-a/b/c model.
 
-| Class                                  | Frameworks                                      | Composition strategy                                                                                                                                                                   | Status                                     |
-| -------------------------------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
-| **A — Vite-native, we own the entry**  | TanStack Start, React Router (Vite), SolidStart | `createWorker({ httpRouter: <framework SSR handler> })` directly in the worker entry. Cleanest tier; in-process `serverQuery` available here.                                          | TanStack Start shipped; others in progress |
-| **B — own CF adapter, hook-injection** | SvelteKit, Nuxt, Astro                          | The framework builds its own server; Cirrus composition is injected into its server entry / hooks. Cirrus realtime stays under `/_cirrus/*`; the framework keeps everything else.      | preview                                    |
-| **C — non-CF or SSR-less**             | static / SPA                                    | No SSR loaders. Ship the client adapter plus a standalone Cirrus worker (the current default for SPA apps). Data is still live; it just hydrates client-side instead of from the HTML. | shipped                                    |
+| Class                                  | Frameworks                                      | Composition strategy                                                                                                                                                                   | Status                                                                  |
+| -------------------------------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| **A — Vite-native, we own the entry**  | TanStack Start, React Router (Vite), SolidStart | `createWorker({ httpRouter: <framework SSR handler> })` directly in the worker entry. Cleanest tier; in-process `serverQuery` available here.                                          | TanStack Start proven; React Router + SolidStart templated, in progress |
+| **B — own CF adapter, hook-injection** | SvelteKit, Nuxt, Astro                          | The framework builds its own server; Cirrus composition is injected into its server entry / hooks. Cirrus realtime stays under `/_cirrus/*`; the framework keeps everything else.      | preview — SvelteKit + Nuxt templated, not yet proven end-to-end         |
+| **C — non-CF or SSR-less**             | static / SPA                                    | No SSR loaders. Ship the client adapter plus a standalone Cirrus worker (the current default for SPA apps). Data is still live; it just hydrates client-side instead of from the HTML. | shipped                                                                 |
 
 **Class A** is the cleanest: we own the Cloudflare worker entry, so we drop the
 framework's SSR handler straight into `httpRouter`. **Class B** frameworks bundle
@@ -79,15 +79,21 @@ same handoff: a live `useQuery`/equivalent, an optimistic `useMutation`/
 equivalent, a provider/context, and the preloaded-hydration primitive that seeds
 an SSR value into a live subscription.
 
-| Adapter          | Idiom                            | Status      |
-| ---------------- | -------------------------------- | ----------- |
-| `@cirrus/react`  | hooks + context                  | shipped     |
-| `@cirrus/solid`  | signals / resources              | in progress |
-| `@cirrus/svelte` | stores (`$store`) / runes        | in progress |
-| `@cirrus/vue`    | composables (`ref` / `reactive`) | in progress |
+| Adapter          | Idiom                            | Status  |
+| ---------------- | -------------------------------- | ------- |
+| `@cirrus/react`  | hooks + context                  | shipped |
+| `@cirrus/solid`  | signals / resources              | preview |
+| `@cirrus/svelte` | stores (`$store`) / runes        | preview |
+| `@cirrus/vue`    | composables (`ref` / `reactive`) | preview |
 
 > Solid lands first after React: its fine-grained signals map most directly onto
 > Cirrus deltas, so it showcases live loaders with the least glue.
+
+The Solid, Svelte, and Vue adapter **packages exist** and expose the same
+hydrate-then-subscribe handoff under their idiom — but they are **preview**: not
+yet proven end-to-end against a running app. The React adapter is the only one
+proven through the full live-loader path (see
+[Manual end-to-end verification](/docs/frameworks/verify-live-loaders)).
 
 For React today, the preloaded-hydration primitive is `usePreloadedQuery` (see
 [Reactive loaders](/docs/frameworks/reactive-loaders)). The Solid/Svelte/Vue
@@ -99,7 +105,7 @@ name.
 Scaffold a new project wired for your framework with `cirrus init`:
 
 ```bash
-cirrus init my-app -t tanstack-start   # class A — shipped, with a live-loader route
+cirrus init my-app -t tanstack-start   # class A — proven, with a live-loader route
 cirrus init my-app -t vite             # SPA (class C) — the default
 cirrus init my-app -t standalone       # worker-only, no frontend
 ```
@@ -107,12 +113,19 @@ cirrus init my-app -t standalone       # worker-only, no frontend
 `cirrus init -t tanstack-start` is fully wired: it mounts the framework SSR
 handler as the worker's `httpRouter`, ships a sample **live loader** route, and
 sets up the `@cirrus/react` provider. Templates for `react-router`,
-`solid-start`, `sveltekit`, `nuxt`, and `astro` are in progress and land
-alongside their adapters.
+`solid-start`, `sveltekit`, and `nuxt` exist alongside their adapters; they are
+**preview** — scaffoldable but not yet proven end-to-end. An `astro` template is
+still in progress.
 
 To add Cirrus to an **existing** meta-framework app, the in-place patcher
-(`cirrus init --here`) wires the worker composition and provider into your project
-without scaffolding a fresh tree.
+`cirrus init --here` detects your framework from `package.json`, classifies it
+(A/B/C), patches your Vite config where applicable, scaffolds `cirrus/` (schema +
+a sample query/mutation) idempotently, and prints **per-framework next steps**:
+the right `@cirrus/<adapter>` to install plus the worker composition to wire
+(`httpRouter` for class A, hook-injection for class B). The `cirrus/` scaffold and
+the config patch are applied automatically; the provider mount and worker
+composition live in framework-owned files, so the CLI prints precise steps for
+those rather than guessing.
 
 ## Vite composition
 
@@ -139,6 +152,8 @@ frameworks are in progress.
 ## See also
 
 - [Reactive loaders](/docs/frameworks/reactive-loaders) — the differentiator
+- [Deploy your framework](/docs/frameworks/deploy) — one worker, one deploy
+- [Manual end-to-end verification](/docs/frameworks/verify-live-loaders) — prove live loaders work
 - [Real-time](/docs/concepts/realtime)
 - [@cirrus/runtime](/docs/api/runtime) — `createWorker`, the `httpRouter` seam
 - [@cirrus/cli](/docs/api/cli) — `cirrus init -t <framework>`

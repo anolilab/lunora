@@ -264,7 +264,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
                 type: Boolean,
             },
             {
-                description: "Configure Cirrus into the current project (patch vite.config) instead of scaffolding a new one",
+                description: "Add Cirrus to the current project: detect the framework, patch the config, scaffold cirrus/, print per-framework wiring steps",
                 name: "here",
                 type: Boolean,
             },

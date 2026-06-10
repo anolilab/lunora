@@ -11,6 +11,8 @@
         "---Frameworks---",
         "frameworks/reactive-loaders",
         "frameworks/bring-your-framework",
+        "frameworks/deploy",
+        "frameworks/verify-live-loaders",
         "---Tutorial---",
         "tutorial/realtime-chat",
         "---API Reference---",
