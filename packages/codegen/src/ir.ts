@@ -197,9 +197,39 @@ export interface QueryReadIR {
     table: string;
 }
 
+/**
+ * A typed REST route declared with the `httpRoute.&lt;verb>("/path")…` builder in
+ * `@cirrus/server` and mounted on `httpRouter()`. Captured statically from the
+ * builder chain so the OpenAPI emitter can render a real `paths` entry: the verb
+ * + path become the operation's method + URL, and the accumulated validator maps
+ * become its query parameters, path parameters, and request body.
+ */
+export interface HttpRouteIR {
+    /** `v.*` validators decoding the JSON request body (`.body({...})`), keyed by field. */
+    body: Record<string, ValidatorIR>;
+    /** Export binding name of the route handler (used only for diagnostics / dedupe). */
+    exportName: string;
+    /** Path relative to `&lt;projectRoot>/cirrus/` without extension, e.g. "http". */
+    filePath: string;
+    /** HTTP verb the route binds to (uppercased), e.g. `"GET"`. */
+    method: string;
+    /** The `.output(validator)` return schema when declared; absent ⇒ TS-inferred / best-effort. */
+    output?: ValidatorIR;
+    /** `v.*` validators decoding the hono path params (`.params({...})`), keyed by `:name`. */
+    params: Record<string, ValidatorIR>;
+    /** The route path passed to `httpRoute.&lt;verb>(path)`, e.g. `/api/todos/:id`. */
+    path: string;
+    /** `v.*` validators decoding the URL query string (`.searchParams({...})`), keyed by name. */
+    searchParams: Record<string, ValidatorIR>;
+    /** `true` when declared via the terminal `.stream(...)` (Server-Sent Events) rather than `.handler(...)`. */
+    stream: boolean;
+}
+
 export interface ProjectIR {
     crons: ReadonlyArray<CronJobIR>;
     functions: ReadonlyArray<FunctionIR>;
+    /** Typed REST routes discovered from `httpRoute.&lt;verb>(...)` builder chains. */
+    httpRoutes: ReadonlyArray<HttpRouteIR>;
     migrations: ReadonlyArray<MigrationIR>;
     schema: SchemaIR;
 }

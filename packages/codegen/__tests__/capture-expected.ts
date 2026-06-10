@@ -25,6 +25,8 @@ writeFileSync(join(expectedDirectory, "dataModel.ts"), result.generated.dataMode
 writeFileSync(join(expectedDirectory, "drizzle.global.ts"), result.generated.drizzleGlobal, "utf8");
 writeFileSync(join(expectedDirectory, "drizzle.shard.ts"), result.generated.drizzleShard, "utf8");
 writeFileSync(join(expectedDirectory, "shard.ts"), result.generated.shard, "utf8");
+writeFileSync(join(expectedDirectory, "functions.ts"), result.generated.functions, "utf8");
+writeFileSync(join(expectedDirectory, "openapi.json"), result.generated.openApi, "utf8");
 
 // eslint-disable-next-line no-console
 console.log("Wrote expected fixtures to", expectedDirectory);

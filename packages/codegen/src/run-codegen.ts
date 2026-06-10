@@ -7,10 +7,12 @@ import { Project } from "ts-morph";
 import { lintSchema } from "./advisor";
 import discoverCrons from "./discover-crons";
 import { discoverFunctions } from "./discover-functions";
+import discoverHttpRoutes from "./discover-http-routes";
 import discoverMigrations from "./discover-migrations";
 import discoverQueries from "./discover-queries";
 import discoverSchema from "./discover-schema";
 import { emitApi, emitCrons, emitDataModel, emitDrizzleSchema, emitFunctions, emitServer, emitShard, emitWranglerCronTriggers } from "./emit";
+import { emitOpenApi } from "./openapi";
 
 const writeIfChanged = (filePath: string, content: string): void => {
     // Avoid spurious writes (and downstream HMR reloads) when the rendered
@@ -68,6 +70,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
 
     const schema = discoverSchema(project, schemaPath);
     const functions = discoverFunctions(project, cirrusDirectory);
+    const httpRoutes = discoverHttpRoutes(project, cirrusDirectory);
     const migrations = discoverMigrations(project, cirrusDirectory);
     const crons = discoverCrons(project, cirrusDirectory);
 
@@ -87,6 +90,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const shardContent = emitShard(schema, advisories);
     const cronsContent = emitCrons(crons);
     const drizzleFiles = emitDrizzleSchema(schema);
+    const openApiContent = emitOpenApi({ functions, httpRoutes });
 
     const outputDirectory = join(cirrusDirectory, "_generated");
 
@@ -103,6 +107,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         writeIfChanged(join(outputDirectory, "crons.ts"), cronsContent);
         writeIfChanged(join(outputDirectory, "drizzle.global.ts"), drizzleFiles.global);
         writeIfChanged(join(outputDirectory, "drizzle.shard.ts"), drizzleFiles.shard);
+        writeIfChanged(join(outputDirectory, "openapi.json"), openApiContent);
     }
 
     return {
@@ -115,6 +120,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
             drizzleGlobal: drizzleFiles.global,
             drizzleShard: drizzleFiles.shard,
             functions: functionsContent,
+            openApi: openApiContent,
             server: serverContent,
             shard: shardContent,
         },
@@ -167,6 +173,8 @@ export interface CodegenResult {
         drizzleGlobal: string;
         drizzleShard: string;
         functions: string;
+        /** OpenAPI 3.1.0 document (`_generated/openapi.json`), pretty-printed JSON. */
+        openApi: string;
         server: string;
         shard: string;
     };

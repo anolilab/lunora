@@ -242,7 +242,7 @@ describe("run-codegen", () => {
         });
 
         it("writes all generated files into _generated/", () => {
-            expect.assertions(7);
+            expect.assertions(8);
 
             runCodegen({ projectRoot: workdir });
 
@@ -255,6 +255,39 @@ describe("run-codegen", () => {
             expect(existsSync(join(generatedDirectory, "drizzle.global.ts"))).toBe(true);
             expect(existsSync(join(generatedDirectory, "drizzle.shard.ts"))).toBe(true);
             expect(existsSync(join(generatedDirectory, "shard.ts"))).toBe(true);
+            expect(existsSync(join(generatedDirectory, "openapi.json"))).toBe(true);
+        });
+
+        it("emits openapi.json covering httpRouter routes and RPC functions", () => {
+            expect.assertions(9);
+
+            const result = runCodegen({ projectRoot: workdir });
+            const document = JSON.parse(result.generated.openApi) as Record<string, unknown>;
+
+            const paths = document.paths as Record<string, Record<string, { operationId: string }>>;
+
+            // The typed REST routes from cirrus/http.ts → real paths (with `:param`
+            // rewritten to the OpenAPI `{param}` template form).
+            expect(document.openapi).toBe("3.1.0");
+            expect(paths["/api/messages"]?.get?.operationId).toBe("get__api_messages");
+            expect(paths["/api/messages/{channelId}"]?.post).toBeDefined();
+
+            // RPC functions → one POST operation each on /_cirrus/rpc, disambiguated
+            // by a #functionPath fragment; the internalMutation `purge` is excluded.
+            expect(paths["/_cirrus/rpc#messages:list"]?.post?.operationId).toBe("messages:list");
+            expect(paths["/_cirrus/rpc#messages:send"]?.post?.operationId).toBe("messages:send");
+            expect(paths["/_cirrus/rpc#messages:purge"]).toBeUndefined();
+
+            // The reusable error component is referenced by operations.
+            const components = document.components as {
+                responses: { CirrusError: { content: Record<string, { schema: { properties: { error: { properties: { code: { enum: string[] } } } } } }> } };
+            };
+
+            expect(components.responses.CirrusError).toBeDefined();
+            expect(components.responses.CirrusError.content["application/json"]?.schema.properties.error.properties.code.enum).toContain("UNAUTHORIZED");
+
+            // Pretty-printed JSON ends with a trailing newline.
+            expect(result.generated.openApi.endsWith("}\n")).toBe(true);
         });
 
         it("emits drizzle.global.ts containing only `.global()` tables", () => {
@@ -312,7 +345,7 @@ describe("run-codegen", () => {
         });
 
         it("output matches committed expected/ files (snapshot)", () => {
-            expect.assertions(7);
+            expect.assertions(8);
 
             // `lint: false` keeps the emitted `CIRRUS_ADVISORIES` empty so the
             // snapshot stays decoupled from advisor behaviour (a lint change
@@ -327,6 +360,7 @@ describe("run-codegen", () => {
             const expectedDrizzleGlobal = readFileSync(join(expectedDirectory, "drizzle.global.ts"), "utf8");
             const expectedDrizzleShard = readFileSync(join(expectedDirectory, "drizzle.shard.ts"), "utf8");
             const expectedShard = readFileSync(join(expectedDirectory, "shard.ts"), "utf8");
+            const expectedOpenApi = readFileSync(join(expectedDirectory, "openapi.json"), "utf8");
 
             expect(result.generated.api).toBe(expectedApi);
             expect(result.generated.server).toBe(expectedServer);
@@ -335,6 +369,7 @@ describe("run-codegen", () => {
             expect(result.generated.drizzleGlobal).toBe(expectedDrizzleGlobal);
             expect(result.generated.drizzleShard).toBe(expectedDrizzleShard);
             expect(result.generated.shard).toBe(expectedShard);
+            expect(result.generated.openApi).toBe(expectedOpenApi);
         });
 
         it("emits shard.ts with a createShardDO factory wired to generated modules", () => {

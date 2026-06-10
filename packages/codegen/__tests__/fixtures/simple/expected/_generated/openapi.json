@@ -1,0 +1,369 @@
+{
+  "components": {
+    "responses": {
+      "CirrusError": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "additionalProperties": false,
+              "description": "Standard Cirrus error envelope.",
+              "properties": {
+                "error": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "description": "Machine-readable error code. Clients switch on this value.",
+                      "enum": [
+                        "BAD_REQUEST",
+                        "CONFLICT",
+                        "COUNT_RLS_UNSUPPORTED",
+                        "FORBIDDEN",
+                        "FUNCTION_NOT_FOUND",
+                        "INTERNAL",
+                        "INTERNAL_SERVER_ERROR",
+                        "METHOD_NOT_ALLOWED",
+                        "NOT_FOUND",
+                        "NOT_IMPLEMENTED",
+                        "PAYLOAD_TOO_LARGE",
+                        "TOO_MANY_REQUESTS",
+                        "UNAUTHORIZED",
+                        "UNPROCESSABLE",
+                        "VALIDATION_ERROR"
+                      ],
+                      "type": "string"
+                    },
+                    "message": {
+                      "description": "Human-readable error message (never echoes internal details).",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "error"
+              ],
+              "type": "object"
+            }
+          }
+        },
+        "description": "A Cirrus error response. The HTTP status reflects the error code (e.g. BAD_REQUEST→400, UNAUTHORIZED→401, FORBIDDEN→403, NOT_FOUND→404)."
+      }
+    }
+  },
+  "info": {
+    "description": "Auto-generated from @cirrus/values-typed functions by @cirrus/codegen. Do not edit — run `cirrus codegen` to regenerate.",
+    "title": "Cirrus API",
+    "version": "0.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/messages": {
+      "get": {
+        "description": "HTTP route handler `listMessages` (GET /api/messages).",
+        "operationId": "get__api_messages",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "channelId": {
+                      "description": "Id<\"channels\">",
+                      "type": "string",
+                      "x-cirrus-table": "channels"
+                    },
+                    "limit": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "channelId",
+                    "limit"
+                  ],
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful response."
+          },
+          "204": {
+            "description": "No content (handler returned `undefined`)."
+          },
+          "default": {
+            "$ref": "#/components/responses/CirrusError"
+          }
+        },
+        "summary": "GET /api/messages",
+        "tags": [
+          "http"
+        ],
+        "parameters": [
+          {
+            "description": "Query parameter `channelId`",
+            "in": "query",
+            "name": "channelId",
+            "required": true,
+            "schema": {
+              "description": "Id<\"channels\">",
+              "type": "string",
+              "x-cirrus-table": "channels"
+            }
+          },
+          {
+            "description": "Query parameter `limit`",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "type": "number"
+            }
+          }
+        ]
+      }
+    },
+    "/api/messages/{channelId}": {
+      "post": {
+        "description": "HTTP route handler `sendMessage` (POST /api/messages/:channelId).",
+        "operationId": "post__api_messages__channelId",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "Return shape is TS-inferred (no `.output()` declared); best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful response. The return shape is TypeScript-inferred and not declared via `.output()`, so it is documented best-effort."
+          },
+          "204": {
+            "description": "No content (handler returned `undefined`)."
+          },
+          "default": {
+            "$ref": "#/components/responses/CirrusError"
+          }
+        },
+        "summary": "POST /api/messages/:channelId",
+        "tags": [
+          "http"
+        ],
+        "parameters": [
+          {
+            "description": "Path parameter `channelId`",
+            "in": "path",
+            "name": "channelId",
+            "required": true,
+            "schema": {
+              "description": "Id<\"channels\">",
+              "type": "string",
+              "x-cirrus-table": "channels"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "anyOf": [
+                      {
+                        "const": "text",
+                        "type": "string"
+                      },
+                      {
+                        "const": "image",
+                        "type": "string"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "text",
+                  "kind"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        }
+      }
+    },
+    "/_cirrus/rpc#messages:list": {
+      "post": {
+        "description": "Invoke the `query` `messages:list` over the Cirrus RPC envelope (POST /_cirrus/rpc).",
+        "operationId": "messages:list",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "channelId": {
+                        "description": "Id<\"channels\">",
+                        "type": "string",
+                        "x-cirrus-table": "channels"
+                      },
+                      "limit": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "channelId"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "messages:list",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+          },
+          "default": {
+            "$ref": "#/components/responses/CirrusError"
+          }
+        },
+        "summary": "query: messages:list",
+        "tags": [
+          "messages"
+        ],
+        "x-cirrus-function-kind": "query"
+      }
+    },
+    "/_cirrus/rpc#messages:send": {
+      "post": {
+        "description": "Invoke the `mutation` `messages:send` over the Cirrus RPC envelope (POST /_cirrus/rpc).",
+        "operationId": "messages:send",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "channelId": {
+                        "description": "Id<\"channels\">",
+                        "type": "string",
+                        "x-cirrus-table": "channels"
+                      },
+                      "text": {
+                        "type": "string"
+                      },
+                      "kind": {
+                        "anyOf": [
+                          {
+                            "const": "text",
+                            "type": "string"
+                          },
+                          {
+                            "const": "image",
+                            "type": "string"
+                          }
+                        ]
+                      },
+                      "tags": {
+                        "additionalProperties": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      }
+                    },
+                    "required": [
+                      "channelId",
+                      "text",
+                      "kind",
+                      "tags"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "messages:send",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+          },
+          "default": {
+            "$ref": "#/components/responses/CirrusError"
+          }
+        },
+        "summary": "mutation: messages:send",
+        "tags": [
+          "messages"
+        ],
+        "x-cirrus-function-kind": "mutation"
+      }
+    }
+  },
+  "tags": [
+    {
+      "description": "Operations declared in `cirrus/http`.",
+      "name": "http"
+    },
+    {
+      "description": "Operations declared in `cirrus/messages`.",
+      "name": "messages"
+    }
+  ]
+}
