@@ -46,7 +46,6 @@
         "@hugeicons/react": "catalog:ui",
         "@lingui/core": "catalog:i18n",
         "@lingui/message-utils": "catalog:i18n",
-        "@scalar/api-reference-react": "catalog:ui",
         "@tanstack/react-router": "catalog:frontend",
         "@tanstack/react-table": "catalog:frontend",
         "@tanstack/react-virtual": "catalog:frontend",

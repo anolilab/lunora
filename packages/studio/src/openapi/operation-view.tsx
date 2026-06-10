@@ -6,27 +6,51 @@ import type { ApiOperation } from "./openapi-model";
 import { SchemaTable } from "./schema-view";
 import TryIt from "./try-it";
 
+/** A response status's dot/text colour: 2xx success, 4xx/5xx/default error, else neutral. */
+const statusToneClass = (status: string): string => {
+    if (status.startsWith("2")) {
+        return "text-emerald-600 dark:text-emerald-400";
+    }
+
+    if (status === "default" || status.startsWith("4") || status.startsWith("5")) {
+        return "text-red-600 dark:text-red-400";
+    }
+
+    return "text-muted-foreground";
+};
+
+const statusDotClass = (status: string): string => {
+    if (status.startsWith("2")) {
+        return "bg-emerald-500";
+    }
+
+    if (status === "default" || status.startsWith("4") || status.startsWith("5")) {
+        return "bg-red-500";
+    }
+
+    return "bg-muted-foreground";
+};
+
 interface OperationViewProps {
     readonly operation: ApiOperation;
 }
 
 /**
- * The centre column for one selected operation: a header (method/kind chip, the
- * endpoint, title, description), the live try-it console, the request-argument
- * schema table, and a row per documented response. Pure studio primitives — the
- * content scrolls within its column with no portals or overlays.
+ * The centre column for one selected operation: a sticky header (method/kind
+ * chip, endpoint, title, description), the request console, the request-argument
+ * schema table, and a colour-coded row per documented response. Pure studio
+ * primitives — the content scrolls within its column, the header stays pinned,
+ * and a subtle enter animation plays on each operation switch.
  */
 const OperationView = ({ operation }: OperationViewProps): ReactElement => {
     const t = useT();
 
     return (
-        <div className="flex flex-col gap-6" data-testid={`api-operation-${operation.operationId}`}>
-            <header className="flex flex-col gap-2">
+        <div className="flex flex-col gap-6 duration-200 animate-in fade-in-0 slide-in-from-bottom-1" data-testid={`api-operation-${operation.operationId}`} key={operation.key}>
+            <header className="sticky top-0 z-10 -mx-6 -mt-6 flex flex-col gap-2 border-b border-border bg-background/85 px-6 pt-6 pb-3 backdrop-blur">
                 <div className="flex items-center gap-2">
                     <MethodBadge kind={operation.kind} method={operation.method} testId="api-operation-method" />
-                    <code className="font-mono text-xs text-muted-foreground">
-                        {operation.method} {operation.functionPath ?? operation.httpPath}
-                    </code>
+                    <code className="truncate font-mono text-xs text-muted-foreground">{operation.functionPath ?? operation.httpPath}</code>
                 </div>
                 <h1 className="text-lg font-semibold text-foreground" data-testid="api-operation-title">
                     {operation.title}
@@ -36,9 +60,7 @@ const OperationView = ({ operation }: OperationViewProps): ReactElement => {
 
             <section className="flex flex-col gap-2">
                 <h2 className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">{t("Try it")}</h2>
-                {/* Keyed on the operation so switching operations remounts the console with
-                    a freshly-seeded args editor and a cleared result (no reset effect). */}
-                <TryIt key={operation.key} operation={operation} />
+                <TryIt />
             </section>
 
             <section className="flex flex-col gap-2">
@@ -51,7 +73,10 @@ const OperationView = ({ operation }: OperationViewProps): ReactElement => {
                 {operation.responses.map((response) => (
                     <div className="flex flex-col gap-1.5 rounded-md border border-border p-3" key={response.status}>
                         <div className="flex items-center gap-2">
-                            <span className="font-mono text-xs font-semibold text-foreground">{response.status}</span>
+                            <span className={`inline-flex items-center gap-1.5 font-mono text-xs font-semibold ${statusToneClass(response.status)}`}>
+                                <span className={`size-1.5 rounded-full ${statusDotClass(response.status)}`} />
+                                {response.status}
+                            </span>
                             {response.description !== undefined && <span className="text-xs text-muted-foreground">{response.description}</span>}
                         </div>
                         {response.schema !== undefined && <SchemaTable schema={response.schema} testId={`api-response-${response.status}`} />}

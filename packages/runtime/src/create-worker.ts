@@ -548,7 +548,7 @@ interface WorkerOptions {
      * stays live.
      *
      * When set, the worker exposes the admin-gated `GET /_cirrus/admin/openapi`
-     * endpoint the studio's API-reference (Scalar) view renders. The runtime does
+     * endpoint the studio's API-reference view renders. The runtime does
      * NOT assemble or validate the spec — it serves what the host injects verbatim.
      * Omit it and the endpoint returns an empty-but-valid OpenAPI 3.1 document
      * (no paths), so the studio shows a "not configured" state rather than erroring.

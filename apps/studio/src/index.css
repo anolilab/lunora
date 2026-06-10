@@ -3,11 +3,6 @@
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
 
-/* Scalar's prebuilt stylesheet for the API tab's OpenAPI reference — mirrors the
-   library's `src/styles.css` so this dev harness renders the reference styled
-   (without it Scalar shows unstyled: giant logos, broken layout). */
-@import "@scalar/api-reference-react/style.css";
-
 /* Shared shadcn theme tokens — single source of truth in the library, so this
    dev app and the shipped library CSS stay in lockstep. Imported by relative
    path (not the package specifier) to sidestep the source alias this app maps
