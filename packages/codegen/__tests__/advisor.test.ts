@@ -92,10 +92,12 @@ describe("runCodegen lint integration", () => {
     it("returns advisories in the result (codegen does not print them)", () => {
         expect.assertions(2);
 
-        const result = runCodegen({ projectRoot: workdir });
+        const names = runCodegen({ projectRoot: workdir }).advisories.map((advisory) => advisory.name);
 
-        expect(result.advisories).toHaveLength(1);
-        expect(result.advisories[0]?.name).toBe("unindexed_foreign_key");
+        // The FK lint fires on the schema; the write feeder also flags `posts`
+        // (no `ctx.db.insert("posts", …)` in the fixture functions).
+        expect(names).toContain("unindexed_foreign_key");
+        expect(names).toContain("table_without_insert");
     });
 
     it("respects `lint: false` — no findings", () => {
@@ -107,7 +109,7 @@ describe("runCodegen lint integration", () => {
     it("still computes advisories on a dry run", () => {
         expect.assertions(1);
 
-        expect(runCodegen({ dryRun: true, projectRoot: workdir }).advisories).toHaveLength(1);
+        expect(runCodegen({ dryRun: true, projectRoot: workdir }).advisories.map((advisory) => advisory.name)).toContain("unindexed_foreign_key");
     });
 
     it("flags a filter-without-index read discovered in a function body", () => {

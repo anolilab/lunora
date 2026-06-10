@@ -8,6 +8,7 @@ import { lintSchema } from "./advisor";
 import discoverCrons from "./discover-crons";
 import { discoverFunctions } from "./discover-functions";
 import discoverHttpRoutes from "./discover-http-routes";
+import discoverInserts from "./discover-inserts";
 import discoverMigrations from "./discover-migrations";
 import discoverQueries from "./discover-queries";
 import discoverSchema from "./discover-schema";
@@ -82,7 +83,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // job: the result carries the findings and each caller surfaces them through
     // its own channel (the CLI logger, the vite overlay, the studio Advisors
     // table) rather than this library printing.
-    const advisories = options.lint === false ? [] : lintSchema(schema, discoverQueries(project, cirrusDirectory));
+    const advisories = options.lint === false ? [] : lintSchema(schema, discoverQueries(project, cirrusDirectory), discoverInserts(project, cirrusDirectory));
 
     const dataModelContent = emitDataModel(schema);
     const apiContent = emitApi(functions);

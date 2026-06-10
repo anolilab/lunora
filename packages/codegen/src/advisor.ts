@@ -1,7 +1,7 @@
 import type { AdvisorIndex, AdvisorSchema, Finding } from "@cirrus/advisor";
 import { runAdvisor } from "@cirrus/advisor";
 
-import type { QueryReadIR, SchemaIR, TableIR } from "./ir";
+import type { InsertWriteIR, QueryReadIR, SchemaIR, TableIR } from "./ir";
 
 /**
  * Flatten a table's per-kind index declarations into the advisor's unified
@@ -58,13 +58,15 @@ const toAdvisorSchema = (schema: SchemaIR): AdvisorSchema => {
 };
 
 /**
- * Run the static lints against a discovered {@link SchemaIR} and the query reads
- * found in function bodies (which feed `filter_without_index`; default empty for
- * callers that don't analyze functions). Returns the findings; surfacing them
+ * Run the static lints against a discovered {@link SchemaIR} and the reads/writes
+ * found in function bodies: query reads feed `filter_without_index`, insert writes
+ * feed `table_without_insert` (both default empty for callers that don't analyze
+ * functions). `QueryReadIR`/`InsertWriteIR` are structurally the advisor's
+ * `AdvisorQueryRead`/`AdvisorInsertWrite`. Returns the findings; surfacing them
  * (console, error overlay, studio Advisors table) is the caller's choice.
  */
-export const lintSchema = (schema: SchemaIR, queries: ReadonlyArray<QueryReadIR> = []): Finding[] =>
-    runAdvisor({ queries, schema: toAdvisorSchema(schema) }, { source: "static" });
+export const lintSchema = (schema: SchemaIR, queries: ReadonlyArray<QueryReadIR> = [], inserts?: ReadonlyArray<InsertWriteIR>): Finding[] =>
+    runAdvisor({ inserts, queries, schema: toAdvisorSchema(schema) }, { source: "static" });
 
 /**
  * Render advisor findings as a single multi-line string for console surfacing:

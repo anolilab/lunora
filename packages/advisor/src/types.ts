@@ -1,3 +1,4 @@
+import type { AdvisorInsertWrite } from "./inserts";
 import type { AdvisorQueryRead } from "./queries";
 import type { AdvisorSchema } from "./schema";
 
@@ -69,6 +70,13 @@ export interface Finding {
  * runtime lints will additionally read observed-signal fields added here later.
  */
 export interface LintContext {
+    /**
+     * Insert writes discovered in function bodies (the `table_without_insert`
+     * input). Supplied by the codegen feeder; absent for runtime callers, where
+     * the write-shaped lints simply find nothing.
+     */
+    inserts?: ReadonlyArray<AdvisorInsertWrite>;
+
     /**
      * Query reads discovered in function bodies (the `filter_without_index`
      * input). Supplied by the codegen feeder; absent for runtime callers, where
