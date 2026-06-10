@@ -11,6 +11,7 @@ import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
 import { useT } from "./i18n-context";
 import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal";
+import { CLOUDFLARE_OBSERVABILITY_URL } from "./lib/cf-links";
 import { LiveToggle } from "./live-toggle";
 import { recordShard } from "./shard-history";
 import { ShardInput } from "./shard-input";
@@ -33,14 +34,6 @@ const ROW_BASE_STYLE: CSSProperties = {
     top: 0,
     width: "100%",
 };
-
-/**
- * Cloudflare Workers Observability — the raw, un-attributed request firehose.
- * Cirrus's request log is the cirrus-attributed readout (function/shard/user/
- * tables); the raw transport stays with Workers Logs / Logpush
- * (`CLOUDFLARE-REUSE-AUDIT.md` #5), so we deep-link out rather than re-stream it.
- */
-const CLOUDFLARE_OBSERVABILITY_URL = "https://dash.cloudflare.com/?to=/:account/workers-and-pages/observability";
 
 /**
  * Viewport-rect observer that floors the measured height to {@link SCROLL_HEIGHT}
