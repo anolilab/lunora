@@ -1203,8 +1203,13 @@ const vectorsStub: VectorSearchLike = {
         ? `\n            const facade = db as unknown as Record<string, ReturnType<typeof bindTableFacade>>;
 ${schema.tables
     .map(
-        (table) =>
-            `            facade[${JSON.stringify(table.name)}] = bindTableFacade(${table.shardMode === "global" ? "globalDb" : "db"}, ${JSON.stringify(table.name)});`,
+        // Always bind through `db` (the shard ctx-db) — even for `.global()`
+        // tables. `createShardCtxDb` routes global ops to the D1 `globalDb`
+        // internally AND stamps the read-dependency / change-broadcast hooks that
+        // drive live subscriptions; binding a global facade straight to `globalDb`
+        // would skip those, so a `ctx.db.<global>` read/write would never refresh
+        // a subscriber of that table.
+        (table) => `            facade[${JSON.stringify(table.name)}] = bindTableFacade(db, ${JSON.stringify(table.name)});`,
     )
     .join("\n")}
 `

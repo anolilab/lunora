@@ -2220,6 +2220,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const global = globalWriterFor(tableName, "aggregate");
 
             if (global) {
+                onRead(tableName, SCAN_DEP);
+
                 return global.aggregate(tableName, aggOptions);
             }
 
@@ -2299,6 +2301,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const global = globalWriterFor(tableName, "count");
 
             if (global) {
+                onRead(tableName, SCAN_DEP);
+
                 return global.count(tableName, whereOrOptions);
             }
 
@@ -2464,6 +2468,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const global = globalWriterFor(tableName, "findMany");
 
             if (global) {
+                // The result lives in D1, but a live subscription that runs this
+                // read still needs to refresh when the global table changes. We
+                // can't track per-row deps across the D1 boundary, so stamp the
+                // conservative `*scan` marker: any write to the table re-runs it.
+                onRead(tableName, SCAN_DEP);
+
                 return global.findMany(tableName, args);
             }
 
@@ -2581,6 +2591,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const global = globalWriterFor(tableName, "groupBy");
 
             if (global) {
+                onRead(tableName, SCAN_DEP);
+
                 return global.groupBy(tableName, groupOptions);
             }
 
@@ -2706,7 +2718,17 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const global = globalWriterFor(tableName, "insert");
 
             if (global) {
-                return global.insert(tableName, document, insertOptions);
+                const id = await global.insert(tableName, document, insertOptions);
+
+                // A `.global()` (D1) write lands in another backend, but live
+                // subscriptions on this DO that read the table still need to be
+                // refreshed — so notify them via the same `broadcast` channel the
+                // local path uses (the DO maps it to `recordChangedTable`). Without
+                // this, `ctx.db.insert("<global>", …)` would never push a delta to
+                // subscribers of that global table's query.
+                broadcast({ key: id, op: "insert", row: { ...document, _id: id }, table: tableName });
+
+                return id;
             }
 
             const definition = schema.tables[tableName];
@@ -2862,6 +2884,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const global = globalWriterFor(tableName, "query");
 
             if (global) {
+                // Conservative dep so a live subscription over this global query
+                // refreshes on any write to the table (see `findMany`).
+                onRead(tableName, SCAN_DEP);
+
                 return global.query(tableName);
             }
 
@@ -2879,6 +2905,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const global = globalWriterFor(tableName, "rank");
 
             if (global) {
+                onRead(tableName, SCAN_DEP);
+
                 return global.rank(tableName, indexName, rankOptions);
             }
 
@@ -3020,6 +3048,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const global = globalWriterFor(tableName, "rankPage");
 
             if (global) {
+                onRead(tableName, SCAN_DEP);
+
                 return global.rankPage(tableName, indexName, rankPageOptions);
             }
 

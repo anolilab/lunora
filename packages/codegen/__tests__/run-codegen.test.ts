@@ -477,7 +477,7 @@ describe("run-codegen", () => {
             expect(output).toContain("export const createShardDO");
         });
 
-        it("binds `.global()` tables to the D1 facade and shard tables to the DO writer", () => {
+        it("binds every table facade through the shard ctx-db (which routes `.global()` ops to D1)", () => {
             expect.assertions(6);
 
             const schema: SchemaIR = {
@@ -518,9 +518,13 @@ describe("run-codegen", () => {
             // the property-style `ctx.db.<global>` facade).
             expect(output).toContain("\n                globalDb,");
 
-            // Backend selection by shardMode: shard table → DO writer, global table → D1 facade.
+            // Every table — shard-local AND `.global()` — binds its facade through
+            // `db` (the shard ctx-db). `createShardCtxDb` routes global ops to the
+            // D1 `globalDb` internally while still firing the read-dependency /
+            // change-broadcast hooks that drive live subscriptions; binding a global
+            // facade straight to `globalDb` would skip those.
             expect(output).toContain('facade["messages"] = bindTableFacade(db, "messages");');
-            expect(output).toContain('facade["users"] = bindTableFacade(globalDb, "users");');
+            expect(output).toContain('facade["users"] = bindTableFacade(db, "users");');
         });
 
         it("omits the D1 facade plumbing when no table is `.global()`", () => {

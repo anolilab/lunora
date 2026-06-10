@@ -533,7 +533,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             });
 
             const facade = db as unknown as Record<string, ReturnType<typeof bindTableFacade>>;
-            facade["users"] = bindTableFacade(globalDb, "users");
+            facade["users"] = bindTableFacade(db, "users");
             facade["posts"] = bindTableFacade(db, "posts");
             facade["drafts"] = bindTableFacade(db, "drafts");
 

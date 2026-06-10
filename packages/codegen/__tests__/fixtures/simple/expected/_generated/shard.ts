@@ -472,8 +472,8 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
             const facade = db as unknown as Record<string, ReturnType<typeof bindTableFacade>>;
             facade["messages"] = bindTableFacade(db, "messages");
-            facade["users"] = bindTableFacade(globalDb, "users");
-            facade["attachments"] = bindTableFacade(globalDb, "attachments");
+            facade["users"] = bindTableFacade(db, "users");
+            facade["attachments"] = bindTableFacade(db, "attachments");
 
             const ctx: Record<string, unknown> = {
                 auth: {

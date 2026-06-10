@@ -14,7 +14,7 @@ export const list = query({
     handler: async (context): Promise<Doc<"channels">[]> => {
         const { page } = await context.db.channels.findMany();
 
-        return page as unknown as Doc<"channels">[];
+        return page;
     },
 });
 
