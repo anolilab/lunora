@@ -86,6 +86,8 @@ export type { MetricsPanelProps } from "./metrics-panel";
 export { MetricsPanel } from "./metrics-panel";
 export type { MigrationsPanelProps } from "./migrations";
 export { MigrationsPanel } from "./migrations";
+export type { OpenRpcReferencePanelProps } from "./openrpc-reference-panel";
+export { default as OpenRpcReferencePanel } from "./openrpc-reference-panel";
 export type { PitrPanelProps } from "./pitr-panel";
 export { PitrPanel } from "./pitr-panel";
 export type { ScheduledJobsProps } from "./scheduled-jobs";

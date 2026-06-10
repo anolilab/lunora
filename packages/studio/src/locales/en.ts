@@ -520,6 +520,18 @@ const MESSAGE_IDS = [
     "Couldn't load the OpenAPI spec: {message}",
     "No OpenAPI spec configured",
     "Run `cirrus codegen` and wire `_generated/openapi.json` to the worker to render the API reference here.",
+    // API tab — spec format switch + OpenRPC reference sub-view.
+    "API spec format",
+    "OpenAPI",
+    "OpenRPC",
+    "Params",
+    "Result",
+    "Field",
+    "Required",
+    "JSON-RPC request",
+    "Couldn't load the OpenRPC spec: {message}",
+    "No OpenRPC spec configured",
+    "Run `cirrus codegen --api-spec openrpc` and wire `_generated/openrpc.json` to the worker to render the OpenRPC reference here.",
 ] as const;
 
 /** A known studio message id — one of the entries in {@link MESSAGE_IDS}. */

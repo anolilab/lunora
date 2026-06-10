@@ -29,6 +29,7 @@ interface MockClientHooks {
     /** Push a job list to every live `subscribeScheduledJobs` subscriber. */
     emitJobs: (jobs: ScheduleRecord[]) => void;
     fetchOpenApi: ReturnType<typeof vi.fn>;
+    fetchOpenRpc: ReturnType<typeof vi.fn>;
     getAuthCapabilities: ReturnType<typeof vi.fn>;
     impersonateAuthUser: ReturnType<typeof vi.fn>;
     listAuthAccounts: ReturnType<typeof vi.fn>;
@@ -82,6 +83,7 @@ interface MockClientImpls {
     action?: Impl;
     cancelScheduledJob?: (id: string) => { cancelled: boolean };
     fetchOpenApi?: () => Record<string, unknown>;
+    fetchOpenRpc?: () => Record<string, unknown>;
     listAuthSessions?: (options: { limit?: number; offset?: number; userId?: string }) => AuthPage<AuthSession>;
     listAuthUsers?: (options: ListAuthUsersOptions) => AuthPage<AuthUser>;
     listFunctions?: () => FunctionDescriptor[];
@@ -100,6 +102,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
     const action = makeMethod(impls.action);
     const listFunctions = vi.fn<() => Promise<FunctionDescriptor[]>>(async () => impls.listFunctions?.() ?? []);
     const fetchOpenApi = vi.fn<() => Promise<Record<string, unknown>>>(async () => impls.fetchOpenApi?.() ?? { openapi: "3.1.0", paths: {} });
+    const fetchOpenRpc = vi.fn<() => Promise<Record<string, unknown>>>(async () => impls.fetchOpenRpc?.() ?? { methods: [], openrpc: "1.3.2" });
     const listScheduledJobs = vi.fn<() => Promise<ScheduleRecord[]>>(async () => impls.listScheduledJobs?.() ?? []);
     const cancelScheduledJob = vi.fn<(id: string) => Promise<{ cancelled: boolean }>>(
         async (id: string) => impls.cancelScheduledJob?.(id) ?? { cancelled: true },
@@ -254,6 +257,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         cancelScheduledJob,
         deleteStorageObject,
         fetchOpenApi,
+        fetchOpenRpc,
         listAuthSessions,
         listAuthUsers,
         listFunctions,
@@ -279,6 +283,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         emitError,
         emitJobs,
         fetchOpenApi,
+        fetchOpenRpc,
         listAuthSessions,
         listAuthUsers,
         listFunctions,

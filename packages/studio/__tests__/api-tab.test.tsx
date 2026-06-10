@@ -21,9 +21,14 @@ const SPEC: Record<string, unknown> = {
     paths: { "/_cirrus/rpc#messages:list": { post: { operationId: "messages:list" } } },
 };
 
+const RPC_SPEC: Record<string, unknown> = {
+    methods: [{ name: "messages:list", params: [{ name: "args", schema: { type: "object" } }], result: { schema: {} }, "x-tags": [{ name: "messages" }] }],
+    openrpc: "1.3.2",
+};
+
 const renderTab = (): ReactElement => (
     <CirrusProvider client={createMockClient().asClient}>
-        <ApiTab functions={FUNCTIONS} openApiSpec={SPEC} />
+        <ApiTab functions={FUNCTIONS} openApiSpec={SPEC} openRpcSpec={RPC_SPEC} />
     </CirrusProvider>
 );
 
@@ -51,5 +56,32 @@ describe("apiTab", () => {
         fireEvent.click(screen.getByTestId("api-view-reference"));
 
         expect(screen.getByTestId("scalar-stub")).toBeDefined();
+    });
+
+    it("switches the reference format from OpenAPI (Scalar) to the OpenRPC view", () => {
+        expect.assertions(3);
+
+        render(renderTab());
+
+        // OpenAPI (Scalar) is the default format.
+        expect(screen.getByTestId("scalar-stub")).toBeDefined();
+
+        fireEvent.click(screen.getByTestId("api-format-openrpc"));
+
+        // The custom OpenRPC view renders; Scalar is unmounted.
+        expect(screen.getByTestId("openrpc-reference")).toBeDefined();
+        expect(screen.queryByTestId("scalar-stub")).toBeNull();
+    });
+
+    it("hides the format switch on the snippets sub-view", () => {
+        expect.assertions(2);
+
+        render(renderTab());
+
+        expect(screen.getByTestId("api-format-toggle")).toBeDefined();
+
+        fireEvent.click(screen.getByTestId("api-view-snippets"));
+
+        expect(screen.queryByTestId("api-format-toggle")).toBeNull();
     });
 });

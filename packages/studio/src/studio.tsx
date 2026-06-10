@@ -115,6 +115,15 @@ interface StudioProps {
     readonly openApiSpec?: unknown;
 
     /**
+     * Inline OpenRPC 1.x document rendered by the API tab's reference sub-view
+     * when the OpenRPC format is selected. Thread the generated
+     * `_generated/openrpc.json` here to render it without a round-trip. When
+     * omitted the OpenRPC view fetches the worker's admin-gated
+     * `GET /_cirrus/admin/openrpc` endpoint via the client.
+     */
+    readonly openRpcSpec?: unknown;
+
+    /**
      * Override how the schedule tab cancels a job. Defaults to the client's
      * scheduler admin endpoint; see {@link ScheduledJobs}.
      */
@@ -570,11 +579,20 @@ const NotFoundRedirect = (): null => {
  * there's no DOM (SSR). The panels close over the shell props, so the router is
  * rebuilt only when those change.
  */
-const buildRouter = ({ basePath, dataEditable = false, functions, initialShardKey, openApiSpec, scheduledCancel, scheduledLoad }: StudioShellProps) => {
+const buildRouter = ({
+    basePath,
+    dataEditable = false,
+    functions,
+    initialShardKey,
+    openApiSpec,
+    openRpcSpec,
+    scheduledCancel,
+    scheduledLoad,
+}: StudioShellProps) => {
     const rootRoute = createRootRoute({ component: StudioLayout });
 
     const panels: Record<StudioTab, ReactElement> = {
-        api: <ApiTab functions={functions} initialShardKey={initialShardKey} openApiSpec={openApiSpec} />,
+        api: <ApiTab functions={functions} initialShardKey={initialShardKey} openApiSpec={openApiSpec} openRpcSpec={openRpcSpec} />,
         audit: <AuditPanel initialShardKey={initialShardKey} />,
         dashboards: <DashboardsPanel initialShardKey={initialShardKey} />,
         data: <DataBrowser editable={dataEditable} initialShardKey={initialShardKey} />,
@@ -646,13 +664,22 @@ const buildRouter = ({ basePath, dataEditable = false, functions, initialShardKe
  * only when a panel-affecting prop changes (not on the unstable `props` object),
  * so navigation state survives unrelated re-renders.
  */
-const StudioShell = ({ basePath, dataEditable, functions, initialShardKey, openApiSpec, scheduledCancel, scheduledLoad }: StudioShellProps): ReactElement => {
+const StudioShell = ({
+    basePath,
+    dataEditable,
+    functions,
+    initialShardKey,
+    openApiSpec,
+    openRpcSpec,
+    scheduledCancel,
+    scheduledLoad,
+}: StudioShellProps): ReactElement => {
     // Rebuild the router only when a panel-affecting prop changes (keyed on the
     // individual props, not the unstable `props` identity), so navigation state
     // survives unrelated re-renders.
     const router = useMemo(
-        () => buildRouter({ basePath, dataEditable, functions, initialShardKey, openApiSpec, scheduledCancel, scheduledLoad }),
-        [basePath, dataEditable, functions, initialShardKey, openApiSpec, scheduledCancel, scheduledLoad],
+        () => buildRouter({ basePath, dataEditable, functions, initialShardKey, openApiSpec, openRpcSpec, scheduledCancel, scheduledLoad }),
+        [basePath, dataEditable, functions, initialShardKey, openApiSpec, openRpcSpec, scheduledCancel, scheduledLoad],
     );
 
     return <RouterProvider router={router} />;
@@ -676,6 +703,7 @@ export const Studio = ({
     initialShardKey,
     locale,
     openApiSpec,
+    openRpcSpec,
     scheduledCancel,
     scheduledLoad,
 }: StudioProps): ReactElement => {
@@ -686,6 +714,7 @@ export const Studio = ({
             functions={functions}
             initialShardKey={initialShardKey}
             openApiSpec={openApiSpec}
+            openRpcSpec={openRpcSpec}
             scheduledCancel={scheduledCancel}
             scheduledLoad={scheduledLoad}
         />
