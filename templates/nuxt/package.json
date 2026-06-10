@@ -1,0 +1,26 @@
+{
+    "name": "{{name}}",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "dev": "cirrus dev",
+        "build": "nuxt build",
+        "preview": "nuxt preview",
+        "codegen": "cirrus codegen",
+        "deploy": "cirrus deploy"
+    },
+    "dependencies": {
+        "@cirrus/client": "^0.0.0",
+        "@cirrus/runtime": "^0.0.0",
+        "@cirrus/server": "^0.0.0",
+        "@cirrus/vue": "^0.0.0",
+        "nuxt": "^3.14.0",
+        "vue": "^3.5.0"
+    },
+    "devDependencies": {
+        "@cirrus/vite": "^0.0.0",
+        "nitro-cloudflare-dev": "^0.2.0",
+        "wrangler": "^4.0.0"
+    }
+}
