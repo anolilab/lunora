@@ -13,6 +13,6 @@
  * load the prebuilt asset bytes.
  */
 export { parseDevVariable, resolveAdminToken } from "./admin-token";
-export { default as loadStudioAssets } from "./assets";
+export { default as loadStudioAssets, studioAssetsStamp } from "./assets";
 export { default as renderStudioHtml } from "./render-html";
 export type { StudioAssets, StudioHtmlConfig, WarnLogger } from "./types";

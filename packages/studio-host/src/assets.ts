@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 
 import type { StudioAssets, WarnLogger } from "./types";
@@ -27,6 +27,25 @@ const loadStudioAssets = (logger?: WarnLogger, resolveFrom: string = import.meta
 
         logger?.warnOnce?.(`[cirrus] studio assets unavailable (build @cirrus/studio?): ${message}`);
 
+        return undefined;
+    }
+};
+
+/**
+ * A freshness stamp for the studio assets: the latest mtime (ms) of the resolved
+ * `studio.js` / `styles.css`, or `undefined` when they can't be resolved. Hosts
+ * cache {@link loadStudioAssets} for the dev session but compare this stamp per
+ * request, so a `@cirrus/studio` rebuild mid-session is picked up live — no dev
+ * server restart needed.
+ */
+export const studioAssetsStamp = (resolveFrom: string = import.meta.url): number | undefined => {
+    try {
+        const require = createRequire(resolveFrom);
+        const scriptMtime = statSync(require.resolve("@cirrus/studio/standalone/studio.js")).mtimeMs;
+        const stylesMtime = statSync(require.resolve("@cirrus/studio/styles.css")).mtimeMs;
+
+        return Math.max(scriptMtime, stylesMtime);
+    } catch {
         return undefined;
     }
 };

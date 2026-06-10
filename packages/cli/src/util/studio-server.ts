@@ -18,7 +18,7 @@ import { connect } from "node:net";
 import type { Duplex } from "node:stream";
 
 // eslint-disable-next-line import/no-extraneous-dependencies -- bundled at build time (packem inlines it), so it's a devDependency, not a runtime dep consumers must install
-import { loadStudioAssets, renderStudioHtml, resolveAdminToken } from "@cirrus/studio-host";
+import { loadStudioAssets, renderStudioHtml, resolveAdminToken, studioAssetsStamp } from "@cirrus/studio-host";
 
 /** Request paths the studio server reverse-proxies to the worker (admin RPC, RPC, WS). */
 const PROXY_PREFIX = "/_cirrus";
@@ -113,7 +113,8 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
     // Resolve `@cirrus/studio` from THIS module (a `@cirrus/cli` file, which
     // depends on it) rather than from the shared `@cirrus/studio-host` (which
     // doesn't).
-    const assets = loadStudioAssets(options.logger, import.meta.url);
+    let assets = loadStudioAssets(options.logger, import.meta.url);
+    let assetsStamp = studioAssetsStamp(import.meta.url);
     const html = renderStudioHtml({
         adminToken: resolveAdminToken(options.cwd),
         basePath: "/",
@@ -140,6 +141,15 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
 
         // Static assets are exact paths.
         if (pathname === "/studio.js" || pathname === "/styles.css") {
+            // Re-read the bytes when the built studio files change on disk so a
+            // mid-session `@cirrus/studio` rebuild is served without a restart.
+            const stamp = studioAssetsStamp(import.meta.url);
+
+            if (stamp !== assetsStamp) {
+                assets = loadStudioAssets(options.logger, import.meta.url);
+                assetsStamp = stamp;
+            }
+
             if (assets === undefined) {
                 response.statusCode = 501;
                 response.setHeader("Content-Type", "text/plain");

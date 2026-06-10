@@ -7,7 +7,7 @@ import type { AddressInfo } from "node:net";
 // identical studio.
 import type { StudioAssets } from "@cirrus/studio-host";
 // eslint-disable-next-line import/no-extraneous-dependencies -- devDependency on purpose: packem bundles it at build time (see the note above) rather than externalizing it
-import { loadStudioAssets, renderStudioHtml, resolveAdminToken } from "@cirrus/studio-host";
+import { loadStudioAssets, renderStudioHtml, resolveAdminToken, studioAssetsStamp } from "@cirrus/studio-host";
 import type { Plugin, ViteDevServer } from "vite";
 
 /** Dev-server path the studio SPA is served from. */
@@ -67,14 +67,17 @@ const pathnameOf = (url: string): string => {
 
 /**
  * Connect middleware that serves the static studio. Extracted from
- * `configureServer` so each function stays small. Memoises the asset bytes on
- * first use; restart the dev server to pick up a studio rebuild.
+ * `configureServer` so each function stays small. Caches the asset bytes but
+ * re-reads them when the built files change on disk (compared via
+ * {@link studioAssetsStamp}), so a `@cirrus/studio` rebuild is picked up live
+ * without a dev server restart.
  */
 const createStudioHandler = (
     server: ViteDevServer,
     isNonLoopbackBind: boolean,
 ): ((request: { url?: string }, response: ServerResponse, next: () => void) => void) => {
     let assets: StudioAssets | undefined;
+    let assetsStamp: number | undefined;
     let html: string | undefined;
 
     return (request: { url?: string }, response: ServerResponse, next: () => void): void => {
@@ -102,7 +105,14 @@ const createStudioHandler = (
         // SPA route and gets the history fallback (the document) below, so a hard
         // load of a deep link like `/__cirrus/globals` boots the router there.
         if (pathname === STUDIO_SCRIPT_PATH || pathname === STUDIO_STYLE_PATH) {
-            assets ??= loadStudioAssets(server.config.logger);
+            // Re-read the bytes when the built studio files change on disk so a
+            // mid-session `@cirrus/studio` rebuild is served without a restart.
+            const stamp = studioAssetsStamp();
+
+            if (assets === undefined || stamp !== assetsStamp) {
+                assets = loadStudioAssets(server.config.logger);
+                assetsStamp = stamp;
+            }
 
             if (assets === undefined) {
                 response.statusCode = 501;
