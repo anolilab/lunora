@@ -198,6 +198,26 @@ export interface QueryReadIR {
 }
 
 /**
+ * A `ctx.authApi.&lt;method>(...)` call discovered in a function body, attributed
+ * to the exported function (and its file = api namespace) that performs it.
+ * Structurally identical to `AdvisorAuthApiCall` so it passes straight through
+ * to the advisor lint without conversion, exactly as `InsertWriteIR` does for
+ * `AdvisorInsertWrite`.
+ */
+export interface AuthApiCallIR {
+    /** Export binding name of the function performing the call, e.g. "createOrg". */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/cirrus/`, without extension. */
+    file: string;
+    /** True when the call's argument object includes a `headers` property. */
+    hasHeaders: boolean;
+    /** 1-based line of the call, or `0` when unknown. */
+    line: number;
+    /** The better-auth method invoked (e.g. `banUser`); empty when not statically known. */
+    method: string;
+}
+
+/**
  * A `ctx.db.insert("table", …)` write discovered in a function body, attributed
  * to the exported function (and its file = api namespace) that performs it — the
  * write-side analog of {@link QueryReadIR}. Lets tooling wire a table's write

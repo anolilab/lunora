@@ -2,7 +2,7 @@ import emit from "../../finding";
 import type { Lint } from "../../types";
 
 /**
- * Flags a `ctx.authApi.<method>(...)` call whose argument object omits `headers`.
+ * Flags a `ctx.authApi.&lt;method>(...)` call whose argument object omits `headers`.
  *
  * `@cirrus/auth`'s `withAuthPlugins` middleware attaches the full privileged
  * better-auth API to `ctx.authApi` — `banUser`, `setRole`, impersonation,
@@ -41,8 +41,8 @@ const authApiCallWithoutHeaders: Lint = {
 
             findings.push(
                 emit(authApiCallWithoutHeaders, {
-                    cacheKey: `auth_api_call_without_headers:${call.file}:${call.line}:${call.method}`,
-                    detail: `\`ctx.authApi.${call.method || "<method>"}(…)\` in ${call.exportName} (${call.file}:${call.line}) is called without \`headers\` — better-auth skips session authorization, so this runs with full privileges. Pass the inbound \`headers\`.`,
+                    cacheKey: `auth_api_call_without_headers:${call.file}:${call.line.toString()}:${call.method}`,
+                    detail: `\`ctx.authApi.${call.method || "<method>"}(…)\` in ${call.exportName} (${call.file}:${call.line.toString()}) is called without \`headers\` — better-auth skips session authorization, so this runs with full privileges. Pass the inbound \`headers\`.`,
                     metadata: { exportName: call.exportName, file: call.file, line: call.line, method: call.method },
                 }),
             );

@@ -72,7 +72,7 @@ export interface Finding {
  */
 export interface LintContext {
     /**
-     * `ctx.authApi.<method>(...)` calls discovered in function bodies (the
+     * `ctx.authApi.&lt;method>(...)` calls discovered in function bodies (the
      * `auth_api_call_without_headers` input). Supplied by the codegen feeder; absent
      * for runtime callers, where the lint finds nothing.
      */
