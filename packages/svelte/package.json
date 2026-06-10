@@ -17,6 +17,10 @@
             "types": "./dist/server.d.ts",
             "import": "./dist/server.mjs"
         },
+        "./worker": {
+            "types": "./dist/worker.d.ts",
+            "import": "./dist/worker.mjs"
+        },
         "./package.json": "./package.json"
     },
     "files": [
@@ -36,6 +40,7 @@
     },
     "dependencies": {
         "@cirrus/client": "workspace:*",
+        "@cirrus/runtime": "workspace:*",
         "@cirrus/ssr": "workspace:*"
     },
     "devDependencies": {
