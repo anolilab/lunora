@@ -1,0 +1,55 @@
+---
+// `.astro` frontmatter runs server-side during SSR (inside the composed
+// Cloudflare Worker). This is the SERVER half of the reactive-loader handoff:
+// preload the query over HTTP RPC, ship the snapshot in the HTML, and hand the
+// `Preloaded` token to the React island for the SSR-seed → live handoff.
+//
+// `@cirrus/astro/server` re-exports the framework-neutral `@cirrus/ssr`
+// contract — `createServerClient` only opens a socket on `.subscribe()`, and we
+// only call `preloadQuery` (HTTP RPC), so no live connection is made here.
+import { createServerClient, preloadQuery } from "@cirrus/astro/server";
+
+import { api } from "../../cirrus/_generated/api";
+import Messages from "../components/Messages";
+
+const channelId = "channel:demo";
+
+// Identity continuity (PLAN4 open question #2): forward the inbound cookie on
+// every RPC so the worker-side auth sees the same session the browser has, and
+// the client subscription resumes that same identity post-hydration. Same-origin
+// (`Astro.url.origin`) means `/_cirrus/rpc` loops back into THIS composed worker.
+const client = createServerClient({
+    fetch: (input, init) => {
+        const headers = new Headers(init?.headers);
+        const cookie = Astro.request.headers.get("cookie");
+
+        if (cookie) {
+            headers.set("cookie", cookie);
+        }
+
+        return fetch(input, { ...init, headers });
+    },
+    url: Astro.url.origin,
+});
+
+// Sharded preload (PLAN4 open question #6): the schema declares
+// `.shardBy("channelId")`, so pass `channelId` as the shard key to route the RPC
+// to the correct Durable Object shard.
+const preloaded = await preloadQuery(client, api.messages.list, { channelId }, { shardKey: channelId });
+---
+
+<html lang="en">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width" />
+        <title>{{name}} — Astro + Cirrus</title>
+    </head>
+    <body style="font-family: system-ui; padding: 24px;">
+        <h1>{{name}}</h1>
+        <p>Astro + Cirrus live loaders. Open a second tab and send a message — this list updates with no refresh.</p>
+
+        <!-- `client:load` hydrates the React island; `hydratePreloaded` seeds it
+             from the SSR snapshot, then opens the live subscription. -->
+        <Messages preloaded={preloaded} client:load />
+    </body>
+</html>

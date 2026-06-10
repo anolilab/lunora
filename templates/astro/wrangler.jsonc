@@ -1,0 +1,11 @@
+{
+    "name": "{{name}}",
+    // Astro's @astrojs/cloudflare adapter builds its SSR worker; `src/worker.ts`
+    // wraps it with `withCirrus` so Cirrus realtime mounts in the same worker.
+    "main": "src/worker.ts",
+    "compatibility_date": "2026-04-07",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
+    },
+}

@@ -1,0 +1,7 @@
+node_modules
+.astro
+dist
+.output
+.wrangler
+.cirrus-cache
+cirrus/_generated
