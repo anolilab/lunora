@@ -1,5 +1,6 @@
 import type { JsonSchema } from "@cirrus/values";
 
+import { GENERATED_HEADER } from "./emit";
 import type { FunctionIR, HttpRouteIR, ValidatorIR } from "./ir";
 import sanitizeNamespace from "./paths";
 import { argsObjectSchema, CIRRUS_ERROR_CODES, objectSchema, validatorIrToJsonSchema } from "./schema-ir";
@@ -191,9 +192,11 @@ interface OpenApiEmitInput {
  * references a reusable `CirrusError` error-response component enumerating the
  * standard error codes. Borrows oRPC's per-procedure-operation + tag-grouping +
  * internal-filtering structure; the JSON Schema dialect matches `@cirrus/values`
- * (Draft 2020-12). Returns the document as a pretty-printed JSON string.
+ * (Draft 2020-12). Returns the document as a plain object (the single source of
+ * truth `emitOpenApi` stringifies and `emitOpenApiModule` inlines, so the
+ * `.json` and `.ts` artifacts can never drift).
  */
-const emitOpenApi = (input: OpenApiEmitInput): string => {
+const buildOpenApiDocument = (input: OpenApiEmitInput): Record<string, unknown> => {
     const version = input.version ?? "0.0.0";
     const paths: Record<string, Record<string, unknown>> = {};
     const tagNames = new Set<string>();
@@ -272,8 +275,26 @@ const emitOpenApi = (input: OpenApiEmitInput): string => {
         tags,
     };
 
-    return `${JSON.stringify(document, undefined, 2)}\n`;
+    return document;
 };
 
-export { emitOpenApi };
+/**
+ * Emit the OpenAPI 3.1 document as a pretty-printed JSON string
+ * (`_generated/openapi.json`) — the portable artifact for external tooling.
+ */
+const emitOpenApi = (input: OpenApiEmitInput): string => `${JSON.stringify(buildOpenApiDocument(input), undefined, 2)}\n`;
+
+/**
+ * Emit the OpenAPI document as an importable TS module
+ * (`_generated/openapi.ts`) the worker entry imports and passes to
+ * `createWorker({ openApiSpec })`. The document object literal is inlined
+ * verbatim (same `JSON.stringify` form the `.json` uses), so the `.ts` and
+ * `.json` are byte-identical content and regenerate together — closing the gap
+ * where a Worker cannot read the JSON file at runtime. `document_` is the object
+ * returned by {@link buildOpenApiDocument} (reused, never recomputed).
+ */
+const emitOpenApiModule = (document_: Record<string, unknown>): string =>
+    `${GENERATED_HEADER}export const openApiSpec: Record<string, unknown> = ${JSON.stringify(document_, undefined, 4)};\n`;
+
+export { buildOpenApiDocument, emitOpenApi, emitOpenApiModule };
 export type { OpenApiEmitInput };

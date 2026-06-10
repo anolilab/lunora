@@ -1,5 +1,6 @@
 import type { JsonSchema } from "@cirrus/values";
 
+import { GENERATED_HEADER } from "./emit";
 import type { FunctionIR } from "./ir";
 import sanitizeNamespace from "./paths";
 import { argsObjectSchema, CIRRUS_ERROR_CODES } from "./schema-ir";
@@ -96,9 +97,11 @@ interface OpenRpcEmitInput {
  * `httpRouter()` typed REST routes are deliberately omitted — OpenRPC is
  * RPC-only and cannot represent REST paths; the OpenAPI document is the spec
  * that covers the REST surface. Methods are sorted by name for stable output.
- * Returns the document as a pretty-printed JSON string.
+ * Returns the document as a plain object (the single source of truth
+ * `emitOpenRpc` stringifies and `emitOpenRpcModule` inlines, so the `.json` and
+ * `.ts` artifacts can never drift).
  */
-const emitOpenRpc = (input: OpenRpcEmitInput): string => {
+const buildOpenRpcDocument = (input: OpenRpcEmitInput): Record<string, unknown> => {
     const version = input.version ?? "0.0.0";
 
     // Same filter as the OpenAPI emitter: `internal` and `stream` functions are
@@ -118,8 +121,25 @@ const emitOpenRpc = (input: OpenRpcEmitInput): string => {
         openrpc: OPENRPC_VERSION,
     };
 
-    return `${JSON.stringify(document, undefined, 2)}\n`;
+    return document;
 };
 
-export { emitOpenRpc, OPENRPC_VERSION };
+/**
+ * Emit the OpenRPC 1.x document as a pretty-printed JSON string
+ * (`_generated/openrpc.json`) — the portable artifact for external tooling.
+ */
+const emitOpenRpc = (input: OpenRpcEmitInput): string => `${JSON.stringify(buildOpenRpcDocument(input), undefined, 2)}\n`;
+
+/**
+ * Emit the OpenRPC document as an importable TS module
+ * (`_generated/openrpc.ts`) the worker entry imports and passes to
+ * `createWorker({ openRpcSpec })`. The document object literal is inlined
+ * verbatim (same `JSON.stringify` form the `.json` uses), so the `.ts` and
+ * `.json` are byte-identical content and regenerate together. `document_` is
+ * the object returned by {@link buildOpenRpcDocument} (reused, never recomputed).
+ */
+const emitOpenRpcModule = (document_: Record<string, unknown>): string =>
+    `${GENERATED_HEADER}export const openRpcSpec: Record<string, unknown> = ${JSON.stringify(document_, undefined, 4)};\n`;
+
+export { buildOpenRpcDocument, emitOpenRpc, emitOpenRpcModule, OPENRPC_VERSION };
 export type { OpenRpcEmitInput };

@@ -12,8 +12,8 @@ import discoverMigrations from "./discover-migrations";
 import discoverQueries from "./discover-queries";
 import discoverSchema from "./discover-schema";
 import { emitApi, emitCrons, emitDataModel, emitDrizzleSchema, emitFunctions, emitServer, emitShard, emitWranglerCronTriggers } from "./emit";
-import { emitOpenApi } from "./openapi";
-import { emitOpenRpc } from "./openrpc";
+import { buildOpenApiDocument, emitOpenApiModule } from "./openapi";
+import { buildOpenRpcDocument, emitOpenRpcModule } from "./openrpc";
 
 const writeIfChanged = (filePath: string, content: string): void => {
     // Avoid spurious writes (and downstream HMR reloads) when the rendered
@@ -98,10 +98,18 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const wantsOpenApi = apiSpec === "openapi" || apiSpec === "both";
     const wantsOpenRpc = apiSpec === "openrpc" || apiSpec === "both";
 
-    // Always compute both strings (cheap, pure) so `CodegenResult` can carry
-    // whichever the caller asked for; only the requested file(s) are written.
-    const openApiContent = emitOpenApi({ functions, httpRoutes });
-    const openRpcContent = emitOpenRpc({ functions });
+    // Build each spec document once, then derive both artifacts from the same
+    // object so the portable `.json` and the worker-importable `.ts` are
+    // identical content and can never drift. Both are computed regardless of
+    // `apiSpec` (cheap, pure) so `CodegenResult` can carry whichever the caller
+    // asked for; only the requested file(s) are written.
+    const openApiDocument = buildOpenApiDocument({ functions, httpRoutes });
+    const openRpcDocument = buildOpenRpcDocument({ functions });
+
+    const openApiContent = `${JSON.stringify(openApiDocument, undefined, 2)}\n`;
+    const openRpcContent = `${JSON.stringify(openRpcDocument, undefined, 2)}\n`;
+    const openApiModuleContent = emitOpenApiModule(openApiDocument);
+    const openRpcModuleContent = emitOpenRpcModule(openRpcDocument);
 
     const outputDirectory = join(cirrusDirectory, "_generated");
 
@@ -120,11 +128,17 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         writeIfChanged(join(outputDirectory, "drizzle.shard.ts"), drizzleFiles.shard);
 
         if (wantsOpenApi) {
+            // The `.json` is the portable artifact for external tooling; the
+            // `.ts` (same document, inlined) is what the worker imports and
+            // passes to `createWorker({ openApiSpec })`. Both are gated on the
+            // same `apiSpec` choice so they regenerate together.
             writeIfChanged(join(outputDirectory, "openapi.json"), openApiContent);
+            writeIfChanged(join(outputDirectory, "openapi.ts"), openApiModuleContent);
         }
 
         if (wantsOpenRpc) {
             writeIfChanged(join(outputDirectory, "openrpc.json"), openRpcContent);
+            writeIfChanged(join(outputDirectory, "openrpc.ts"), openRpcModuleContent);
         }
     }
 
@@ -139,7 +153,9 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
             drizzleShard: drizzleFiles.shard,
             functions: functionsContent,
             openApi: openApiContent,
+            openApiModule: openApiModuleContent,
             openRpc: openRpcContent,
+            openRpcModule: openRpcModuleContent,
             server: serverContent,
             shard: shardContent,
         },
@@ -208,8 +224,24 @@ export interface CodegenResult {
         functions: string;
         /** OpenAPI 3.1.0 document (`_generated/openapi.json`), pretty-printed JSON. */
         openApi: string;
+
+        /**
+         * OpenAPI document as an importable TS module (`_generated/openapi.ts`) —
+         * `export const openApiSpec`, the worker imports it for
+         * `createWorker({ openApiSpec })`. Same document as `openApi`. Written
+         * alongside `openapi.json` whenever `apiSpec` includes `openapi`.
+         */
+        openApiModule: string;
         /** OpenRPC 1.x document (`_generated/openrpc.json`), pretty-printed JSON. Always computed; written only when `apiSpec` includes `openrpc`. */
         openRpc: string;
+
+        /**
+         * OpenRPC document as an importable TS module (`_generated/openrpc.ts`) —
+         * `export const openRpcSpec`, for `createWorker({ openRpcSpec })`. Same
+         * document as `openRpc`. Written alongside `openrpc.json` whenever
+         * `apiSpec` includes `openrpc`.
+         */
+        openRpcModule: string;
         server: string;
         shard: string;
     };
