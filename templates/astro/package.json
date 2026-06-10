@@ -11,21 +11,21 @@
         "deploy": "cirrus deploy"
     },
     "dependencies": {
-        "@astrojs/cloudflare": "^12.0.0",
-        "@astrojs/react": "^4.0.0",
+        "@astrojs/cloudflare": "^13.7.0",
+        "@astrojs/react": "^5.0.0",
         "@cirrus/astro": "^0.0.0",
         "@cirrus/client": "^0.0.0",
         "@cirrus/react": "^0.0.0",
         "@cirrus/runtime": "^0.0.0",
         "@cirrus/server": "^0.0.0",
-        "astro": "^5.0.0",
-        "react": "^19.0.0",
-        "react-dom": "^19.0.0"
+        "astro": "^6.3.0",
+        "react": "^19.2.7",
+        "react-dom": "^19.2.7"
     },
     "devDependencies": {
         "@cirrus/vite": "^0.0.0",
-        "@types/react": "^19.0.0",
-        "@types/react-dom": "^19.0.0",
-        "wrangler": "^4.0.0"
+        "@types/react": "^19.2.17",
+        "@types/react-dom": "^19.2.3",
+        "wrangler": "^4.99.0"
     }
 }

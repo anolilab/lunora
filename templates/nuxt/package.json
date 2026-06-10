@@ -15,12 +15,12 @@
         "@cirrus/runtime": "^0.0.0",
         "@cirrus/server": "^0.0.0",
         "@cirrus/vue": "^0.0.0",
-        "nuxt": "^3.14.0",
-        "vue": "^3.5.0"
+        "nuxt": "^4.4.0",
+        "vue": "^3.5.13"
     },
     "devDependencies": {
         "@cirrus/vite": "^0.0.0",
-        "nitro-cloudflare-dev": "^0.2.0",
-        "wrangler": "^4.0.0"
+        "nitro-cloudflare-dev": "^0.2.2",
+        "wrangler": "^4.99.0"
     }
 }
