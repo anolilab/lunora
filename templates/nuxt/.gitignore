@@ -1,0 +1,8 @@
+node_modules
+.output
+.nuxt
+.nitro
+dist
+.wrangler
+.cirrus-cache
+cirrus/_generated
