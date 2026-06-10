@@ -404,7 +404,7 @@ describe("introspect", () => {
 
             const { references } = findStorageReferences(database.sql, { avatars: ["fileKey"] }, ["u/1.png", "u/2.png"]);
 
-            expect([...references["u/1.png"]].toSorted((a, b) => a.id.localeCompare(b.id))).toEqual([
+            expect((references["u/1.png"] ?? []).toSorted((a, b) => a.id.localeCompare(b.id))).toEqual([
                 { column: "fileKey", id: "a1", table: "avatars" },
                 { column: "fileKey", id: "a3", table: "avatars" },
             ]);
