@@ -5,6 +5,9 @@
     "license": "FSL-1.1-Apache-2.0",
     "type": "module",
     "sideEffects": false,
+    "engines": {
+        "node": "^22.15.0 || >=24.10.0"
+    },
     "scripts": {
         "build": "vite build",
         "dev": "vite",

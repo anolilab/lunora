@@ -8,12 +8,20 @@
 // from a mock client, minus the vitest spies.
 //
 // Dev-only: imported solely by `main.mock.tsx`, never by the shipped studio.
-import { ADMIN_FUNCTIONS } from "@cirrus/studio";
+//
+// Every method is `async` to match @cirrus/studio's Promise-returning
+// `CirrusClient` surface, yet returns fixed data synchronously — so a blanket
+// require-await disable is intentional here, not a smell.
+/* eslint-disable @typescript-eslint/require-await -- mock implements an async client interface with synchronous fixtures */
 import type { CirrusClient } from "@cirrus/studio";
+import { ADMIN_FUNCTIONS } from "@cirrus/studio";
 
 interface Ref {
     readonly __cirrusRef: string;
 }
+
+/** Image-extension test for the signed-URL mock; module-scoped so it isn't recompiled per call. */
+const IMAGE_KEY_RE = /\.(?:gif|jpe?g|png|webp)$/iu;
 
 const TABLES = [
     { name: "messages", rowCount: 128 },
@@ -60,8 +68,8 @@ const FUNCTIONS = [
         calls: 1280,
         errors: 2,
         lastCalledAt: 1_749_300_120_000,
-        lastErrorAt: null,
-        lastErrorMessage: null,
+        lastErrorAt: undefined,
+        lastErrorMessage: undefined,
         maxDurationMs: 41,
         path: "messages:list",
         totalDurationMs: 7100,
@@ -70,8 +78,8 @@ const FUNCTIONS = [
         calls: 642,
         errors: 0,
         lastCalledAt: 1_749_300_020_000,
-        lastErrorAt: null,
-        lastErrorMessage: null,
+        lastErrorAt: undefined,
+        lastErrorMessage: undefined,
         maxDurationMs: 28,
         path: "messages:send",
         totalDurationMs: 3300,
@@ -91,45 +99,51 @@ const FUNCTIONS = [
 const now = 1_749_300_120_000;
 
 const minuteBuckets = (n: number, base: number, jitter: number): { bucketMs: number; calls: number; errors: number; path: string }[] =>
-    Array.from({ length: n }, (_, index) => ({
+    Array.from({ length: n }, (_, index) => {return {
         bucketMs: now - (n - index) * 60_000,
         calls: Math.round(base + Math.sin(index / 2) * jitter + jitter),
         errors: index % 7 === 0 ? 1 : 0,
         path: "messages:list",
-    }));
+    }});
 
 /** Fixed payload per admin reference; shared by `query` and `subscribe`. */
 const dataFor = (reference: string, args: unknown): unknown => {
     const argument = (args ?? {}) as { table?: string };
 
     switch (reference) {
-        case ADMIN_FUNCTIONS.listTables: {
-            return TABLES;
+        case ADMIN_FUNCTIONS.getAuditLog: {
+            return {
+                entries: [
+                    { detail: { userId: "usr_ada" }, id: "post_5", op: "writeRow", seq: 412, table: "posts", ts: now - 60_000 },
+                    { detail: { userId: "usr_grace" }, op: "runMigration", seq: 411, ts: now - 240_000 },
+                ],
+            };
         }
-        case ADMIN_FUNCTIONS.readTablePage: {
-            const page = PAGES[argument.table ?? "messages"] ?? { columns: [], rows: [], total: 0 };
-            const { orderBy } = (args ?? {}) as { orderBy?: { column: string; direction: "asc" | "desc" } };
-
-            if (orderBy === undefined) {
-                return page;
-            }
-
-            // Apply the server-side sort so the mock reflects header-click ordering.
-            const rows = page.rows.toSorted((first, second) => {
-                const a = first[orderBy.column];
-                const b = second[orderBy.column];
-                const cmp = typeof a === "number" && typeof b === "number" ? a - b : String(a).localeCompare(String(b));
-
-                return orderBy.direction === "desc" ? -cmp : cmp;
-            });
-
-            return { ...page, rows };
-        }
-        case ADMIN_FUNCTIONS.migrationStatus: {
-            return { migrations: [] };
+        case ADMIN_FUNCTIONS.getAuthMetrics: {
+            return {
+                attempts: 214,
+                failureRate: 0.04,
+                failures: 9,
+                history: Array.from({ length: 30 }, (_, index) => {return {
+                    attempts: 6 + (index % 4),
+                    bucketMs: now - (30 - index) * 60_000,
+                    failures: index % 9 === 0 ? 1 : 0,
+                }}),
+                sinceMs: now - 3_600_000,
+            };
         }
         case ADMIN_FUNCTIONS.getFunctionStats: {
             return { functions: FUNCTIONS, sinceMs: now - 3_600_000 };
+        }
+        case ADMIN_FUNCTIONS.getLogs: {
+            return {
+                entries: [
+                    { functionPath: "posts:publish", level: "error", message: "Rate limited (429) from upstream", timestamp: now - 4000 },
+                    { functionPath: "messages:list", level: "info", message: "Served 128 rows in 12ms", timestamp: now - 9000 },
+                    { functionPath: "messages:send", level: "warn", message: "Slow write: 28ms", timestamp: now - 15_000 },
+                    { level: "debug", message: "Reactive cache warm (312 entries)", timestamp: now - 22_000 },
+                ],
+            };
         }
         case ADMIN_FUNCTIONS.getMetrics: {
             return {
@@ -144,58 +158,8 @@ const dataFor = (reference: string, args: unknown): unknown => {
                 uptimeMs: 5_400_000,
             };
         }
-        case ADMIN_FUNCTIONS.getAuthMetrics: {
-            return {
-                attempts: 214,
-                failureRate: 0.04,
-                failures: 9,
-                history: Array.from({ length: 30 }, (_, index) => ({
-                    attempts: 6 + (index % 4),
-                    bucketMs: now - (30 - index) * 60_000,
-                    failures: index % 9 === 0 ? 1 : 0,
-                })),
-                sinceMs: now - 3_600_000,
-            };
-        }
-        case ADMIN_FUNCTIONS.getLogs: {
-            return {
-                entries: [
-                    { functionPath: "posts:publish", level: "error", message: "Rate limited (429) from upstream", timestamp: now - 4000 },
-                    { functionPath: "messages:list", level: "info", message: "Served 128 rows in 12ms", timestamp: now - 9000 },
-                    { functionPath: "messages:send", level: "warn", message: "Slow write: 28ms", timestamp: now - 15_000 },
-                    { level: "debug", message: "Reactive cache warm (312 entries)", timestamp: now - 22_000 },
-                ],
-            };
-        }
-        case ADMIN_FUNCTIONS.getAuditLog: {
-            return {
-                entries: [
-                    { detail: { userId: "usr_ada" }, id: "post_5", op: "writeRow", seq: 412, table: "posts", ts: now - 60_000 },
-                    { detail: { userId: "usr_grace" }, op: "runMigration", seq: 411, ts: now - 240_000 },
-                ],
-            };
-        }
-        case ADMIN_FUNCTIONS.listSubscriptions: {
-            return {
-                connections: [
-                    {
-                        admin: false,
-                        id: 0,
-                        subscriptions: [
-                            { args: { room: "general" }, functionPath: "messages:list", table: "messages" },
-                            { args: { limit: 50 }, functionPath: "presence:list", table: "presence" },
-                        ],
-                    },
-                    {
-                        admin: false,
-                        id: 1,
-                        subscriptions: [{ args: { since: now - 60_000 }, functionPath: "feed:recent", table: "posts" }],
-                    },
-                    { admin: true, id: 2, subscriptions: [{ functionPath: "__cirrus_admin__:getMetrics" }] },
-                ],
-                totalConnections: 3,
-                totalSubscriptions: 4,
-            };
+        case ADMIN_FUNCTIONS.getPitrBookmark: {
+            return { current: "0000003f-0000000a" };
         }
         case ADMIN_FUNCTIONS.getRequestLog: {
             return {
@@ -224,17 +188,6 @@ const dataFor = (reference: string, args: unknown): unknown => {
                 ],
             };
         }
-        case ADMIN_FUNCTIONS.getSettings: {
-            return {
-                deploy: { deploymentId: "dev-local", environment: "development", versionTag: "v0.0.0", workerUrl: "http://localhost:5173" },
-                settings: [
-                    { kind: "var", name: "AUTH_URL", value: "http://localhost:5173" },
-                    { kind: "secret", name: "AUTH_SECRET", value: "••••••••" },
-                    { bindingType: "durable-object", kind: "binding", name: "SHARD_DO", value: null },
-                    { bindingType: "r2", kind: "binding", name: "UPLOADS", value: null },
-                ],
-            };
-        }
         case ADMIN_FUNCTIONS.getSecurityAudit: {
             // Representative of this mock's dev profile (see getSettings): a short
             // token, the WS gate open (info in dev), and the dev-mode request log.
@@ -245,6 +198,67 @@ const dataFor = (reference: string, args: unknown): unknown => {
                     { kind: "ws-gate-open", level: "info" },
                 ],
             };
+        }
+        case ADMIN_FUNCTIONS.getSettings: {
+            return {
+                deploy: { deploymentId: "dev-local", environment: "development", versionTag: "v0.0.0", workerUrl: "http://localhost:5173" },
+                settings: [
+                    { kind: "var", name: "AUTH_URL", value: "http://localhost:5173" },
+                    { kind: "secret", name: "AUTH_SECRET", value: "••••••••" },
+                    { bindingType: "durable-object", kind: "binding", name: "SHARD_DO", value: undefined },
+                    { bindingType: "r2", kind: "binding", name: "UPLOADS", value: undefined },
+                ],
+            };
+        }
+        case ADMIN_FUNCTIONS.listSubscriptions: {
+            return {
+                connections: [
+                    {
+                        admin: false,
+                        id: 0,
+                        subscriptions: [
+                            { args: { room: "general" }, functionPath: "messages:list", table: "messages" },
+                            { args: { limit: 50 }, functionPath: "presence:list", table: "presence" },
+                        ],
+                    },
+                    {
+                        admin: false,
+                        id: 1,
+                        subscriptions: [{ args: { since: now - 60_000 }, functionPath: "feed:recent", table: "posts" }],
+                    },
+                    { admin: true, id: 2, subscriptions: [{ functionPath: "__cirrus_admin__:getMetrics" }] },
+                ],
+                totalConnections: 3,
+                totalSubscriptions: 4,
+            };
+        }
+        case ADMIN_FUNCTIONS.listTableIndexes: {
+            return { indexes: [{ fields: ["createdAt"], name: "by_createdAt", type: "index" }] };
+        }
+        case ADMIN_FUNCTIONS.listTables: {
+            return TABLES;
+        }
+        case ADMIN_FUNCTIONS.migrationStatus: {
+            return { migrations: [] };
+        }
+        case ADMIN_FUNCTIONS.readTablePage: {
+            const page = PAGES[argument.table ?? "messages"] ?? { columns: [], rows: [], total: 0 };
+            const { orderBy } = (args ?? {}) as { orderBy?: { column: string; direction: "asc" | "desc" } };
+
+            if (orderBy === undefined) {
+                return page;
+            }
+
+            // Apply the server-side sort so the mock reflects header-click ordering.
+            const rows = page.rows.toSorted((first, second) => {
+                const a = first[orderBy.column];
+                const b = second[orderBy.column];
+                const cmp = typeof a === "number" && typeof b === "number" ? a - b : String(a).localeCompare(String(b));
+
+                return orderBy.direction === "desc" ? -cmp : cmp;
+            });
+
+            return { ...page, rows };
         }
         case ADMIN_FUNCTIONS.runSql: {
             return {
@@ -258,12 +272,6 @@ const dataFor = (reference: string, args: unknown): unknown => {
                 truncated: false,
             };
         }
-        case ADMIN_FUNCTIONS.listTableIndexes: {
-            return { indexes: [{ fields: ["createdAt"], name: "by_createdAt", type: "index" }] };
-        }
-        case ADMIN_FUNCTIONS.getPitrBookmark: {
-            return { current: "0000003f-0000000a" };
-        }
         default: {
             return { columns: [], entries: [], rows: [], total: 0 };
         }
@@ -273,33 +281,33 @@ const dataFor = (reference: string, args: unknown): unknown => {
 const noop = (): void => {};
 
 /** A plain mock client cast to {@link CirrusClient}, for the dev harness only. */
-export const createDevMockClient = (): CirrusClient =>
+const createDevMockClient = (): CirrusClient =>
     ({
-        action: async (): Promise<unknown> => ({}),
-        banAuthUser: async (input: { userId: string }): Promise<unknown> => ({ banned: true, id: input.userId }),
-        cancelScheduledJob: async (): Promise<{ cancelled: boolean }> => ({ cancelled: true }),
+        action: async (): Promise<unknown> => {return {}},
+        banAuthUser: async (input: { userId: string }): Promise<unknown> => {return { banned: true, id: input.userId }},
+        cancelScheduledJob: async (): Promise<{ cancelled: boolean }> => {return { cancelled: true }},
         close: noop,
         connectionStatus: (): string => "connected",
-        createAuthUser: async (input: { email: string; name: string; role?: string }): Promise<unknown> => ({
+        createAuthUser: async (input: { email: string; name: string; role?: string }): Promise<unknown> => {return {
             createdAt: now,
             email: input.email,
             emailVerified: false,
             id: "usr_new",
             name: input.name,
             role: input.role ?? "user",
-        }),
-        impersonateAuthUser: async (input: { userId: string }): Promise<unknown> => ({
+        }},
+        impersonateAuthUser: async (input: { userId: string }): Promise<unknown> => {return {
             expiresAt: now + 3_600_000,
             token: `mock-impersonation-token-for-${input.userId}`,
             user: { id: input.userId },
-        }),
-        listAuthSessions: async (): Promise<unknown> => ({
+        }},
+        listAuthSessions: async (): Promise<unknown> => {return {
             rows: [
                 { createdAt: now - 3_600_000, expiresAt: now + 86_400_000, id: "ses_1", ipAddress: "127.0.0.1", userAgent: "Mozilla/5.0", userId: "usr_ada" },
             ],
             total: 1,
-        }),
-        listAuthUsers: async (): Promise<unknown> => ({
+        }},
+        listAuthUsers: async (): Promise<unknown> => {return {
             rows: [
                 {
                     banned: false,
@@ -307,7 +315,7 @@ export const createDevMockClient = (): CirrusClient =>
                     email: "ada@example.com",
                     emailVerified: true,
                     id: "usr_ada",
-                    image: null,
+                    image: undefined,
                     name: "Ada Lovelace",
                     role: "admin",
                 },
@@ -317,7 +325,7 @@ export const createDevMockClient = (): CirrusClient =>
                     email: "grace@example.com",
                     emailVerified: true,
                     id: "usr_grace",
-                    image: null,
+                    image: undefined,
                     name: "Grace Hopper",
                     role: "user",
                 },
@@ -328,14 +336,14 @@ export const createDevMockClient = (): CirrusClient =>
                     email: "lin@example.com",
                     emailVerified: false,
                     id: "usr_lin",
-                    image: null,
+                    image: undefined,
                     name: "Lin Clark",
                     role: "user",
                 },
             ],
             total: 42,
-        }),
-        fetchOpenApi: async (): Promise<unknown> => ({
+        }},
+        fetchOpenApi: async (): Promise<unknown> => {return {
             info: { title: "Cirrus API (mock)", version: "0.0.0" },
             openapi: "3.1.0",
             paths: {
@@ -344,8 +352,8 @@ export const createDevMockClient = (): CirrusClient =>
                 "/_cirrus/rpc#posts:publish": { post: { operationId: "posts:publish", responses: { default: { description: "RPC error." } }, summary: "mutation posts:publish", tags: ["posts"] } },
             },
             tags: [{ name: "messages" }, { name: "posts" }],
-        }),
-        fetchOpenRpc: async (): Promise<unknown> => ({
+        }},
+        fetchOpenRpc: async (): Promise<unknown> => {return {
             info: { title: "Cirrus RPC (mock)", version: "0.0.0" },
             methods: [
                 { name: "messages:list", params: [{ name: "args", schema: { properties: { channelId: { type: "string" }, limit: { type: "number" } }, required: ["channelId"], type: "object" } }], result: { name: "result", schema: {} }, "x-cirrus-function-kind": "query", "x-tags": [{ name: "messages" }] },
@@ -353,7 +361,7 @@ export const createDevMockClient = (): CirrusClient =>
                 { name: "posts:publish", params: [{ name: "args", schema: { properties: { id: { type: "string" } }, required: ["id"], type: "object" } }], result: { name: "result", schema: {} }, "x-cirrus-function-kind": "mutation", "x-tags": [{ name: "posts" }] },
             ],
             openrpc: "1.3.2",
-        }),
+        }},
         listFunctions: async (): Promise<unknown> => [
             { kind: "query", path: "messages:list" },
             { kind: "mutation", path: "messages:send" },
@@ -379,42 +387,42 @@ export const createDevMockClient = (): CirrusClient =>
 
             return { objects: all.filter((object) => object.key.startsWith(options.prefix ?? "")) };
         },
-        deleteStorageObject: async (key: string): Promise<unknown> => ({ deleted: true, key }),
+        deleteStorageObject: async (key: string): Promise<unknown> => {return { deleted: true, key }},
         // Real placeholder images for image keys (so thumbnails render); a fake URL otherwise.
         signedStorageUrl: async (key: string): Promise<string> =>
-            /\.(?:png|jpe?g|gif|webp)$/iu.test(key) ? `https://picsum.photos/seed/${encodeURIComponent(key)}/320` : `https://mock.cdn.example/${key}?sig=dev`,
-        uploadStorageObject: async (options: { key: string }): Promise<unknown> => ({ etag: "dev-etag", key: options.key }),
-        mutation: async (): Promise<unknown> => ({}),
+            IMAGE_KEY_RE.test(key) ? `https://picsum.photos/seed/${encodeURIComponent(key)}/320` : `https://mock.cdn.example/${key}?sig=dev`,
+        uploadStorageObject: async (options: { key: string }): Promise<unknown> => {return { etag: "dev-etag", key: options.key }},
+        mutation: async (): Promise<unknown> => {return {}},
         onConnectionStatus: (): (() => void) => noop,
         query: async (function_: Ref, args: unknown): Promise<unknown> => dataFor(function_.__cirrusRef, args),
-        readGlobalTablePage: async (): Promise<unknown> => ({
+        readGlobalTablePage: async (): Promise<unknown> => {return {
             columns: ["key", "enabled", "rollout"],
             rows: [
                 { enabled: true, key: "new-dashboard", rollout: 100 },
                 { enabled: false, key: "ai-suggestions", rollout: 0 },
             ],
             total: 12,
-        }),
+        }},
         cancelAuthOrgInvitation: async (): Promise<void> => {},
         deleteAuthPasskey: async (): Promise<void> => {},
         disableAuthTwoFactor: async (): Promise<void> => {},
-        getAuthCapabilities: async (): Promise<unknown> => ({ accounts: true, admin: true, organization: true, passkey: true, twoFactor: true }),
+        getAuthCapabilities: async (): Promise<unknown> => {return { accounts: true, admin: true, organization: true, passkey: true, twoFactor: true }},
         listAuthAccounts: async (): Promise<unknown> => [
             { accountId: "ada@example.com", createdAt: 1_749_100_000_000, id: "acc_cred", providerId: "credential", userId: "usr_ada" },
             { accountId: "12345", createdAt: 1_749_100_000_000, id: "acc_gh", providerId: "github", userId: "usr_ada" },
         ],
-        listAuthOrganizations: async (): Promise<unknown> => ({
+        listAuthOrganizations: async (): Promise<unknown> => {return {
             rows: [{ createdAt: 1_749_000_000_000, id: "org_acme", name: "Acme Inc", slug: "acme" }],
             total: 1,
-        }),
-        listAuthOrgInvitations: async (): Promise<unknown> => ({
+        }},
+        listAuthOrgInvitations: async (): Promise<unknown> => {return {
             rows: [{ email: "new@example.com", id: "inv_1", organizationId: "org_acme", role: "member", status: "pending" }],
             total: 1,
-        }),
-        listAuthOrgMembers: async (): Promise<unknown> => ({
+        }},
+        listAuthOrgMembers: async (): Promise<unknown> => {return {
             rows: [{ createdAt: 1_749_000_000_000, id: "mem_1", organizationId: "org_acme", role: "owner", userId: "usr_ada" }],
             total: 1,
-        }),
+        }},
         listAuthPasskeys: async (): Promise<unknown> => [{ createdAt: 1_749_100_000_000, deviceType: "singleDevice", id: "pk_1", name: "MacBook", userId: "usr_ada" }],
         removeAuthOrgMember: async (): Promise<void> => {},
         removeAuthUser: async (): Promise<void> => {},
@@ -422,20 +430,22 @@ export const createDevMockClient = (): CirrusClient =>
         revokeAuthUserSessions: async (): Promise<void> => {},
         setAuthToken: noop,
         setAuthUserPassword: async (): Promise<void> => {},
-        setAuthUserRole: async (input: { role: string; userId: string }): Promise<unknown> => ({ id: input.userId, role: input.role }),
-        unbanAuthUser: async (input: { userId: string }): Promise<unknown> => ({ banned: false, id: input.userId }),
+        setAuthUserRole: async (input: { role: string; userId: string }): Promise<unknown> => {return { id: input.userId, role: input.role }},
+        unbanAuthUser: async (input: { userId: string }): Promise<unknown> => {return { banned: false, id: input.userId }},
         unlinkAuthAccount: async (): Promise<void> => {},
-        updateAuthUser: async (input: { userId: string }): Promise<unknown> => ({ id: input.userId }),
+        updateAuthUser: async (input: { userId: string }): Promise<unknown> => {return { id: input.userId }},
         subscribe: (function_: Ref, args: unknown, callback: (value: unknown) => void): (() => void) => {
             // Emit once on the next tick so the panel paints with data, the same
             // shape its `query` path would return.
-            queueMicrotask(() => callback(dataFor(function_.__cirrusRef, args)));
+            queueMicrotask(() => { callback(dataFor(function_.__cirrusRef, args)); });
 
             return noop;
         },
         subscribeScheduledJobs: (callback: (jobs: unknown) => void): (() => void) => {
-            queueMicrotask(() => callback([{ id: "job_1", name: "clear presence", runAt: now + 60_000 }]));
+            queueMicrotask(() => { callback([{ id: "job_1", name: "clear presence", runAt: now + 60_000 }]); });
 
             return noop;
         },
     }) as unknown as CirrusClient;
+
+export default createDevMockClient;
