@@ -1786,15 +1786,46 @@ const checkAdminWsToken = (request: Request, expected: string | undefined): bool
 };
 
 /**
+ * The composed Cirrus worker. `fetch` / `scheduled` are the standard Cloudflare
+ * module-worker entrypoints (so the object can be re-exported directly as
+ * `export default createWorker(...)`). `serverQuery` is the in-process fast-path
+ * (PLAN4 §2.2) an SSR loader running inside the same worker calls to reach a
+ * Cirrus query without a self-`fetch` to `/_cirrus/rpc`, with identity / RLS /
+ * auth semantics identical to the HTTP path.
+ */
+interface CirrusWorker {
+    fetch: (request: Request, env: unknown, context: ExecutionContextLike) => Promise<Response>;
+    scheduled: (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike) => Promise<void>;
+
+    /**
+     * In-process query/mutation dispatch for SSR loaders co-located in this
+     * worker. Resolves identity off `request` (cookies / bearer / bookmark) and
+     * runs the per-shard authorization gate exactly like `POST /_cirrus/rpc`,
+     * then dispatches to the owning shard — no network self-fetch. Returns the
+     * raw shard {@link Response}, byte-identical to the HTTP path's, so callers
+     * can `.json()` it (`{ result }` / `{ error }`) or forward it verbatim. Like
+     * the worker's `fetch`, it never throws on a request fault: a denied auth
+     * gate, a bad reference, or a downstream error comes back as the SAME JSON
+     * error `Response` (`toErrorResponse`) the HTTP path returns.
+     * @param request The inbound SSR request — its `cookie` / `authorization`
+     * / `x-d1-bookmark` headers drive identity, exactly as the
+     * HTTP RPC path reads them.
+     * @param env The worker `env`, forwarded to `resolveIdentity`.
+     * @param reference A generated function reference (`api.foo.bar`); its
+     * `__cirrusRef` is the `"namespace:fn"` dispatched.
+     * @param args The function arguments.
+     * @param options Call options mirroring the RPC envelope.
+     * @param options.shardKey Routes to a specific shard (omitted → the worker's
+     * `defaultShardKey`).
+     */
+    serverQuery: (request: Request, env: unknown, reference: unknown, args?: Record<string, unknown>, options?: { shardKey?: string }) => Promise<Response>;
+}
+
+/**
  * Build a Cloudflare Worker entry. Returns an object with `fetch` so it can
  * be re-exported directly as `export default createWorker(...)`.
  */
-const createWorker = (
-    options: WorkerOptions,
-): {
-    fetch: (request: Request, env: unknown, context: ExecutionContextLike) => Promise<Response>;
-    scheduled: (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike) => Promise<void>;
-} => {
+const createWorker = (options: WorkerOptions): CirrusWorker => {
     const defaultShard = options.defaultShardKey ?? "__root__";
 
     // Fan-out and non-default shard routing are authorization-open when neither
@@ -2814,11 +2845,15 @@ const createWorker = (
         // hono then matches/dispatches and returns its own response (incl. 404).
         const httpContext = await buildHttpActionContext(request, env);
 
-        // TODO(PLAN4 M2): in-process serverQuery fast-path — when the SSR loader
-        // runs inside this same worker it should reach Cirrus through `createCaller`
-        // (generated in `_generated/functions.ts`) and skip the network hop to
-        // `/_cirrus/rpc`. Deferred per M0-LIVE-LOADER-FINDINGS.md §3 (#3) pending
-        // benchmarking; today every SSR read still forwards over RPC.
+        // In-process serverQuery fast-path (PLAN4 §2.2 / §5.3): an SSR loader
+        // running inside this worker can call `worker.serverQuery(request, env,
+        // api.foo.bar, args, { shardKey })` to reach a Cirrus query without a
+        // self-`fetch` to `/_cirrus/rpc`. It resolves identity + runs the
+        // per-shard authorization gate identically to `handleRpc`, then
+        // dispatches to the owning shard (the worker→DO hop is itself in-process
+        // — not a network self-fetch). `ctx.runQuery`/`runMutation` below keep
+        // the loopback-shaped `run` helper for back-compat; `serverQuery` is the
+        // identity-parity-guaranteed, shard-routable entrypoint for loaders.
 
         // Error isolation (PLAN4 §1, §2.2): the `httpRouter` is the meta-framework
         // SSR handler, the LOWEST-priority matcher — it only runs after auth,
@@ -2918,6 +2953,66 @@ const createWorker = (
         }
     };
 
+    /**
+     * Dispatch a single-shard RPC envelope to its owning shard and return the
+     * shard's `Response` (with the `x-d1-bookmark` propagated). Extracted from
+     * {@link handleRpc} so the in-process `serverQuery` fast-path (PLAN4 §2.2 /
+     * §5.3) runs the IDENTICAL shard dispatch + observability + bookmark logic
+     * as the HTTP `/_cirrus/rpc` path — same `forwardToShard`, same shard
+     * routing, same error shape. The caller is responsible for having already
+     * resolved identity (`resolveForwardContext`) and run the authorization gate
+     * (`authorizeRpcEnvelope`); this helper performs neither, so both call sites
+     * keep those security steps explicit and in the same order.
+     */
+    const dispatchSingleShard = async (
+        functionPath: string,
+        args: Record<string, unknown>,
+        shardKey: string,
+        forwardedHeaders: Record<string, string>,
+    ): Promise<Response> => {
+        const rpcStartedAt = Date.now();
+        const { observability } = options;
+
+        // Re-emit the RPC body to the shard at its `/rpc` route.
+        const forwarded = new Request(`https://shard.internal/rpc`, {
+            body: JSON.stringify({ args, functionPath }),
+            headers: forwardedHeaders,
+            method: "POST",
+        });
+
+        try {
+            const response = await forwardToShard(options.shardDO, shardKey, forwarded);
+
+            // A non-2xx from the shard is reported as ok=false even though no
+            // exception was thrown — the user-visible result is still an error
+            // surface, just one the shard chose to encode in the status code.
+            emitRpcEvent(observability, {
+                durationMs: Date.now() - rpcStartedAt,
+                functionPath,
+                ok: response.ok,
+                shardKey,
+                ...(response.ok ? {} : { error: { code: "SHARD_ERROR", message: `shard returned ${String(response.status)}`, status: response.status } }),
+            });
+
+            // Propagate the DO's bookmark header so the client can pin reads
+            // after a write.
+            const responseBookmark = response.headers.get("x-d1-bookmark");
+
+            if (responseBookmark) {
+                const headers = new Headers(response.headers);
+
+                headers.set("x-d1-bookmark", responseBookmark);
+
+                return new Response(response.body, { headers, status: response.status });
+            }
+
+            return response;
+        } catch (error) {
+            emitRpcEvent(observability, buildErrorEvent(functionPath, Date.now() - rpcStartedAt, error, { shardKey }));
+            throw error;
+        }
+    };
+
     const handleRpc = async (request: Request, env: unknown): Promise<Response> => {
         if (request.method !== "POST") {
             throw new CirrusError("RPC endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
@@ -2999,44 +3094,82 @@ const createWorker = (
 
             const shardKey = envelope.shardKey ?? defaultShard;
 
-            // Re-emit the RPC body to the shard at its `/rpc` route.
-            const forwarded = new Request(`https://shard.internal/rpc`, {
-                body: JSON.stringify({ args: envelope.args ?? {}, functionPath: envelope.functionPath }),
-                headers: forwardedHeaders,
-                method: "POST",
-            });
+            return dispatchSingleShard(envelope.functionPath, envelope.args ?? {}, shardKey, forwardedHeaders);
+        }
+    };
 
-            try {
-                const response = await forwardToShard(options.shardDO, shardKey, forwarded);
+    /**
+     * In-process server-query fast-path (PLAN4 §2.2 bullet 3 / §5.3 / risk #3).
+     *
+     * An SSR loader running INSIDE this same worker (the `httpRouter` seam) can
+     * call a Cirrus query without a self-`fetch` to `/_cirrus/rpc`. Skipping the
+     * loopback avoids re-entering `fetch()` — URL parse, the route table, and the
+     * `/api/auth/*` dispatch chain — for a request whose destination is already
+     * known. The worker→ShardDO hop (`forwardToShard` → `stub.fetch`) is *not* a
+     * network self-fetch; it is the same in-process Durable Object dispatch the
+     * HTTP path performs, and is unavoidable because the data lives in the DO and
+     * the worker holds no DB handle.
+     *
+     * IDENTITY / RLS / AUTH PARITY (the load-bearing contract). This runs the
+     * EXACT same security steps as {@link handleRpc}, in the same order, off the
+     * SAME inbound `request`:
+     *
+     * 1. `resolveForwardContext(request, env, options.resolveIdentity)` — the
+     * identical identity resolution (`resolveIdentity`, cookie / authorization /
+     * `x-d1-bookmark` forwarding, `x-cirrus-userid` / `x-cirrus-identity` header
+     * derivation). Same per-request auth context, byte-for-byte.
+     * 2. `authorizeRpcEnvelope({ functionPath, shardKey }, identity)` — the
+     * identical per-shard authorization gate (`authorizeShard`), so an
+     * unauthenticated / unauthorized call to an auth-gated function is rejected
+     * here exactly as it is on `/_cirrus/rpc` (same `FORBIDDEN_SHARD` 403).
+     * 3. `dispatchSingleShard(...)` — the identical shard routing, observability
+     * event, bookmark propagation, and `Response` shape.
+     *
+     * Result: byte-identical to what `POST /_cirrus/rpc` returns for the same
+     * function reference, args, `shardKey`, and inbound request. It returns the
+     * raw shard {@link Response} (the same object `handleRpc` returns) so callers
+     * and tests can compare it byte-for-byte against the HTTP path.
+     *
+     * Fan-out is intentionally NOT reachable here: it is the cross-shard,
+     * coordinator-gated, privileged path. An SSR loader that needs fan-out uses
+     * the HTTP `/_cirrus/rpc` envelope (with `authorizeFanOut`); this fast-path
+     * stays single-shard so the simpler, stricter `authorizeShard` parity holds.
+     */
+    const serverQuery = async (
+        request: Request,
+        env: unknown,
+        reference: unknown,
+        args: Record<string, unknown> = {},
+        callOptions: { shardKey?: string } = {},
+    ): Promise<Response> => {
+        // Error mapping mirrors the top-level `fetch` catch (`toErrorResponse`)
+        // EXACTLY: a thrown `CirrusError` (bad reference, a denied `authorizeShard`
+        // gate, a 404 from the shard) becomes the same JSON error `Response` the
+        // HTTP `/_cirrus/rpc` path returns — so an auth-gated rejection is
+        // byte-identical on both paths rather than surfacing as a thrown value on
+        // one and a 403 `Response` on the other.
+        try {
+            const functionPath = (reference as { __cirrusRef?: unknown }).__cirrusRef;
 
-                // A non-2xx from the shard is reported as ok=false even though no
-                // exception was thrown — the user-visible result is still an error
-                // surface, just one the shard chose to encode in the status code.
-                emitRpcEvent(observability, {
-                    durationMs: Date.now() - rpcStartedAt,
-                    functionPath: envelope.functionPath,
-                    ok: response.ok,
-                    shardKey,
-                    ...(response.ok ? {} : { error: { code: "SHARD_ERROR", message: `shard returned ${String(response.status)}`, status: response.status } }),
-                });
-
-                // Propagate the DO's bookmark header so the client can pin reads
-                // after a write.
-                const responseBookmark = response.headers.get("x-d1-bookmark");
-
-                if (responseBookmark) {
-                    const headers = new Headers(response.headers);
-
-                    headers.set("x-d1-bookmark", responseBookmark);
-
-                    return new Response(response.body, { headers, status: response.status });
-                }
-
-                return response;
-            } catch (error) {
-                emitRpcEvent(observability, buildErrorEvent(envelope.functionPath, Date.now() - rpcStartedAt, error, { shardKey }));
-                throw error;
+            if (typeof functionPath !== "string") {
+                throw new CirrusError("serverQuery: expected a function reference from the generated `api`", { code: "BAD_REQUEST", status: 400 });
             }
+
+            // Resolve identity off the SAME inbound request the HTTP path uses, so
+            // cookies / bearer / bookmark and the derived `x-cirrus-*` headers are
+            // byte-identical to `handleRpc`'s.
+            const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, options.resolveIdentity);
+
+            // Run the IDENTICAL per-shard authorization gate. A `shardKey` of
+            // `undefined` resolves to `defaultShard` for both the gate and the
+            // dispatch, mirroring `handleRpc` exactly.
+            await authorizeRpcEnvelope({ args, functionPath, shardKey: callOptions.shardKey }, identity);
+
+            const shardKey = callOptions.shardKey ?? defaultShard;
+
+            return await dispatchSingleShard(functionPath, args, shardKey, forwardedHeaders);
+        } catch (error: unknown) {
+            return toErrorResponse(error);
         }
     };
 
@@ -3406,6 +3539,7 @@ const createWorker = (
         async scheduled(controller, env, context) {
             await handleScheduled(controller, env, context);
         },
+        serverQuery,
     };
 };
 
@@ -3439,12 +3573,7 @@ const createWorker = (
  * options. Prefer this name in framework templates to make the composition
  * intent explicit.
  */
-const composeWorker = (
-    options: WorkerOptions,
-): {
-    fetch: (request: Request, env: unknown, context: ExecutionContextLike) => Promise<Response>;
-    scheduled: (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike) => Promise<void>;
-} => createWorker(options);
+const composeWorker = (options: WorkerOptions): CirrusWorker => createWorker(options);
 
 /** Re-exported helper so callers can roundtrip envelopes in tests. */
 const defineRpcEnvelope = (envelope: RpcEnvelope): RpcEnvelope => envelope;
@@ -3454,6 +3583,7 @@ export type {
     AdminTableResolver,
     BackupManifest,
     BackupStore,
+    CirrusWorker,
     CronHandler,
     CronJobDispatch,
     ExecutionContextLike,
