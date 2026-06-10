@@ -68,6 +68,7 @@ const SCHEDULED_CANCEL_PATH = "/_cirrus/admin/scheduled/cancel";
 const STORAGE_PATH = "/_cirrus/admin/storage";
 const STORAGE_URL_PATH = "/_cirrus/admin/storage/url";
 const FUNCTIONS_PATH = "/_cirrus/admin/functions";
+const OPENAPI_PATH = "/_cirrus/admin/openapi";
 const GLOBAL_TABLES_PATH = "/_cirrus/admin/global/tables";
 const GLOBAL_TABLE_PATH = "/_cirrus/admin/global/table";
 const AUTH_USERS_PATH = "/_cirrus/admin/auth/users";
@@ -854,6 +855,22 @@ class CirrusClient {
         const body = (await this.adminFetch(FUNCTIONS_PATH, "GET")) as { functions?: FunctionDescriptor[] };
 
         return body.functions ?? [];
+    }
+
+    /**
+     * Fetch the generated OpenAPI 3.1 document. Hits the admin-gated
+     * `GET /_cirrus/admin/openapi` endpoint — the worker must be built with an
+     * `openApiSpec` and `adminToken`, and this client's auth token must match.
+     * Powers `@cirrus/studio`'s API-reference (Scalar) view. When the worker has
+     * no spec wired, the endpoint still resolves with an empty-but-valid OpenAPI
+     * document (no `paths`), so callers can render a "not configured" state.
+     */
+    public async fetchOpenApi(): Promise<Record<string, unknown>> {
+        if (this.closed) {
+            throw new Error("CirrusClient is closed");
+        }
+
+        return (await this.adminFetch(OPENAPI_PATH, "GET")) as Record<string, unknown>;
     }
 
     // --- Storage admin ------------------------------------------------------

@@ -539,6 +539,17 @@ interface WorkerOptions {
     observability?: ObservabilitySink;
 
     /**
+     * The generated OpenAPI 3.1 document (parsed JSON from
+     * `_generated/openapi.json`, emitted by `@cirrus/codegen`'s `emitOpenApi`).
+     * When set, the worker exposes the admin-gated `GET /_cirrus/admin/openapi`
+     * endpoint the studio's API-reference (Scalar) view renders. The runtime does
+     * NOT assemble or validate the spec — it serves what the host injects verbatim.
+     * Omit it and the endpoint returns an empty-but-valid OpenAPI 3.1 document
+     * (no paths), so the studio shows a "not configured" state rather than erroring.
+     */
+    openApiSpec?: unknown;
+
+    /**
      * When true, the runtime calls `ctx.passThroughOnException()` at the top
      * of the fetch handler. Forwards uncaught exceptions to the origin
      * instead of returning a synthetic 500.
@@ -781,9 +792,29 @@ const STORAGE_URL_PATH = "/_cirrus/admin/storage/url";
 // mirror that ceiling here so an over-max request is clamped, not a 500.
 const MAX_STORAGE_EXPIRES_IN_SECONDS = 7 * 24 * 60 * 60;
 const FUNCTIONS_PATH = "/_cirrus/admin/functions";
+const OPENAPI_PATH = "/_cirrus/admin/openapi";
 const GLOBAL_TABLES_PATH = "/_cirrus/admin/global/tables";
 const GLOBAL_TABLE_PATH = "/_cirrus/admin/global/table";
 // `/_cirrus/admin/auth/*` paths + handlers live in `./auth-admin-routes`.
+
+/**
+ * Empty-but-valid OpenAPI 3.1 document served by `GET /_cirrus/admin/openapi`
+ * when no `openApiSpec` is injected on the worker. A spec-less worker still
+ * answers 200 with a well-formed document (no paths), so the studio's
+ * API-reference view renders a clean "no operations / not configured" state
+ * rather than treating the endpoint as an error. Frozen so the shared instance
+ * can't be mutated by a serializer.
+ */
+const EMPTY_OPENAPI_DOCUMENT = Object.freeze({
+    info: {
+        description:
+            "No OpenAPI spec is configured on this worker. Run `cirrus codegen` and wire `_generated/openapi.json` to the worker's `openApiSpec` option.",
+        title: "Cirrus API",
+        version: "0.0.0",
+    },
+    openapi: "3.1.0",
+    paths: {},
+});
 
 /**
  * Admin RPCs the migration endpoint is allowed to orchestrate. Spelled out
@@ -2623,6 +2654,21 @@ const createWorker = (
         return Response.json({ functions }, { headers: { "content-type": "application/json" }, status: 200 });
     };
 
+    const handleOpenApi = (request: Request): Response => {
+        if (request.method !== "GET") {
+            throw new CirrusError("OpenAPI endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        assertAdminAuthorized(request);
+
+        // Serve the injected spec verbatim — the runtime never assembles or
+        // validates it. With no spec configured, answer 200 with an empty-but-valid
+        // OpenAPI 3.1 document so the studio renders a clean "not configured" state.
+        const spec = options.openApiSpec ?? EMPTY_OPENAPI_DOCUMENT;
+
+        return Response.json(spec, { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
     const handleGlobalTables = async (request: Request): Promise<Response> => {
         if (request.method !== "GET") {
             throw new CirrusError("Global-tables endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
@@ -3187,6 +3233,7 @@ const createWorker = (
         [STORAGE_PATH]: (request) => handleStorage(request),
         [STORAGE_URL_PATH]: (request) => handleStorageSignedUrl(request),
         [FUNCTIONS_PATH]: (request) => handleFunctionsList(request),
+        [OPENAPI_PATH]: (request) => handleOpenApi(request),
         [GLOBAL_TABLES_PATH]: (request) => handleGlobalTables(request),
         [GLOBAL_TABLE_PATH]: (request) => handleGlobalTablePage(request),
         // `/_cirrus/admin/auth/*` — the whole user-management plane, one route per
