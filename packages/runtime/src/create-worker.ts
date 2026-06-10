@@ -550,6 +550,20 @@ interface WorkerOptions {
     openApiSpec?: unknown;
 
     /**
+     * The generated OpenRPC 1.x document (parsed JSON from
+     * `_generated/openrpc.json`, emitted by `@cirrus/codegen`'s `emitOpenRpc`).
+     * When set, the worker exposes the admin-gated `GET /_cirrus/admin/openrpc`
+     * endpoint the studio's API-reference view can render. OpenRPC is the
+     * RPC-native spec (a `methods` array over the JSON-RPC-shaped
+     * `POST /_cirrus/rpc` transport); it covers only the RPC functions, not
+     * `httpRouter()` REST routes. The runtime does NOT assemble or validate the
+     * spec — it serves what the host injects verbatim. Omit it and the endpoint
+     * returns an empty-but-valid OpenRPC 1.x document (no methods), so the studio
+     * shows a "not configured" state rather than erroring.
+     */
+    openRpcSpec?: unknown;
+
+    /**
      * When true, the runtime calls `ctx.passThroughOnException()` at the top
      * of the fetch handler. Forwards uncaught exceptions to the origin
      * instead of returning a synthetic 500.
@@ -793,6 +807,7 @@ const STORAGE_URL_PATH = "/_cirrus/admin/storage/url";
 const MAX_STORAGE_EXPIRES_IN_SECONDS = 7 * 24 * 60 * 60;
 const FUNCTIONS_PATH = "/_cirrus/admin/functions";
 const OPENAPI_PATH = "/_cirrus/admin/openapi";
+const OPENRPC_PATH = "/_cirrus/admin/openrpc";
 const GLOBAL_TABLES_PATH = "/_cirrus/admin/global/tables";
 const GLOBAL_TABLE_PATH = "/_cirrus/admin/global/table";
 // `/_cirrus/admin/auth/*` paths + handlers live in `./auth-admin-routes`.
@@ -814,6 +829,25 @@ const EMPTY_OPENAPI_DOCUMENT = Object.freeze({
     },
     openapi: "3.1.0",
     paths: {},
+});
+
+/**
+ * Empty-but-valid OpenRPC 1.x document served by `GET /_cirrus/admin/openrpc`
+ * when no `openRpcSpec` is injected on the worker. Mirrors
+ * {@link EMPTY_OPENAPI_DOCUMENT}: a spec-less worker still answers 200 with a
+ * well-formed document (no `methods`), so the studio's API-reference view
+ * renders a clean "no operations / not configured" state rather than treating
+ * the endpoint as an error. Frozen so the shared instance can't be mutated.
+ */
+const EMPTY_OPENRPC_DOCUMENT = Object.freeze({
+    info: {
+        description:
+            "No OpenRPC spec is configured on this worker. Run `cirrus codegen --api-spec openrpc` (or `both`) and wire `_generated/openrpc.json` to the worker's `openRpcSpec` option.",
+        title: "Cirrus RPC",
+        version: "0.0.0",
+    },
+    methods: [],
+    openrpc: "1.3.2",
 });
 
 /**
@@ -2669,6 +2703,21 @@ const createWorker = (
         return Response.json(spec, { headers: { "content-type": "application/json" }, status: 200 });
     };
 
+    const handleOpenRpc = (request: Request): Response => {
+        if (request.method !== "GET") {
+            throw new CirrusError("OpenRPC endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        assertAdminAuthorized(request);
+
+        // Serve the injected spec verbatim — the runtime never assembles or
+        // validates it. With no spec configured, answer 200 with an empty-but-valid
+        // OpenRPC 1.x document so the studio renders a clean "not configured" state.
+        const spec = options.openRpcSpec ?? EMPTY_OPENRPC_DOCUMENT;
+
+        return Response.json(spec, { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
     const handleGlobalTables = async (request: Request): Promise<Response> => {
         if (request.method !== "GET") {
             throw new CirrusError("Global-tables endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
@@ -3234,6 +3283,7 @@ const createWorker = (
         [STORAGE_URL_PATH]: (request) => handleStorageSignedUrl(request),
         [FUNCTIONS_PATH]: (request) => handleFunctionsList(request),
         [OPENAPI_PATH]: (request) => handleOpenApi(request),
+        [OPENRPC_PATH]: (request) => handleOpenRpc(request),
         [GLOBAL_TABLES_PATH]: (request) => handleGlobalTables(request),
         [GLOBAL_TABLE_PATH]: (request) => handleGlobalTablePage(request),
         // `/_cirrus/admin/auth/*` — the whole user-management plane, one route per

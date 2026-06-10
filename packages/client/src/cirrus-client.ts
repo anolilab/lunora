@@ -69,6 +69,7 @@ const STORAGE_PATH = "/_cirrus/admin/storage";
 const STORAGE_URL_PATH = "/_cirrus/admin/storage/url";
 const FUNCTIONS_PATH = "/_cirrus/admin/functions";
 const OPENAPI_PATH = "/_cirrus/admin/openapi";
+const OPENRPC_PATH = "/_cirrus/admin/openrpc";
 const GLOBAL_TABLES_PATH = "/_cirrus/admin/global/tables";
 const GLOBAL_TABLE_PATH = "/_cirrus/admin/global/table";
 const AUTH_USERS_PATH = "/_cirrus/admin/auth/users";
@@ -871,6 +872,24 @@ class CirrusClient {
         }
 
         return (await this.adminFetch(OPENAPI_PATH, "GET")) as Record<string, unknown>;
+    }
+
+    /**
+     * Fetch the generated OpenRPC 1.x document. Hits the admin-gated
+     * `GET /_cirrus/admin/openrpc` endpoint — the worker must be built with an
+     * `openRpcSpec` and `adminToken`, and this client's auth token must match.
+     * OpenRPC is the RPC-native spec (a `methods` array over the JSON-RPC-shaped
+     * `POST /_cirrus/rpc` transport); it documents the RPC functions only.
+     * Powers `@cirrus/studio`'s OpenRPC API-reference view. When the worker has
+     * no spec wired, the endpoint still resolves with an empty-but-valid OpenRPC
+     * document (no `methods`), so callers can render a "not configured" state.
+     */
+    public async fetchOpenRpc(): Promise<Record<string, unknown>> {
+        if (this.closed) {
+            throw new Error("CirrusClient is closed");
+        }
+
+        return (await this.adminFetch(OPENRPC_PATH, "GET")) as Record<string, unknown>;
     }
 
     // --- Storage admin ------------------------------------------------------
