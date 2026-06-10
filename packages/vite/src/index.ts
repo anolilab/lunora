@@ -5,6 +5,7 @@ import type { Plugin } from "vite";
 import codegenPlugin from "./codegen-plugin";
 import devVariablesPlugin from "./dev-variables-plugin";
 import { createCommandProbe, withDevWorkerEnv } from "./dev-worker-env";
+import frameworkDetectPlugin, { createPluginContext } from "./framework-detect-plugin";
 import logStreamPlugin from "./log-stream-plugin";
 import { studioPlugin } from "./studio-plugin";
 import type { CirrusPluginOptions, CirrusPlugins, CloudflarePluginOptions, OverlayPluginOptions, ResolvedCirrusPluginOptions } from "./types";
@@ -63,12 +64,24 @@ const resolveOptions = (options: CirrusPluginOptions | undefined): ResolvedCirru
  */
 const cirrus = (options?: CirrusPluginOptions): CirrusPlugins => {
     const resolved = resolveOptions(options);
+    // Shared, mutable context threaded through every Cirrus sub-plugin so the
+    // detected meta-framework is computed once and readable downstream.
+    const context = createPluginContext();
     // Captures `serve` vs `build` so the dev worker var below is injected only
     // in `vite`, never a production build. `enforce: "pre"` → captured first.
     const { isServe, plugin: commandProbe } = createCommandProbe();
     // `devVariablesPlugin` is `enforce: "pre"` + `apply: "serve"`: it offers to
     // scaffold `.dev.vars` before `@cloudflare/vite-plugin` boots the worker.
-    const plugins: Plugin[] = [commandProbe, devVariablesPlugin(resolved), codegenPlugin(resolved), logStreamPlugin()];
+    // The framework-detect plugin runs early (its `config` hook) so the
+    // detection result is available to later hooks; it's a no-op beyond a dev
+    // log for the standalone (class-C) flow.
+    const plugins: Plugin[] = [
+        commandProbe,
+        frameworkDetectPlugin(resolved, context),
+        devVariablesPlugin(resolved),
+        codegenPlugin(resolved),
+        logStreamPlugin(),
+    ];
 
     if (resolved.studio) {
         plugins.push(studioPlugin());
@@ -97,8 +110,12 @@ const VERSION = "0.0.0";
 export { default as codegenPlugin } from "./codegen-plugin";
 export type { ReconcileResult } from "./cron-sync";
 export { reconcileWranglerCrons } from "./cron-sync";
+export type { DetectedFramework, FrameworkClass, FrameworkDetection } from "./detect-framework";
+export { detectFramework } from "./detect-framework";
 export { default as devVariablesPlugin } from "./dev-variables-plugin";
 export { createCommandProbe, DEV_WORKER_ENV_VALUE, DEV_WORKER_ENV_VAR, withDevWorkerEnv } from "./dev-worker-env";
+export type { CirrusPluginContext } from "./framework-detect-plugin";
+export { createPluginContext, formatFrameworkDetection, default as frameworkDetectPlugin } from "./framework-detect-plugin";
 export { default as logStreamPlugin } from "./log-stream-plugin";
 export { buildStudioUrl, STUDIO_PATH, studioPlugin } from "./studio-plugin";
 export type { CirrusPluginOptions, CirrusPlugins, CloudflarePluginOptions, OverlayPluginOptions, ResolvedCirrusPluginOptions } from "./types";

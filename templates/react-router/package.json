@@ -1,0 +1,33 @@
+{
+    "name": "{{name}}",
+    "version": "0.0.0",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "dev": "cirrus dev",
+        "build": "react-router build",
+        "start": "wrangler dev",
+        "typecheck": "react-router typegen && tsc --noEmit",
+        "codegen": "cirrus codegen",
+        "deploy": "cirrus deploy"
+    },
+    "dependencies": {
+        "@cirrus/client": "^0.0.0",
+        "@cirrus/react": "^0.0.0",
+        "@cirrus/runtime": "^0.0.0",
+        "@cirrus/server": "^0.0.0",
+        "@tanstack/react-query": "^5.62.0",
+        "isbot": "^5.1.0",
+        "react": "^19.0.0",
+        "react-dom": "^19.0.0",
+        "react-router": "^7.0.0"
+    },
+    "devDependencies": {
+        "@cirrus/vite": "^0.0.0",
+        "@react-router/dev": "^7.0.0",
+        "@cloudflare/workers-types": "^4.0.0",
+        "vite": "^8.0.0",
+        "vite-tsconfig-paths": "^5.0.0",
+        "wrangler": "^4.0.0"
+    }
+}
