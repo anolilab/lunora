@@ -41,17 +41,15 @@ export const getMessagesStore = (client: CirrusClient): MessagesStore => {
         return store;
     }
 
-    const now = (): number => Date.now();
-
     const database = defineCollections(client, {
         channels: {
             insert: {
                 mutation: api.channels.create,
                 optimistic: (input: { createdBy: Id<"users">; name: string }, id) => {
                     return {
-                        _creationTime: now(),
+                        _creationTime: Date.now(),
                         _id: id as Id<"channels">,
-                        createdAt: now(),
+                        createdAt: Date.now(),
                         createdBy: input.createdBy,
                         name: input.name,
                     };
@@ -67,10 +65,10 @@ export const getMessagesStore = (client: CirrusClient): MessagesStore => {
                 mutation: api.messages.send,
                 optimistic: (input: { channelId: Id<"channels">; text: string; userId: Id<"users"> }, id) => {
                     return {
-                        _creationTime: now(),
+                        _creationTime: Date.now(),
                         _id: id as Id<"messages">,
                         channelId: input.channelId,
-                        createdAt: now(),
+                        createdAt: Date.now(),
                         text: input.text,
                         userId: input.userId,
                     };

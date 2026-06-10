@@ -86,8 +86,21 @@ describe(runOutboxMutation, () => {
         ).rejects.toBe(error);
     });
 
-    it("wraps a server rejection in NonRetriableError so the optimistic insert rolls back", async () => {
-        await expect(runOutboxMutation(() => Promise.reject(new Error("duplicate name")))).rejects.toBeInstanceOf(NonRetriableError);
+    it("rethrows a code-less transient HTTP failure so the outbox retries it", async () => {
+        // e.g. a 5xx gateway page / non-JSON body the rpc surfaces without a code.
+        const error = new Error("CirrusClient: response was not JSON (status 502)");
+
+        await expect(
+            runOutboxMutation(() => {
+                throw error;
+            }),
+        ).rejects.toBe(error);
+    });
+
+    it("wraps a coded server rejection in NonRetriableError so the optimistic insert rolls back", async () => {
+        const rejected = Object.assign(new Error("duplicate name"), { code: "CONFLICT" });
+
+        await expect(runOutboxMutation(() => Promise.reject(rejected))).rejects.toBeInstanceOf(NonRetriableError);
     });
 
     it("resolves quietly on success", async () => {

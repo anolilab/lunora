@@ -28,20 +28,20 @@ export const Chat = (): ReactElement => {
     const { user } = useAuth();
     const store = getMessagesStore(client);
 
-    // Surface the real outbox state: how many sends are persisted-but-unconfirmed,
-    // and whether the browser is online. Polled because the executor exposes the
-    // counts as getters; online transitions come through its detector.
+    // Surface the real outbox state on a single poll: how many sends are
+    // persisted-but-unconfirmed (`getPendingCount`), and whether the browser is
+    // online. Connectivity comes from `navigator.onLine`, NOT the executor's
+    // detector — that detector is intentionally always-online (it gates retries,
+    // not the UI), so reading it here would make the "(offline)" badge dead code.
     useEffect(() => {
-        const detector = store.executor.getOnlineDetector();
         const update = (): void => {
-            setSync({ online: store.executor.isOnline(), pending: store.executor.getPendingCount() });
+            // eslint-disable-next-line n/no-unsupported-features/node-builtins -- browser client code; `navigator.onLine` is available in all supported browsers
+            setSync({ online: globalThis.navigator.onLine, pending: store.executor.getPendingCount() });
         };
 
-        const unsubscribe = detector.subscribe(update);
         const interval = setInterval(update, 500);
 
         return () => {
-            unsubscribe();
             clearInterval(interval);
         };
     }, [store]);

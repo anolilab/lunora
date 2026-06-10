@@ -443,7 +443,7 @@ importers:
         specifier: workspace:*
         version: link:../../packages/d1
       '@cirrus/db':
-        specifier: workspace:0.0.0
+        specifier: workspace:*
         version: link:../../packages/db
       '@cirrus/do':
         specifier: workspace:*
