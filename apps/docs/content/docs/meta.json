@@ -21,6 +21,7 @@
         "api/do",
         "api/d1",
         "---Add-ons---",
+        "addons/db",
         "addons/auth",
         "addons/auth-plugins",
         "addons/mail",

@@ -64,6 +64,22 @@ with a uniform `{ kind, args, handler }` shape consumed by codegen.
 `ActionCtx` drops `db` entirely — actions must read/write via mutations or
 queries called through `ctx.runQuery` / `ctx.runMutation`.
 
+### Client-supplied ids
+
+By default `ctx.db.insert(table, doc)` mints a fresh row id and **ignores** any
+client-chosen `_id`. To let the caller choose it — which an optimistic client
+needs so it can key a row before the server responds — pass a UUID via the
+options:
+
+```ts
+ctx.db.insert("messages", doc, { clientId });
+```
+
+`clientId` is validated for shape (a v1–v8 UUID) and still subject to the
+primary-key uniqueness constraint, so a client can't collide with, overwrite, or
+forge a peer row. This is the mechanism [`@cirrus/db`](/docs/addons/db#client-generated-ids)
+uses to reconcile an optimistic row with its persisted server row.
+
 ## See also
 
 - [@cirrus/client](/docs/api/client)
