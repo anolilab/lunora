@@ -1,4 +1,4 @@
-import type { OfflineQueueOptions, PersistenceAdapter } from "./types";
+import type { OfflineQueueOptions, PersistenceAdapter, PersistenceErrorContext, PersistenceOperation } from "./types";
 
 interface QueuedMutation<T = unknown> {
     readonly args: Record<string, unknown>;
@@ -25,6 +25,25 @@ const nextId = (): string => {
 };
 
 /**
+ * Report a swallowed persistence rejection: hand it to the caller's handler if
+ * one is configured, else `console.warn` so it is never fully silent.
+ */
+const reportPersistenceError = (
+    handler: ((context: PersistenceErrorContext) => void) | undefined,
+    operation: PersistenceOperation,
+    error: unknown,
+    mutationId?: string,
+): void => {
+    if (handler) {
+        handler({ error, mutationId, operation });
+        return;
+    }
+
+    // eslint-disable-next-line no-console -- last-resort visibility for a swallowed durable-write failure
+    console.warn(`[cirrus] offline-queue persistence ${operation} failed`, error);
+};
+
+/**
  * Bounded FIFO queue. Mutations issued while the client is offline are
  * enqueued and replayed in the order they were submitted once the WS
  * reconnects and identifies. If the queue exceeds `maxItems` the oldest
@@ -42,6 +61,8 @@ class OfflineQueue {
 
     private readonly maxItems: number;
 
+    private readonly onPersistenceError: ((context: PersistenceErrorContext) => void) | undefined;
+
     private readonly persistence: PersistenceAdapter | undefined;
 
     private readonly items: QueuedMutation[] = [];
@@ -49,6 +70,7 @@ class OfflineQueue {
     public constructor(options: OfflineQueueOptions = {}, persistence?: PersistenceAdapter) {
         this.maxItems = options.maxItems ?? 1000;
         this.queueBeforeFirstConnect = options.queueBeforeFirstConnect ?? false;
+        this.onPersistenceError = options.onPersistenceError;
         this.persistence = persistence;
     }
 
@@ -62,14 +84,18 @@ class OfflineQueue {
         item.id ??= nextId();
         this.items.push(item);
 
-        this.persistence?.append({ args: item.args, functionPath: item.functionPath, id: item.id, shardKey: item.shardKey }).catch(() => undefined);
+        this.persistence?.append({ args: item.args, functionPath: item.functionPath, id: item.id, shardKey: item.shardKey }).catch((error: unknown) => {
+            reportPersistenceError(this.onPersistenceError, "append", error, item.id);
+        });
 
         while (this.items.length > this.maxItems) {
             const dropped = this.items.shift();
 
             if (dropped) {
                 if (dropped.id) {
-                    this.persistence?.remove(dropped.id).catch(() => undefined);
+                    this.persistence?.remove(dropped.id).catch((error: unknown) => {
+                        reportPersistenceError(this.onPersistenceError, "remove", error, dropped.id);
+                    });
                 }
 
                 const error = new Error("offline queue overflow");
@@ -160,5 +186,5 @@ class OfflineQueue {
     }
 }
 
-export { OfflineQueue };
+export { OfflineQueue, reportPersistenceError };
 export type { QueuedMutation };

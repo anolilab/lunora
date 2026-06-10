@@ -55,8 +55,27 @@ export interface ReconnectOptions {
     maxDelayMs?: number;
 }
 
+/** Which durable-storage operation failed, passed to {@link OfflineQueueOptions.onPersistenceError}. */
+export type PersistenceOperation = "append" | "clear" | "load" | "remove";
+
+/** Context handed to a persistence-error handler. */
+export interface PersistenceErrorContext {
+    readonly error: unknown;
+    /** The mutation id involved, when the failing op was scoped to one (`append`/`remove`). */
+    readonly mutationId?: string;
+    readonly operation: PersistenceOperation;
+}
+
 export interface OfflineQueueOptions {
     maxItems?: number;
+
+    /**
+     * Invoked when a {@link PersistenceAdapter} call rejects (e.g. IndexedDB quota
+     * exceeded). Without a handler, failures are logged via `console.warn` so they
+     * are never fully silent. Note: a failed `append` means the write is queued in
+     * memory but NOT durable — it will not survive a reload.
+     */
+    onPersistenceError?: (context: PersistenceErrorContext) => void;
 
     /**
      * Queue mutations issued before a shard's first successful WebSocket
