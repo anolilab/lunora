@@ -216,6 +216,28 @@ To skip discovery (or expose a curated subset), pass the list directly:
 <FunctionRunner functions={[{ kind: "query", path: "messages:list" }]} />
 ```
 
+### API reference
+
+The **API reference** tab renders the generated OpenAPI document the worker
+serves at the admin-gated `GET /_cirrus/admin/openapi`. A Worker can't read the
+`_generated/openapi.json` file at runtime, so `@cirrus/codegen` also emits an
+importable `openapi.ts` module (the same document, regenerated on every
+`cirrus/` change). Import it and pass it as `openApiSpec` so the reference stays
+live without any hand-wiring:
+
+```ts
+import { openApiSpec } from "./cirrus/_generated/openapi.js";
+
+createWorker({
+    shardDO: env.SHARD,
+    adminToken: env.CIRRUS_ADMIN_TOKEN,
+    openApiSpec,
+});
+```
+
+Projects that opt into OpenRPC (`cirrus codegen --api-spec openrpc` / `both`)
+get a parallel `openrpc.ts` module; wire it through `openRpcSpec` the same way.
+
 ### Global (D1) tables
 
 `GlobalDataBrowser` reads `.global()` tables — which live in D1, not the shard

@@ -539,8 +539,14 @@ interface WorkerOptions {
     observability?: ObservabilitySink;
 
     /**
-     * The generated OpenAPI 3.1 document (parsed JSON from
-     * `_generated/openapi.json`, emitted by `@cirrus/codegen`'s `emitOpenApi`).
+     * The generated OpenAPI 3.1 document. Import it from the codegen-emitted
+     * module and pass it through:
+     * `import { openApiSpec } from "./cirrus/_generated/openapi"`. A Worker can't
+     * read the `_generated/openapi.json` file at runtime, so codegen also emits
+     * `openapi.ts` (the same document inlined as `export const openApiSpec`) for
+     * exactly this wiring — it regenerates on every `cirrus/` change so the spec
+     * stays live.
+     *
      * When set, the worker exposes the admin-gated `GET /_cirrus/admin/openapi`
      * endpoint the studio's API-reference (Scalar) view renders. The runtime does
      * NOT assemble or validate the spec — it serves what the host injects verbatim.
@@ -550,8 +556,13 @@ interface WorkerOptions {
     openApiSpec?: unknown;
 
     /**
-     * The generated OpenRPC 1.x document (parsed JSON from
-     * `_generated/openrpc.json`, emitted by `@cirrus/codegen`'s `emitOpenRpc`).
+     * The generated OpenRPC 1.x document. Import it from the codegen-emitted
+     * module and pass it through:
+     * `import { openRpcSpec } from "./cirrus/_generated/openrpc"` (only emitted
+     * when the project opts into `apiSpec: "openrpc"` or `"both"`). Like
+     * `openApiSpec`, codegen inlines the document into `openrpc.ts` because a
+     * Worker can't read the `.json` at runtime; both regenerate together.
+     *
      * When set, the worker exposes the admin-gated `GET /_cirrus/admin/openrpc`
      * endpoint the studio's API-reference view can render. OpenRPC is the
      * RPC-native spec (a `methods` array over the JSON-RPC-shaped
@@ -823,7 +834,7 @@ const GLOBAL_TABLE_PATH = "/_cirrus/admin/global/table";
 const EMPTY_OPENAPI_DOCUMENT = Object.freeze({
     info: {
         description:
-            "No OpenAPI spec is configured on this worker. Run `cirrus codegen` and wire `_generated/openapi.json` to the worker's `openApiSpec` option.",
+            'No OpenAPI spec is configured on this worker. Run `cirrus codegen`, then wire the generated module to `createWorker`: `import { openApiSpec } from "./cirrus/_generated/openapi"`.',
         title: "Cirrus API",
         version: "0.0.0",
     },
@@ -842,7 +853,7 @@ const EMPTY_OPENAPI_DOCUMENT = Object.freeze({
 const EMPTY_OPENRPC_DOCUMENT = Object.freeze({
     info: {
         description:
-            "No OpenRPC spec is configured on this worker. Run `cirrus codegen --api-spec openrpc` (or `both`) and wire `_generated/openrpc.json` to the worker's `openRpcSpec` option.",
+            'No OpenRPC spec is configured on this worker. Run `cirrus codegen --api-spec openrpc` (or `both`), then wire the generated module to `createWorker`: `import { openRpcSpec } from "./cirrus/_generated/openrpc"`.',
         title: "Cirrus RPC",
         version: "0.0.0",
     },
