@@ -1,88 +1,8 @@
-import type { JsonSchema } from "@cirrus/values";
+import type { JsonSchema, SchemaNodeReader } from "@cirrus/values";
+import { jsonSchemaFromNode, objectSchemaFromNodes } from "@cirrus/values";
 
 import type { FunctionIR, HttpRouteIR, ValidatorIR } from "./ir";
 import sanitizeNamespace from "./paths";
-
-/**
- * Convert a codegen {@link ValidatorIR} (parsed from the schema/handler AST) into
- * a JSON Schema node, mirroring `@cirrus/values`' `toJsonSchema` faithfully so
- * the dialect (Draft 2020-12 / OpenAPI 3.1) stays identical across the two entry
- * points. We re-implement over `ValidatorIR` rather than reuse `toJsonSchema`
- * directly because codegen only ever holds the reflected IR — it never
- * instantiates the runtime `v.*` validator objects that `toJsonSchema` consumes.
- *
- * The kind→schema mapping (date/timestamp → epoch-ms integer, bigint → int64,
- * bytes → base64 string, id → annotated string with `x-cirrus-table`, literal →
- * `const`, optionality via the parent `required` list, `.nullable()` widening to
- * accept null) is borrowed verbatim from `@cirrus/values/src/to-json-schema.ts`.
- */
-const validatorIrToJsonSchema = (validator: ValidatorIR): JsonSchema => {
-    const base = ((): JsonSchema => {
-        switch (validator.kind) {
-            case "any": {
-                return {};
-            }
-            case "array": {
-                return { items: validator.inner ? validatorIrToJsonSchema(validator.inner) : {}, type: "array" };
-            }
-            case "bigint": {
-                return { format: "int64", type: "integer" };
-            }
-            case "boolean": {
-                return { type: "boolean" };
-            }
-            case "bytes": {
-                return { contentEncoding: "base64", description: "binary (ArrayBuffer)", type: "string" };
-            }
-            case "date": {
-                return { description: "epoch milliseconds (date)", type: "integer" };
-            }
-            case "id": {
-                return { description: `Id<"${String(validator.tableName)}">`, type: "string", "x-cirrus-table": validator.tableName };
-            }
-            case "literal": {
-                // eslint-disable-next-line @typescript-eslint/no-use-before-define -- literalConst is a sibling helper defined just below
-                return literalConst(validator.literalValue);
-            }
-            case "null": {
-                return { type: "null" };
-            }
-            case "number": {
-                return { type: "number" };
-            }
-            case "object": {
-                // eslint-disable-next-line @typescript-eslint/no-use-before-define -- objectSchema is mutually recursive with this function
-                return objectSchema(validator.shape ?? {});
-            }
-            case "optional": {
-                return validator.inner ? validatorIrToJsonSchema(validator.inner) : {};
-            }
-            case "record": {
-                return { additionalProperties: validator.valueType ? validatorIrToJsonSchema(validator.valueType) : {}, type: "object" };
-            }
-            case "string": {
-                return { type: "string" };
-            }
-            case "timestamp": {
-                return { description: "epoch milliseconds (timestamp)", type: "integer" };
-            }
-            case "union": {
-                return { anyOf: (validator.members ?? []).map((member) => validatorIrToJsonSchema(member)) };
-            }
-            default: {
-                return {};
-            }
-        }
-    })();
-
-    // `.nullable()` is the only modifier that flips `column.notNull` to false;
-    // widen the schema to accept null (mirrors `@cirrus/values`).
-    if (validator.column?.notNull === false) {
-        return { anyOf: [base, { type: "null" }] };
-    }
-
-    return base;
-};
 
 /**
  * Render a `v.literal(...)` value as a JSON Schema `const`. The IR carries the
@@ -122,22 +42,42 @@ const literalConst = (literalValue: string | undefined): JsonSchema => {
     return { const: trimmed };
 };
 
-/** Build `{ type: "object", properties, required }` from an IR shape (mirrors `@cirrus/values`' `objectSchema`). */
-const objectSchema = (shape: Record<string, ValidatorIR>): JsonSchema => {
-    const properties: Record<string, JsonSchema> = {};
-    const required: string[] = [];
-
-    for (const [key, child] of Object.entries(shape)) {
-        properties[key] = validatorIrToJsonSchema(child);
-
-        // A `v.optional(...)` field is the only thing that drops out of `required`.
-        if (child.kind !== "optional") {
-            required.push(key);
-        }
-    }
-
-    return { additionalProperties: false, properties, required, type: "object" };
+/**
+ * The {@link SchemaNodeReader} over codegen {@link ValidatorIR} (parsed from the
+ * schema/handler AST). Children are plain IR fields rather than runtime `_meta`,
+ * and the IR carries no runtime metadata, so `.check()`/`.meta()` constraint
+ * fragments are always absent (`constraints` → `undefined`). A `literal`'s `const`
+ * is parsed from the verbatim source text the IR records (see {@link literalConst}),
+ * not a live value. Plugging this reader into the shared {@link jsonSchemaFromNode}
+ * core keeps the dialect (Draft 2020-12 / OpenAPI 3.1) identical to
+ * `@cirrus/values`' `toJsonSchema` by construction.
+ */
+const irReader: SchemaNodeReader<ValidatorIR> = {
+    constraints: () => undefined,
+    inner: (validator) => validator.inner,
+    isNullable: (validator) => validator.column?.notNull === false,
+    // `ValidatorIR.kind` is a loose `string` (build-time AST); narrow it to the
+    // shared reader's `ValidatorKind`. Unknown kinds fall through the mapper's
+    // `default` branch to an empty schema, exactly as before.
+    kind: (validator) => validator.kind as ReturnType<SchemaNodeReader<ValidatorIR>["kind"]>,
+    literalSchema: (validator) => literalConst(validator.literalValue),
+    members: (validator) => validator.members ?? [],
+    shape: (validator) => validator.shape ?? {},
+    tableName: (validator) => validator.tableName,
+    valueChild: (validator) => validator.valueType,
 };
+
+/**
+ * Convert a codegen {@link ValidatorIR} into a JSON Schema node. A thin wrapper
+ * over the shared {@link jsonSchemaFromNode} core (from `@cirrus/values`) with the
+ * IR-backed {@link irReader}, so the kind→schema mapping is the *same* algorithm
+ * `@cirrus/values`' `toJsonSchema` runs — codegen never instantiates the runtime
+ * `v.*` objects, it only holds the reflected IR.
+ */
+const validatorIrToJsonSchema = (validator: ValidatorIR): JsonSchema => jsonSchemaFromNode(validator, irReader);
+
+/** Build `{ type: "object", properties, required }` from an IR shape (mirrors `@cirrus/values`' object mapping). */
+const objectSchema = (shape: Record<string, ValidatorIR>): JsonSchema => objectSchemaFromNodes(shape, irReader);
 
 /** Build the args object schema for an RPC function (mirrors `argsToJsonSchema`). */
 const argsObjectSchema = (args: Record<string, ValidatorIR>): JsonSchema => objectSchema(args);

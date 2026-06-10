@@ -949,6 +949,9 @@ importers:
       '@cirrus/scheduler':
         specifier: workspace:*
         version: link:../scheduler
+      '@cirrus/values':
+        specifier: workspace:*
+        version: link:../values
       ts-morph:
         specifier: catalog:tooling
         version: 28.0.0
@@ -959,9 +962,6 @@ importers:
       '@cirrus/server':
         specifier: workspace:*
         version: link:../server
-      '@cirrus/values':
-        specifier: workspace:*
-        version: link:../values
       '@types/node':
         specifier: catalog:types
         version: 25.9.2

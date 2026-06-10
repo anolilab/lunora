@@ -1,6 +1,7 @@
 export type { ValidationPath } from "./errors";
 export { describeValue, formatPath, ValidationError } from "./errors";
-export type { JsonSchema } from "./to-json-schema";
+export type { JsonSchema, SchemaNodeReader } from "./json-schema-core";
+export { jsonSchemaFromNode, objectSchemaFromNodes } from "./json-schema-core";
 export { argsToJsonSchema, toJsonSchema } from "./to-json-schema";
 export type {
     CheckOptions,

@@ -33,12 +33,12 @@
     "dependencies": {
         "@cirrus/advisor": "workspace:*",
         "@cirrus/scheduler": "workspace:*",
+        "@cirrus/values": "workspace:*",
         "ts-morph": "catalog:tooling"
     },
     "devDependencies": {
         "@cirrus/do": "workspace:*",
         "@cirrus/server": "workspace:*",
-        "@cirrus/values": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "drizzle-orm": "catalog:drizzle",
