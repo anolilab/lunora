@@ -7,6 +7,7 @@ import type { R2BucketLike } from "@cirrus/storage";
 import { createStorage } from "@cirrus/storage";
 import type { VectorizeIndexLike } from "@cirrus/vectors";
 
+import { openApiSpec } from "../../cirrus/_generated/openapi.js";
 import { createShardDO } from "../../cirrus/_generated/shard.js";
 
 export { SchedulerDO } from "./scheduler-do.js";
@@ -85,6 +86,9 @@ const buildMigrationAuth = (env: Env): CirrusAuth => createAuth({ ...authOptions
 const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
     createWorker({
         d1: env.DB,
+        // `openApiSpec` (regenerated on every `cirrus/` change) backs the
+        // studio's always-current API-reference tab.
+        openApiSpec,
         resolveIdentity: async (request) => {
             if (!auth) {
                 return null;

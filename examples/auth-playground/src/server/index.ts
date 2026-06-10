@@ -2,6 +2,7 @@ import { ensureMigrated, handleAuthRequest } from "@cirrus/auth";
 import type { ExecutionContextLike, ShardNamespaceLike } from "@cirrus/runtime";
 import { createWorker } from "@cirrus/runtime";
 
+import { openApiSpec } from "../../cirrus/_generated/openapi.js";
 import { createShardDO } from "../../cirrus/_generated/shard.js";
 import { buildAuth, buildMigrationAuth } from "../../cirrus/auth.js";
 
@@ -47,6 +48,9 @@ export default {
 
         if (!worker) {
             worker = createWorker({
+                // `openApiSpec` (regenerated on every `cirrus/` change) backs the
+                // studio's always-current API-reference tab.
+                openApiSpec,
                 resolveIdentity: async (identityRequest) => {
                     // `authInstance` is always set by the time we reach here — it is built
                     // at the top of `fetch` before any request work happens.

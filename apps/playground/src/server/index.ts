@@ -12,6 +12,7 @@ import { buildSignedUrl, createStorage, verifySignedUrl } from "@cirrus/storage"
 
 import { CIRRUS_CRONS } from "../../cirrus/_generated/crons.js";
 import { CIRRUS_FUNCTIONS } from "../../cirrus/_generated/functions.js";
+import { openApiSpec } from "../../cirrus/_generated/openapi.js";
 import { createShardDO } from "../../cirrus/_generated/shard.js";
 import schema from "../../cirrus/schema.js";
 
@@ -196,6 +197,9 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
         // Exposes /_cirrus/admin/global/* so the studio can browse `.global()`
         // (D1-backed) tables.
         globalIntrospector: env.DB ? d1Introspector(env.DB as D1DatabaseLike) : undefined,
+        // The generated OpenAPI document (regenerated on every `cirrus/` change)
+        // backs the studio's always-current API-reference tab.
+        openApiSpec,
         resolveIdentity: async (request) => {
             if (!auth) {
                 return null;

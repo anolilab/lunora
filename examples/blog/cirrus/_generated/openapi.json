@@ -1,0 +1,579 @@
+{
+  "components": {
+    "responses": {
+      "CirrusError": {
+        "content": {
+          "application/json": {
+            "schema": {
+              "additionalProperties": false,
+              "description": "Standard Cirrus error envelope.",
+              "properties": {
+                "error": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "code": {
+                      "description": "Machine-readable error code. Clients switch on this value.",
+                      "enum": [
+                        "BAD_REQUEST",
+                        "CONFLICT",
+                        "COUNT_RLS_UNSUPPORTED",
+                        "FORBIDDEN",
+                        "FUNCTION_NOT_FOUND",
+                        "INTERNAL",
+                        "INTERNAL_SERVER_ERROR",
+                        "METHOD_NOT_ALLOWED",
+                        "NOT_FOUND",
+                        "NOT_IMPLEMENTED",
+                        "PAYLOAD_TOO_LARGE",
+                        "TOO_MANY_REQUESTS",
+                        "UNAUTHORIZED",
+                        "UNPROCESSABLE",
+                        "VALIDATION_ERROR"
+                      ],
+                      "type": "string"
+                    },
+                    "message": {
+                      "description": "Human-readable error message (never echoes internal details).",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ],
+                  "type": "object"
+                }
+              },
+              "required": [
+                "error"
+              ],
+              "type": "object"
+            }
+          }
+        },
+        "description": "A Cirrus error response. The HTTP status reflects the error code (e.g. BAD_REQUEST→400, UNAUTHORIZED→401, FORBIDDEN→403, NOT_FOUND→404)."
+      }
+    }
+  },
+  "info": {
+    "description": "Auto-generated from @cirrus/values-typed functions by @cirrus/codegen. Do not edit — run `cirrus codegen` to regenerate.",
+    "title": "Cirrus API",
+    "version": "0.0.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/_cirrus/rpc#cleanup:purgeStaleDrafts": {
+      "post": {
+        "description": "Invoke the `mutation` `cleanup:purgeStaleDrafts` over the Cirrus RPC envelope (POST /_cirrus/rpc).",
+        "operationId": "cleanup:purgeStaleDrafts",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "additionalProperties": false,
+                    "properties": {},
+                    "required": [],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "cleanup:purgeStaleDrafts",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+          },
+          "default": {
+            "$ref": "#/components/responses/CirrusError"
+          }
+        },
+        "summary": "mutation: cleanup:purgeStaleDrafts",
+        "tags": [
+          "cleanup"
+        ],
+        "x-cirrus-function-kind": "mutation"
+      }
+    },
+    "/_cirrus/rpc#drafts:listMine": {
+      "post": {
+        "description": "Invoke the `query` `drafts:listMine` over the Cirrus RPC envelope (POST /_cirrus/rpc).",
+        "operationId": "drafts:listMine",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "additionalProperties": false,
+                    "properties": {},
+                    "required": [],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "drafts:listMine",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+          },
+          "default": {
+            "$ref": "#/components/responses/CirrusError"
+          }
+        },
+        "summary": "query: drafts:listMine",
+        "tags": [
+          "drafts"
+        ],
+        "x-cirrus-function-kind": "query"
+      }
+    },
+    "/_cirrus/rpc#drafts:save": {
+      "post": {
+        "description": "Invoke the `mutation` `drafts:save` over the Cirrus RPC envelope (POST /_cirrus/rpc).",
+        "operationId": "drafts:save",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "description": "Id<\"drafts\">",
+                        "type": "string",
+                        "x-cirrus-table": "drafts"
+                      },
+                      "title": {
+                        "type": "string"
+                      },
+                      "body": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "title",
+                      "body"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "drafts:save",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+          },
+          "default": {
+            "$ref": "#/components/responses/CirrusError"
+          }
+        },
+        "summary": "mutation: drafts:save",
+        "tags": [
+          "drafts"
+        ],
+        "x-cirrus-function-kind": "mutation"
+      }
+    },
+    "/_cirrus/rpc#posts:get": {
+      "post": {
+        "description": "Invoke the `query` `posts:get` over the Cirrus RPC envelope (POST /_cirrus/rpc).",
+        "operationId": "posts:get",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "description": "Id<\"posts\">",
+                        "type": "string",
+                        "x-cirrus-table": "posts"
+                      }
+                    },
+                    "required": [
+                      "id"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "posts:get",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+          },
+          "default": {
+            "$ref": "#/components/responses/CirrusError"
+          }
+        },
+        "summary": "query: posts:get",
+        "tags": [
+          "posts"
+        ],
+        "x-cirrus-function-kind": "query"
+      }
+    },
+    "/_cirrus/rpc#posts:list": {
+      "post": {
+        "description": "Invoke the `query` `posts:list` over the Cirrus RPC envelope (POST /_cirrus/rpc).",
+        "operationId": "posts:list",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "additionalProperties": false,
+                    "properties": {},
+                    "required": [],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "posts:list",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+          },
+          "default": {
+            "$ref": "#/components/responses/CirrusError"
+          }
+        },
+        "summary": "query: posts:list",
+        "tags": [
+          "posts"
+        ],
+        "x-cirrus-function-kind": "query"
+      }
+    },
+    "/_cirrus/rpc#posts:publish": {
+      "post": {
+        "description": "Invoke the `mutation` `posts:publish` over the Cirrus RPC envelope (POST /_cirrus/rpc).",
+        "operationId": "posts:publish",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "title": {
+                        "type": "string"
+                      },
+                      "body": {
+                        "type": "string"
+                      },
+                      "imageKey": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "title",
+                      "body"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "posts:publish",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+          },
+          "default": {
+            "$ref": "#/components/responses/CirrusError"
+          }
+        },
+        "summary": "mutation: posts:publish",
+        "tags": [
+          "posts"
+        ],
+        "x-cirrus-function-kind": "mutation"
+      }
+    },
+    "/_cirrus/rpc#posts:requestImageUpload": {
+      "post": {
+        "description": "Invoke the `mutation` `posts:requestImageUpload` over the Cirrus RPC envelope (POST /_cirrus/rpc).",
+        "operationId": "posts:requestImageUpload",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "contentType": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "contentType"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "posts:requestImageUpload",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+          },
+          "default": {
+            "$ref": "#/components/responses/CirrusError"
+          }
+        },
+        "summary": "mutation: posts:requestImageUpload",
+        "tags": [
+          "posts"
+        ],
+        "x-cirrus-function-kind": "mutation"
+      }
+    },
+    "/_cirrus/rpc#posts:search": {
+      "post": {
+        "description": "Invoke the `query` `posts:search` over the Cirrus RPC envelope (POST /_cirrus/rpc).",
+        "operationId": "posts:search",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "text": {
+                        "type": "string"
+                      },
+                      "topK": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "text"
+                    ],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "posts:search",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+          },
+          "default": {
+            "$ref": "#/components/responses/CirrusError"
+          }
+        },
+        "summary": "query: posts:search",
+        "tags": [
+          "posts"
+        ],
+        "x-cirrus-function-kind": "query"
+      }
+    }
+  },
+  "tags": [
+    {
+      "description": "Operations declared in `cirrus/cleanup`.",
+      "name": "cleanup"
+    },
+    {
+      "description": "Operations declared in `cirrus/drafts`.",
+      "name": "drafts"
+    },
+    {
+      "description": "Operations declared in `cirrus/posts`.",
+      "name": "posts"
+    }
+  ]
+}

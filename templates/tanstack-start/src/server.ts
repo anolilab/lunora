@@ -2,6 +2,7 @@ import type { ExecutionContextLike, ShardNamespaceLike } from "@cirrus/runtime";
 import { createWorker } from "@cirrus/runtime";
 
 import { CIRRUS_FUNCTIONS } from "../cirrus/_generated/functions.js";
+import { openApiSpec } from "../cirrus/_generated/openapi.js";
 import { createShardDO } from "../cirrus/_generated/shard.js";
 
 /**
@@ -30,6 +31,9 @@ export default {
         worker ??= createWorker({
             // Exposes /_cirrus/admin/functions for the studio's function runner.
             functions: CIRRUS_FUNCTIONS,
+            // The generated OpenAPI document (regenerated on every `cirrus/`
+            // change) backs the studio's always-current API-reference tab.
+            openApiSpec,
             // better-auth / OAuth callbacks etc. mount here; empty to start.
             routes: {},
             shardDO: env.SHARD,

@@ -9,7 +9,9 @@ optimistic updates and live subscriptions over WebSocket.
 - `query` + `mutation` handlers in `cirrus/todos.ts`
 - The full client pipeline: `useQuery` for live data, `useMutation` with the
   `optimistic` callback for zero-latency UI
-- The smallest possible Worker entry: just `createWorker({ shardDO: ... })`
+- A minimal Worker entry: `createWorker({ openApiSpec, shardDO: ... })`, where
+  `openApiSpec` is imported from `cirrus/_generated/openapi` so the studio's
+  API-reference tab stays in sync on every `cirrus/` change
 
 ## Run it
 
