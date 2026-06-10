@@ -104,3 +104,9 @@ playwright-report/
 # Local git worktrees (Agent tool isolation)
 .worktrees/
 .claude/worktrees/
+
+# Scratch e2e debug scripts (local only — not part of the Playwright suite)
+tests/e2e/debug-*.mjs
+tests/e2e/diag*.mjs
+tests/e2e/experiment.mjs
+tests/e2e/validate-studio.mjs
