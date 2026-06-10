@@ -24,7 +24,10 @@ export default defineSchema({
         userId: v.id("users"),
     })
         .shardBy("channelId")
-        .index("by_channel_created", ["channelId", "_creationTime"]),
+        .index("by_channel_created", ["channelId", "_creationTime"])
+        // Lets the daily cleanup purge stale messages via an indexed range scan
+        // (`createdAt < cutoff`) instead of loading every row and filtering in memory.
+        .index("by_created", ["createdAt"]),
 
     users: defineTable({
         email: v.string(),

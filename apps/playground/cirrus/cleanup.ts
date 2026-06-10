@@ -16,9 +16,12 @@ export const cleanupOldMessages = mutation({
     args: {},
     handler: async (context): Promise<{ deleted: number }> => {
         const cutoff = Date.now() - THIRTY_DAYS_MS;
+        // Indexed range scan on `by_created` — reads only the stale rows
+        // (`createdAt < cutoff`) instead of loading every message and filtering
+        // in memory.
         const stale = (await context.db
             .query("messages")
-            .filter((document_) => typeof document_.createdAt === "number" && document_.createdAt < cutoff)
+            .withIndex("by_created", (q) => q.lt("createdAt", cutoff))
             .collect()) as { _id: Id<"messages"> }[];
 
         for (const row of stale) {
