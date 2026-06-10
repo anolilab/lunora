@@ -5,6 +5,7 @@ import type { Finding } from "@cirrus/advisor";
 import { Project } from "ts-morph";
 
 import { lintSchema } from "./advisor";
+import discoverAuthApiCalls from "./discover-authapi-calls";
 import discoverCrons from "./discover-crons";
 import { discoverFunctions } from "./discover-functions";
 import discoverHttpRoutes from "./discover-http-routes";
@@ -83,7 +84,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // job: the result carries the findings and each caller surfaces them through
     // its own channel (the CLI logger, the vite overlay, the studio Advisors
     // table) rather than this library printing.
-    const advisories = options.lint === false ? [] : lintSchema(schema, discoverQueries(project, cirrusDirectory), discoverInserts(project, cirrusDirectory));
+    const advisories = options.lint === false ? [] : lintSchema(schema, discoverQueries(project, cirrusDirectory), discoverInserts(project, cirrusDirectory), discoverAuthApiCalls(project, cirrusDirectory));
 
     const dataModelContent = emitDataModel(schema);
     const apiContent = emitApi(functions);

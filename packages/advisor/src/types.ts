@@ -1,3 +1,4 @@
+import type { AdvisorAuthApiCall } from "./authapi-calls";
 import type { AdvisorInsertWrite } from "./inserts";
 import type { AdvisorQueryRead } from "./queries";
 import type { AdvisorSchema } from "./schema";
@@ -70,6 +71,13 @@ export interface Finding {
  * runtime lints will additionally read observed-signal fields added here later.
  */
 export interface LintContext {
+    /**
+     * `ctx.authApi.&lt;method>(...)` calls discovered in function bodies (the
+     * `auth_api_call_without_headers` input). Supplied by the codegen feeder; absent
+     * for runtime callers, where the lint finds nothing.
+     */
+    authApiCalls?: ReadonlyArray<AdvisorAuthApiCall>;
+
     /**
      * Insert writes discovered in function bodies (the `table_without_insert`
      * input). Supplied by the codegen feeder; absent for runtime callers, where
