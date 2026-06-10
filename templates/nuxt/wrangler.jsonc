@@ -1,15 +1,16 @@
 {
-    // NOTE: Nuxt is CLASS-B — it owns its own Cloudflare worker entry (Nitro's
-    // `cloudflare-pages`/`cloudflare-module` preset emits it). The Cirrus
-    // realtime worker (the ShardDO + `/_cirrus/*` routes) is composed INTO that
-    // Nitro output via hook-injection in PLAN4 M4 (see README, "Class-B
-    // composition — TODO"). This file declares the SHARD Durable Object binding
-    // the composed worker will need; `main` is filled in once M4 wires the
-    // Nitro/CF entry that mounts Cirrus.
+    // Nuxt is CLASS-B — it owns its own Cloudflare worker entry (Nitro's
+    // `cloudflare-module` preset emits it). PLAN4 M4 composes the Cirrus realtime
+    // worker (the ShardDO + `/_cirrus/*` routes) INTO that Nitro output via the
+    // `withCirrus` wrapper in `server/cirrus-entry.ts` (see README, "Class-B
+    // composition"). `main` points at Nitro's emitted Worker — which now wraps
+    // Cirrus and exports the `ShardDO` class the binding below references.
     "name": "{{name}}",
+    "main": ".output/server/index.mjs",
     "compatibility_date": "2026-04-07",
     "compatibility_flags": ["nodejs_compat"],
     "durable_objects": {
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
     },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
 }

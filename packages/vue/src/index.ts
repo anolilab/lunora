@@ -12,7 +12,9 @@
  * - `hydratePreloaded` — seed a `ref` synchronously from an SSR `Preloaded` token (no loading flash), then attach the live subscription.
  *
  * Server-side preload helpers live in the socket-free `@cirrus/vue/server`
- * entry (`createServerClient`, `preloadQuery`).
+ * entry (`createServerClient`, `preloadQuery`). Single-worker composition for
+ * Nuxt (Class-B: inject Cirrus realtime into Nitro's emitted Worker) lives in
+ * the Vue-free `@cirrus/vue/worker` entry (`withCirrus`).
  */
 export { CIRRUS_INJECTION_KEY, createCirrus, provideCirrus, useCirrus } from "./cirrus-provider";
 export { hydratePreloaded } from "./hydrate-preloaded";

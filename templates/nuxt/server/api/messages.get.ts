@@ -15,10 +15,13 @@ const channelId = "channel:demo" as const;
  * Identity continuity (PLAN4 §5 #2): we forward the incoming request's `Cookie`
  * header on every outgoing RPC so the worker-side auth middleware sees the same
  * session the browser has — no separate token exchange on the same origin.
+ *
+ * Single-worker (M4): Cirrus realtime is co-located in the SAME Worker as Nuxt
+ * (composed via `withCirrus` in `server/cirrus-entry.ts`), so the SSR loader
+ * reaches `/_cirrus/rpc` on its own origin — derived from the inbound request —
+ * rather than a separately-deployed worker URL.
  */
 export default defineEventHandler(async (event): Promise<{ preloaded: Preloaded<ReturnOf<typeof api.messages.list>> }> => {
-    const config = useRuntimeConfig(event);
-
     // Forward the browser's Cookie header so the SSR load runs as the signed-in
     // user (same-origin, same session).
     const cookie = getHeader(event, "cookie");
@@ -33,7 +36,12 @@ export default defineEventHandler(async (event): Promise<{ preloaded: Preloaded<
         return fetch(input, { ...init, headers });
     };
 
-    const client = createServerClient({ fetch: cookieForwardingFetch, url: config.cirrusWorkerUrl });
+    // Same-origin: the Cirrus realtime plane lives in this very Worker, so the RPC
+    // base URL is the request's own origin. `getRequestURL` reflects the inbound
+    // protocol/host, so this works identically in `wrangler dev` and production.
+    const origin = getRequestURL(event).origin;
+
+    const client = createServerClient({ fetch: cookieForwardingFetch, url: origin });
 
     // `channelId` is the shard key because the schema declares
     // `.shardBy("channelId")` on the messages table — routes the HTTP RPC to the
