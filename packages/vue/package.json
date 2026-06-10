@@ -43,6 +43,7 @@
         "@visulima/packem": "catalog:build",
         "esbuild": "catalog:build",
         "typescript": "catalog:tsc",
+        "unplugin-vue": "catalog:build",
         "vitest": "catalog:test",
         "vue": "catalog:frontend"
     },

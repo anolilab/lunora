@@ -23,6 +23,8 @@ catalogs:
     "babel-plugin-react-compiler": ^19.1.0-rc.2
     "babel-preset-solid": ^1.9.12
     esbuild: ^0.28.0
+    "rollup-plugin-svelte": ^7.2.3
+    "unplugin-vue": ^7.2.0
   dev:
     "@anolilab/semantic-release-pnpm": ^8.1.15
     "@anolilab/semantic-release-preset": ^13.4.16

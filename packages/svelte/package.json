@@ -42,6 +42,7 @@
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "esbuild": "catalog:build",
+        "rollup-plugin-svelte": "catalog:build",
         "svelte": "catalog:frontend",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
