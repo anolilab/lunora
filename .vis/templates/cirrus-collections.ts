@@ -1,27 +1,27 @@
 /**
  * `vis generate cirrus-collections` — scaffold `cirrus/collections.ts`, a
- * `@cirrus/db` `defineCollections` call pre-filled from the schema (+ the
- * generated `api.ts` when present).
+ * `@cirrus/db` `defineCollections` call pre-filled from the schema + functions.
  *
- * Reads are wired by convention (`api.<table>.list`) and sharded tables get a
- * `scopeBy`. When the generated `api.ts` is available, a table whose namespace
- * has a conventional insert mutation (`create`/`send`/`add`/`insert`) gets a
- * complete, compiling `insert` binding — `toArgs` mapped from the mutation's real
- * arguments, `optimistic` typed as `Omit<Doc, meta>`. Without `api.ts` (codegen
- * not yet run) the `insert` is emitted as a commented template to complete.
+ * Reads are wired from each table's `list` query; sharded tables get a `scopeBy`.
+ * The insert mutation for each table is attributed by **behavior** — the function
+ * that calls `ctx.db.insert("<table>", …)` (see `discover-inserts`) — not by
+ * naming convention. When the generated `api.ts` is present, that mutation's real
+ * argument names produce a complete, compiling `insert` binding; otherwise the
+ * binding is emitted as a commented template referencing the discovered mutation.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { createTemplate } from "@visulima/vis/generate";
 
+import type { InsertMutationRef } from "./_helpers/discover-inserts.js";
+import { discoverInsertMutations } from "./_helpers/discover-inserts.js";
 import type { ApiNamespace } from "./_helpers/parse-api.js";
 import { parseApiNamespaces } from "./_helpers/parse-api.js";
 import type { SchemaTable } from "./_helpers/parse-schema.js";
 import { parseSchemaTables } from "./_helpers/parse-schema.js";
 
-/** Mutation names that, by convention, persist a new row into their table. */
-const INSERT_MUTATION_NAMES = new Set(["add", "create", "insert", "send"]);
+type InsertPlan = { args: string[]; kind: "active"; ref: InsertMutationRef } | { kind: "template"; ref: InsertMutationRef } | undefined;
 
 /** Build the `toArgs` body from an insert mutation's argument names (`id` → `row._id`). */
 const renderToArgs = (args: string[]): string => {
@@ -30,37 +30,34 @@ const renderToArgs = (args: string[]): string => {
     return `{ ${pairs.join(", ")} }`;
 };
 
-/** Render one table's entry, using the api namespace (when known) to wire writes. */
-const renderTable = (table: SchemaTable, namespace: ApiNamespace | undefined): string => {
+/** Render one table's entry, wiring its write action from the attributed insert mutation. */
+const renderTable = (table: SchemaTable, insert: InsertPlan): string => {
     const lines: string[] = [`        ${table.name}: {`, `            list: api.${table.name}.list,`];
 
     if (table.shardBy !== undefined) {
         lines.push(`            scopeBy: ${JSON.stringify(table.shardBy)},`);
     }
 
-    const insertMutation = namespace?.functions.find((function_) => function_.kind === "mutation" && INSERT_MUTATION_NAMES.has(function_.name));
-
-    if (insertMutation) {
-        // We know the mutation and its real args — emit a complete, typed binding.
+    if (insert?.kind === "active") {
         lines.push(
             `            insert: {`,
-            `                mutation: api.${table.name}.${insertMutation.name},`,
+            `                mutation: api.${insert.ref.namespace}.${insert.ref.name},`,
             `                optimistic: (input: Omit<Doc<${JSON.stringify(table.name)}>, "_id" | "_creationTime">, id) => ({`,
             `                    _id: id as Id<${JSON.stringify(table.name)}>,`,
             `                    _creationTime: Date.now(),`,
             `                    ...input,`,
             `                }),`,
-            `                toArgs: (row) => (${renderToArgs(insertMutation.args)}),`,
+            `                toArgs: (row) => (${renderToArgs(insert.args)}),`,
             `            },`,
         );
-    } else if (namespace === undefined) {
-        // No api.ts yet — emit a template listing the table's columns.
+    } else if (insert?.kind === "template") {
         const inputColumns = table.columns.length > 0 ? table.columns.join(", ") : "/* … */";
 
         lines.push(
-            `            // To make ${table.name} writable, run codegen then re-generate, or fill in:`,
+            `            // ${insert.ref.namespace}.${insert.ref.name} inserts into ${table.name}. Run codegen + re-generate to`,
+            `            // wire this automatically, or complete the binding:`,
             `            // insert: {`,
-            `            //     mutation: api.${table.name}.create,`,
+            `            //     mutation: api.${insert.ref.namespace}.${insert.ref.name},`,
             `            //     optimistic: (input: { ${inputColumns} }, id) => ({ _id: id as Id<${JSON.stringify(table.name)}>, _creationTime: Date.now(), ...input }),`,
             `            //     toArgs: (row) => ({ id: row._id /* , …the fields the mutation accepts */ }),`,
             `            // },`,
@@ -72,9 +69,8 @@ const renderTable = (table: SchemaTable, namespace: ApiNamespace | undefined): s
     return lines.join("\n");
 };
 
-const renderCollectionsFile = (tables: SchemaTable[], namespaces: ApiNamespace[]): string => {
-    const byName = new Map(namespaces.map((namespace) => [namespace.name, namespace]));
-    const entries = tables.map((table) => renderTable(table, byName.get(table.name))).join("\n");
+const renderCollectionsFile = (tables: SchemaTable[], plans: Map<string, InsertPlan>): string => {
+    const entries = tables.map((table) => renderTable(table, plans.get(table.name))).join("\n");
 
     return `import { defineCollections } from "@cirrus/db";
 import type { CirrusClient } from "@cirrus/react";
@@ -98,6 +94,25 @@ ${entries}
 `;
 };
 
+/** Resolve each table's write plan: the attributed insert mutation + its args (if api.ts is present). */
+const planInserts = (tables: SchemaTable[], inserts: Map<string, InsertMutationRef>, namespaces: ApiNamespace[]): Map<string, InsertPlan> => {
+    const plans = new Map<string, InsertPlan>();
+
+    for (const table of tables) {
+        const ref = inserts.get(table.name);
+
+        if (ref === undefined) {
+            continue;
+        }
+
+        const args = namespaces.find((namespace) => namespace.name === ref.namespace)?.functions.find((function_) => function_.name === ref.name)?.args;
+
+        plans.set(table.name, args === undefined ? { kind: "template", ref } : { args, kind: "active", ref });
+    }
+
+    return plans;
+};
+
 export default createTemplate({
     about: {
         description: "Scaffold cirrus/collections.ts (a @cirrus/db defineCollections call) from schema.ts",
@@ -105,7 +120,8 @@ export default createTemplate({
     },
     options: {},
     produce: ({ builtins }) => {
-        const schemaPath = join(builtins.dest_dir, "cirrus", "schema.ts");
+        const cirrusDir = join(builtins.dest_dir, "cirrus");
+        const schemaPath = join(cirrusDir, "schema.ts");
 
         if (!existsSync(schemaPath)) {
             throw new Error(`no cirrus/schema.ts found at ${schemaPath} — create a schema first (vis generate cirrus-table).`);
@@ -117,23 +133,21 @@ export default createTemplate({
             throw new Error(`no tables found in ${schemaPath} — is it a defineSchema({ … }) with table entries?`);
         }
 
-        const apiPath = join(builtins.dest_dir, "cirrus", "_generated", "api.ts");
+        const apiPath = join(cirrusDir, "_generated", "api.ts");
         const namespaces = existsSync(apiPath) ? parseApiNamespaces(readFileSync(apiPath, "utf8")) : [];
+        const inserts = discoverInsertMutations(cirrusDir);
+        const plans = planInserts(tables, inserts, namespaces);
 
-        const writable = tables.filter((table) =>
-            namespaces
-                .find((namespace) => namespace.name === table.name)
-                ?.functions.some((function_) => function_.kind === "mutation" && INSERT_MUTATION_NAMES.has(function_.name)),
-        );
+        const wired = [...plans.entries()].filter(([, plan]) => plan?.kind === "active").map(([table]) => table);
 
         return {
-            files: { cirrus: { "collections.ts": renderCollectionsFile(tables, namespaces) } },
+            files: { cirrus: { "collections.ts": renderCollectionsFile(tables, plans) } },
             filesMeta: { "cirrus/collections.ts": { force: true } },
             suggestions: [
                 `Scaffolded cirrus/collections.ts for ${tables.length} table(s): ${tables.map((table) => table.name).join(", ")}.`,
-                namespaces.length === 0
-                    ? "Run `cirrus codegen` then re-generate to auto-wire write actions from your mutations."
-                    : `Wired write actions for: ${writable.map((table) => table.name).join(", ") || "(none — no conventional insert mutations found)"}.`,
+                wired.length > 0
+                    ? `Wired write actions (attributed by ctx.db.insert calls) for: ${wired.join(", ")}.`
+                    : "Run `cirrus codegen` then re-generate to auto-wire write actions from your mutations.",
                 "Then call `createCollections(client)` from your app.",
             ],
         };
