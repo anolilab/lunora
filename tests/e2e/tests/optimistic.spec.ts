@@ -26,28 +26,29 @@ test("optimistic message appears instantly, then clears the pending indicator on
 
     await signedInPage.getByPlaceholder("Type a message…").fill(draftText);
 
-    // Capture timing: optimistic row should appear before the network ack.
+    // Capture timing: the optimistic row should appear before the network ack.
     const sendButton = signedInPage.getByRole("button", { name: "Send" });
-    const optimisticListItem = signedInPage.locator(`li:has-text("${draftText}")`);
+    // Scope to the `(pending)` row specifically — during the brief overlap after
+    // the ack the optimistic override and the real subscription row both carry
+    // `draftText`, so a bare `:has-text(draftText)` would match two elements and
+    // trip strict mode. The `(pending)` marker is unique to the optimistic row.
+    const pendingRow = signedInPage.locator("li", { hasText: draftText }).filter({ hasText: "(pending)" });
 
     await Promise.all([
         sendButton.click(),
-        // Race window: < 50ms is essentially "instant" — server can't have
+        // Race window: < 200ms is essentially "instant" — the server can't have
         // acked yet in any realistic deployment.
-        expect(optimisticListItem).toBeVisible({ timeout: 200 }),
+        expect(pendingRow).toBeVisible({ timeout: 200 }),
     ]);
 
-    // The acked row clears the (pending) indicator.
-    await expect(optimisticListItem).not.toContainText("(pending)", { timeout: 5000 });
+    // On ack the optimistic override is dropped and the real (unmarked) row
+    // shows through — no `(pending)` row remains for this draft.
+    await expect(pendingRow).toHaveCount(0, { timeout: 5000 });
+    // …and the message itself is still there, now server-backed.
+    await expect(signedInPage.locator("li", { hasText: draftText }).first()).toBeVisible();
 });
 
 test("failed mutation rolls back the optimistic value", async ({ signedInPage }) => {
-    // TODO: the optimistic row never becomes observable when the failing
-    // `messages:send` is mocked via Playwright's `route` (the insert + rollback
-    // collapse into one paint). The optimistic *render* path is covered by the
-    // sibling test; only the rollback assertion is parked here.
-    test.fixme(true, "optimistic row not observable under Playwright route-mock");
-
     await signedInPage.goto("/");
 
     signedInPage.once("dialog", async (dialog: Dialog) => dialog.accept("rollback-channel"));
