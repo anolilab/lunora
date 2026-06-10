@@ -114,8 +114,10 @@ export type { DetectedFramework, FrameworkClass, FrameworkDetection } from "./de
 export { detectFramework } from "./detect-framework";
 export { default as devVariablesPlugin } from "./dev-variables-plugin";
 export { createCommandProbe, DEV_WORKER_ENV_VALUE, DEV_WORKER_ENV_VAR, withDevWorkerEnv } from "./dev-worker-env";
-export type { CirrusPluginContext } from "./framework-detect-plugin";
-export { createPluginContext, formatFrameworkDetection, default as frameworkDetectPlugin } from "./framework-detect-plugin";
+// `framework-detect-plugin` (the `CirrusPluginContext` bag + `createPluginContext`
+// + the plugin itself) stays internal plumbing — it is wired into `cirrus()`
+// here and consumed only there + in tests until a second reader (PLAN4 M4
+// composition) justifies a public surface. Only `detectFramework` (above) is public.
 export { default as logStreamPlugin } from "./log-stream-plugin";
 export { buildStudioUrl, STUDIO_PATH, studioPlugin } from "./studio-plugin";
 export type { CirrusPluginOptions, CirrusPlugins, CloudflarePluginOptions, OverlayPluginOptions, ResolvedCirrusPluginOptions } from "./types";

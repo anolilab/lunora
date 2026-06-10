@@ -5,12 +5,14 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import type { SqlConsoleResult } from "./admin";
 import { ADMIN_FUNCTIONS } from "./admin";
 import { newId, usePersistedList } from "./browser-storage";
+import { Alert } from "./components/ui/alert";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
 import { CellValue } from "./data-grid";
 import formatSql from "./format-sql";
 import { ExportMenu } from "./grid-features";
 import { useT } from "./i18n-context";
 import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal";
+import { cn } from "./lib/utils";
 import SqlResultChart from "./result-chart";
 import { recordShard } from "./shard-history";
 import { ShardInput } from "./shard-input";
@@ -83,7 +85,10 @@ const QueryRow = ({ active, onDelete, onSelect, query }: QueryRowProps): ReactEl
         <li className="group/q flex items-center">
             <button
                 aria-pressed={active}
-                className={`flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-start text-[13px] outline-none transition-colors hover:bg-sidebar-accent focus-visible:bg-sidebar-accent ${active ? "bg-sidebar-accent font-medium text-foreground" : "text-muted-foreground"}`}
+                className={cn(
+                    "flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-start text-[13px] outline-none transition-colors hover:bg-sidebar-accent focus-visible:bg-sidebar-accent",
+                    active ? "bg-sidebar-accent font-medium text-foreground" : "text-muted-foreground",
+                )}
                 data-testid={`sql-query-${query.id}`}
                 onClick={onClick}
                 type="button"
@@ -552,13 +557,9 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
                     <div className="min-h-0 flex-1 overflow-auto">
                         {error !== null && (
-                            <p
-                                className="m-3 rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 font-mono text-xs text-destructive"
-                                data-testid="sql-error"
-                                role="alert"
-                            >
+                            <Alert className="m-3 font-mono text-xs" testId="sql-error" variant="destructive">
                                 {error}
-                            </p>
+                            </Alert>
                         )}
 
                         {error === null && result === null && (

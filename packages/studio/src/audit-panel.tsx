@@ -1,6 +1,8 @@
 import { useCirrus } from "@cirrus/react";
-import type { ChangeEvent, ReactElement } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import type { Rect, Virtualizer } from "@tanstack/react-virtual";
+import { observeElementRect, useVirtualizer } from "@tanstack/react-virtual";
+import type { ChangeEvent, CSSProperties, ReactElement } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { AuditEntry, AuditLogResult } from "./admin";
 import { ADMIN_FUNCTIONS } from "./admin";
@@ -36,6 +38,25 @@ const formatDetail = (detail: Record<string, unknown> | undefined): string => {
 
     return json.length > DETAIL_MAX ? `${json.slice(0, DETAIL_MAX)}…` : json;
 };
+
+/** Estimated height of one virtualized audit row, and the bounded height of the scroll viewport. */
+const ROW_HEIGHT = 41;
+const SCROLL_HEIGHT = 480;
+
+/** Number of body columns — the colspan a top/bottom spacer row stretches across. */
+const COLUMN_COUNT = 5;
+
+/**
+ * Viewport-rect observer that floors a zero-height measurement to
+ * {@link SCROLL_HEIGHT}. A no-op in a real browser (the scroll container has its
+ * CSS height); under jsdom — which reports every box as 0×0 — it hands the
+ * virtualizer a real viewport so a bounded, deterministic set of rows mounts in
+ * tests instead of zero. Mirrors the logs panel's row virtualization.
+ */
+const observeViewportRect = (instance: Virtualizer<HTMLDivElement, Element>, callback: (rect: Rect) => void): (() => void) | undefined =>
+    observeElementRect(instance, (rect) => {
+        callback(rect.height > 0 ? rect : { height: SCROLL_HEIGHT, width: rect.width });
+    });
 
 /**
  * Durable audit log for one shard: the admin state-changing operations
@@ -116,6 +137,33 @@ const AuditPanel = ({ initialShardKey }: AuditPanelProps): ReactElement => {
         );
     }, [entries, search]);
 
+    // Row virtualization over the filtered buffer: only the rows intersecting the
+    // bounded viewport (+ overscan) mount, so a durable, retention-capped log never
+    // renders hundreds of <tr>s. Spacer rows preserve the real <table> (and its
+    // cells) so the semantics, styling, and tests stay intact. See `observeViewportRect`.
+    const scrollRef = useRef<HTMLDivElement>(null);
+
+    const virtualizer = useVirtualizer({
+        count: filtered.length,
+        estimateSize: () => ROW_HEIGHT,
+        getScrollElement: () => scrollRef.current,
+        initialRect: { height: SCROLL_HEIGHT, width: 800 },
+        observeElementRect: observeViewportRect,
+        overscan: 8,
+    });
+
+    const virtualRows = virtualizer.getVirtualItems();
+    const totalSize = virtualizer.getTotalSize();
+    const paddingTop = virtualRows[0]?.start ?? 0;
+    const paddingBottom = totalSize - (virtualRows.at(-1)?.end ?? 0);
+
+    const topSpacerStyle = useMemo<CSSProperties>(() => {
+        return { height: paddingTop };
+    }, [paddingTop]);
+    const bottomSpacerStyle = useMemo<CSSProperties>(() => {
+        return { height: paddingBottom };
+    }, [paddingBottom]);
+
     const refreshCurrent = useCallback((): void => {
         fireAndForget(refresh(shardKey));
     }, [refresh, shardKey]);
@@ -125,7 +173,7 @@ const AuditPanel = ({ initialShardKey }: AuditPanelProps): ReactElement => {
     }, []);
 
     return (
-        <div className="space-y-4" data-testid="cirrus-audit">
+        <div className="flex flex-col gap-4" data-testid="cirrus-audit">
             <div className="flex flex-wrap items-center gap-2">
                 <ShardInput onChange={setShardKey} testId="au-shard-input" value={shardKey} />
                 <Button data-testid="au-refresh" onClick={refreshCurrent} size="sm" type="button" variant="outline">
@@ -170,38 +218,53 @@ const AuditPanel = ({ initialShardKey }: AuditPanelProps): ReactElement => {
             )}
 
             {filtered.length > 0 && (
-                <Table data-testid="au-table">
-                    <TableHeader>
-                        <TableRow>
-                            <TableHead>{t("time")}</TableHead>
-                            <TableHead>{t("op")}</TableHead>
-                            <TableHead>{t("table")}</TableHead>
-                            <TableHead>{t("id")}</TableHead>
-                            <TableHead>{t("detail")}</TableHead>
-                        </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                        {filtered.map((entry) => {
-                            const detail = formatDetail(entry.detail);
+                <div className="max-h-[30rem] overflow-auto rounded-md border border-border" ref={scrollRef}>
+                    <Table data-testid="au-table">
+                        <TableHeader>
+                            <TableRow>
+                                <TableHead>{t("time")}</TableHead>
+                                <TableHead>{t("op")}</TableHead>
+                                <TableHead>{t("table")}</TableHead>
+                                <TableHead>{t("id")}</TableHead>
+                                <TableHead>{t("detail")}</TableHead>
+                            </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                            {paddingTop > 0 && (
+                                <tr aria-hidden="true">
+                                    {/* eslint-disable-next-line jsx-a11y/control-has-associated-label -- presentational virtualization spacer; the row is aria-hidden */}
+                                    <td colSpan={COLUMN_COUNT} style={topSpacerStyle} />
+                                </tr>
+                            )}
+                            {virtualRows.map((virtualRow) => {
+                                const entry = filtered[virtualRow.index] as AuditEntry;
+                                const detail = formatDetail(entry.detail);
 
-                            return (
-                                <TableRow data-testid="au-row" key={entry.seq}>
-                                    <TableCell className="text-muted-foreground tabular-nums">{formatTimestamp(entry.ts, "—")}</TableCell>
-                                    <TableCell>
-                                        <Badge variant="secondary">{entry.op}</Badge>
-                                    </TableCell>
-                                    <TableCell className="font-medium">{entry.table ?? <span className="text-muted-foreground">—</span>}</TableCell>
-                                    <TableCell className="max-w-[20ch] truncate font-mono text-xs">
-                                        {entry.id ?? <span className="text-muted-foreground">—</span>}
-                                    </TableCell>
-                                    <TableCell className="max-w-[32ch] truncate font-mono text-xs text-muted-foreground" title={detail || undefined}>
-                                        {detail || <span className="text-muted-foreground">—</span>}
-                                    </TableCell>
-                                </TableRow>
-                            );
-                        })}
-                    </TableBody>
-                </Table>
+                                return (
+                                    <TableRow data-testid="au-row" key={entry.seq}>
+                                        <TableCell className="text-muted-foreground tabular-nums">{formatTimestamp(entry.ts, "—")}</TableCell>
+                                        <TableCell>
+                                            <Badge variant="secondary">{entry.op}</Badge>
+                                        </TableCell>
+                                        <TableCell className="font-medium">{entry.table ?? <span className="text-muted-foreground">—</span>}</TableCell>
+                                        <TableCell className="max-w-[20ch] truncate font-mono text-xs">
+                                            {entry.id ?? <span className="text-muted-foreground">—</span>}
+                                        </TableCell>
+                                        <TableCell className="max-w-[32ch] truncate font-mono text-xs text-muted-foreground" title={detail || undefined}>
+                                            {detail || <span className="text-muted-foreground">—</span>}
+                                        </TableCell>
+                                    </TableRow>
+                                );
+                            })}
+                            {paddingBottom > 0 && (
+                                <tr aria-hidden="true">
+                                    {/* eslint-disable-next-line jsx-a11y/control-has-associated-label -- presentational virtualization spacer; the row is aria-hidden */}
+                                    <td colSpan={COLUMN_COUNT} style={bottomSpacerStyle} />
+                                </tr>
+                            )}
+                        </TableBody>
+                    </Table>
+                </div>
             )}
         </div>
     );

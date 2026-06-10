@@ -21,7 +21,10 @@ catalogs:
     "@babel/preset-react": ^7.29.7
     "@visulima/packem": 2.0.0-alpha.87
     "babel-plugin-react-compiler": ^19.1.0-rc.2
+    "babel-preset-solid": ^1.9.12
     esbuild: ^0.28.0
+    "rollup-plugin-svelte": ^7.2.3
+    "unplugin-vue": ^7.2.0
   dev:
     "@anolilab/semantic-release-pnpm": ^8.1.15
     "@anolilab/semantic-release-preset": ^13.4.16
@@ -104,6 +107,7 @@ catalogs:
     shadcn: ^4.11.0
     tailwind-merge: ^3.6.0
   frontend:
+    "@solidjs/testing-library": ^0.8.10
     "@tanstack/db": ^0.6.8
     "@tanstack/offline-transactions": ^1.0.33
     "@tanstack/react-db": ^0.1.86
@@ -112,12 +116,17 @@ catalogs:
     "@tanstack/react-table": ^8.21.3
     "@tanstack/react-virtual": ^3.14.2
     "@testing-library/dom": ^10.4.1
+    "@testing-library/jest-dom": ^6.9.1
     "@testing-library/react": ^16.3.2
     "@types/react": ^19.2.17
     "@types/react-dom": ^19.2.3
     jsdom: ^29.1.1
     react: ^19.2.7
     react-dom: ^19.2.7
+    solid-js: ^1.9.13
+    svelte: ^5.56.3
+    vite-plugin-solid: ^2.11.12
+    vue: ^3.5.13
   mail:
     "@visulima/email": 1.0.0-alpha.35
     "@react-email/render": 2.0.8

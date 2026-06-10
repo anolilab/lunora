@@ -3,6 +3,7 @@ import { memo, useCallback, useMemo, useState } from "react";
 
 import { useT } from "./i18n-context";
 import { formatCell } from "./internal";
+import { cn } from "./lib/utils";
 
 /**
  * One grid cell's value, rendered Outerbase/Supabase-style: a `null`/`undefined`
@@ -44,7 +45,10 @@ const TableListButton = ({ item, onSelect, prefix, selected }: TableListButtonPr
         <li>
             <button
                 aria-pressed={selected}
-                className={`flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-start text-sm outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent ${selected ? "bg-accent font-medium text-accent-foreground" : "text-foreground"}`}
+                className={cn(
+                    "flex w-full items-center justify-between gap-2 rounded-md px-2 py-1.5 text-start text-sm outline-none transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent",
+                    selected ? "bg-accent font-medium text-accent-foreground" : "text-foreground",
+                )}
                 data-testid={`${prefix}-table-${item.name}`}
                 onClick={onClick}
                 type="button"
@@ -322,23 +326,26 @@ const GridPagination = ({
 
 /**
  * Container that frames a data grid (the table is passed as `children`). The
- * default mode is a bordered, rounded, horizontally-scrolling card — the look
- * Supabase's Table Editor uses, instead of a bare table bleeding into the page.
- * In `fill` mode it instead grows to fill its flex parent (`flex-1 min-h-0`) and
- * lets the child own scrolling, so a full-height table editor's grid stretches to
- * the bottom of the panel rather than being pinned to a fixed height.
+ * `"card"` layout (the default) is a bordered, rounded, horizontally-scrolling
+ * card — the look Supabase's Table Editor uses, instead of a bare table bleeding
+ * into the page. The `"fill"` layout instead grows to fill its flex parent
+ * (`flex-1 min-h-0`) and lets the child own scrolling, so a full-height table
+ * editor's grid stretches to the bottom of the panel rather than being pinned to
+ * a fixed height.
  */
 const GridContainer = ({
     children,
-    fill = false,
+    layout = "card",
     testId,
 }: {
     readonly children: ReactNode;
-    readonly fill?: boolean;
+    readonly layout?: "card" | "fill";
     readonly testId?: string;
 }): ReactElement => (
     <div
-        className={fill ? "flex min-h-0 flex-1 flex-col overflow-hidden border-t border-border" : "overflow-x-auto rounded-md border border-border"}
+        className={
+            layout === "fill" ? "flex min-h-0 flex-1 flex-col overflow-hidden border-t border-border" : "overflow-x-auto rounded-md border border-border"
+        }
         data-testid={testId}
     >
         {children}

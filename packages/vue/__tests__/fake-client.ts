@@ -66,7 +66,7 @@ const createFakeClient = (): FakeClient => {
     const fake = { mutation: mutationSpy, subscribe } as unknown as CirrusClient;
 
     // Install the fake into the app's provide context up front so
-    // `useCirrusClient()` resolves it inside `runWithContext`.
+    // `useCirrus()` resolves it inside `runWithContext`.
     app.provide(CIRRUS_INJECTION_KEY, fake);
 
     const provide = <T>(fn: () => T): T => app.runWithContext(fn);

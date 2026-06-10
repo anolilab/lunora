@@ -1,7 +1,7 @@
 import type { FunctionReference, Preloaded } from "@cirrus/client";
 import type { Ref } from "vue";
 
-import { useCirrusClient } from "./cirrus-provider";
+import { useCirrus } from "./cirrus-provider";
 import { subscribeToQuery } from "./use-query";
 
 /**
@@ -20,7 +20,7 @@ import { subscribeToQuery } from "./use-query";
  */
 // eslint-disable-next-line import/prefer-default-export -- the package barrel re-exports every composable by name; a default here would break the `import { hydratePreloaded } from "@cirrus/vue"` surface.
 export const hydratePreloaded = <T>(preloaded: Preloaded<T>): Ref<T | undefined> => {
-    const client = useCirrusClient();
+    const client = useCirrus();
 
     const { args, functionPath, shardKey, value } = preloaded;
 

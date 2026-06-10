@@ -6,26 +6,26 @@
  * delta-merge — zero React, zero Vue). This package re-expresses that contract
  * as Vue composables:
  *
- * - `createCirrus` / `provideCirrus` / `useCirrusClient` — provide/inject the client.
- * - `useQuery` — a live `ref` that opens a WS subscription and updates on deltas.
+ * - `createCirrus` / `provideCirrus` / `useCirrus` — provide/inject the client.
+ * - `useQuery` — a live `ref` that opens a WS subscription and updates on deltas (reactive args re-subscribe).
  * - `useMutation` — an optimistic mutation handle (refs + awaitable `mutate`).
  * - `hydratePreloaded` — seed a `ref` synchronously from an SSR `Preloaded` token (no loading flash), then attach the live subscription.
  *
  * Server-side preload helpers live in the socket-free `@cirrus/vue/server`
  * entry (`createServerClient`, `preloadQuery`).
  */
-export { CIRRUS_INJECTION_KEY, createCirrus, provideCirrus, useCirrusClient } from "./cirrus-provider";
+export { CIRRUS_INJECTION_KEY, createCirrus, provideCirrus, useCirrus } from "./cirrus-provider";
 export { hydratePreloaded } from "./hydrate-preloaded";
 export type {
     ArgsOf,
     CirrusClient,
     FunctionReference,
+    MutationCallOptions,
     OptimisticLocalStore,
     OptimisticUpdate,
     Preloaded,
     ReturnOf,
     Unsubscribe,
-    UseMutationCallOptions,
     UseQueryOptions,
     User,
 } from "./types";

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { useT } from "./i18n-context";
 import { fireAndForget } from "./internal";
+import { cn } from "./lib/utils";
 
 /** A navigable destination shown in the palette. */
 interface CommandItem {
@@ -63,7 +64,10 @@ const CommandRow = ({ active, index, item, onActivate, onSelect }: CommandRowPro
     return (
         <li>
             <button
-                className={`flex w-full items-center justify-between gap-3 rounded-md px-3 py-2 text-start text-sm outline-none transition-colors hover:bg-accent hover:text-accent-foreground ${active ? "bg-accent text-accent-foreground" : "text-foreground"}`}
+                className={cn(
+                    "flex w-full items-center justify-between gap-3 rounded-md px-3 py-2 text-start text-sm outline-none transition-colors hover:bg-accent hover:text-accent-foreground",
+                    active ? "bg-accent text-accent-foreground" : "text-foreground",
+                )}
                 onClick={onClick}
                 onMouseEnter={onMouseEnter}
                 type="button"

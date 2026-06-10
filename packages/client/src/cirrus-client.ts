@@ -116,7 +116,14 @@ type WSState = "idle" | "connecting" | "open" | "closed";
  */
 type ConnectionStatus = "connected" | "connecting" | "idle" | "offline";
 
-interface MutationCallOptions<TCurrent, TValue, TArgs> {
+/**
+ * Per-call options for {@link CirrusClient.mutation} — the optimistic-update
+ * machinery plus `shardKey`. Exported (at the end of this file) so the framework
+ * adapters (`@cirrus/react`, `/solid`, `/svelte`, `/vue`) can type their
+ * `mutate(args, options?)` against one canonical definition instead of
+ * re-declaring it.
+ */
+interface MutationCallOptions<TCurrent = unknown, TValue = unknown, TArgs = unknown> {
     optimistic?: (current: TCurrent | undefined) => TValue;
 
     /**
@@ -2210,4 +2217,4 @@ class CirrusClient {
 }
 
 export { CirrusClient };
-export type { ConnectionStatus };
+export type { ConnectionStatus, MutationCallOptions };

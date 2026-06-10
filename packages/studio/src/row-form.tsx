@@ -3,6 +3,7 @@ import { useCallback, useMemo, useState } from "react";
 
 import { Checkbox } from "./components/ui/checkbox";
 import { useT } from "./i18n-context";
+import { cn } from "./lib/utils";
 
 /** Shared control-button class (mirrors the data-browser toolbar). */
 const CONTROL_BTN =
@@ -156,7 +157,7 @@ const JsonField = ({ column, onChange, value }: FieldProps): ReactElement => {
     return (
         <div className="flex flex-col gap-1">
             <textarea
-                className={`${FIELD_INPUT} min-h-16 ${error ? "border-destructive" : ""}`}
+                className={cn(FIELD_INPUT, "min-h-16", error && "border-destructive")}
                 data-testid={`db-field-${column}`}
                 onChange={onInput}
                 value={text}

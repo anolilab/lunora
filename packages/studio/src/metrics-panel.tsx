@@ -253,7 +253,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
     }, []);
 
     return (
-        <div className="space-y-4" data-testid="cirrus-metrics">
+        <div className="flex flex-col gap-4" data-testid="cirrus-metrics">
             <div className="flex flex-wrap items-center gap-2">
                 <ShardInput onChange={setShardKey} testId="mt-shard-input" value={shardKey} />
                 <Button data-testid="mt-refresh" onClick={refreshCurrent} size="sm" type="button" variant="outline">
@@ -338,7 +338,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
             )}
 
             {aggregate !== null && shardResults !== null && (
-                <div className="space-y-4" data-testid="mt-aggregate-view">
+                <div className="flex flex-col gap-4" data-testid="mt-aggregate-view">
                     <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" data-testid="mt-aggregate-stats">
                         <StatCard
                             label={t("Shards")}

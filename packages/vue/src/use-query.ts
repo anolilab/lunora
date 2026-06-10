@@ -1,26 +1,27 @@
 import type { ArgsOf, CirrusClient, FunctionReference, ReturnOf, Unsubscribe } from "@cirrus/client";
-import type { Ref } from "vue";
-import { getCurrentScope, onScopeDispose, shallowRef } from "vue";
+import type { MaybeRefOrGetter, Ref } from "vue";
+import { getCurrentScope, onScopeDispose, shallowRef, toValue, watch } from "vue";
 
-import { useCirrusClient } from "./cirrus-provider";
+import { useCirrus } from "./cirrus-provider";
 import type { UseQueryOptions } from "./types";
 
 /**
- * Open a live subscription against `client` and stream its values into a `ref`.
+ * Open a live subscription against `client` for FIXED args and stream its values
+ * into a `ref`. The low-level primitive behind `hydratePreloaded` (whose args
+ * come from an immutable `Preloaded` token and never change); {@link useQuery}
+ * handles the reactive-args case separately.
  *
- * Shared by {@link useQuery} and `hydratePreloaded`: both want "open a WS
- * subscription, push every server delta into a ref, tear down on scope dispose."
  * `client.subscribe` already dedupes by `(functionPath, args, shardKey)` and
  * replays the last value synchronously, so multiple consumers of the same query
- * ride one server-side registration.
- *
- * The teardown is wired to the active effect scope (`onScopeDispose`) so it
- * fires on component unmount *or* when an `effectScope().stop()` runs — which is
- * what lets the composable be unit-tested without mounting a component.
- *
- * `seed` (used by the preloaded handoff) sets the ref's value synchronously
+ * ride one server-side registration. `seed` sets the ref's value synchronously
  * before the subscription attaches, so the first read shows the SSR value with
  * no loading flash.
+ *
+ * Teardown is wired to the active effect scope (`onScopeDispose`), so it fires
+ * on component unmount or `effectScope().stop()`. Call it inside `setup()` / an
+ * effect scope (as `hydratePreloaded` does); outside any scope there is nothing
+ * to own the subscription, so it would leak until the process exits — the
+ * `getCurrentScope` guard only avoids throwing, it does not auto-clean.
  */
 export const subscribeToQuery = <F extends FunctionReference, T = ReturnOf<F>>(
     client: CirrusClient,
@@ -41,10 +42,6 @@ export const subscribeToQuery = <F extends FunctionReference, T = ReturnOf<F>>(
         { shardKey: options.shardKey },
     );
 
-    // Tear down with the surrounding scope (component unmount or
-    // `effectScope().stop()`). Guard `getCurrentScope` so a call outside any
-    // scope still unsubscribes — it just leaks until the caller drops the ref;
-    // we surface that by unsubscribing eagerly when there's no scope to own it.
     if (getCurrentScope()) {
         onScopeDispose(unsubscribe);
     }
@@ -57,14 +54,51 @@ export const subscribeToQuery = <F extends FunctionReference, T = ReturnOf<F>>(
  *
  * The returned ref is `undefined` until the first server response lands, then
  * updates on every delta the server pushes — the Vue-idiomatic equivalent of
- * React's `useQuery`. The underlying WS subscription is torn down automatically
- * when the owning component unmounts (or the effect scope stops).
+ * React's `useQuery`. `args` may be a plain value, a `ref`, or a getter: passing
+ * a reactive source makes the subscription reactive — when the args change the
+ * old subscription is torn down and a fresh one opens for the new args (matching
+ * `@cirrus/react`/`@cirrus/solid`). Pass `"skip"` (or a source resolving to
+ * `"skip"`) to short-circuit: no network call, no socket. The subscription tears
+ * down automatically when the owning component unmounts (or the effect scope
+ * stops).
  *
  * Call inside `setup()` (or any active effect scope). For SSR seeding with no
  * loading flash, use `hydratePreloaded` instead.
  */
-export const useQuery = <F extends FunctionReference>(function_: F, args: ArgsOf<F>, options: UseQueryOptions = {}): Ref<ReturnOf<F> | undefined> => {
-    const client = useCirrusClient();
+export const useQuery = <F extends FunctionReference>(
+    function_: F,
+    args: MaybeRefOrGetter<ArgsOf<F> | "skip">,
+    options: UseQueryOptions = {},
+): Ref<ReturnOf<F> | undefined> => {
+    const client = useCirrus();
+    const data = shallowRef<ReturnOf<F> | undefined>(undefined) as Ref<ReturnOf<F> | undefined>;
 
-    return subscribeToQuery<F>(client, function_, args, { shardKey: options.shardKey });
+    // Re-subscribe whenever the (reactive) args change: `watch`'s `onCleanup`
+    // tears down the previous subscription before opening the next, and also runs
+    // when the surrounding effect scope stops (component unmount). A plain-value
+    // `args` resolves once and the watcher never re-fires.
+    watch(
+        () => toValue(args),
+        (current, _previous, onCleanup) => {
+            if (current === "skip") {
+                data.value = undefined;
+
+                return;
+            }
+
+            const unsubscribe: Unsubscribe = client.subscribe(
+                function_,
+                current,
+                (value) => {
+                    data.value = value;
+                },
+                { shardKey: options.shardKey },
+            );
+
+            onCleanup(unsubscribe);
+        },
+        { immediate: true },
+    );
+
+    return data;
 };

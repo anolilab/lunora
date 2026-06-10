@@ -2,6 +2,7 @@ import type { ReactElement } from "react";
 import { useCallback, useState } from "react";
 
 import { newId, usePersistedList } from "./browser-storage";
+import { Alert } from "./components/ui/alert";
 import { Button } from "./components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
 import { EmptyState } from "./components/ui/empty-state";
@@ -113,13 +114,9 @@ const WidgetCard = ({ onEdit, onRemove, widget }: WidgetCardProps): ReactElement
             </CardHeader>
             <CardContent className="min-h-32 py-2">
                 {error !== undefined && (
-                    <p
-                        className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 font-mono text-xs text-destructive"
-                        data-testid={`dashboards-widget-error-${widget.id}`}
-                        role="alert"
-                    >
+                    <Alert className="font-mono text-xs" testId={`dashboards-widget-error-${widget.id}`} variant="destructive">
                         {error}
-                    </p>
+                    </Alert>
                 )}
                 {error === undefined && loading && result === undefined && (
                     <p className="p-4 text-sm text-muted-foreground" data-testid={`dashboards-widget-loading-${widget.id}`}>

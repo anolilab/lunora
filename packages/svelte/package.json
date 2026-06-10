@@ -13,6 +13,10 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
         },
+        "./server": {
+            "types": "./dist/server.d.ts",
+            "import": "./dist/server.mjs"
+        },
         "./package.json": "./package.json"
     },
     "files": [
@@ -31,13 +35,15 @@
         "test": "vitest run"
     },
     "dependencies": {
-        "@cirrus/client": "workspace:*"
+        "@cirrus/client": "workspace:*",
+        "@cirrus/ssr": "workspace:*"
     },
     "devDependencies": {
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "esbuild": "catalog:build",
-        "svelte": "^5.56.3",
+        "rollup-plugin-svelte": "catalog:build",
+        "svelte": "catalog:frontend",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
     },

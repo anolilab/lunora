@@ -1,6 +1,6 @@
-import type { Preloaded, ReturnOf } from "@cirrus/client";
-import { CirrusClient, preloadQuery } from "@cirrus/client";
 import { createMutation, hydratePreloaded } from "@cirrus/solid";
+import type { Preloaded, ReturnOf } from "@cirrus/solid/server";
+import { createServerClient, preloadQuery } from "@cirrus/solid/server";
 import { createAsync, query } from "@solidjs/router";
 import { getRequestEvent } from "solid-js/web";
 import { createSignal, Show } from "solid-js";
@@ -16,9 +16,8 @@ type MessagesResult = ReturnOf<typeof api.messages.list>;
  * (the Cloudflare Worker) before the route renders. It builds a request-scoped
  * `CirrusClient` that uses the HTTP RPC path (`/_cirrus/rpc`) — no WebSocket, no
  * in-process Durable Object access — and returns a serializable `Preloaded`
- * token. (Building the client directly keeps this loader free of any React-only
- * server helper; `@cirrus/ssr`'s `createServerClient` will be the sugar for this
- * once that package lands — PLAN4 §2.1.)
+ * token. `createServerClient` (from `@cirrus/solid/server`, a re-export of the
+ * framework-neutral `@cirrus/ssr` contract) builds that request-scoped client.
  *
  * Identity continuity (PLAN4 open question #2): same-origin cookie forwarding.
  * `getRequestEvent()` exposes the inbound request, so we relay its `Cookie`
@@ -50,11 +49,11 @@ const loadMessages = query(async (): Promise<Preloaded<MessagesResult>> => {
     // operators point at a remote worker in preview deploys.
     const workerUrl = process.env.CIRRUS_WORKER_URL ?? "http://localhost:8787";
 
-    // A `CirrusClient` only opens a socket on `.subscribe()`/`.stream()`; the
+    // `createServerClient` only opens a socket on `.subscribe()`/`.stream()`; the
     // loader only calls `preloadQuery` (HTTP RPC), so no live connection is made
     // server-side. Build a fresh one per request so each runs under its own
     // forwarded session.
-    const client = new CirrusClient({ fetch: cookieForwardingFetch, url: workerUrl });
+    const client = createServerClient({ fetch: cookieForwardingFetch, url: workerUrl });
 
     return preloadQuery(client, api.messages.list, { channelId }, { shardKey: channelId });
 }, "messages");

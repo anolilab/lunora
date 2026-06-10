@@ -1,4 +1,5 @@
 import type { CirrusClient } from "@cirrus/client";
+import type { Context } from "solid-js";
 import { createContext, useContext } from "solid-js";
 
 /**
@@ -10,7 +11,7 @@ import { createContext, useContext } from "solid-js";
  * Defaults to `undefined` so {@link useCirrus} can throw a helpful error when a
  * primitive is used outside a provider rather than dereferencing it.
  */
-export const CirrusContext = createContext<CirrusClient | undefined>();
+export const CirrusContext: Context<CirrusClient | undefined> = createContext<CirrusClient | undefined>();
 
 /**
  * Read the {@link CirrusClient} from the nearest `&lt;CirrusProvider>`.

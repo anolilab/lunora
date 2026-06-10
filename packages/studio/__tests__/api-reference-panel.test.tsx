@@ -10,7 +10,29 @@ import { createMockClient } from "./mock-client.js";
 const SPEC_WITH_PATHS: Record<string, unknown> = {
     info: { title: "Cirrus API", version: "1.0.0" },
     openapi: "3.1.0",
-    paths: { "/_cirrus/rpc#messages:list": { post: { operationId: "messages:list", summary: "query: messages:list", tags: ["messages"], "x-cirrus-function-kind": "query" } } },
+    paths: {
+        "/_cirrus/rpc#messages:list": {
+            post: { operationId: "messages:list", summary: "query: messages:list", tags: ["messages"], "x-cirrus-function-kind": "query" },
+        },
+    },
+};
+
+const SPEC_WITH_RESPONSE: Record<string, unknown> = {
+    info: { title: "Cirrus API", version: "1.0.0" },
+    openapi: "3.1.0",
+    paths: {
+        "/_cirrus/rpc#messages:list": {
+            post: {
+                operationId: "messages:list",
+                responses: {
+                    "200": { content: { "application/json": { schema: { properties: { id: { type: "string" } }, type: "object" } } }, description: "OK" },
+                },
+                summary: "query: messages:list",
+                tags: ["messages"],
+                "x-cirrus-function-kind": "query",
+            },
+        },
+    },
 };
 
 const EMPTY_SPEC: Record<string, unknown> = { info: { title: "Cirrus API", version: "0.0.0" }, openapi: "3.1.0", paths: {} };
@@ -44,6 +66,67 @@ describe("apiReferencePanel", () => {
         await expect(screen.findByTestId("api-reference")).resolves.toBeDefined();
         // The inline path never hits the client's fetch accessor.
         expect(mock.fetchOpenApi).not.toHaveBeenCalled();
+    });
+
+    it("renders a documented response example as a status tab in the right rail before any send", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient();
+
+        render(renderPanel(mock, SPEC_WITH_RESPONSE));
+
+        // The 200 response surfaces as a tab on the right-rail response panel…
+        await expect(screen.findByTestId("api-response-tab-200")).resolves.toBeDefined();
+        // …and its body is the example seeded from the response schema (no request sent).
+        expect(screen.getByTestId("api-response-body").textContent).toContain('"id"');
+    });
+
+    it("renders nested fields and constraint badges in the response schema", async () => {
+        expect.assertions(4);
+
+        const SPEC_WITH_SCHEMA: Record<string, unknown> = {
+            info: { title: "Cirrus API", version: "1.0.0" },
+            openapi: "3.1.0",
+            paths: {
+                "/_cirrus/rpc#planets:get": {
+                    post: {
+                        operationId: "planets:get",
+                        responses: {
+                            "200": {
+                                content: {
+                                    "application/json": {
+                                        schema: {
+                                            properties: {
+                                                id: { format: "int64", type: "integer" },
+                                                physicalProperties: { properties: { mass: { type: "number" } }, type: "object" },
+                                                type: { anyOf: [{ const: "terrestrial" }, { const: "gas_giant" }] },
+                                            },
+                                            required: ["id"],
+                                            type: "object",
+                                        },
+                                    },
+                                },
+                                description: "OK",
+                            },
+                        },
+                        summary: "query: planets:get",
+                        tags: ["planets"],
+                        "x-cirrus-function-kind": "query",
+                    },
+                },
+            },
+        };
+
+        const mock = createMockClient();
+
+        render(renderPanel(mock, SPEC_WITH_SCHEMA));
+
+        const table = await screen.findByTestId("api-response-200");
+
+        expect(table.textContent).toContain("int64"); // Format badge value
+        expect(table.textContent).toContain("Value in"); // enum (anyOf of consts) badge
+        expect(table.textContent).toContain("physicalProperties"); // nested object field
+        expect(table.textContent).toContain("mass"); // recursed sub-field
     });
 
     it("shows the not-configured empty state for a pathless spec", async () => {

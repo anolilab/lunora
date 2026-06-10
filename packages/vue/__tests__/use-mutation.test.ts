@@ -25,7 +25,9 @@ describe(useMutation, () => {
         expect(handle.error.value).toBeUndefined();
         expect(handle.pending.value).toBe(false);
 
-        expect(fake.mutationSpy).toHaveBeenCalledWith(sendMessage, { channelId: "c1", text: "hi" }, {});
+        // No per-call options → the runner forwards `undefined`, which
+        // `CirrusClient.mutation`'s default param resolves to `{}`.
+        expect(fake.mutationSpy).toHaveBeenCalledWith(sendMessage, { channelId: "c1", text: "hi" }, undefined);
 
         scope.stop();
     });
@@ -48,23 +50,16 @@ describe(useMutation, () => {
         scope.stop();
     });
 
-    it("withOptimisticUpdate forwards the bound update unless a per-call one overrides", async () => {
+    it("forwards a per-call optimisticUpdate straight through to client.mutation", async () => {
         const fake = createFakeClient();
         fake.mutationSpy.mockResolvedValue(undefined);
 
-        const bound = (_store: OptimisticLocalStore): void => undefined;
         const perCall = (_store: OptimisticLocalStore): void => undefined;
 
         const scope = effectScope();
         const handle = scope.run(() => fake.provide(() => useMutation(sendMessage)))!;
 
-        const boundHandle = handle.withOptimisticUpdate(bound);
-
-        await boundHandle.mutate({ channelId: "c1", text: "a" });
-
-        expect(fake.mutationSpy).toHaveBeenLastCalledWith(sendMessage, { channelId: "c1", text: "a" }, { optimisticUpdate: bound });
-
-        await boundHandle.mutate({ channelId: "c1", text: "b" }, { optimisticUpdate: perCall });
+        await handle.mutate({ channelId: "c1", text: "b" }, { optimisticUpdate: perCall });
 
         expect(fake.mutationSpy).toHaveBeenLastCalledWith(sendMessage, { channelId: "c1", text: "b" }, { optimisticUpdate: perCall });
 

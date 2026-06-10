@@ -210,7 +210,7 @@ export const GlobalDataBrowser = ({ pageSize: initialPageSize = DEFAULT_PAGE_SIZ
 
                 {page !== null && (
                     <div className="flex min-h-0 flex-1 flex-col" data-testid="gdb-page">
-                        <GridContainer fill>
+                        <GridContainer layout="fill">
                             <div className="min-h-0 flex-1 overflow-auto">
                                 <Table data-testid="gdb-rows">
                                     <TableHeader>

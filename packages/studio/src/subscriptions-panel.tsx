@@ -117,7 +117,7 @@ const SubscriptionsPanel = ({ initialShardKey }: SubscriptionsPanelProps): React
     const rows = result === null ? [] : toRows(result.connections);
 
     return (
-        <div className="space-y-4" data-testid="subs-panel">
+        <div className="flex flex-col gap-4" data-testid="subs-panel">
             <div className="flex flex-wrap items-center gap-2">
                 <ShardInput onChange={setShardKey} testId="subs-shard-input" value={shardKey} />
                 <Button data-testid="subs-refresh" onClick={refreshCurrent} size="sm" type="button" variant="outline">
@@ -141,7 +141,15 @@ const SubscriptionsPanel = ({ initialShardKey }: SubscriptionsPanelProps): React
                 <EmptyState
                     description={t("Active WebSocket subscriptions on this shard.")}
                     icon={
-                        <svg aria-hidden="true" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.6} viewBox="0 0 24 24">
+                        <svg
+                            aria-hidden="true"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={1.6}
+                            viewBox="0 0 24 24"
+                        >
                             <path d="M5 12a7 7 0 0 1 14 0M8 12a4 4 0 0 1 8 0M12 12v8m0-8a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" />
                         </svg>
                     }

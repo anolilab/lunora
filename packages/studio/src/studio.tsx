@@ -33,6 +33,7 @@ import { useT } from "./i18n-context";
 import { StudioI18nProvider } from "./i18n-provider";
 import { InsightsPanel } from "./insights-panel";
 import { fireAndForget } from "./internal";
+import { cn } from "./lib/utils";
 import { LogsPanel } from "./logs-panel";
 import { MetricsPanel } from "./metrics-panel";
 import { MigrationsPanel } from "./migrations";
@@ -421,7 +422,7 @@ const StudioLayout = (): ReactElement => {
 
     return (
         <div
-            className={`grid min-h-0 flex-1 ${navCollapsed ? "grid-cols-[3rem_minmax(0,1fr)]" : "grid-cols-[3rem_13.5rem_minmax(0,1fr)]"}`}
+            className={cn("grid min-h-0 flex-1", navCollapsed ? "grid-cols-[3rem_minmax(0,1fr)]" : "grid-cols-[3rem_13.5rem_minmax(0,1fr)]")}
             data-testid="cirrus-studio"
         >
             <CommandPalette items={commandItems} />
@@ -436,7 +437,10 @@ const StudioLayout = (): ReactElement => {
                         <button
                             aria-current={activeGroup.key === group.key ? "page" : undefined}
                             aria-label={groupLabel[group.key]}
-                            className={`flex size-8 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:bg-sidebar-accent aria-[current=page]:bg-sidebar-accent aria-[current=page]:text-foreground${group.key === "settings" ? " mt-auto" : ""}`}
+                            className={cn(
+                                "flex size-8 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:bg-sidebar-accent aria-[current=page]:bg-sidebar-accent aria-[current=page]:text-foreground",
+                                group.key === "settings" && "mt-auto",
+                            )}
                             data-tab={railTab}
                             data-testid={`dash-rail-${group.key}`}
                             key={group.key}
@@ -461,7 +465,7 @@ const StudioLayout = (): ReactElement => {
                 >
                     <svg
                         aria-hidden="true"
-                        className={`size-4 transition-transform ${navCollapsed ? "rotate-180" : ""}`}
+                        className={cn("size-4 transition-transform", navCollapsed && "rotate-180")}
                         fill="none"
                         stroke="currentColor"
                         strokeLinecap="round"
@@ -477,7 +481,7 @@ const StudioLayout = (): ReactElement => {
             {/* Secondary nav — the active area's title + its tabs. Hidden when collapsed. */}
             <div
                 aria-label={t("Studio sections")}
-                className={`flex flex-col overflow-y-auto border-e border-border bg-sidebar${navCollapsed ? " hidden" : ""}`}
+                className={cn("flex flex-col overflow-y-auto border-e border-border bg-sidebar", navCollapsed && "hidden")}
                 data-testid="dash-tabs"
                 hidden={navCollapsed}
                 role="tablist"
@@ -535,7 +539,7 @@ const StudioLayout = (): ReactElement => {
  * empty. Renders inside the layout's panel region during navigation.
  */
 const RoutePending = (): ReactElement => (
-    <div className="space-y-4" data-testid="dash-pending">
+    <div className="flex flex-col gap-4" data-testid="dash-pending">
         <div className="flex items-center gap-2">
             <Skeleton className="h-8 w-40" />
             <Skeleton className="h-8 w-24" />
@@ -599,7 +603,7 @@ const buildRouter = ({
         export: <ExportImportPanel initialShardKey={initialShardKey} />,
         files: <FileBrowser />,
         functions: (
-            <div className="space-y-8">
+            <div className="flex flex-col gap-8">
                 <FunctionStatsPanel functions={functions} initialShardKey={initialShardKey} />
                 <FunctionRunner functions={functions} />
             </div>

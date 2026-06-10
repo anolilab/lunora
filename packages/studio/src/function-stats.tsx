@@ -9,6 +9,7 @@ import { Button } from "./components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
 import { useT } from "./i18n-context";
 import { adminRef, callOptions, errorMessage, fireAndForget, formatTimestamp } from "./internal";
+import { cn } from "./lib/utils";
 import { LiveToggle } from "./live-toggle";
 import { ShardInput } from "./shard-input";
 import type { FunctionDescriptor, FunctionKind } from "./types";
@@ -181,7 +182,7 @@ export const FunctionStatsPanel = ({ functions, initialShardKey }: FunctionStats
     ];
 
     return (
-        <div className="space-y-4" data-testid="cirrus-function-stats">
+        <div className="flex flex-col gap-4" data-testid="cirrus-function-stats">
             <div className="flex flex-wrap items-center gap-2">
                 <ShardInput onChange={setShardKey} testId="fs-shard-input" value={shardKey} />
                 <Button data-testid="fs-refresh" onClick={refreshCurrent} size="sm" type="button" variant="outline">
@@ -246,7 +247,7 @@ export const FunctionStatsPanel = ({ functions, initialShardKey }: FunctionStats
                                         )}
                                     </TableCell>
                                     <TableCell className="text-right tabular-nums">{stat.calls}</TableCell>
-                                    <TableCell className={`text-right tabular-nums${stat.errors > 0 ? " text-destructive" : ""}`}>{errorCell(stat)}</TableCell>
+                                    <TableCell className={cn("text-right tabular-nums", stat.errors > 0 && "text-destructive")}>{errorCell(stat)}</TableCell>
                                     <TableCell className="text-right tabular-nums">
                                         {stat.calls === 0 ? "—" : formatMs(stat.totalDurationMs / stat.calls)}
                                     </TableCell>
