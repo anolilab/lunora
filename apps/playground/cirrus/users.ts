@@ -12,6 +12,6 @@ export const list = query({
     handler: async (context): Promise<Pick<Doc<"users">, "_id" | "name">[]> => {
         const { page } = await context.db.users.findMany();
 
-        return page.map((user) => ({ _id: user._id, name: user.name }));
+        return page.map((user) => {return { _id: user._id, name: user.name }});
     },
 });

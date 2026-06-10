@@ -187,7 +187,7 @@ const CLIENT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a
  * unguessable and fixed-shape; the primary-key constraint still enforces actual
  * uniqueness at insert time — this only gates the *shape*.
  */
-export const assertValidClientId = (clientId: string): void => {
+const assertValidClientId = (clientId: string): void => {
     if (!CLIENT_ID_PATTERN.test(clientId)) {
         throw new Error(`invalid clientId ${JSON.stringify(clientId)}: a client-supplied row id must be a UUID`);
     }
@@ -387,12 +387,12 @@ interface DatabaseWriterLike {
      *
      * Two opt-ins override the default fresh-id behavior:
      * - `options.clientId` — the **public, validated** path: a UUID supplied by
-     *   the caller (e.g. an optimistic client) becomes the row's primary key.
-     *   Validated for shape via {@link assertValidClientId}; uniqueness is still
-     *   enforced by the primary-key constraint.
+     * the caller (e.g. an optimistic client) becomes the row's primary key.
+     * Validated for shape via {@link assertValidClientId}; uniqueness is still
+     * enforced by the primary-key constraint.
      * - `options.allowExplicitId` — the internal **trusted-import** path (dev/admin
-     *   snapshot round-trip), which honors a string `_id` on `document` verbatim,
-     *   no shape check.
+     * snapshot round-trip), which honors a string `_id` on `document` verbatim,
+     * no shape check.
      */
     insert: (tableName: string, document: Record<string, unknown>, options?: { allowExplicitId?: boolean; clientId?: string }) => Promise<string>;
 
@@ -3586,6 +3586,7 @@ const backfillRankIndexes = (sql: SqlExec, schema: SchemaLike): void => {
 
 export {
     applyCdcChanges,
+    assertValidClientId,
     backfillAggregateIndexes,
     backfillRankIndexes,
     CDC_LOG_TABLE,

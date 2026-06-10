@@ -39,7 +39,7 @@ export const send = mutation({
                 channelId,
                 createdAt: Date.now(),
                 text,
-                userId: (context.auth.userId ?? "anonymous") as Id<"users">,
+                userId: (context.auth.userId ?? "anonymous"),
             },
             id ? { clientId: id } : undefined,
         ),

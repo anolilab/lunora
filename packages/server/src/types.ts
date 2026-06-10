@@ -421,6 +421,7 @@ interface SearchFilterBuilder {
 
 interface DatabaseWriter extends DatabaseReader {
     delete: <T extends string>(id: Id<T>) => Promise<void>;
+
     /**
      * Insert a document, returning its server id.
      *
