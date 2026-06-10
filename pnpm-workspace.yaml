@@ -31,7 +31,7 @@ catalogs:
   lint:
     "@anolilab/eslint-config": 27.0.2
     "@anolilab/prettier-config": 10.0.1
-    "@eslint-react/eslint-plugin": 5.8.13
+    "@eslint-react/eslint-plugin": 5.8.17
     "@ospm/eslint-plugin-react-unhookify": ^1.0.2
     eslint: 10.4.1
     eslint-plugin-jsx-a11y: ^6.10.2
@@ -45,7 +45,7 @@ catalogs:
     eslint-plugin-testing-library: 7.16.2
     eslint-plugin-validate-jsx-nesting: ^0.1.1
     husky: ^9.1.7
-    prettier: 3.8.3
+    prettier: 3.8.4
   node:
     fast-glob: ^3.3.3
     rimraf: 6.1.3
@@ -69,10 +69,10 @@ catalogs:
     "@standard-schema/spec": 1.1.0
     "@types/node": 25.9.2
   cloudflare:
-    "@cloudflare/vitest-pool-workers": ^0.16.13
-    "@cloudflare/workers-types": ^4.20260607.1
-    miniflare: ^4.20260603.0
-    wrangler: ^4.98.0
+    "@cloudflare/vitest-pool-workers": ^0.16.14
+    "@cloudflare/workers-types": ^4.20260610.1
+    miniflare: ^4.20260609.0
+    wrangler: ^4.99.0
   e2e:
     "@playwright/test": ^1.60.0
     playwright: ^1.60.0
@@ -82,7 +82,7 @@ catalogs:
     # Pinned to 1.39.2: 1.40.0 regressed the dev runner — `getWorkerEntryExportTypes`
     # throws "Cannot read properties of undefined (reading 'string')" while evaluating
     # the Worker entry. Revisit when a fixed 1.40.x ships.
-    "@cloudflare/vite-plugin": 1.39.2
+    "@cloudflare/vite-plugin": 1.40.1
     "@tailwindcss/cli": ^4.3.0
     "@tailwindcss/vite": ^4.3.0
     "@visulima/vite-overlay": 2.0.0-alpha.33
@@ -92,8 +92,8 @@ catalogs:
     tw-animate-css: ^1.4.0
     vite: ^8.0.16
   i18n:
-    "@lingui/core": ^6.2.0
-    "@lingui/message-utils": ^6.2.0
+    "@lingui/core": ^6.3.0
+    "@lingui/message-utils": ^6.3.0
   ui:
     "@base-ui/react": 1.5.0
     "@fontsource-variable/geist": ^5.2.9
@@ -102,7 +102,7 @@ catalogs:
     "@scalar/api-reference-react": ^0.9.45
     class-variance-authority: ^0.7.1
     clsx: ^2.1.1
-    shadcn: ^4.10.0
+    shadcn: ^4.11.0
     tailwind-merge: ^3.6.0
   frontend:
     "@tanstack/db": ^0.6.8
@@ -128,15 +128,15 @@ catalogs:
     "fumadocs-core": ^16.9.3
     "fumadocs-ui": ^16.9.3
     "fumadocs-mdx": ^15.0.11
-    "next": ^16.2.7
+    "next": ^16.2.9
     "tailwindcss": ^4.3.0
   auth:
-    "@better-auth/passkey": ^1.6.14
-    "better-auth": ^1.6.14
+    "@better-auth/passkey": ^1.6.16
+    "better-auth": ^1.6.16
   drizzle:
     drizzle-orm: ^0.45.2
   http:
-    hono: ^4.12.23
+    hono: ^4.12.25
   redact:
     "@visulima/redact": 3.0.0-alpha.13
 
@@ -174,138 +174,42 @@ allowBuilds:
 #   - 'better-auth@1.6.13 || 1.6.14'
 # When bumping a dependency, UPDATE its existing line — do not append a new one.
 minimumReleaseAgeExclude:
-  - '@better-auth/core@1.6.14'
-  - '@better-auth/drizzle-adapter@1.6.14'
-  - '@better-auth/kysely-adapter@1.6.14'
-  - '@better-auth/memory-adapter@1.6.14'
-  - '@better-auth/mongo-adapter@1.6.14'
-  - '@better-auth/prisma-adapter@1.6.14'
-  - '@better-auth/telemetry@1.6.14'
+  - '@better-auth/core@1.6.16'
+  - '@better-auth/drizzle-adapter@1.6.16'
+  - '@better-auth/kysely-adapter@1.6.16'
+  - '@better-auth/memory-adapter@1.6.16'
+  - '@better-auth/mongo-adapter@1.6.16'
+  - '@better-auth/passkey@1.6.16'
+  - '@better-auth/prisma-adapter@1.6.16'
+  - '@better-auth/telemetry@1.6.16'
+  - '@better-fetch/fetch@1.2.2'
   - '@cloudflare/vite-plugin@1.39.2'
   - '@cloudflare/vitest-pool-workers@0.16.12'
-  - '@next/env@16.2.7'
-  - '@next/swc-darwin-arm64@16.2.7'
-  - '@next/swc-darwin-x64@16.2.7'
-  - '@next/swc-linux-arm64-gnu@16.2.7'
-  - '@next/swc-linux-arm64-musl@16.2.7'
-  - '@next/swc-linux-x64-gnu@16.2.7'
-  - '@next/swc-linux-x64-musl@16.2.7'
-  - '@next/swc-win32-arm64-msvc@16.2.7'
-  - '@next/swc-win32-x64-msvc@16.2.7'
-  - '@tanstack/eslint-plugin-query@5.101.0'
-  - '@tanstack/query-core@5.101.0'
-  - '@tanstack/react-query@5.101.0'
-  - '@tanstack/react-virtual@3.14.2'
-  - '@tanstack/virtual-core@3.17.0'
-  - '@types/react@19.2.16'
-  - better-auth@1.6.14
-  - eslint-plugin-react-you-might-not-need-an-effect@1.0.0
-  - miniflare@4.20260601.0
-  - next@16.2.7
-  - react@19.2.7
-  - react-dom@19.2.7
-  - tsx@4.22.4
-  - vite@8.0.16
-  - wrangler@4.97.0
-  - '@cloudflare/workers-types@4.20260605.1 || 4.20260607.1'
-  - '@eslint-react/ast@5.8.12 || 5.8.13'
-  - '@eslint-react/core@5.8.12 || 5.8.13'
-  - '@eslint-react/eslint-plugin@5.8.12 || 5.8.13'
-  - '@eslint-react/eslint@5.8.12 || 5.8.13'
-  - '@eslint-react/jsx@5.8.12 || 5.8.13'
-  - '@eslint-react/shared@5.8.12 || 5.8.13'
-  - '@eslint-react/var@5.8.12 || 5.8.13'
-  - 'eslint-plugin-react-dom@5.8.12 || 5.8.13'
-  - 'eslint-plugin-react-jsx@5.8.12 || 5.8.13'
-  - 'eslint-plugin-react-naming-convention@5.8.12 || 5.8.13'
-  - 'eslint-plugin-react-rsc@5.8.12 || 5.8.13'
-  - 'eslint-plugin-react-web-api@5.8.12 || 5.8.13'
-  - 'eslint-plugin-react-x@5.8.12 || 5.8.13'
-  - '@visulima/packem@2.0.0-alpha.87'
-  - '@visulima/tabular@4.0.0-alpha.13'
-  - '@visulima/vis@1.0.0-alpha.34'
-  - '@visulima/vis-binding-darwin-arm64@1.0.0-alpha.34'
-  - '@visulima/vis-binding-darwin-x64@1.0.0-alpha.34'
-  - '@visulima/vis-binding-linux-arm64-gnu@1.0.0-alpha.34'
-  - '@visulima/vis-binding-linux-arm64-musl@1.0.0-alpha.34'
-  - '@visulima/vis-binding-linux-x64-gnu@1.0.0-alpha.34'
-  - '@visulima/vis-binding-linux-x64-musl@1.0.0-alpha.34'
-  - '@visulima/vis-binding-win32-arm64-msvc@1.0.0-alpha.34'
-  - '@visulima/vis-binding-win32-x64-msvc@1.0.0-alpha.34'
-  - '@visulima/email@1.0.0-alpha.35'
-  - '@visulima/ansi@4.0.0-alpha.16'
-  - '@visulima/colorize@2.0.0-alpha.13'
-  - '@visulima/css-style-inject@1.0.0-alpha.17'
-  - '@visulima/disposable-email-domains@1.0.0-alpha.16'
-  - '@visulima/error@6.0.0-alpha.32'
-  - '@visulima/humanizer@3.0.0-alpha.13'
-  - '@visulima/interactive-manager@1.0.0-alpha.4'
-  - '@visulima/is-ansi-color-supported@3.0.0-alpha.12'
-  - '@visulima/packem-rollup@1.0.0-alpha.72'
-  - '@visulima/packem-share@1.0.0-alpha.49'
-  - '@visulima/path@3.0.0-alpha.12'
-  - '@visulima/rollup-plugin-css@1.0.0-alpha.52'
-  - '@visulima/rollup-plugin-dts@1.0.0-alpha.33'
-  - '@visulima/secret-scanner-binding-darwin-arm64@1.0.0-alpha.5'
-  - '@visulima/secret-scanner-binding-darwin-x64@1.0.0-alpha.5'
-  - '@visulima/secret-scanner-binding-linux-arm64-gnu@1.0.0-alpha.5'
-  - '@visulima/secret-scanner-binding-linux-arm64-musl@1.0.0-alpha.5'
-  - '@visulima/secret-scanner-binding-linux-x64-gnu@1.0.0-alpha.5'
-  - '@visulima/secret-scanner-binding-linux-x64-musl@1.0.0-alpha.5'
-  - '@visulima/secret-scanner-binding-win32-arm64-msvc@1.0.0-alpha.5'
-  - '@visulima/secret-scanner-binding-win32-x64-msvc@1.0.0-alpha.5'
-  - '@visulima/secret-scanner@1.0.0-alpha.5'
-  - '@visulima/spinner@1.0.0-alpha.3'
-  - '@visulima/string@3.0.0-alpha.16'
-  - '@visulima/task-runner-binding-darwin-arm64@1.0.0-alpha.21'
-  - '@visulima/task-runner-binding-darwin-x64@1.0.0-alpha.21'
-  - '@visulima/task-runner-binding-linux-arm64-gnu@1.0.0-alpha.21'
-  - '@visulima/task-runner-binding-linux-arm64-musl@1.0.0-alpha.21'
-  - '@visulima/task-runner-binding-linux-x64-gnu@1.0.0-alpha.21'
-  - '@visulima/task-runner-binding-linux-x64-musl@1.0.0-alpha.21'
-  - '@visulima/task-runner-binding-win32-arm64-msvc@1.0.0-alpha.21'
-  - '@visulima/task-runner-binding-win32-x64-msvc@1.0.0-alpha.21'
-  - '@visulima/task-runner@1.0.0-alpha.21'
-  - '@visulima/tui-binding-darwin-arm64@1.0.0-alpha.23'
-  - '@visulima/tui-binding-darwin-x64@1.0.0-alpha.23'
-  - '@visulima/tui-binding-linux-arm64-gnu@1.0.0-alpha.23'
-  - '@visulima/tui-binding-linux-arm64-musl@1.0.0-alpha.23'
-  - '@visulima/tui-binding-linux-x64-gnu@1.0.0-alpha.23'
-  - '@visulima/tui-binding-linux-x64-musl@1.0.0-alpha.23'
-  - '@visulima/tui-binding-win32-arm64-msvc@1.0.0-alpha.23'
-  - '@visulima/tui-binding-win32-x64-msvc@1.0.0-alpha.23'
-  - '@visulima/tui@1.0.0-alpha.23'
-  - '@visulima/vis-binding-darwin-arm64@1.0.0-alpha.34'
-  - '@visulima/vis-binding-darwin-x64@1.0.0-alpha.34'
-  - '@visulima/vis-binding-linux-arm64-gnu@1.0.0-alpha.34'
-  - '@visulima/vis-binding-linux-arm64-musl@1.0.0-alpha.34'
-  - '@visulima/vis-binding-linux-x64-gnu@1.0.0-alpha.34'
-  - '@visulima/vis-binding-linux-x64-musl@1.0.0-alpha.34'
-  - '@visulima/vis-binding-win32-arm64-msvc@1.0.0-alpha.34'
-  - '@visulima/vis-binding-win32-x64-msvc@1.0.0-alpha.34'
-  - '@visulima/vis@1.0.0-alpha.34'
-  - '@cloudflare/workers-types@4.20260605.1'
-  - '@eslint-react/ast@5.8.12'
-  - '@eslint-react/core@5.8.12'
-  - '@eslint-react/eslint-plugin@5.8.12'
-  - '@eslint-react/eslint@5.8.12'
-  - '@eslint-react/jsx@5.8.12'
-  - '@eslint-react/shared@5.8.12'
-  - '@eslint-react/var@5.8.12'
-  - eslint-plugin-react-dom@5.8.12
-  - eslint-plugin-react-jsx@5.8.12
-  - eslint-plugin-react-naming-convention@5.8.12
-  - eslint-plugin-react-rsc@5.8.12
-  - eslint-plugin-react-web-api@5.8.12
-  - eslint-plugin-react-x@5.8.12
-  - fumadocs-mdx@15.0.11
-  - 'oxlint-plugin-react-doctor@0.4.0 || 0.4.2'
-  - 'react-doctor@0.4.0 || 0.4.2'
-  - deslop-js@0.0.21
+  - '@cloudflare/workers-types@4.20260610.1'
+  - '@eslint-react/ast@5.8.17'
+  - '@eslint-react/core@5.8.17'
+  - '@eslint-react/eslint@5.8.17'
+  - '@eslint-react/eslint-plugin@5.8.17'
+  - '@eslint-react/jsx@5.8.17'
+  - '@eslint-react/shared@5.8.17'
+  - '@eslint-react/var@5.8.17'
+  - '@lingui/babel-plugin-lingui-macro@6.3.0'
+  - '@lingui/conf@6.3.0'
+  - '@lingui/core@6.3.0'
+  - '@lingui/message-utils@6.3.0'
+  - '@next/env@16.2.9'
+  - '@next/swc-darwin-arm64@16.2.9'
+  - '@next/swc-darwin-x64@16.2.9'
+  - '@next/swc-linux-arm64-gnu@16.2.9'
+  - '@next/swc-linux-arm64-musl@16.2.9'
+  - '@next/swc-linux-x64-gnu@16.2.9'
+  - '@next/swc-linux-x64-musl@16.2.9'
+  - '@next/swc-win32-arm64-msvc@16.2.9'
+  - '@next/swc-win32-x64-msvc@16.2.9'
   - '@scalar/agent-chat@0.12.9'
   - '@scalar/api-client@3.10.2'
-  - '@scalar/api-reference-react@0.9.45'
   - '@scalar/api-reference@1.59.2'
+  - '@scalar/api-reference-react@0.9.45'
   - '@scalar/code-highlight@0.3.5'
   - '@scalar/components@0.27.1'
   - '@scalar/helpers@0.8.2'
@@ -316,3 +220,82 @@ minimumReleaseAgeExclude:
   - '@scalar/snippetz@0.9.15'
   - '@scalar/types@0.13.2'
   - '@scalar/workspace-store@0.54.2'
+  - '@tanstack/eslint-plugin-query@5.101.0'
+  - '@tanstack/query-core@5.101.0'
+  - '@tanstack/react-query@5.101.0'
+  - '@tanstack/react-virtual@3.14.2'
+  - '@tanstack/virtual-core@3.17.0'
+  - '@types/react@19.2.16'
+  - '@visulima/ansi@4.0.0-alpha.16'
+  - '@visulima/colorize@2.0.0-alpha.13'
+  - '@visulima/css-style-inject@1.0.0-alpha.17'
+  - '@visulima/disposable-email-domains@1.0.0-alpha.16'
+  - '@visulima/email@1.0.0-alpha.35'
+  - '@visulima/error@6.0.0-alpha.32'
+  - '@visulima/humanizer@3.0.0-alpha.13'
+  - '@visulima/interactive-manager@1.0.0-alpha.4'
+  - '@visulima/is-ansi-color-supported@3.0.0-alpha.12'
+  - '@visulima/packem@2.0.0-alpha.87'
+  - '@visulima/packem-rollup@1.0.0-alpha.72'
+  - '@visulima/packem-share@1.0.0-alpha.49'
+  - '@visulima/path@3.0.0-alpha.12'
+  - '@visulima/rollup-plugin-css@1.0.0-alpha.52'
+  - '@visulima/rollup-plugin-dts@1.0.0-alpha.33'
+  - '@visulima/secret-scanner@1.0.0-alpha.5'
+  - '@visulima/secret-scanner-binding-darwin-arm64@1.0.0-alpha.5'
+  - '@visulima/secret-scanner-binding-darwin-x64@1.0.0-alpha.5'
+  - '@visulima/secret-scanner-binding-linux-arm64-gnu@1.0.0-alpha.5'
+  - '@visulima/secret-scanner-binding-linux-arm64-musl@1.0.0-alpha.5'
+  - '@visulima/secret-scanner-binding-linux-x64-gnu@1.0.0-alpha.5'
+  - '@visulima/secret-scanner-binding-linux-x64-musl@1.0.0-alpha.5'
+  - '@visulima/secret-scanner-binding-win32-arm64-msvc@1.0.0-alpha.5'
+  - '@visulima/secret-scanner-binding-win32-x64-msvc@1.0.0-alpha.5'
+  - '@visulima/spinner@1.0.0-alpha.3'
+  - '@visulima/string@3.0.0-alpha.16'
+  - '@visulima/tabular@4.0.0-alpha.13'
+  - '@visulima/task-runner@1.0.0-alpha.21'
+  - '@visulima/task-runner-binding-darwin-arm64@1.0.0-alpha.21'
+  - '@visulima/task-runner-binding-darwin-x64@1.0.0-alpha.21'
+  - '@visulima/task-runner-binding-linux-arm64-gnu@1.0.0-alpha.21'
+  - '@visulima/task-runner-binding-linux-arm64-musl@1.0.0-alpha.21'
+  - '@visulima/task-runner-binding-linux-x64-gnu@1.0.0-alpha.21'
+  - '@visulima/task-runner-binding-linux-x64-musl@1.0.0-alpha.21'
+  - '@visulima/task-runner-binding-win32-arm64-msvc@1.0.0-alpha.21'
+  - '@visulima/task-runner-binding-win32-x64-msvc@1.0.0-alpha.21'
+  - '@visulima/tui@1.0.0-alpha.23'
+  - '@visulima/tui-binding-darwin-arm64@1.0.0-alpha.23'
+  - '@visulima/tui-binding-darwin-x64@1.0.0-alpha.23'
+  - '@visulima/tui-binding-linux-arm64-gnu@1.0.0-alpha.23'
+  - '@visulima/tui-binding-linux-arm64-musl@1.0.0-alpha.23'
+  - '@visulima/tui-binding-linux-x64-gnu@1.0.0-alpha.23'
+  - '@visulima/tui-binding-linux-x64-musl@1.0.0-alpha.23'
+  - '@visulima/tui-binding-win32-arm64-msvc@1.0.0-alpha.23'
+  - '@visulima/tui-binding-win32-x64-msvc@1.0.0-alpha.23'
+  - '@visulima/vis@1.0.0-alpha.34'
+  - '@visulima/vis-binding-darwin-arm64@1.0.0-alpha.34'
+  - '@visulima/vis-binding-darwin-x64@1.0.0-alpha.34'
+  - '@visulima/vis-binding-linux-arm64-gnu@1.0.0-alpha.34'
+  - '@visulima/vis-binding-linux-arm64-musl@1.0.0-alpha.34'
+  - '@visulima/vis-binding-linux-x64-gnu@1.0.0-alpha.34'
+  - '@visulima/vis-binding-linux-x64-musl@1.0.0-alpha.34'
+  - '@visulima/vis-binding-win32-arm64-msvc@1.0.0-alpha.34'
+  - '@visulima/vis-binding-win32-x64-msvc@1.0.0-alpha.34'
+  - 'better-auth@1.6.16'
+  - 'deslop-js@0.0.21'
+  - 'eslint-plugin-react-dom@5.8.17'
+  - 'eslint-plugin-react-jsx@5.8.17'
+  - 'eslint-plugin-react-naming-convention@5.8.17'
+  - 'eslint-plugin-react-rsc@5.8.17'
+  - 'eslint-plugin-react-web-api@5.8.17'
+  - 'eslint-plugin-react-x@5.8.17'
+  - 'eslint-plugin-react-you-might-not-need-an-effect@1.0.0'
+  - 'fumadocs-mdx@15.0.11'
+  - 'miniflare@4.20260601.0'
+  - 'next@16.2.9'
+  - 'oxlint-plugin-react-doctor@0.5.1'
+  - 'react@19.2.7'
+  - 'react-doctor@0.5.1'
+  - 'react-dom@19.2.7'
+  - 'tsx@4.22.4'
+  - 'vite@8.0.16'
+  - 'wrangler@4.97.0'
