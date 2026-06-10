@@ -1,5 +1,7 @@
 export type { ValidationPath } from "./errors";
 export { describeValue, formatPath, ValidationError } from "./errors";
+export type { JsonSchema } from "./to-json-schema";
+export { argsToJsonSchema, toJsonSchema } from "./to-json-schema";
 export type {
     Column,
     ColumnMeta,
