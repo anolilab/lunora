@@ -13,6 +13,13 @@ export type CloudflarePluginOptions = Record<string, unknown>;
 export type OverlayPluginOptions = NonNullable<Parameters<typeof errorOverlayPlugin>[0]>;
 
 export interface CirrusPluginOptions {
+    /**
+     * Which machine-readable API spec(s) codegen emits into `_generated/`.
+     * `"openapi"` (default) writes `openapi.json` (OpenAPI 3.1; RPC + REST),
+     * `"openrpc"` writes `openrpc.json` (OpenRPC 1.x; RPC-only), `"both"` writes
+     * both, and `"none"` writes neither. Forwarded to `runCodegen({ apiSpec })`.
+     */
+    apiSpec?: "both" | "none" | "openapi" | "openrpc";
     /** Pass through to `@cloudflare/vite-plugin`. Pass `false` to opt out. Defaults to `true`. */
     cloudflare?: boolean | CloudflarePluginOptions;
     /** Directory name (relative to `projectRoot`) where generated files are written. Defaults to `"cirrus/_generated"`. */
@@ -36,6 +43,7 @@ export interface CirrusPluginOptions {
 
 /** Resolved options after merging defaults. */
 export interface ResolvedCirrusPluginOptions {
+    apiSpec: "both" | "none" | "openapi" | "openrpc";
     cloudflare: false | CloudflarePluginOptions;
     generatedDir: string;
     overlay: false | OverlayPluginOptions;

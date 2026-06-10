@@ -51,6 +51,7 @@ const VALID_WRANGLER = `{
 
 const makeOptions = (projectRoot: string): ResolvedCirrusPluginOptions => {
     return {
+        apiSpec: "openapi",
         cloudflare: false,
         studio: false,
         generatedDir: "cirrus/_generated",

@@ -3,6 +3,7 @@ import { spawn as nodeSpawn } from "node:child_process";
 
 import { createConfirm, ensureDevVariables } from "@cirrus/config";
 
+import type { ApiSpec } from "../util/api-spec";
 import type { CodegenWatcherHandle } from "../util/codegen-watch";
 import { startCodegenWatch } from "../util/codegen-watch";
 import { detectPackageManager, execArgsFor } from "../util/detect-package-manager";
@@ -29,6 +30,8 @@ interface WorkerProcess {
 type WorkerSpawner = (descriptor: SpawnDescriptor & { tag: string }, logger: Logger) => WorkerProcess;
 
 interface DevCommandOptions {
+    /** Which API spec(s) the codegen watcher emits. Defaults to codegen's `"openapi"` when omitted. */
+    apiSpec?: ApiSpec;
     /** Disable the codegen watch loop. */
     codegen?: boolean;
     cwd?: string;
@@ -199,7 +202,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
     logger.info("starting wrangler dev + studio");
 
     if (plan.codegenEnabled) {
-        handles.codegen = (options.startCodegen ?? startCodegenWatch)({ logger, projectRoot: cwd });
+        handles.codegen = (options.startCodegen ?? startCodegenWatch)({ apiSpec: options.apiSpec, logger, projectRoot: cwd });
     }
 
     let studioUrl: string | undefined;

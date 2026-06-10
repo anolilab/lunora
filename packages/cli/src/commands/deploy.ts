@@ -2,6 +2,7 @@ import { runCodegen } from "@cirrus/codegen";
 import { findWranglerFile, inferCirrusBindings, readWranglerJsonc, reconcileWranglerBindings } from "@cirrus/config";
 import { Spinner } from "@visulima/pail/spinner";
 
+import type { ApiSpec } from "../util/api-spec";
 import type { Logger } from "../util/logger";
 import type { SpawnDescriptor, Spawner } from "../util/spawn";
 import { defaultSpawner } from "../util/spawn";
@@ -14,6 +15,8 @@ import type { FetchLike } from "./run";
 const D1_PLACEHOLDER_ID = "<replace-with-d1-create-id>";
 
 interface DeployCommandOptions {
+    /** Which API spec(s) codegen emits. Defaults to codegen's `"openapi"` when omitted. */
+    apiSpec?: ApiSpec;
     cwd?: string;
     env?: string;
     /** Fetch implementation injected in tests for `--migrate` RPC calls. */
@@ -193,7 +196,7 @@ const runPostDeployMigrations = async (options: DeployCommandOptions, cwd: strin
 };
 
 /** Run codegen (with optional spinner), returning an error message or `undefined` on success. */
-const runCodegenStep = (cwd: string, interactive: boolean, logger: Logger): string | undefined => {
+const runCodegenStep = (cwd: string, interactive: boolean, logger: Logger, apiSpec: ApiSpec | undefined): string | undefined => {
     let codegenSpinner: Spinner | undefined;
 
     if (interactive) {
@@ -204,7 +207,7 @@ const runCodegenStep = (cwd: string, interactive: boolean, logger: Logger): stri
     }
 
     try {
-        runCodegen({ projectRoot: cwd });
+        runCodegen({ apiSpec, projectRoot: cwd });
         codegenSpinner?.succeed("codegen complete");
 
         if (!codegenSpinner) {
@@ -251,7 +254,7 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
     const interactive = isInteractive(options);
 
     if (!options.skipCodegen) {
-        const codegenError = runCodegenStep(cwd, interactive, options.logger);
+        const codegenError = runCodegenStep(cwd, interactive, options.logger, options.apiSpec);
 
         if (codegenError !== undefined) {
             return {

@@ -7,10 +7,13 @@
 import { runCodegen } from "@cirrus/codegen";
 import { inferCirrusBindings, reconcileWranglerBindings } from "@cirrus/config";
 
+import type { ApiSpec } from "../util/api-spec";
 import type { Logger } from "../util/logger";
 import { validateWrangler } from "../util/wrangler-validator";
 
 interface PrepareCommandOptions {
+    /** Which API spec(s) to emit. Defaults to codegen's `"openapi"` when omitted. */
+    apiSpec?: ApiSpec;
     cwd?: string;
     logger: Logger;
 }
@@ -62,7 +65,7 @@ const runPrepareCommand = async (options: PrepareCommandOptions): Promise<Prepar
     options.logger.info("running codegen");
 
     try {
-        runCodegen({ projectRoot: cwd });
+        runCodegen({ apiSpec: options.apiSpec, projectRoot: cwd });
         options.logger.success("codegen complete");
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);

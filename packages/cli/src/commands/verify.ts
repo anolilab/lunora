@@ -3,12 +3,15 @@ import { join } from "node:path";
 
 import { runCodegen } from "@cirrus/codegen";
 
+import type { ApiSpec } from "../util/api-spec";
 import type { Logger } from "../util/logger";
 import type { Spawner } from "../util/spawn";
 import { defaultSpawner } from "../util/spawn";
 import { validateWrangler } from "../util/wrangler-validator";
 
 interface VerifyCommandOptions {
+    /** Which API spec(s) codegen would emit. Defaults to codegen's `"openapi"` when omitted. */
+    apiSpec?: ApiSpec;
     cwd?: string;
     logger: Logger;
     /** Injectable subprocess runner for the tsc step; defaults to the real spawner. */
@@ -85,7 +88,7 @@ const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCo
     const warnings: string[] = [...validation.report.warnings];
 
     try {
-        runCodegen({ dryRun: true, projectRoot: cwd });
+        runCodegen({ apiSpec: options.apiSpec, dryRun: true, projectRoot: cwd });
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
 

@@ -56,6 +56,28 @@ describe("cirrus codegen", () => {
             expect(existsSync(join(generated, "server.ts"))).toBe(true);
         });
 
+        it("defaults to openapi: writes openapi.json, not openrpc.json", () => {
+            expect.assertions(2);
+
+            runCodegenCommand({ cwd: workdir, logger: silentLogger() });
+
+            const generated = join(workdir, "cirrus", "_generated");
+
+            expect(existsSync(join(generated, "openapi.json"))).toBe(true);
+            expect(existsSync(join(generated, "openrpc.json"))).toBe(false);
+        });
+
+        it('apiSpec:"both" writes both spec files', () => {
+            expect.assertions(2);
+
+            runCodegenCommand({ apiSpec: "both", cwd: workdir, logger: silentLogger() });
+
+            const generated = join(workdir, "cirrus", "_generated");
+
+            expect(existsSync(join(generated, "openapi.json"))).toBe(true);
+            expect(existsSync(join(generated, "openrpc.json"))).toBe(true);
+        });
+
         it("logs success once codegen completes", () => {
             expect.assertions(2);
 

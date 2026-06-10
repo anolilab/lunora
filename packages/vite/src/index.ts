@@ -36,6 +36,7 @@ const resolveOptions = (options: CirrusPluginOptions | undefined): ResolvedCirru
     }
 
     return {
+        apiSpec: input.apiSpec ?? "openapi",
         cloudflare: cloudflareOption,
         studio: input.studio ?? true,
         generatedDir: input.generatedDir ?? `${schemaDirectory}/_generated`,

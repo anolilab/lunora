@@ -8,6 +8,7 @@ import type { FSWatcher } from "node:fs";
 import { watch } from "node:fs";
 import { join } from "node:path";
 
+import type { CodegenOptions } from "@cirrus/codegen";
 import { runCodegen } from "@cirrus/codegen";
 
 import type { Logger } from "./logger";
@@ -18,9 +19,9 @@ const DEFAULT_DEBOUNCE_MS = 100;
 const PATH_SEGMENT_SEPARATOR = /[/\\]/u;
 
 /** Run codegen once, logging success or surfacing a parse/emit error without throwing. */
-const runOnce = (projectRoot: string, cirrusDirectory: string, logger: Logger, reason: string): void => {
+const runOnce = (projectRoot: string, cirrusDirectory: string, apiSpec: CodegenOptions["apiSpec"], logger: Logger, reason: string): void => {
     try {
-        runCodegen({ cirrusDirectory, projectRoot });
+        runCodegen({ apiSpec, cirrusDirectory, projectRoot });
 
         logger.success(`codegen: wrote ${cirrusDirectory}/_generated (${reason})`);
     } catch (error: unknown) {
@@ -38,8 +39,9 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
     const cirrusDirectory = options.cirrusDirectory ?? "cirrus";
     const watchDirectory = join(options.projectRoot, cirrusDirectory);
     const debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
+    const { apiSpec } = options;
 
-    runOnce(options.projectRoot, cirrusDirectory, options.logger, "startup");
+    runOnce(options.projectRoot, cirrusDirectory, apiSpec, options.logger, "startup");
 
     let timer: NodeJS.Timeout | undefined;
     let watcher: FSWatcher | undefined;
@@ -55,7 +57,7 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
                 clearTimeout(timer);
             }
 
-            timer = setTimeout(runOnce, debounceMs, options.projectRoot, cirrusDirectory, options.logger, `change: ${filename ?? "?"}`);
+            timer = setTimeout(runOnce, debounceMs, options.projectRoot, cirrusDirectory, apiSpec, options.logger, `change: ${filename ?? "?"}`);
         });
     } catch (error: unknown) {
         options.logger.warn(
@@ -75,6 +77,8 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
 };
 
 export interface CodegenWatcherOptions {
+    /** Which API spec(s) to emit. Defaults to codegen's `"openapi"` when omitted. */
+    apiSpec?: CodegenOptions["apiSpec"];
     /** Override the cirrus subdirectory name. Defaults to `"cirrus"`. */
     cirrusDirectory?: string;
     /** Debounce window for coalescing rapid edits. Defaults to 100ms. */

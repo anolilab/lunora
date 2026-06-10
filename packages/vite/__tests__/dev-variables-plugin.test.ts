@@ -10,6 +10,7 @@ import { cirrus } from "../src/index";
 
 const RESOLVED = (projectRoot: string) => {
     return {
+        apiSpec: "openapi" as const,
         cloudflare: {} as never,
         generatedDir: "cirrus/_generated",
         overlay: false as const,

@@ -11,6 +11,7 @@ import { bold, cyan, dim } from "@visulima/colorize";
 import type { BackupSubcommand } from "./commands/backup";
 import type { EnvSubcommand } from "./commands/env";
 import type { Template } from "./commands/init";
+import { API_SPEC_HELP, parseApiSpec } from "./util/api-spec";
 import { createLogger } from "./util/logger";
 
 const COMMANDS = [
@@ -349,6 +350,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
         execute: async ({ options: parsed }) => {
             const { runDevCommand } = await import("./commands/dev");
             const result = await runDevCommand({
+                apiSpec: parseApiSpec(parsed.apiSpec),
                 codegen: parsed.noCodegen === true ? false : undefined,
                 cwd,
                 studio: parsed.noStudio === true ? false : undefined,
@@ -361,6 +363,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
         },
         name: "dev",
         options: [
+            { description: `Which API spec(s) codegen emits: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
             { description: "Studio server port (default 6173)", name: "port", type: Number },
             { description: "wrangler dev port (default 8787)", name: "worker-port", type: Number },
             { description: "Don't start the embedded studio server", name: "no-studio", type: Boolean },
@@ -370,11 +373,11 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
 
     cli.addCommand({
         description: "Run codegen for cirrus/ functions and schema",
-        execute: async () => {
+        execute: async ({ options: parsed }) => {
             try {
                 const { runCodegenCommand } = await import("./commands/codegen");
 
-                runCodegenCommand({ cwd, logger });
+                runCodegenCommand({ apiSpec: parseApiSpec(parsed.apiSpec), cwd, logger });
                 exitCode.value = 0;
             } catch (error: unknown) {
                 logger.error(error instanceof Error ? error.message : String(error));
@@ -382,6 +385,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
             }
         },
         name: "codegen",
+        options: [{ description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String }],
     });
 
     cli.addCommand({
@@ -389,6 +393,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
         execute: async ({ options: parsed }) => {
             const { runDeployCommand } = await import("./commands/deploy");
             const result = await runDeployCommand({
+                apiSpec: parseApiSpec(parsed.apiSpec),
                 cwd,
                 env: toStringOrUndefined(parsed.env),
                 logger,
@@ -401,6 +406,7 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
         },
         name: "deploy",
         options: [
+            { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
             { description: "Cloudflare environment name", name: "env", type: String },
             { description: "After a successful deploy, run pending data migrations against the live worker", name: "migrate", type: Boolean },
             { description: "Admin bearer token for --migrate (falls back to CIRRUS_ADMIN_TOKEN)", name: "migrate-token", type: String },
@@ -410,13 +416,14 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
 
     cli.addCommand({
         description: "Run codegen + binding reconcile + wrangler validation (no Vite) — for CI",
-        execute: async () => {
+        execute: async ({ options: parsed }) => {
             const { runPrepareCommand } = await import("./commands/prepare");
-            const result = await runPrepareCommand({ cwd, logger });
+            const result = await runPrepareCommand({ apiSpec: parseApiSpec(parsed.apiSpec), cwd, logger });
 
             exitCode.value = result.code;
         },
         name: "prepare",
+        options: [{ description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String }],
     });
 
     cli.addCommand({
@@ -722,12 +729,20 @@ const buildCli = (options: RunCliOptions): BuildCliResult => {
         description: "Validate wrangler.jsonc + codegen dry-run + tsc --noEmit (no files written)",
         execute: async ({ options: parsed }) => {
             const { runVerifyCommand } = await import("./commands/verify");
-            const result = await runVerifyCommand({ cwd, logger, typecheck: parsed.noTypecheck === true ? false : undefined });
+            const result = await runVerifyCommand({
+                apiSpec: parseApiSpec(parsed.apiSpec),
+                cwd,
+                logger,
+                typecheck: parsed.noTypecheck === true ? false : undefined,
+            });
 
             exitCode.value = result.code;
         },
         name: "verify",
-        options: [{ description: "Skip the TypeScript type-check step", name: "no-typecheck", type: Boolean }],
+        options: [
+            { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
+            { description: "Skip the TypeScript type-check step", name: "no-typecheck", type: Boolean },
+        ],
     });
 
     cli.addCommand({

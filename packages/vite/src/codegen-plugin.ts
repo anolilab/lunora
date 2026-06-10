@@ -45,7 +45,7 @@ const reconcileBindingsSafely = async (
  * path), or `undefined` when codegen was skipped or failed.
  */
 const runCodegenSafely = (
-    options: Pick<ResolvedCirrusPluginOptions, "projectRoot" | "schemaDir">,
+    options: Pick<ResolvedCirrusPluginOptions, "apiSpec" | "projectRoot" | "schemaDir">,
     logger: { error: (message: string) => void; info?: (message: string) => void; warn: (message: string) => void },
 ): string | undefined => {
     const schemaPath = join(options.projectRoot, options.schemaDir, "schema.ts");
@@ -57,7 +57,7 @@ const runCodegenSafely = (
     }
 
     try {
-        const result = runCodegen({ cirrusDirectory: options.schemaDir, projectRoot: options.projectRoot });
+        const result = runCodegen({ apiSpec: options.apiSpec, cirrusDirectory: options.schemaDir, projectRoot: options.projectRoot });
 
         // Reconcile code-first cron definitions into wrangler.jsonc so the user
         // never hand-edits `triggers.crons`. Best-effort: a wrangler problem
