@@ -1,6 +1,6 @@
 import type { CirrusClient } from "@cirrus/react";
 import type { Collection, Transaction } from "@tanstack/db";
-import { createCollection } from "@tanstack/db";
+import { BTreeIndex, createCollection } from "@tanstack/db";
 import type { OfflineExecutor, OnlineDetector } from "@tanstack/offline-transactions";
 import { NonRetriableError, startOfflineExecutor } from "@tanstack/offline-transactions";
 
@@ -27,7 +27,10 @@ export type UserRow = Pick<Doc<"users">, "_id" | "name">;
  *     client-generated id).
  */
 export interface MessagesStore {
+    channelsCollection: Collection<Doc<"channels">, string>;
     collection: Collection<Doc<"messages">, string>;
+    /** Optimistically create a channel through the durable outbox. */
+    createChannel: (input: { createdBy: Id<"users">; name: string }) => { id: Id<"channels">; transaction: Transaction };
     executor: OfflineExecutor;
     /** Optimistically send a message; returns the client id + its transaction. */
     send: (input: { channelId: Id<"channels">; text: string; userId: Id<"users"> }) => { id: Id<"messages">; transaction: Transaction };
@@ -112,6 +115,24 @@ const createOptimisticOnlineDetector = (): OnlineDetector => {
     };
 };
 
+/**
+ * Run a Cirrus mutation under the outbox's retry policy: a network failure
+ * (`TypeError`) stays retryable so the outbox replays it with backoff once the
+ * browser is back online; a server rejection becomes a `NonRetriableError` so the
+ * executor stops and TanStack DB rolls the optimistic insert back.
+ */
+const runOutboxMutation = async (mutate: () => Promise<unknown>): Promise<void> => {
+    try {
+        await mutate();
+    } catch (error) {
+        if (error instanceof TypeError) {
+            throw error;
+        }
+
+        throw new NonRetriableError(error instanceof Error ? error.message : String(error));
+    }
+};
+
 let store: MessagesStore | undefined;
 
 /**
@@ -129,6 +150,11 @@ export const getMessagesStore = (client: CirrusClient): MessagesStore => {
     let unsubscribe: (() => void) | undefined;
 
     const collection = createCollection<Doc<"messages">, string>({
+        // Auto-build ordered (B-tree) indexes for the live query's predicates —
+        // the `userId` join key and the `createdAt` sort — so they stay fast as the
+        // channel's history grows instead of full-scanning every update.
+        autoIndex: "eager",
+        defaultIndexType: BTreeIndex,
         getKey: (message) => message._id,
         id: "messages",
         sync: {
@@ -147,6 +173,9 @@ export const getMessagesStore = (client: CirrusClient): MessagesStore => {
     const usersSynced = new Map<string, UserRow>();
 
     const usersCollection = createCollection<UserRow, string>({
+        // Index the join key (`_id`) so the `messages ⨝ users` lookup is O(log n).
+        autoIndex: "eager",
+        defaultIndexType: BTreeIndex,
         getKey: (user) => user._id,
         id: "users",
         sync: {
@@ -164,34 +193,54 @@ export const getMessagesStore = (client: CirrusClient): MessagesStore => {
         },
     });
 
+    // --- channels: mirrored from D1 (static, app-wide) -------------------------
+    const channelsSynced = new Map<string, Doc<"channels">>();
+
+    const channelsCollection = createCollection<Doc<"channels">, string>({
+        autoIndex: "eager",
+        defaultIndexType: BTreeIndex,
+        getKey: (channel) => channel._id,
+        id: "channels",
+        sync: {
+            sync: (writer) => {
+                const channelsEmit = makeDiffEmit(channelsSynced, writer);
+                const unsub = client.subscribe(api.channels.list, {}, (rows) => {
+                    channelsEmit(new Map(rows.map((channel) => [channel._id, channel])));
+                    writer.markReady();
+                });
+
+                return () => {
+                    unsub();
+                };
+            },
+        },
+    });
+
     // --- writes: durable, retried outbox ---------------------------------------
     const executor = startOfflineExecutor({
-        collections: { messages: collection },
+        collections: { channels: channelsCollection, messages: collection },
         onlineDetector: createOptimisticOnlineDetector(),
         mutationFns: {
-            // Runs for every queued send. A network failure (offline) is transient,
-            // so it stays retryable and the outbox replays it with backoff once the
-            // browser is back online. A server rejection is a verdict — rethrow it
-            // as `NonRetriableError` so the executor stops and TanStack DB rolls the
-            // optimistic insert back instead of looping forever.
+            createChannel: async ({ transaction }) => {
+                for (const mutation of transaction.mutations) {
+                    const document = mutation.modified as unknown as Doc<"channels">;
+
+                    // eslint-disable-next-line no-await-in-loop -- sequential keeps the outbox's FIFO ordering
+                    await runOutboxMutation(() => client.mutation(api.channels.create, { id: document._id, name: document.name }));
+                }
+            },
             sendMessage: async ({ transaction }) => {
                 for (const mutation of transaction.mutations) {
                     const document = mutation.modified as unknown as Doc<"messages">;
 
-                    try {
-                        // eslint-disable-next-line no-await-in-loop -- sequential keeps the outbox's FIFO ordering
-                        await client.mutation(api.messages.send, {
+                    // eslint-disable-next-line no-await-in-loop -- sequential keeps the outbox's FIFO ordering
+                    await runOutboxMutation(() =>
+                        client.mutation(api.messages.send, {
                             channelId: document.channelId,
                             id: document._id,
                             text: document.text,
-                        });
-                    } catch (error) {
-                        if (error instanceof TypeError) {
-                            throw error;
-                        }
-
-                        throw new NonRetriableError(error instanceof Error ? error.message : String(error));
-                    }
+                        }),
+                    );
                 }
             },
         },
@@ -207,6 +256,19 @@ export const getMessagesStore = (client: CirrusClient): MessagesStore => {
                 createdAt: Date.now(),
                 text,
                 userId,
+            });
+        },
+    });
+
+    const createChannelAction = executor.createOfflineAction<{ createdBy: Id<"users">; id: Id<"channels">; name: string }>({
+        mutationFnName: "createChannel",
+        onMutate: ({ createdBy, id, name }) => {
+            channelsCollection.insert({
+                _creationTime: Date.now(),
+                _id: id,
+                createdAt: Date.now(),
+                createdBy,
+                name,
             });
         },
     });
@@ -233,7 +295,15 @@ export const getMessagesStore = (client: CirrusClient): MessagesStore => {
     };
 
     store = {
+        channelsCollection,
         collection,
+        createChannel: ({ createdBy, name }) => {
+            // eslint-disable-next-line n/no-unsupported-features/node-builtins -- browser client code; `crypto.randomUUID` is available in all supported browsers
+            const id = crypto.randomUUID() as Id<"channels">;
+            const transaction = createChannelAction({ createdBy, id, name });
+
+            return { id, transaction };
+        },
         executor,
         send: ({ channelId, text, userId }) => {
             // eslint-disable-next-line n/no-unsupported-features/node-builtins -- browser client code; `crypto.randomUUID` is available in all supported browsers

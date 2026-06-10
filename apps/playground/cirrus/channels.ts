@@ -21,16 +21,23 @@ export const list = query({
 /**
  * Create a new channel. D1 enforces the `by_name` unique index — duplicate
  * names raise a constraint error the runtime translates into a CirrusError.
+ *
+ * Accepts an optional client-generated `id` so the offline outbox can key its
+ * optimistic channel by the same id the persisted row carries.
  */
 export const create = mutation({
-    args: { name: v.string() },
-    handler: async (context, { name }): Promise<Id<"channels">> => {
+    args: { id: v.optional(v.string()), name: v.string() },
+    handler: async (context, { id, name }): Promise<Id<"channels">> => {
         const userId = (context.auth.userId ?? "anonymous") as Id<"users">;
 
-        return context.db.insert("channels", {
-            createdAt: Date.now(),
-            createdBy: userId,
-            name,
-        });
+        return context.db.insert(
+            "channels",
+            {
+                createdAt: Date.now(),
+                createdBy: userId,
+                name,
+            },
+            id ? { clientId: id } : undefined,
+        );
     },
 });

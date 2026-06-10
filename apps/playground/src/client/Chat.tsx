@@ -1,10 +1,9 @@
-import { useAuth, useCirrus, useMutation, useQuery } from "@cirrus/react";
+import { useAuth, useCirrus } from "@cirrus/react";
 import { eq } from "@tanstack/db";
 import { useLiveQuery } from "@tanstack/react-db";
 import type { CSSProperties, ReactElement } from "react";
 import { useEffect, useState } from "react";
 
-import { api } from "../../cirrus/_generated/api.js";
 import type { Id } from "../../cirrus/_generated/dataModel.js";
 import { getMessagesStore } from "./messages-store.js";
 
@@ -47,8 +46,9 @@ export const Chat = (): ReactElement => {
         };
     }, [store]);
 
-    const channels = useQuery(api.channels.list, {});
-    const { mutate: createChannel } = useMutation(api.channels.create);
+    // Channels also run through the data layer: a live collection for reads and
+    // the durable outbox for creation (optimistic, retried, offline-safe).
+    const { data: channels } = useLiveQuery((q) => q.from({ channel: store.channelsCollection }), [store]);
 
     // Point the shared messages collection at the active channel.
     useEffect(() => {
@@ -117,14 +117,14 @@ export const Chat = (): ReactElement => {
                             return;
                         }
 
-                        void createChannel({ name });
+                        store.createChannel({ createdBy: (user?.id ?? "anonymous") as Id<"users">, name });
                     }}
                     type="button"
                 >
                     + New channel
                 </button>
                 <ul>
-                    {(channels ?? []).map((channel) => (
+                    {channels.map((channel) => (
                         <li key={channel._id}>
                             <button
                                 onClick={() => {
