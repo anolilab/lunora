@@ -2,8 +2,9 @@ import type { StorageObject } from "@cirrus/client";
 import type { CSSProperties, ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 
+import type { StorageReference } from "./admin";
 import type { FileItemHandlers } from "./file-item";
-import { FileActions, FileSelect, useFileItem } from "./file-item";
+import { FileActions, FileReferences, FileSelect, useFileItem } from "./file-item";
 import type { TFunction } from "./i18n-context";
 import { fireAndForget, formatBytes } from "./internal";
 
@@ -96,8 +97,12 @@ interface GalleryTileProps {
     readonly handlers: FileItemHandlers;
     readonly object: StorageObject;
     readonly prefix: string;
+    /** Rows that reference this object (via a `v.storage()` column); `undefined` while resolving. */
+    readonly references: ReadonlyArray<StorageReference> | undefined;
     readonly resolveUrl: (key: string) => Promise<string>;
     readonly selected: boolean;
+    /** Whether the schema models storage refs at all — gates the used-by/orphan badge. */
+    readonly showReferences: boolean;
     readonly t: TFunction;
 }
 
@@ -108,7 +113,7 @@ interface GalleryTileProps {
  * {@link FileActions} / {@link FileSelect}, mirroring the list view's file row
  * (only the tile layout differs).
  */
-const GalleryTile = ({ busy, copiedKey, handlers, object, prefix, resolveUrl, selected, t }: GalleryTileProps): ReactElement => {
+const GalleryTile = ({ busy, copiedKey, handlers, object, prefix, references, resolveUrl, selected, showReferences, t }: GalleryTileProps): ReactElement => {
     const { copy, download, name, remove, toggle } = useFileItem(object, prefix, handlers);
 
     return (
@@ -124,6 +129,11 @@ const GalleryTile = ({ busy, copiedKey, handlers, object, prefix, resolveUrl, se
                     {name}
                 </p>
                 <p className="text-[11px] tabular-nums text-muted-foreground">{formatBytes(object.size)}</p>
+                {showReferences && (
+                    <div className="mt-1">
+                        <FileReferences objectKey={object.key} references={references} t={t} />
+                    </div>
+                )}
             </div>
             <div className="flex items-center gap-1">
                 <FileActions
@@ -178,8 +188,12 @@ interface FileGalleryProps {
     readonly handlers: FileItemHandlers;
     readonly onEnterFolder: (name: string) => void;
     readonly prefix: string;
+    /** Rows referencing each object key (via a `v.storage()` column), keyed by key. */
+    readonly references: Readonly<Record<string, ReadonlyArray<StorageReference>>>;
     readonly resolveUrl: (key: string) => Promise<string>;
     readonly selected: ReadonlySet<string>;
+    /** Whether the schema declares any `v.storage()` columns — gates the used-by/orphan badge. */
+    readonly showReferences: boolean;
     /** Tile column width in px — the slider resizes thumbnails live via the grid template. */
     readonly size: number;
     readonly t: TFunction;
@@ -191,7 +205,21 @@ interface FileGalleryProps {
  * the size control re-flows and resizes every thumbnail on the fly (pure CSS — no
  * re-fetch).
  */
-const FileGallery = ({ busy, copiedKey, files, folders, handlers, onEnterFolder, prefix, resolveUrl, selected, size, t }: FileGalleryProps): ReactElement => {
+const FileGallery = ({
+    busy,
+    copiedKey,
+    files,
+    folders,
+    handlers,
+    onEnterFolder,
+    prefix,
+    references,
+    resolveUrl,
+    selected,
+    showReferences,
+    size,
+    t,
+}: FileGalleryProps): ReactElement => {
     // The only dynamic style: the column width tracks the size slider.
     // eslint-disable-next-line react-perf/jsx-no-new-object-as-prop -- column width is intrinsically dynamic (the size slider)
     const gridStyle: CSSProperties = { gridTemplateColumns: `repeat(auto-fill, minmax(${size.toString()}px, 1fr))` };
@@ -209,8 +237,10 @@ const FileGallery = ({ busy, copiedKey, files, folders, handlers, onEnterFolder,
                     key={object.key}
                     object={object}
                     prefix={prefix}
+                    references={references[object.key]}
                     resolveUrl={resolveUrl}
                     selected={selected.has(object.key)}
+                    showReferences={showReferences}
                     t={t}
                 />
             ))}

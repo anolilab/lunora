@@ -221,8 +221,10 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
                     handlers={handlers}
                     onEnterFolder={vm.enterFolder}
                     prefix={vm.prefix}
+                    references={vm.references}
                     resolveUrl={vm.resolveUrl}
                     selected={vm.selected}
+                    showReferences={vm.hasStorageColumns}
                     size={vm.thumbSize}
                     t={t}
                 />
