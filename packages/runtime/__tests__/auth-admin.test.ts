@@ -114,25 +114,27 @@ const USER = { banned: false, email: "a@example.com", id: "u1", role: "user" };
 /** A full auth-admin plane with spy-able mutations. */
 const authAdmin = (): AuthAdmin => {
     return {
-        banUser: vi.fn(async () => {
+        banUser: vi.fn<NonNullable<AuthAdmin["banUser"]>>(async () => {
             return { ...USER, banned: true };
         }),
-        createUser: vi.fn(async () => USER),
-        impersonateUser: vi.fn(async () => {
+        createUser: vi.fn<NonNullable<AuthAdmin["createUser"]>>(async () => USER),
+        impersonateUser: vi.fn<NonNullable<AuthAdmin["impersonateUser"]>>(async () => {
             return { expiresAt: 1, token: "tok_u1", user: USER };
         }),
-        listSessions: vi.fn(async () => SESSIONS),
-        listUsers: vi.fn(async () => USERS),
-        removeUser: vi.fn(async () => undefined),
-        revokeUserSession: vi.fn(async () => undefined),
-        revokeUserSessions: vi.fn(async () => undefined),
-        setRole: vi.fn(async () => {
+        listSessions: vi.fn<AuthAdmin["listSessions"]>(async () => SESSIONS),
+        listUsers: vi.fn<AuthAdmin["listUsers"]>(async () => USERS),
+        removeUser: vi.fn<NonNullable<AuthAdmin["removeUser"]>>(async () => undefined),
+        revokeUserSession: vi.fn<NonNullable<AuthAdmin["revokeUserSession"]>>(async () => undefined),
+        revokeUserSessions: vi.fn<NonNullable<AuthAdmin["revokeUserSessions"]>>(async () => undefined),
+        setRole: vi.fn<NonNullable<AuthAdmin["setRole"]>>(async () => {
             return { ...USER, role: "admin" };
         }),
-        setUserPassword: vi.fn(async () => undefined),
-        unbanUser: vi.fn(async () => USER),
-         
-        capabilities: vi.fn(async () => {return { accounts: true, admin: true, organization: false, passkey: false, twoFactor: false }}),
+        setUserPassword: vi.fn<NonNullable<AuthAdmin["setUserPassword"]>>(async () => undefined),
+        unbanUser: vi.fn<NonNullable<AuthAdmin["unbanUser"]>>(async () => USER),
+
+        capabilities: vi.fn<NonNullable<AuthAdmin["capabilities"]>>(async () => {
+            return { accounts: true, admin: true, organization: false, passkey: false, twoFactor: false };
+        }),
     };
 };
 
