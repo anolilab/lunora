@@ -503,6 +503,21 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
     // up the virtualized table is suppressed so only one readout is mounted.
     const summaryVisible = view === "errors" && showSummary;
 
+    // The body shows exactly one readout. Computing the discriminant once (rather
+    // than gating four JSX blocks on overlapping booleans) keeps the cases provably
+    // exclusive — in particular the list can't render an error's empty buffer.
+    const readout = useMemo<"empty" | "error" | "list" | "summary">(() => {
+        if (error !== null) {
+            return "error";
+        }
+
+        if (activeCount === 0) {
+            return "empty";
+        }
+
+        return summaryVisible ? "summary" : "list";
+    }, [activeCount, error, summaryVisible]);
+
     // Row virtualization over the active list: only the rows intersecting the
     // 400px viewport (+ overscan) are mounted, so a full buffer never renders
     // hundreds of <div>s. See the jsdom note on `observeViewportRect`.
@@ -574,12 +589,16 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
         setOutcomeFilter(event.target.value);
     }, []);
 
+    // Switching views resets the Summary toggle so a view change always lands on
+    // the row list (the summary is an Errors-only opt-in, not a sticky mode).
     const showRequests = useCallback((): void => {
         setView("requests");
+        setShowSummary(false);
     }, []);
 
     const showErrors = useCallback((): void => {
         setView("errors");
+        setShowSummary(false);
     }, []);
 
     return (
@@ -710,19 +729,19 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
                 </div>
             )}
 
-            {error !== null && (
+            {readout === "error" && (
                 <p className="text-sm text-destructive" data-testid="lg-error" role="alert">
                     {error}
                 </p>
             )}
 
-            {error === null && activeCount === 0 && (
+            {readout === "empty" && (
                 <p className="text-sm text-muted-foreground" data-testid="lg-empty">
                     {t("No logs.")}
                 </p>
             )}
 
-            {summaryVisible && error === null && activeCount > 0 && (
+            {readout === "summary" && (
                 <div className="flex flex-col gap-4 rounded-md border border-border p-3" data-testid="logs-summary">
                     <p className="text-xs text-muted-foreground" data-testid="logs-summary-total">
                         {t("{count} entries", { count: summary.total })}
@@ -746,7 +765,7 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
                 </div>
             )}
 
-            {!summaryVisible && activeCount > 0 && (
+            {readout === "list" && (
                 <div className="rounded-md border border-border" data-testid="lg-scroll" ref={scrollRef} style={SCROLL_STYLE}>
                     <div aria-label={t("Recent logs")} data-testid="lg-table" role="grid" style={gridStyle}>
                         {virtualRows.map((virtualRow) =>

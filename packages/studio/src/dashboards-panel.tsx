@@ -1,15 +1,13 @@
-import { useCirrus } from "@cirrus/react";
 import type { ReactElement } from "react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 
-import type { SqlConsoleResult } from "./admin";
-import { ADMIN_FUNCTIONS } from "./admin";
+import { newId, usePersistedList } from "./browser-storage";
 import { Button } from "./components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./components/ui/card";
 import { EmptyState } from "./components/ui/empty-state";
 import { useT } from "./i18n-context";
-import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal";
 import SqlResultChart from "./result-chart";
+import { useRunSql } from "./use-run-sql";
 
 interface DashboardsPanelProps {
     /** Shard key new widgets default to. Defaults to the root shard. */
@@ -32,29 +30,8 @@ interface WidgetDraft {
     readonly title: string;
 }
 
-const RUN_SQL = adminRef(ADMIN_FUNCTIONS.runSql);
 const STORAGE_KEY = "cirrus-studio-dashboards";
 const EMPTY_DRAFT: WidgetDraft = { shardKey: "", sql: "", title: "" };
-
-/** Read the persisted widget list (browser-local, best-effort). */
-const loadWidgets = (): Widget[] => {
-    if (!("localStorage" in globalThis)) {
-        return [];
-    }
-
-    try {
-        const raw = globalThis.localStorage.getItem(STORAGE_KEY);
-        const parsed = raw === null ? [] : (JSON.parse(raw) as unknown);
-
-        return Array.isArray(parsed) ? (parsed as Widget[]) : [];
-    } catch {
-        return [];
-    }
-};
-
-/** A best-effort unique id for a new widget. */
-const newId = (): string =>
-    (globalThis.crypto as { randomUUID?: () => string } | undefined)?.randomUUID?.() ?? `w-${globalThis.performance.now().toString(36)}`;
 
 interface WidgetCardProps {
     readonly onEdit: (id: string) => void;
@@ -69,50 +46,11 @@ interface WidgetCardProps {
  * rather than throwing, so one broken widget never blanks the grid.
  */
 const WidgetCard = ({ onEdit, onRemove, widget }: WidgetCardProps): ReactElement => {
-    const client = useCirrus();
     const t = useT();
 
-    const [result, setResult] = useState<null | SqlConsoleResult>(null);
-    const [error, setError] = useState<null | string>(null);
-    const [loading, setLoading] = useState<boolean>(true);
-
-    // Run the widget's query. Kept in a callback (not inline in the effect) so the
-    // setState calls aren't flagged as synchronous effect writes; the `token` lets
-    // a re-run/unmount discard a stale in-flight result.
-    const run = useCallback(
-        async (token: { cancelled: boolean }): Promise<void> => {
-            setLoading(true);
-
-            try {
-                const next = (await client.query(RUN_SQL, { sql: widget.sql }, callOptions(widget.shardKey ?? ""))) as SqlConsoleResult;
-
-                if (!token.cancelled) {
-                    setResult(next);
-                    setError(null);
-                }
-            } catch (error_) {
-                if (!token.cancelled) {
-                    setResult(null);
-                    setError(errorMessage(error_));
-                }
-            } finally {
-                if (!token.cancelled) {
-                    setLoading(false);
-                }
-            }
-        },
-        [client, widget.sql, widget.shardKey],
-    );
-
-    useEffect(() => {
-        const token = { cancelled: false };
-
-        fireAndForget(run(token));
-
-        return () => {
-            token.cancelled = true;
-        };
-    }, [run]);
+    // The shared run/cancel hook owns the query lifecycle; the card is otherwise
+    // purely presentational. It re-runs whenever the widget's SQL or shard changes.
+    const { error, loading, result } = useRunSql(widget.sql, widget.shardKey ?? "");
 
     const onEditClick = useCallback((): void => {
         onEdit(widget.id);
@@ -174,7 +112,7 @@ const WidgetCard = ({ onEdit, onRemove, widget }: WidgetCardProps): ReactElement
                 </div>
             </CardHeader>
             <CardContent className="min-h-32 py-2">
-                {error !== null && (
+                {error !== undefined && (
                     <p
                         className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 font-mono text-xs text-destructive"
                         data-testid={`dashboards-widget-error-${widget.id}`}
@@ -183,12 +121,12 @@ const WidgetCard = ({ onEdit, onRemove, widget }: WidgetCardProps): ReactElement
                         {error}
                     </p>
                 )}
-                {error === null && loading && result === null && (
+                {error === undefined && loading && result === undefined && (
                     <p className="p-4 text-sm text-muted-foreground" data-testid={`dashboards-widget-loading-${widget.id}`}>
                         {t("Running…")}
                     </p>
                 )}
-                {error === null && result !== null && <SqlResultChart result={result} />}
+                {error === undefined && result !== undefined && <SqlResultChart result={result} />}
             </CardContent>
         </Card>
     );
@@ -284,17 +222,10 @@ const WidgetForm = ({ draft, editing, onCancel, onChange, onSubmit }: WidgetForm
 const DashboardsPanel = ({ initialShardKey }: DashboardsPanelProps): ReactElement => {
     const t = useT();
 
-    const [widgets, setWidgets] = useState<Widget[]>(loadWidgets);
+    const [widgets, setWidgets] = usePersistedList<Widget>(STORAGE_KEY);
     const [draft, setDraft] = useState<WidgetDraft>(EMPTY_DRAFT);
     const [editingId, setEditingId] = useState<null | string>(null);
     const [formOpen, setFormOpen] = useState<boolean>(false);
-
-    // Persist the widget list to the browser whenever it changes.
-    useEffect(() => {
-        if ("localStorage" in globalThis) {
-            globalThis.localStorage.setItem(STORAGE_KEY, JSON.stringify(widgets));
-        }
-    }, [widgets]);
 
     const openAdd = useCallback((): void => {
         setEditingId(null);
@@ -321,9 +252,12 @@ const DashboardsPanel = ({ initialShardKey }: DashboardsPanelProps): ReactElemen
         [widgets],
     );
 
-    const onRemove = useCallback((id: string): void => {
-        setWidgets((current) => current.filter((widget) => widget.id !== id));
-    }, []);
+    const onRemove = useCallback(
+        (id: string): void => {
+            setWidgets((current) => current.filter((widget) => widget.id !== id));
+        },
+        [setWidgets],
+    );
 
     const onSubmit = useCallback((): void => {
         const title = draft.title.trim();
@@ -336,13 +270,13 @@ const DashboardsPanel = ({ initialShardKey }: DashboardsPanelProps): ReactElemen
         const shardKey = draft.shardKey.trim();
 
         if (editingId === null) {
-            setWidgets((current) => [...current, { id: newId(), shardKey, sql, title }]);
+            setWidgets((current) => [...current, { id: newId("w"), shardKey, sql, title }]);
         } else {
             setWidgets((current) => current.map((widget) => (widget.id === editingId ? { ...widget, shardKey, sql, title } : widget)));
         }
 
         closeForm();
-    }, [closeForm, draft, editingId]);
+    }, [closeForm, draft, editingId, setWidgets]);
 
     return (
         <div className="flex flex-col gap-4" data-testid="cirrus-dashboards">
@@ -358,11 +292,7 @@ const DashboardsPanel = ({ initialShardKey }: DashboardsPanelProps): ReactElemen
             {formOpen && <WidgetForm draft={draft} editing={editingId !== null} onCancel={closeForm} onChange={setDraft} onSubmit={onSubmit} />}
 
             {widgets.length === 0 && !formOpen ? (
-                <EmptyState
-                    description={t("Add a widget to chart a saved SQL query on this browser.")}
-                    testId="dashboards-empty"
-                    title={t("No widgets yet")}
-                />
+                <EmptyState description={t("Add a widget to chart a saved SQL query on this browser.")} testId="dashboards-empty" title={t("No widgets yet")} />
             ) : (
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3" data-testid="dashboards-grid">
                     {widgets.map((widget) => (

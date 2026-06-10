@@ -1,11 +1,13 @@
 import { useCirrus } from "@cirrus/react";
 import type { CSSProperties, ReactElement } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 import type { SqlConsoleResult } from "./admin";
 import { ADMIN_FUNCTIONS } from "./admin";
+import { newId, usePersistedList } from "./browser-storage";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
 import { CellValue } from "./data-grid";
+import formatSql from "./format-sql";
 import { ExportMenu } from "./grid-features";
 import { useT } from "./i18n-context";
 import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal";
@@ -48,22 +50,6 @@ const TEMPLATES: ReadonlyArray<QueryTemplate> = [
     { label: "Index list", sql: "SELECT name, tbl_name FROM sqlite_master WHERE type = 'index' ORDER BY tbl_name;" },
 ];
 
-/** Read the persisted query list (browser-local, best-effort). */
-const loadQueries = (): SavedQuery[] => {
-    if (!("localStorage" in globalThis)) {
-        return [];
-    }
-
-    try {
-        const raw = globalThis.localStorage.getItem(STORAGE_KEY);
-        const parsed = raw === null ? [] : (JSON.parse(raw) as unknown);
-
-        return Array.isArray(parsed) ? (parsed as SavedQuery[]) : [];
-    } catch {
-        return [];
-    }
-};
-
 /** One run recorded in the browser-local query history. */
 interface HistoryEntry {
     /** Epoch milliseconds the query was run. */
@@ -71,124 +57,6 @@ interface HistoryEntry {
     /** The executed SQL string. */
     readonly sql: string;
 }
-
-/** Read the persisted run history (browser-local, best-effort, newest first). */
-const loadHistory = (): HistoryEntry[] => {
-    if (!("localStorage" in globalThis)) {
-        return [];
-    }
-
-    try {
-        const raw = globalThis.localStorage.getItem(HISTORY_KEY);
-        const parsed = raw === null ? [] : (JSON.parse(raw) as unknown);
-
-        return Array.isArray(parsed) ? (parsed as HistoryEntry[]) : [];
-    } catch {
-        return [];
-    }
-};
-
-/** SQL keywords upper-cased by {@link formatSql}; longest-first so multi-word clauses match before their prefix. */
-const SQL_KEYWORDS: ReadonlyArray<string> = [
-    "ORDER BY",
-    "GROUP BY",
-    "LEFT JOIN",
-    "RIGHT JOIN",
-    "INNER JOIN",
-    "OUTER JOIN",
-    "CROSS JOIN",
-    "EXPLAIN QUERY PLAN",
-    "SELECT",
-    "DISTINCT",
-    "FROM",
-    "WHERE",
-    "HAVING",
-    "LIMIT",
-    "OFFSET",
-    "JOIN",
-    "ON",
-    "AND",
-    "OR",
-    "AS",
-    "ASC",
-    "DESC",
-    "WITH",
-    "UNION",
-    "EXPLAIN",
-];
-
-/** Clauses that begin a new line in the formatted output. */
-const SQL_NEWLINE_CLAUSES: ReadonlyArray<string> = [
-    "FROM",
-    "WHERE",
-    "ORDER BY",
-    "GROUP BY",
-    "HAVING",
-    "LIMIT",
-    "OFFSET",
-    "UNION",
-    "JOIN",
-    "LEFT JOIN",
-    "RIGHT JOIN",
-    "INNER JOIN",
-    "OUTER JOIN",
-    "CROSS JOIN",
-];
-
-/**
- * A sentinel that brackets stashed string literals while {@link formatSql}
- * rewrites keywords/whitespace. NUL can't appear in user-typed SQL, so it never
- * collides with a real token (e.g. a numeric literal like `5`).
- */
-const SENTINEL = String.fromCodePoint(0);
-/** Matches a stashed-literal placeholder (NUL-index-NUL) on restore. */
-const RESTORE_RE = new RegExp(`${SENTINEL}${String.raw`(\d+)`}${SENTINEL}`, "gu");
-
-/**
- * A small, pragmatic SQL pretty-printer for the read-only SELECT / WITH / EXPLAIN
- * this editor allows. It upper-cases known keywords (whole-word, case-insensitive),
- * collapses runs of whitespace, and breaks a new line before each major clause. It
- * is intentionally not a full SQL parser — string literals are preserved verbatim
- * and only reasonable read queries are expected. Idempotent: formatting an already
- * formatted query yields the same string.
- */
-const formatSql = (sql: string): string => {
-    // Preserve single-quoted string literals (incl. '' escapes) by stashing them
-    // behind NUL-delimited placeholders so keyword/whitespace rewriting never
-    // touches their contents.
-    const literals: string[] = [];
-    const withPlaceholders = sql.replaceAll(/'(?:[^']|'')*'/gu, (match) => {
-        literals.push(match);
-
-        return `${SENTINEL}${(literals.length - 1).toString()}${SENTINEL}`;
-    });
-
-    // Collapse all whitespace (including newlines) to single spaces, then trim.
-    let out = withPlaceholders.replaceAll(/\s+/gu, " ").trim();
-
-    // Upper-case keywords as whole words (longest-first via the source ordering).
-    for (const keyword of SQL_KEYWORDS) {
-        const pattern = new RegExp(String.raw`\b${keyword.replaceAll(" ", String.raw`\s+`)}\b`, "giu");
-
-        out = out.replaceAll(pattern, keyword);
-    }
-
-    // Break a new line before each major clause (but not at the very start).
-    for (const clause of SQL_NEWLINE_CLAUSES) {
-        const pattern = new RegExp(String.raw`\s+${clause.replaceAll(" ", String.raw`\s+`)}\b`, "gu");
-
-        out = out.replaceAll(pattern, `\n${clause}`);
-    }
-
-    // Restore the stashed string literals.
-    out = out.replaceAll(RESTORE_RE, (_match, index: string) => literals[Number(index)] ?? "");
-
-    return out;
-};
-
-/** A best-effort unique id for a new saved query. */
-const newId = (): string =>
-    (globalThis.crypto as { randomUUID?: () => string } | undefined)?.randomUUID?.() ?? `q-${globalThis.performance.now().toString(36)}`;
 
 interface QueryRowProps {
     readonly active: boolean;
@@ -301,8 +169,8 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     const client = useCirrus();
     const t = useT();
 
-    const [queries, setQueries] = useState<SavedQuery[]>(loadQueries);
-    const [history, setHistory] = useState<HistoryEntry[]>(loadHistory);
+    const [queries, setQueries] = usePersistedList<SavedQuery>(STORAGE_KEY);
+    const [history, setHistory] = usePersistedList<HistoryEntry>(HISTORY_KEY);
     const [activeId, setActiveId] = useState<null | string>(null);
     const [draft, setDraft] = useState<string>(TEMPLATES[0]?.sql ?? "");
     const [search, setSearch] = useState<string>("");
@@ -315,33 +183,22 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
     const gutterRef = useRef<HTMLDivElement | null>(null);
 
-    // Persist the query list to the browser whenever it changes.
-    useEffect(() => {
-        if ("localStorage" in globalThis) {
-            globalThis.localStorage.setItem(STORAGE_KEY, JSON.stringify(queries));
-        }
-    }, [queries]);
-
-    // Persist the run history whenever it changes.
-    useEffect(() => {
-        if ("localStorage" in globalThis) {
-            globalThis.localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
-        }
-    }, [history]);
-
     // Record a successfully-run query at the head of the history, de-duping an
     // identical consecutive run and any earlier copy, capped to HISTORY_LIMIT.
-    const recordHistory = useCallback((sql: string): void => {
-        setHistory((current) => {
-            if (current[0]?.sql === sql) {
-                return current;
-            }
+    const recordHistory = useCallback(
+        (sql: string): void => {
+            setHistory((current) => {
+                if (current[0]?.sql === sql) {
+                    return current;
+                }
 
-            const next: HistoryEntry[] = [{ at: Date.now(), sql }, ...current.filter((entry) => entry.sql !== sql)];
+                const next: HistoryEntry[] = [{ at: Date.now(), sql }, ...current.filter((entry) => entry.sql !== sql)];
 
-            return next.slice(0, HISTORY_LIMIT);
-        });
-    }, []);
+                return next.slice(0, HISTORY_LIMIT);
+            });
+        },
+        [setHistory],
+    );
 
     const run = useCallback(
         async (mode: ResultTab): Promise<void> => {
@@ -386,7 +243,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                 setQueries((current) => current.map((query) => (query.id === activeId ? { ...query, sql: value } : query)));
             }
         },
-        [activeId],
+        [activeId, setQueries],
     );
 
     const onEditorKeyDown = useCallback(
@@ -407,14 +264,14 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     }, []);
 
     const newQuery = useCallback((): void => {
-        const query: SavedQuery = { id: newId(), name: t("Untitled query"), sql: "" };
+        const query: SavedQuery = { id: newId("q"), name: t("Untitled query"), sql: "" };
 
         setQueries((current) => [query, ...current]);
         setActiveId(query.id);
         setDraft("");
         setResult(null);
         setError(null);
-    }, [t]);
+    }, [setQueries, t]);
 
     const selectQuery = useCallback(
         (id: string): void => {
@@ -438,7 +295,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                 setActiveId(null);
             }
         },
-        [activeId],
+        [activeId, setQueries],
     );
 
     const loadTemplate = useCallback((event: React.MouseEvent<HTMLButtonElement>): void => {
@@ -462,7 +319,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
     const clearHistory = useCallback((): void => {
         setHistory([]);
-    }, []);
+    }, [setHistory]);
 
     // Pretty-print the current draft in place (auto-saving the active query too).
     const formatDraft = useCallback((): void => {
@@ -473,7 +330,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         if (activeId !== null) {
             setQueries((current) => current.map((query) => (query.id === activeId ? { ...query, sql: next } : query)));
         }
-    }, [activeId, draft]);
+    }, [activeId, draft, setQueries]);
 
     const showResults = useCallback((): void => {
         setTab("results");
@@ -727,5 +584,4 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     );
 };
 
-export { formatSql };
 export type { SqlEditorPanelProps };

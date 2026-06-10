@@ -232,7 +232,6 @@ const MESSAGE_IDS = [
     "Committing…",
     "Discard",
     "Table touched",
-    "Tables",
     "Token rides the WebSocket URL — it can surface in browser DevTools and server logs. Use a dev-only token.",
     "Total database size",
     "Total errors",

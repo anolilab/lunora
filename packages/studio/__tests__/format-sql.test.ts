@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatSql } from "../src/sql-editor-panel";
+import formatSql from "../src/format-sql";
 
 describe("formatSql", () => {
     it("upper-cases known keywords as whole words", () => {
