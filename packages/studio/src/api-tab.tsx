@@ -42,12 +42,12 @@ const FORMAT_KEYS: ReadonlyArray<ApiFormat> = ["openapi", "openrpc"];
 
 /**
  * The studio's API tab. Hosts two complementary surfaces behind a segmented
- * toggle. The Reference view renders a machine-readable spec — OpenAPI 3.1 via
- * Scalar's interactive reference (operation browser, "try it" console) or the
- * RPC-native OpenRPC document via the custom OpenRPC viewer — with a small
- * format switch between them. The Snippets view is the per-function React /
- * Client / CLI copy-paste browser (`api-docs-panel`), the lightweight "how do I
- * call this" DX.
+ * toggle. The Reference view renders a machine-readable spec — the OpenAPI 3.1
+ * document or the RPC-native OpenRPC document — through the studio-native
+ * reference UI (operation browser, schema tables, a live "try it" console, and a
+ * request-sample rail), with a small format switch between them. The Snippets
+ * view is the per-function React / Client / CLI copy-paste browser
+ * (`api-docs-panel`), the lightweight "how do I call this" DX.
  *
  * Reference is the default; OpenAPI is the default format (the richer,
  * spec-driven view that also covers REST). Each format degrades to a clear
@@ -118,9 +118,9 @@ const ApiTab = ({ functions, initialShardKey, openApiSpec, openRpcSpec }: ApiTab
             </div>
 
             {/* Bounded viewport: each panel fills it and scrolls internally, so the
-                toolbar above (and the studio chrome) stay fixed. Scalar renders
-                full-bleed and manages its own sticky sidebar; the document-flow
-                snippet + OpenRPC views scroll as a unit with comfortable padding. */}
+                toolbar above (and the studio chrome) stay fixed. The reference view
+                manages its own three-column scroll (pinned sidebar + scrolling
+                content); the snippet view scrolls as a unit with comfortable padding. */}
             <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
                 {view === "snippets" && (
                     <div className="min-h-0 flex-1 overflow-y-auto p-6">

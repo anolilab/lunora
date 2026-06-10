@@ -11,8 +11,8 @@ import { errorMessage } from "./internal";
 export type SpecFetchState<T> = { kind: "empty" } | { kind: "error"; message: string } | { kind: "loading" } | { kind: "ready"; spec: T };
 
 /**
- * Resolve the spec an API reference panel renders, shared by the OpenAPI (Scalar)
- * and OpenRPC reference panels. An inline `inlineSpec` (host-provided or the mock
+ * Resolve the spec an API reference panel renders, shared by the OpenAPI and
+ * OpenRPC reference panels. An inline `inlineSpec` (host-provided or the mock
  * harness) is authoritative and classified synchronously; otherwise `fetcher` is
  * called once and its result classified, with the in-flight request cancelled on
  * unmount or when the inputs change so a late resolve never sets state on a gone

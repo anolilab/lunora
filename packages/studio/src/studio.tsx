@@ -107,8 +107,8 @@ interface StudioProps {
     readonly locale?: string;
 
     /**
-     * Inline OpenAPI 3.1 document rendered by the API tab's reference (Scalar)
-     * sub-view. Thread the generated `_generated/openapi.json` here to render it
+     * Inline OpenAPI 3.1 document rendered by the API tab's reference sub-view.
+     * Thread the generated `_generated/openapi.json` here to render it
      * without a round-trip. When omitted the reference fetches the worker's
      * admin-gated `GET /_cirrus/admin/openapi` endpoint via the client.
      */

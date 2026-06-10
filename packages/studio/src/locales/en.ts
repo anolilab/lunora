@@ -515,11 +515,22 @@ const MESSAGE_IDS = [
     "By function",
     "Count",
     "{count} entries",
-    // API tab — OpenAPI reference (Scalar) sub-view.
+    // API tab — OpenAPI reference sub-view.
     "Snippets",
     "Couldn't load the OpenAPI spec: {message}",
     "No OpenAPI spec configured",
     "Run `cirrus codegen` and wire `_generated/openapi.json` to the worker to render the API reference here.",
+    // API tab — shared native reference UI (OpenAPI + OpenRPC).
+    "API operations",
+    "Try it",
+    "Request arguments",
+    "Responses",
+    "Arguments (JSON)",
+    "Send",
+    "Sending…",
+    "200 OK",
+    "Request failed",
+    "relation: {table}",
     // API tab — spec format switch + OpenRPC reference sub-view.
     "API spec format",
     "OpenAPI",

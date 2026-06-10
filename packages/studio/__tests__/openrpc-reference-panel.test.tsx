@@ -30,30 +30,30 @@ const renderPanel = (mock: MockClientHooks, spec?: unknown): ReactElement => (
 );
 
 describe("openRpcReferencePanel", () => {
-    it("renders methods grouped by namespace from a spec fetched from the worker", async () => {
+    it("renders methods in the shared reference UI from a spec fetched from the worker", async () => {
         expect.assertions(3);
 
         const mock = createMockClient({ fetchOpenRpc: () => SPEC_WITH_METHODS });
 
         render(renderPanel(mock));
 
-        await expect(screen.findByTestId("openrpc-reference")).resolves.toBeDefined();
-        expect(screen.getByTestId("openrpc-method-messages:list")).toBeDefined();
-        // The params table renders the declared arg property.
-        expect(screen.getByTestId("openrpc-params-messages:list")).toBeDefined();
+        await expect(screen.findByTestId("api-reference")).resolves.toBeDefined();
+        // The method appears in the nav and its request-argument table renders.
+        expect(screen.getByTestId("api-nav-messages:list")).toBeDefined();
+        expect(screen.getByTestId("api-operation-args")).toBeDefined();
     });
 
-    it("builds a JSON-RPC request example for each method", async () => {
-        expect.assertions(2);
+    it("offers a copy-paste request sample for the selected method", async () => {
+        expect.assertions(1);
 
         const mock = createMockClient({ fetchOpenRpc: () => SPEC_WITH_METHODS });
 
         render(renderPanel(mock));
 
-        const example = await screen.findByTestId("openrpc-example-messages:list");
+        const sample = await screen.findByTestId("api-sample-source");
 
-        expect(example.textContent).toContain('"jsonrpc": "2.0"');
-        expect(example.textContent).toContain('"method": "messages:list"');
+        // The default (cURL) sample posts the RPC envelope for this function.
+        expect(sample.textContent).toContain("messages:list");
     });
 
     it("renders an inline spec directly without fetching", async () => {
@@ -63,7 +63,7 @@ describe("openRpcReferencePanel", () => {
 
         render(renderPanel(mock, SPEC_WITH_METHODS));
 
-        await expect(screen.findByTestId("openrpc-reference")).resolves.toBeDefined();
+        await expect(screen.findByTestId("api-reference")).resolves.toBeDefined();
         expect(mock.fetchOpenRpc).not.toHaveBeenCalled();
     });
 

@@ -2,14 +2,6 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
-/* Scalar's prebuilt stylesheet for the API tab's OpenAPI reference. The panel
-   renders Scalar with `theme: "none"` (colours bridged to the studio tokens via
-   its customCss), but Scalar still needs its own structural CSS — without this
-   the reference renders unstyled (giant logos, broken layout). Left unlayered:
-   Scalar scopes everything under `.scalar-app`, so it styles only its own
-   subtree and never leaks into the rest of the studio. */
-@import "@scalar/api-reference-react/style.css";
-
 /* Theme tokens (shadcn palette, @custom-variant, @layer base) live in the shared
    theme.css so the library CSS and the standalone apps/studio never drift. */
 @import "./theme.css";
