@@ -5,6 +5,7 @@ import type { Plugin } from "vite";
 import codegenPlugin from "./codegen-plugin";
 import devVariablesPlugin from "./dev-variables-plugin";
 import { createCommandProbe, withDevWorkerEnv } from "./dev-worker-env";
+import frameworkComposePlugin from "./framework-compose-plugin";
 import frameworkDetectPlugin, { createPluginContext } from "./framework-detect-plugin";
 import logStreamPlugin from "./log-stream-plugin";
 import { studioPlugin } from "./studio-plugin";
@@ -78,6 +79,13 @@ const cirrus = (options?: CirrusPluginOptions): CirrusPlugins => {
     const plugins: Plugin[] = [
         commandProbe,
         frameworkDetectPlugin(resolved, context),
+        // Reads the detected framework off `context` and, for a class-A
+        // framework (and only when the CF integration is on), resolves the
+        // `virtual:cirrus/worker` entry to a `composeWorker`-based worker that
+        // routes `/_cirrus/*` to Cirrus and falls through to the framework SSR
+        // handler — so the template never hand-wires `createWorker({ httpRouter })`.
+        // A strict no-op for class-C and the `cloudflare: false` BYO path.
+        frameworkComposePlugin(resolved, context),
         devVariablesPlugin(resolved),
         codegenPlugin(resolved),
         logStreamPlugin(),
@@ -114,6 +122,19 @@ export type { DetectedFramework, FrameworkClass, FrameworkDetection } from "./de
 export { detectFramework } from "./detect-framework";
 export { default as devVariablesPlugin } from "./dev-variables-plugin";
 export { createCommandProbe, DEV_WORKER_ENV_VALUE, DEV_WORKER_ENV_VAR, withDevWorkerEnv } from "./dev-worker-env";
+// Class-A composition surface. `CIRRUS_WORKER_VIRTUAL_ID` is the virtual entry a
+// class-A template points its wrangler `main` at (or re-exports) so the worker
+// composing the framework SSR handler under `composeWorker`'s `httpRouter` seam
+// is emitted by the plugin, not hand-wired. `buildWorkerEntrySource` /
+// `isAutoComposable` / `CLASS_A_WIRING` are exported for the CLI + tests.
+export type { ClassAWiring } from "./framework-compose-plugin";
+export {
+    buildWorkerEntrySource,
+    CIRRUS_WORKER_VIRTUAL_ID,
+    CLASS_A_WIRING,
+    default as frameworkComposePlugin,
+    isAutoComposable,
+} from "./framework-compose-plugin";
 // `framework-detect-plugin` (the `CirrusPluginContext` bag + `createPluginContext`
 // + the plugin itself) stays internal plumbing — it is wired into `cirrus()`
 // here and consumed only there + in tests until a second reader (PLAN4 M4
