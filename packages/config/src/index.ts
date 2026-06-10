@@ -1,3 +1,5 @@
+export type { DetectedFramework, FrameworkClass, FrameworkDetection } from "./detect-framework";
+export { detectFramework } from "./detect-framework";
 export { DEV_VARS_EXAMPLE_FILE, DEV_VARS_FILE, DEV_VARS_KEY_PATTERN, parseDevVariableEntries } from "./dev-variables-format";
 export type { InferOptions, InferredBindings } from "./infer-bindings";
 export { inferCirrusBindings } from "./infer-bindings";
