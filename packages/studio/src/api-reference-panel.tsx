@@ -46,19 +46,9 @@ const classifySpec = (spec: unknown): SpecFetchState<OpenApiDocument> => {
  * studio flips a `.dark` class on an ancestor, which retargets those tokens).
  */
 const SCALAR_THEME_CSS = `
+/* Theme tokens — global on the app root (and Scalar's body-level portal root),
+   both are .scalar-app; mapping CSS variables on either is harmless. */
 .scalar-app {
-    /* Bind Scalar to the panel box so it runs its own internal layout — a pinned,
-       independently-scrolling operation sidebar + a scrolling content column —
-       rather than sizing itself to 100dvh (taller than an embedded panel, so the
-       sidebar scrolls out of view). Absolute-fill the (relative, bounded) wrapper:
-       a percentage height wouldn't resolve through the flex chain, and min-height:0
-       defeats the grid's default min-content floor. */
-    position: absolute !important;
-    inset: 0 !important;
-    min-height: 0 !important;
-    /* Scalar hard-codes the content grid track to 100dvh; retrack it to fill the
-       panel box so the sidebar + content fit (and clip nothing) at any panel size. */
-    grid-template-rows: auto minmax(0, 1fr) auto !important;
     --scalar-font: inherit;
     --scalar-background-1: var(--background);
     --scalar-background-2: var(--sidebar);
@@ -73,19 +63,37 @@ const SCALAR_THEME_CSS = `
     --scalar-button-1: var(--primary);
     --scalar-button-1-color: var(--primary-foreground);
 }
+/* Layout overrides scoped to OUR in-panel reference only. Scalar also mounts a
+   body-level \`<div class="scalar-app" id="headlessui-portal-root">\` for overlays;
+   scoping under the panel keeps these off it — making the portal absolute+inset:0
+   turned it into a full-viewport overlay that swallowed every click. */
+[data-testid="api-reference"] .scalar-app {
+    /* Bind Scalar to the panel box so it runs its own internal layout — a pinned,
+       independently-scrolling operation sidebar + a scrolling content column —
+       rather than sizing itself to 100dvh (taller than an embedded panel, so the
+       sidebar scrolls out of view). Absolute-fill the (relative, bounded) wrapper:
+       a percentage height wouldn't resolve through the flex chain, and min-height:0
+       defeats the grid's default min-content floor. */
+    position: absolute !important;
+    inset: 0 !important;
+    min-height: 0 !important;
+    /* Scalar hard-codes the content grid track to 100dvh; retrack it to fill the
+       panel box so the sidebar + content fit (and clip nothing) at any panel size. */
+    grid-template-rows: auto minmax(0, 1fr) auto !important;
+}
 .scalar-api-reference {
     background: var(--background);
 }
 /* The operation sidebar stays pinned and scrolls its own nav within the panel
    (min-height:0 lets it shrink to the panel box instead of its 100dvh default). */
-.scalar-app aside {
+[data-testid="api-reference"] .scalar-app aside {
     height: 100% !important;
     min-height: 0 !important;
     overflow-y: auto !important;
 }
 /* The rendered reference (operations) scrolls within the panel, so the sidebar
    stays put and the studio chrome never moves. */
-.scalar-app .references-rendered {
+[data-testid="api-reference"] .scalar-app .references-rendered {
     min-height: 0 !important;
     overflow-y: auto !important;
 }
@@ -94,6 +102,17 @@ const SCALAR_THEME_CSS = `
    reference's logo showcase is redundant noise. */
 .scalar-app .scalar-reference-intro-clients {
     display: none;
+}
+/* Belt-and-suspenders with agentEnabled:false — hide every "Ask AI" agent surface
+   (drawer, its fixed backdrop overlay, the trigger button, and the inline ask
+   form). The agent is unconfigured here; on localhost Scalar would otherwise mount
+   a broken drawer whose overlay swallows clicks/scroll. */
+.scalar-app .agent-scalar-overlay,
+.scalar-app .agent-scalar,
+.scalar-app .agent-button-container,
+.scalar-app [class*="agent-scalar"],
+.scalar-app [class*="ask-agent"] {
+    display: none !important;
 }
 `;
 
@@ -152,6 +171,10 @@ const ApiReferencePanel = ({ spec: inlineSpec }: ApiReferencePanelProps): ReactE
 
         return {
             _integration: "react",
+            // Scalar auto-enables its "Ask AI" agent on localhost (agentEnabled
+            // defaults to isLocalUrl). With no agent configured the AgentScalarDrawer
+            // mounts broken and its overlay swallows clicks/scroll — so disable it.
+            agentEnabled: false,
             content: state.spec,
             customCss: SCALAR_THEME_CSS,
             // The studio owns the theme toggle, so hide Scalar's and force the
