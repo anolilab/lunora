@@ -47,6 +47,7 @@
         "@anolilab/prettier-config": "catalog:lint",
         "@anolilab/semantic-release-preset": "catalog:dev",
         "@babel/core": "catalog:build",
+        "@cirrus/codegen": "workspace:*",
         "@commitlint/cli": "catalog:prod",
         "@commitlint/config-conventional": "catalog:prod",
         "@eslint-react/eslint-plugin": "catalog:lint",

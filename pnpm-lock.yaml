@@ -309,6 +309,9 @@ importers:
       '@babel/core':
         specifier: catalog:build
         version: 7.29.7
+      '@cirrus/codegen':
+        specifier: workspace:*
+        version: link:packages/codegen
       '@commitlint/cli':
         specifier: catalog:prod
         version: 21.0.2(@types/node@25.9.2)(conventional-commits-filter@5.0.0)(conventional-commits-parser@6.4.0)(typescript@6.0.3)

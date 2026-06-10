@@ -198,6 +198,24 @@ export interface QueryReadIR {
 }
 
 /**
+ * A `ctx.db.insert("table", …)` write discovered in a function body, attributed
+ * to the exported function (and its file = api namespace) that performs it — the
+ * write-side analog of {@link QueryReadIR}. Lets tooling wire a table's write
+ * action by behavior (which function inserts into it) rather than by naming.
+ * {@link InsertWriteIR.table} is `""` when the argument is not a string literal.
+ */
+export interface InsertWriteIR {
+    /** Export binding name of the function performing the insert, e.g. "send". */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/cirrus/`, without extension (the api namespace). */
+    file: string;
+    /** 1-based line of the `insert(...)` call. */
+    line: number;
+    /** Target table name, or `""` when the argument is not a string literal. */
+    table: string;
+}
+
+/**
  * A typed REST route declared with the `httpRoute.&lt;verb>("/path")…` builder in
  * `@cirrus/server` and mounted on `httpRouter()`. Captured statically from the
  * builder chain so the OpenAPI emitter can render a real `paths` entry: the verb

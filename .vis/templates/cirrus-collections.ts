@@ -12,14 +12,20 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { discoverInserts } from "@cirrus/codegen";
 import { createTemplate } from "@visulima/vis/generate";
+import { Project } from "ts-morph";
 
-import type { InsertMutationRef } from "./_helpers/discover-inserts.js";
-import { discoverInsertMutations } from "./_helpers/discover-inserts.js";
 import type { ApiNamespace } from "./_helpers/parse-api.js";
 import { parseApiNamespaces } from "./_helpers/parse-api.js";
 import type { SchemaTable } from "./_helpers/parse-schema.js";
 import { parseSchemaTables } from "./_helpers/parse-schema.js";
+
+/** A table's attributed insert mutation: the function (and its file = api namespace) that inserts into it. */
+interface InsertMutationRef {
+    name: string;
+    namespace: string;
+}
 
 type InsertPlan = { args: string[]; kind: "active"; ref: InsertMutationRef } | { kind: "template"; ref: InsertMutationRef } | undefined;
 
@@ -135,7 +141,18 @@ export default createTemplate({
 
         const apiPath = join(cirrusDir, "_generated", "api.ts");
         const namespaces = existsSync(apiPath) ? parseApiNamespaces(readFileSync(apiPath, "utf8")) : [];
-        const inserts = discoverInsertMutations(cirrusDir);
+
+        // Attribute each table's insert mutation by behavior (which exported
+        // function calls `ctx.db.insert("<table>", …)`) via @cirrus/codegen's
+        // first-class discovery; first inserter for a table wins.
+        const inserts = new Map<string, InsertMutationRef>();
+
+        for (const write of discoverInserts(new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false }), cirrusDir)) {
+            if (write.table !== "" && !inserts.has(write.table)) {
+                inserts.set(write.table, { name: write.exportName, namespace: write.file });
+            }
+        }
+
         const plans = planInserts(tables, inserts, namespaces);
 
         const wired = [...plans.entries()].filter(([, plan]) => plan?.kind === "active").map(([table]) => table);
