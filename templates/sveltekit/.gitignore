@@ -1,0 +1,7 @@
+node_modules
+.svelte-kit
+.output
+dist
+.wrangler
+.cirrus-cache
+cirrus/_generated
