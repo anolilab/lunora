@@ -66,6 +66,7 @@ catalogs:
   tsc:
     typescript: 6.0.3
   types:
+    "@standard-schema/spec": 1.1.0
     "@types/node": 25.9.2
   cloudflare:
     "@cloudflare/vitest-pool-workers": ^0.16.13

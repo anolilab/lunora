@@ -1,7 +1,46 @@
+import type { StandardSchemaV1 } from "@standard-schema/spec";
+
 import { describeValue, formatPath, ValidationError } from "./errors";
 
 /** Branded id type, e.g. `Id&lt;"users">`. */
 type Id<TableName extends string> = string & { readonly __table: TableName };
+
+/**
+ * A JSON Schema fragment (Draft 2020-12 / OpenAPI 3.1 compatible). Intentionally
+ * a loose bag — a `.check()`/`.meta()` caller contributes keywords like
+ * `minLength`/`pattern`/`minimum` that `toJsonSchema` shallow-merges onto the
+ * node for the enclosing validator. Mirrors the `JsonSchema` shape exported by
+ * `./to-json-schema`; kept structurally identical and local so `v.ts` never
+ * imports the converter and the two files stay decoupled.
+ */
+interface JsonSchemaFragment {
+    [keyword: string]: unknown;
+}
+
+/**
+ * Options for a {@link Validator.check} refinement. Lets a predicate carry both
+ * a human-facing `message` and an introspectable JSON Schema `schema` fragment
+ * (e.g. `{ minLength: 1 }`) so the constraint flows into `toJsonSchema`. The
+ * legacy `.check(pred, "message")` string form remains supported.
+ */
+interface CheckOptions {
+    /** Failure message thrown on the `ValidationError` (default `"value matching refinement"`). */
+    message?: string;
+    /** JSON Schema fragment merged onto this validator's node by `toJsonSchema`. */
+    schema?: JsonSchemaFragment;
+}
+
+/**
+ * Options for {@link Validator.meta} — pure metadata with no runtime parsing
+ * effect, used to enrich the emitted JSON Schema node (description + constraint
+ * keywords) without attaching a predicate.
+ */
+interface MetaOptions {
+    /** A human description merged onto this validator's JSON Schema node. */
+    description?: string;
+    /** JSON Schema fragment merged onto this validator's node by `toJsonSchema`. */
+    schema?: JsonSchemaFragment;
+}
 
 /**
  * Runtime "kind" tag attached to every validator. Codegen and reflective tools
@@ -25,24 +64,36 @@ type ValidatorKind =
     | "timestamp"
     | "union";
 
-interface Validator<T = unknown> {
+interface Validator<T = unknown> extends StandardSchemaV1<T, T> {
     readonly __type: T;
 
     /**
      * Attach a refinement predicate. The returned validator parses with the
      * original rules first; if the result satisfies `predicate` it passes
      * through, otherwise it throws a {@link ValidationError} carrying
-     * `message` (default: `"failed refinement"`). Multiple `.check()` calls
-     * chain — every predicate must return true.
+     * `message` (default: `"value matching refinement"`). Multiple `.check()`
+     * calls chain — every predicate must return true.
+     *
+     * The second argument may be a plain message string (legacy form) or a
+     * {@link CheckOptions} object that additionally carries a JSON Schema
+     * `schema` fragment (e.g. `{ minLength: 1 }`) reflected by `toJsonSchema`.
      *
      * Works in any context — argument validators, column validators, or
      * standalone — so it can encode invariants like
      * `v.number().check(n => n >= 0)` or
-     * `v.string().check(s => s.length > 0, "must not be empty")`.
+     * `v.string().check(s => s.length > 0, { message: "non-empty", schema: { minLength: 1 } })`.
      */
-    check: (predicate: (value: T) => boolean, message?: string) => Validator<T>;
+    check: (predicate: (value: T) => boolean, options?: CheckOptions | string) => Validator<T>;
 
     readonly kind: ValidatorKind;
+
+    /**
+     * Attach pure metadata (description + JSON Schema constraint fragment) with
+     * no effect on runtime parsing. The fragment is shallow-merged onto this
+     * validator's emitted JSON Schema node, composing with any `.check()`
+     * `schema` fragments (later wins on conflicting keys).
+     */
+    meta: (options: MetaOptions) => Validator<T>;
 
     parse: (value: unknown) => T;
 
@@ -93,9 +144,11 @@ interface ColumnValidator<TSelect, TInsert> extends Column<TSelect, TInsert>, Va
     /** Override the inferred select/insert type without changing runtime parsing (e.g. `v.string().$type&lt;Id&lt;"users">>()`). */
     $type: <TOverride>() => ColumnValidator<TOverride, TOverride>;
     /** Refinement predicate run after parsing — see {@link Validator.check}. Chainable; preserves column modifiers. */
-    check: (predicate: (value: TSelect) => boolean, message?: string) => ColumnValidator<TSelect, TInsert>;
+    check: (predicate: (value: TSelect) => boolean, options?: CheckOptions | string) => ColumnValidator<TSelect, TInsert>;
     /** Literal default applied in the write layer; field becomes optional on insert. */
     default: (value: TSelect) => ColumnValidator<TSelect, TInsert | undefined>;
+    /** Attach JSON Schema metadata — see {@link Validator.meta}. Chainable; preserves column modifiers. */
+    meta: (options: MetaOptions) => ColumnValidator<TSelect, TInsert>;
     /** Allow SQL NULL — widens the select type to `T | null`. */
     nullable: () => ColumnValidator<null | TSelect, null | TInsert>;
     /** Enforce a UNIQUE constraint (synthesizes a unique index). */
@@ -162,9 +215,10 @@ interface InternalColumnValidator<T> extends InternalValidator<T> {
     $defaultFn: (function_: () => T) => InternalColumnValidator<T>;
     $onUpdateFn: (function_: () => T) => InternalColumnValidator<T>;
     $type: <TOverride>() => InternalColumnValidator<TOverride>;
-    check: (predicate: (value: T) => boolean, message?: string) => InternalColumnValidator<T>;
+    check: (predicate: (value: T) => boolean, options?: CheckOptions | string) => InternalColumnValidator<T>;
     default: (value: T) => InternalColumnValidator<T>;
     defaultNow: () => InternalColumnValidator<T>;
+    meta: (options: MetaOptions) => InternalColumnValidator<T>;
     nullable: () => InternalColumnValidator<null | T>;
     unique: () => InternalColumnValidator<T>;
 }
@@ -187,6 +241,23 @@ function fail(context: ParseContext, expected: string, received: unknown): never
     });
 }
 
+/**
+ * Shallow-merge a JSON Schema `fragment` onto the `constraints` already carried
+ * in `meta`, returning the next meta bag. Later fragments win on conflicting
+ * keys (matching how chained `.check()`/`.meta()` calls read left-to-right).
+ * When there is no fragment the original meta is returned untouched so the
+ * common (constraint-free) path allocates nothing extra.
+ */
+const mergeConstraints = (meta: Record<string, unknown> | undefined, fragment: JsonSchemaFragment | undefined): Record<string, unknown> | undefined => {
+    if (fragment === undefined) {
+        return meta;
+    }
+
+    const previous = meta?.constraints as JsonSchemaFragment | undefined;
+
+    return { ...meta, constraints: { ...previous, ...fragment } };
+};
+
 const createValidator = <T>(
     kind: ValidatorKind,
     parser: (value: unknown, context: ParseContext) => T,
@@ -196,6 +267,26 @@ const createValidator = <T>(
 
     const validator = {
         __type: undefined as unknown as T,
+        // The Standard Schema v1 surface (https://standardschema.dev). `validate`
+        // delegates to `safeParse`: on success it returns `{ value }`, on a
+        // ValidationError it maps to `{ issues: [...] }`. Cirrus paths are already
+        // `(string | number)[]`, a subset of Standard Schema's
+        // `ReadonlyArray<PropertyKey | PathSegment>`, so they pass through
+        // verbatim — no per-segment wrapping needed (same as Zod/Valibot, which
+        // also emit bare keys). Synchronous validate is permitted by the spec.
+        "~standard": {
+            validate(value: unknown): StandardSchemaV1.Result<T> {
+                const result = validator.safeParse(value);
+
+                if (result.ok) {
+                    return { value: result.value };
+                }
+
+                return { issues: [{ message: result.error.message, path: result.error.path }] };
+            },
+            vendor: "cirrus",
+            version: 1,
+        } satisfies StandardSchemaV1.Props<T, T>,
         _meta: { ...meta, column },
         _parse(value: unknown, context: ParseContext) {
             return parser(value, context);
@@ -235,8 +326,14 @@ const createValidator = <T>(
     };
     // `.check()` composes a refinement on top of the existing parser. The
     // returned validator keeps the same kind + column meta so column modifiers
-    // chained either before or after a check still apply.
-    validator.check = (predicate, message) => {
+    // chained either before or after a check still apply. The optional second
+    // argument is either a bare message string (legacy form) or a
+    // {@link CheckOptions} object additionally carrying a JSON Schema `schema`
+    // fragment, which is accumulated into `_meta.constraints` (later checks win
+    // on conflicting keys) so `toJsonSchema` can reflect it.
+    validator.check = (predicate, options) => {
+        const message = typeof options === "string" ? options : options?.message;
+        const fragment = typeof options === "string" ? undefined : options?.schema;
         const refinedParser = (value: unknown, context: ParseContext): T => {
             const parsed = parser(value, context);
 
@@ -247,7 +344,16 @@ const createValidator = <T>(
             return parsed;
         };
 
-        return createValidator<T>(kind, refinedParser, meta);
+        return createValidator<T>(kind, refinedParser, mergeConstraints(meta, fragment));
+    };
+    // `.meta()` carries pure metadata (description + JSON Schema fragment) with
+    // no parsing effect, so the parser is reused unchanged. A `description` is
+    // folded into the same `constraints` bag toJsonSchema shallow-merges.
+    validator.meta = (options) => {
+        const fragment: JsonSchemaFragment | undefined =
+            options.description === undefined ? options.schema : { description: options.description, ...options.schema };
+
+        return createValidator<T>(kind, parser, mergeConstraints(meta, fragment));
     };
 
     return validator;
@@ -607,6 +713,7 @@ const v: {
 };
 
 export type {
+    CheckOptions,
     Column,
     ColumnMeta,
     ColumnValidator,
@@ -615,6 +722,8 @@ export type {
     InferInsert,
     InferSelect,
     InsertShape,
+    JsonSchemaFragment,
+    MetaOptions,
     SelectShape,
     TimestampColumnValidator,
     Validator,

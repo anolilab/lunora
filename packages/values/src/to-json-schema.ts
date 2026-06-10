@@ -40,8 +40,11 @@ const objectSchema = (shape: Record<string, Validator>, convert: (validator: Val
  * runtime `kind` + `_meta` recursively, so nested objects/arrays/unions/records
  * are fully expanded (not collapsed to one level). A `.nullable()` validator —
  * which keeps its base `kind` but clears `column.notNull` — widens to also accept
- * `null`. Refinements added via `.check()` are opaque closures and cannot be
- * reflected into constraints (minLength/pattern/etc.).
+ * `null`. A `.check()`/`.meta()` that contributed a JSON Schema fragment (stored
+ * on `_meta.constraints`) is shallow-merged onto the node, so refinements like
+ * `{ minLength: 1 }`/`{ pattern: "…" }`/`{ minimum: 0 }` and descriptions are
+ * reflected (constraint keys win over the base on conflict). A plain
+ * predicate-only `.check()` carries no fragment and stays opaque.
  *
  * `date`/`timestamp` are epoch-millisecond numbers in Cirrus (not ISO strings),
  * so they schema as integers; `bigint` schemas as an int64 (JSON has no bigint
@@ -114,15 +117,23 @@ const toJsonSchema = (validator: Validator): JsonSchema => {
         }
     })();
 
+    // Shallow-merge any `.check()`/`.meta()` JSON Schema fragment onto the node.
+    // Constraint keys (minLength/pattern/minimum/description/…) win over the base
+    // so an enriched refinement can tighten — never silently weaken — the schema.
+    const constraints = meta.constraints as JsonSchema | undefined;
+    const node = constraints === undefined ? base : { ...base, ...constraints };
+
     // `.nullable()` is the only modifier that flips `column.notNull` to false;
     // widen the schema to accept null without disturbing the non-nullable default.
+    // Constraints describe the underlying value, so they ride inside the non-null
+    // branch rather than on the wrapping anyOf.
     const column = meta.column as ColumnMeta | undefined;
 
     if (column?.notNull === false) {
-        return { anyOf: [base, { type: "null" }] };
+        return { anyOf: [node, { type: "null" }] };
     }
 
-    return base;
+    return node;
 };
 
 /**

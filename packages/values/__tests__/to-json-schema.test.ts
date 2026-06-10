@@ -125,6 +125,56 @@ describe("toJsonSchema", () => {
             expect(toJsonSchema(v.string().nullable())).toStrictEqual({ anyOf: [{ type: "string" }, { type: "null" }] });
         });
     });
+
+    describe("constraint-carrying .check()/.meta()", () => {
+        it("merges a .check() schema fragment onto the node", () => {
+            expect.assertions(1);
+
+            const schema = toJsonSchema(v.string().check((s) => s.length > 0, { message: "non-empty", schema: { minLength: 1 } }));
+
+            expect(schema).toStrictEqual({ minLength: 1, type: "string" });
+        });
+
+        it("ignores a predicate-only .check() (stays opaque)", () => {
+            expect.assertions(1);
+
+            expect(toJsonSchema(v.string().check((s) => s.length > 0, "non-empty"))).toStrictEqual({ type: "string" });
+        });
+
+        it("composes multiple .check() fragments, later keys winning on conflict", () => {
+            expect.assertions(1);
+
+            const schema = toJsonSchema(
+                v
+                    .number()
+                    .check((n) => n >= 0, { schema: { minimum: 0 } })
+                    .check((n) => n <= 100, { schema: { maximum: 100, minimum: 1 } }),
+            );
+
+            expect(schema).toStrictEqual({ maximum: 100, minimum: 1, type: "number" });
+        });
+
+        it("reflects .meta() description and schema", () => {
+            expect.assertions(1);
+
+            const schema = toJsonSchema(v.string().meta({ description: "a slug", schema: { pattern: "^[a-z]+$" } }));
+
+            expect(schema).toStrictEqual({ description: "a slug", pattern: "^[a-z]+$", type: "string" });
+        });
+
+        it("rides inside the non-null branch when combined with .nullable()", () => {
+            expect.assertions(1);
+
+            const schema = toJsonSchema(
+                v
+                    .string()
+                    .check((s) => s.length > 0, { schema: { minLength: 1 } })
+                    .nullable(),
+            );
+
+            expect(schema).toStrictEqual({ anyOf: [{ minLength: 1, type: "string" }, { type: "null" }] });
+        });
+    });
 });
 
 describe("argsToJsonSchema", () => {

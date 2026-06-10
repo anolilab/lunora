@@ -1,3 +1,4 @@
+import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { describe, expect, it } from "vitest";
 
 import type { Id, Infer } from "../src/index";
@@ -447,5 +448,76 @@ describe(".check() refinement", () => {
 
         expect(failure.ok).toBe(false);
         expect(failure.error.expected).toBe("must be positive");
+    });
+
+    it("accepts the CheckOptions object form and still enforces the predicate", () => {
+        expect.hasAssertions();
+
+        const nonEmpty = v.string().check((s) => s.length > 0, { message: "non-empty", schema: { minLength: 1 } });
+
+        expect(nonEmpty.parse("hi")).toBe("hi");
+
+        const failure = nonEmpty.safeParse("");
+
+        assertOk(!failure.ok, "expected parse to fail");
+
+        expect(failure.error.expected).toBe("non-empty");
+    });
+});
+
+describe("standard schema (~standard)", () => {
+    it("exposes the v1 props with the cirrus vendor", () => {
+        expect.assertions(3);
+
+        const schema = v.string();
+
+        expect(schema["~standard"].version).toBe(1);
+        expect(schema["~standard"].vendor).toBe("cirrus");
+        expect(typeof schema["~standard"].validate).toBe("function");
+    });
+
+    it("type-checks as a StandardSchemaV1", () => {
+        expect.assertions(1);
+
+        // Type-level assertion: every factory result satisfies the spec interface.
+        const schema: StandardSchemaV1<string, string> = v.string();
+        const obj: StandardSchemaV1 = v.object({ name: v.string() });
+
+        expect(schema["~standard"].vendor).toBe(obj["~standard"].vendor);
+    });
+
+    it("validate returns { value } on success (synchronously)", () => {
+        expect.assertions(1);
+
+        const nonNeg = v.number().check((n) => n >= 0);
+        const result = nonNeg["~standard"].validate(7);
+
+        // Synchronous per the spec — never a Promise.
+        assertOk(!(result instanceof Promise), "validate must be synchronous");
+
+        expect(result).toStrictEqual({ value: 7 });
+    });
+
+    it("validate maps a ValidationError to { issues } with the cirrus path", () => {
+        expect.hasAssertions();
+
+        const nested = v.object({ user: v.object({ tags: v.array(v.string()) }) });
+        const result = nested["~standard"].validate({ user: { tags: ["ok", 42] } });
+
+        assertOk(!(result instanceof Promise), "validate must be synchronous");
+        assertOk(result.issues !== undefined, "expected issues");
+
+        expect(result.issues).toHaveLength(1);
+        // Cirrus paths are (string | number)[] — Standard-Schema-compatible verbatim.
+        expect(result.issues[0]?.path).toStrictEqual(["user", "tags", 1]);
+        expect(typeof result.issues[0]?.message).toBe("string");
+    });
+
+    it("attaches ~standard to derived validators (.check/.nullable/.default)", () => {
+        expect.assertions(3);
+
+        expect(v.string().check((s) => s.length > 0)["~standard"].vendor).toBe("cirrus");
+        expect(v.string().nullable()["~standard"].vendor).toBe("cirrus");
+        expect(v.string().default("x")["~standard"].vendor).toBe("cirrus");
     });
 });

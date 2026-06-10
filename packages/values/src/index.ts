@@ -3,6 +3,7 @@ export { describeValue, formatPath, ValidationError } from "./errors";
 export type { JsonSchema } from "./to-json-schema";
 export { argsToJsonSchema, toJsonSchema } from "./to-json-schema";
 export type {
+    CheckOptions,
     Column,
     ColumnMeta,
     ColumnValidator,
@@ -11,6 +12,8 @@ export type {
     InferInsert,
     InferSelect,
     InsertShape,
+    JsonSchemaFragment,
+    MetaOptions,
     SelectShape,
     TimestampColumnValidator,
     Validator,

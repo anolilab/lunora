@@ -31,6 +31,7 @@
         "bench": "vitest bench --run"
     },
     "devDependencies": {
+        "@standard-schema/spec": "catalog:types",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "esbuild": "catalog:build",
