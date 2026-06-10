@@ -55,7 +55,7 @@ const OpenRpcReferencePanel = ({ spec: inlineSpec }: OpenRpcReferencePanelProps)
 
     if (state.kind === "loading") {
         return (
-            <div className="space-y-4" data-testid="openrpc-reference-loading">
+            <div className="flex flex-col gap-4" data-testid="openrpc-reference-loading">
                 <Skeleton className="h-8 w-48" />
                 <Skeleton className="h-64 w-full" />
             </div>

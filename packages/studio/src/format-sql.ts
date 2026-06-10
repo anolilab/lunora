@@ -54,6 +54,22 @@ const SENTINEL = String.fromCodePoint(0);
 /** Matches a stashed-literal placeholder (NUL-index-NUL) on restore. */
 const RESTORE_RE = new RegExp(`${SENTINEL}${String.raw`(\d+)`}${SENTINEL}`, "gu");
 
+/** Pre-compiled whole-word, case-insensitive matcher per keyword (built once, not per `formatSql` call). */
+const KEYWORD_PATTERNS: ReadonlyArray<{ pattern: RegExp; replacement: string }> = SQL_KEYWORDS.map((keyword) => {
+    return {
+        pattern: new RegExp(String.raw`\b${keyword.replaceAll(" ", String.raw`\s+`)}\b`, "giu"),
+        replacement: keyword,
+    };
+});
+
+/** Pre-compiled leading-whitespace matcher per newline clause (built once, not per `formatSql` call). */
+const CLAUSE_PATTERNS: ReadonlyArray<{ pattern: RegExp; replacement: string }> = SQL_NEWLINE_CLAUSES.map((clause) => {
+    return {
+        pattern: new RegExp(String.raw`\s+${clause.replaceAll(" ", String.raw`\s+`)}\b`, "gu"),
+        replacement: `\n${clause}`,
+    };
+});
+
 /**
  * A small, pragmatic SQL pretty-printer for the read-only SELECT / WITH / EXPLAIN
  * the editor allows. It upper-cases known keywords (whole-word, case-insensitive),
@@ -77,17 +93,13 @@ const formatSql = (sql: string): string => {
     let out = withPlaceholders.replaceAll(/\s+/gu, " ").trim();
 
     // Upper-case keywords as whole words (longest-first via the source ordering).
-    for (const keyword of SQL_KEYWORDS) {
-        const pattern = new RegExp(String.raw`\b${keyword.replaceAll(" ", String.raw`\s+`)}\b`, "giu");
-
-        out = out.replaceAll(pattern, keyword);
+    for (const { pattern, replacement } of KEYWORD_PATTERNS) {
+        out = out.replaceAll(pattern, replacement);
     }
 
     // Break a new line before each major clause (but not at the very start).
-    for (const clause of SQL_NEWLINE_CLAUSES) {
-        const pattern = new RegExp(String.raw`\s+${clause.replaceAll(" ", String.raw`\s+`)}\b`, "gu");
-
-        out = out.replaceAll(pattern, `\n${clause}`);
+    for (const { pattern, replacement } of CLAUSE_PATTERNS) {
+        out = out.replaceAll(pattern, replacement);
     }
 
     // Restore the stashed string literals.

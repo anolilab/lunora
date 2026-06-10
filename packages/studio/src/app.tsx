@@ -13,6 +13,7 @@ import ConnectionBadge from "./connection-badge";
 import { ErrorBoundary } from "./error-boundary";
 import { createStudioI18n, useT } from "./i18n-context";
 import { StudioI18nProvider } from "./i18n-provider";
+import { cn } from "./lib/utils";
 import type { StudioProps } from "./studio";
 import { Studio } from "./studio";
 import STUDIO_ROOT_CLASS from "./theme-constants";
@@ -340,7 +341,7 @@ export const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClien
 
     return (
         <div
-            className={`${STUDIO_ROOT_CLASS} ${theme === "dark" ? "dark" : ""} flex h-dvh flex-col overflow-hidden bg-background text-sm text-foreground`}
+            className={cn(STUDIO_ROOT_CLASS, theme === "dark" && "dark", "flex h-dvh flex-col overflow-hidden bg-background text-sm text-foreground")}
             data-testid="cirrus-studio-app"
         >
             <CirrusProvider client={client}>

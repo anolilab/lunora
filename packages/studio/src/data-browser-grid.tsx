@@ -10,6 +10,7 @@ import { ConfirmButton } from "./confirm-button";
 import { CellValue, GridContainer } from "./data-grid";
 import { useT } from "./i18n-context";
 import { formatCell } from "./internal";
+import { cn } from "./lib/utils";
 import type { StagedEditsModel } from "./staged-edits";
 import { coerceCellValue } from "./staged-edits";
 
@@ -115,27 +116,19 @@ const rowKey = (row: TableRow, index: number): string => rowId(row) ?? `row-${in
  * scope so the column-def `cell` renderer stays a flat callback instead of
  * nesting another arrow for the click handler.
  */
-const RefCell = memo(({
-    column,
-    id,
-    onNavigate,
-    target,
-}: {
-    column: string;
-    id: string;
-    onNavigate: (target: string, id: string) => void;
-    target: string;
-}): ReactElement => {
-    const onClick = useCallback((): void => {
-        onNavigate(target, id);
-    }, [onNavigate, target, id]);
+const RefCell = memo(
+    ({ column, id, onNavigate, target }: { column: string; id: string; onNavigate: (target: string, id: string) => void; target: string }): ReactElement => {
+        const onClick = useCallback((): void => {
+            onNavigate(target, id);
+        }, [onNavigate, target, id]);
 
-    return (
-        <button data-testid={`db-ref-${column}`} onClick={onClick} title={`Open ${target} ${id}`} type="button">
-            {id} ↗
-        </button>
-    );
-});
+        return (
+            <button data-testid={`db-ref-${column}`} onClick={onClick} title={`Open ${target} ${id}`} type="button">
+                {id} ↗
+            </button>
+        );
+    },
+);
 
 /** The header glyph for a column given react-table's sort state: ` ▲`, ` ▼`, or empty. */
 const sortIndicator = (sorted: "asc" | "desc" | false): string => {
@@ -179,36 +172,30 @@ const EXPAND_BTN =
  * Extracted so it binds its own `useCallback` closing over the column + value
  * rather than a fresh inline arrow per cell.
  */
-const CellExpandButton = memo(({
-    column,
-    onExpand,
-    value,
-}: {
-    column: string;
-    onExpand: (column: string, value: unknown) => void;
-    value: unknown;
-}): ReactElement => {
-    const onClick = useCallback((): void => {
-        onExpand(column, value);
-    }, [column, onExpand, value]);
+const CellExpandButton = memo(
+    ({ column, onExpand, value }: { column: string; onExpand: (column: string, value: unknown) => void; value: unknown }): ReactElement => {
+        const onClick = useCallback((): void => {
+            onExpand(column, value);
+        }, [column, onExpand, value]);
 
-    return (
-        <button aria-label="Expand cell" className={EXPAND_BTN} data-testid={`db-expand-${column}`} onClick={onClick} type="button">
-            <svg
-                aria-hidden="true"
-                className="size-3"
-                fill="none"
-                stroke="currentColor"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={1.8}
-                viewBox="0 0 24 24"
-            >
-                <path d="M9 21H5a2 2 0 0 1-2-2v-4m18 0v4a2 2 0 0 1-2 2h-4M3 9V5a2 2 0 0 1 2-2h4m6 0h4a2 2 0 0 1 2 2v4" />
-            </svg>
-        </button>
-    );
-});
+        return (
+            <button aria-label="Expand cell" className={EXPAND_BTN} data-testid={`db-expand-${column}`} onClick={onClick} type="button">
+                <svg
+                    aria-hidden="true"
+                    className="size-3"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={1.8}
+                    viewBox="0 0 24 24"
+                >
+                    <path d="M9 21H5a2 2 0 0 1-2-2v-4m18 0v4a2 2 0 0 1-2 2h-4M3 9V5a2 2 0 0 1 2-2h4m6 0h4a2 2 0 0 1 2 2v4" />
+                </svg>
+            </button>
+        );
+    },
+);
 
 /**
  * The text input shown while a cell is being edited. Commits on Enter or blur
@@ -390,7 +377,7 @@ const GridHeaderCell = ({
 
     return (
         <th
-            className={`text-start text-xs font-medium text-muted-foreground${pinned ? " border-e border-border bg-muted" : ""}`}
+            className={cn("text-start text-xs font-medium text-muted-foreground", pinned && "border-e border-border bg-muted")}
             draggable
             onDragOver={onDragOver}
             onDragStart={onDragStart}
@@ -606,7 +593,7 @@ const DataBrowserTableView = ({
 
                     return (
                         <td
-                            className={`group/cell truncate font-mono text-muted-foreground${pinned ? " border-e border-border bg-background" : ""}${ring}`}
+                            className={cn("group/cell truncate font-mono text-muted-foreground", pinned && "border-e border-border bg-background", ring)}
                             key={cell.id}
                             style={pinned ? pinnedDataCellStyle(cell.column.getSize()) : sizedCellStyle(cell.column.getSize())}
                         >
@@ -659,7 +646,7 @@ const DataBrowserTableView = ({
     };
 
     return (
-        <GridContainer fill>
+        <GridContainer layout="fill">
             <div data-testid="db-scroll" onKeyDown={onGridKeyDown} ref={scrollRef} role="grid" style={SCROLL_STYLE} tabIndex={0}>
                 <table className="w-full text-xs" data-testid="db-rows" style={ROWS_STYLE}>
                     <thead className="bg-muted/50">

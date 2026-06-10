@@ -130,7 +130,7 @@ export const HomePanel = ({ initialShardKey }: HomePanelProps): ReactElement => 
     }, [navigate]);
 
     return (
-        <div className="space-y-6" data-testid="cirrus-home">
+        <div className="flex flex-col gap-6" data-testid="cirrus-home">
             {/* Health digest. */}
             <div className="grid gap-3 sm:grid-cols-3" data-testid="home-health">
                 <StatCard label={t("Requests")} value={(metrics?.requests ?? 0).toLocaleString()} />
@@ -140,7 +140,7 @@ export const HomePanel = ({ initialShardKey }: HomePanelProps): ReactElement => 
 
             {/* Advisors summary. When both advisors are loaded and clean, collapse
                 to a single "no issues" state (mirrors Supabase's Home advisor block). */}
-            <section className="space-y-3" data-testid="home-advisors">
+            <section className="flex flex-col gap-3" data-testid="home-advisors">
                 <h2 className="text-sm font-semibold tracking-tight text-foreground">{t("Advisors")}</h2>
                 {securityCount === 0 && performanceCount === 0 ? (
                     <EmptyState
@@ -171,7 +171,7 @@ export const HomePanel = ({ initialShardKey }: HomePanelProps): ReactElement => 
             </section>
 
             {/* Get connected — point an app at this deployment (Supabase-style). */}
-            <section className="space-y-3" data-testid="home-get-connected">
+            <section className="flex flex-col gap-3" data-testid="home-get-connected">
                 <h2 className="text-sm font-semibold tracking-tight text-foreground">{t("Get connected")}</h2>
                 <div className="grid gap-3 sm:grid-cols-3">
                     <ConnectCard command="npm i @cirrus/client" label={t("Client SDK")} />
@@ -181,7 +181,7 @@ export const HomePanel = ({ initialShardKey }: HomePanelProps): ReactElement => 
             </section>
 
             {/* Quick links into the busiest panels. */}
-            <section className="space-y-3" data-testid="home-quick-links">
+            <section className="flex flex-col gap-3" data-testid="home-quick-links">
                 <h2 className="text-sm font-semibold tracking-tight text-foreground">{t("Quick links")}</h2>
                 <div className="flex flex-wrap gap-2">
                     <Button data-to="/data" onClick={goTo} size="sm" type="button" variant="outline">

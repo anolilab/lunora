@@ -12,6 +12,7 @@ import { Input } from "./components/ui/input";
 import { useT } from "./i18n-context";
 import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal";
 import { CLOUDFLARE_OBSERVABILITY_URL } from "./lib/cf-links";
+import { cn } from "./lib/utils";
 import { LiveToggle } from "./live-toggle";
 import { recordShard } from "./shard-history";
 import { ShardInput } from "./shard-input";
@@ -331,7 +332,7 @@ const LevelToggle = ({ level, onToggle, selected }: LevelToggleProps): ReactElem
     return (
         <button
             aria-pressed={selected}
-            className={`rounded-md border px-2 py-1 text-xs ${selected ? "border-border bg-muted font-medium" : "border-input text-muted-foreground"}`}
+            className={cn("rounded-md border px-2 py-1 text-xs", selected ? "border-border bg-muted font-medium" : "border-input text-muted-foreground")}
             data-testid={`logs-level-${level}`}
             onClick={onClick}
             type="button"
@@ -600,7 +601,7 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
                 <div className="inline-flex overflow-hidden rounded-md border border-border" role="tablist">
                     <button
                         aria-selected={view === "requests"}
-                        className={`px-3 py-1 text-sm ${view === "requests" ? "bg-muted font-medium" : "text-muted-foreground"}`}
+                        className={cn("px-3 py-1 text-sm", view === "requests" ? "bg-muted font-medium" : "text-muted-foreground")}
                         data-testid="lg-view-requests"
                         onClick={showRequests}
                         role="tab"
@@ -610,7 +611,7 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
                     </button>
                     <button
                         aria-selected={view === "errors"}
-                        className={`px-3 py-1 text-sm ${view === "errors" ? "bg-muted font-medium" : "text-muted-foreground"}`}
+                        className={cn("px-3 py-1 text-sm", view === "errors" ? "bg-muted font-medium" : "text-muted-foreground")}
                         data-testid="lg-view-errors"
                         onClick={showErrors}
                         role="tab"
@@ -672,7 +673,10 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
                     </select>
                     <button
                         aria-pressed={showSummary}
-                        className={`h-8 rounded-md border px-3 text-sm ${showSummary ? "border-border bg-muted font-medium" : "border-input text-muted-foreground"}`}
+                        className={cn(
+                            "h-8 rounded-md border px-3 text-sm",
+                            showSummary ? "border-border bg-muted font-medium" : "border-input text-muted-foreground",
+                        )}
                         data-testid="logs-summary-toggle"
                         onClick={toggleSummary}
                         type="button"

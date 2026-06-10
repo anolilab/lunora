@@ -1,4 +1,4 @@
-import type { CSSProperties, KeyboardEvent, MouseEvent, ReactElement, ReactNode } from "react";
+import type { KeyboardEvent, MouseEvent, ReactElement, ReactNode } from "react";
 import { useCallback } from "react";
 
 import { cn } from "../../lib/utils";
@@ -19,20 +19,11 @@ interface ModalShellProps {
     readonly variant: "dialog" | "drawer";
 }
 
-const OVERLAY_BASE: CSSProperties = {
-    background: "rgba(0,0,0,0.2)",
-    bottom: 0,
-    display: "flex",
-    left: 0,
-    position: "fixed",
-    right: 0,
-    top: 0,
-    zIndex: 1000,
-};
-
-const OVERLAY_BY_VARIANT: Record<ModalShellProps["variant"], CSSProperties> = {
-    dialog: { ...OVERLAY_BASE, justifyContent: "center", paddingTop: "10vh" },
-    drawer: { ...OVERLAY_BASE, justifyContent: "flex-end" },
+// The overlay owns its own stacking context — `z-[1000]` keeps a modal above the
+// in-flow `z-50` popover/dropdown/tooltip primitives, matching the prior inline value.
+const OVERLAY_BY_VARIANT: Record<ModalShellProps["variant"], string> = {
+    dialog: "fixed inset-0 z-[1000] flex justify-center bg-black/20 pt-[10vh]",
+    drawer: "fixed inset-0 z-[1000] flex justify-end bg-black/20",
 };
 
 const PANEL_BY_VARIANT: Record<ModalShellProps["variant"], string> = {
@@ -67,7 +58,7 @@ export const ModalShell = ({ className, children, label, onClose, panelTestId, t
     );
 
     return (
-        <div data-testid={testId} onClick={onOverlayClick} onKeyDown={onOverlayKeyDown} role="presentation" style={OVERLAY_BY_VARIANT[variant]}>
+        <div className={OVERLAY_BY_VARIANT[variant]} data-testid={testId} onClick={onOverlayClick} onKeyDown={onOverlayKeyDown} role="presentation">
             <div aria-label={label} className={cn(PANEL_BY_VARIANT[variant], className)} data-testid={panelTestId} role="dialog">
                 {children}
             </div>
