@@ -7,6 +7,7 @@
  * any lint uniformly, but the rules run against Cirrus's declared schema (and,
  * later, observed runtime signal) rather than Postgres catalog views.
  */
+import authApiCallWithoutHeaders from "./lints/static/auth-api-call-without-headers";
 import duplicateIndex from "./lints/static/duplicate-index";
 import emptyIndex from "./lints/static/empty-index";
 import filterWithoutIndex from "./lints/static/filter-without-index";
@@ -17,7 +18,9 @@ import tableWithoutInsert from "./lints/static/table-without-insert";
 import unindexedForeignKey from "./lints/static/unindexed-foreign-key";
 import type { Finding, Lint, LintContext, LintSource } from "./types";
 
+export type { AdvisorAuthApiCall } from "./authapi-calls";
 export type { AdvisorInsertWrite } from "./inserts";
+export { default as authApiCallWithoutHeaders } from "./lints/static/auth-api-call-without-headers";
 export { default as duplicateIndex } from "./lints/static/duplicate-index";
 export { default as emptyIndex } from "./lints/static/empty-index";
 export { default as filterWithoutIndex } from "./lints/static/filter-without-index";
@@ -46,6 +49,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     duplicateIndex,
     tableWithoutInsert,
     filterWithoutIndex,
+    authApiCallWithoutHeaders,
 ];
 
 /** The default lint set. Currently the static lints; runtime lints join as they land. */
