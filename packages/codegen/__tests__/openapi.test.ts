@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import type { FunctionIR, HttpRouteIR } from "../src/ir";
-import { CIRRUS_ERROR_CODES, emitOpenApi } from "../src/openapi";
+import { emitOpenApi } from "../src/openapi";
+import { CIRRUS_ERROR_CODES } from "../src/schema-ir";
 
 const makeFunction = (overrides: Partial<FunctionIR> = {}): FunctionIR => {
     return {
@@ -53,7 +54,9 @@ describe("emitOpenApi", () => {
 
         const document = JSON.parse(
             emitOpenApi({
-                functions: [makeFunction({ args: { channelId: { kind: "id", tableName: "channels" }, limit: { inner: { kind: "number" }, kind: "optional" } } })],
+                functions: [
+                    makeFunction({ args: { channelId: { kind: "id", tableName: "channels" }, limit: { inner: { kind: "number" }, kind: "optional" } } }),
+                ],
                 httpRoutes: [],
             }),
         );

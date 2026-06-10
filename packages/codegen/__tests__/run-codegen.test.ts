@@ -290,6 +290,70 @@ describe("run-codegen", () => {
             expect(result.generated.openApi.endsWith("}\n")).toBe(true);
         });
 
+        it('defaults to apiSpec:"openapi" — writes openapi.json only, not openrpc.json', () => {
+            expect.assertions(2);
+
+            runCodegen({ projectRoot: workdir });
+
+            const generatedDirectory = join(workdir, "cirrus", "_generated");
+
+            expect(existsSync(join(generatedDirectory, "openapi.json"))).toBe(true);
+            expect(existsSync(join(generatedDirectory, "openrpc.json"))).toBe(false);
+        });
+
+        it('apiSpec:"openrpc" writes openrpc.json only, not openapi.json', () => {
+            expect.assertions(3);
+
+            const result = runCodegen({ apiSpec: "openrpc", projectRoot: workdir });
+
+            const generatedDirectory = join(workdir, "cirrus", "_generated");
+
+            expect(existsSync(join(generatedDirectory, "openrpc.json"))).toBe(true);
+            expect(existsSync(join(generatedDirectory, "openapi.json"))).toBe(false);
+
+            const document = JSON.parse(result.generated.openRpc) as { methods: { name: string }[]; openrpc: string };
+
+            expect(document.openrpc).toBe("1.3.2");
+        });
+
+        it('apiSpec:"both" writes both openapi.json and openrpc.json', () => {
+            expect.assertions(2);
+
+            runCodegen({ apiSpec: "both", projectRoot: workdir });
+
+            const generatedDirectory = join(workdir, "cirrus", "_generated");
+
+            expect(existsSync(join(generatedDirectory, "openapi.json"))).toBe(true);
+            expect(existsSync(join(generatedDirectory, "openrpc.json"))).toBe(true);
+        });
+
+        it('apiSpec:"none" writes neither spec file', () => {
+            expect.assertions(2);
+
+            runCodegen({ apiSpec: "none", projectRoot: workdir });
+
+            const generatedDirectory = join(workdir, "cirrus", "_generated");
+
+            expect(existsSync(join(generatedDirectory, "openapi.json"))).toBe(false);
+            expect(existsSync(join(generatedDirectory, "openrpc.json"))).toBe(false);
+        });
+
+        it("emits openrpc.json modelling RPC functions as methods, excluding internal/stream", () => {
+            expect.assertions(5);
+
+            const result = runCodegen({ apiSpec: "openrpc", projectRoot: workdir });
+            const document = JSON.parse(result.generated.openRpc) as { methods: { name: string; params: { name: string }[] }[]; openrpc: string };
+
+            const names = document.methods.map((method) => method.name);
+
+            expect(document.openrpc).toBe("1.3.2");
+            expect(names).toContain("messages:list");
+            expect(names).toContain("messages:send");
+            // The internalMutation `purge` is excluded, like the OpenAPI emitter.
+            expect(names).not.toContain("messages:purge");
+            expect(document.methods[0]?.params[0]?.name).toBe("args");
+        });
+
         it("emits drizzle.global.ts containing only `.global()` tables", () => {
             expect.assertions(3);
 
@@ -345,7 +409,7 @@ describe("run-codegen", () => {
         });
 
         it("output matches committed expected/ files (snapshot)", () => {
-            expect.assertions(8);
+            expect.assertions(9);
 
             // `lint: false` keeps the emitted `CIRRUS_ADVISORIES` empty so the
             // snapshot stays decoupled from advisor behaviour (a lint change
@@ -361,6 +425,7 @@ describe("run-codegen", () => {
             const expectedDrizzleShard = readFileSync(join(expectedDirectory, "drizzle.shard.ts"), "utf8");
             const expectedShard = readFileSync(join(expectedDirectory, "shard.ts"), "utf8");
             const expectedOpenApi = readFileSync(join(expectedDirectory, "openapi.json"), "utf8");
+            const expectedOpenRpc = readFileSync(join(expectedDirectory, "openrpc.json"), "utf8");
 
             expect(result.generated.api).toBe(expectedApi);
             expect(result.generated.server).toBe(expectedServer);
@@ -370,6 +435,7 @@ describe("run-codegen", () => {
             expect(result.generated.drizzleShard).toBe(expectedDrizzleShard);
             expect(result.generated.shard).toBe(expectedShard);
             expect(result.generated.openApi).toBe(expectedOpenApi);
+            expect(result.generated.openRpc).toBe(expectedOpenRpc);
         });
 
         it("emits shard.ts with a createShardDO factory wired to generated modules", () => {

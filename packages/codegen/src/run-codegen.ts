@@ -13,6 +13,7 @@ import discoverQueries from "./discover-queries";
 import discoverSchema from "./discover-schema";
 import { emitApi, emitCrons, emitDataModel, emitDrizzleSchema, emitFunctions, emitServer, emitShard, emitWranglerCronTriggers } from "./emit";
 import { emitOpenApi } from "./openapi";
+import { emitOpenRpc } from "./openrpc";
 
 const writeIfChanged = (filePath: string, content: string): void => {
     // Avoid spurious writes (and downstream HMR reloads) when the rendered
@@ -90,7 +91,17 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const shardContent = emitShard(schema, advisories);
     const cronsContent = emitCrons(crons);
     const drizzleFiles = emitDrizzleSchema(schema);
+
+    // Which API spec(s) the run emits. Defaults to `"openapi"` so existing
+    // projects (and the golden fixtures) keep writing only `openapi.json`.
+    const apiSpec = options.apiSpec ?? "openapi";
+    const wantsOpenApi = apiSpec === "openapi" || apiSpec === "both";
+    const wantsOpenRpc = apiSpec === "openrpc" || apiSpec === "both";
+
+    // Always compute both strings (cheap, pure) so `CodegenResult` can carry
+    // whichever the caller asked for; only the requested file(s) are written.
     const openApiContent = emitOpenApi({ functions, httpRoutes });
+    const openRpcContent = emitOpenRpc({ functions });
 
     const outputDirectory = join(cirrusDirectory, "_generated");
 
@@ -107,7 +118,14 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         writeIfChanged(join(outputDirectory, "crons.ts"), cronsContent);
         writeIfChanged(join(outputDirectory, "drizzle.global.ts"), drizzleFiles.global);
         writeIfChanged(join(outputDirectory, "drizzle.shard.ts"), drizzleFiles.shard);
-        writeIfChanged(join(outputDirectory, "openapi.json"), openApiContent);
+
+        if (wantsOpenApi) {
+            writeIfChanged(join(outputDirectory, "openapi.json"), openApiContent);
+        }
+
+        if (wantsOpenRpc) {
+            writeIfChanged(join(outputDirectory, "openrpc.json"), openRpcContent);
+        }
     }
 
     return {
@@ -121,6 +139,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
             drizzleShard: drizzleFiles.shard,
             functions: functionsContent,
             openApi: openApiContent,
+            openRpc: openRpcContent,
             server: serverContent,
             shard: shardContent,
         },
@@ -129,6 +148,20 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
 };
 
 export interface CodegenOptions {
+    /**
+     * Which machine-readable API spec(s) to emit into `_generated/`.
+     *
+     * `"openapi"` (the default) writes only `openapi.json` (OpenAPI 3.1; covers
+     * both the RPC functions and `httpRouter()` REST routes). `"openrpc"` writes
+     * only `openrpc.json` (OpenRPC 1.x; the RPC functions only — OpenRPC cannot
+     * represent REST routes). `"both"` writes both files; `"none"` writes neither.
+     *
+     * Regardless of the choice, `CodegenResult.generated.openApi` and `.openRpc`
+     * always carry the rendered string (computation is cheap and pure); only the
+     * on-disk write is gated by this option.
+     */
+    apiSpec?: "both" | "none" | "openapi" | "openrpc";
+
     /** Override the cirrus subdirectory name. Defaults to `"cirrus"`. */
     cirrusDirectory?: string;
 
@@ -175,6 +208,8 @@ export interface CodegenResult {
         functions: string;
         /** OpenAPI 3.1.0 document (`_generated/openapi.json`), pretty-printed JSON. */
         openApi: string;
+        /** OpenRPC 1.x document (`_generated/openrpc.json`), pretty-printed JSON. Always computed; written only when `apiSpec` includes `openrpc`. */
+        openRpc: string;
         server: string;
         shard: string;
     };

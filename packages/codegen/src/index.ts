@@ -8,9 +8,12 @@ export { default as discoverSchema } from "./discover-schema";
 export { emitApi, emitCrons, emitDataModel, emitDrizzleSchema, emitFunctions, emitServer, emitShard, emitWranglerCronTriggers, GENERATED_HEADER } from "./emit";
 export type { CronJobIR, FunctionIR, HttpRouteIR, IndexIR, MigrationIR, ProjectIR, QueryReadIR, SchemaIR, TableIR, ValidatorIR, VectorIndexIR } from "./ir";
 export type { OpenApiEmitInput } from "./openapi";
-export { CIRRUS_ERROR_CODES, emitOpenApi, validatorIrToJsonSchema } from "./openapi";
+export { emitOpenApi } from "./openapi";
+export type { OpenRpcEmitInput } from "./openrpc";
+export { emitOpenRpc, OPENRPC_VERSION } from "./openrpc";
 export type { CodegenOptions, CodegenResult } from "./run-codegen";
 export { runCodegen } from "./run-codegen";
+export { CIRRUS_ERROR_CODES, validatorIrToJsonSchema } from "./schema-ir";
 export type { Finding } from "@cirrus/advisor";
 
 export const VERSION = "0.0.0";
