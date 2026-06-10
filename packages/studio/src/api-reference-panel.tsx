@@ -2,12 +2,13 @@ import { useCirrus } from "@cirrus/react";
 import type { AnyApiReferenceConfiguration } from "@scalar/api-reference-react";
 import { ApiReferenceReact } from "@scalar/api-reference-react";
 import type { ReactElement } from "react";
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useMemo, useSyncExternalStore } from "react";
 
 import { EmptyState } from "./components/ui/empty-state";
 import { Skeleton } from "./components/ui/skeleton";
 import { useT } from "./i18n-context";
-import { errorMessage } from "./internal";
+import type { SpecFetchState } from "./use-admin-spec";
+import { useAdminSpec } from "./use-admin-spec";
 
 interface ApiReferencePanelProps {
     /**
@@ -19,23 +20,22 @@ interface ApiReferencePanelProps {
     readonly spec?: unknown;
 }
 
-/**
- * Result of resolving the spec the reference renders. `empty` is distinct from
- * `error`: the worker answers a spec-less `GET /_cirrus/admin/openapi` with a
- * well-formed-but-pathless 200 document, so "no operations" is a clean
- * configured-but-empty state, not a failure.
- */
-type FetchState = { kind: "empty" } | { kind: "error"; message: string } | { kind: "loading" } | { kind: "ready"; spec: Record<string, unknown> };
+/** The OpenAPI document shape the panel renders (only the field it inspects). */
+type OpenApiDocument = Record<string, unknown>;
 
 /** A spec with no `paths` (or an empty map) is the worker's "not configured" sentinel. */
-const isEmptySpec = (spec: Record<string, unknown>): boolean => {
+const isEmptySpec = (spec: OpenApiDocument): boolean => {
     const { paths } = spec;
 
     return paths === undefined || (typeof paths === "object" && paths !== null && Object.keys(paths).length === 0);
 };
 
-/** Classify a resolved spec object into the `ready`/`empty` terminal states. */
-const classifySpec = (spec: Record<string, unknown>): FetchState => (isEmptySpec(spec) ? { kind: "empty" } : { kind: "ready", spec });
+/** Classify a resolved spec object into the `ready`/`empty` terminal states (see {@link useAdminSpec}). */
+const classifySpec = (spec: unknown): SpecFetchState<OpenApiDocument> => {
+    const document = spec as OpenApiDocument;
+
+    return isEmptySpec(document) ? { kind: "empty" } : { kind: "ready", spec: document };
+};
 
 /**
  * CSS bridging Scalar's design tokens onto the studio's Tailwind theme variables
@@ -111,40 +111,8 @@ const ApiReferencePanel = ({ spec: inlineSpec }: ApiReferencePanelProps): ReactE
     const client = useCirrus();
     const dark = useStudioDarkMode();
 
-    // An inline spec resolves synchronously (no fetch); the fetched path starts
-    // in `loading` and the effect below resolves it. Lazy initialiser so the
-    // inline spec is classified once at mount, not on every render.
-    const [fetched, setFetched] = useState<FetchState>({ kind: "loading" });
-    const state: FetchState = inlineSpec === undefined ? fetched : classifySpec(inlineSpec as Record<string, unknown>);
-
-    useEffect(() => {
-        // An inline spec is authoritative and handled synchronously above — skip
-        // the fetch entirely.
-        if (inlineSpec !== undefined) {
-            return undefined;
-        }
-
-        let cancelled = false;
-
-        client
-            .fetchOpenApi()
-            .then((spec) => {
-                if (!cancelled) {
-                    setFetched(classifySpec(spec));
-                }
-
-                return spec;
-            })
-            .catch((error: unknown) => {
-                if (!cancelled) {
-                    setFetched({ kind: "error", message: errorMessage(error) });
-                }
-            });
-
-        return () => {
-            cancelled = true;
-        };
-    }, [client, inlineSpec]);
+    const fetchOpenApi = useCallback(() => client.fetchOpenApi(), [client]);
+    const state = useAdminSpec<OpenApiDocument>(inlineSpec, fetchOpenApi, classifySpec);
 
     const configuration = useMemo<AnyApiReferenceConfiguration | undefined>(() => {
         if (state.kind !== "ready") {

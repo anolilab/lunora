@@ -1,13 +1,15 @@
 import { useCirrus } from "@cirrus/react";
 import type { ReactElement } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
 
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { EmptyState } from "./components/ui/empty-state";
 import { Skeleton } from "./components/ui/skeleton";
 import { useT } from "./i18n-context";
-import { errorMessage, fireAndForget } from "./internal";
+import { fireAndForget } from "./internal";
+import type { SpecFetchState } from "./use-admin-spec";
+import { useAdminSpec } from "./use-admin-spec";
 
 interface OpenRpcReferencePanelProps {
     /**
@@ -54,14 +56,18 @@ interface OpenRpcDocument {
     methods?: OpenRpcMethod[];
 }
 
-/** Result of resolving the spec the reference renders. */
-type FetchState = { document: OpenRpcDocument; kind: "ready" } | { kind: "empty" } | { kind: "error"; message: string } | { kind: "loading" };
-
 /** A document with no `methods` (or an empty array) is the worker's "not configured" sentinel. */
 const isEmptyDocument = (document: OpenRpcDocument): boolean => document.methods === undefined || document.methods.length === 0;
 
-/** Classify a resolved document into the `ready`/`empty` terminal states. */
-const classifyDocument = (document: OpenRpcDocument): FetchState => (isEmptyDocument(document) ? { kind: "empty" } : { kind: "ready", document });
+/** Classify a resolved document into the `ready`/`empty` terminal states (see {@link useAdminSpec}). */
+const classifyDocument = (spec: unknown): SpecFetchState<OpenRpcDocument> => {
+    const document = spec as OpenRpcDocument;
+
+    return isEmptyDocument(document) ? { kind: "empty" } : { kind: "ready", spec: document };
+};
+
+/** The method's `args` param (or its first param), shared by the example builder and the card. */
+const argsParameterOf = (method: OpenRpcMethod): OpenRpcParameter | undefined => (method.params ?? []).find((parameter) => parameter.name === "args") ?? (method.params ?? [])[0];
 
 /** Render a schema node as a short, human-readable type label (best-effort, non-recursive past one level). */
 const typeLabel = (schema: SchemaNode | undefined): string => {
@@ -133,7 +139,7 @@ const exampleForSchema = (schema: SchemaNode | undefined): unknown => {
  * from the method's single `args` param schema.
  */
 const requestExample = (method: OpenRpcMethod): string => {
-    const argsParameter = (method.params ?? []).find((parameter) => parameter.name === "args") ?? (method.params ?? [])[0];
+    const argsParameter = argsParameterOf(method);
     const params = argsParameter === undefined ? {} : { args: exampleForSchema(argsParameter.schema) };
 
     return JSON.stringify({ id: 1, jsonrpc: "2.0", method: method.name, params }, undefined, 2);
@@ -233,7 +239,7 @@ interface MethodCardProps {
 const MethodCard = ({ method }: MethodCardProps): ReactElement => {
     const t = useT();
     const example = useMemo(() => requestExample(method), [method]);
-    const argsParameter = useMemo(() => (method.params ?? []).find((parameter) => parameter.name === "args") ?? (method.params ?? [])[0], [method]);
+    const argsParameter = useMemo(() => argsParameterOf(method), [method]);
 
     return (
         <div className="flex flex-col gap-3 rounded-md border border-border p-4" data-testid={`openrpc-method-${method.name}`}>
@@ -299,37 +305,10 @@ const OpenRpcReferencePanel = ({ spec: inlineSpec }: OpenRpcReferencePanelProps)
     const t = useT();
     const client = useCirrus();
 
-    const [fetched, setFetched] = useState<FetchState>({ kind: "loading" });
-    const state: FetchState = inlineSpec === undefined ? fetched : classifyDocument(inlineSpec as OpenRpcDocument);
+    const fetchOpenRpc = useCallback(() => client.fetchOpenRpc(), [client]);
+    const state = useAdminSpec<OpenRpcDocument>(inlineSpec, fetchOpenRpc, classifyDocument);
 
-    useEffect(() => {
-        if (inlineSpec !== undefined) {
-            return undefined;
-        }
-
-        let cancelled = false;
-
-        client
-            .fetchOpenRpc()
-            .then((document) => {
-                if (!cancelled) {
-                    setFetched(classifyDocument(document));
-                }
-
-                return document;
-            })
-            .catch((error: unknown) => {
-                if (!cancelled) {
-                    setFetched({ kind: "error", message: errorMessage(error) });
-                }
-            });
-
-        return () => {
-            cancelled = true;
-        };
-    }, [client, inlineSpec]);
-
-    const groups = useMemo(() => (state.kind === "ready" ? groupMethods(state.document.methods ?? []) : []), [state]);
+    const groups = useMemo(() => (state.kind === "ready" ? groupMethods(state.spec.methods ?? []) : []), [state]);
 
     if (state.kind === "loading") {
         return (

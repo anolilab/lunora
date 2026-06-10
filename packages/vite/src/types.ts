@@ -1,3 +1,4 @@
+import type { CodegenOptions } from "@cirrus/codegen";
 import type errorOverlayPlugin from "@visulima/vite-overlay";
 import type { Plugin } from "vite";
 
@@ -17,9 +18,10 @@ export interface CirrusPluginOptions {
      * Which machine-readable API spec(s) codegen emits into `_generated/`.
      * `"openapi"` (default) writes `openapi.json` (OpenAPI 3.1; RPC + REST),
      * `"openrpc"` writes `openrpc.json` (OpenRPC 1.x; RPC-only), `"both"` writes
-     * both, and `"none"` writes neither. Forwarded to `runCodegen({ apiSpec })`.
+     * both, and `"none"` writes neither. Forwarded to `runCodegen({ apiSpec })`;
+     * the value set is derived from `CodegenOptions` so it can't drift.
      */
-    apiSpec?: "both" | "none" | "openapi" | "openrpc";
+    apiSpec?: CodegenOptions["apiSpec"];
     /** Pass through to `@cloudflare/vite-plugin`. Pass `false` to opt out. Defaults to `true`. */
     cloudflare?: boolean | CloudflarePluginOptions;
     /** Directory name (relative to `projectRoot`) where generated files are written. Defaults to `"cirrus/_generated"`. */
@@ -43,7 +45,7 @@ export interface CirrusPluginOptions {
 
 /** Resolved options after merging defaults. */
 export interface ResolvedCirrusPluginOptions {
-    apiSpec: "both" | "none" | "openapi" | "openrpc";
+    apiSpec: NonNullable<CodegenOptions["apiSpec"]>;
     cloudflare: false | CloudflarePluginOptions;
     generatedDir: string;
     overlay: false | OverlayPluginOptions;
