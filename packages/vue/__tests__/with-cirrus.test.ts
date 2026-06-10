@@ -1,8 +1,11 @@
 import type { ShardNamespaceLike } from "@cirrus/runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ExecutionContextLike, NitroCloudflareHandler } from "../src/worker";
+import type { ExecutionContextLike, NitroCloudflareHandler, ScheduledControllerLike } from "../src/worker";
 import { withCirrus } from "../src/worker";
+
+/** The `scheduled` hook shape a Nitro host may carry (the object arm of the handler union). */
+type NitroScheduled = (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike) => Promise<void> | void;
 
 /**
  * Records every shard forward and lets a test override the stub response — the
@@ -52,7 +55,7 @@ const fakeContext: ExecutionContextLike = {
  */
 const createNitroHandler = (
     fetchImpl: (request: Request) => Response | Promise<Response>,
-    scheduled?: NitroCloudflareHandler["scheduled"],
+    scheduled?: NitroScheduled,
 ): { handler: NitroCloudflareHandler; spy: ReturnType<typeof vi.fn> } => {
     const spy = vi.fn<(request: Request) => Response | Promise<Response>>(fetchImpl);
 

@@ -3575,10 +3575,93 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
  */
 const composeWorker = (options: WorkerOptions): CirrusWorker => createWorker(options);
 
+/**
+ * A meta-framework's emitted Cloudflare handler: either a bare `fetch` function
+ * or a `{ fetch }` module object (optionally carrying its own `scheduled`). Every
+ * class-B adapter output (`@sveltejs/adapter-cloudflare`, Nitro's
+ * `cloudflare-module`, `@astrojs/cloudflare`) is structurally one of these.
+ */
+type FrameworkHostHandler =
+    | ((request: Request, env?: unknown, context?: ExecutionContextLike) => Promise<Response> | Response)
+    | (HttpRouterLike & { scheduled?: (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike) => Promise<void> | void });
+
+/** Cirrus worker options for {@link withFrameworkWorker} — everything except `httpRouter` (supplied from the framework host). */
+type FrameworkWorkerOptions = Omit<WorkerOptions, "httpRouter">;
+
+/**
+ * Either fixed {@link FrameworkWorkerOptions}, or a factory deriving them from the
+ * per-request `env` — for bindings (like `env.SHARD` → `shardDO`) that only exist
+ * at request time.
+ */
+type FrameworkWorkerOptionsInput = ((env: unknown) => FrameworkWorkerOptions) | FrameworkWorkerOptions;
+
+const toHttpRouter = (handler: FrameworkHostHandler): HttpRouterLike => (typeof handler === "function" ? { fetch: handler } : handler);
+
+/** Whether the Cirrus options configure any cron surface (so Cirrus owns `scheduled` rather than the framework host). */
+const hasCirrusCrons = (options: FrameworkWorkerOptions): boolean => Boolean(options.crons ?? options.cronJobs ?? options.backupCron);
+
+/**
+ * Compose a meta-framework's Cloudflare Worker handler with Cirrus's realtime
+ * plane into one `{ fetch, scheduled }` Worker — the **single, shared** class-B
+ * (own-CF-adapter, hook-injection) composer behind `@cirrus/svelte/worker`,
+ * `@cirrus/vue/worker`, and `@cirrus/astro`'s `withCirrus` (PLAN4 §3). It wraps
+ * the framework handler as {@link composeWorker}'s `httpRouter`, so the reserved
+ * realtime endpoints (`/_cirrus/rpc`, `/_cirrus/ws`, `/_cirrus/admin/*`) plus
+ * auth/explicit `routes` go to Cirrus and **everything else** delegates to the
+ * framework. A framework render that throws is contained at the seam and
+ * surfaced as a plain 500 — it can never take down the realtime plane.
+ *
+ * Owns the three behaviors the adapters otherwise each re-implemented (and
+ * diverged on): (1) the host may be a bare `fetch` fn or a `{ fetch }` object;
+ * (2) options may be a fixed object or an `(env) => options` factory, rebuilt per
+ * request so per-request bindings wire in; (3) **`scheduled` preservation** — when
+ * Cirrus configures no cron surface, the framework host's own `scheduled` (if any)
+ * is preserved rather than silently dropped; otherwise Cirrus owns it (crons /
+ * backup).
+ * @param host The framework's emitted Cloudflare handler.
+ * @param optionsInput Cirrus options minus `httpRouter`, or an `(env) => options` factory.
+ */
+const withFrameworkWorker = (host: FrameworkHostHandler, optionsInput: FrameworkWorkerOptionsInput): CirrusWorker => {
+    const httpRouter = toHttpRouter(host);
+    const hostScheduled = typeof host === "object" && typeof host.scheduled === "function" ? host.scheduled : undefined;
+
+    const build = (options: FrameworkWorkerOptions): CirrusWorker => {
+        const cirrus = composeWorker({ ...options, httpRouter });
+
+        // Preserve the framework host's own `scheduled` when Cirrus configures no
+        // cron surface (so a host with cron tasks isn't silently dropped). Spread
+        // `cirrus` so `fetch`/`serverQuery` are kept and only `scheduled` is
+        // overridden.
+        if (hostScheduled !== undefined && !hasCirrusCrons(options)) {
+            return {
+                ...cirrus,
+                scheduled: async (controller, env, context): Promise<void> => {
+                    await hostScheduled(controller, env, context);
+                },
+            };
+        }
+
+        return cirrus;
+    };
+
+    if (typeof optionsInput !== "function") {
+        return build(optionsInput);
+    }
+
+    // Factory form: options depend on per-request `env`, so (re)build per call.
+    const optionsFactory = optionsInput;
+
+    return {
+        fetch: (request, env, context) => build(optionsFactory(env)).fetch(request, env, context),
+        scheduled: (controller, env, context) => build(optionsFactory(env)).scheduled(controller, env, context),
+        serverQuery: (request, env, reference, args, options) => build(optionsFactory(env)).serverQuery(request, env, reference, args, options),
+    };
+};
+
 /** Re-exported helper so callers can roundtrip envelopes in tests. */
 const defineRpcEnvelope = (envelope: RpcEnvelope): RpcEnvelope => envelope;
 
-export { composeWorker, createWorker, defineRpcEnvelope };
+export { composeWorker, createWorker, defineRpcEnvelope, withFrameworkWorker };
 export type {
     AdminTableResolver,
     BackupManifest,
@@ -3587,6 +3670,9 @@ export type {
     CronHandler,
     CronJobDispatch,
     ExecutionContextLike,
+    FrameworkHostHandler,
+    FrameworkWorkerOptions,
+    FrameworkWorkerOptionsInput,
     FunctionDescriptor,
     FunctionRegistryEntry,
     FunctionRegistryLike,

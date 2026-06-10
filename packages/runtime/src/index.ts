@@ -15,6 +15,9 @@ export type {
     CronHandler,
     CronJobDispatch,
     ExecutionContextLike,
+    FrameworkHostHandler,
+    FrameworkWorkerOptions,
+    FrameworkWorkerOptionsInput,
     FunctionDescriptor,
     FunctionRegistryEntry,
     FunctionRegistryLike,
@@ -36,7 +39,7 @@ export type {
     StorageObject,
     WorkerOptions,
 } from "./create-worker";
-export { composeWorker, createWorker, defineRpcEnvelope } from "./create-worker";
+export { composeWorker, createWorker, defineRpcEnvelope, withFrameworkWorker } from "./create-worker";
 export type { DynamicShardRegistry, DynamicShardRegistryOptions } from "./dynamic-shard-registry";
 export { createDynamicShardRegistry, DEFAULT_REGISTRY_CACHE_TTL_MS, SHARD_REGISTRY_DO_NAME } from "./dynamic-shard-registry";
 export type { CirrusErrorBody } from "./errors";

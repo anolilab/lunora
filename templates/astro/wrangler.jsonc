@@ -8,4 +8,9 @@
     "durable_objects": {
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
     },
+    // Required: ShardDO is SQLite-backed, so binding it needs a migration that
+    // registers the class. The Astro integration hook is side-effect-free (unlike
+    // the class-A Vite binding reconciler), so the template ships this explicitly —
+    // matching the sveltekit/nuxt class-B templates.
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
 }
