@@ -99,6 +99,7 @@ catalogs:
     "@fontsource-variable/geist": ^5.2.9
     "@hugeicons/core-free-icons": ^4.2.0
     "@hugeicons/react": ^1.1.6
+    "@scalar/api-reference-react": ^0.9.45
     class-variance-authority: ^0.7.1
     clsx: ^2.1.1
     shadcn: ^4.10.0
@@ -157,6 +158,7 @@ allowBuilds:
   rs-module-lexer: true
   sharp: true
   unrs-resolver: true
+  vue-demi: false
   workerd: true
 
 # Only versions that are currently within the `minimumReleaseAge` window need to
@@ -297,3 +299,17 @@ minimumReleaseAgeExclude:
   - 'oxlint-plugin-react-doctor@0.4.0 || 0.4.2'
   - 'react-doctor@0.4.0 || 0.4.2'
   - deslop-js@0.0.21
+  - '@scalar/agent-chat@0.12.9'
+  - '@scalar/api-client@3.10.2'
+  - '@scalar/api-reference-react@0.9.45'
+  - '@scalar/api-reference@1.59.2'
+  - '@scalar/code-highlight@0.3.5'
+  - '@scalar/components@0.27.1'
+  - '@scalar/helpers@0.8.2'
+  - '@scalar/json-magic@0.12.16'
+  - '@scalar/oas-utils@0.18.3'
+  - '@scalar/schemas@0.4.2'
+  - '@scalar/sidebar@0.9.21'
+  - '@scalar/snippetz@0.9.15'
+  - '@scalar/types@0.13.2'
+  - '@scalar/workspace-store@0.54.2'

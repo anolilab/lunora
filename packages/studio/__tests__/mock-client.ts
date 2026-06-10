@@ -28,6 +28,7 @@ interface MockClientHooks {
     emitError: (reference: string, message: string) => void;
     /** Push a job list to every live `subscribeScheduledJobs` subscriber. */
     emitJobs: (jobs: ScheduleRecord[]) => void;
+    fetchOpenApi: ReturnType<typeof vi.fn>;
     getAuthCapabilities: ReturnType<typeof vi.fn>;
     impersonateAuthUser: ReturnType<typeof vi.fn>;
     listAuthAccounts: ReturnType<typeof vi.fn>;
@@ -80,6 +81,7 @@ const makeMethod = (impl?: Impl): ReturnType<typeof vi.fn> =>
 interface MockClientImpls {
     action?: Impl;
     cancelScheduledJob?: (id: string) => { cancelled: boolean };
+    fetchOpenApi?: () => Record<string, unknown>;
     listAuthSessions?: (options: { limit?: number; offset?: number; userId?: string }) => AuthPage<AuthSession>;
     listAuthUsers?: (options: ListAuthUsersOptions) => AuthPage<AuthUser>;
     listFunctions?: () => FunctionDescriptor[];
@@ -97,6 +99,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
     const mutation = makeMethod(impls.mutation);
     const action = makeMethod(impls.action);
     const listFunctions = vi.fn<() => Promise<FunctionDescriptor[]>>(async () => impls.listFunctions?.() ?? []);
+    const fetchOpenApi = vi.fn<() => Promise<Record<string, unknown>>>(async () => impls.fetchOpenApi?.() ?? { openapi: "3.1.0", paths: {} });
     const listScheduledJobs = vi.fn<() => Promise<ScheduleRecord[]>>(async () => impls.listScheduledJobs?.() ?? []);
     const cancelScheduledJob = vi.fn<(id: string) => Promise<{ cancelled: boolean }>>(
         async (id: string) => impls.cancelScheduledJob?.(id) ?? { cancelled: true },
@@ -250,6 +253,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         action,
         cancelScheduledJob,
         deleteStorageObject,
+        fetchOpenApi,
         listAuthSessions,
         listAuthUsers,
         listFunctions,
@@ -274,6 +278,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         emit,
         emitError,
         emitJobs,
+        fetchOpenApi,
         listAuthSessions,
         listAuthUsers,
         listFunctions,

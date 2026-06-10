@@ -37,6 +37,10 @@ export type {
 export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS } from "./admin";
 export type { ApiDocsPanelProps } from "./api-docs-panel";
 export { default as ApiDocsPanel } from "./api-docs-panel";
+export type { ApiReferencePanelProps } from "./api-reference-panel";
+export { default as ApiReferencePanel } from "./api-reference-panel";
+export type { ApiTabProps } from "./api-tab";
+export { default as ApiTab } from "./api-tab";
 export type { StudioAppProps } from "./app";
 export { StudioApp } from "./app";
 export type { AuditPanelProps } from "./audit-panel";

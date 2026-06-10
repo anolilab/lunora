@@ -14,8 +14,7 @@ import {
 import type { ReactElement, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-// eslint-disable-next-line unicorn/prevent-abbreviations -- matches the panel's exported default name (the studio's "API" tab)
-import ApiDocsPanel from "./api-docs-panel";
+import ApiTab from "./api-tab";
 import { AuditPanel } from "./audit-panel";
 import type { CommandItem } from "./command-palette";
 import { CommandPalette } from "./command-palette";
@@ -106,6 +105,14 @@ interface StudioProps {
 
     /** Active locale for the studio's own UI strings. Defaults to `en`. */
     readonly locale?: string;
+
+    /**
+     * Inline OpenAPI 3.1 document rendered by the API tab's reference (Scalar)
+     * sub-view. Thread the generated `_generated/openapi.json` here to render it
+     * without a round-trip. When omitted the reference fetches the worker's
+     * admin-gated `GET /_cirrus/admin/openapi` endpoint via the client.
+     */
+    readonly openApiSpec?: unknown;
 
     /**
      * Override how the schedule tab cancels a job. Defaults to the client's
@@ -328,7 +335,7 @@ const StudioLayout = (): ReactElement => {
     // One-line section descriptions for the page header.
     const tabDescription = useMemo<Record<StudioTab, string>>(() => {
         return {
-            api: t("Copy-paste snippets for calling your functions and tables."),
+            api: t("Interactive OpenAPI reference and copy-paste snippets for your functions."),
             audit: t("A durable log of admin state-changing operations."),
             dashboards: t("Chart widgets backed by saved read-only SQL queries."),
             data: t("Browse and edit rows in your shard tables."),
@@ -563,11 +570,11 @@ const NotFoundRedirect = (): null => {
  * there's no DOM (SSR). The panels close over the shell props, so the router is
  * rebuilt only when those change.
  */
-const buildRouter = ({ basePath, dataEditable = false, functions, initialShardKey, scheduledCancel, scheduledLoad }: StudioShellProps) => {
+const buildRouter = ({ basePath, dataEditable = false, functions, initialShardKey, openApiSpec, scheduledCancel, scheduledLoad }: StudioShellProps) => {
     const rootRoute = createRootRoute({ component: StudioLayout });
 
     const panels: Record<StudioTab, ReactElement> = {
-        api: <ApiDocsPanel functions={functions} initialShardKey={initialShardKey} />,
+        api: <ApiTab functions={functions} initialShardKey={initialShardKey} openApiSpec={openApiSpec} />,
         audit: <AuditPanel initialShardKey={initialShardKey} />,
         dashboards: <DashboardsPanel initialShardKey={initialShardKey} />,
         data: <DataBrowser editable={dataEditable} initialShardKey={initialShardKey} />,
@@ -639,13 +646,13 @@ const buildRouter = ({ basePath, dataEditable = false, functions, initialShardKe
  * only when a panel-affecting prop changes (not on the unstable `props` object),
  * so navigation state survives unrelated re-renders.
  */
-const StudioShell = ({ basePath, dataEditable, functions, initialShardKey, scheduledCancel, scheduledLoad }: StudioShellProps): ReactElement => {
+const StudioShell = ({ basePath, dataEditable, functions, initialShardKey, openApiSpec, scheduledCancel, scheduledLoad }: StudioShellProps): ReactElement => {
     // Rebuild the router only when a panel-affecting prop changes (keyed on the
     // individual props, not the unstable `props` identity), so navigation state
     // survives unrelated re-renders.
     const router = useMemo(
-        () => buildRouter({ basePath, dataEditable, functions, initialShardKey, scheduledCancel, scheduledLoad }),
-        [basePath, dataEditable, functions, initialShardKey, scheduledCancel, scheduledLoad],
+        () => buildRouter({ basePath, dataEditable, functions, initialShardKey, openApiSpec, scheduledCancel, scheduledLoad }),
+        [basePath, dataEditable, functions, initialShardKey, openApiSpec, scheduledCancel, scheduledLoad],
     );
 
     return <RouterProvider router={router} />;
@@ -661,13 +668,24 @@ const StudioShell = ({ basePath, dataEditable, functions, initialShardKey, sched
  * (`StudioApp` owns one for the top bar too) or the shared default — instead
  * of nesting a second, redundant provider.
  */
-export const Studio = ({ basePath, dataEditable, functions, i18n, initialShardKey, locale, scheduledCancel, scheduledLoad }: StudioProps): ReactElement => {
+export const Studio = ({
+    basePath,
+    dataEditable,
+    functions,
+    i18n,
+    initialShardKey,
+    locale,
+    openApiSpec,
+    scheduledCancel,
+    scheduledLoad,
+}: StudioProps): ReactElement => {
     const shell = (
         <StudioShell
             basePath={basePath}
             dataEditable={dataEditable}
             functions={functions}
             initialShardKey={initialShardKey}
+            openApiSpec={openApiSpec}
             scheduledCancel={scheduledCancel}
             scheduledLoad={scheduledLoad}
         />

@@ -38,8 +38,10 @@ const MESSAGE_IDS = [
     "all",
     "All shards",
     "API",
+    "API reference unavailable",
     "API resources",
     "API usage snippets",
+    "API view",
     "Arguments",
     "Auth",
     "Auth failures",
@@ -70,6 +72,7 @@ const MESSAGE_IDS = [
     "Connecting…",
     "Copy",
     "Copy-paste snippets for calling your functions and tables.",
+    "Interactive OpenAPI reference and copy-paste snippets for your functions.",
     "content-type",
     "created",
     "Search…",
@@ -512,6 +515,11 @@ const MESSAGE_IDS = [
     "By function",
     "Count",
     "{count} entries",
+    // API tab — OpenAPI reference (Scalar) sub-view.
+    "Snippets",
+    "Couldn't load the OpenAPI spec: {message}",
+    "No OpenAPI spec configured",
+    "Run `cirrus codegen` and wire `_generated/openapi.json` to the worker to render the API reference here.",
 ] as const;
 
 /** A known studio message id — one of the entries in {@link MESSAGE_IDS}. */
