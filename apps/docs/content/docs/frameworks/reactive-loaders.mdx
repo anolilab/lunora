@@ -1,0 +1,175 @@
+---
+title: Reactive loaders
+description: Your loaders are live — SSR data that hydrates into a real-time subscription with no flash.
+---
+
+Every meta-framework has a route loader: Next.js Server Components, TanStack
+Start `createServerFn`, React Router `loader`, SvelteKit `load`. They all do the
+same thing — fetch data on the server, ship it in the HTML, hydrate it on the
+client. And then they stop. The data is a **snapshot**: correct at request time,
+stale the moment anyone else writes.
+
+Cirrus changes the second half. A Cirrus loader fetches on the server _and_ hands
+the client a token that re-opens the same query as a **live subscription**. The
+first paint is the SSR value (no loading spinner, no flash); every write after
+that re-renders the component automatically.
+
+> **Bring your framework. Your loaders are live.**
+
+## The problem with static loaders
+
+- **Next / TanStack / React Router** render server data beautifully, but it's a
+  one-shot fetch. Keeping it fresh means polling, manual `revalidate`, or wiring
+  your own WebSocket on top — none of which the loader knows about.
+- **void** plugs any framework into one worker, but its loaders are static
+  fetches. It has no reactivity layer; there is nothing to keep the rendered data
+  in sync after hydration.
+
+Cirrus's loader and its real-time subscription are the **same query**. The server
+runs it once for SSR; the client resumes it as a subscription. No second data
+path, no polling, no hand-rolled socket.
+
+## The handoff
+
+```
+[server: route loader]                         [client: framework adapter]
+  client    = createServerClient({ url, fetch })   usePreloadedQuery(preloaded)
+  preloaded = await preloadQuery(client, fn, args)   → seed initialData (no refetch)
+  return { preloaded }            ──serialize──▶      → open WS subscription
+                                                       → re-render on every write
+```
+
+Everything left of "bind to UI" is framework-neutral — it's the same
+`createServerClient` / `preloadQuery` flow regardless of which meta-framework
+runs the loader. Only the last step (read the token, seed the cache, attach the
+socket) is per-framework, and that's what each adapter provides.
+
+### Server: preload the query
+
+The server half lives in `@cirrus/react/server` — a module with no `"use client"`
+directive, no WebSocket, and no browser globals, so it is safe to import from any
+SSR loader or React Server Component. `createServerClient` builds a request-scoped
+HTTP client; `preloadQuery` runs the query and returns a serializable `Preloaded`
+token.
+
+```ts
+// A TanStack Start route loader (createServerFn).
+import { createServerClient, preloadQuery } from "@cirrus/react/server";
+
+import { api } from "../../cirrus/_generated/api";
+
+const loadMessages = createServerFn().handler(async ({ request }) => {
+    // Forward the browser's cookie so the SSR query runs as the signed-in user.
+    const cookie = request.headers.get("cookie") ?? undefined;
+    const cookieForwardingFetch: typeof fetch = (input, init) => {
+        const headers = new Headers(init?.headers);
+        if (cookie) headers.set("cookie", cookie);
+        return fetch(input, { ...init, headers });
+    };
+
+    const client = createServerClient({ fetch: cookieForwardingFetch, url: workerUrl });
+    const preloaded = await preloadQuery(client, api.messages.list, { channelId }, { shardKey: channelId });
+
+    return { preloaded };
+});
+```
+
+The `Preloaded` token is a plain JSON-serializable object —
+`{ __cirrusPreloaded: true, functionPath, args, shardKey?, value }` — so the
+framework's router dehydration embeds it directly in the SSR HTML inside a
+`<script>` tag. No special serializer is needed.
+
+### Client: hydrate, then subscribe
+
+On the client, `usePreloadedQuery` (from `@cirrus/react`) reads the token, paints
+the SSR value on the first render, and attaches the live subscription after mount.
+
+```tsx
+import { useMutation, usePreloadedQuery } from "@cirrus/react";
+
+function ChannelView() {
+    const { preloaded } = Route.useLoaderData();
+    const messages = usePreloadedQuery(preloaded); // SSR value first, then live
+    const send = useMutation(api.messages.send);
+
+    return (
+        <ul>
+            {messages.map((m) => (
+                <li key={m._id}>{m.text}</li>
+            ))}
+        </ul>
+    );
+}
+```
+
+The component never renders a loading state — `messages` is the real list on the
+very first paint, and it updates on every write from any client, with no extra
+wiring.
+
+## Why there's no flash
+
+The no-flash behaviour is two TanStack Query options working together:
+
+- **`initialData: preloaded.value`** — the first render returns the SSR value
+  synchronously. There is no intermediate `undefined`/loading state, so the
+  server markup and the first client markup match (no hydration mismatch).
+- **`staleTime: Infinity`** — Cirrus is push-driven, so the seeded value is never
+  considered stale and is never refetched. The WebSocket subscription that
+  attaches in `useEffect` after mount is the _only_ freshness signal; when a
+  mutation broadcasts a delta, `usePreloadedQuery` updates via
+  `queryClient.setQueryData` and React re-renders.
+
+The result: the first paint already contains live data, and the transition from
+"server-rendered" to "live-subscribed" is invisible — no refetch, no spinner, no
+content shift.
+
+## Identity continuity (SSR → client)
+
+The loader and the client subscription must run as the **same user**. On the same
+origin this is automatic:
+
+- **Server side**, the loader reads the `cookie` header from the request and
+  passes a cookie-forwarding `fetch` to `createServerClient`. Every HTTP RPC the
+  SSR client makes to `/_cirrus/rpc` carries the same session cookie the browser
+  sent, so the worker's auth middleware resolves the same identity.
+- **Client side**, the browser naturally sends that same cookie on the WebSocket
+  upgrade to `/_cirrus/ws`. The subscription resumes the same identity with **no
+  token-exchange step**.
+
+So for same-origin, same-session apps you don't manage any tokens — cookie
+forwarding on the server and the browser's own cookie on the socket are enough.
+Apps that deploy the SSR layer and the worker on **different origins** (e.g. a
+separate edge-SSR tier) pass the `token` option to `createServerClient` instead,
+and the client provider is configured with the matching bearer token.
+
+## Sharding carries through
+
+`preloadQuery` accepts a `{ shardKey }` option, which it writes into the
+`Preloaded` token. On the client, `usePreloadedQuery` reads `preloaded.shardKey`
+and opens the subscription to the **same** Durable Object shard the loader read
+from. For route-param-driven sharding (`/rooms/:roomId`), pass `roomId` as the
+`shardKey` in the loader — shard continuity SSR → client is then automatic.
+
+```ts
+const preloaded = await preloadQuery(client, api.messages.list, { roomId }, { shardKey: roomId });
+```
+
+## Status
+
+The reactive-loader contract is shipped for React today via `@cirrus/react`
+(`createServerClient`, `preloadQuery`, `usePreloadedQuery`) and proven end-to-end
+on the TanStack Start template (`cirrus init -t tanstack-start`).
+
+A dedicated `@cirrus/ssr` entrypoint — promoting `createServerClient` /
+`preloadQuery` plus a `getServerSession` cookie helper and a `createLoaderClient`
+convenience wrapper into one framework-neutral package — is in progress, along
+with Solid, Svelte, and Vue adapters that expose the same hydrate-then-subscribe
+handoff idiomatically. See [Bring your framework](/docs/frameworks/bring-your-framework)
+for the per-framework status.
+
+## See also
+
+- [Bring your framework](/docs/frameworks/bring-your-framework)
+- [Real-time](/docs/concepts/realtime)
+- [Sharding](/docs/concepts/sharding)
+- [@cirrus/react](/docs/api/react)
