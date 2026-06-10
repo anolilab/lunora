@@ -102,7 +102,15 @@ const OperationRunProvider = ({ children, operation }: OperationRunProviderProps
                     method: operation.method,
                 });
 
-                value = await fetchResponse.json().catch(() => fetchResponse.text());
+                // Read the body once, then parse — a Response stream can't be read
+                // twice, so `.json().catch(() => .text())` would throw on a non-JSON body.
+                const text = await fetchResponse.text();
+
+                try {
+                    value = JSON.parse(text);
+                } catch {
+                    value = text;
+                }
             } else {
                 const reference = adminRef(operation.functionPath);
                 const options = callOptions(shardKey);

@@ -61,6 +61,20 @@ export const fireAndForget = (promise: Promise<unknown>): void => {
 };
 
 /**
+ * Copy `text` to the clipboard when the browser exposes one; a no-op under
+ * SSR/tests without `navigator`. The single home for the studio's copy buttons
+ * so the (browser-only) guard and its lint exception live in one place.
+ */
+export const copyToClipboard = (text: string): void => {
+    // eslint-disable-next-line n/no-unsupported-features/node-builtins -- browser-only clipboard, guarded by the "navigator" in globalThis check
+    const clipboard: Clipboard | undefined = "navigator" in globalThis ? globalThis.navigator.clipboard : undefined;
+
+    if (clipboard !== undefined) {
+        fireAndForget(clipboard.writeText(text));
+    }
+};
+
+/**
  * Render a byte count compactly (e.g. `1.4 MB`). `null`/`undefined` render as an
  * em dash so panels can pass an absent size straight through.
  */

@@ -30,6 +30,17 @@ const TryIt = (): ReactElement => {
         [setArgsText],
     );
 
+    // ⌘/Ctrl+Enter fires the request from the editor, like a typical request console.
+    const onArgsKeyDown = useCallback(
+        (event: React.KeyboardEvent<HTMLTextAreaElement>): void => {
+            if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                event.preventDefault();
+                send();
+            }
+        },
+        [send],
+    );
+
     const running = status === "running";
 
     return (
@@ -52,6 +63,7 @@ const TryIt = (): ReactElement => {
                         data-testid="api-try-args"
                         id="api-try-args"
                         onChange={onArgsChange}
+                        onKeyDown={onArgsKeyDown}
                         rows={Math.min(12, Math.max(3, argsText.split("\n").length))}
                         spellCheck={false}
                         value={argsText}
@@ -61,7 +73,7 @@ const TryIt = (): ReactElement => {
                 {operation.functionPath !== undefined && (
                     <div className="flex flex-col gap-1.5">
                         <Label htmlFor="shard-input">{t("Shard key (optional)")}</Label>
-                        <ShardInput onChange={setShardKey} testId="shard-input" value={shardKey} />
+                        <ShardInput id="shard-input" onChange={setShardKey} testId="shard-input" value={shardKey} />
                     </div>
                 )}
             </div>

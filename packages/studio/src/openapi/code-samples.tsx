@@ -3,7 +3,7 @@ import { useCallback, useMemo, useState } from "react";
 
 import { Button } from "../components/ui/button";
 import { useT } from "../i18n-context";
-import { fireAndForget } from "../internal";
+import { copyToClipboard } from "../internal";
 import type { ApiOperation } from "./openapi-model";
 import { exampleForSchema } from "./schema-view";
 
@@ -13,15 +13,8 @@ type Sample = "cirrus" | "curl" | "javascript";
 const SAMPLE_ORDER: ReadonlyArray<Sample> = ["curl", "javascript", "cirrus"];
 const SAMPLE_LABEL: Record<Sample, string> = { cirrus: "Cirrus", curl: "cURL", javascript: "JavaScript" };
 
-/** Copy `text` to the clipboard when available; a no-op under SSR/tests without one. */
-const copyToClipboard = (text: string): void => {
-    // eslint-disable-next-line n/no-unsupported-features/node-builtins -- browser-only clipboard, guarded by the "navigator" check
-    const clipboard: Clipboard | undefined = "navigator" in globalThis ? globalThis.navigator.clipboard : undefined;
-
-    if (clipboard !== undefined) {
-        fireAndForget(clipboard.writeText(text));
-    }
-};
+/** Map an RPC `functionPath` (`file:export`) onto its generated typed handle, e.g. `api.messages.list`. */
+const apiReferenceOf = (functionPath: string): string => `api.${functionPath.replaceAll(/[/:]/g, ".")}`;
 
 /** The JSON request body the samples post — the RPC envelope for an RPC op, else the raw args. */
 const requestBody = (operation: ApiOperation): unknown => {
@@ -44,7 +37,9 @@ const sampleSource = (sample: Sample, operation: ApiOperation, server: string): 
 
             const method = operation.kind ?? "query";
 
-            return `import { useCirrus } from "@cirrus/react";\n\nconst client = useCirrus();\nawait client.${method}({ __cirrusRef: ${JSON.stringify(operation.functionPath)} }, ${args});`;
+            // Emit the public, documented surface — the generated `api.*` handle —
+            // not the internal `{ __cirrusRef }` admin escape hatch.
+            return `import { useCirrus } from "@cirrus/react";\nimport { api } from "./_generated/api";\n\nconst client = useCirrus();\nawait client.${method}(${apiReferenceOf(operation.functionPath)}, ${args});`;
         }
         case "curl": {
             const hasBody = operation.method !== "GET" && operation.method !== "HEAD";

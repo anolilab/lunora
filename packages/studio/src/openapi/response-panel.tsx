@@ -5,18 +5,8 @@ import { useCallback, useMemo } from "react";
 
 import { Button } from "../components/ui/button";
 import { useT } from "../i18n-context";
-import { fireAndForget } from "../internal";
+import { copyToClipboard } from "../internal";
 import { useOperationRun } from "./run-context";
-
-/** Copy `text` to the clipboard when available; a no-op under SSR/tests without one. */
-const copyToClipboard = (text: string): void => {
-    // eslint-disable-next-line n/no-unsupported-features/node-builtins -- browser-only clipboard, guarded by the "navigator" check
-    const clipboard: Clipboard | undefined = "navigator" in globalThis ? globalThis.navigator.clipboard : undefined;
-
-    if (clipboard !== undefined) {
-        fireAndForget(clipboard.writeText(text));
-    }
-};
 
 /**
  * The right-rail response panel: the live result of the last "try it" run for

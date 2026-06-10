@@ -8,7 +8,7 @@ import { ADMIN_FUNCTIONS } from "./admin.js";
 import { Button } from "./components/ui/button.js";
 import { EmptyState } from "./components/ui/empty-state.js";
 import { useT } from "./i18n-context.js";
-import { adminRef, callOptions, fireAndForget } from "./internal.js";
+import { adminRef, callOptions, copyToClipboard } from "./internal";
 import type { FunctionDescriptor, FunctionKind } from "./types.js";
 
 interface ApiDocsPanelProps {
@@ -129,18 +129,6 @@ const snippetForTab = (tab: SnippetTab, input: SnippetInput): string => {
 
 /** A resource selected in the left rail: a registered function, or a table. */
 type Selection = { kind: "fn"; path: string } | { kind: "table"; name: string };
-
-/** Copy `text` to the clipboard if the browser exposes one; a no-op under SSR/tests without it. */
-const copyToClipboard = (text: string): void => {
-    // eslint-disable-next-line n/no-unsupported-features/node-builtins -- browser-only clipboard; guarded by the "navigator" in globalThis check
-    const clipboard: Clipboard | undefined = "navigator" in globalThis ? globalThis.navigator.clipboard : undefined;
-
-    if (clipboard === undefined) {
-        return;
-    }
-
-    fireAndForget(clipboard.writeText(text));
-};
 
 interface SnippetBlockProps {
     readonly code: string;

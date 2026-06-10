@@ -534,7 +534,6 @@ const MESSAGE_IDS = [
     "Send a request to see the response.",
     "200 OK",
     "Error",
-    "Request failed",
     "{ms} ms",
     "relation: {table}",
     // API tab — spec format switch + OpenRPC reference sub-view.

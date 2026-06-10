@@ -13,7 +13,7 @@ interface RawResponse extends MediaContent {
     description?: string;
 }
 
-interface RawOperation extends Record<string, unknown> {
+interface RawOperation {
     description?: string;
     operationId?: string;
     requestBody?: MediaContent & { required?: boolean };
