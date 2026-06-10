@@ -23,17 +23,24 @@ export const list = query({
 /**
  * Send a message into a channel. Broadcasts a delta to every subscriber on
  * the channel's shard via `ShardDO.broadcastDelta`.
+ *
+ * Accepts an optional client-generated `id` (a UUID). The TanStack DB client
+ * (`apps/playground/src/client`) keys its optimistic row by this id, so the
+ * persisted server row must carry the *same* id for the sync engine to supersede
+ * the optimistic entry on ack (per-row key match). Forwarded to `insert` as the
+ * validated `clientId`; without it Cirrus mints a fresh server id as usual.
  */
 export const send = mutation({
-    args: { channelId: v.id("channels"), text: v.string() },
-    handler: async (context, { channelId, text }): Promise<Id<"messages">> => {
-        const userId = (context.auth.userId ?? "anonymous") as Id<"users">;
-
-        return context.db.insert("messages", {
-            channelId,
-            createdAt: Date.now(),
-            text,
-            userId,
-        });
-    },
+    args: { channelId: v.id("channels"), id: v.optional(v.string()), text: v.string() },
+    handler: async (context, { channelId, id, text }): Promise<Id<"messages">> =>
+        context.db.insert(
+            "messages",
+            {
+                channelId,
+                createdAt: Date.now(),
+                text,
+                userId: (context.auth.userId ?? "anonymous") as Id<"users">,
+            },
+            id ? { clientId: id } : undefined,
+        ),
 });
