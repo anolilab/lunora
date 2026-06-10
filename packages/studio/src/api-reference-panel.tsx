@@ -47,6 +47,10 @@ const classifySpec = (spec: unknown): SpecFetchState<OpenApiDocument> => {
  */
 const SCALAR_THEME_CSS = `
 .scalar-app {
+    /* Fill the bounded panel viewport so Scalar runs its own internal layout —
+       a sticky operation sidebar + an independently scrolling content column —
+       instead of growing the page and scrolling its sidebar out of view. */
+    height: 100%;
     --scalar-font: inherit;
     --scalar-background-1: var(--background);
     --scalar-background-2: var(--sidebar);
@@ -165,7 +169,7 @@ const ApiReferencePanel = ({ spec: inlineSpec }: ApiReferencePanelProps): ReactE
     }
 
     return (
-        <div className="min-h-0 flex-1" data-testid="api-reference">
+        <div className="min-h-0 flex-1 overflow-hidden" data-testid="api-reference">
             <ApiReferenceReact configuration={configuration as AnyApiReferenceConfiguration} />
         </div>
     );

@@ -272,7 +272,7 @@ const TABS = [
  * an internally-scrolling grid), rather than the default top-aligned, page-scrolled
  * content. The Table editor and SQL editor render as full-height database consoles.
  */
-const FULL_HEIGHT_TABS = new Set<StudioTab>(["data", "globals", "sql"]);
+const FULL_HEIGHT_TABS = new Set<StudioTab>(["api", "data", "globals", "sql"]);
 
 /** Resolve the active tab from a router pathname (`/logs` → `logs`); unknown paths fall back to `home`. */
 const tabFromPathname = (pathname: string): StudioTab => {

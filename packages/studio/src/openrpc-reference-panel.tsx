@@ -342,7 +342,7 @@ const OpenRpcReferencePanel = ({ spec: inlineSpec }: OpenRpcReferencePanelProps)
     }
 
     return (
-        <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto" data-testid="openrpc-reference">
+        <div className="flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto p-6" data-testid="openrpc-reference">
             {groups.map((group) => (
                 <section className="flex flex-col gap-3" key={group.namespace}>
                     <h2 className="text-[11px] font-semibold tracking-wide text-muted-foreground uppercase">{group.namespace || t("(root)")}</h2>

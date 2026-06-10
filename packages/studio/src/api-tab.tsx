@@ -75,8 +75,9 @@ const ApiTab = ({ functions, initialShardKey, openApiSpec, openRpcSpec }: ApiTab
     }, []);
 
     return (
-        <div className="flex min-h-0 flex-1 flex-col gap-4" data-testid="cirrus-api-tab">
-            <div className="flex flex-wrap items-center gap-3">
+        <div className="flex min-h-0 flex-1 flex-col" data-testid="cirrus-api-tab">
+            {/* Sticky sub-toolbar: stays pinned while the panel below scrolls. */}
+            <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-border px-6 py-3">
                 <div aria-label={t("API view")} className="flex gap-1.5" data-testid="api-view-toggle" role="tablist">
                     {VIEW_KEYS.map((key) => (
                         <Button
@@ -116,9 +117,19 @@ const ApiTab = ({ functions, initialShardKey, openApiSpec, openRpcSpec }: ApiTab
                 )}
             </div>
 
-            {view === "snippets" && <ApiDocsPanel functions={functions} initialShardKey={initialShardKey} />}
-            {view === "reference" && format === "openapi" && <ApiReferencePanel spec={openApiSpec} />}
-            {view === "reference" && format === "openrpc" && <OpenRpcReferencePanel spec={openRpcSpec} />}
+            {/* Bounded viewport: each panel fills it and scrolls internally, so the
+                toolbar above (and the studio chrome) stay fixed. Scalar renders
+                full-bleed and manages its own sticky sidebar; the document-flow
+                snippet + OpenRPC views scroll as a unit with comfortable padding. */}
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+                {view === "snippets" && (
+                    <div className="min-h-0 flex-1 overflow-y-auto p-6">
+                        <ApiDocsPanel functions={functions} initialShardKey={initialShardKey} />
+                    </div>
+                )}
+                {view === "reference" && format === "openapi" && <ApiReferencePanel spec={openApiSpec} />}
+                {view === "reference" && format === "openrpc" && <OpenRpcReferencePanel spec={openRpcSpec} />}
+            </div>
         </div>
     );
 };

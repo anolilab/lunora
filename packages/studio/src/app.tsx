@@ -337,7 +337,7 @@ export const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClien
 
     return (
         <div
-            className={`${STUDIO_ROOT_CLASS} ${theme === "dark" ? "dark" : ""} flex min-h-screen flex-col bg-background text-sm text-foreground`}
+            className={`${STUDIO_ROOT_CLASS} ${theme === "dark" ? "dark" : ""} flex h-dvh flex-col overflow-hidden bg-background text-sm text-foreground`}
             data-testid="cirrus-studio-app"
         >
             <CirrusProvider client={client}>
