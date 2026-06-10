@@ -8,7 +8,7 @@ import { createWorker } from "@cirrus/runtime";
 import type { DurableObjectNamespaceLike } from "@cirrus/scheduler";
 import { createScheduler } from "@cirrus/scheduler";
 import type { R2BucketLike } from "@cirrus/storage";
-import { buildSignedUrl, createStorage } from "@cirrus/storage";
+import { buildSignedUrl, createStorage, verifySignedUrl } from "@cirrus/storage";
 
 import { CIRRUS_CRONS } from "../../cirrus/_generated/crons.js";
 import { CIRRUS_FUNCTIONS } from "../../cirrus/_generated/functions.js";
@@ -52,7 +52,7 @@ export { SchedulerDO } from "./scheduler-do.js";
 
 interface ShardEnv {
     CIRRUS_WORKER_ORIGIN?: string;
-    /** D1 binding backing `.global()` tables — wired into the DO so generic `ctx.db.<globalTable>` writes route to it. */
+    /** D1 binding backing `.global()` tables — wired into the DO so generic `ctx.db` writes to a global table route to it. */
     DB?: D1DatabaseLike;
     FILES?: R2BucketLike;
     PUBLIC_STORAGE_BASE_URL?: string;
@@ -101,6 +101,8 @@ interface Env {
      * `tests/e2e/globalSetup.ts` — *never* set this in production.
      */
     CIRRUS_E2E?: string;
+    /** Origin the SchedulerDO dispatches HTTP callbacks back to (job execution). */
+    CIRRUS_WORKER_ORIGIN?: string;
     DB: unknown;
     FILES: R2BucketLike;
     /** Public base URL R2 objects resolve against — used to mint signed URLs. */
@@ -231,6 +233,41 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
             : {}),
     });
 
+/** The slice of D1 the reset needs: list tables, then empty them. */
+interface D1Reset {
+    prepare: (sql: string) => {
+        all: () => Promise<{ results: { name: string }[] }>;
+        run: () => Promise<unknown>;
+    };
+}
+
+/**
+ * Clear D1 between tests: empty every user table (auth `user`/`session`/… plus
+ * app tables) so each spec starts from a known-empty database. We DELETE rather
+ * than DROP so the schema survives and no re-migration is needed, and we delete
+ * in reverse creation order (children before parents) so foreign-key references
+ * don't block the clear.
+ */
+const clearD1 = async (database: D1Reset): Promise<void> => {
+    const { results } = await database
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' AND name NOT LIKE 'd1_%'")
+        .all();
+
+    // Children-before-parents (reverse creation order) so FK references don't
+    // block the clear. A plain reverse for-loop — `toReversed()` isn't in the
+    // Node-16 target and `[...].reverse()` trips the lint.
+    for (let index = results.length - 1; index >= 0; index -= 1) {
+        const { name } = results[index];
+
+        try {
+            // eslint-disable-next-line no-await-in-loop -- sequential DELETEs; the table set is tiny
+            await database.prepare(`DELETE FROM "${name}"`).run();
+        } catch {
+            // A FK-blocked table clears on the next pass; best-effort per table.
+        }
+    }
+};
+
 const handleTestReset = async (env: Env): Promise<Response> => {
     try {
         const id = env.SHARD.idFromName("__e2e_reset__");
@@ -239,6 +276,12 @@ const handleTestReset = async (env: Env): Promise<Response> => {
         await stub.fetch(new Request("https://do/internal/reset", { method: "POST" }));
     } catch {
         // best-effort
+    }
+
+    try {
+        await clearD1(env.DB as D1Reset);
+    } catch {
+        // best-effort — a fresh DB (pre-migration) has no tables to clear
     }
 
     return Response.json({ ok: true });
@@ -319,14 +362,74 @@ const handleTestRoute = async (request: Request, env: Env): Promise<Response | n
     }
 
     if (url.pathname === "/test/job-status" && method === "GET") {
-        return Response.json({ status: "unknown" });
-    }
+        const id = url.searchParams.get("id");
 
-    if (url.pathname === "/test/throw" && method === "POST") {
-        return Response.json({ error: "simulated" }, { status: 500 });
+        if (!id || !env.SCHEDULER || !env.CIRRUS_WORKER_ORIGIN) {
+            return Response.json({ status: "unknown" });
+        }
+
+        const scheduler = createScheduler({ namespace: env.SCHEDULER, originUrl: env.CIRRUS_WORKER_ORIGIN });
+        const record = await scheduler.get(id);
+
+        // The SchedulerDO deletes a job's rows once it completes successfully, so
+        // a previously-scheduled id with no record left has executed.
+        return Response.json({ status: record ? "scheduled" : "executed" });
     }
 
     return new Response("not found", { status: 404 });
+};
+
+/**
+ * Serve `@cirrus/storage` signed URLs. The signer mints a URL under
+ * `PUBLIC_STORAGE_BASE_URL` carrying the object key plus expiry/method/signature
+ * query params; in production that base is a CDN/Worker route, but in dev the
+ * Worker shares its origin, so the signed URL lands back here. We verify the
+ * HMAC + expiry, then stream the R2 body (GET) or store the uploaded bytes
+ * (PUT). The `avatars/` prefix is the only key namespace
+ * the playground signs, and it can't collide with the `/_cirrus`, `/api/auth`,
+ * `/test` routes the Worker otherwise owns.
+ */
+const handleStorageAsset = async (request: Request, env: Env): Promise<null | Response> => {
+    const url = new URL(request.url);
+
+    if (!url.pathname.startsWith("/avatars/")) {
+        return null;
+    }
+
+    if (!env.STORAGE_SECRET || !env.FILES) {
+        return new Response("storage not configured", { status: 500 });
+    }
+
+    // The signed `method` is HMAC-bound, so a GET URL can't be replayed as a PUT;
+    // still require the request verb to match what was signed.
+    if (request.method !== (url.searchParams.get("method") ?? "GET")) {
+        return new Response("method not allowed", { status: 405 });
+    }
+
+    const verdict = await verifySignedUrl(request.url, env.STORAGE_SECRET);
+
+    if (!verdict.valid) {
+        // Opaque 403 — never leak expired-vs-bad-signature (a signing oracle).
+        return new Response("forbidden", { status: 403 });
+    }
+
+    const key = decodeURIComponent(url.pathname.slice(1));
+
+    if (request.method === "PUT") {
+        await env.FILES.put(key, request.body, { httpMetadata: { contentType: request.headers.get("content-type") ?? undefined } });
+
+        return new Response(null, { status: 200 });
+    }
+
+    const object = await env.FILES.get(key);
+
+    if (!object) {
+        return new Response("not found", { status: 404 });
+    }
+
+    return new Response(object.body, {
+        headers: { "content-type": object.httpMetadata?.contentType ?? "application/octet-stream" },
+    });
 };
 
 export default {
@@ -335,6 +438,12 @@ export default {
 
         if (testResponse) {
             return testResponse;
+        }
+
+        const assetResponse = await handleStorageAsset(request, env);
+
+        if (assetResponse) {
+            return assetResponse;
         }
 
         if (!auth) {
