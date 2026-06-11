@@ -1,6 +1,7 @@
 import type { AdvisorAuthApiCall } from "./authapi-calls";
 import type { AdvisorInsertWrite } from "./inserts";
 import type { AdvisorQueryRead } from "./queries";
+import type { AdvisorRlsProcedure } from "./rls-procedures";
 import type { AdvisorSchema } from "./schema";
 
 /**
@@ -91,6 +92,16 @@ export interface LintContext {
      * the query-shaped lints simply find nothing.
      */
     queries?: ReadonlyArray<AdvisorQueryRead>;
+
+    /**
+     * Per-procedure RLS usage discovered in function bodies (the
+     * `rls_uncovered_table` input). Carries whether each procedure's builder chain
+     * includes `.use(rls(...))`, which tables the procedure reads/writes, and which
+     * tables its RLS policy array names. Supplied by the codegen feeder; absent for
+     * runtime callers, where the lint finds nothing.
+     */
+    rlsProcedures?: ReadonlyArray<AdvisorRlsProcedure>;
+
     /** The declared schema under audit, normalized to the feeder-agnostic {@link AdvisorSchema}. */
     schema: AdvisorSchema;
 }

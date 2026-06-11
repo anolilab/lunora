@@ -14,12 +14,14 @@ import filterWithoutIndex from "./lints/static/filter-without-index";
 import indexReferencesUnknownField from "./lints/static/index-references-unknown-field";
 import relationReferencesUnknownField from "./lints/static/relation-references-unknown-field";
 import relationReferencesUnknownTable from "./lints/static/relation-references-unknown-table";
+import rlsUncoveredTable from "./lints/static/rls-uncovered-table";
 import tableWithoutInsert from "./lints/static/table-without-insert";
 import unindexedForeignKey from "./lints/static/unindexed-foreign-key";
 import type { Finding, Lint, LintContext, LintSource } from "./types";
 
 export type { AdvisorAuthApiCall } from "./authapi-calls";
 export type { AdvisorInsertWrite } from "./inserts";
+export type { AdvisorRlsProcedure } from "./rls-procedures";
 export { default as authApiCallWithoutHeaders } from "./lints/static/auth-api-call-without-headers";
 export { default as duplicateIndex } from "./lints/static/duplicate-index";
 export { default as emptyIndex } from "./lints/static/empty-index";
@@ -27,6 +29,7 @@ export { default as filterWithoutIndex } from "./lints/static/filter-without-ind
 export { default as indexReferencesUnknownField } from "./lints/static/index-references-unknown-field";
 export { default as relationReferencesUnknownField } from "./lints/static/relation-references-unknown-field";
 export { default as relationReferencesUnknownTable } from "./lints/static/relation-references-unknown-table";
+export { default as rlsUncoveredTable } from "./lints/static/rls-uncovered-table";
 export { default as tableWithoutInsert } from "./lints/static/table-without-insert";
 export { default as unindexedForeignKey } from "./lints/static/unindexed-foreign-key";
 export type { AdvisorQueryRead } from "./queries";
@@ -50,6 +53,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     tableWithoutInsert,
     filterWithoutIndex,
     authApiCallWithoutHeaders,
+    rlsUncoveredTable,
 ];
 
 /** The default lint set. Currently the static lints; runtime lints join as they land. */

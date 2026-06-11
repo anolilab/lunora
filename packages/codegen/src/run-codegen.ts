@@ -12,6 +12,7 @@ import discoverHttpRoutes from "./discover-http-routes";
 import discoverInserts from "./discover-inserts";
 import discoverMigrations from "./discover-migrations";
 import discoverQueries from "./discover-queries";
+import discoverRlsProcedures from "./discover-rls-procedures";
 import discoverSchema from "./discover-schema";
 import { emitApi, emitCrons, emitDataModel, emitDrizzleSchema, emitFunctions, emitServer, emitShard, emitWranglerCronTriggers } from "./emit";
 import { buildOpenApiDocument, emitOpenApiModule } from "./openapi";
@@ -84,7 +85,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // job: the result carries the findings and each caller surfaces them through
     // its own channel (the CLI logger, the vite overlay, the studio Advisors
     // table) rather than this library printing.
-    const advisories = options.lint === false ? [] : lintSchema(schema, discoverQueries(project, cirrusDirectory), discoverInserts(project, cirrusDirectory), discoverAuthApiCalls(project, cirrusDirectory));
+    const advisories = options.lint === false ? [] : lintSchema(schema, discoverQueries(project, cirrusDirectory), discoverInserts(project, cirrusDirectory), discoverAuthApiCalls(project, cirrusDirectory), discoverRlsProcedures(project, cirrusDirectory));
 
     const dataModelContent = emitDataModel(schema);
     const apiContent = emitApi(functions);

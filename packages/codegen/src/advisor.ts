@@ -1,7 +1,7 @@
 import type { AdvisorIndex, AdvisorSchema, Finding } from "@cirrus/advisor";
 import { runAdvisor } from "@cirrus/advisor";
 
-import type { AuthApiCallIR, InsertWriteIR, QueryReadIR, SchemaIR, TableIR } from "./ir";
+import type { AuthApiCallIR, InsertWriteIR, QueryReadIR, RlsProcedureIR, SchemaIR, TableIR } from "./ir";
 
 /**
  * Flatten a table's per-kind index declarations into the advisor's unified
@@ -60,7 +60,8 @@ const toAdvisorSchema = (schema: SchemaIR): AdvisorSchema => {
 /**
  * Run the static lints against a discovered {@link SchemaIR} and the reads/writes/calls
  * found in function bodies: query reads feed `filter_without_index`, insert writes
- * feed `table_without_insert`, authApi calls feed `auth_api_call_without_headers`
+ * feed `table_without_insert`, authApi calls feed `auth_api_call_without_headers`,
+ * and rls procedure snapshots feed `rls_uncovered_table`
  * (all default empty for callers that don't analyze functions).
  * The IR types are structurally identical to the advisor's evidence types so they
  * pass straight through without conversion. Returns the findings; surfacing them
@@ -71,7 +72,8 @@ export const lintSchema = (
     queries: ReadonlyArray<QueryReadIR> = [],
     inserts?: ReadonlyArray<InsertWriteIR>,
     authApiCalls?: ReadonlyArray<AuthApiCallIR>,
-): Finding[] => runAdvisor({ authApiCalls, inserts, queries, schema: toAdvisorSchema(schema) }, { source: "static" });
+    rlsProcedures?: ReadonlyArray<RlsProcedureIR>,
+): Finding[] => runAdvisor({ authApiCalls, inserts, queries, rlsProcedures, schema: toAdvisorSchema(schema) }, { source: "static" });
 
 /**
  * Render advisor findings as a single multi-line string for console surfacing:

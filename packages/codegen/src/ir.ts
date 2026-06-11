@@ -238,6 +238,33 @@ export interface InsertWriteIR {
 }
 
 /**
+ * Per-procedure RLS usage snapshot, produced by `discoverRlsProcedures` for the
+ * `rls_uncovered_table` advisor lint. Structurally identical to
+ * `AdvisorRlsProcedure` (they share the same field set) so values pass straight
+ * through to the advisor without conversion, exactly as `AuthApiCallIR` does for
+ * `AdvisorAuthApiCall`.
+ */
+export interface RlsProcedureIR {
+    /** Export binding name of the procedure (e.g. `listDocuments`). */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/cirrus/`, without extension. */
+    file: string;
+    /**
+     * Table names extracted from the `rls(policies)` array literal. Empty when the
+     * policies argument is not a statically-readable array literal.
+     */
+    rlsTables: string[];
+    /** Tables read by the procedure via `ctx.db.query/findMany/findFirst/…`. */
+    tablesRead: string[];
+    /** Tables written by the procedure via `ctx.db.insert/patch/replace/delete`. */
+    tablesWritten: string[];
+    /** `true` when the procedure's builder chain includes `.use(rls(...))`. */
+    usesRls: boolean;
+    /** `"internal"` for `internalQuery` / `internalMutation` / `internalAction`. */
+    visibility: "internal" | "public";
+}
+
+/**
  * A typed REST route declared with the `httpRoute.&lt;verb>("/path")…` builder in
  * `@cirrus/server` and mounted on `httpRouter()`. Captured statically from the
  * builder chain so the OpenAPI emitter can render a real `paths` entry: the verb
