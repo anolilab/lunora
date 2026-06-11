@@ -1,6 +1,7 @@
 "use client";
 
 import type { ArgsOf, FunctionReference, ReturnOf } from "@cirrus/client";
+import { createQuerySubscription } from "@cirrus/query-core";
 import { useEffect, useRef, useState } from "react";
 
 import { useCirrus } from "./cirrus-provider";
@@ -43,39 +44,41 @@ const useSubscription = <F extends FunctionReference>(
         let cancelled = false;
         const { args: currentArgs, fn: currentFunction } = subscribeRef.current;
 
-        try {
-            const unsubscribe = client.subscribe(
-                currentFunction,
-                currentArgs as ArgsOf<F>,
-                (value) => {
+        // The subscribe → snapshot → error → cleanup lifecycle lives in the shared
+        // `@cirrus/query-core` state machine; this hook only binds it to React
+        // state. The error sink maps the client's `SubscriptionError` back to an
+        // `Error` (the public `UseSubscriptionResult` shape) and is deferred out
+        // of the synchronous effect body so it isn't a state adjustment made
+        // directly in response to a prop change.
+        const unsubscribe = createQuerySubscription(
+            client,
+            currentFunction,
+            currentArgs as ArgsOf<F>,
+            {
+                onData: (value: ReturnOf<F>) => {
                     if (cancelled) {
                         return;
                     }
 
                     setState({ data: value, error: undefined });
                 },
-                { shardKey: options.shardKey },
-            );
+                onError: (error) => {
+                    const normalized = new Error(error.message);
 
-            return () => {
-                cancelled = true;
-                unsubscribe();
-            };
-        } catch (error: unknown) {
-            const normalized = error instanceof Error ? error : new Error(String(error));
+                    queueMicrotask(() => {
+                        if (!cancelled) {
+                            setState({ data: undefined, error: normalized });
+                        }
+                    });
+                },
+            },
+            { shardKey: options.shardKey },
+        );
 
-            // Defer out of the synchronous effect body so the error isn't a
-            // state adjustment made directly in response to a prop change.
-            queueMicrotask(() => {
-                if (!cancelled) {
-                    setState({ data: undefined, error: normalized });
-                }
-            });
-
-            return () => {
-                cancelled = true;
-            };
-        }
+        return () => {
+            cancelled = true;
+            unsubscribe();
+        };
     }, [client, function_.__cirrusRef, serialized, options.shardKey, skipped]);
 
     return state;

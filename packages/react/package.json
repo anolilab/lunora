@@ -36,6 +36,7 @@
     },
     "dependencies": {
         "@cirrus/client": "workspace:*",
+        "@cirrus/query-core": "workspace:*",
         "@cirrus/ratelimit": "workspace:*",
         "@cirrus/ssr": "workspace:*"
     },

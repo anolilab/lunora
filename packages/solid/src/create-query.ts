@@ -1,4 +1,5 @@
 import type { ArgsOf, FunctionReference, ReturnOf } from "@cirrus/client";
+import { createQuerySubscription } from "@cirrus/query-core";
 import type { Accessor } from "solid-js";
 import { createEffect, createSignal, on, onCleanup } from "solid-js";
 
@@ -41,24 +42,24 @@ export const createQuery = <F extends FunctionReference>(
 
     // `on(resolveArgs, …)` re-runs the body whenever the args accessor changes,
     // tearing down the previous subscription via `onCleanup` before opening the
-    // next. A static (non-accessor) `args` resolves once and never re-runs.
+    // next. A static (non-accessor) `args` resolves once and never re-runs. The
+    // skip-handling, subscribe, and cleanup are owned by the shared
+    // `@cirrus/query-core` state machine; this binds it to a Solid signal. The
+    // `() => …` setter forms keep Solid from mistaking a function-valued server
+    // result for an updater.
     createEffect(
         on(resolveArgs, (current) => {
-            if (current === "skip") {
-                // Functional form: a function-valued result would otherwise be
-                // mistaken for an updater by Solid's setter overload.
-                setValue(() => undefined as ReturnOf<F> | undefined);
-
-                return;
-            }
-
-            const unsubscribe = client.subscribe<F>(
+            const unsubscribe = createQuerySubscription<F>(
+                client,
                 function_,
                 current,
-                (next) => {
-                    // Solid stores functions as-is, so wrap to set the accessor to a
-                    // (possibly function-valued) server result without invoking it.
-                    setValue(() => next);
+                {
+                    onData: (next) => {
+                        setValue(() => next);
+                    },
+                    onReset: () => {
+                        setValue(() => undefined as ReturnOf<F> | undefined);
+                    },
                 },
                 { shardKey },
             );
