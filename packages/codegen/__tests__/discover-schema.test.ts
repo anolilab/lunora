@@ -2,6 +2,7 @@ import { Project } from "ts-morph";
 import { describe, expect, it } from "vitest";
 
 import discoverSchema from "../src/discover-schema";
+import { CodegenDiagnosticError } from "../src/diagnostics";
 import { emitDataModel } from "../src/emit";
 
 /**
@@ -805,5 +806,40 @@ describe("discoverSchema", () => {
         }
 
         expect(warnings.some((message) => message.includes("could not be resolved from local sources"))).toBe(true);
+    });
+
+    it("throws a CodegenDiagnosticError with file:line:column when `unique` is not a literal", () => {
+        expect.assertions(5);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@cirrus/server";
+
+            const someFlag = true;
+            export const schema = defineSchema({
+                users: defineTable({
+                    email: v.string(),
+                })
+                    .index("by_email", ["email"], { unique: someFlag }),
+            });
+        `);
+
+        let thrown: unknown;
+
+        try {
+            discoverSchema(project, schemaPath);
+        } catch (error) {
+            thrown = error;
+        }
+
+        expect(thrown).toBeInstanceOf(CodegenDiagnosticError);
+
+        const diagnostic = thrown as CodegenDiagnosticError;
+
+        // Message must contain the schema path so users can navigate directly to the error.
+        expect(diagnostic.message).toContain("schema.ts:");
+        // The structured properties must be set.
+        expect(diagnostic.file).toBe(schemaPath);
+        expect(diagnostic.line).toBeGreaterThan(0);
+        expect(diagnostic.column).toBeGreaterThan(0);
     });
 });

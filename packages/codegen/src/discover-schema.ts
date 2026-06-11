@@ -2,6 +2,7 @@ import type { CallExpression, Expression, Node as TsNode, ObjectLiteralExpressio
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { IndexIR, RankIndexIR, RankSortKeyIR, RelationIR, SchemaIR, SearchIndexIR, TableIR, ValidatorIR, VectorIndexIR } from "./ir";
+import { diagnosticAt } from "./diagnostics";
 import { parseObjectShape } from "./parse-validator";
 
 const VECTOR_METRICS = new Set(["cosine", "dot-product", "euclidean"]);
@@ -169,7 +170,7 @@ const parseIndexCall = (args: ReadonlyArray<Node>): IndexIR => {
             // resolved statically here, so we fail loudly rather than silently
             // dropping a `uniqueIndex` from the emitted metadata.
             if (initializer && !Node.isTrueLiteral(initializer) && !Node.isFalseLiteral(initializer)) {
-                throw new Error(`@cirrus/codegen: \`unique\` must be a literal \`true\` or \`false\`, got ${JSON.stringify(initializer.getText())}`);
+                throw diagnosticAt(initializer, `\`unique\` must be a literal \`true\` or \`false\`, got ${JSON.stringify(initializer.getText())}`);
             }
 
             unique = initializer ? Node.isTrueLiteral(initializer) : false;
@@ -806,8 +807,9 @@ const applyExtensions = (defineSchemaCall: CallExpression, tables: TableIR[]): V
 
         for (const table of merged.tables) {
             if (existingTableNames.has(table.name)) {
-                throw new Error(
-                    `@cirrus/codegen: defineSchema(...).extend(...): table "${table.name}" already exists — another extension with the same key already contributed it.`,
+                throw diagnosticAt(
+                    extendCall,
+                    `defineSchema(...).extend(...): table "${table.name}" already exists — another extension with the same key already contributed it.`,
                 );
             }
 
@@ -841,7 +843,7 @@ const discoverSchema = (project: Project, schemaPath: string): SchemaIR => {
     const argument = defineSchemaCall.getArguments()[0];
 
     if (!argument || !Node.isObjectLiteralExpression(argument)) {
-        throw new Error("defineSchema() expects an object literal");
+        throw diagnosticAt(defineSchemaCall, "defineSchema() expects an object literal");
     }
 
     const tables: TableIR[] = parseBaseTables(argument);

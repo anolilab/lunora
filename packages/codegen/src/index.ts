@@ -1,4 +1,5 @@
 export { formatAdvisories, lintSchema } from "./advisor";
+export { CodegenDiagnosticError, diagnosticAt } from "./diagnostics";
 export { default as discoverAuthApiCalls } from "./discover-authapi-calls";
 export { default as discoverCrons } from "./discover-crons";
 export { discoverFunctions } from "./discover-functions";
