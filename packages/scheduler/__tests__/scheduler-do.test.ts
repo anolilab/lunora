@@ -1,7 +1,8 @@
-import { describe, expect, expectTypeOf, it } from "vitest";
+import { afterEach, describe, expect, expectTypeOf, it } from "vitest";
 
 import { SchedulerDO } from "../src/scheduler-do";
 import type { ScheduleRecord } from "../src/types";
+import { createAlarmHarness } from "./alarm-harness";
 import { createFakeSocket, createFakeState, createFakeStateWithSockets } from "./fake-state";
 
 interface ScheduleResponseBody {
@@ -413,5 +414,123 @@ describe("schedulerDO — retry / dead-letter pipeline", () => {
         expect(state.storageMap.has(`id:${id}`)).toBe(true);
         expect([...state.storageMap.keys()].filter((key) => key.startsWith("retry:"))).toHaveLength(1);
         expect([...state.storageMap.keys()].filter((key) => key.startsWith("dead:"))).toHaveLength(0);
+    });
+});
+
+/**
+ * These tests exercise the real Cloudflare alarm contract — `setAlarm(ts)` is
+ * armed, the wall clock advances *to* that time, and only then does the runtime
+ * deliver `alarm()`. The harness records every armed time and clears the alarm
+ * before firing, so each test asserts the full schedule→fire wiring (the right
+ * alarm time was set, advancing time fires it, re-scheduling sets the next
+ * alarm) rather than calling `alarm()` directly with no scheduled-time check.
+ */
+describe("schedulerDO — alarm contract (fake clock)", () => {
+    let dispose: (() => void) | undefined;
+
+    afterEach(() => {
+        dispose?.();
+        dispose = undefined;
+    });
+
+    const harness = <T extends SchedulerDO>(
+        factory: (state: ConstructorParameters<typeof SchedulerDO>[0], env: ConstructorParameters<typeof SchedulerDO>[1]) => T,
+        now: number,
+    ) => {
+        const created = createAlarmHarness(factory, { env: { CIRRUS_ORIGIN_URL: "https://app.test" }, now });
+
+        dispose = created.dispose;
+
+        return created;
+    };
+
+    it("arms the alarm for a runAfter-style schedule, then fires it when time reaches it", async () => {
+        expect.assertions(5);
+
+        const now = 1_700_000_000_000;
+        const { scheduler, setAlarmCalls, currentAlarm, fastForwardToAlarm } = harness((state, env) => new TestScheduler(state, env), now);
+
+        // runAt posts /schedule with an absolute time; runAfter is the same path
+        // with `Date.now() + delayMs`. Schedule 60s out.
+        await scheduler.fetch(
+            post("/schedule", { args: { text: "hi" }, functionPath: "messages.send", originUrl: "https://app.test", scheduledFor: now + 60_000 }),
+        );
+
+        // The DO armed the alarm for exactly the scheduled time.
+        expect(setAlarmCalls).toEqual([now + 60_000]);
+        expect(currentAlarm()).toBe(now + 60_000);
+        // Nothing has dispatched yet — the clock has not advanced.
+        expect(scheduler.dispatched).toHaveLength(0);
+
+        // Advancing time to the armed alarm fires it.
+        const { firedAt } = await fastForwardToAlarm();
+
+        expect(firedAt).toBe(now + 60_000);
+        expect(scheduler.dispatched.map((record) => record.functionPath)).toEqual(["messages.send"]);
+    });
+
+    it("fires only the due job and re-arms setAlarm to the next pending entry", async () => {
+        expect.assertions(4);
+
+        const now = 1_700_000_000_000;
+        const { scheduler, setAlarmCalls, fastForwardToAlarm, currentAlarm } = harness((state, env) => new TestScheduler(state, env), now);
+
+        await scheduler.fetch(post("/schedule", { args: { x: 1 }, functionPath: "due", originUrl: "https://app.test", scheduledFor: now + 1000 }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "later", originUrl: "https://app.test", scheduledFor: now + 60_000 }));
+
+        // Earliest-pending wins the alarm (armed to the sooner of the two).
+        expect(currentAlarm()).toBe(now + 1000);
+
+        const { firedAt } = await fastForwardToAlarm();
+
+        // Only the record whose time has actually arrived dispatched.
+        expect(firedAt).toBe(now + 1000);
+        expect(scheduler.dispatched.map((record) => record.functionPath)).toEqual(["due"]);
+        // alarm() re-armed setAlarm to the still-pending "later" job.
+        expect(setAlarmCalls.at(-1)).toBe(now + 60_000);
+    });
+
+    it("fires both jobs across two alarm cycles, then clears the alarm when the queue drains", async () => {
+        expect.assertions(3);
+
+        const now = 1_700_000_000_000;
+        const { scheduler, setAlarmCalls, fastForwardToAlarm, currentAlarm } = harness((state, env) => new TestScheduler(state, env), now);
+
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "first", originUrl: "https://app.test", scheduledFor: now + 1000 }));
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "second", originUrl: "https://app.test", scheduledFor: now + 2000 }));
+
+        await fastForwardToAlarm();
+        await fastForwardToAlarm();
+
+        expect(scheduler.dispatched.map((record) => record.functionPath)).toEqual(["first", "second"]);
+        // Queue drained: the last alarm op was a deleteAlarm() (recorded as null).
+        expect(currentAlarm()).toBeNull();
+        expect(setAlarmCalls.at(-1)).toBeNull();
+    });
+
+    it("re-arms the alarm into the future on a failed dispatch (backoff fires on the next cycle)", async () => {
+        expect.assertions(4);
+
+        const now = 1_700_000_000_000;
+        const { scheduler, setAlarmCalls, fastForwardToAlarm } = harness((state, env) => new FailingScheduler(state, env, Number.POSITIVE_INFINITY), now);
+
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", originUrl: "https://app.test", scheduledFor: now + 1000 }));
+
+        const { firedAt } = await fastForwardToAlarm();
+
+        // The first attempt ran at the scheduled time and failed.
+        expect(scheduler.attempts).toBe(1);
+
+        // The DO re-armed the alarm ~RETRY_BASE_DELAY_MS (30s) past the fire time.
+        const rearmed = setAlarmCalls.at(-1) ?? 0;
+
+        expect(rearmed).toBeGreaterThan(firedAt + 20_000);
+
+        // Advancing to the backoff alarm fires the retry — a second attempt.
+        await fastForwardToAlarm();
+
+        expect(scheduler.attempts).toBe(2);
+        // Each failure pushes the next alarm further out (growing backoff).
+        expect(setAlarmCalls.at(-1) ?? 0).toBeGreaterThan(rearmed);
     });
 });
