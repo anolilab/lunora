@@ -46,6 +46,10 @@ const SCALAR_TYPE_BY_KIND: Record<string, string> = {
     bytes: "ArrayBuffer",
     // Epoch-millisecond numbers; the distinction is semantic only.
     date: "number",
+    // v.from() wraps an external Standard Schema validator whose output type is
+    // not statically recoverable at codegen time — emit `unknown` so the
+    // generated api types still compile without depending on the library.
+    from: "unknown",
     null: "null",
     number: "number",
     // The key of a stored R2 object — a string; the distinction is semantic only.

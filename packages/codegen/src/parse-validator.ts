@@ -163,6 +163,13 @@ const parseBuilderMember = (member: string, args: ReadonlyArray<Node>): Validato
             };
         }
 
+        case "from": {
+            // v.from(externalSchema) — the external Standard Schema validator's
+            // output type is not statically recoverable at codegen time.
+            // Emit an `unknown`-typed IR node so generated api types compile.
+            return { kind: "from" };
+        }
+
         default: {
             // Loud failure — silently emitting `unknown` masks codegen bugs.
             // `emit.ts` keeps a fallback case for safety, but this parser
