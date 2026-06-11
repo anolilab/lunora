@@ -78,6 +78,60 @@ describe("cirrus dev", () => {
             expect(plan.studioEnabled).toBe(false);
             expect(plan.codegenEnabled).toBe(false);
         });
+
+        it("leaves remote mode off and adds no --config when --remote is absent", () => {
+            expect.assertions(3);
+
+            const plan = planDevCommand({ cwd: workdir, logger: silentLogger() });
+
+            expect(plan.remote.enabled).toBe(false);
+            expect(plan.remote.bindings).toEqual([]);
+            expect(plan.wrangler.args).not.toContain("--config");
+        });
+
+        it("appends `--config <temp>` and lists remoted bindings when --remote is on", () => {
+            expect.assertions(4);
+
+            const generatedConfig = join(workdir, "cirrus-remote", "wrangler.remote.jsonc");
+            const plan = planDevCommand({
+                cwd: workdir,
+                logger: silentLogger(),
+                // Injected materializer stands in for the real temp-config writer.
+                materializeRemote: () => {
+                    return {
+                        configPath: generatedConfig,
+                        enabled: true,
+                        remoteBindings: [
+                            { binding: "DB", index: 0, kind: "D1", section: "d1_databases" },
+                            { binding: "FILES", index: 0, kind: "R2", section: "r2_buckets" },
+                        ],
+                    };
+                },
+                remote: true,
+            });
+
+            expect(plan.remote.enabled).toBe(true);
+            expect(plan.remote.bindings).toEqual(["DB (D1)", "FILES (R2)"]);
+            expect(plan.wrangler.args).toContain("--config");
+            expect(plan.wrangler.args).toContain(generatedConfig);
+        });
+
+        it("requests remote mode but adds no --config when nothing is eligible", () => {
+            expect.assertions(3);
+
+            const plan = planDevCommand({
+                cwd: workdir,
+                logger: silentLogger(),
+                materializeRemote: () => {
+                    return { enabled: true, reason: "no D1/KV/R2 bindings to proxy remotely", remoteBindings: [] };
+                },
+                remote: true,
+            });
+
+            expect(plan.remote.enabled).toBe(true);
+            expect(plan.remote.reason).toContain("no D1/KV/R2");
+            expect(plan.wrangler.args).not.toContain("--config");
+        });
     });
 
     describe("runDevCommand", () => {

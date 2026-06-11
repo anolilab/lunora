@@ -8,6 +8,8 @@ export { CIRRUS_EVENT_SOURCE, formatCirrusEvent } from "./log-format";
 export { createConfirm, isInteractive, promptYesNo } from "./prompt";
 export type { ReconcileBindingsResult } from "./reconcile-bindings";
 export { reconcileWranglerBindings } from "./reconcile-bindings";
+export type { MaterializeOptions, MaterializeResult, RemoteBindingPlan, RemoteWranglerShape } from "./remote-bindings";
+export { injectRemoteFlags, isRemoteEnvEnabled, materializeRemoteWranglerConfig, planRemoteBindings, REMOTE_ELIGIBLE_KEYS } from "./remote-bindings";
 export type { AugmentPlan, EnsureDevVariablesDeps, EnsureDevVariablesResult, EnsureDevVariablesStatus, ScaffoldPlan } from "./scaffold-dev-variables";
 export { ensureDevVariables, isPlaceholderValue, planDevVariablesAugment, planDevVariablesScaffold } from "./scaffold-dev-variables";
 export type { DiscoverSchemaInfoResult, SchemaInfo } from "./schema-info";

@@ -1,7 +1,7 @@
 import type { ChildProcess } from "node:child_process";
 import { spawn as nodeSpawn } from "node:child_process";
 
-import { createConfirm, ensureDevVariables, formatCirrusEvent } from "@cirrus/config";
+import { createConfirm, ensureDevVariables, formatCirrusEvent, isRemoteEnvEnabled, materializeRemoteWranglerConfig } from "@cirrus/config";
 
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
@@ -42,8 +42,12 @@ interface DevCommandOptions {
     /** Injection seam for tests — defaults to the real `.dev.vars` scaffolder. */
     ensureEnv?: typeof ensureDevVariables;
     logger: Logger;
+    /** Injection seam for tests — defaults to the real remote-config materializer. */
+    materializeRemote?: typeof materializeRemoteWranglerConfig;
     /** Studio server port. */
     port?: number;
+    /** Proxy D1/KV/R2 bindings to the deployed worker during dev (`CIRRUS_REMOTE=1` / `--remote`); DO shards stay local. */
+    remote?: boolean;
     /** Injection seam for tests — defaults to the real codegen watcher. */
     startCodegen?: typeof startCodegenWatch;
     /** Injection seam for tests — defaults to the real studio server. */
@@ -56,8 +60,19 @@ interface DevCommandOptions {
     workerPort?: number;
 }
 
+interface DevRemotePlan {
+    /** Short binding labels remoted (e.g. `"DB (D1)"`), for the banner. */
+    bindings: string[];
+    /** Whether remote mode was requested. */
+    enabled: boolean;
+    /** Why remote mode didn't take effect despite being requested, for logging. */
+    reason?: string;
+}
+
 interface DevCommandPlan {
     codegenEnabled: boolean;
+    /** The remote-binding decision: which D1/KV/R2 bindings hit the deployed worker. */
+    remote: DevRemotePlan;
     studioEnabled: boolean;
     studioPort: number;
     workerOrigin: string;
@@ -65,6 +80,30 @@ interface DevCommandPlan {
     /** The single child process `cirrus dev` spawns: `wrangler dev`. */
     wrangler: SpawnDescriptor & { tag: string };
 }
+
+/**
+ * Resolve remote-binding mode into the extra `wrangler dev` args + a banner
+ * summary. When `--remote`/`CIRRUS_REMOTE` is set we materialize a temp wrangler
+ * config with `"remote": true` on each D1/KV/R2 binding (Durable Object shards
+ * stay local) and point `wrangler dev --config` at it, so the local worker reads
+ * and writes the **deployed** resources. When disabled, or when there's nothing
+ * to remote, the args stay empty and dev runs fully local.
+ */
+const resolveRemotePlan = (options: DevCommandOptions, cwd: string): { args: string[]; plan: DevRemotePlan } => {
+    if (!options.remote) {
+        return { args: [], plan: { bindings: [], enabled: false } };
+    }
+
+    const materialize = options.materializeRemote ?? materializeRemoteWranglerConfig;
+    const result = materialize({ enabled: true, projectRoot: cwd });
+    const bindings = result.remoteBindings.map((binding) => `${binding.binding} (${binding.kind})`);
+
+    if (result.configPath === undefined) {
+        return { args: [], plan: { bindings, enabled: true, reason: result.reason } };
+    }
+
+    return { args: ["--config", result.configPath], plan: { bindings, enabled: true } };
+};
 
 /**
  * Plan `cirrus dev`: it runs the worker via `wrangler dev` and nothing else as a
@@ -76,15 +115,19 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
     const cwd = options.cwd ?? process.cwd();
     const workerPort = options.workerPort ?? DEFAULT_WORKER_PORT;
     const manager = detectPackageManager(cwd);
+    const remote = resolveRemotePlan(options, cwd);
     // `--var WORKER_ENV:development` flags the worker as a dev deployment so the
     // runtime streams every RPC dispatch summary to the terminal by default
     // (`@cirrus/do`'s `isDevEnvironment`). `wrangler dev` only — never `deploy` —
     // so it can't leak into production; a `WORKER_ENV` in wrangler config / a
     // `--var` the user passes still wins. Mirrors the Vite plugin's injection.
-    const exec = execArgsFor(manager, "wrangler", ["dev", "--port", String(workerPort), "--var", "WORKER_ENV:development"]);
+    // `--config <temp>` (when remote) points wrangler at a config whose D1/KV/R2
+    // bindings carry `"remote": true`.
+    const exec = execArgsFor(manager, "wrangler", ["dev", "--port", String(workerPort), "--var", "WORKER_ENV:development", ...remote.args]);
 
     return {
         codegenEnabled: options.codegen !== false,
+        remote: remote.plan,
         studioEnabled: options.studio !== false,
         studioPort: options.port ?? DEFAULT_STUDIO_PORT,
         workerOrigin: `http://localhost:${String(workerPort)}`,
@@ -202,6 +245,14 @@ const printBanner = (logger: Logger, plan: DevCommandPlan, studioUrl: string | u
 
     if (plan.codegenEnabled) {
         logger.info("  ➜  Codegen:    watching cirrus/");
+    }
+
+    if (plan.remote.enabled) {
+        if (plan.remote.bindings.length > 0) {
+            logger.info(`  ➜  Remote:     ${plan.remote.bindings.join(", ")} → deployed worker`);
+        } else {
+            logger.warn(`  ➜  Remote:     requested but inactive (${plan.remote.reason ?? "no eligible bindings"}) — running fully local`);
+        }
     }
 
     logger.info("");
@@ -326,11 +377,14 @@ const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(({ cwd, lo
         cwd,
         logger,
         port: options.port,
+        // `--remote` (an explicit flag) OR `CIRRUS_REMOTE=1` in the environment
+        // turns on remote bindings; the flag wins when present.
+        remote: options.remote === true || isRemoteEnvEnabled(process.env["CIRRUS_REMOTE"]),
         studio: options.studio === false ? false : undefined,
         workerPort: options.workerPort,
     }),
 );
 
 export { execute };
-export type { DevCommandOptions, DevCommandPlan, WorkerProcess, WorkerSpawner };
-export { planDevCommand, runDevCommand };
+export type { DevCommandOptions, DevCommandPlan, DevRemotePlan, WorkerProcess, WorkerSpawner };
+export { planDevCommand, resolveRemotePlan, runDevCommand };

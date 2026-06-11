@@ -8,6 +8,7 @@ const devCommand: Command = {
         ["cirrus dev", "Run the worker + studio + codegen watch"],
         ["cirrus dev --no-studio", "Skip the embedded studio server"],
         ["cirrus dev --worker-port 8080", "Use a custom wrangler dev port"],
+        ["cirrus dev --remote", "Proxy D1/KV/R2 to the deployed worker (also CIRRUS_REMOTE=1)"],
     ],
     group: "Develop",
     loader: () =>
@@ -21,6 +22,7 @@ const devCommand: Command = {
         { description: "wrangler dev port (default 8787)", name: "worker-port", type: Number },
         { description: "Don't start the embedded studio server", name: "no-studio", type: Boolean },
         { description: "Don't watch + regenerate codegen", name: "no-codegen", type: Boolean },
+        { description: "Proxy D1/KV/R2 bindings to the deployed worker (or set CIRRUS_REMOTE=1)", name: "remote", type: Boolean },
     ],
 };
 
@@ -32,6 +34,7 @@ export type DevOptions = CreateOptions<{
     // cerebro exposes them under the negated positive key at runtime.
     codegen: boolean | undefined;
     port: number | undefined;
+    remote: boolean | undefined;
     studio: boolean | undefined;
     "worker-port": number | undefined;
 }>;
