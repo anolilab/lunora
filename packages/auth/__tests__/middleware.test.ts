@@ -2,7 +2,7 @@ import { memoryAdapter } from "better-auth/adapters/memory";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
 
 import { createAuth } from "../src/create-auth";
-import { withAuthPlugins } from "../src/middleware";
+import { CirrusAuthHeadersError, withAuthPlugins } from "../src/middleware";
 import { admin, organization } from "../src/plugins";
 
 /**
@@ -100,7 +100,10 @@ describe("withAuthPlugins", () => {
         const context = await runMiddleware<MockHandlerContext>(middleware, {});
 
         expect(context.authApi).toBeDefined();
-        expect(context.authApi).toBe(auth.api);
+        // The default surface is the runtime header guard (a transparent proxy
+        // over `auth.api`), so it is structurally the api but not identity-equal.
+        // The unguarded `auth.api` is reachable via the `withoutHeaders()` hatch.
+        expect((context.authApi as { withoutHeaders(): unknown }).withoutHeaders()).toBe(auth.api);
 
         // Non-null assertions narrow away the `| undefined` from the optional
         // chain so `toBeFunction` checks the resolved endpoint type, not the union.
@@ -122,8 +125,10 @@ describe("withAuthPlugins", () => {
         const context = await runMiddleware<MockHandlerContext>(middleware, {});
 
         // Call the plugin endpoint through the ctx — exactly how a handler
-        // would reach it after composing the middleware.
-        await context.authApi?.createOrganization?.({
+        // would reach it after composing the middleware. This is a server-side
+        // seed with no inbound request, so we use the explicit `withoutHeaders()`
+        // opt-out (the runtime guard would otherwise reject the header-less call).
+        await (context.authApi as unknown as { withoutHeaders(): typeof auth.api }).withoutHeaders().createOrganization({
             body: { name: "Acme", slug: "acme", userId: ownerId },
         });
 
@@ -160,5 +165,148 @@ describe("withAuthPlugins", () => {
         expect(contextOut.authApi).toBeDefined();
 
         expectTypeOf((contextOut.authApi as { createOrganization: (...args: unknown[]) => unknown }).createOrganization).toBeFunction();
+    });
+});
+
+/**
+ * Runtime header guard (audit finding #7). `withAuthPlugins` wraps `ctx.authApi`
+ * in a proxy that throws when a privileged endpoint is called without `headers`,
+ * mirroring the static `auth_api_call_without_headers` advisor lint. The guard
+ * is on by default (safe); opting out must be explicit (`withoutHeaders()` per
+ * call, or `{ enforceHeaders: false }` for the whole middleware).
+ *
+ * The guard wraps EVERY callable on `auth.api` — it doesn't need a real
+ * better-auth instance to exercise the throw/pass behaviour, so we drive it with
+ * a minimal stub api whose endpoint records the arguments it received. That
+ * isolates "did the guard throw / forward correctly" from better-auth's own
+ * authorization, which the sql-store + behaviour suites already cover.
+ */
+describe("withAuthPlugins — runtime header guard", () => {
+    interface StubApi extends Record<string, unknown> {
+        banUser: (options: { body: { userId: string }; headers?: Headers }) => Promise<{ called: true; sawHeaders: boolean }>;
+    }
+
+    const stubAuth = (calls: { options: unknown }[]): { api: StubApi } => ({
+        api: {
+            banUser: (options) => {
+                calls.push({ options });
+
+                return Promise.resolve({ called: true, sawHeaders: options.headers !== undefined });
+            },
+        },
+    });
+
+    const installAuthApi = async (auth: unknown, enforceHeaders?: boolean): Promise<{ banUser: StubApi["banUser"]; withoutHeaders(): StubApi }> => {
+        const middleware = withAuthPlugins(auth as never, enforceHeaders === undefined ? undefined : { enforceHeaders });
+        const context = await runMiddleware<{ authApi: { banUser: StubApi["banUser"]; withoutHeaders(): StubApi } }>(middleware as never, {});
+
+        return context.authApi;
+    };
+
+    it("throws CirrusAuthHeadersError on a header-less privileged call (safe default)", async () => {
+        expect.assertions(3);
+
+        const calls: { options: unknown }[] = [];
+        const authApi = await installAuthApi(stubAuth(calls));
+
+        // No headers → guard throws and the underlying endpoint is never reached.
+        await expect(authApi.banUser({ body: { userId: "u_1" } })).rejects.toBeInstanceOf(CirrusAuthHeadersError);
+        await expect(authApi.banUser({ body: { userId: "u_1" } })).rejects.toThrow(/banUser/u);
+        expect(calls).toHaveLength(0);
+    });
+
+    it("also throws when `headers` is present but nullish (undefined / null)", async () => {
+        expect.assertions(3);
+
+        const calls: { options: unknown }[] = [];
+        const authApi = await installAuthApi(stubAuth(calls));
+
+        // `headers: undefined` is the same bypass as omitting it.
+        await expect(authApi.banUser({ body: { userId: "u_1" }, headers: undefined })).rejects.toBeInstanceOf(CirrusAuthHeadersError);
+        // A `null` headers value is the bypass too — cast through `unknown` since
+        // the stub's signature only admits `Headers | undefined`.
+        const callWithNullHeaders = authApi.banUser as unknown as (o: { body: { userId: string }; headers: null }) => Promise<unknown>;
+
+        await expect(callWithNullHeaders({ body: { userId: "u_1" }, headers: null })).rejects.toBeInstanceOf(CirrusAuthHeadersError);
+        expect(calls).toHaveLength(0);
+    });
+
+    it("passes a normal header-bearing call straight through to the endpoint", async () => {
+        expect.assertions(3);
+
+        const calls: { options: unknown }[] = [];
+        const authApi = await installAuthApi(stubAuth(calls));
+
+        const result = await authApi.banUser({ body: { userId: "u_1" }, headers: new Headers({ cookie: "session=abc" }) });
+
+        expect(result).toEqual({ called: true, sawHeaders: true });
+        expect(calls).toHaveLength(1);
+        // The guard forwards the original arguments verbatim.
+        expect((calls[0]!.options as { body: { userId: string } }).body).toEqual({ userId: "u_1" });
+    });
+
+    it("ctx.authApi.withoutHeaders() opts a single call out of the guard", async () => {
+        expect.assertions(2);
+
+        const calls: { options: unknown }[] = [];
+        const authApi = await installAuthApi(stubAuth(calls));
+
+        // The explicit per-call escape hatch returns the raw, unguarded surface.
+        const result = await authApi.withoutHeaders().banUser({ body: { userId: "u_1" } });
+
+        expect(result).toEqual({ called: true, sawHeaders: false });
+        expect(calls).toHaveLength(1);
+    });
+
+    it("{ enforceHeaders: false } disables the guard for the whole middleware", async () => {
+        expect.assertions(2);
+
+        const calls: { options: unknown }[] = [];
+        const authApi = await installAuthApi(stubAuth(calls), false);
+
+        // Guard disabled → a header-less call runs the endpoint directly.
+        const result = await authApi.banUser({ body: { userId: "u_1" } });
+
+        expect(result).toEqual({ called: true, sawHeaders: false });
+        expect(calls).toHaveLength(1);
+    });
+
+    it("guards a real better-auth admin endpoint end to end", async () => {
+        expect.assertions(2);
+
+        // Drive the guard over an actual `auth.api` surface so the throw fires
+        // before better-auth's own session-less privilege escalation runs.
+        const memoryDatabase: Record<string, unknown[]> = {
+            account: [],
+            invitation: [],
+            member: [],
+            organization: [],
+            session: [],
+            team: [],
+            user: [],
+            verification: [],
+        };
+        const auth = createAuth({
+            baseURL: "http://localhost",
+            database: memoryAdapter(memoryDatabase),
+            emailAndPassword: { enabled: true },
+            plugins: [organization(), admin()],
+            secret: "x".repeat(32),
+        });
+
+        const middleware = withAuthPlugins(auth);
+        const context = await runMiddleware<{
+            authApi: { createOrganization: (options: { body: { name: string; slug: string }; headers?: Headers }) => Promise<unknown> };
+        }>(middleware as never, {});
+
+        // Header-less privileged call → guard throws (would have escalated).
+        await expect(context.authApi.createOrganization({ body: { name: "Acme", slug: "acme" } })).rejects.toBeInstanceOf(CirrusAuthHeadersError);
+
+        // With headers, the call reaches better-auth (which then enforces its
+        // own session check — an unauthenticated empty Headers is rejected by
+        // better-auth, NOT by our guard). Either way the guard let it through.
+        await expect(context.authApi.createOrganization({ body: { name: "Acme", slug: "acme" }, headers: new Headers() })).rejects.not.toBeInstanceOf(
+            CirrusAuthHeadersError,
+        );
     });
 });

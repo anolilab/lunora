@@ -12,6 +12,138 @@ interface MiddlewareNext<ContextIn> {
 }
 
 /**
+ * Thrown by the runtime header guard when a privileged `ctx.authApi.*` endpoint
+ * is invoked without a `headers` property on its argument object. Carries the
+ * offending `method` name so callers can pinpoint the bad call site, and points
+ * at the explicit escape hatches.
+ *
+ * This is the runtime sibling of the static `auth_api_call_without_headers`
+ * advisor lint — both treat a header-less `ctx.authApi.*` call as an
+ * authorization bypass, so a call that trips the lint also trips this guard.
+ */
+export class CirrusAuthHeadersError extends Error {
+    /** The `ctx.authApi.<method>` that was called without `headers`. */
+    public readonly method: string;
+
+    public constructor(method: string) {
+        super(
+            `@cirrus/auth: ctx.authApi.${method}(…) was called without \`headers\`. ` +
+                "better-auth treats a header-less call as a trusted server-to-server " +
+                "invocation and skips session authorization entirely — an authorization " +
+                "bypass. Pass the inbound request headers: " +
+                `ctx.authApi.${method}({ body, headers: request.headers }). ` +
+                "If you genuinely intend an unauthenticated server-to-server call, opt " +
+                "out explicitly via ctx.authApi.withoutHeaders().<method>(…), or disable " +
+                "the guard for the whole middleware with withAuthPlugins(auth, { enforceHeaders: false }).",
+        );
+
+        this.name = "CirrusAuthHeadersError";
+        this.method = method;
+    }
+}
+
+/**
+ * Decide whether a `ctx.authApi.*` call carried `headers`. Mirrors the static
+ * advisor's `hasHeaders` rule (`@cirrus/codegen`'s `discover-authapi-calls`) so
+ * the runtime guard and the lint agree on what counts as a header-bearing call:
+ *
+ * - **No argument at all** → no headers (the lint flags `method()`).
+ * - **An object argument** → require a `headers` property to be present
+ *   (the lint flags `method({ body })` but not `method({ body, headers })`).
+ *   A nullish `headers` value still counts as "absent" — passing
+ *   `headers: undefined` is the same bypass as omitting it.
+ * - **A non-object argument** (a pre-bound options variable, a call, …) →
+ *   treated as header-bearing. The static lint under-reports here too
+ *   ("can't prove headers is absent → don't flag"); we mirror that rather than
+ *   risk false positives on a security guard.
+ */
+const callHasHeaders = (argument: unknown): boolean => {
+    if (argument === undefined) {
+        return false;
+    }
+
+    if (typeof argument !== "object" || argument === null) {
+        // Can't prove headers is absent → don't throw (mirrors the lint).
+        return true;
+    }
+
+    const { headers } = argument as { headers?: unknown };
+
+    return headers !== undefined && headers !== null;
+};
+
+/**
+ * Wrap a better-auth `api` surface in a Proxy that throws
+ * {@link CirrusAuthHeadersError} when any endpoint is invoked without `headers`.
+ *
+ * The proxy is transparent: property reads return guarded function wrappers for
+ * callable endpoints and pass everything else (non-function properties) through
+ * untouched, so the wrapped surface stays structurally identical to `auth.api`.
+ *
+ * One synthetic property is added — `withoutHeaders()` — the explicit, loud
+ * escape hatch that returns the raw, unguarded `auth.api` for the rare,
+ * deliberate server-to-server call that must run unauthenticated.
+ */
+const guardAuthApi = <Api extends Record<string, unknown>>(api: Api): Api => {
+    const withoutHeaders = (): Api => api;
+
+    return new Proxy(api, {
+        get(target, property, receiver) {
+            // The explicit opt-out: `ctx.authApi.withoutHeaders()` returns the
+            // raw, unguarded surface. We only synthesise it when the underlying
+            // api doesn't already define a real endpoint by that name, so a
+            // future better-auth `withoutHeaders` endpoint would win.
+            if (property === "withoutHeaders" && !(property in target)) {
+                return withoutHeaders;
+            }
+
+            const value = Reflect.get(target, property, receiver);
+
+            if (typeof value !== "function" || typeof property !== "string") {
+                return value;
+            }
+
+            const method = property;
+
+            return (...arguments_: unknown[]): unknown => {
+                if (!callHasHeaders(arguments_[0])) {
+                    // better-auth endpoints are async, so surface the guard as a
+                    // rejected promise — it composes with `await`/`.catch` the
+                    // same way an endpoint error would, instead of throwing
+                    // synchronously during the call expression.
+                    return Promise.reject(new CirrusAuthHeadersError(method));
+                }
+
+                // Call with `target` as `this` so endpoints that read other
+                // properties off the api object still resolve them.
+                return Reflect.apply(value as (...a: unknown[]) => unknown, target, arguments_);
+            };
+        },
+    }) as Api;
+};
+
+/**
+ * Options for {@link withAuthPlugins}.
+ */
+export interface WithAuthPluginsOptions {
+    /**
+     * Whether to install the runtime header guard around `ctx.authApi`.
+     *
+     * **Defaults to `true` — the safe default.** When enabled, every
+     * `ctx.authApi.<method>(…)` call that omits `headers` throws
+     * {@link CirrusAuthHeadersError} instead of silently running with full
+     * server-to-server privileges. For a deliberate, per-call unauthenticated
+     * invocation, use the explicit `ctx.authApi.withoutHeaders()` escape hatch
+     * rather than disabling the guard wholesale.
+     *
+     * Set to `false` only when you have audited every `ctx.authApi.*` call site
+     * and accept responsibility for passing headers yourself. This is the loud,
+     * all-or-nothing opt-out; prefer `withoutHeaders()` for one-offs.
+     */
+    enforceHeaders?: boolean;
+}
+
+/**
  * The Cirrus context extension this middleware installs. It does *not* replace
  * `ctx.auth` (the identity-only surface populated by the runtime — `userId` and
  * `getIdentity()`); instead it adds a sibling `ctx.authApi` that points at the
@@ -45,13 +177,39 @@ export interface CirrusAuthApiContext<Auth extends CirrusAuth> {
      * entirely** — any procedure that can reach `ctx.authApi` could then ban a
      * user, escalate a role, or read another tenant's data.
      *
+     * To stop that bypass at runtime, `withAuthPlugins` installs a guard around
+     * `ctx.authApi` by default: a header-less call to any endpoint throws
+     * {@link CirrusAuthHeadersError} rather than running with full privileges.
+     * The same `auth_api_call_without_headers` advisor lint catches it
+     * statically; the guard is the runtime backstop for the cases the lint
+     * can't see (dynamic method names, indirected calls). For the rare,
+     * deliberate unauthenticated server-to-server call, opt out explicitly with
+     * `ctx.authApi.withoutHeaders().<method>(…)`.
+     *
      * Cirrus's procedure context carries only the resolved identity, not the
      * raw inbound `Headers`, so this middleware CANNOT pre-bind them for you.
      * Therefore: **thread the inbound `Headers` into every `ctx.authApi.*`
      * call** (typically from an HTTP action — see {@link withAuthPlugins}). A
      * header-less call is an authorization bypass, not a convenience.
      */
-    readonly authApi: Auth["api"];
+    readonly authApi: Auth["api"] & {
+        /**
+         * Explicit, loud escape hatch from the runtime header guard. Returns
+         * the raw, **unguarded** `auth.api` surface — every endpoint reached
+         * through it runs as a trusted server-to-server call with session
+         * authorization skipped.
+         *
+         * ```ts
+         * // A scheduled job with no inbound request that must create the
+         * // system org. Audited and intentional:
+         * await ctx.authApi.withoutHeaders().createOrganization({ body: { name } });
+         * ```
+         *
+         * Use only for deliberate, audited unauthenticated calls. For ordinary
+         * request-driven calls, pass `headers` so authorization is enforced.
+         */
+        withoutHeaders(): Auth["api"];
+    };
 }
 
 /**
@@ -70,6 +228,18 @@ export interface CirrusAuthApiContext<Auth extends CirrusAuth> {
  * altogether** — so a header-less `ctx.authApi.banUser(...)` from any procedure
  * runs with full privileges regardless of who the caller is. This is an
  * authorization bypass, not just a missing convenience.
+ *
+ * To make that bypass fail loudly instead of silently, this middleware wraps
+ * `ctx.authApi` in a **runtime header guard by default**: any endpoint called
+ * without a `headers` property throws {@link CirrusAuthHeadersError}. The guard
+ * mirrors the static `auth_api_call_without_headers` advisor lint exactly, so
+ * the two agree on what counts as a header-bearing call.
+ *
+ * - **Default (safe):** `withAuthPlugins(auth)` — header-less calls throw.
+ * - **Per-call opt-out (preferred):** `ctx.authApi.withoutHeaders().banUser(…)`
+ *   for a deliberate, audited unauthenticated server-to-server call.
+ * - **Whole-middleware opt-out (loud):** `withAuthPlugins(auth, { enforceHeaders: false })`
+ *   disables the guard entirely; only do this once every call site is audited.
  *
  * Cirrus's procedure context does not currently carry the raw request headers
  * (only the resolved identity — see `AuthState` in `@cirrus/server`), so
@@ -97,9 +267,9 @@ export interface CirrusAuthApiContext<Auth extends CirrusAuth> {
  * ```
  *
  * For internal server-to-server calls where there is no inbound request
- * (e.g. a scheduled job that creates the system org), pass an empty
- * `Headers` and authenticate with whatever bearer token your auth instance
- * is configured to honour.
+ * (e.g. a scheduled job that creates the system org), opt out explicitly with
+ * `ctx.authApi.withoutHeaders()` and authenticate with whatever bearer token
+ * your auth instance is configured to honour.
  */
 
 /**
@@ -114,16 +284,24 @@ export type WithAuthPluginsMiddleware<Auth extends CirrusAuth> = <ContextIn>(opt
     next: MiddlewareNext<ContextIn>;
 }) => Promise<CirrusAuthApiContext<Auth> & ContextIn>;
 
-export const withAuthPlugins =
-    <Auth extends CirrusAuth>(auth: Auth): WithAuthPluginsMiddleware<Auth> =>
+export const withAuthPlugins = <Auth extends CirrusAuth>(auth: Auth, options: WithAuthPluginsOptions = {}): WithAuthPluginsMiddleware<Auth> => {
+    const enforceHeaders = options.enforceHeaders ?? true;
+
+    // Build the surface once per middleware, not per request: the guard proxy
+    // is stateless, so the same wrapped object is safe to share across calls.
+    const authApi = enforceHeaders
+        ? (guardAuthApi(auth.api as Record<string, unknown>) as CirrusAuthApiContext<Auth>["authApi"])
+        : (auth.api as CirrusAuthApiContext<Auth>["authApi"]);
+
     // The callable is generic over CtxIn so `next({ ctx: { authApi } })`
-    // returns `CtxIn & { authApi: Auth["api"] }` — fields the upstream
-    // middleware installed survive into the downstream chain. Returning the
-    // extended ctx (instead of a fresh object) is critical: the structural
-    // mirror of `Middleware` says the return value IS the new ctx, so
-    // returning anything narrower would drop upstream fields.
-    async <ContextIn>({ next }: { ctx: ContextIn; next: MiddlewareNext<ContextIn> }): Promise<CirrusAuthApiContext<Auth> & ContextIn> => {
-        const extended = await next({ ctx: { authApi: auth.api } });
+    // returns `CtxIn & { authApi }` — fields the upstream middleware
+    // installed survive into the downstream chain. Returning the extended ctx
+    // (instead of a fresh object) is critical: the structural mirror of
+    // `Middleware` says the return value IS the new ctx, so returning anything
+    // narrower would drop upstream fields.
+    return async <ContextIn>({ next }: { ctx: ContextIn; next: MiddlewareNext<ContextIn> }): Promise<CirrusAuthApiContext<Auth> & ContextIn> => {
+        const extended = await next({ ctx: { authApi } });
 
         return extended;
     };
+};
