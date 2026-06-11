@@ -131,4 +131,4 @@ const getSubscriptionRegistry = (client: CirrusClient): CirrusSubscriptionRegist
 };
 
 export { CirrusSubscriptionRegistry, getSubscriptionRegistry };
-export { cirrusQueryKey, serializeQueryKey } from "./query-key";
+export { cirrusQueryKey, serializeQueryKey, stableStringify } from "./query-key";

@@ -206,11 +206,9 @@ describe("codegen-plugin", () => {
     };
 
     /**
-     * Invoke `configureServer` on the plugin and return a helper that fires the
-     * `change` watcher listener synchronously with a fake file path.
-     *
-     * We advance the debounce timer via `vi.useFakeTimers()` so the callback
-     * executes in the same tick.
+     * Invoke the plugin's `configureServer` hook with the fake dev server,
+     * wiring the overlay callbacks under test. Centralizes the cast so the
+     * overlay cases below stay focused on their assertions.
      */
     const wireServer = (plugin: import("vite").Plugin, server: import("vite").ViteDevServer) => {
         const hook = plugin.configureServer as (server: import("vite").ViteDevServer) => void;

@@ -4,8 +4,7 @@ import type { ArgsOf, FunctionReference, ReturnOf } from "@cirrus/client";
 import { useQuery as useTanStackQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
 
-import { cirrusQueryKey, getSubscriptionRegistry, serializeQueryKey } from "./cache";
-import { stableStringify } from "./query-key";
+import { cirrusQueryKey, getSubscriptionRegistry, serializeQueryKey, stableStringify } from "./cache";
 import { useCirrus } from "./cirrus-provider";
 import type { UseQueryOptions } from "./types";
 
