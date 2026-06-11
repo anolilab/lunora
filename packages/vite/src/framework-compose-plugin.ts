@@ -1,3 +1,5 @@
+import { resolve } from "node:path";
+
 import type { Plugin } from "vite";
 
 import type { DetectedFramework } from "./detect-framework";
@@ -20,8 +22,6 @@ const CIRRUS_WORKER_VIRTUAL_ID: string = "virtual:cirrus/worker";
 const RESOLVED_VIRTUAL_PREFIX = "\0";
 const RESOLVED_CIRRUS_WORKER_ID: string = `${RESOLVED_VIRTUAL_PREFIX}${CIRRUS_WORKER_VIRTUAL_ID}`;
 
-/** Strip a single leading `./` from a configured, root-relative dir. */
-const LEADING_DOT_SLASH = /^\.\//;
 /** Strip a single trailing slash from a dir so the emitted import has exactly one separator. */
 const TRAILING_SLASH = /\/$/;
 
@@ -83,6 +83,18 @@ const isAutoComposable = (context: CirrusPluginContext): boolean => {
 };
 
 /**
+ * Whether the `virtual:cirrus/worker` virtual entry should be resolved. This is
+ * intentionally independent of `options.cloudflare`: `cloudflare: false` means
+ * "don't add @cloudflare/vite-plugin a second time" (the user added it
+ * themselves, e.g. to control plugin ordering), NOT "disable the composed worker
+ * entry". The worker virtual must be resolvable whenever the CF integration is
+ * present — whether Cirrus added it or the user did.
+ */
+const isWorkerVirtualActive = (context: CirrusPluginContext): boolean => {
+    return isAutoComposable(context);
+};
+
+/**
  * Build the source of the virtual class-A worker entry. Pure (no fs / no Vite),
  * so the emitted composition is unit-testable in isolation.
  *
@@ -90,9 +102,11 @@ const isAutoComposable = (context: CirrusPluginContext): boolean => {
  * generated artifacts (functions registry, OpenAPI doc, `createShardDO`) and
  * composes them through `composeWorker` — reserved `/_cirrus/*` paths route to
  * Cirrus, everything else falls through to the framework SSR handler. The
- * `generatedImportBase` is the import path (relative to the project root) of the
- * `_generated` dir; the emitted `.js` extensions match the NodeNext-resolved
- * generated output.
+ * `generatedImportBase` MUST be an absolute filesystem path to the `_generated`
+ * directory. Virtual modules have no real filesystem path, so relative specifiers
+ * like `./cirrus/_generated/functions` cannot be resolved by Vite/rolldown from a
+ * virtual module id. Absolute paths are resolved correctly in all environments
+ * (Vite 8 + rolldown 1.x confirmed).
  */
 const buildWorkerEntrySource = (framework: DetectedFramework, generatedImportBase: string): string => {
     const wiring = CLASS_A_WIRING[framework];
@@ -106,9 +120,9 @@ const buildWorkerEntrySource = (framework: DetectedFramework, generatedImportBas
 // wrangler \`main\` here (or re-export it) instead of hand-wiring createWorker.
 import { composeWorker } from "@cirrus/runtime";
 ${wiring.imports}
-import { CIRRUS_FUNCTIONS } from "${generatedImportBase}/functions.js";
-import { openApiSpec } from "${generatedImportBase}/openapi.js";
-import { createShardDO } from "${generatedImportBase}/shard.js";
+import { CIRRUS_FUNCTIONS } from "${generatedImportBase}/functions";
+import { openApiSpec } from "${generatedImportBase}/openapi";
+import { createShardDO } from "${generatedImportBase}/shard";
 
 export const ShardDO = createShardDO();
 
@@ -144,23 +158,22 @@ export default {
  * already make HMR-aware.
  *
  * Safety: it is a strict no-op unless `context.framework.class === "A"` with a
- * known wiring AND the host's Cloudflare integration is enabled
- * (`options.cloudflare !== false`). For class-C (SPA) projects and the
- * `cloudflare: false` BYO escape hatch it resolves/loads nothing, preserving
- * today's behaviour exactly.
+ * known wiring. For class-C (SPA) projects and undetected frameworks it
+ * resolves/loads nothing. `cloudflare: false` does NOT disable the virtual
+ * entry — it only means "don't add @cloudflare/vite-plugin a second time"
+ * (the user supplied it themselves); the composed worker must still be
+ * resolvable so the user-supplied CF plugin can find the wrangler `main`.
  */
 const frameworkComposePlugin = (options: ResolvedCirrusPluginOptions, context: CirrusPluginContext): Plugin => {
-    // The generated dir is configured relative to the project root; the emitted
-    // entry imports it relative to the same root, so a leading "./" keeps it a
-    // relative specifier.
-    const generatedImportBase = `./${options.generatedDir.replace(LEADING_DOT_SLASH, "").replace(TRAILING_SLASH, "")}`;
-
-    /** Auto-composition is gated on detection *and* the CF integration being on. */
-    const active = (): boolean => options.cloudflare !== false && isAutoComposable(context);
+    // Virtual modules have no real filesystem path, so relative specifiers like
+    // "./cirrus/_generated/functions" cannot be resolved by Vite/rolldown from
+    // `\0virtual:cirrus/worker`. We must use an absolute path so the bundler can
+    // locate the files regardless of the virtual module's (non-existent) base dir.
+    const generatedImportBase = resolve(options.projectRoot, options.generatedDir.replace(TRAILING_SLASH, ""));
 
     return {
         load(id) {
-            if (id === RESOLVED_CIRRUS_WORKER_ID && active() && context.framework !== undefined) {
+            if (id === RESOLVED_CIRRUS_WORKER_ID && isWorkerVirtualActive(context) && context.framework !== undefined) {
                 return buildWorkerEntrySource(context.framework.framework, generatedImportBase);
             }
 
@@ -168,7 +181,7 @@ const frameworkComposePlugin = (options: ResolvedCirrusPluginOptions, context: C
         },
         name: "cirrus:framework-compose",
         resolveId(id) {
-            if (id === CIRRUS_WORKER_VIRTUAL_ID && active()) {
+            if (id === CIRRUS_WORKER_VIRTUAL_ID && isWorkerVirtualActive(context)) {
                 return RESOLVED_CIRRUS_WORKER_ID;
             }
 

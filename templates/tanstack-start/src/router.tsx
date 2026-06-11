@@ -4,11 +4,11 @@ import { createRouter as createTanStackRouter } from "@tanstack/react-router";
 import { routeTree } from "./routeTree.gen";
 
 /**
- * Centralised router factory. TanStack Start calls this on both the client
- * and the server entry, so anything that needs to be shared (query client,
- * cirrus client) lives here.
+ * Router factory — exported as `getRouter` (the TanStack Start v1.168+ convention).
+ * TanStack Start's build tooling (`#tanstack-router-entry` / hydrateStart.js)
+ * expects this exact export name. Called on both the client and the server entry.
  */
-export const createRouter = () => {
+export const getRouter = () => {
     const queryClient = new QueryClient({
         defaultOptions: {
             queries: {
@@ -30,6 +30,6 @@ export const createRouter = () => {
 
 declare module "@tanstack/react-router" {
     interface Register {
-        router: ReturnType<typeof createRouter>;
+        router: ReturnType<typeof getRouter>;
     }
 }

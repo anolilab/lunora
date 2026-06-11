@@ -2,7 +2,7 @@ import type { Preloaded, ReturnOf } from "@cirrus/client";
 import { useMutation, usePreloadedQuery } from "@cirrus/react";
 import { createServerClient, preloadQuery } from "@cirrus/react/server";
 import { createFileRoute } from "@tanstack/react-router";
-import { createServerFn, getRequest } from "@tanstack/react-start/server";
+import { createServerFn } from "@tanstack/react-start";
 import { useState } from "react";
 
 import { api } from "../../cirrus/_generated/api";
@@ -10,84 +10,63 @@ import { api } from "../../cirrus/_generated/api";
 const channelId = "channel:demo" as const;
 
 /**
- * SSR loader: runs on the server (Cloudflare Worker) before the route
- * renders. Builds a request-scoped `CirrusClient` that uses the HTTP RPC
- * path (/_cirrus/rpc) — no WebSocket, no in-process Durable Object access.
+ * SSR loader: runs on the server (Cloudflare Worker) before the route renders.
+ * Builds a request-scoped CirrusClient that uses the HTTP RPC path (/_cirrus/rpc).
  *
- * Identity / session forwarding (PLAN4 open question #2):
- * Using the same-origin cookie path: we pass a `fetch` that forwards the
- * incoming `Cookie` header. TanStack Start exposes the raw Request through
- * `createServerFn` — we read `cookie` from the request headers and relay
- * it on every outgoing RPC call so the worker-side auth middleware sees the
- * same session the browser has. This keeps SSR and client on the same
- * identity without a separate bearer-token exchange.
+ * `createServerFn` is imported from "@tanstack/react-start" (the allowed client-safe
+ * entry). The handler closure is tree-shaken away from the client bundle — only a
+ * lightweight RPC stub remains on the client side. Importing the helper from the
+ * sub-path "@tanstack/react-start/server" is NOT needed here and must be avoided:
+ * TanStack Start's import-protection plugin marks that sub-path as client-denied,
+ * and with Vite 8 + rolldown the resulting mock-edge virtual modules cannot be
+ * resolved (UNLOADABLE_DEPENDENCY). Use createServerFn from the main entry instead.
  *
- * In-process vs network (PLAN4 open question #3):
- * M0 deliberately uses the HTTP path. The worker and the SSR renderer share
- * the same process in Cloudflare's module-worker model, so this is a
- * loopback call — low latency, but still a network round-trip through the
- * full Worker request handler. Whether an in-process `createCaller` bypass
- * is needed depends on measured latency in M1 load tests; it is NOT needed
- * for M0 correctness.
+ * Cookie forwarding: if your app needs to forward the incoming Cookie header to
+ * Cirrus RPC calls for session continuity, use createMiddleware() from
+ * "@tanstack/react-start" and call getRequestHeader("cookie") inside the middleware
+ * handler — middleware files that import "@tanstack/react-start/server" should live
+ * in a dedicated *.server.ts file so the import-protection file rule (not the
+ * specifier rule) applies, and TanStack Start generates a safe empty-exports mock
+ * instead of the problematic mock-edge virtual modules.
+ *
+ * In-process vs network: the worker and the SSR renderer share the same process
+ * in Cloudflare's module-worker model, so this is a loopback call — low latency.
  */
 const loadMessages = createServerFn().handler(async () => {
-    // TanStack Start v1 server functions do not receive `request` as a handler
-    // param. Use `getRequest()` from "@tanstack/react-start/server" instead.
-    const request = getRequest();
-    // Forward the browser's Cookie header so the CirrusClient's HTTP RPC
-    // calls carry the same session cookie the client would send. This is the
-    // identity-continuity answer for PLAN4 open question #2: same-origin
-    // same-session, zero token-exchange overhead.
-    const cookie = request.headers.get("cookie") ?? undefined;
-
-    const cookieForwardingFetch: typeof fetch = (input, init) => {
-        const headers = new Headers((init as RequestInit | undefined)?.headers);
-
-        if (cookie) {
-            headers.set("cookie", cookie);
-        }
-
-        return fetch(input, { ...(init as RequestInit | undefined), headers });
-    };
-
-    // Worker URL: in Cloudflare's module-worker SSR the worker and the SSR
-    // renderer share the same process, so loopback to localhost works.
-    // The env var lets operators point at a remote worker in preview deploys.
+    // Worker URL: in Cloudflare's module-worker SSR the worker and SSR renderer share
+    // the same process, so loopback to localhost works. The env var lets operators
+    // point at a remote worker in preview deploys.
     const workerUrl =
         typeof process !== "undefined"
             ? (process.env["CIRRUS_WORKER_URL"] ?? "http://localhost:8787")
             : "http://localhost:8787";
 
-    const client = createServerClient({ fetch: cookieForwardingFetch, url: workerUrl });
+    const client = createServerClient({ url: workerUrl });
 
-    // Sharded preload (PLAN4 open question #6): `channelId` is the shard key
-    // because the schema declares `.shardBy("channelId")` on the messages
-    // table. Passing it here routes the HTTP RPC to the correct Durable Object
-    // shard without a shard-key resolution round-trip.
+    // Sharded preload: `channelId` is the shard key because the schema declares
+    // `.shardBy("channelId")` on the messages table.
     const preloaded = await preloadQuery(client, api.messages.list, { channelId }, { shardKey: channelId });
 
     return { preloaded } as { preloaded: Preloaded<ReturnOf<typeof api.messages.list>> };
 });
 
 export const Route = createFileRoute("/")({
-    // The loader runs server-side and returns the preloaded token. TanStack
-    // Start embeds the serialized loader result in the SSR HTML and sends it
-    // to the client, where `useLoaderData()` deserializes it without a
-    // second network call.
+    // The loader runs server-side and returns the preloaded token. TanStack Start
+    // embeds the serialized loader result in the SSR HTML and sends it to the client,
+    // where `useLoaderData()` deserializes it without a second network call.
     loader: () => loadMessages(),
     component: HomePage,
 });
 
 function HomePage() {
-    // Read the preloaded token from the loader. On the server this is the
-    // direct loader return value; on the client it is deserialized from the
-    // dehydrated router state embedded in the SSR HTML.
+    // Read the preloaded token from the loader. On the server this is the direct
+    // loader return value; on the client it is deserialized from the dehydrated router
+    // state embedded in the SSR HTML.
     const { preloaded } = Route.useLoaderData();
 
     // `usePreloadedQuery` seeds TanStack Query's cache with the SSR value as
-    // `initialData` — no loading flash, no hydration mismatch. After mount it
-    // calls `getSubscriptionRegistry(client).attach(...)` to open the WS, so
-    // subsequent server pushes update the data live (PLAN4 open question #1).
+    // `initialData` — no loading flash, no hydration mismatch. After mount it opens
+    // a WebSocket subscription so subsequent server pushes update the data live.
     const data = usePreloadedQuery(preloaded);
 
     const send = useMutation(api.messages.send);

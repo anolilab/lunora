@@ -20,6 +20,10 @@ import { defineConfig } from "vite";
  * SSR handler (@tanstack/react-start/server-entry).
  */
 export default defineConfig({
+    resolve: {
+        // Vite 8 resolves tsconfig paths natively — no vite-tsconfig-paths plugin needed.
+        tsconfigPaths: true,
+    },
     plugins: [
         cloudflare({ viteEnvironment: { name: "ssr" } }),
         tanstackStart({ tsr: { srcDirectory: "src" } }),

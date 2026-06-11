@@ -5,7 +5,7 @@
     "type": "module",
     "scripts": {
         "dev": "cirrus dev",
-        "build": "vite build",
+        "build": "cirrus codegen && vite build",
         "preview": "vite preview",
         "codegen": "cirrus codegen",
         "deploy": "cirrus deploy"
@@ -17,19 +17,19 @@
         "@cirrus/runtime": "^0.0.0",
         "@cirrus/server": "^0.0.0",
         "@tanstack/react-query": "^5.101.0",
-        "@tanstack/react-router": "^1.121.0",
-        "@tanstack/react-start": "^1.121.0",
-        "react": "^19.2.7",
-        "react-dom": "^19.2.7"
+        "@tanstack/react-router": "^1.170.15",
+        "@tanstack/react-start": "^1.168.25",
+        "react": "^19.0.0",
+        "react-dom": "^19.0.0"
     },
     "devDependencies": {
         "@cirrus/cli": "^0.0.0",
         "@cirrus/vite": "^0.0.0",
-        "@cloudflare/vite-plugin": "^1.0.0",
+        "@cloudflare/vite-plugin": "^1.29.0",
         "@cloudflare/workers-types": "^4.20260610.1",
-        "@vitejs/plugin-react": "^6.0.0",
-        "typescript": "^6.0.3",
-        "vite": "^8.0.16",
-        "wrangler": "^4.99.0"
+        "@vitejs/plugin-react": "^6.0.1",
+        "typescript": "^6.0.2",
+        "vite": "^8.0.14",
+        "wrangler": "^4.74.0"
     }
 }

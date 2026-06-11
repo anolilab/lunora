@@ -104,8 +104,12 @@ describe("framework-compose-plugin", () => {
             // React Router wiring: createRequestHandler over its virtual build.
             expect(code).toContain('from "react-router"');
             expect(code).toContain("virtual:react-router/server-build");
-            // Generated artifacts wired in from the configured generated dir.
-            expect(code).toContain('"./cirrus/_generated/functions.js"');
+            // Generated artifacts are wired in via ABSOLUTE paths (projectRoot +
+            // generatedDir). Virtual modules have no real filesystem path so
+            // relative specifiers like "./cirrus/_generated/..." can't be resolved
+            // by Vite/rolldown — absolute paths work in all bundler environments.
+            // baseOptions() uses projectRoot="/workspace/app", generatedDir="cirrus/_generated".
+            expect(code).toContain('"/workspace/app/cirrus/_generated/functions"');
             expect(code).toContain("createShardDO()");
             expect(code).toContain("shardDO: env.SHARD");
         });
@@ -116,12 +120,13 @@ describe("framework-compose-plugin", () => {
             const plugin = frameworkComposePlugin(baseOptions({ generatedDir: "server/gen" }), context("solid-start", "A"));
             const code = callLoad(plugin, RESOLVED_CIRRUS_WORKER_ID) as string;
 
-            expect(code).toContain('"./server/gen/functions.js"');
+            // Absolute path: projectRoot + custom generatedDir
+            expect(code).toContain('"/workspace/app/server/gen/functions"');
             expect(code).toContain('from "@solidjs/start/server-handler"');
         });
     });
 
-    describe("no-op paths (class C + cloudflare:false BYO must be untouched)", () => {
+    describe("no-op paths (class C and undetected must be untouched)", () => {
         it("does not resolve or load anything for a class-C (SPA) project", () => {
             expect.hasAssertions();
 
@@ -131,15 +136,18 @@ describe("framework-compose-plugin", () => {
             expect(callLoad(plugin, RESOLVED_CIRRUS_WORKER_ID)).toBeUndefined();
         });
 
-        it("does not resolve or load anything when cloudflare:false (BYO escape hatch)", () => {
+        it("resolves and loads the virtual worker entry even when cloudflare:false (BYO Cloudflare plugin)", () => {
             expect.hasAssertions();
 
-            // Even a class-A project must be left untouched when the host opts out
-            // of the Cloudflare integration — it supplies its own worker build.
+            // `cloudflare: false` means "don't add @cloudflare/vite-plugin a second
+            // time" — the user supplied it themselves (e.g. TanStack Start's vite.config
+            // puts it first). It does NOT mean "disable the composed worker entry".
+            // The virtual:cirrus/worker must still resolve so @cloudflare/vite-plugin
+            // (added by the user) can find the main entry declared in wrangler.jsonc.
             const plugin = frameworkComposePlugin(baseOptions({ cloudflare: false }), context("tanstack-start", "A"));
 
-            expect(callResolveId(plugin, CIRRUS_WORKER_VIRTUAL_ID)).toBeUndefined();
-            expect(callLoad(plugin, RESOLVED_CIRRUS_WORKER_ID)).toBeUndefined();
+            expect(callResolveId(plugin, CIRRUS_WORKER_VIRTUAL_ID)).toBe(RESOLVED_CIRRUS_WORKER_ID);
+            expect(typeof callLoad(plugin, RESOLVED_CIRRUS_WORKER_ID)).toBe("string");
         });
 
         it("does not resolve or load anything for an undetected project", () => {
