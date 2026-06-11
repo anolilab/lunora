@@ -68,8 +68,8 @@ Commit the SQL and the `.snapshot.json` next to it — both are deterministic.
 
 ## 4. Write the query
 
-`pnpm cirrus new query listMessages` drops a stub at `cirrus/listMessages.ts`,
-or just edit `cirrus/messages.ts` by hand:
+Create `cirrus/messages.ts` (the template already has a starter version — replace
+its contents with the real implementation):
 
 ```ts
 import { mutation, query, v } from "@cirrus/server";
