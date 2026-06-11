@@ -8,6 +8,7 @@ import { createCommandProbe, withDevWorkerEnv } from "./dev-worker-env";
 import frameworkComposePlugin from "./framework-compose-plugin";
 import frameworkDetectPlugin, { createPluginContext } from "./framework-detect-plugin";
 import logStreamPlugin from "./log-stream-plugin";
+import { planViteRemoteBindings, remoteBindingsCleanupPlugin, withRemoteBindings } from "./remote-bindings-plugin";
 import { studioPlugin } from "./studio-plugin";
 import type { CirrusPluginOptions, CirrusPlugins, CloudflarePluginOptions, OverlayPluginOptions, ResolvedCirrusPluginOptions } from "./types";
 import { withWorkerStartupHint } from "./worker-startup-hint";
@@ -104,10 +105,23 @@ const cirrus = (options?: CirrusPluginOptions): CirrusPlugins => {
     }
 
     if (resolved.cloudflare !== false) {
+        // Honor remote-binding dev (`CIRRUS_REMOTE` / `cirrus.json` `remote`) on
+        // the `vite dev` path too, exactly like `cirrus dev`: materialize a temp
+        // wrangler config with `"remote": true` on each eligible binding and
+        // point the cloudflare plugin's `configPath` at it. DO shards stay local.
+        const remotePlan = planViteRemoteBindings({ projectRoot: resolved.projectRoot });
+
+        if (remotePlan.enabled && remotePlan.configPath !== undefined) {
+            // Register a cleanup that unlinks the temp config when the dev server closes.
+            plugins.push(remoteBindingsCleanupPlugin(remotePlan.cleanup));
+        }
+
+        const cloudflareOptions = withRemoteBindings(withDevWorkerEnv(resolved.cloudflare, isServe), isServe, remotePlan);
+
         // Wrap the Cloudflare plugins' startup hooks so a Worker-entry evaluation
         // failure (e.g. a circular import in `cirrus/`) surfaces an actionable
         // hint instead of a bare, file-less `runner-worker` TypeError.
-        plugins.push(...withWorkerStartupHint(cloudflare(withDevWorkerEnv(resolved.cloudflare, isServe))));
+        plugins.push(...withWorkerStartupHint(cloudflare(cloudflareOptions)));
     }
 
     return plugins;
@@ -140,6 +154,8 @@ export {
 // here and consumed only there + in tests until a second reader (PLAN4 M4
 // composition) justifies a public surface. Only `detectFramework` (above) is public.
 export { default as logStreamPlugin } from "./log-stream-plugin";
+export type { PlanViteRemoteOptions, ViteRemotePlan } from "./remote-bindings-plugin";
+export { planViteRemoteBindings, remoteBindingsCleanupPlugin, withRemoteBindings } from "./remote-bindings-plugin";
 export { buildStudioUrl, STUDIO_PATH, studioPlugin } from "./studio-plugin";
 export type { CirrusPluginOptions, CirrusPlugins, CloudflarePluginOptions, OverlayPluginOptions, ResolvedCirrusPluginOptions } from "./types";
 export { augmentWorkerStartupError, isWorkerEntryEvalError, withWorkerStartupHint, WORKER_STARTUP_HINT } from "./worker-startup-hint";
