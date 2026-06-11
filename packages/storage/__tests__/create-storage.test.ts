@@ -132,6 +132,33 @@ describe("createStorage", () => {
         expect(bucket.puts).toHaveLength(0);
     });
 
+    it("upload() with allowedContentTypes:[] rejects every contentType (deny-all)", async () => {
+        expect.assertions(2);
+
+        const bucket = fakeBucket();
+        const storage = createStorage({ bucket });
+
+        // An empty allowlist still requires a contentType to be supplied …
+        await expect(storage.upload("doc.bin", new ArrayBuffer(4), { allowedContentTypes: [] })).rejects.toThrow(/contentType is required/);
+
+        // … and rejects any value because the list includes nothing.
+        await expect(
+            storage.upload("doc.bin", new ArrayBuffer(4), { allowedContentTypes: [], contentType: "image/png" }),
+        ).rejects.toThrow(/not in allowedContentTypes/);
+    });
+
+    it("upload() with allowedContentTypes:undefined is unrestricted", async () => {
+        expect.assertions(1);
+
+        const bucket = fakeBucket();
+        const storage = createStorage({ bucket });
+
+        // No allowedContentTypes at all — any contentType (or none) is accepted.
+        await expect(storage.upload("doc.bin", new ArrayBuffer(4), { contentType: "application/octet-stream" })).resolves.toMatchObject({
+            key: "doc.bin",
+        });
+    });
+
     it("upload() accepts an allowed contentType when allowedContentTypes is set", async () => {
         expect.assertions(1);
 

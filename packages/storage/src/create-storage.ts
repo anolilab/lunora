@@ -208,7 +208,7 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
         // bypass it — otherwise an uploader sidesteps the allowlist by simply
         // not declaring a type. So when an allowlist is configured, a
         // `contentType` is REQUIRED and must be a member of the list.
-        if (uploadOptions.allowedContentTypes && uploadOptions.allowedContentTypes.length > 0) {
+        if (uploadOptions.allowedContentTypes !== undefined) {
             if (uploadOptions.contentType === undefined) {
                 throw new Error("@cirrus/storage: contentType is required when allowedContentTypes is set");
             }
