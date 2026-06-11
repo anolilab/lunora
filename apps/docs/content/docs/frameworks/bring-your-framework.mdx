@@ -100,6 +100,20 @@ For React today, the preloaded-hydration primitive is `usePreloadedQuery` (see
 adapters will expose the same hydrate-then-subscribe handoff under their idiom's
 name.
 
+### Adapter API notes (alpha)
+
+The adapters share one contract across frameworks. A couple of differences are
+worth calling out for anyone who tracked the earlier previews:
+
+- **`useMutation` handle is uniform** — `{ data, error, pending, mutate, reset }`
+  in React/Solid/Vue (Svelte: the same fields as stores). Multi-query optimistic
+  updates are passed **per call** via the `optimisticUpdate` option on `mutate`;
+  the Vue adapter no longer ships a bound `withOptimisticUpdate(...)` handle
+  (React keeps it). Use `mutate(args, { optimisticUpdate })` everywhere instead.
+- **Provider accessor is `useCirrus`** in React/Solid/Vue (Svelte uses the
+  idiomatic `getCirrusClient`). The Vue adapter's earlier `useCirrusClient` name
+  is gone — use `useCirrus`.
+
 ## Scaffolding
 
 Scaffold a new project wired for your framework with `cirrus init`:
