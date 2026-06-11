@@ -98,6 +98,39 @@ At runtime the branded type is just `string`; the brand exists only in the type 
 
 Types: `Validator<T>`, `ValidatorKind`, `ValidationPath`.
 
+## Standard Schema interop
+
+Every `v.*` validator exports the [Standard Schema v1](https://standardschema.dev) surface outbound — you can pass a Cirrus validator anywhere a library expects a Standard Schema object:
+
+```ts
+import { v } from "@cirrus/values";
+
+const schema = v.string(); // also a StandardSchemaV1<string>
+const result = schema["~standard"].validate("hello"); // { value: "hello" }
+```
+
+Inbound — you can use **any** Standard Schema v1 validator (zod, valibot, arktype, …) as an **args** field via `v.from()`:
+
+```ts
+import { z } from "zod"; // or valibot, arktype, …
+import { query } from "@cirrus/server";
+
+const emailSchema = z.string().email();
+
+export const subscribe = query({
+    args: { email: v.from(emailSchema) },
+    handler: async (_ctx, args) => {
+        // args.email is typed `unknown` (codegen can't recover zod's output type)
+        // the value was validated by zod before the handler runs
+    },
+});
+```
+
+Two constraints apply to `v.from()`:
+
+- **Args-only.** `v.from()` cannot be used as a table column in `defineTable` — columns need a concrete `v.*` type that maps to SQL. Attempting it throws at startup.
+- **Sync-only.** Standard Schema allows async `validate`; Cirrus args validation is synchronous. `v.from()` throws a `ValidationError` when the wrapped validator returns a `Promise`.
+
 ## Docs
 
 - Repo root: [README.md](../../README.md)

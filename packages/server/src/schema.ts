@@ -161,6 +161,14 @@ interface VectorIndexOptions {
  * `defineSchema`) and a fluent builder for indexes + sharding metadata.
  */
 const defineTable = <Shape extends Record<string, Validator>>(shape: Shape): TableBuilder<Shape> => {
+    // v.from() validators are args-only — they delegate to an external Standard
+    // Schema library and do not map to a concrete SQL column type.
+    for (const [columnName, validator] of Object.entries(shape)) {
+        if (validator.kind === "from") {
+            throw new Error(`defineTable: column "${columnName}" uses v.from() which is args-only — table columns need a concrete v.* type`);
+        }
+    }
+
     const aggregateIndexes: AggregateIndexDefinition[] = [];
     const indexes: IndexDefinition[] = [];
     const rankIndexes: RankIndexDefinition[] = [];

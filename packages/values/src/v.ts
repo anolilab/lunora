@@ -53,6 +53,7 @@ type ValidatorKind =
     | "boolean"
     | "bytes"
     | "date"
+    | "from"
     | "id"
     | "literal"
     | "null"
@@ -698,6 +699,76 @@ const optional = <V extends Validator>(inner: V): ColumnValidator<Infer<V> | und
 const any = (): ColumnValidator<unknown, unknown> => asColumn(createValidator<unknown>("any", (value) => value));
 
 /**
+ * Infer the output type of a Standard Schema v1 object. When the schema omits
+ * `~standard.types` (it is optional in the spec), falls back to `unknown` so
+ * callers always get a usable type rather than `never`.
+ */
+type InferStandardOutput<S extends StandardSchemaV1> = S["~standard"]["types"] extends { output: infer O } ? O : unknown;
+
+/**
+ * Wrap any Standard Schema v1 validator (`zod`, `valibot`, `arktype`, …) so it
+ * can be used as an **args** validator in `query`/`mutation`/`action`. The
+ * wrapped validator's output type is inferred from `~standard.types.output`
+ * when declared; falls back to `unknown` when the schema omits the types field.
+ *
+ * **Args-only.** `v.from(...)` validators must not be used as table columns —
+ * `defineTable` checks the `kind` and throws a clear error if you try.
+ *
+ * **Sync-only.** Standard Schema allows async `validate`; Cirrus args
+ * validation is synchronous and throws when a Promise is returned.
+ */
+const from = <S extends StandardSchemaV1>(schema: S): ColumnValidator<InferStandardOutput<S>, InferStandardOutput<S>> => {
+    const props = schema["~standard"];
+
+    if (!props || props.version !== 1 || typeof props.validate !== "function") {
+        throw new Error('@cirrus/values: v.from() expects a Standard Schema v1 object (missing or invalid "~standard")');
+    }
+
+    return asColumn(
+        createValidator<InferStandardOutput<S>>("from", (value, context) => {
+            const result = props.validate(value);
+
+            if (result instanceof Promise) {
+                throw new ValidationError("v.from(): async Standard Schema validators are not supported in args", {
+                    expected: "sync Standard Schema result",
+                    path: [...context.path],
+                    received: "Promise",
+                });
+            }
+
+            if ("issues" in result && result.issues != null && result.issues.length > 0) {
+                const first = result.issues[0];
+                // Build the path from the first issue's path segments (if any),
+                // appended to the current context path. Standard Schema path
+                // entries are either PropertyKey or { key: PropertyKey } objects.
+                const issuePath: (number | string)[] = [];
+
+                if (first?.path) {
+                    for (const segment of first.path) {
+                        const key = typeof segment === "object" && segment !== null && "key" in segment ? (segment as { key: PropertyKey }).key : segment;
+
+                        if (typeof key === "string" || typeof key === "number") {
+                            issuePath.push(key);
+                        }
+                    }
+                }
+
+                const message = first?.message ?? "Standard Schema validation failed";
+                const fullPath = [...context.path, ...issuePath];
+
+                throw new ValidationError(message, {
+                    expected: "valid value",
+                    path: fullPath,
+                    received: describeValue(value),
+                });
+            }
+
+            return (result as { value: InferStandardOutput<S> }).value;
+        }),
+    ) as ColumnValidator<InferStandardOutput<S>, InferStandardOutput<S>>;
+};
+
+/**
  * Validator/codec namespace. Each factory returns a {@link Validator} with a
  * runtime `parse`/`safeParse` plus a phantom `__type` field for inference.
  */
@@ -708,6 +779,7 @@ const v: {
     boolean: typeof boolean;
     bytes: typeof bytes;
     date: typeof date;
+    from: typeof from;
     id: typeof id;
     literal: typeof literal;
     null: typeof nullValidator;
@@ -726,6 +798,7 @@ const v: {
     boolean,
     bytes,
     date,
+    from,
     id,
     literal,
     null: nullValidator,
@@ -748,6 +821,7 @@ export type {
     Infer,
     InferInsert,
     InferSelect,
+    InferStandardOutput,
     InsertShape,
     JsonSchemaFragment,
     MetaOptions,
