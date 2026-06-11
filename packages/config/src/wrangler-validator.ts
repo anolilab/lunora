@@ -143,7 +143,7 @@ const validateWranglerConfig = (wrangler: WranglerConfig | undefined, schema?: S
     const shardBinding = durableObjectBindings.find((binding) => binding.name === "SHARD" && binding.class_name === "ShardDO");
 
     if (!shardBinding) {
-        errors.push('durable_objects.bindings must include { "name": "SHARD", "class_name": "ShardDO" }');
+        errors.push('durable_objects.bindings must include { "name": "SHARD", "class_name": "ShardDO" } — run `cirrus dev` to auto-reconcile wrangler.jsonc, or add the binding manually');
     }
 
     const compatibilityDate = wrangler.compatibility_date ?? "";
@@ -170,7 +170,7 @@ const validateWranglerConfig = (wrangler: WranglerConfig | undefined, schema?: S
         const databaseBinding = d1Bindings.find((binding) => binding.binding === "DB");
 
         if (!databaseBinding) {
-            errors.push('schema declares .global() tables; d1_databases must include a binding named "DB"');
+            errors.push('schema declares .global() tables; d1_databases must include a binding named "DB" — run `cirrus dev` to auto-reconcile wrangler.jsonc, or add the binding manually');
         }
     }
 
