@@ -4,9 +4,11 @@ import { SCAN_DEP } from "../src/dependency-tracker";
 import {
     FUNCTION_METRICS_BUCKET_MS,
     FUNCTION_METRICS_BUCKETS_TABLE,
+    FUNCTION_METRICS_INDEX_TABLE,
     FUNCTION_METRICS_SCANS_TABLE,
     FUNCTION_METRICS_TABLE,
     readFunctionMetricBuckets,
+    readFunctionMetricIndexHits,
     readFunctionMetrics,
     readFunctionMetricScans,
     readFunctionMetricsTotals,
@@ -201,8 +203,72 @@ describe("function-metrics module", () => {
         }
     });
 
+    it("counts per-(table, index) hits across dispatches and reads them back", () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+
+        try {
+            // `feed:list` uses messages.byChannel twice and users.byEmail once.
+            recordFunctionMetric(database.sql, {
+                durationMs: 5,
+                errored: false,
+                indexHits: [
+                    { index: "byChannel", table: "messages" },
+                    { index: "byEmail", table: "users" },
+                ],
+                path: "feed:list",
+                ts: 1000,
+            });
+            recordFunctionMetric(database.sql, {
+                durationMs: 5,
+                errored: false,
+                indexHits: [{ index: "byChannel", table: "messages" }],
+                path: "feed:list",
+                ts: 2000,
+            });
+
+            // Ordered by table then index; reads accumulate per (table, index).
+            expect(readFunctionMetricIndexHits(database.sql)).toEqual([
+                { index: "byChannel", reads: 2, table: "messages" },
+                { index: "byEmail", reads: 1, table: "users" },
+            ]);
+
+            // Physical upsert: one row per (table, index).
+            expect(database.raw(`SELECT table_name, index_name, reads FROM "${FUNCTION_METRICS_INDEX_TABLE}" ORDER BY table_name`)).toEqual([
+                { index_name: "byChannel", reads: 2, table_name: "messages" },
+                { index_name: "byEmail", reads: 1, table_name: "users" },
+            ]);
+        } finally {
+            database.close();
+        }
+    });
+
+    it("dedupes an index used twice within one dispatch to a single hit", () => {
+        expect.assertions(1);
+
+        const database = createSqliteExec();
+
+        try {
+            recordFunctionMetric(database.sql, {
+                durationMs: 5,
+                errored: false,
+                indexHits: [
+                    { index: "byChannel", table: "messages" },
+                    { index: "byChannel", table: "messages" },
+                ],
+                path: "f:a",
+                ts: 1000,
+            });
+
+            expect(readFunctionMetricIndexHits(database.sql)).toEqual([{ index: "byChannel", reads: 1, table: "messages" }]);
+        } finally {
+            database.close();
+        }
+    });
+
     it("returns empty reads on a never-called shard without throwing", () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         const database = createSqliteExec();
 
@@ -210,6 +276,7 @@ describe("function-metrics module", () => {
             expect(readFunctionMetrics(database.sql)).toEqual([]);
             expect(readFunctionMetricBuckets(database.sql)).toEqual([]);
             expect(readFunctionMetricScans(database.sql).size).toBe(0);
+            expect(readFunctionMetricIndexHits(database.sql)).toEqual([]);
             expect(readFunctionMetricsTotals(database.sql)).toEqual({ errors: 0, requests: 0 });
         } finally {
             database.close();

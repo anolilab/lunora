@@ -10,7 +10,7 @@
  *
  * Modelled on the reserved-table helpers in `audit-log.ts`
  * (`ensureAuditTable`/`appendAuditEntry`/`readAuditLog`) and the CDC-log helpers
- * in `ctx-db.ts`. Two reserved tables back this feature.
+ * in `ctx-db.ts`. Four reserved tables back this feature.
  *
  * `__cirrus_metrics` holds one row per function path with the lifetime
  * accumulators (calls, errors, summed/min/max latency, last-called/last-error
@@ -33,7 +33,18 @@
  * carries an aggregate `scans` counter so a function's total scan volume is a
  * single-row read.
  *
- * All three tables carry the reserved `__cirrus` prefix, so the data browser
+ * `__cirrus_metrics_index` holds the per-`(table, index)` hit counter: how many
+ * recorded reads USED each declared index to narrow (the complement of the
+ * scans table, stamped via `onIndexUse` in `ctx-db.ts`). It's the durable
+ * producer behind the advisor `index_utilization` dead-index lint — a declared
+ * index with zero recorded reads over the window is dead overhead. Keyed by
+ * `(table_name, index_name)` so the row count is bounded by the indexes the app
+ * actually exercises; the lint reconciles this against the declared schema to
+ * find indexes that recorded nothing. Unlike the scans table this is keyed on
+ * the index, not the function, since the dead-index signal is per-index across
+ * the whole workload.
+ *
+ * All four tables carry the reserved `__cirrus` prefix, so the data browser
  * hides them automatically.
  */
 
@@ -48,6 +59,9 @@ const FUNCTION_METRICS_BUCKETS_TABLE = "__cirrus_metrics_buckets";
 
 /** Reserved causal full-scan attribution table: per-(function, table) full-scan counts. */
 const FUNCTION_METRICS_SCANS_TABLE = "__cirrus_metrics_scans";
+
+/** Reserved per-(table, index) hit-counter table backing the advisor dead-index lint. */
+const FUNCTION_METRICS_INDEX_TABLE = "__cirrus_metrics_index";
 
 /**
  * Width of one history bucket, in milliseconds. 60s gives a minute-resolution
@@ -74,6 +88,24 @@ interface FunctionMetricBucket {
     errors: number;
 }
 
+/** One declared index a dispatch exercised (used to narrow a read). */
+interface IndexHit {
+    /** The declared index name. */
+    index: string;
+    /** The table the index is declared on. */
+    table: string;
+}
+
+/** One declared index's recorded read count over the durable window — the advisor dead-index lint input. */
+interface FunctionMetricIndexHit {
+    /** The declared index name. */
+    index: string;
+    /** Recorded reads that used this index to narrow. */
+    reads: number;
+    /** The table the index is declared on. */
+    table: string;
+}
+
 /** Fields recorded for one completed dispatch. `errored` advances the failure counters. */
 interface RecordFunctionMetricInput {
     /** Wall-clock millis the handler took. */
@@ -82,6 +114,15 @@ interface RecordFunctionMetricInput {
     errored: boolean;
     /** Most recent failure message, recorded only when `errored`. */
     errorMessage?: string;
+
+    /**
+     * Distinct declared indexes this dispatch exercised (used to narrow a read),
+     * collected from the `onIndexUse` signal. Each entry bumps the
+     * per-`(table, index)` hit counter in `__cirrus_metrics_index`, the durable
+     * producer behind the advisor dead-index lint. Omitted/empty when the
+     * dispatch used no declared index, keeping the hot path unchanged.
+     */
+    indexHits?: ReadonlyArray<IndexHit>;
     /** The `&lt;file>:&lt;function>` identifier. */
     path: string;
 
@@ -107,12 +148,24 @@ const runSql = <Row = Record<string, unknown>>(sql: SqlExec, query: string, ...p
 /** Floor `ts` to the start of its history bucket. */
 const bucketFloor = (ts: number): number => Math.floor(ts / FUNCTION_METRICS_BUCKET_MS) * FUNCTION_METRICS_BUCKET_MS;
 
+/** Collapse a dispatch's index hits to one entry per distinct `(table, index)` so each counts as one read. */
+const dedupeIndexHits = (hits: ReadonlyArray<IndexHit>): IndexHit[] => {
+    const seen = new Map<string, IndexHit>();
+
+    for (const hit of hits) {
+        seen.set(`${hit.table}\u0000${hit.index}`, { index: hit.index, table: hit.table });
+    }
+
+    return [...seen.values()];
+};
+
 /**
- * Create the three reserved metrics tables. Idempotent, so the read and write
+ * Create the four reserved metrics tables. Idempotent, so the read and write
  * paths can call it defensively. The accumulator table is keyed by `path` (one
  * row per function); the bucket table by `(path, bucketMs)` (one row per
  * function per window); the scans table by `(path, table)` (one row per
- * function per full-scanned table).
+ * function per full-scanned table); the index table by `(table, index)` (one
+ * row per declared index the app exercises).
  *
  * The accumulator's `scans` column is added via a guarded `ALTER TABLE` rather
  * than baked into the `CREATE` so a shard whose `__cirrus_metrics` predates the
@@ -164,6 +217,16 @@ const ensureFunctionMetricsTables = (sql: SqlExec): void => {
             PRIMARY KEY (path, table_name)
         )`,
     );
+
+    runSql(
+        sql,
+        `CREATE TABLE IF NOT EXISTS "${FUNCTION_METRICS_INDEX_TABLE}" (
+            table_name TEXT NOT NULL,
+            index_name TEXT NOT NULL,
+            reads INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (table_name, index_name)
+        )`,
+    );
 };
 
 /**
@@ -185,6 +248,9 @@ const recordFunctionMetric = (sql: SqlExec, input: RecordFunctionMetricInput): v
     // than once in a request, but we attribute one scan per distinct table.
     const scannedTables = input.scannedTables ? [...new Set(input.scannedTables)] : [];
     const scanCount = scannedTables.length;
+    // Same dedupe for index hits: one read per distinct `(table, index)` per
+    // dispatch, regardless of how many rows it narrowed.
+    const indexHits = dedupeIndexHits(input.indexHits ?? []);
     const errorCount = input.errored ? 1 : 0;
     // eslint-disable-next-line unicorn/no-null -- SQL NULL is the correct value for "no failure yet"; coalesced into the row on the first throw.
     const lastErrorAt = input.errored ? input.ts : null;
@@ -264,6 +330,21 @@ const recordFunctionMetric = (sql: SqlExec, input: RecordFunctionMetricInput): v
             table,
         );
     }
+
+    // Index-hit attribution: one PK-keyed upsert per distinct `(table, index)`
+    // the dispatch exercised — the durable producer for the dead-index lint.
+    // Skipped when the dispatch used no declared index.
+    for (const hit of indexHits) {
+        runSql(
+            sql,
+            `INSERT INTO "${FUNCTION_METRICS_INDEX_TABLE}" (table_name, index_name, reads)
+             VALUES (?, ?, 1)
+             ON CONFLICT(table_name, index_name) DO UPDATE SET
+                reads = reads + 1`,
+            hit.table,
+            hit.index,
+        );
+    }
 };
 
 /**
@@ -295,6 +376,27 @@ const readFunctionMetricScans = (sql: SqlExec): Map<string, FunctionScanAttribut
     }
 
     return byPath;
+};
+
+/**
+ * Read the per-`(table, index)` hit counts — the advisor dead-index lint input.
+ * Each entry is a declared index and how many recorded reads used it to narrow
+ * over the durable window; the lint reconciles this against the schema to flag
+ * a declared index that appears with zero reads (or not at all) as dead. Ordered
+ * by table then index for stable output. Creates the table first so a read on a
+ * never-exercised shard returns `[]`.
+ */
+const readFunctionMetricIndexHits = (sql: SqlExec): FunctionMetricIndexHit[] => {
+    ensureFunctionMetricsTables(sql);
+
+    const rows = runSql<{ index_name: string; reads: number; table_name: string }>(
+        sql,
+        `SELECT table_name, index_name, reads FROM "${FUNCTION_METRICS_INDEX_TABLE}" ORDER BY table_name ASC, index_name ASC`,
+    ).toArray();
+
+    return rows.map((row): FunctionMetricIndexHit => {
+        return { index: row.index_name, reads: row.reads, table: row.table_name };
+    });
 };
 
 /**
@@ -410,13 +512,15 @@ export {
     FUNCTION_METRICS_BUCKET_MS,
     FUNCTION_METRICS_BUCKET_RETENTION,
     FUNCTION_METRICS_BUCKETS_TABLE,
+    FUNCTION_METRICS_INDEX_TABLE,
     FUNCTION_METRICS_SCANS_TABLE,
     FUNCTION_METRICS_TABLE,
     mergeScanAttribution,
     readFunctionMetricBuckets,
+    readFunctionMetricIndexHits,
     readFunctionMetrics,
     readFunctionMetricScans,
     readFunctionMetricsTotals,
     recordFunctionMetric,
 };
-export type { FunctionMetricBucket, RecordFunctionMetricInput };
+export type { FunctionMetricBucket, FunctionMetricIndexHit, IndexHit, RecordFunctionMetricInput };

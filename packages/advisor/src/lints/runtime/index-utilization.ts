@@ -18,12 +18,11 @@ const HOT_SCAN_THRESHOLD = 25;
  * is pure overhead: every write maintains it, every byte of storage holds it,
  * and nothing reads through it. Fired off the per-index hit feed
  * (`context.indexHits`); a declared index whose recorded `reads` is `0` is dead
- * for the window. Gap: the runtime does not yet record per-index usage — the
- * metrics pipeline records full-scans (reads that hit NO index) but not which
- * index a narrowing read used. So `indexHits` has no runtime producer today and
- * this half stays inert until a feeder supplies it (see `AdvisorIndexHit`). It's
- * wired now so the rule lands complete and lights up the moment the signal
- * exists.
+ * for the window. The runtime records this in the durable
+ * `__cirrus_metrics_index` table (every index use stamps a per-`(table, index)`
+ * counter via `onIndexUse`) and surfaces it through the `getMetrics` admin RPC;
+ * the studio sums the per-shard arrays into `context.indexHits` (see
+ * `AdvisorIndexHit`).
  *
  * Hot unindexed scan — a table read hot with no index at all. Fired off the
  * full-scan attribution the runtime does record (`context.tableScans`, sourced
@@ -44,8 +43,8 @@ const indexUtilization: Lint = {
     run: (context) => {
         const findings = [];
 
-        // Dead-index half: a declared index with zero recorded reads. Inert until
-        // a per-index hit feed exists, but complete when it does.
+        // Dead-index half: a declared index with zero recorded reads, off the
+        // durable `__cirrus_metrics_index` hit feed the runtime now records.
         for (const hit of context.indexHits ?? []) {
             if (hit.reads > 0) {
                 continue;

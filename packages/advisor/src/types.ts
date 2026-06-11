@@ -83,11 +83,11 @@ export interface LintContext {
 
     /**
      * Per-declared-index hit counts observed at runtime (the dead-index half of
-     * the `index_utilization` lint input). Supplied by a runtime feeder that
-     * aggregates per-index reads across shards; absent for static callers and,
-     * today, even for runtime callers — the metrics pipeline records full-scans
-     * but not per-index usage yet (see {@link AdvisorIndexHit}), so the dead-index
-     * check is inert until a feed exists.
+     * the `index_utilization` lint input). Supplied by the studio backend, which
+     * sums the per-`(table, index)` reads each shard records in the durable
+     * `__cirrus_metrics_index` table and surfaces through the `getMetrics` admin
+     * RPC (see {@link AdvisorIndexHit}). Absent for static callers, where the
+     * dead-index check finds nothing.
      */
     indexHits?: ReadonlyArray<AdvisorIndexHit>;
 

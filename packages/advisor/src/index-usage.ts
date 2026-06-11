@@ -8,11 +8,13 @@
  * `FunctionCallStat.scannedTables`). Each entry is a table the app read with no
  * index — a hot one points at a missing index.
  *
- * `AdvisorIndexHit` is the per-declared-index hit count. The runtime does NOT yet
- * record this (see the note on `AdvisorIndexHit`); when a future feeder supplies
- * it the lint flags a declared index with zero recorded reads as dead. Absent,
- * the dead-index half is a no-op and only the hot-scan half of the lint runs off
- * the scan attribution that ships today.
+ * `AdvisorIndexHit` is the per-declared-index hit count. The runtime now records
+ * this in the durable `__cirrus_metrics_index` table (stamped on every index use
+ * via `onIndexUse`) and surfaces it through the `getMetrics` admin RPC; the
+ * studio sums the per-shard arrays and feeds them as `context.indexHits`, and the
+ * lint flags a declared index with zero recorded reads as dead. When the feed is
+ * absent (a static caller, or a shard that recorded nothing) the dead-index half
+ * is a no-op and only the hot-scan half runs off the scan attribution.
  */
 
 /**
@@ -32,13 +34,13 @@ export interface AdvisorTableScan {
  * Per-declared-index hit count observed over the window — how many recorded
  * reads used the index to narrow.
  *
- * **Gap:** the runtime does not currently record per-index usage. The metrics
- * pipeline records full-*scans* (reads that hit NO index, in
- * `__cirrus_metrics_scans`) but not which index a narrowing read *used*. So this
- * feed has no runtime producer yet — the lint reads it when present (e.g. a
- * future per-index counter, or a static "index never referenced by any
- * `.withIndex(...)` in the discovered reads" feeder), and the dead-index half is
- * inert until then.
+ * Produced by the runtime: every index use (`onIndexUse` in the DO) bumps a
+ * per-`(table, index)` counter in the durable `__cirrus_metrics_index` table, the
+ * complement of the full-*scan* attribution in `__cirrus_metrics_scans`. The
+ * `getMetrics` admin RPC surfaces it per shard; the studio sums the arrays across
+ * shards and passes them as `context.indexHits`. A declared index that appears
+ * with `reads: 0` (or is absent entirely after the schema reconciliation) is dead
+ * for the window.
  */
 export interface AdvisorIndexHit {
     /** The declared index name. */

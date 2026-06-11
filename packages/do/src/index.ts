@@ -88,14 +88,16 @@ export type {
 export { DATA_MIGRATION_STATE_TABLE, readMigrationStatus, runDataMigration } from "./data-migration";
 export type { DependencyTracker } from "./dependency-tracker";
 export { createDependencyTracker, depKey, SCAN_DEP } from "./dependency-tracker";
-export type { FunctionMetricBucket, RecordFunctionMetricInput } from "./function-metrics";
+export type { FunctionMetricBucket, FunctionMetricIndexHit, RecordFunctionMetricInput } from "./function-metrics";
 export {
     ensureFunctionMetricsTables,
     FUNCTION_METRICS_BUCKET_MS,
     FUNCTION_METRICS_BUCKET_RETENTION,
     FUNCTION_METRICS_BUCKETS_TABLE,
+    FUNCTION_METRICS_INDEX_TABLE,
     FUNCTION_METRICS_TABLE,
     readFunctionMetricBuckets,
+    readFunctionMetricIndexHits,
     readFunctionMetrics,
     readFunctionMetricsTotals,
     recordFunctionMetric,

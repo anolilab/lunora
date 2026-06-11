@@ -13,8 +13,15 @@ import type { MigrationDirection, MigrationRunResult } from "./data-migration";
 import { DATA_MIGRATION_STATE_TABLE, readMigrationStatus } from "./data-migration";
 import type { DependencyTracker } from "./dependency-tracker";
 import { createDependencyTracker, SCAN_DEP, tableFromDepKey } from "./dependency-tracker";
-import type { FunctionMetricBucket } from "./function-metrics";
-import { mergeScanAttribution, readFunctionMetricBuckets, readFunctionMetrics, readFunctionMetricsTotals, recordFunctionMetric } from "./function-metrics";
+import type { FunctionMetricBucket, FunctionMetricIndexHit, IndexHit } from "./function-metrics";
+import {
+    mergeScanAttribution,
+    readFunctionMetricBuckets,
+    readFunctionMetricIndexHits,
+    readFunctionMetrics,
+    readFunctionMetricsTotals,
+    recordFunctionMetric,
+} from "./function-metrics";
 import type {
     AdvisoryFinding,
     AuditLogResult,
@@ -856,6 +863,26 @@ const parseRankPageArgs = (args: Record<string, unknown>): RunShardRankPageArgs 
     };
 };
 
+/**
+ * Decode a `JSON.stringify([table, index])` index-hit key (stamped by
+ * `getCtxDbIndexUseHook`) back into `{ table, index }`. Returns `undefined` for
+ * a malformed key so a corrupt entry is skipped rather than throwing on the
+ * metrics path.
+ */
+const decodeIndexHitKey = (key: string): IndexHit | undefined => {
+    try {
+        const parsed = JSON.parse(key) as unknown;
+
+        if (Array.isArray(parsed) && typeof parsed[0] === "string" && typeof parsed[1] === "string") {
+            return { index: parsed[1], table: parsed[0] };
+        }
+    } catch {
+        // Malformed key — skip it.
+    }
+
+    return undefined;
+};
+
 /** Arguments accepted by the `__cirrus_admin__:cdcSync` admin RPC. */
 interface RunShardCdcSyncArgs {
     limit?: number;
@@ -1307,6 +1334,16 @@ abstract class ShardDO {
     private currentScannedTables: Set<string> | undefined;
 
     /**
+     * Declared indexes the in-flight dispatch exercised (used to narrow a read,
+     * via `onIndexUse`), keyed by `JSON.stringify([table, index])`. Allocated at the top of each
+     * `/rpc` dispatch and drained into `recordFunctionCall` once the handler
+     * returns, so the durable `__cirrus_metrics_index` hit counter — the producer
+     * behind the advisor dead-index lint — records on the same dispatch path as
+     * the scan attribution. Stamped by `getCtxDbIndexUseHook`.
+     */
+    private currentIndexHits: Set<string> | undefined;
+
+    /**
      * Read-tables + cache-hit captured for the current `/rpc` dispatch, so the
      * dispatch site can fold them into the durable request log
      * (`request-log.ts`). Populated by `runCachedQuery` — the one place that
@@ -1384,6 +1421,12 @@ abstract class ShardDO {
             // attribution. Fresh per request; drained below.
             this.currentScannedTables = new Set<string>();
 
+            // Collect the declared indexes this dispatch exercises (stamped by
+            // the ctx-db index-use hook) so `recordFunctionCall` can persist the
+            // per-index hit counter behind the dead-index lint. Fresh per
+            // request; drained below.
+            this.currentIndexHits = new Set<string>();
+
             try {
                 const result = await this.handleRpc(payload.functionPath, payload.args ?? {});
                 const durationMs = Date.now() - dispatchStartedAt;
@@ -1391,7 +1434,7 @@ abstract class ShardDO {
                 // Record the handler's own latency (before the subscription
                 // write-flush below) against the per-function counters, along
                 // with any tables it full-scanned (causal attribution).
-                this.recordFunctionCall(payload.functionPath, durationMs, undefined, this.currentScannedTables);
+                this.recordFunctionCall(payload.functionPath, durationMs, undefined, this.currentScannedTables, this.currentIndexHits);
 
                 // Snapshot the written-table set BEFORE `flushChangedTables`
                 // drains it — afterwards `pendingChangedTables` is `undefined`,
@@ -1417,7 +1460,7 @@ abstract class ShardDO {
                 const durationMs = Date.now() - dispatchStartedAt;
                 const message = error instanceof Error ? error.message : String(error);
 
-                this.recordFunctionCall(payload.functionPath, durationMs, message, this.currentScannedTables);
+                this.recordFunctionCall(payload.functionPath, durationMs, message, this.currentScannedTables, this.currentIndexHits);
                 this.recordRequestLog(payload.functionPath, payload.args ?? {}, durationMs, "error", [...(this.pendingChangedTables ?? [])], message);
                 this.logs.push({
                     functionPath: payload.functionPath,
@@ -1434,6 +1477,7 @@ abstract class ShardDO {
                 this.currentRequestIdentity = undefined;
                 this.currentRequestSystem = false;
                 this.currentScannedTables = undefined;
+                this.currentIndexHits = undefined;
                 this.currentRequestReadTables = undefined;
                 this.currentRequestCacheHit = undefined;
             }
@@ -2299,15 +2343,24 @@ abstract class ShardDO {
     }
 
     /**
-     * Read hook recording which declared indexes a query actually exercises —
-     * the signal behind the `unused_index` runtime advisory. Passed as
-     * `onIndexUse` to `createShardCtxDb` by the generated subclass. In-memory and
-     * reset on hibernation/restart (a "since this instance woke" readout, like
-     * the function/scan counters), keyed `table:index`.
+     * Read hook recording which declared indexes a query actually exercises.
+     * Two destinations, both stamped here so a single hook serves the live and
+     * durable signals. First, the in-memory `usedIndexes` set behind the
+     * `unused_index` runtime advisory (reset on hibernation/restart — a "since
+     * this instance woke" readout, like the function/scan counters), keyed
+     * `table:index`. Second, the per-dispatch `currentIndexHits` set, drained
+     * into `recordFunctionCall` so the DURABLE `__cirrus_metrics_index` hit
+     * counter (the advisor dead-index lint's producer) records one read per
+     * distinct `(table, index)` this dispatch exercised. Passed as `onIndexUse`
+     * to `createShardCtxDb` by the generated subclass.
      */
     protected getCtxDbIndexUseHook(): (table: string, indexName: string) => void {
         return (table, indexName) => {
             this.usedIndexes.add(`${table}:${indexName}`);
+            // JSON-keyed so a table or index name can never alias a different
+            // pair when the set is unpacked back into `{table, index}` in
+            // recordFunctionCall, matching the durable __cirrus_metrics_index key.
+            this.currentIndexHits?.add(JSON.stringify([table, indexName]));
         };
     }
 
@@ -2430,9 +2483,13 @@ abstract class ShardDO {
      * `__cirrus_metrics` table (source of truth) so they survive
      * hibernation/restart; the in-memory counters are used only as a fallback
      * when the durable read throws. The response is extended additively with
-     * `functions` (per-function persisted rows) and `history` (the coarse
-     * time-series buckets) so the studio can read durable per-function
-     * metrics and chart history without breaking the existing fields.
+     * `functions` (per-function persisted rows), `history` (the coarse
+     * time-series buckets), and `indexHits` (the per-`(table, index)` hit
+     * counts) so the studio can read durable per-function metrics, chart
+     * history, and feed the advisor dead-index lint without breaking existing
+     * fields. `indexHits` is shaped exactly as the advisor's `AdvisorIndexHit`
+     * (`{ table, index, reads }`), so the studio passes it straight to
+     * `runLints({ ..., indexHits })` after summing the per-shard arrays.
      */
     private collectMetrics(): {
         cache: null | { bytes: number; entries: number; evictions: number; hits: number; misses: number };
@@ -2440,6 +2497,7 @@ abstract class ShardDO {
         errors: number;
         functions: FunctionCallStat[];
         history: (FunctionMetricBucket & { path: string })[];
+        indexHits: FunctionMetricIndexHit[];
         requests: number;
         shard: string;
         sinceMs: number;
@@ -2462,6 +2520,17 @@ abstract class ShardDO {
             // Keep the in-memory fallback already assigned above.
         }
 
+        // Durable per-(table, index) hit counts for the dead-index lint.
+        // Best-effort: a missing/unmigrated sql handle yields an empty feed
+        // rather than failing the metrics read.
+        let indexHits: FunctionMetricIndexHit[] = [];
+
+        try {
+            indexHits = readFunctionMetricIndexHits(this.state.storage.sql as unknown as SqlExec);
+        } catch {
+            // No durable index-hit table yet — report an empty feed.
+        }
+
         return {
             // eslint-disable-next-line unicorn/no-null -- metrics wire shape: `cache` is `null | {...}`, null reported when the reactive cache is disabled
             cache: this.reactiveCache ? this.reactiveCache.stats() : null,
@@ -2470,6 +2539,7 @@ abstract class ShardDO {
             errors,
             functions: this.collectFunctionStats().functions,
             history: this.collectFunctionMetricBuckets(),
+            indexHits,
             requests,
             shard: this.state.id?.name ?? ROOT_SHARD_NAME,
             sinceMs: this.metrics.sinceMs,
@@ -2482,8 +2552,12 @@ abstract class ShardDO {
      * creating the entry on first sight. `errorMessage` is supplied only when
      * the handler threw, in which case the failure counters advance too.
      * `scannedTables` carries the tables the dispatch full-scanned (collected by
-     * `getCtxDbReadHook`), which advance the causal scan attribution. Called
-     * once per `/rpc` dispatch alongside the aggregate `metrics` update.
+     * `getCtxDbReadHook`), which advance the causal scan attribution.
+     * `indexHits` carries the declared indexes it exercised (collected by
+     * `getCtxDbIndexUseHook`, NUL-free `JSON.stringify([table, index])` keys),
+     * which advance the durable `__cirrus_metrics_index` hit counter behind the
+     * dead-index lint. Called once per `/rpc` dispatch alongside the aggregate
+     * `metrics` update.
      *
      * Two writes happen here. The in-memory {@link functionStats} map is kept
      * for the fast warm-instance path, and the durable `__cirrus_metrics`
@@ -2493,18 +2567,29 @@ abstract class ShardDO {
      * `sql` handle) must never turn a successful dispatch into a failed one,
      * so it is swallowed and the in-memory counters still advance.
      */
-    private recordFunctionCall(functionPath: string, durationMs: number, errorMessage?: string, scannedTables?: ReadonlySet<string>): void {
+    private recordFunctionCall(
+        functionPath: string,
+        durationMs: number,
+        errorMessage?: string,
+        scannedTables?: ReadonlySet<string>,
+        indexHits?: ReadonlySet<string>,
+    ): void {
         const now = Date.now();
         const scanned = scannedTables ? [...scannedTables] : [];
+        // Each entry is a `JSON.stringify([table, index])` key stamped by the
+        // index-use hook; decode back to `{ table, index }` for the durable
+        // upsert. Skipped entirely when the dispatch used no declared index.
+        const hits: IndexHit[] = indexHits ? [...indexHits].map((key) => decodeIndexHitKey(key)).filter((hit): hit is IndexHit => hit !== undefined) : [];
 
         // Durable upsert on the hot path: two PK-keyed INSERT…ON CONFLICT
         // statements plus a bounded bucket trim, plus one upsert per scanned
-        // table. Survives restart/hibernation.
+        // table and one per exercised index. Survives restart/hibernation.
         try {
             recordFunctionMetric(this.state.storage.sql as unknown as SqlExec, {
                 durationMs,
                 errored: errorMessage !== undefined,
                 errorMessage,
+                indexHits: hits,
                 path: functionPath,
                 scannedTables: scanned,
                 ts: now,
