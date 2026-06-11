@@ -19,21 +19,27 @@
  * an `(env) => options` factory (for the per-request `env.SHARD` binding), and
  * preserves any `scheduled` the adapter emits when no Cirrus crons are configured.
  *
- * The `@astrojs/cloudflare` injection point: Astro's Cloudflare adapter emits a
- * server entry (`dist/_worker.js/index.js`) whose default export is the SSR
- * worker. Wrap it at that boundary:
+ * **Astro 6 / `@astrojs/cloudflare` v13 injection point:** the adapter no longer
+ * emits a `dist/_worker.js` bundle as a custom-entry target; instead, import
+ * `handle` from `@astrojs/cloudflare/handler` — the adapter's built-in SSR fetch
+ * function — and wrap it at that boundary:
  *
  * ```ts
  * // src/worker.ts
- * import astroWorker from "../dist/_worker.js/index.js";
+ * import { handle } from "@astrojs/cloudflare/handler";
  * import { withCirrus } from "@cirrus/astro";
  *
  * // `shardDO` lives on `env` (per request), so pass a factory:
- * export default withCirrus(astroWorker, (env) => ({ shardDO: env.SHARD }));
+ * export default withCirrus(
+ *   (req, env, ctx) => handle(req, env, ctx),
+ *   (env) => ({ shardDO: env.SHARD }),
+ * );
  * ```
  *
- * The `cirrus()` integration (from this package) declares the build-time wiring
- * so templates don't hand-roll it.
+ * Set `"main": "src/worker.ts"` in `wrangler.jsonc` — wrangler bundles this file
+ * (via `@cloudflare/vite-plugin` through the Astro adapter) so `handle` resolves
+ * at build time. The `cirrus()` integration (from this package) declares the
+ * build-time wiring so templates don't hand-roll it.
  */
 export type {
     FrameworkHostHandler as AstroWorkerHandler,

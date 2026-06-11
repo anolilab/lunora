@@ -59,18 +59,11 @@ ONLY_TEMPLATE="${1:-}"
 # Any template IN this list that passes build is an XPASS (also a failure —
 # remove it from the list when the fix lands).
 # ---------------------------------------------------------------------------
-# astro: `astro build` (codegen now runs first) fails resolving
-# `../dist/_worker.js/index.js` in src/worker.ts — the REMOVED Astro-5 custom-entry
-# pattern. Astro 6 + @astrojs/cloudflare v13 no longer emit dist/_worker.js; the
-# class-B worker must wrap `@astrojs/cloudflare/handler`'s handle() instead. This
-# is a composition rewrite that also touches @cirrus/astro's withCirrus (it copied
-# the same outdated pattern) — tracked as a deep finding, not a template-config fix.
-#
 # (react-router + solid-start templates were removed: their build tools
 # (@react-router/dev, vinxi/@solidjs/start) only support Vite <=7 while Cirrus
 # is standardized on Vite 8 — see the official CF react-router starter which
 # pins vite ^7. Re-add the templates when those frameworks ship Vite 8 support.)
-XFAIL_BUILD=(astro)
+XFAIL_BUILD=()
 
 # ---------------------------------------------------------------------------
 # Discover templates (dynamic, so adding a new dir is automatically included).
