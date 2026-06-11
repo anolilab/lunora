@@ -255,6 +255,36 @@ describe("shardDO", () => {
         expect(ws.attachment).toEqual({ subs: {} });
     });
 
+    it("unsubscribe rolls back when serializeAttachment throws and does not propagate the error", async () => {
+        expect.assertions(2);
+
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws, { subs: { "sub-1": { table: "messages" } } });
+
+        // Make serializeAttachment throw on the next call (simulates the
+        // per-socket JSON size limit being exceeded on the shrunken payload).
+        const original = ws.serializeAttachment.bind(ws);
+        let callCount = 0;
+
+        ws.serializeAttachment = (value: unknown) => {
+            callCount += 1;
+
+            if (callCount === 1) {
+                throw new Error("serialize failed");
+            }
+
+            original(value);
+        };
+
+        // Must not throw.
+        await shard.driveMessage(ws, { id: "sub-1", type: "unsubscribe" });
+
+        // Subscription must still be present after the rollback.
+        expect(ws.attachment).toEqual({ subs: { "sub-1": { table: "messages" } } });
+        expect(callCount).toBe(1);
+    });
+
     it("broadcastDelta sends to matching subscribers only", () => {
         expect.assertions(4);
 

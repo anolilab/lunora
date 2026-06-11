@@ -1901,9 +1901,26 @@ abstract class ShardDO {
     protected unsubscribe(ws: WebSocket, subId: string): void {
         const attachment = this.readAttachment(ws);
 
+        // Capture the current query so we can roll back on serialization failure.
+        const captured = attachment.subs[subId];
+
         // eslint-disable-next-line @typescript-eslint/no-dynamic-delete -- `subs` is a Record keyed by dynamic subscription id; removal is the intended unsubscribe
         delete attachment.subs[subId];
-        (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
+
+        try {
+            (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
+        } catch {
+            // Roll back the in-memory deletion so the subscription remains
+            // intact — mirrors the subscribe() rollback path. We never throw
+            // out of this path; the WS hibernation API treats a thrown
+            // webSocketMessage as a fatal-channel error.
+            if (captured !== undefined) {
+                attachment.subs[subId] = captured;
+            }
+
+            return;
+        }
+
         this.subMemos.get(ws)?.delete(subId);
     }
 
