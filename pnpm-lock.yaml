@@ -1562,6 +1562,9 @@ importers:
       '@base-ui/react':
         specifier: catalog:ui
         version: 1.5.0(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
+      '@cirrus/advisor':
+        specifier: workspace:*
+        version: link:../advisor
       '@cirrus/client':
         specifier: workspace:*
         version: link:../client

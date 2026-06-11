@@ -3,13 +3,24 @@ import { useNavigate } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import type { AdvisoriesResult, AdvisoryFinding, FunctionCallStat, FunctionStatsResult, ShardMetrics } from "./admin";
+import type {
+    AdvisoriesResult,
+    AdvisoryFinding,
+    FunctionCallStat,
+    FunctionStatsResult,
+    MetricsIndexHit,
+    MetricsSnapshot,
+    TableIndexesResult,
+    TableInfo,
+} from "./admin";
 import { ADMIN_FUNCTIONS } from "./admin";
 import type { AdvisorRow } from "./advisor-view";
 import { AdvisorView } from "./advisor-view";
 import { Button } from "./components/ui/button";
 import type { Insight } from "./derive-insights";
 import { deriveInsights } from "./derive-insights";
+import type { DeclaredIndex } from "./derive-runtime-advisories";
+import { declaredIndexesFor, deriveRuntimeAdvisories } from "./derive-runtime-advisories";
 import type { TFunction } from "./i18n-context";
 import { useT } from "./i18n-context";
 import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal";
@@ -24,6 +35,8 @@ interface InsightsPanelProps {
 const GET_ADVISORIES = adminRef(ADMIN_FUNCTIONS.getAdvisories);
 const GET_FUNCTION_STATS = adminRef(ADMIN_FUNCTIONS.getFunctionStats);
 const GET_METRICS = adminRef(ADMIN_FUNCTIONS.getMetrics);
+const LIST_TABLES = adminRef(ADMIN_FUNCTIONS.listTables);
+const LIST_TABLE_INDEXES = adminRef(ADMIN_FUNCTIONS.listTableIndexes);
 
 /** Map the advisor's severity onto the studio's tab levels. */
 const ADVISORY_LEVEL = { ERROR: "error", INFO: "info", WARN: "warning" } as const;
@@ -126,9 +139,15 @@ export const InsightsPanel = ({ initialShardKey }: InsightsPanelProps): ReactEle
     const t = useT();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
-    const [metrics, setMetrics] = useState<ShardMetrics | null>(null);
+    const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
     const [functions, setFunctions] = useState<FunctionCallStat[] | null>(null);
     const [advisories, setAdvisories] = useState<AdvisoryFinding[] | null>(null);
+    // Runtime-lint inputs the dead-index advisory reconciles: the per-(table,
+    // index) recorded reads from getMetrics and every declared index from
+    // listTables + listTableIndexes. Both best-effort — absent on an older
+    // worker, where the runtime lints simply find nothing.
+    const [indexHits, setIndexHits] = useState<MetricsIndexHit[] | null>(null);
+    const [declaredIndexes, setDeclaredIndexes] = useState<DeclaredIndex[] | null>(null);
     const [error, setError] = useState<null | string>(null);
     const [loading, setLoading] = useState<boolean>(false);
 
@@ -137,7 +156,7 @@ export const InsightsPanel = ({ initialShardKey }: InsightsPanelProps): ReactEle
             setLoading(true);
 
             const [snapshot, stats, advisorySnapshot] = await Promise.allSettled([
-                client.query(GET_METRICS, {}, callOptions(shard)) as Promise<ShardMetrics>,
+                client.query(GET_METRICS, {}, callOptions(shard)) as Promise<MetricsSnapshot>,
                 client.query(GET_FUNCTION_STATS, {}, callOptions(shard)) as Promise<FunctionStatsResult>,
                 client.query(GET_ADVISORIES, {}, callOptions(shard)) as Promise<AdvisoriesResult>,
             ]);
@@ -156,6 +175,40 @@ export const InsightsPanel = ({ initialShardKey }: InsightsPanelProps): ReactEle
             setMetrics(snapshot.status === "fulfilled" ? snapshot.value : null);
             setFunctions(stats.status === "fulfilled" ? stats.value.functions : null);
             setAdvisories(advisorySnapshot.status === "fulfilled" ? advisorySnapshot.value.advisories : null);
+            setIndexHits(snapshot.status === "fulfilled" ? (snapshot.value.indexHits ?? null) : null);
+
+            // Enumerate the declared indexes for the dead-index reconciliation:
+            // the recorded-reads feed only carries USED indexes, so a declared
+            // index absent from it is dead. Best-effort and independent of the
+            // metrics reads — a worker without listTables / listTableIndexes (or
+            // without an admin token for them) just yields no declared indexes,
+            // so the dead-index check stays quiet rather than failing the panel.
+            try {
+                const tables = (await client.query(LIST_TABLES, {}, callOptions(shard))) as TableInfo[];
+                const indexResults = await Promise.allSettled(
+                    tables.map(
+                        async (table) =>
+                            [table.name, (await client.query(LIST_TABLE_INDEXES, { table: table.name }, callOptions(shard))) as TableIndexesResult] as const,
+                    ),
+                );
+
+                const declared: DeclaredIndex[] = [];
+
+                for (const result of indexResults) {
+                    if (result.status === "fulfilled") {
+                        const [name, payload] = result.value;
+
+                        declared.push(...declaredIndexesFor(name, payload.indexes));
+                    }
+                }
+
+                setDeclaredIndexes(declared);
+            } catch {
+                // listTables unavailable (older worker / no admin token) — no
+                // declared-index enumeration, so the dead-index check is dormant.
+                setDeclaredIndexes(null);
+            }
+
             setLoading(false);
         },
         [client],
@@ -201,6 +254,14 @@ export const InsightsPanel = ({ initialShardKey }: InsightsPanelProps): ReactEle
 
     const insights = useMemo<Insight[]>(() => deriveInsights(metrics, functions), [metrics, functions]);
 
+    // Runtime advisor lints (dead index + hot scan) over the recorded metrics.
+    // Same verbatim advisory mapping as the static getAdvisories findings — no
+    // new i18n. shardTraffic is omitted, so hot_shard stays dormant here.
+    const runtimeRows = useMemo<AdvisorRow[]>(
+        () => deriveRuntimeAdvisories({ declaredIndexes: declaredIndexes ?? [], functions, indexHits }),
+        [declaredIndexes, functions, indexHits],
+    );
+
     const rows = useMemo<AdvisorRow[]>(() => {
         const insightRows = insights.map((insight) => {
             const tables = insight.kind === "missing-index" ? (insight.tables ?? []) : [];
@@ -216,9 +277,10 @@ export const InsightsPanel = ({ initialShardKey }: InsightsPanelProps): ReactEle
         });
 
         // Static schema advisories (codegen-time lints) first, then the runtime
-        // insights. The severity tabs in AdvisorView regroup them by level.
-        return [...(advisories ?? []).map((finding) => advisoryRow(finding)), ...insightRows];
-    }, [advisories, insights, jumpToSchemaIndex, t]);
+        // advisor lints (dead index / hot scan), then the derived insights. The
+        // severity tabs in AdvisorView regroup them all by level.
+        return [...(advisories ?? []).map((finding) => advisoryRow(finding)), ...runtimeRows, ...insightRows];
+    }, [advisories, insights, jumpToSchemaIndex, runtimeRows, t]);
 
     const toolbar = <ShardInput onChange={setShardKey} testId="in-shard-input" value={shardKey} />;
 

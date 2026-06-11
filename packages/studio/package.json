@@ -40,6 +40,7 @@
     },
     "dependencies": {
         "@base-ui/react": "catalog:ui",
+        "@cirrus/advisor": "workspace:*",
         "@cirrus/client": "workspace:*",
         "@cirrus/react": "workspace:*",
         "@hugeicons/core-free-icons": "catalog:ui",

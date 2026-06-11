@@ -2,7 +2,7 @@ import { CirrusProvider } from "@cirrus/react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import type { AdvisoryFinding, FunctionStatsResult, ShardMetrics } from "../src/admin";
+import type { AdvisoryFinding, FunctionStatsResult, MetricsSnapshot, ShardMetrics } from "../src/admin";
 import { ADMIN_FUNCTIONS } from "../src/admin";
 import { InsightsPanel } from "../src/insights-panel";
 import type { MockClientHooks } from "./mock-client";
@@ -148,6 +148,55 @@ describe("insightsPanel", () => {
         expect(view.textContent).toContain("Unindexed foreign key");
         // The advisory names the offending table.
         expect(view.textContent).toContain("posts");
+    });
+
+    it("surfaces a runtime dead-index advisory for a declared index with no recorded reads", async () => {
+        expect.assertions(2);
+
+        // getMetrics reports a read for `byAuthor` but NOT `byTitle`; listTableIndexes
+        // declares both → `byTitle` reconciles to reads:0 → the runtime dead-index lint fires.
+        const metrics: MetricsSnapshot = { ...HEALTHY, indexHits: [{ index: "byAuthor", reads: 5, table: "posts" }] };
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.getMetrics) {
+                    return metrics;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.getFunctionStats) {
+                    return EMPTY_STATS;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.getAdvisories) {
+                    return { advisories: [] };
+                }
+
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "posts", rowCount: 3 }];
+                }
+
+                if (reference === ADMIN_FUNCTIONS.listTableIndexes) {
+                    return {
+                        indexes: [
+                            { fields: ["authorId"], name: "byAuthor", type: "index" },
+                            { fields: ["title"], name: "byTitle", type: "index" },
+                        ],
+                    };
+                }
+
+                throw new Error(`unexpected ${reference}`);
+            },
+        });
+
+        render(renderPanel(mock));
+
+        // index_utilization (dead index) is INFO-severity → the Info tab.
+        fireEvent.click(await screen.findByTestId("cirrus-insights-tab-info"));
+        await screen.findByText("Index utilization");
+
+        const view = screen.getByTestId("cirrus-insights");
+
+        expect(view.textContent).toContain("Index utilization");
+        expect(view.textContent).toContain('Index "byTitle" on table "posts" recorded no reads');
     });
 
     it("auto-refreshes advisories when the tab regains focus (no manual Refresh)", async () => {

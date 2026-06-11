@@ -148,14 +148,31 @@ export interface MetricsHistoryBucket {
 }
 
 /**
+ * One declared index's recorded read count over the durable window, returned in
+ * the `getMetrics` payload's `indexHits` array. The DO stamps a per-`(table,
+ * index)` counter in the durable `__cirrus_metrics_index` table on every index
+ * use (`onIndexUse`); this is its surfaced shape. It is identical to
+ * `@cirrus/advisor`'s `AdvisorIndexHit`, so the studio passes it straight into
+ * the runtime dead-index lint after summing across shards.
+ */
+export interface MetricsIndexHit {
+    index: string;
+    reads: number;
+    table: string;
+}
+
+/**
  * The full `__cirrus_admin__:getMetrics` payload. The wire response carries the
- * per-function lifetime stats (`functions`) and the durable time buckets
- * (`history`) alongside the {@link ShardMetrics} snapshot; both are optional so a
- * pre-2.3 worker (or a consumer that only needs the snapshot) still type-checks.
+ * per-function lifetime stats (`functions`), the durable time buckets
+ * (`history`), and the per-`(table, index)` hit counts (`indexHits`) alongside
+ * the {@link ShardMetrics} snapshot; all are optional so a pre-feature worker
+ * (or a consumer that only needs the snapshot) still type-checks.
  */
 export interface MetricsSnapshot extends ShardMetrics {
     functions?: FunctionCallStat[];
     history?: MetricsHistoryBucket[];
+    /** Per-declared-index recorded reads; absent on a worker predating the dead-index feed. */
+    indexHits?: MetricsIndexHit[];
 }
 
 /**
