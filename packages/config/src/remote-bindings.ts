@@ -13,18 +13,20 @@
  * Two halves live here, both pure/file-system-local and unit-testable.
  *
  * {@link planRemoteBindings} is the decision layer: given a parsed wrangler
- * config it reports which binding entries are eligible for remote mode. Only the
- * stateless storage bindings (D1, KV, R2) qualify; Durable Objects are never
- * remoted, because a Cirrus shard's authoritative state is its DO SQLite and CF
- * has no remote-DO mode — shards run locally while their data deps point at
- * production (the PLAN5 §5.3 boundary).
+ * config it reports which binding entries are eligible for remote mode. The
+ * stateless storage + service bindings whose wrangler schema accepts
+ * `"remote": true` qualify (D1, KV, R2, Vectorize, Queue producers, Services,
+ * AI); Durable Objects are never remoted, because a Cirrus shard's
+ * authoritative state is its DO SQLite and CF has no remote-DO mode — shards run
+ * locally while their data deps point at production (the PLAN5 §5.3 boundary).
  *
  * {@link materializeRemoteWranglerConfig} writes a sibling temp config with
  * `"remote": true` injected onto each eligible binding, comment-preservingly, so
  * `cirrus dev` can point `wrangler dev --config` at it without ever mutating the
- * user's checked-in `wrangler.jsonc`.
+ * user's checked-in `wrangler.jsonc`. It returns a {@link MaterializeResult.cleanup}
+ * disposer so the caller can unlink the generated temp dir when dev exits.
  */
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 import { applyEdits, modify } from "jsonc-parser";
@@ -35,71 +37,126 @@ import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 const FORMATTING = { formattingOptions: { insertSpaces: true, tabSize: 4 } } as const;
 
 /**
- * The wrangler binding arrays Cirrus can safely flip to remote mode in dev.
- * Each maps the top-level config key to a human label used in logs.
+ * The wrangler config sections Cirrus can safely flip to remote mode in dev,
+ * each with the human label used in logs and the structural `shape` the entry
+ * lives in.
  *
- * Deliberately omits `durable_objects` (no CF remote-DO mode; shards stay
- * local), `vectorize`, `queues`, `services` and friends — the first increment
- * targets the three stateful stores VOID-TEARDOWN names (D1/KV/R2). Widening to
- * more binding kinds is a follow-up; the decision lives in one table.
+ * `"array"` is a top-level array of binding objects (`d1_databases`,
+ * `kv_namespaces`, `r2_buckets`, `vectorize`, `services`). `"producers"` is
+ * `queues.producers[]` — consumers are NOT remoted (their schema has no `remote`
+ * field) and the edit path is two levels deep. `"object"` is a single binding
+ * object, not an array (`ai`), whose edit path targets the section key directly.
+ *
+ * Every kind here was confirmed against `wrangler/config-schema.json`: the
+ * entry's schema declares a `remote` property. Deliberately omits
+ * `durable_objects` (no CF remote-DO mode; shards stay local) and sections whose
+ * schema has no `remote` field (`hyperdrive`, `analytics_engine_datasets`,
+ * `secrets_store_secrets`, queue consumers, …). Widening further is a one-line
+ * table edit.
  */
 const REMOTE_ELIGIBLE_KEYS = {
-    d1_databases: "D1",
-    kv_namespaces: "KV",
-    r2_buckets: "R2",
+    ai: { label: "AI", shape: "object" },
+    d1_databases: { label: "D1", shape: "array" },
+    kv_namespaces: { label: "KV", shape: "array" },
+    queues: { label: "Queue", shape: "producers" },
+    r2_buckets: { label: "R2", shape: "array" },
+    services: { label: "Service", shape: "array" },
+    vectorize: { label: "Vectorize", shape: "array" },
 } as const;
 
 type RemoteEligibleKey = keyof typeof REMOTE_ELIGIBLE_KEYS;
 
 const REMOTE_ELIGIBLE_KEY_LIST = Object.keys(REMOTE_ELIGIBLE_KEYS) as RemoteEligibleKey[];
 
+/** One binding object as it appears in any eligible section. */
+interface BindingEntry {
+    binding?: string;
+    remote?: boolean;
+}
+
 /** One binding entry we mark remote, with enough provenance to log + edit it. */
 interface RemoteBindingPlan {
     /** The binding name as declared in the config (e.g. `"DB"`, `"FILES"`). */
     binding: string;
-    /** Index of the entry within its config array — the jsonc edit path tail. */
-    index: number;
-    /** Short kind label for logging (`"D1"`, `"KV"`, `"R2"`). */
+    /** Short kind label for logging (`"D1"`, `"KV"`, `"R2"`, `"Vectorize"`, …). */
     kind: string;
+
+    /**
+     * The jsonc edit path within {@link RemoteBindingPlan.section}, relative to
+     * the section key: `[index]` for an `"array"` section, `["producers", index]`
+     * for a queue producer, or `[]` for the single-object `ai` section. The
+     * materializer prepends the section key and appends `"remote"`.
+     */
+    path: ReadonlyArray<number | string>;
     /** The wrangler config key the entry lives under. */
     section: RemoteEligibleKey;
 }
 
 /** The structural slice of a wrangler config the remote planner reads. */
 interface RemoteWranglerShape {
-    d1_databases?: ReadonlyArray<{ binding?: string; remote?: boolean } | null | undefined>;
-    kv_namespaces?: ReadonlyArray<{ binding?: string; remote?: boolean } | null | undefined>;
-    r2_buckets?: ReadonlyArray<{ binding?: string; remote?: boolean } | null | undefined>;
+    ai?: BindingEntry | null;
+    d1_databases?: ReadonlyArray<BindingEntry | null | undefined>;
+    kv_namespaces?: ReadonlyArray<BindingEntry | null | undefined>;
+    queues?: { producers?: ReadonlyArray<BindingEntry | null | undefined> } | null;
+    r2_buckets?: ReadonlyArray<BindingEntry | null | undefined>;
+    services?: ReadonlyArray<BindingEntry | null | undefined>;
+    vectorize?: ReadonlyArray<BindingEntry | null | undefined>;
 }
 
+/** Derive the log/plan name for an entry: its declared `binding`, else a positional fallback. */
+const entryName = (entry: BindingEntry, fallback: string): string => (typeof entry.binding === "string" ? entry.binding : fallback);
+
 /**
- * Inspect a parsed wrangler config and list every D1/KV/R2 binding that should
- * be flipped to remote mode. Pure — no file-system access, no mutation. An
- * entry already carrying `"remote": true` is still reported (so logging is
- * complete) but the materializer's edit is a harmless no-op for it.
+ * Collect remote plans from an array of binding entries, each plan's edit path
+ * being `[...pathPrefix, index]`. Used for the flat `"array"` sections (empty
+ * prefix) and for `queues.producers` (prefix `["producers"]`).
  */
-const planRemoteBindings = (parsed: RemoteWranglerShape): RemoteBindingPlan[] => {
+const planArrayEntries = (
+    section: RemoteEligibleKey,
+    entries: ReadonlyArray<BindingEntry | null | undefined>,
+    kind: string,
+    pathPrefix: ReadonlyArray<number | string>,
+): RemoteBindingPlan[] => {
     const plans: RemoteBindingPlan[] = [];
 
-    for (const section of REMOTE_ELIGIBLE_KEY_LIST) {
-        const entries = parsed[section] ?? [];
-
-        for (const [index, entry] of entries.entries()) {
-            if (entry === null || entry === undefined) {
-                continue;
-            }
-
-            plans.push({
-                binding: typeof entry.binding === "string" ? entry.binding : `#${String(index)}`,
-                index,
-                kind: REMOTE_ELIGIBLE_KEYS[section],
-                section,
-            });
+    for (const [index, entry] of entries.entries()) {
+        if (entry === null || entry === undefined) {
+            continue;
         }
+
+        plans.push({ binding: entryName(entry, `#${String(index)}`), kind, path: [...pathPrefix, index], section });
     }
 
     return plans;
 };
+
+/** Plans for one eligible section, dispatched on its declared structural shape. */
+const planSection = (section: RemoteEligibleKey, parsed: RemoteWranglerShape): RemoteBindingPlan[] => {
+    const { label, shape } = REMOTE_ELIGIBLE_KEYS[section];
+
+    if (shape === "array") {
+        const entries = (parsed[section] as ReadonlyArray<BindingEntry | null | undefined> | undefined) ?? [];
+
+        return planArrayEntries(section, entries, label, []);
+    }
+
+    if (shape === "producers") {
+        return planArrayEntries(section, parsed.queues?.producers ?? [], label, ["producers"]);
+    }
+
+    // Single-object section (`ai`): one binding, edit path is the section key itself.
+    const entry = parsed.ai;
+
+    return entry === null || entry === undefined ? [] : [{ binding: entryName(entry, section), kind: label, path: [], section }];
+};
+
+/**
+ * Inspect a parsed wrangler config and list every eligible binding that should
+ * be flipped to remote mode. Pure — no file-system access, no mutation. An
+ * entry already carrying `"remote": true` is still reported (so logging is
+ * complete) but the materializer's edit is a harmless no-op for it.
+ */
+const planRemoteBindings = (parsed: RemoteWranglerShape): RemoteBindingPlan[] => REMOTE_ELIGIBLE_KEY_LIST.flatMap((section) => planSection(section, parsed));
 
 /** Apply one structural edit and return the rewritten text (mirrors reconcile-bindings). */
 const applyModify = (text: string, path: ReadonlyArray<number | string>, value: unknown): string => {
@@ -111,13 +168,15 @@ const applyModify = (text: string, path: ReadonlyArray<number | string>, value: 
 /**
  * Inject `"remote": true` onto each planned binding in the config `text`,
  * comment-preservingly via jsonc edits. Pure string→string; the edits target
- * disjoint array entries so applying them sequentially is safe.
+ * disjoint entries so applying them sequentially is safe. The edit path is
+ * `[section, ...plan.path, "remote"]`, which resolves to the array element, the
+ * `queues.producers[i]` entry, or the single `ai` object as the plan demands.
  */
 const injectRemoteFlags = (text: string, plans: ReadonlyArray<RemoteBindingPlan>): string => {
     let next = text;
 
     for (const plan of plans) {
-        next = applyModify(next, [plan.section, plan.index, "remote"], true);
+        next = applyModify(next, [plan.section, ...plan.path, "remote"], true);
     }
 
     return next;
@@ -130,6 +189,14 @@ interface MaterializeOptions {
 }
 
 interface MaterializeResult {
+    /**
+     * Removes the generated temp config + its directory. Always present and
+     * always safe to call: it is idempotent, a no-op when nothing was written
+     * (disabled / fall-through cases), and never throws if the path is already
+     * gone. The dev command calls this on every exit path (normal, signal, error).
+     */
+    cleanup: () => void;
+
     /**
      * Absolute path to the generated temp config to pass to
      * `wrangler dev --config`. `undefined` when remote mode is disabled, no
@@ -144,6 +211,33 @@ interface MaterializeResult {
     /** The bindings flipped to remote, for the dev banner. */
     remoteBindings: RemoteBindingPlan[];
 }
+
+/** A disposer that does nothing — the cleanup for every fall-through (no temp file written). */
+const noopCleanup = (): void => {};
+
+/**
+ * Build an idempotent disposer that removes the generated temp directory. Guards
+ * against a double call (the flag) and a missing path (`force: true` +
+ * try/catch), so the dev command can wire it onto multiple exit paths without
+ * ever crashing the shutdown.
+ */
+const createCleanup = (directory: string): (() => void) => {
+    let done = false;
+
+    return () => {
+        if (done) {
+            return;
+        }
+
+        done = true;
+
+        try {
+            rmSync(directory, { force: true, recursive: true });
+        } catch {
+            /* already gone / unremovable — nothing actionable on shutdown */
+        }
+    };
+};
 
 /** Filename component identifying a Cirrus-generated remote-dev config. */
 const REMOTE_CONFIG_BASENAME = "wrangler.remote.jsonc";
@@ -163,25 +257,25 @@ const REMOTE_CONFIG_BASENAME = "wrangler.remote.jsonc";
  */
 const materializeRemoteWranglerConfig = (options: MaterializeOptions): MaterializeResult => {
     if (!options.enabled) {
-        return { enabled: false, remoteBindings: [] };
+        return { cleanup: noopCleanup, enabled: false, remoteBindings: [] };
     }
 
     const wranglerPath = findWranglerFile(options.projectRoot);
 
     if (!wranglerPath) {
-        return { enabled: true, reason: "wrangler.jsonc not found", remoteBindings: [] };
+        return { cleanup: noopCleanup, enabled: true, reason: "wrangler.jsonc not found", remoteBindings: [] };
     }
 
     const { parsed, text } = readWranglerJsonc<RemoteWranglerShape>(wranglerPath);
 
     if (parsed === undefined) {
-        return { enabled: true, reason: `failed to parse ${wranglerPath} as JSONC`, remoteBindings: [] };
+        return { cleanup: noopCleanup, enabled: true, reason: `failed to parse ${wranglerPath} as JSONC`, remoteBindings: [] };
     }
 
     const plans = planRemoteBindings(parsed);
 
     if (plans.length === 0) {
-        return { enabled: true, reason: "no D1/KV/R2 bindings to proxy remotely", remoteBindings: [] };
+        return { cleanup: noopCleanup, enabled: true, reason: "no remote-eligible bindings to proxy", remoteBindings: [] };
     }
 
     const directory = mkdtempSync(join(tmpdir(), "cirrus-remote-"));
@@ -189,7 +283,7 @@ const materializeRemoteWranglerConfig = (options: MaterializeOptions): Materiali
 
     writeFileSync(configPath, injectRemoteFlags(text, plans), "utf8");
 
-    return { configPath, enabled: true, remoteBindings: plans };
+    return { cleanup: createCleanup(directory), configPath, enabled: true, remoteBindings: plans };
 };
 
 /**
@@ -207,5 +301,43 @@ const isRemoteEnvEnabled = (value: string | undefined): boolean => {
     return normalized === "1" || normalized === "true";
 };
 
-export type { MaterializeOptions, MaterializeResult, RemoteBindingPlan, RemoteWranglerShape };
-export { injectRemoteFlags, isRemoteEnvEnabled, materializeRemoteWranglerConfig, planRemoteBindings, REMOTE_ELIGIBLE_KEYS };
+/** The three inputs that can switch remote-binding dev on, in precedence order. */
+interface RemoteEnableInputs {
+    /**
+     * The `remote` preference from `cirrus.json` (the lowest-priority signal).
+     * `undefined` means "no project preference"; an explicit `false` here loses
+     * to neither the flag nor the env when those are absent — it just stays off.
+     */
+    configPreference?: boolean;
+    /** The raw `CIRRUS_REMOTE` env value (parsed with {@link isRemoteEnvEnabled}). */
+    envValue?: string;
+    /** The explicit `--remote` CLI flag — `true` when passed, `undefined`/`false` otherwise. */
+    flag?: boolean;
+}
+
+/**
+ * Resolve whether remote-binding dev is on, with a clear precedence:
+ *
+ * 1. an explicit `--remote` flag (highest — a deliberate per-invocation choice),
+ * 2. then `CIRRUS_REMOTE` in the environment,
+ * 3. then the `remote` key in `cirrus.json` (lowest — a project default).
+ *
+ * The flag and env are one-directional (they can only turn remote *on*); only
+ * the config preference carries a meaningful `false`, and it applies solely when
+ * neither stronger signal is present. So a project that sets `"remote": false`
+ * is still overridable per-run by `--remote` or `CIRRUS_REMOTE=1`.
+ */
+const resolveRemoteEnabled = (inputs: RemoteEnableInputs): boolean => {
+    if (inputs.flag === true) {
+        return true;
+    }
+
+    if (isRemoteEnvEnabled(inputs.envValue)) {
+        return true;
+    }
+
+    return inputs.configPreference ?? false;
+};
+
+export type { MaterializeOptions, MaterializeResult, RemoteBindingPlan, RemoteEnableInputs, RemoteWranglerShape };
+export { injectRemoteFlags, isRemoteEnvEnabled, materializeRemoteWranglerConfig, planRemoteBindings, REMOTE_ELIGIBLE_KEYS, resolveRemoteEnabled };
