@@ -8,6 +8,10 @@ packages:
 
 autoInstallPeers: true
 
+minimumReleaseAge: 1440
+
+blockExoticSubdeps: true
+
 # Force a single React across the tree. @visulima/tui (a vis dependency) and its
 # react-reconciler pin react@19.2.6 while everything else uses 19.2.7; the two
 # copies crash vis's TUI renderer ("Invalid hook call" / useContext on null).
