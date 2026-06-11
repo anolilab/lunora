@@ -52,25 +52,18 @@ ONLY_TEMPLATE="${1:-}"
 # Any template IN this list that passes build is an XPASS (also a failure —
 # remove it from the list when the fix lands).
 # ---------------------------------------------------------------------------
-# sveltekit: class-B composition blocker — @sveltejs/adapter-cloudflare emits
-# its output to .svelte-kit/cloudflare/_worker.js but the cirrus wrangler.jsonc
-# points `main` at that path too; the adapter overwrites the composed entry so
-# `vite build` fails with a wrangler validation error on the composed worker.
-# Track: PLAN3 §Known-broken.
-#
-# nuxt: `nuxt build` fails with a Vite/vue plugin error parsing
-# pages/index.vue (Unterminated string constant). Template source issue; not
-# an offline/network problem.
-#
 # astro: `astro build` fails offline — the Astro CLI fetches integration
-# metadata over the network during the build.
+# metadata over the network during the build (network call to the integrations
+# registry, not a template defect). Builds fine with network access.
 #
-# react-router: `react-router build` fails — missing @react-router/node runtime;
-# the template needs a Cloudflare-specific entry.server.tsx wired up.
-#
-# solid-start: `vinxi build` fails with wrangler.jsonc validation error
-# (Processing wrangler.jsonc configuration: config wrangler validation failed).
-XFAIL_BUILD=(sveltekit nuxt astro react-router solid-start)
+# solid-start: `vinxi build` succeeds through the SSR/client/server-fns phases
+# but fails at the Nitro packaging step with ENOENT for the client Vite manifest
+# (.vinxi/build/client/_build/.vite/manifest.json). Root cause: @solidjs/start
+# sets router.base="/_build" but with nitropack@2.13.x the manifest ends up at
+# _build/client/.vite/manifest.json (extra router-name subdir). This is a
+# framework-level incompatibility between @solidjs/start + nitropack + Vite 6;
+# not fixable at the template config level without changing packages/.
+XFAIL_BUILD=(astro solid-start)
 
 # ---------------------------------------------------------------------------
 # Discover templates (dynamic, so adding a new dir is automatically included).
@@ -182,7 +175,9 @@ for tname in "${TEMPLATES[@]}"; do
     cp -R "$src_dir/." "$scaffold_dir/"
 
     # Replace {{name}} placeholder (matches what cirrus init does).
-    find "$scaffold_dir" -type f \( -name "*.json" -o -name "*.jsonc" -o -name "*.ts" -o -name "*.js" -o -name "*.mjs" -o -name "*.html" -o -name "*.md" \) \
+    # Includes .vue and .svelte files so framework-specific templates that
+    # embed {{name}} in their component markup are correctly substituted.
+    find "$scaffold_dir" -type f \( -name "*.json" -o -name "*.jsonc" -o -name "*.ts" -o -name "*.tsx" -o -name "*.js" -o -name "*.mjs" -o -name "*.html" -o -name "*.md" -o -name "*.vue" -o -name "*.svelte" \) \
         -exec sed -i '' 's/{{name}}/'"$tname"'-app/g' {} \; 2>/dev/null || true
 
     # -- Inject overrides ---------------------------------------------------

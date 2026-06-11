@@ -1,3 +1,5 @@
+import { cirrus } from "@cirrus/vite";
+
 // https://nuxt.com/docs/api/configuration/nuxt-config
 export default defineNuxtConfig({
     compatibilityDate: "2026-04-07",
@@ -32,5 +34,16 @@ export default defineNuxtConfig({
             // SAME Worker as Nuxt (single-worker composition, M4).
             cirrusUrl: "",
         },
+    },
+
+    // Run Cirrus codegen during the Nuxt/Vite build so `cirrus/_generated/`
+    // is present when page components and server routes import the typed API.
+    // `cloudflare: false` — Nuxt uses its own CF adapter (Nitro preset) and
+    // doesn't need @cloudflare/vite-plugin wired through here.
+    // `validateWrangler: false` — the wrangler main field points at Nitro's
+    // emitted output (.output/server/index.mjs) which doesn't exist until
+    // after the build completes; validation happens at `cirrus deploy` time.
+    vite: {
+        plugins: [cirrus({ cloudflare: false, validateWrangler: false })],
     },
 });
