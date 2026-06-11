@@ -5,6 +5,7 @@ import { useQuery as useTanStackQuery, useQueryClient } from "@tanstack/react-qu
 import { useEffect, useMemo } from "react";
 
 import { cirrusQueryKey, getSubscriptionRegistry, serializeQueryKey } from "./cache";
+import { stableStringify } from "./query-key";
 import { useCirrus } from "./cirrus-provider";
 import type { UseQueryOptions } from "./types";
 
@@ -30,7 +31,7 @@ const useQuery = <F extends FunctionReference>(function_: F, args: ArgsOf<F> | "
 
     // Memoise the queryKey so the effect dep array tracks structural equality
     // via TanStack's hash, not reference equality of the args object.
-    const queryKey = useMemo(() => cirrusQueryKey(function_, argsRecord, shardKey), [function_.__cirrusRef, JSON.stringify(argsRecord), shardKey]);
+    const queryKey = useMemo(() => cirrusQueryKey(function_, argsRecord, shardKey), [function_.__cirrusRef, stableStringify(argsRecord), shardKey]);
 
     // eslint-disable-next-line @tanstack/query/exhaustive-deps -- client is provider-stable (it comes from CirrusContext; swapping it remounts the provider subtree) and is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache.
     const { data } = useTanStackQuery<ReturnOf<F>>({
