@@ -1,8 +1,8 @@
 import { Project } from "ts-morph";
 import { describe, expect, it } from "vitest";
 
-import discoverSchema from "../src/discover-schema";
 import { CodegenDiagnosticError } from "../src/diagnostics";
+import discoverSchema from "../src/discover-schema";
 import { emitDataModel } from "../src/emit";
 
 /**

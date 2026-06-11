@@ -1,8 +1,8 @@
 import type { CallExpression, Expression, Node as TsNode, ObjectLiteralExpression, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import type { IndexIR, RankIndexIR, RankSortKeyIR, RelationIR, SchemaIR, SearchIndexIR, TableIR, ValidatorIR, VectorIndexIR } from "./ir";
 import { diagnosticAt } from "./diagnostics";
+import type { IndexIR, RankIndexIR, RankSortKeyIR, RelationIR, SchemaIR, SearchIndexIR, TableIR, ValidatorIR, VectorIndexIR } from "./ir";
 import { parseObjectShape } from "./parse-validator";
 
 const VECTOR_METRICS = new Set(["cosine", "dot-product", "euclidean"]);

@@ -7,11 +7,11 @@ import type { Node } from "ts-morph";
  * error-overlay `loc` field expects so the browser can display the exact spot.
  */
 export class CodegenDiagnosticError extends Error {
-    readonly file: string;
-    readonly line: number;
-    readonly column: number;
+    public readonly column: number;
+    public readonly file: string;
+    public readonly line: number;
 
-    constructor(message: string, file: string, line: number, column: number) {
+    public constructor(message: string, file: string, line: number, column: number) {
         super(message);
         this.name = "CodegenDiagnosticError";
         this.file = file;
@@ -25,14 +25,14 @@ export class CodegenDiagnosticError extends Error {
  * location and whose `file`/`line`/`column` properties are set from the
  * ts-morph `Node`'s position in its source file.
  *
- * Message format: `@cirrus/codegen: <detail> (<file>:<line>:<column>)`
+ * Message format: `@cirrus/codegen: &lt;detail> (&lt;file>:&lt;line>:&lt;column>)`
  */
 export const diagnosticAt = (node: Node, detail: string): CodegenDiagnosticError => {
     const sourceFile = node.getSourceFile();
     const file = sourceFile.getFilePath();
     const line = node.getStartLineNumber();
     const { column } = sourceFile.getLineAndColumnAtPos(node.getStart());
-    const message = `@cirrus/codegen: ${detail} (${file}:${line}:${column})`;
+    const message = `@cirrus/codegen: ${detail} (${file}:${line.toString()}:${column.toString()})`;
 
     return new CodegenDiagnosticError(message, file, line, column);
 };
