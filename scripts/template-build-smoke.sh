@@ -63,7 +63,15 @@ ONLY_TEMPLATE="${1:-}"
 # _build/client/.vite/manifest.json (extra router-name subdir). This is a
 # framework-level incompatibility between @solidjs/start + nitropack + Vite 6;
 # not fixable at the template config level without changing packages/.
-XFAIL_BUILD=(astro solid-start)
+#
+# react-router: `react-router build` (the CF entry.server.tsx is in place, so the
+# server runtime is detected) fails at `generateReactRouterManifestsForBuild` with
+# ENOENT for build/client/.vite/manifest.json. Same class as solid-start: with
+# @react-router/dev@7.17 on Vite 8 + rolldown the client manifest is not emitted
+# where the dev plugin expects it. Framework-level (Vite 8/rolldown) incompat, not
+# fixable at the template config level — revisit when @react-router/dev supports
+# Vite 8's manifest layout.
+XFAIL_BUILD=(astro react-router solid-start)
 
 # ---------------------------------------------------------------------------
 # Discover templates (dynamic, so adding a new dir is automatically included).
