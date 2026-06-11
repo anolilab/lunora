@@ -38,7 +38,8 @@
         "test": "vis run test --query \"project!=@cirrus/e2e\"",
         "test:affected": "vis affected test --fail-fast --query \"project!=@cirrus/e2e\"",
         "test:clean-machine": "./scripts/clean-machine-smoke.sh",
-        "test:coverage": "vis run test:coverage --query \"project!=@cirrus/e2e\""
+        "test:coverage": "vis run test:coverage --query \"project!=@cirrus/e2e\"",
+        "test:templates": "./scripts/template-build-smoke.sh"
     },
     "devDependencies": {
         "@anolilab/commitlint-config": "catalog:prod",
