@@ -39,20 +39,35 @@ PROJECT_DIR="$SCRATCH/scaffold"
 
 mkdir -p "$PACK_DIR" "$INSTALL_DIR"
 
-echo "==> Packing @cirrus/cli + its workspace deps into $PACK_DIR"
-# `pnpm pack` rebuilds the tarball with current source; we pack the cli
-# plus everything its package.json depends on at workspace:* so they can
-# resolve inside the standalone install.
-for pkg in cirrus-cli cirrus-codegen cirrus-config cirrus-vite; do
-    pushd "$REPO_ROOT/packages/$pkg" >/dev/null
-    pnpm pack --pack-destination "$PACK_DIR" >/dev/null
-    popd >/dev/null
+echo "==> Packing all @cirrus/* workspace packages into $PACK_DIR"
+# Pack every package so we can map any @cirrus/* dep a template (or the CLI
+# itself) might pull to a local file: tarball instead of the npm registry.
+for pkg_dir in "$REPO_ROOT"/packages/*/; do
+    pkg_name="$(node -e "try{process.stdout.write(require('$pkg_dir/package.json').name||'')}catch{}" 2>/dev/null)"
+    if [[ "$pkg_name" == @cirrus/* ]]; then
+        pushd "$pkg_dir" >/dev/null
+        pnpm pack --pack-destination "$PACK_DIR" >/dev/null
+        popd >/dev/null
+    fi
 done
 
 cli_tgz="$(ls "$PACK_DIR"/cirrus-cli-*.tgz | head -n1)"
-codegen_tgz="$(ls "$PACK_DIR"/cirrus-codegen-*.tgz | head -n1)"
-config_tgz="$(ls "$PACK_DIR"/cirrus-config-*.tgz | head -n1)"
-vite_tgz="$(ls "$PACK_DIR"/cirrus-vite-*.tgz | head -n1)"
+
+# Build the pnpm-workspace.yaml overrides block (pnpm 11: overrides live in
+# pnpm-workspace.yaml, not in the "pnpm" field of package.json).
+OVERRIDES_YAML="$(node -e "
+const fs = require('fs');
+const path = require('path');
+const dir = '$PACK_DIR';
+const lines = fs.readdirSync(dir)
+  .filter(f => f.endsWith('.tgz'))
+  .map(f => {
+    const base = f.replace(/-[0-9]+\.[0-9]+\.[0-9]+\.tgz\$/, '');
+    const scope = base.replace(/^cirrus-/, '@cirrus/');
+    return '  \"' + scope + '\": \"file:' + path.join(dir, f) + '\"';
+  });
+process.stdout.write(lines.join('\n'));
+")"
 
 echo "==> Installing @cirrus/cli into a standalone tmpdir"
 cd "$INSTALL_DIR"
@@ -63,20 +78,18 @@ cat > package.json <<EOF
     "private": true,
     "dependencies": {
         "@cirrus/cli": "file:$cli_tgz"
-    },
-    "pnpm": {
-        "overrides": {
-            "@cirrus/codegen": "file:$codegen_tgz",
-            "@cirrus/config": "file:$config_tgz",
-            "@cirrus/vite": "file:$vite_tgz"
-        }
     }
 }
 EOF
 
-# `--ignore-workspace` because $SCRATCH may be inside the user's home and
-# inherit a parent pnpm-workspace.yaml otherwise.
-pnpm install --ignore-workspace --no-frozen-lockfile >/dev/null
+# pnpm-workspace.yaml with overrides redirects all @cirrus/* to packed tarballs.
+cat > pnpm-workspace.yaml <<EOF
+packages: []
+overrides:
+$OVERRIDES_YAML
+EOF
+
+pnpm install --no-frozen-lockfile >/dev/null
 
 echo "==> Sanity: the cli binary is on the path"
 test -x node_modules/.bin/cirrus || {

@@ -6,6 +6,11 @@ yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
 
+# …but the CLI's `logs` command is source, not log output — the bare `logs`
+# rule above otherwise hides packages/cli/src/commands/logs/ and broke the build.
+!/packages/cli/src/commands/logs/
+!/packages/cli/src/commands/logs/index.ts
+
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
