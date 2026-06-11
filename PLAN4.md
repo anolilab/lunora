@@ -128,27 +128,43 @@ Mirror void's class-a/b/c model:
 
 ## 4. Milestones (prove the differentiator first, then broaden)
 
-**M0 — Spike: prove "live loaders" end-to-end on TanStack Start (class A).**
+> **Status (updated):** M0–M5 are all shipped. Remaining gap is purely
+> validation: the class-B templates (sveltekit/nuxt/astro) are contract-level
+> scaffolds proven at the unit level — the real meta-framework Cloudflare builds
+> can't run in this monorepo, so a `cirrus init -t <fw>` → build/deploy smoke in a
+> real environment (see `docs/frameworks/verify-live-loaders`) is the outstanding
+> end-to-end proof. The in-process `serverQuery` fast-path is also shipped, but
+> intentionally keeps the worker→DO hop (a worker-side `createCaller` is
+> architecturally impossible — dispatch happens inside the DO), so it removes the
+> self-`fetch` loopback while keeping byte-identical identity/RLS semantics.
+
+**M0 — Spike: prove "live loaders" end-to-end on TanStack Start (class A). ✅ shipped.**
 One template where a TanStack Start route loader calls `preloadQuery` (with forwarded session),
 SSRs the data, and the React adapter hydrates it into a live `useQuery` that updates on a mutation
 from a second tab. This validates the whole contract (composition + SSR data + WS handoff +
 in-process `serverQuery`). _Highest-signal, smallest scope._
 
-**M1 — Formalize the contract.** Ship `@cirrus/ssr` (`createServerClient`/`getServerSession`/
-`preloadQuery`), the `composeWorker` sugar + in-process `serverQuery` fast-path, and harden
-`@cirrus/react`'s `hydratePreloaded`. Docs: reactive-loaders page.
+**M1 — Formalize the contract. ✅ shipped.** `@cirrus/ssr` (`createServerClient`/`getServerSession`/
+`preloadQuery`/`serializePreloaded`), the `composeWorker` sugar + in-process `serverQuery` fast-path
+(with HTTP-path identity/RLS parity), and `@cirrus/react` sourcing `createServerClient` from
+`@cirrus/ssr` + `hydratePreloaded`. Docs: reactive-loaders page.
 
-**M2 — Build/deploy composition.** `@cirrus/vite` framework detection + one-worker emit + wrangler
-reconcile for class-A frameworks. `cirrus init -t tanstack-start` and `-t react-router` fully wired.
+**M2 — Build/deploy composition. ✅ shipped.** `@cirrus/vite` `detectFramework` + detection-driven
+class-A one-worker emit (a `virtual:cirrus/worker` entry under `composeWorker`); the developer points
+wrangler `main` at it. `cirrus init -t tanstack-start` and `-t react-router` wired.
 
-**M3 — Adapter breadth.** `@cirrus/solid` (+ SolidStart template), then `@cirrus/svelte`,
-`@cirrus/vue`. Each ships its `hydratePreloaded` + provider + a live-loader template.
+**M3 — Adapter breadth. ✅ shipped.** `@cirrus/solid` (+ SolidStart template), `@cirrus/svelte`,
+`@cirrus/vue` — each thin glue over `@cirrus/client` with `hydratePreloaded` + provider + a
+live-loader template, and the shared `createMutationRunner`. Each on its packem framework preset.
 
-**M4 — Class-B frameworks.** SvelteKit/Nuxt/Astro hook-injection composition + templates. This is
-the hardest tier (their builds, not ours) — do it after the adapters + contract are proven.
+**M4 — Class-B frameworks. ✅ shipped (contract-level).** SvelteKit/Nuxt/Astro single-worker
+composition via one shared `withFrameworkWorker` (`@cirrus/runtime`), surfaced as `withCirrus` per
+adapter + `@cirrus/astro` integration + templates. The real framework CF builds aren't in-repo, so
+the templates are wiring scaffolds pending the real-app smoke (above).
 
-**M5 — Polish.** `init --here` for existing apps across frameworks; dev HMR for the composed
-worker; the "bring your framework" docs matrix; deploy guide.
+**M5 — Polish. ✅ shipped.** `cirrus init --here` per framework; dev HMR (the composed worker is an
+ordinary module entry, HMRs under `@cloudflare/vite-plugin`); the "bring your framework" docs matrix;
+deploy + verify-live-loaders guides.
 
 ---
 
