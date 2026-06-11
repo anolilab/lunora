@@ -7,6 +7,8 @@
  * any lint uniformly, but the rules run against Cirrus's declared schema (and,
  * later, observed runtime signal) rather than Postgres catalog views.
  */
+import hotShard from "./lints/runtime/hot-shard";
+import indexUtilization from "./lints/runtime/index-utilization";
 import authApiCallWithoutHeaders from "./lints/static/auth-api-call-without-headers";
 import duplicateIndex from "./lints/static/duplicate-index";
 import emptyIndex from "./lints/static/empty-index";
@@ -20,8 +22,10 @@ import unindexedForeignKey from "./lints/static/unindexed-foreign-key";
 import type { Finding, Lint, LintContext, LintSource } from "./types";
 
 export type { AdvisorAuthApiCall } from "./authapi-calls";
+export type { AdvisorIndexHit, AdvisorTableScan } from "./index-usage";
 export type { AdvisorInsertWrite } from "./inserts";
-export type { AdvisorRlsProcedure } from "./rls-procedures";
+export { default as hotShard } from "./lints/runtime/hot-shard";
+export { default as indexUtilization } from "./lints/runtime/index-utilization";
 export { default as authApiCallWithoutHeaders } from "./lints/static/auth-api-call-without-headers";
 export { default as duplicateIndex } from "./lints/static/duplicate-index";
 export { default as emptyIndex } from "./lints/static/empty-index";
@@ -33,8 +37,10 @@ export { default as rlsUncoveredTable } from "./lints/static/rls-uncovered-table
 export { default as tableWithoutInsert } from "./lints/static/table-without-insert";
 export { default as unindexedForeignKey } from "./lints/static/unindexed-foreign-key";
 export type { AdvisorQueryRead } from "./queries";
+export type { AdvisorRlsProcedure } from "./rls-procedures";
 export type { AdvisorIndex, AdvisorRelation, AdvisorSchema, AdvisorTable } from "./schema";
 export { fromServerSchema } from "./schema";
+export type { AdvisorShardTraffic } from "./shard-traffic";
 export type { Category, Facing, Finding, Level, Lint, LintContext, LintSource } from "./types";
 
 /**
@@ -56,8 +62,18 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     rlsUncoveredTable,
 ];
 
-/** The default lint set. Currently the static lints; runtime lints join as they land. */
-export const ALL_LINTS: ReadonlyArray<Lint> = [...STATIC_LINTS];
+/**
+ * Every lint that needs observed runtime signal (recorded metrics) rather than
+ * just the declared schema. They read the feeder-supplied
+ * {@link LintContext.shardTraffic} / {@link LintContext.tableScans} /
+ * {@link LintContext.indexHits}; absent that signal (a static caller) each is a
+ * no-op. Run them with `runAdvisor(ctx, { source: "runtime" })` against a live
+ * deployment's aggregated metrics.
+ */
+export const RUNTIME_LINTS: ReadonlyArray<Lint> = [hotShard, indexUtilization];
+
+/** The default lint set: the static lints, then the runtime lints. A caller filters by `source` to run one tier. */
+export const ALL_LINTS: ReadonlyArray<Lint> = [...STATIC_LINTS, ...RUNTIME_LINTS];
 
 /** Options for {@link runAdvisor}. */
 export interface RunAdvisorOptions {

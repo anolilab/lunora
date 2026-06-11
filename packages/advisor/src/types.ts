@@ -1,8 +1,10 @@
 import type { AdvisorAuthApiCall } from "./authapi-calls";
+import type { AdvisorIndexHit, AdvisorTableScan } from "./index-usage";
 import type { AdvisorInsertWrite } from "./inserts";
 import type { AdvisorQueryRead } from "./queries";
 import type { AdvisorRlsProcedure } from "./rls-procedures";
 import type { AdvisorSchema } from "./schema";
+import type { AdvisorShardTraffic } from "./shard-traffic";
 
 /**
  * Severity of a finding, mirroring splinter's `level`. `ERROR` is a definite
@@ -80,6 +82,16 @@ export interface LintContext {
     authApiCalls?: ReadonlyArray<AdvisorAuthApiCall>;
 
     /**
+     * Per-declared-index hit counts observed at runtime (the dead-index half of
+     * the `index_utilization` lint input). Supplied by a runtime feeder that
+     * aggregates per-index reads across shards; absent for static callers and,
+     * today, even for runtime callers — the metrics pipeline records full-scans
+     * but not per-index usage yet (see {@link AdvisorIndexHit}), so the dead-index
+     * check is inert until a feed exists.
+     */
+    indexHits?: ReadonlyArray<AdvisorIndexHit>;
+
+    /**
      * Insert writes discovered in function bodies (the `table_without_insert`
      * input). Supplied by the codegen feeder; absent for runtime callers, where
      * the write-shaped lints simply find nothing.
@@ -104,6 +116,23 @@ export interface LintContext {
 
     /** The declared schema under audit, normalized to the feeder-agnostic {@link AdvisorSchema}. */
     schema: AdvisorSchema;
+
+    /**
+     * Per-shard observed traffic — the `hot_shard` lint input. Supplied by the
+     * studio backend, which fans out over a sharded function's shards and reads
+     * each shard's recorded request volume from the durable `__cirrus_metrics`
+     * accumulator. Absent for static callers, where the lint finds nothing.
+     */
+    shardTraffic?: ReadonlyArray<AdvisorShardTraffic>;
+
+    /**
+     * Per-table full-scan volume observed at runtime (the hot-scan half of the
+     * `index_utilization` lint input). Sourced from the per-`(function, table)`
+     * full-scan attribution the runtime records (`__cirrus_metrics_scans`,
+     * surfaced as `FunctionCallStat.scannedTables`), aggregated across functions
+     * and shards. Absent for static callers, where the lint finds nothing.
+     */
+    tableScans?: ReadonlyArray<AdvisorTableScan>;
 }
 
 /**
