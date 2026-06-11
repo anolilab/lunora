@@ -1,7 +1,14 @@
 import type { ChildProcess } from "node:child_process";
 import { spawn as nodeSpawn } from "node:child_process";
 
-import { createConfirm, ensureDevVariables, formatCirrusEvent, isRemoteEnvEnabled, materializeRemoteWranglerConfig } from "@cirrus/config";
+import {
+    createConfirm,
+    ensureDevVariables,
+    formatCirrusEvent,
+    materializeRemoteWranglerConfig,
+    readProjectRemotePreference,
+    resolveRemoteEnabled,
+} from "@cirrus/config";
 
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
@@ -63,6 +70,13 @@ interface DevCommandOptions {
 interface DevRemotePlan {
     /** Short binding labels remoted (e.g. `"DB (D1)"`), for the banner. */
     bindings: string[];
+
+    /**
+     * Removes the generated temp wrangler config when dev exits. Always present
+     * and idempotent — a no-op when remote mode is off or nothing was
+     * materialized. The dev loop calls it on every shutdown path.
+     */
+    cleanup: () => void;
     /** Whether remote mode was requested. */
     enabled: boolean;
     /** Why remote mode didn't take effect despite being requested, for logging. */
@@ -90,19 +104,25 @@ interface DevCommandPlan {
  * to remote, the args stay empty and dev runs fully local.
  */
 const resolveRemotePlan = (options: DevCommandOptions, cwd: string): { args: string[]; plan: DevRemotePlan } => {
+    // A disposer that does nothing — used whenever no temp config was written
+    // (remote off, or a fall-through case), so `cleanup` is always callable.
+    const noopCleanup = (): void => {};
+
     if (!options.remote) {
-        return { args: [], plan: { bindings: [], enabled: false } };
+        return { args: [], plan: { bindings: [], cleanup: noopCleanup, enabled: false } };
     }
 
     const materialize = options.materializeRemote ?? materializeRemoteWranglerConfig;
     const result = materialize({ enabled: true, projectRoot: cwd });
     const bindings = result.remoteBindings.map((binding) => `${binding.binding} (${binding.kind})`);
+    // The materializer always returns an idempotent, never-throwing `cleanup`.
+    const { cleanup } = result;
 
     if (result.configPath === undefined) {
-        return { args: [], plan: { bindings, enabled: true, reason: result.reason } };
+        return { args: [], plan: { bindings, cleanup, enabled: true, reason: result.reason } };
     }
 
-    return { args: ["--config", result.configPath], plan: { bindings, enabled: true } };
+    return { args: ["--config", result.configPath], plan: { bindings, cleanup, enabled: true } };
 };
 
 /**
@@ -260,13 +280,22 @@ const printBanner = (logger: Logger, plan: DevCommandPlan, studioUrl: string | u
 
 interface Teardown {
     codegen?: CodegenWatcherHandle;
+    /** Disposer for the materialized remote wrangler temp config (idempotent, never throws). */
+    remoteCleanup?: () => void;
     studio?: StudioServerHandle;
 }
 
-/** Best-effort shutdown of the studio server + codegen watcher. */
+/** Best-effort shutdown of the studio server, codegen watcher, and remote temp config. */
 const teardown = async (handles: Teardown): Promise<void> => {
     handles.codegen?.close();
     await handles.studio?.close().catch(() => undefined);
+    // Unlink the generated remote wrangler config last; the disposer is itself
+    // idempotent + swallows errors, but guard the call site too for safety.
+    try {
+        handles.remoteCleanup?.();
+    } catch {
+        /* already gone */
+    }
 };
 
 /**
@@ -294,76 +323,82 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
     const plan = planDevCommand(options);
     const { logger } = options;
     const cwd = plan.wrangler.cwd ?? process.cwd();
-    const handles: Teardown = {};
+    // Register the remote temp-config disposer up front so it's torn down on
+    // every exit path — including a throw during startup below (the `finally`).
+    const handles: Teardown = { remoteCleanup: plan.remote.cleanup };
 
-    await offerDevVariablesScaffold(options, cwd);
+    try {
+        await offerDevVariablesScaffold(options, cwd);
 
-    logger.info("starting wrangler dev + studio");
+        logger.info("starting wrangler dev + studio");
 
-    if (plan.codegenEnabled) {
-        handles.codegen = (options.startCodegen ?? startCodegenWatch)({ apiSpec: options.apiSpec, logger, projectRoot: cwd });
-    }
+        if (plan.codegenEnabled) {
+            handles.codegen = (options.startCodegen ?? startCodegenWatch)({ apiSpec: options.apiSpec, logger, projectRoot: cwd });
+        }
 
-    let studioUrl: string | undefined;
+        let studioUrl: string | undefined;
 
-    if (plan.studioEnabled) {
-        try {
-            handles.studio = await (options.startStudio ?? startStudioServer)({
-                cwd,
-                logger: {
-                    warnOnce: (message) => {
-                        logger.warn(message);
+        if (plan.studioEnabled) {
+            try {
+                handles.studio = await (options.startStudio ?? startStudioServer)({
+                    cwd,
+                    logger: {
+                        warnOnce: (message) => {
+                            logger.warn(message);
+                        },
                     },
-                },
-                port: plan.studioPort,
-                workerOrigin: plan.workerOrigin,
-            });
-            studioUrl = handles.studio.url;
-        } catch (error: unknown) {
-            logger.warn(`studio server failed to start (${error instanceof Error ? error.message : String(error)}) — continuing without it`);
+                    port: plan.studioPort,
+                    workerOrigin: plan.workerOrigin,
+                });
+                studioUrl = handles.studio.url;
+            } catch (error: unknown) {
+                logger.warn(`studio server failed to start (${error instanceof Error ? error.message : String(error)}) — continuing without it`);
+            }
         }
-    }
 
-    const worker = (options.startWorker ?? defaultWorkerSpawner)(plan.wrangler, logger);
+        const worker = (options.startWorker ?? defaultWorkerSpawner)(plan.wrangler, logger);
 
-    printBanner(logger, plan, studioUrl);
+        printBanner(logger, plan, studioUrl);
 
-    let sigintCount = 0;
-    let escalationTimer: NodeJS.Timeout | undefined;
+        let sigintCount = 0;
+        let escalationTimer: NodeJS.Timeout | undefined;
 
-    const onSigint = (): void => {
-        sigintCount += 1;
+        const onSigint = (): void => {
+            sigintCount += 1;
 
-        if (sigintCount === 1) {
-            logger.info("received SIGINT — shutting down (press Ctrl-C again to force-kill)");
-            worker.kill("SIGTERM");
-            escalationTimer = setTimeout(() => {
+            if (sigintCount === 1) {
+                logger.info("received SIGINT — shutting down (press Ctrl-C again to force-kill)");
+                worker.kill("SIGTERM");
+                escalationTimer = setTimeout(() => {
+                    worker.kill("SIGKILL");
+                }, SIGINT_GRACE_MS);
+                escalationTimer.unref();
+            } else {
                 worker.kill("SIGKILL");
-            }, SIGINT_GRACE_MS);
-            escalationTimer.unref();
-        } else {
-            worker.kill("SIGKILL");
+            }
+        };
+        const onSigterm = (): void => {
+            worker.kill("SIGTERM");
+        };
+
+        process.on("SIGINT", onSigint);
+        process.on("SIGTERM", onSigterm);
+
+        const code = await worker.exited;
+
+        if (escalationTimer) {
+            clearTimeout(escalationTimer);
         }
-    };
-    const onSigterm = (): void => {
-        worker.kill("SIGTERM");
-    };
 
-    process.on("SIGINT", onSigint);
-    process.on("SIGTERM", onSigterm);
+        process.off("SIGINT", onSigint);
+        process.off("SIGTERM", onSigterm);
 
-    const code = await worker.exited;
-
-    if (escalationTimer) {
-        clearTimeout(escalationTimer);
+        return { code, plan };
+    } finally {
+        // Always shut the siblings down + unlink the remote temp config, whether
+        // the worker exited cleanly, the user interrupted, or startup threw.
+        await teardown(handles);
     }
-
-    process.off("SIGINT", onSigint);
-    process.off("SIGTERM", onSigterm);
-
-    await teardown(handles);
-
-    return { code, plan };
 };
 
 /** `cirrus dev` handler (lazy-loaded via the command's `loader`). */
@@ -377,9 +412,15 @@ const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(({ cwd, lo
         cwd,
         logger,
         port: options.port,
-        // `--remote` (an explicit flag) OR `CIRRUS_REMOTE=1` in the environment
-        // turns on remote bindings; the flag wins when present.
-        remote: options.remote === true || isRemoteEnvEnabled(process.env["CIRRUS_REMOTE"]),
+        // Remote-binding mode obeys a clear precedence: an explicit `--remote`
+        // flag wins, then `CIRRUS_REMOTE` in the environment, then the `remote`
+        // key in the project's `cirrus.json` (a project default). See
+        // `resolveRemoteEnabled` in @cirrus/config.
+        remote: resolveRemoteEnabled({
+            configPreference: readProjectRemotePreference(cwd),
+            envValue: process.env["CIRRUS_REMOTE"],
+            flag: options.remote,
+        }),
         studio: options.studio === false ? false : undefined,
         workerPort: options.workerPort,
     }),

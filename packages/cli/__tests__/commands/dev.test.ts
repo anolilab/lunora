@@ -99,11 +99,12 @@ describe("cirrus dev", () => {
                 // Injected materializer stands in for the real temp-config writer.
                 materializeRemote: () => {
                     return {
+                        cleanup: () => {},
                         configPath: generatedConfig,
                         enabled: true,
                         remoteBindings: [
-                            { binding: "DB", index: 0, kind: "D1", section: "d1_databases" },
-                            { binding: "FILES", index: 0, kind: "R2", section: "r2_buckets" },
+                            { binding: "DB", kind: "D1", path: [0], section: "d1_databases" },
+                            { binding: "SEARCH", kind: "Vectorize", path: [0], section: "vectorize" },
                         ],
                     };
                 },
@@ -111,7 +112,7 @@ describe("cirrus dev", () => {
             });
 
             expect(plan.remote.enabled).toBe(true);
-            expect(plan.remote.bindings).toEqual(["DB (D1)", "FILES (R2)"]);
+            expect(plan.remote.bindings).toEqual(["DB (D1)", "SEARCH (Vectorize)"]);
             expect(plan.wrangler.args).toContain("--config");
             expect(plan.wrangler.args).toContain(generatedConfig);
         });
@@ -123,14 +124,30 @@ describe("cirrus dev", () => {
                 cwd: workdir,
                 logger: silentLogger(),
                 materializeRemote: () => {
-                    return { enabled: true, reason: "no D1/KV/R2 bindings to proxy remotely", remoteBindings: [] };
+                    return { cleanup: () => {}, enabled: true, reason: "no remote-eligible bindings to proxy", remoteBindings: [] };
                 },
                 remote: true,
             });
 
             expect(plan.remote.enabled).toBe(true);
-            expect(plan.remote.reason).toContain("no D1/KV/R2");
+            expect(plan.remote.reason).toContain("no remote-eligible bindings");
             expect(plan.wrangler.args).not.toContain("--config");
+        });
+
+        it("threads the materializer's cleanup disposer onto the remote plan", () => {
+            expect.assertions(1);
+
+            const cleanup = (): void => {};
+            const plan = planDevCommand({
+                cwd: workdir,
+                logger: silentLogger(),
+                materializeRemote: () => {
+                    return { cleanup, configPath: join(workdir, "w.jsonc"), enabled: true, remoteBindings: [] };
+                },
+                remote: true,
+            });
+
+            expect(plan.remote.cleanup).toBe(cleanup);
         });
     });
 
@@ -174,6 +191,76 @@ describe("cirrus dev", () => {
             expect(codegenClosed).toBe(true);
             expect(studioClosed).toBe(true);
             expect(result.plan.workerOrigin).toBe("http://localhost:8787");
+        });
+
+        it("unlinks the materialized remote temp config when the worker exits", async () => {
+            expect.assertions(1);
+
+            let cleaned = false;
+
+            await runDevCommand({
+                cwd: workdir,
+                logger: silentLogger(),
+                // Stub the materializer so remote mode is "on" with a disposer we can observe.
+                materializeRemote: () => {
+                    return {
+                        cleanup: () => {
+                            cleaned = true;
+                        },
+                        configPath: join(workdir, "wrangler.remote.jsonc"),
+                        enabled: true,
+                        remoteBindings: [],
+                    };
+                },
+                remote: true,
+                startCodegen: () => {
+                    return { close: () => {} };
+                },
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+                studio: false,
+            });
+
+            // The remote disposer ran on the (clean) exit path.
+            expect(cleaned).toBe(true);
+        });
+
+        it("still unlinks the remote temp config when startup throws", async () => {
+            expect.assertions(2);
+
+            let cleaned = false;
+
+            await expect(
+                runDevCommand({
+                    cwd: workdir,
+                    logger: silentLogger(),
+                    // ensureEnv throwing models a startup failure before the worker spawns.
+                    ensureEnv: async () => {
+                        throw new Error("boom");
+                    },
+                    materializeRemote: () => {
+                        return {
+                            cleanup: () => {
+                                cleaned = true;
+                            },
+                            configPath: join(workdir, "wrangler.remote.jsonc"),
+                            enabled: true,
+                            remoteBindings: [],
+                        };
+                    },
+                    remote: true,
+                    startWorker: () => {
+                        return { exited: Promise.resolve(0), kill: () => {} };
+                    },
+                }),
+            ).rejects.toThrow("boom");
+
+            // The `finally` teardown ran the disposer despite the throw.
+            expect(cleaned).toBe(true);
         });
     });
 });
