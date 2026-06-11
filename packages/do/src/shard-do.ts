@@ -3242,16 +3242,24 @@ abstract class ShardDO {
                     continue;
                 }
 
-                const outcome = isAdmin
-                    ? this.executeAdminSubscription(functionPath, query.args ?? {})
-                    : // eslint-disable-next-line no-await-in-loop -- subscriptions on a socket re-run sequentially; each shares the single SQLite handle
-                      await this.withAnonymousIdentity(() => this.executeSubscription(functionPath, query.args ?? {}));
+                try {
+                    const outcome = isAdmin
+                        ? this.executeAdminSubscription(functionPath, query.args ?? {})
+                        : // eslint-disable-next-line no-await-in-loop -- subscriptions on a socket re-run sequentially; each shares the single SQLite handle
+                          await this.withAnonymousIdentity(() => this.executeSubscription(functionPath, query.args ?? {}));
 
-                if (!outcome) {
-                    continue;
+                    if (!outcome) {
+                        continue;
+                    }
+
+                    this.pushSubscriptionData(ws, subId, outcome);
+                } catch {
+                    // A throwing subscription must not abort the refresh of its
+                    // siblings, nor fail the mutation that triggered it. The memo
+                    // is left untouched ("unknown deps"), so this subscription
+                    // re-runs on the next flush.
+                    /* refresh error contained to this subscription */ continue;
                 }
-
-                this.pushSubscriptionData(ws, subId, outcome);
             }
         };
 

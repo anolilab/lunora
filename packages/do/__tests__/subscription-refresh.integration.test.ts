@@ -81,7 +81,7 @@ const createFakeState = (): ShardDOState & { sockets: FakeWebSocket[] } => {
         storage: {
             sql: {
                 exec() {
-                    return { one: () => undefined, toArray: () => [], [Symbol.iterator]: [][Symbol.iterator].bind([]) };
+                    return { one: () => undefined, toArray: () => [], [Symbol.iterator]: Array.prototype[Symbol.iterator].bind([]) };
                 },
             },
         },
@@ -176,7 +176,7 @@ const subscribeSocket = (shard: SubscriptionRefreshShard, ws: FakeWebSocket, sub
 // ---------------------------------------------------------------------------
 // Test suite
 // ---------------------------------------------------------------------------
-describe("ShardDO: mutation → subscription-refresh pipeline", () => {
+describe("shardDO: mutation → subscription-refresh pipeline", () => {
     let state: ReturnType<typeof createFakeState>;
 
     beforeEach(() => {
@@ -350,32 +350,25 @@ describe("ShardDO: mutation → subscription-refresh pipeline", () => {
     });
 
     // -------------------------------------------------------------------------
-    // Case 4 — A FAILING SUBSCRIPTION DOESN'T BREAK OTHERS (characterization)
+    // Case 4 — A FAILING SUBSCRIPTION DOESN'T BREAK ITS SIBLINGS
     //
     // Socket A has two subscriptions on the same socket. One subscription
     // ("messages:broken") will throw on re-execution during refresh. The other
-    // ("messages:list") is healthy.
+    // ("messages:list") is healthy and ordered AFTER the broken one.
     //
     // To avoid the broken subscription throwing during the seed call, we arrange
     // for it to return null (no initial push), then throw only on subsequent
     // calls (during refresh). This ensures the throw happens in refreshSubscriptions
     // rather than in the initial subscribe seed path.
     //
-    // This is a characterization test: it documents the observed behavior so
-    // that a future refactor changing the error-propagation behavior is detected.
-    //
-    // Current implementation: `refreshSubscriptions` iterates subs on a socket
-    // sequentially. An unhandled promise rejection from `executeSubscription`
-    // propagates through `withAnonymousIdentity` and out of `refreshOne`.
-    // The `worker()` loop catches the rejection from `await refreshOne(socket)`.
-    // The `Promise.all(workers)` then rejects, which propagates through
-    // `flushChangedTables` (which does `await this.refreshSubscriptions`) and up
-    // through `fetch`. The `fetch` handler has a try/catch that returns a 500.
-    // The healthy subscription on the same socket does NOT receive its frame
-    // (the loop aborted before reaching it).
+    // New behavior (after this fix): a throwing subscription is caught per-sub
+    // and the iteration continues. Assertions:
+    //   A. The fetch that triggered the mutation returns 200 (write succeeded).
+    //   B. The healthy subscription ordered AFTER the broken one receives its frame.
+    //   C. The broken subscription receives no frame (nothing to push since it threw).
     // -------------------------------------------------------------------------
-    it("characterization: fetch returns an error response when a subscription throws during refresh", async () => {
-        expect.assertions(2);
+    it("a failing subscription does not abort the refresh of its siblings on the same socket", async () => {
+        expect.assertions(3);
 
         class BrokenRefreshShard extends SubscriptionRefreshShard {
             // Track whether we are on the first call (seed) to each functionPath.
@@ -430,19 +423,91 @@ describe("ShardDO: mutation → subscription-refresh pipeline", () => {
         });
         brokenShard.changedTableOnRpc = "messages";
 
-        // Characterization assertion A: the fetch catches the thrown error and
-        // returns a non-200 response (the broken subscription's rejection
-        // propagates through refreshSubscriptions to flushChangedTables to fetch).
         const response = await brokenShard.writeRpc();
 
-        expect(response.status).not.toBe(200);
+        // Assertion A: the write committed — fetch returns 200.
+        expect(response.status).toBe(200);
 
-        // Characterization assertion B: the healthy subscription did NOT receive
-        // its refresh frame because the loop aborted before reaching it.
-        // (Both "broken" and "healthy" are on the same socket; "broken" is iterated
-        // first and throws, which aborts the per-socket refreshOne loop.)
+        // Assertion B: the healthy subscription (ordered after the broken one)
+        // received its refresh frame — the broken sub's throw was contained.
         const healthyFramesAfterMutation = subFrames(ws, "sub-healthy").slice(1); // skip seed
 
-        expect(healthyFramesAfterMutation).toHaveLength(0);
+        expect(healthyFramesAfterMutation.length).toBeGreaterThan(0);
+
+        // Assertion C: the broken subscription received no frame (threw before push).
+        const brokenFrames = subFrames(ws, "sub-broken");
+
+        expect(brokenFrames).toHaveLength(0);
+    });
+
+    // -------------------------------------------------------------------------
+    // Case 5 — CROSS-SOCKET ISOLATION
+    //
+    // Socket A has a broken subscription that throws during refresh.
+    // Socket B has a healthy subscription on the same changed table.
+    // Both sockets depend on the mutated table.
+    //
+    // Assert: socket B receives its refresh push even though socket A's
+    // subscription threw. The error on one socket must not affect other sockets.
+    // -------------------------------------------------------------------------
+    it("cross-socket isolation: a failing subscription on socket A does not block socket B's refresh", async () => {
+        expect.assertions(3);
+
+        class CrossSocketBrokenShard extends SubscriptionRefreshShard {
+            private readonly firstCall = new Set<string>();
+
+            protected override executeSubscription(functionPath: string, args: Record<string, unknown>): Promise<SubscriptionOutcome | null> {
+                if (functionPath === "messages:broken") {
+                    if (!this.firstCall.has(functionPath)) {
+                        this.firstCall.add(functionPath);
+
+                        return Promise.resolve(null);
+                    }
+
+                    return Promise.reject(new Error("broken on socket A"));
+                }
+
+                return super.executeSubscription(functionPath, args);
+            }
+        }
+
+        const shard = new CrossSocketBrokenShard(state, {});
+
+        // Socket A — has a broken subscription on "messages:broken".
+        const wsA = createFakeWebSocket();
+
+        shard.registerSocket(wsA);
+        await shard.driveMessage(wsA, {
+            id: "sub-broken-A",
+            query: { args: {}, functionPath: "messages:broken" },
+            type: "subscribe",
+        });
+
+        // Socket B — has a healthy subscription on the same "messages" table.
+        const wsB = createFakeWebSocket();
+
+        shard.registerSocket(wsB);
+        shard.outcomes.set("messages:list", {
+            result: [{ _id: "m1" }],
+            tables: new Set(["messages"]),
+        });
+        await subscribeSocket(shard, wsB, "sub-healthy-B", "messages:list");
+
+        // Socket B has its seed frame; socket A has none (broken sub returned null).
+        expect(subFrames(wsB, "sub-healthy-B")).toHaveLength(1);
+
+        // Update healthy result and trigger mutation touching "messages".
+        shard.outcomes.set("messages:list", {
+            result: [{ _id: "m1" }, { _id: "m2" }],
+            tables: new Set(["messages"]),
+        });
+        shard.changedTableOnRpc = "messages";
+        const response = await shard.writeRpc();
+
+        // The write must succeed — the broken sub on socket A must not poison the RPC.
+        expect(response.status).toBe(200);
+
+        // Socket B must have received a refresh frame despite the broken sub on A.
+        expect(subFrames(wsB, "sub-healthy-B").length).toBeGreaterThan(1);
     });
 });
