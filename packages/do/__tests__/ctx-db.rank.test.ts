@@ -290,6 +290,63 @@ describe("ctx-db rank", () => {
             expect(page.page.map((document_) => document_["_id"])).toEqual(["m1", "m3"]);
         });
 
+        it("rankPageRows returns keyed rows + hasMore, byte-compatible with the coordinator key", async () => {
+            expect.assertions(4);
+
+            const writer = setupWriter(makeSchema(byScoreDesc));
+
+            await writer.insert("messages", { _id: "m1", archived: false, channelId: "c1", score: 10 }, { allowExplicitId: true });
+            await writer.insert("messages", { _id: "m2", archived: false, channelId: "c1", score: 50 }, { allowExplicitId: true });
+            await writer.insert("messages", { _id: "m3", archived: false, channelId: "c1", score: 30 }, { allowExplicitId: true });
+
+            // rankPageRows is the optional cross-shard surface; the DO writer always defines it.
+            const result = await writer.rankPageRows?.("messages", "leaderboard", { take: 2 });
+
+            // Descending score: m2 (50) then m3 (30), with a third row remaining.
+            expect(result?.rows.map((row) => row.doc["_id"])).toEqual(["m2", "m3"]);
+            expect(result?.hasMore).toBe(true);
+            // Each row's key matches rankKeyFromDoc — what the coordinator's comparator expects.
+            expect(result?.rows[0]?.key).toEqual({ partitionKey: "", rowId: "m2", sortValues: [50] });
+            expect(result?.rows[1]?.key).toEqual({ partitionKey: "", rowId: "m3", sortValues: [30] });
+        });
+
+        it("rankPageRows resumes strictly-after the `after` key", async () => {
+            expect.assertions(2);
+
+            const writer = setupWriter(makeSchema(byScoreDesc));
+
+            for (let i = 0; i < 5; i += 1) {
+                // eslint-disable-next-line no-await-in-loop -- sequential ordered inserts into the same DB
+                await writer.insert("messages", { _id: `m${String(i)}`, archived: false, channelId: "c1", score: i * 10 }, { allowExplicitId: true });
+            }
+
+            const first = await writer.rankPageRows?.("messages", "leaderboard", { take: 2 });
+
+            expect(first?.rows.map((row) => row.doc["_id"])).toEqual(["m4", "m3"]);
+
+            // Resume from the last row's key — same structured key the coordinator forwards.
+            const lastKey = first?.rows.at(-1)?.key;
+            const second = await writer.rankPageRows?.("messages", "leaderboard", { after: lastKey, take: 2 });
+
+            expect(second?.rows.map((row) => row.doc["_id"])).toEqual(["m2", "m1"]);
+        });
+
+        it("rankPageRows scopes to an explicit pre-encoded partitionKey", async () => {
+            expect.assertions(1);
+
+            const writer = setupWriter(makeSchema(byChannelByCreation));
+
+            await writer.insert("messages", { _creationTime: 100, _id: "m1", archived: false, channelId: "c1", score: 0 }, { allowExplicitId: true });
+            await writer.insert("messages", { _creationTime: 200, _id: "m2", archived: false, channelId: "c2", score: 0 }, { allowExplicitId: true });
+            await writer.insert("messages", { _creationTime: 300, _id: "m3", archived: false, channelId: "c1", score: 0 }, { allowExplicitId: true });
+
+            // Pre-encoded partition tuple, exactly as the coordinator forwards it.
+            const partitionKey = JSON.stringify({ channelId: "c1" });
+            const result = await writer.rankPageRows?.("messages", "byChannel", { partitionKey, take: 10 });
+
+            expect(result?.rows.map((row) => row.doc["_id"])).toEqual(["m1", "m3"]);
+        });
+
         it("unknown rankIndex name throws", async () => {
             expect.assertions(2);
 

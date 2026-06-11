@@ -37,6 +37,7 @@ const ADMIN_FUNCTIONS = {
     migrationStatus: "__cirrus_admin__:migrationStatus",
     pitrRestore: "__cirrus_admin__:pitrRestore",
     rankBefore: "__cirrus_admin__:rankBefore",
+    rankPage: "__cirrus_admin__:rankPage",
     readTablePage: "__cirrus_admin__:readTablePage",
     recordAuthEvent: "__cirrus_admin__:recordAuthEvent",
     runMigration: "__cirrus_admin__:runMigration",

@@ -126,7 +126,18 @@ export type { PitrBookmarkResult, PitrRestoreArgs, PitrRestoreResult, PitrStorag
 export { armRestore, readBookmark } from "./pitr";
 export type { OrderByInput, OrderKey, QueryArgs, QueryPage, SortDirection } from "./query-args";
 export { buildSeekWhere, compileOrderBy, decodeCursor, encodeCursor, normalizeOrderKeys } from "./query-args";
-export type { RankDirection, RankIndexDefinitionLike, RankOptions, RankPage, RankPageOptions, RankResult, RankSortKeyLike } from "./rank";
+export type {
+    RankDirection,
+    RankIndexDefinitionLike,
+    RankOptions,
+    RankPage,
+    RankPageOptions,
+    RankPageRow,
+    RankPageRowKey,
+    RankResult,
+    RankSortKeyLike,
+    ShardRankPageResult,
+} from "./rank";
 export { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
 export type { CacheEntry, ReactiveCacheOptions } from "./reactive-cache";
 export { ReactiveCache, reactiveCacheKey, stableStringify } from "./reactive-cache";
@@ -149,6 +160,7 @@ export type {
     RunShardImportArgs,
     RunShardMigrationArgs,
     RunShardRankBeforeArgs,
+    RunShardRankPageArgs,
     RunShardWriteArgs,
     RunShardWriteResult,
     ShardDOOptions,

@@ -38,6 +38,7 @@ import {
 } from "./introspect";
 import { LogBuffer } from "./log-buffer";
 import { armRestore, readBookmark } from "./pitr";
+import type { ShardRankPageResult } from "./rank";
 import type { ReactiveCacheOptions } from "./reactive-cache";
 import { ReactiveCache, reactiveCacheKey } from "./reactive-cache";
 import type { AppendRequestLogEntry, ContextLogLevel, LogEventInput, RequestLogResult, RequestLogWriteOptions } from "./request-log";
@@ -274,6 +275,28 @@ interface RunShardRankBeforeArgs {
     table: string;
 }
 
+/**
+ * Arguments accepted by the `__cirrus_admin__:rankPage` admin RPC. The query
+ * coordinator (`orchestrateRankPage`) fans this out to every live shard of a
+ * `.shardBy(...)` table to gather each shard's local ranked slice, then k-way
+ * merges them into one globally-ranked page. `take` bounds the per-shard slice;
+ * `after` is the structured per-shard resume key (`{ partitionKey, sortValues,
+ * rowId }`) the coordinator forwards so the shard pages strictly-after the prior
+ * page's last globally-consumed row; `partitionKey` pins a single partition;
+ * `directions` (`asc`/`desc` per sort key) parallels the index's `sortBy`
+ * directions so a shard's `ORDER BY` matches the coordinator's comparator. Only
+ * `table` and `index` are required.
+ */
+interface RunShardRankPageArgs {
+    after?: { partitionKey: string; rowId: string; sortValues: unknown[] };
+    cursor?: null | string;
+    directions?: ("asc" | "desc")[];
+    index: string;
+    partitionKey?: string;
+    table: string;
+    take?: number;
+}
+
 /** Per-subscription memo used to suppress no-op pushes. */
 interface SubscriptionMemo {
     lastJson: string;
@@ -437,12 +460,7 @@ const collectUpsertDeltas = (previous: RowIndex, next: RowIndex, deltaTable: str
  * order, so the caller can splice it straight into the `{type:"delta"}` frame
  * without serializing the delta (and the row inside it) a second time.
  */
-const subscriptionListDeltas = (
-    previousJson: string,
-    nextResult: unknown,
-    table: string,
-    frames?: string[],
-): MutationDelta[] | undefined => {
+const subscriptionListDeltas = (previousJson: string, nextResult: unknown, table: string, frames?: string[]): MutationDelta[] | undefined => {
     let parsed: unknown;
 
     try {
@@ -757,6 +775,85 @@ const parseRankBeforeArgs = (args: Record<string, unknown>): RunShardRankBeforeA
     }
 
     return { index, partitionKey: args["partitionKey"], rowId, sortValues: args["sortValues"], table };
+};
+
+/** Throw a uniform 400 `CirrusError` for a malformed admin payload field. */
+const badRequest = (message: string): never => {
+    throw Object.assign(new Error(message), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+};
+
+/** Narrow a required non-empty string admin arg or 400 with `&lt;field> is required`. */
+const requireNonEmptyString = (value: unknown, field: string): string => {
+    if (typeof value !== "string" || value.trim() === "") {
+        badRequest(`rankPage: \`${field}\` is required`);
+    }
+
+    return value as string;
+};
+
+/**
+ * Validate the optional `__cirrus_admin__:rankPage` `after` resume key the
+ * coordinator forwards (`{ partitionKey, sortValues, rowId }`), so a malformed
+ * cursor is rejected at the boundary rather than mid-SQL. `undefined` (first
+ * page) passes through.
+ */
+const parseRankPageAfter = (raw: unknown): RunShardRankPageArgs["after"] => {
+    if (raw === undefined) {
+        return undefined;
+    }
+
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+        badRequest("rankPage: `after` must be an object");
+    }
+
+    const record = raw as Record<string, unknown>;
+
+    if (typeof record["partitionKey"] !== "string" || typeof record["rowId"] !== "string" || !Array.isArray(record["sortValues"])) {
+        badRequest("rankPage: `after` must have a string partitionKey, string rowId, and array sortValues");
+    }
+
+    return { partitionKey: record["partitionKey"] as string, rowId: record["rowId"] as string, sortValues: record["sortValues"] as unknown[] };
+};
+
+/**
+ * Validate the `__cirrus_admin__:rankPage` payload. `table` and `index` are
+ * required non-empty strings; `take`/`cursor`/`after`/`partitionKey`/`directions`
+ * are optional and shape-checked just enough to reject obvious garbage before it
+ * reaches the rank reader. The error shape stays uniform with the other admin
+ * parsers so the cross-shard coordinator surfaces a 400 rather than a downstream
+ * SQL failure.
+ */
+const parseRankPageArgs = (args: Record<string, unknown>): RunShardRankPageArgs => {
+    const table = requireNonEmptyString(args["table"], "table");
+    const index = requireNonEmptyString(args["index"], "index");
+
+    if (args["take"] !== undefined && typeof args["take"] !== "number") {
+        badRequest("rankPage: `take` must be a number");
+    }
+
+    if (args["cursor"] !== undefined && args["cursor"] !== null && typeof args["cursor"] !== "string") {
+        badRequest("rankPage: `cursor` must be a string or null");
+    }
+
+    if (args["partitionKey"] !== undefined && typeof args["partitionKey"] !== "string") {
+        badRequest("rankPage: `partitionKey` must be a string");
+    }
+
+    if (args["directions"] !== undefined && !Array.isArray(args["directions"])) {
+        badRequest("rankPage: `directions` must be an array");
+    }
+
+    const directions = args["directions"] === undefined ? undefined : (args["directions"] as unknown[]).map((d) => (d === "desc" ? "desc" : "asc"));
+
+    return {
+        after: parseRankPageAfter(args["after"]),
+        cursor: typeof args["cursor"] === "string" ? args["cursor"] : undefined,
+        directions,
+        index,
+        partitionKey: typeof args["partitionKey"] === "string" ? args["partitionKey"] : undefined,
+        take: typeof args["take"] === "number" ? args["take"] : undefined,
+        table,
+    };
 };
 
 /** Arguments accepted by the `__cirrus_admin__:cdcSync` admin RPC. */
@@ -1905,6 +2002,23 @@ abstract class ShardDO {
     }
 
     /**
+     * Page this shard's local ranked slice under `index`, each row tagged with
+     * its rank-key tuple (`partitionKey`, `sortValues`, `rowId`). The cross-shard
+     * coordinator (`orchestrateRankPage`) fans this out to every live shard and
+     * k-way merges the slices into one globally-ranked page.
+     *
+     * Same base/codegen split as {@link runShardRankBefore}: the base class has
+     * no schema-aware writer, so the codegen subclass overrides this to call
+     * `rankPageRows(...)` on a live `createShardCtxDb(...)` writer.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
+    protected runShardRankPage(_args: RunShardRankPageArgs): Promise<ShardRankPageResult> {
+        return Promise.reject(
+            Object.assign(new Error("rankPage is not implemented in base ShardDO"), { code: "NOT_IMPLEMENTED", name: "CirrusError", status: 500 }),
+        );
+    }
+
+    /**
      * Page this shard's change-data-capture log past `sinceSeq`. Read-only and
      * schema-free — it only touches the `__cdc_log` table — so the base class
      * implements it directly (no codegen override needed). Returns an empty
@@ -2650,6 +2764,16 @@ abstract class ShardDO {
                 // writer mutation, so nothing to flush — the cross-shard
                 // coordinator sums the `{before, total}` from every shard.
                 const result = await this.runShardRankBefore(parseRankBeforeArgs(args));
+
+                return jsonResponse({ result }, 200);
+            }
+
+            if (functionPath === ADMIN_FUNCTIONS.rankPage) {
+                // Read-only: this shard's local ranked slice, each row tagged
+                // with its rank-key tuple. No writer mutation, so nothing to
+                // flush — the cross-shard coordinator k-way merges the
+                // `{ rows, hasMore }` slices from every shard into one page.
+                const result = await this.runShardRankPage(parseRankPageArgs(args));
 
                 return jsonResponse({ result }, 200);
             }
@@ -3636,6 +3760,7 @@ export type {
     RunShardImportArgs,
     RunShardMigrationArgs,
     RunShardRankBeforeArgs,
+    RunShardRankPageArgs,
     RunShardWriteArgs,
     RunShardWriteResult,
     ShardDOOptions,

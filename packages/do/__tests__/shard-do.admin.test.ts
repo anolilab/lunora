@@ -7,13 +7,14 @@ import type { DataMigrationLike, MigrationRunResult } from "../src/data-migratio
 import { runDataMigration } from "../src/data-migration";
 import type { AdvisoryFinding } from "../src/introspect";
 import { ADMIN_FUNCTIONS } from "../src/introspect";
-import type { RankIndexDefinitionLike } from "../src/rank";
+import type { RankIndexDefinitionLike, ShardRankPageResult } from "../src/rank";
 import { rankKeyFromDoc } from "../src/rank";
 import type {
     RunShardApplyCdcArgs,
     RunShardApplyCdcResult,
     RunShardMigrationArgs,
     RunShardRankBeforeArgs,
+    RunShardRankPageArgs,
     RunShardWriteArgs,
     RunShardWriteResult,
     ShardDOState,
@@ -1076,6 +1077,23 @@ class RankableShard extends ShardDO {
             sortValues: args.sortValues,
         });
     }
+
+    protected override async runShardRankPage(args: RunShardRankPageArgs): Promise<ShardRankPageResult> {
+        const writer = createShardContextDatabase({
+            broadcast: (delta) => {
+                this.recordChangedTable(delta.table);
+            },
+            schema: messagesRankSchema,
+            sql: this.sql as SqlExec,
+        });
+
+        return writer.rankPageRows!(args.table, args.index, {
+            after: args.after,
+            cursor: args.cursor,
+            partitionKey: args.partitionKey,
+            take: args.take,
+        });
+    }
 }
 
 describe("shardDO admin rankBefore", () => {
@@ -1153,6 +1171,106 @@ describe("shardDO admin rankBefore", () => {
         const shard = new BareShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(rankBeforeRequest({ index: "leaderboard", partitionKey: "", rowId: "x1", sortValues: [75], table: "messages" }));
+
+        expect(response.status).toBe(500);
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "NOT_IMPLEMENTED" } });
+    });
+});
+
+describe("shardDO admin rankPage", () => {
+    let database: ReturnType<typeof createSqliteExec>;
+    let state: ShardDOState;
+
+    beforeEach(() => {
+        database = createSqliteExec();
+        runShardMigrations(database.sql, messagesRankSchema);
+
+        state = {
+            acceptWebSocket() {},
+            getWebSockets() {
+                return [];
+            },
+            storage: { sql: database.sql as unknown as ShardDOState["storage"]["sql"] },
+        };
+    });
+
+    afterEach(() => {
+        database.close();
+    });
+
+    const rankPageRequest = (args: Record<string, unknown>): Request =>
+        new Request("https://shard.internal/rpc", {
+            body: JSON.stringify({ args, functionPath: ADMIN_FUNCTIONS.rankPage }),
+            headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
+            method: "POST",
+        });
+
+    it("returns this shard's local ranked slice with correctly-keyed rows + hasMore", async () => {
+        expect.assertions(4);
+
+        const seed = createShardContextDatabase({ schema: messagesRankSchema, sql: database.sql });
+
+        await seed.insert("messages", { _id: "m1", channelId: "c1", score: 90 }, { allowExplicitId: true });
+        await seed.insert("messages", { _id: "m2", channelId: "c1", score: 70 }, { allowExplicitId: true });
+        await seed.insert("messages", { _id: "m3", channelId: "c1", score: 20 }, { allowExplicitId: true });
+
+        const shard = new RankableShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(rankPageRequest({ index: "leaderboard", table: "messages", take: 2 }));
+
+        expect(response.status).toBe(200);
+
+        // The shape the coordinator's `readRankPageResult` parses (under `result`): { hasMore, rows: [{doc, key}] }.
+        const body = await response.json<{ result: ShardRankPageResult }>();
+
+        expect(body.result.hasMore).toBe(true);
+        expect(body.result.rows.map((row) => row.doc["_id"])).toEqual(["m1", "m2"]);
+        // Keys are byte-compatible with rankKeyFromDoc — what the cross-shard comparator orders on.
+        expect(body.result.rows[0]?.key).toEqual(rankKeyFromDoc(rankByScoreDesc, { _id: "m1", channelId: "c1", score: 90 }));
+    });
+
+    it("resumes strictly-after the structured `after` key the coordinator forwards", async () => {
+        expect.assertions(1);
+
+        const seed = createShardContextDatabase({ schema: messagesRankSchema, sql: database.sql });
+
+        await seed.insert("messages", { _id: "m1", channelId: "c1", score: 90 }, { allowExplicitId: true });
+        await seed.insert("messages", { _id: "m2", channelId: "c1", score: 70 }, { allowExplicitId: true });
+        await seed.insert("messages", { _id: "m3", channelId: "c1", score: 20 }, { allowExplicitId: true });
+
+        const shard = new RankableShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        // Resume after m1 (the highest score) → the next page is m2 then m3.
+        const after = rankKeyFromDoc(rankByScoreDesc, { _id: "m1", channelId: "c1", score: 90 });
+        const response = await shard.fetch(rankPageRequest({ after, index: "leaderboard", table: "messages", take: 10 }));
+        const body = await response.json<{ result: ShardRankPageResult }>();
+
+        expect(body.result.rows.map((row) => row.doc["_id"])).toEqual(["m2", "m3"]);
+    });
+
+    it("400s on a malformed `after` key (missing rowId)", async () => {
+        expect.assertions(1);
+
+        const shard = new RankableShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(rankPageRequest({ after: { partitionKey: "", sortValues: [1] }, index: "leaderboard", table: "messages" }));
+
+        expect(response.status).toBe(400);
+    });
+
+    it("base ShardDO rejects rankPage as not implemented (no override)", async () => {
+        expect.assertions(2);
+
+        class BareShard extends ShardDO {
+            // eslint-disable-next-line class-methods-use-this -- override stub; the admin-rank path never dispatches an RPC
+            public override async handleRpc(): Promise<unknown> {
+                return null;
+            }
+        }
+
+        const shard = new BareShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(rankPageRequest({ index: "leaderboard", table: "messages" }));
 
         expect(response.status).toBe(500);
         await expect(response.json()).resolves.toMatchObject({ error: { code: "NOT_IMPLEMENTED" } });
