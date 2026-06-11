@@ -92,9 +92,16 @@ catalogs:
   tooling:
     ts-morph: ^28.0.0
   vite:
-    # Pinned to 1.39.2: 1.40.0 regressed the dev runner — `getWorkerEntryExportTypes`
-    # throws "Cannot read properties of undefined (reading 'string')" while evaluating
-    # the Worker entry. Revisit when a fixed 1.40.x ships.
+    # Exact-pinned (no caret). 1.40.0 regressed the dev runner — `getWorkerEntryExportTypes`
+    # threw "Cannot read properties of undefined (reading 'string')" while evaluating the
+    # Worker entry. We've moved past it to 1.40.1, a verified-good release. Held EXACT (not a
+    # caret) for two reasons: the upstream changelog never named a fix for that crash, and
+    # 1.40.2 drags in too-fresh transitive deps (wrangler@4.100.0 → miniflare/workerd dated
+    # 2026-06-11) that trip the minimumReleaseAge gate — 1.40.1's wrangler@4.99.0 chain is
+    # aged-in and matches the catalog's `wrangler: ^4.99.0`. To bump: try the new version
+    # locally, run a `pnpm --filter "@cirrus/vite" dev` smoke against a template, confirm the
+    # dev runner boots without the getWorkerEntryExportTypes crash AND that its transitive
+    # wrangler/miniflare/workerd are past the release-age window, then update this pin.
     "@cloudflare/vite-plugin": 1.40.1
     "@tailwindcss/cli": ^4.3.0
     "@tailwindcss/vite": ^4.3.0
@@ -201,7 +208,7 @@ minimumReleaseAgeExclude:
   - '@better-auth/prisma-adapter@1.6.16'
   - '@better-auth/telemetry@1.6.16'
   - '@better-fetch/fetch@1.2.2'
-  - '@cloudflare/vite-plugin@1.39.2'
+  - '@cloudflare/vite-plugin@1.40.1'
   - '@cloudflare/vitest-pool-workers@0.16.12'
   - '@cloudflare/workers-types@4.20260610.1'
   - '@eslint-react/ast@5.8.17'
