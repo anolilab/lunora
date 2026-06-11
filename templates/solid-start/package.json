@@ -21,6 +21,7 @@
         "vinxi": "^0.5.7"
     },
     "devDependencies": {
+        "@cirrus/cli": "^0.0.0",
         "@cirrus/vite": "^0.0.0",
         "vite": "^8.0.16",
         "wrangler": "^4.99.0"

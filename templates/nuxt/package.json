@@ -19,6 +19,7 @@
         "vue": "^3.5.13"
     },
     "devDependencies": {
+        "@cirrus/cli": "^0.0.0",
         "@cirrus/vite": "^0.0.0",
         "nitro-cloudflare-dev": "^0.2.2",
         "wrangler": "^4.99.0"

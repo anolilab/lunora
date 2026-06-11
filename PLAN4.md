@@ -128,12 +128,17 @@ Mirror void's class-a/b/c model:
 
 ## 4. Milestones (prove the differentiator first, then broaden)
 
-> **Status (updated):** M0–M5 are all shipped. Remaining gap is purely
-> validation: the class-B templates (sveltekit/nuxt/astro) are contract-level
-> scaffolds proven at the unit level — the real meta-framework Cloudflare builds
-> can't run in this monorepo, so a `cirrus init -t <fw>` → build/deploy smoke in a
-> real environment (see `docs/frameworks/verify-live-loaders`) is the outstanding
-> end-to-end proof. The in-process `serverQuery` fast-path is also shipped, but
+> **Status (updated):** M0–M3 + M5 shipped. M1 contract, M2 class-A composition,
+> M3 adapters, and the M5 polish are real. **M4 (class-B) is NOT yet working** —
+> a real `cirrus init -t sveltekit` → `vite build` smoke (via a local verdaccio
+> registry) proved the `withCirrus`-wraps-`_worker.js` strategy is clobbered by
+> `@sveltejs/adapter-cloudflare`, which owns the wrangler `main` and writes its own
+> worker there. The composition _code_ is sound (unit-tested); the open problem is
+> the injection point (a `hooks.server` handle, a post-build wrap, or the adapter's
+> custom-entry hooks). The same smoke also surfaced template gaps now fixed
+> (`@cirrus/cli` was missing from every template; the sveltekit scaffold lacked
+> `vite.config.ts`/`app.html`). See `docs/frameworks/bring-your-framework` (class-B
+> note) + `verify-live-loaders`. The in-process `serverQuery` fast-path is also shipped, but
 > intentionally keeps the worker→DO hop (a worker-side `createCaller` is
 > architecturally impossible — dispatch happens inside the DO), so it removes the
 > self-`fetch` loopback while keeping byte-identical identity/RLS semantics.
@@ -157,10 +162,11 @@ wrangler `main` at it. `cirrus init -t tanstack-start` and `-t react-router` wir
 `@cirrus/vue` — each thin glue over `@cirrus/client` with `hydratePreloaded` + provider + a
 live-loader template, and the shared `createMutationRunner`. Each on its packem framework preset.
 
-**M4 — Class-B frameworks. ✅ shipped (contract-level).** SvelteKit/Nuxt/Astro single-worker
-composition via one shared `withFrameworkWorker` (`@cirrus/runtime`), surfaced as `withCirrus` per
-adapter + `@cirrus/astro` integration + templates. The real framework CF builds aren't in-repo, so
-the templates are wiring scaffolds pending the real-app smoke (above).
+**M4 — Class-B frameworks. ⚠️ in progress — composition NOT yet working.** The shared
+`withFrameworkWorker` (`@cirrus/runtime`), the per-adapter `withCirrus`, the `@cirrus/astro`
+integration, and the templates exist and unit-test — but a real SvelteKit build proved the
+adapter clobbers the composed `main` (see status note above). The injection point is the open work;
+until it's solved, class-B apps run Cirrus as a separate worker (class-C style).
 
 **M5 — Polish. ✅ shipped.** `cirrus init --here` per framework; dev HMR (the composed worker is an
 ordinary module entry, HMRs under `@cloudflare/vite-plugin`); the "bring your framework" docs matrix;

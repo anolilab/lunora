@@ -60,7 +60,7 @@ mirrors void's class-a/b/c model.
 | Class                                  | Frameworks                                      | Composition strategy                                                                                                                                                                   | Status                                                                  |
 | -------------------------------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
 | **A — Vite-native, we own the entry**  | TanStack Start, React Router (Vite), SolidStart | `createWorker({ httpRouter: <framework SSR handler> })` directly in the worker entry. Cleanest tier; in-process `serverQuery` available here.                                          | TanStack Start proven; React Router + SolidStart templated, in progress |
-| **B — own CF adapter, hook-injection** | SvelteKit, Nuxt, Astro                          | The framework builds its own server; Cirrus composition is injected into its server entry / hooks. Cirrus realtime stays under `/_cirrus/*`; the framework keeps everything else.      | preview — SvelteKit + Nuxt templated, not yet proven end-to-end         |
+| **B — own CF adapter, hook-injection** | SvelteKit, Nuxt, Astro                          | The framework builds its own server; Cirrus composition is injected into its server entry / hooks. Cirrus realtime stays under `/_cirrus/*`; the framework keeps everything else.      | ⚠️ not yet working — see the class-B composition note below             |
 | **C — non-CF or SSR-less**             | static / SPA                                    | No SSR loaders. Ship the client adapter plus a standalone Cirrus worker (the current default for SPA apps). Data is still live; it just hydrates client-side instead of from the HTML. | shipped                                                                 |
 
 **Class A** is the cleanest: we own the Cloudflare worker entry, so we drop the
@@ -69,6 +69,22 @@ their own worker, so Cirrus is injected into their server entry rather than
 fighting their build (the adapter ships `withCirrus()`-style wrappers). **Class
 C** has no SSR loaders, so there's nothing to make live on the server — the client
 adapter still gives you live queries, they just hydrate on the client.
+
+> **⚠️ Class-B composition is not yet working end-to-end (known issue).** A real
+> `cirrus init -t sveltekit` → `vite build` smoke proved that the
+> `withCirrus()`-wraps-the-adapter-output strategy does **not** survive the
+> framework build: `@sveltejs/adapter-cloudflare` (and, by the same shape, Nitro's
+> Cloudflare preset and `@astrojs/cloudflare`) takes ownership of the wrangler
+> `main` entry and **writes its own generated worker there**, clobbering the
+> template's `src/worker.ts` (the `withCirrus` composition + `ShardDO` export).
+> The Cirrus composition _code_ (`withFrameworkWorker` / each adapter's
+> `withCirrus`) is sound and unit-tested — the open problem is the **injection
+> point**: getting the composed worker to be what the framework actually deploys.
+> Candidate fixes (a SvelteKit `hooks.server` `handle` for `/_cirrus/*` rather than
+> a worker wrapper; a post-build wrap step; or the adapter's own custom-entry
+> hooks) are the focus of the remaining M4 work. Until then, run Cirrus as a
+> **separate worker** alongside the framework (class-C style) and point the client
+> at it.
 
 ## Client adapters
 

@@ -22,6 +22,7 @@
         "react-dom": "^19.2.7"
     },
     "devDependencies": {
+        "@cirrus/cli": "^0.0.0",
         "@cirrus/vite": "^0.0.0",
         "@tanstack/router-plugin": "^1.168.0",
         "@vitejs/plugin-react": "^6.0.0",
