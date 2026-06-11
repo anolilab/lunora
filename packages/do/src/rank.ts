@@ -201,6 +201,15 @@ interface RankPageRow {
  * had rows beyond the slice it returned.
  */
 interface ShardRankPageResult {
+    /**
+     * Per-sort-key directions (`index.sortBy[i].direction`) the shard actually
+     * ordered its slice by — the authoritative sort order. The coordinator's
+     * k-way merge uses these (not the caller-supplied request `directions`) so
+     * the cross-shard merge order is guaranteed to match each shard's local
+     * `ORDER BY`, even if a caller passed `directions` that disagree with the
+     * named index.
+     */
+    directions: ReadonlyArray<RankDirection>;
     hasMore: boolean;
     rows: ReadonlyArray<RankPageRow>;
 }

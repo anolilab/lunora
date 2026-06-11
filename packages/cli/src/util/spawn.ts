@@ -12,6 +12,14 @@ export interface SpawnDescriptor {
      * line or in env. When absent, stdin is inherited from the parent.
      */
     input?: string;
+
+    /**
+     * Route the child's stdout to the parent's STDERR instead of stdout. Set in
+     * `--format json` mode so a spawned tool's human output (e.g. `wrangler
+     * deploy`'s progress + the deployed URL) can't interleave with — and corrupt
+     * — the single JSON document the command prints to stdout.
+     */
+    stdoutToStderr?: boolean;
 }
 
 export interface SpawnResult {
@@ -27,14 +35,16 @@ export type Spawner = (descriptor: SpawnDescriptor) => Promise<SpawnResult>;
 export const defaultSpawner: Spawner = (descriptor) =>
     new Promise<SpawnResult>((resolve, reject) => {
         const hasInput = typeof descriptor.input === "string";
+        // When the caller pipes input we need a writable stdin handle — "inherit"
+        // gives us the parent's stdin which we can't write to. stderr always stays
+        // inherited so errors land where the user can see them. stdout is normally
+        // inherited too, but in `--format json` mode it is mapped to the parent's
+        // stderr fd (2) so the child's human output never pollutes the JSON on stdout.
+        const stdout: "inherit" | number = descriptor.stdoutToStderr ? 2 : "inherit";
         const child = nodeSpawn(descriptor.command, [...descriptor.args], {
             cwd: descriptor.cwd ?? process.cwd(),
             env: descriptor.env ? { ...process.env, ...descriptor.env } : process.env,
-            // When the caller pipes input we need a writable stdin handle —
-            // "inherit" gives us the parent's stdin which we can't write to.
-            // stdout/stderr stay inherited so logs/errors land where the user
-            // can see them in the terminal.
-            stdio: hasInput ? ["pipe", "inherit", "inherit"] : "inherit",
+            stdio: [hasInput ? "pipe" : "inherit", stdout, "inherit"],
         });
 
         child.on("error", (error) => {

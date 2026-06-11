@@ -1,6 +1,6 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -223,6 +223,25 @@ describe("materializeRemoteWranglerConfig", () => {
         expect(written.vectorize[0].remote).toBe(true);
         // The user's source config is never mutated.
         expect(readFileSync(join(root, "wrangler.jsonc"), "utf8")).toBe(FULL_WRANGLER);
+    });
+
+    it("writes the temp config as a SIBLING of wrangler.jsonc (not an OS temp dir)", () => {
+        // Regression: wrangler resolves a config's relative `main`/`assets` paths
+        // against the CONFIG FILE's own directory. A temp config in `/tmp` would
+        // make wrangler look for `/tmp/src/server.ts` and fail to start. The
+        // generated config must therefore live beside the source wrangler.jsonc.
+        expect.assertions(2);
+
+        writeFileSync(join(root, "wrangler.jsonc"), FULL_WRANGLER, "utf8");
+
+        const result = materializeRemoteWranglerConfig({ enabled: true, projectRoot: root });
+
+        generated = result.configPath;
+
+        // Lives directly in the project root (same dir as wrangler.jsonc), so a
+        // relative `main: "src/server.ts"` still resolves — not in a subdirectory.
+        expect(dirname(result.configPath as string)).toBe(root);
+        expect(existsSync(result.configPath as string)).toBe(true);
     });
 
     it("returns a cleanup that removes the temp config and is idempotent", () => {

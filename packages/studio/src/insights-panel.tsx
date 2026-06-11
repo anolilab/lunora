@@ -15,7 +15,7 @@ import type {
 } from "./admin";
 import { ADMIN_FUNCTIONS } from "./admin";
 import type { AdvisorRow } from "./advisor-view";
-import { AdvisorView } from "./advisor-view";
+import { advisoryRow, AdvisorView } from "./advisor-view";
 import { Button } from "./components/ui/button";
 import type { Insight } from "./derive-insights";
 import { deriveInsights } from "./derive-insights";
@@ -37,22 +37,6 @@ const GET_FUNCTION_STATS = adminRef(ADMIN_FUNCTIONS.getFunctionStats);
 const GET_METRICS = adminRef(ADMIN_FUNCTIONS.getMetrics);
 const LIST_TABLES = adminRef(ADMIN_FUNCTIONS.listTables);
 const LIST_TABLE_INDEXES = adminRef(ADMIN_FUNCTIONS.listTableIndexes);
-
-/** Map the advisor's severity onto the studio's tab levels. */
-const ADVISORY_LEVEL = { ERROR: "error", INFO: "info", WARN: "warning" } as const;
-
-/** Turn one static schema advisory into an Advisor table row (codegen-time lints, alongside the runtime insights). */
-const advisoryRow = (finding: AdvisoryFinding): AdvisorRow => {
-    const table = typeof finding.metadata["table"] === "string" ? finding.metadata["table"] : undefined;
-
-    return {
-        description: `${finding.detail} ${finding.remediation}`,
-        entity: table,
-        issueType: finding.title,
-        key: finding.cacheKey,
-        level: ADVISORY_LEVEL[finding.level],
-    };
-};
 
 /** A 0–1 rate as a one-decimal percentage. */
 const percent = (rate: number): string => `${(rate * 100).toFixed(1)}%`;
@@ -254,12 +238,23 @@ export const InsightsPanel = ({ initialShardKey }: InsightsPanelProps): ReactEle
 
     const insights = useMemo<Insight[]>(() => deriveInsights(metrics, functions), [metrics, functions]);
 
+    // Tables the `missing-index` insight already reports on. The runtime
+    // `index_utilization` hot-scan lint reads the SAME `scannedTables` signal, so
+    // without this gate a hot full-scanned table would render twice (once per
+    // layer). The insight owns the hot-scan story (it's the causal, latency-aware
+    // view with the inline "add index" jump); the runtime lint suppresses its
+    // hot-scan finding for those tables and keeps only its unique dead-index half.
+    const missingIndexTables = useMemo<ReadonlySet<string>>(
+        () => new Set(insights.filter((insight) => insight.kind === "missing-index").flatMap((insight) => insight.tables ?? [])),
+        [insights],
+    );
+
     // Runtime advisor lints (dead index + hot scan) over the recorded metrics.
     // Same verbatim advisory mapping as the static getAdvisories findings — no
     // new i18n. shardTraffic is omitted, so hot_shard stays dormant here.
     const runtimeRows = useMemo<AdvisorRow[]>(
-        () => deriveRuntimeAdvisories({ declaredIndexes: declaredIndexes ?? [], functions, indexHits }),
-        [declaredIndexes, functions, indexHits],
+        () => deriveRuntimeAdvisories({ declaredIndexes: declaredIndexes ?? [], functions, indexHits, suppressHotScanTables: missingIndexTables }),
+        [declaredIndexes, functions, indexHits, missingIndexTables],
     );
 
     const rows = useMemo<AdvisorRow[]>(() => {

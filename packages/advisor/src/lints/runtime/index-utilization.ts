@@ -2,11 +2,11 @@ import emit from "../../finding";
 import type { Lint } from "../../types";
 
 /**
- * A table must be full-scanned at least this many times over the observed window
- * before a missing-index advisory fires. A handful of scans on a tiny table is
- * harmless; the lint targets a table the app reads *hot* with no index, which
- * degrades linearly as the table grows. Deliberately above one so a single
- * incidental scan stays quiet.
+ * A table must be full-scanned at least this many times (cumulatively over the
+ * counter's recorded lifetime) before a missing-index advisory fires. A handful
+ * of scans on a tiny table is harmless; the lint targets a table the app reads
+ * *hot* with no index, which degrades linearly as the table grows. Deliberately
+ * above one so a single incidental scan stays quiet.
  */
 const HOT_SCAN_THRESHOLD = 25;
 
@@ -17,12 +17,13 @@ const HOT_SCAN_THRESHOLD = 25;
  * Dead index — a declared index that recorded reads never used. An unused index
  * is pure overhead: every write maintains it, every byte of storage holds it,
  * and nothing reads through it. Fired off the per-index hit feed
- * (`context.indexHits`); a declared index whose recorded `reads` is `0` is dead
- * for the window. The runtime records this in the durable
- * `__cirrus_metrics_index` table (every index use stamps a per-`(table, index)`
- * counter via `onIndexUse`) and surfaces it through the `getMetrics` admin RPC;
- * the studio sums the per-shard arrays into `context.indexHits` (see
- * `AdvisorIndexHit`).
+ * (`context.indexHits`); a declared index whose recorded `reads` is `0` is dead.
+ * The runtime records this in the durable `__cirrus_metrics_index` table (every
+ * index use stamps a per-`(table, index)` counter via `onIndexUse`) and surfaces
+ * it through the `getMetrics` admin RPC; the studio sums the per-shard arrays
+ * into `context.indexHits` (see `AdvisorIndexHit`). The counter is cumulative and
+ * never decays, so a non-zero index never reverts to "dead" — `reads: 0` means
+ * the index has not been used once since the counter was created.
  *
  * Hot unindexed scan — a table read hot with no index at all. Fired off the
  * full-scan attribution the runtime does record (`context.tableScans`, sourced
@@ -53,7 +54,7 @@ const indexUtilization: Lint = {
             findings.push(
                 emit(indexUtilization, {
                     cacheKey: `index_utilization:dead_index:${hit.table}:${hit.index}`,
-                    detail: `Index "${hit.index}" on table "${hit.table}" recorded no reads over the observed window — it's dead overhead: every write maintains it and nothing reads through it.`,
+                    detail: `Index "${hit.index}" on table "${hit.table}" has recorded no reads since its counter was created — it's dead overhead: every write maintains it and nothing reads through it.`,
                     metadata: { index: hit.index, kind: "dead_index", reads: hit.reads, table: hit.table },
                 }),
             );
@@ -70,7 +71,7 @@ const indexUtilization: Lint = {
             findings.push(
                 emit(indexUtilization, {
                     cacheKey: `index_utilization:hot_scan:${scan.table}`,
-                    detail: `Table "${scan.table}" was full-scanned ${scan.scans.toString()} times over the observed window with no index — a repeated full scan that degrades linearly as "${scan.table}" grows. Add an index covering the read predicate.`,
+                    detail: `Table "${scan.table}" has been full-scanned ${scan.scans.toString()} times (cumulative) with no index — a repeated full scan that degrades linearly as "${scan.table}" grows. Add an index covering the read predicate.`,
                     facing: "EXTERNAL",
                     level: "WARN",
                     metadata: { kind: "hot_scan", scans: scan.scans, table: scan.table },

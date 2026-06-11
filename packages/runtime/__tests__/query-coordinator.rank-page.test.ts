@@ -404,4 +404,96 @@ describe("orchestrateRankPage — failures and request forwarding", () => {
         expect(result.isDone).toBe(true);
         expect(result.ok).toBe(0);
     });
+
+    it("does not duplicate rows when a previously-paged shard fails then recovers", async () => {
+        // Regression: a shard consumed on an earlier page (so its resume key is in
+        // the cursor) that fails on a later page must keep its key carried forward,
+        // so on recovery it resumes strictly-after its last-emitted row instead of
+        // restarting from the top and re-emitting rows already delivered.
+        expect.assertions(3);
+
+        const rowsByShard: Record<string, ReadonlyArray<RankPageRow>> = {
+            a: [row("", [10], "a1"), row("", [30], "a3")],
+            b: [row("", [20], "b2"), row("", [40], "b4")],
+        };
+        const bCalls = { count: 0 };
+
+        const stubFor = (shardKey: string) => ({
+            async fetch(request: Request): Promise<Response> {
+                const body: { args: Record<string, unknown> } = await request.json();
+
+                // Shard b fails on its SECOND request (the 2nd page), succeeds otherwise.
+                if (shardKey === "b") {
+                    bCalls.count += 1;
+
+                    if (bCalls.count === 2) {
+                        return Response.json({ error: "boom" }, { status: 500 });
+                    }
+                }
+
+                const rows = rowsByShard[shardKey] ?? [];
+                const take = Number(body.args["take"] ?? 100);
+                const after = body.args["after"] as RankPageRow["key"] | undefined;
+                const startAt = after ? rows.findIndex((r) => compareKey(r.key, after, ["asc"]) > 0) : 0;
+                const from = startAt === -1 ? rows.length : startAt;
+                const slice = rows.slice(from, from + take);
+
+                return Response.json({ result: { directions: ["asc"], hasMore: from + take < rows.length, rows: slice } }, { status: 200 });
+            },
+        });
+        const namespace: ShardNamespaceLike = {
+            get: (id) => stubFor((id as { __name: string }).__name),
+            getByName: (name) => stubFor(name),
+            idFromName: (name) => ({ __name: name }),
+        };
+        const coordinator = createQueryCoordinator({ registry: createStaticShardRegistry({ scores: ["a", "b"] }) });
+
+        const collected: string[] = [];
+        let cursor: null | string = null;
+
+        // Page in twos until done: a1,b2 | (b fails → a3) | b4.
+        for (let guard = 0; guard < 10; guard += 1) {
+            // eslint-disable-next-line no-await-in-loop -- sequential pagination is the unit under test
+            const result: RankPageFanOutResult = await coordinator.orchestrateRankPage(namespace, { cursor, index: "lb", table: "scores", take: 2 });
+
+            collected.push(...ids(result));
+            cursor = result.continueCursor;
+
+            if (cursor === null) {
+                break;
+            }
+        }
+
+        expect(collected).toContain("b2");
+        // No duplicates: b2 must appear exactly once despite b's mid-pagination failure.
+        expect(collected.filter((id) => id === "b2")).toHaveLength(1);
+        expect([...collected].toSorted()).toEqual(["a1", "a3", "b2", "b4"]);
+    });
+
+    it("merges by the shard-echoed directions, not a conflicting request hint", async () => {
+        // M2: the shards order by the named index's declared directions and echo
+        // them back; the coordinator trusts those over a caller-supplied
+        // `directions` that disagrees, so the merge can't mis-order shard boundaries.
+        expect.assertions(1);
+
+        const rowsByShard: Record<string, ReadonlyArray<RankPageRow>> = {
+            a: [row("", [70], "a3"), row("", [40], "a2"), row("", [10], "a1")],
+            b: [row("", [50], "b2"), row("", [20], "b1")],
+        };
+        const stubFor = (shardKey: string) => ({
+            // Rows are pre-sorted DESC; the shard reports `directions: ["desc"]`.
+            fetch: (): Promise<Response> => Promise.resolve(Response.json({ result: { directions: ["desc"], hasMore: false, rows: rowsByShard[shardKey] ?? [] } }, { status: 200 })),
+        });
+        const namespace: ShardNamespaceLike = {
+            get: (id) => stubFor((id as { __name: string }).__name),
+            getByName: (name) => stubFor(name),
+            idFromName: (name) => ({ __name: name }),
+        };
+        const coordinator = createQueryCoordinator({ registry: createStaticShardRegistry({ scores: ["a", "b"] }) });
+
+        // Pass a WRONG ascending hint; the echoed descending order must win.
+        const result = await coordinator.orchestrateRankPage(namespace, { directions: ["asc"], index: "lb", table: "scores", take: 100 });
+
+        expect(ids(result)).toEqual(["a3", "b2", "a2", "b1", "a1"]);
+    });
 });

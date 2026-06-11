@@ -26,8 +26,7 @@
  * user's checked-in `wrangler.jsonc`. It returns a {@link MaterializeResult.cleanup}
  * disposer so the caller can unlink the generated temp dir when dev exits.
  */
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync, writeFileSync } from "node:fs";
 
 import { applyEdits, modify } from "jsonc-parser";
 
@@ -190,10 +189,10 @@ interface MaterializeOptions {
 
 interface MaterializeResult {
     /**
-     * Removes the generated temp config + its directory. Always present and
-     * always safe to call: it is idempotent, a no-op when nothing was written
-     * (disabled / fall-through cases), and never throws if the path is already
-     * gone. The dev command calls this on every exit path (normal, signal, error).
+     * Removes the generated temp config file. Always present and always safe to
+     * call: it is idempotent, a no-op when nothing was written (disabled /
+     * fall-through cases), and never throws if the path is already gone. The dev
+     * command calls this on every exit path (normal, signal, error).
      */
     cleanup: () => void;
 
@@ -216,12 +215,12 @@ interface MaterializeResult {
 const noopCleanup = (): void => {};
 
 /**
- * Build an idempotent disposer that removes the generated temp directory. Guards
- * against a double call (the flag) and a missing path (`force: true` +
+ * Build an idempotent disposer that removes the generated temp config file.
+ * Guards against a double call (the flag) and a missing path (`force: true` +
  * try/catch), so the dev command can wire it onto multiple exit paths without
  * ever crashing the shutdown.
  */
-const createCleanup = (directory: string): (() => void) => {
+const createCleanup = (path: string): (() => void) => {
     let done = false;
 
     return () => {
@@ -232,28 +231,33 @@ const createCleanup = (directory: string): (() => void) => {
         done = true;
 
         try {
-            rmSync(directory, { force: true, recursive: true });
+            rmSync(path, { force: true, recursive: true });
         } catch {
             /* already gone / unremovable — nothing actionable on shutdown */
         }
     };
 };
 
-/** Filename component identifying a Cirrus-generated remote-dev config. */
-const REMOTE_CONFIG_BASENAME = "wrangler.remote.jsonc";
+/**
+ * Filename for a Cirrus-generated remote-dev config. A dotfile (less likely to
+ * be committed / shown), per-process-unique so concurrent `cirrus dev` runs on
+ * one project don't clobber each other; the cleanup disposer unlinks it on exit.
+ */
+const remoteConfigBasename = (): string => `.wrangler.cirrus-remote.${String(process.pid)}.jsonc`;
 
 /**
  * Produce a temporary wrangler config with `"remote": true` on every eligible
  * binding, so `cirrus dev` can run `wrangler dev --config &lt;temp>` against the
  * deployed D1/KV/R2 without touching the user's file.
  *
- * The temp file is written to an OS temp dir (not next to the source), and the
- * config's `main`/asset paths are left untouched — wrangler resolves a config's
- * relative paths against the **project root** it is invoked from, and
- * `cirrus dev` keeps running wrangler with the project as cwd, so the temp
- * location does not change path resolution. Returns `configPath: undefined`
- * (with a `reason`) for every fall-through case so the caller degrades to plain
- * local dev instead of failing.
+ * The temp file is written as a sibling of the source `wrangler.jsonc` (in the
+ * project root), NOT an OS temp dir: wrangler resolves a config's relative paths
+ * (`main`, `assets`, `migrations_dir`, …) against the **config file's own
+ * directory**, so a temp config in `/tmp` would make wrangler look for
+ * `/tmp/src/server.ts` and fail to start the worker. Keeping it beside the real
+ * config preserves those relative paths. Returns `configPath: undefined` (with a
+ * `reason`) for every fall-through case so the caller degrades to plain local
+ * dev instead of failing.
  */
 const materializeRemoteWranglerConfig = (options: MaterializeOptions): MaterializeResult => {
     if (!options.enabled) {
@@ -278,12 +282,13 @@ const materializeRemoteWranglerConfig = (options: MaterializeOptions): Materiali
         return { cleanup: noopCleanup, enabled: true, reason: "no remote-eligible bindings to proxy", remoteBindings: [] };
     }
 
-    const directory = mkdtempSync(join(tmpdir(), "cirrus-remote-"));
-    const configPath = join(directory, REMOTE_CONFIG_BASENAME);
+    // Sibling of the source config (same directory) so wrangler resolves the
+    // config's relative `main`/`assets`/`migrations_dir` paths correctly.
+    const configPath = join(options.projectRoot, remoteConfigBasename());
 
     writeFileSync(configPath, injectRemoteFlags(text, plans), "utf8");
 
-    return { cleanup: createCleanup(directory), configPath, enabled: true, remoteBindings: plans };
+    return { cleanup: createCleanup(configPath), configPath, enabled: true, remoteBindings: plans };
 };
 
 /**

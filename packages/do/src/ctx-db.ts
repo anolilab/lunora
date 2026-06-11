@@ -45,6 +45,7 @@ import type {
     RankOptions,
     RankPage,
     RankPageOptions,
+    RankDirection,
     RankPageRowKey,
     RankResult,
     ShardRankPageResult,
@@ -2344,7 +2345,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         tableName: string,
         indexName: string,
         rankPageOptions: RankPageOptions,
-    ): { continueCursor: null | string; hasMore: boolean; rows: { doc: Record<string, unknown>; key: RankPageRowKey }[] } => {
+    ): { continueCursor: null | string; directions: ReadonlyArray<RankDirection>; hasMore: boolean; rows: { doc: Record<string, unknown>; key: RankPageRowKey }[] } => {
         const definition = schema.tables[tableName];
 
         if (!definition) {
@@ -2429,8 +2430,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         const pageIds = usable.map((rankRow) => rankRow[RANK_TIEBREAK] as string);
         const rows = buildRankPageRows(usable, hydrateDocsById(tableName, pageIds), sortColumns);
         const continueCursor = hasMore ? buildRankContinueCursor(usable.at(-1), sortColumns) : NO_RANK_CURSOR;
+        const directions: RankDirection[] = index.sortBy.map((key) => (key.direction === "desc" ? "desc" : "asc"));
 
-        return { continueCursor, hasMore, rows };
+        return { continueCursor, directions, hasMore, rows };
     };
 
     const writer: DatabaseWriterLike = {
@@ -3304,9 +3306,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // already-ordered page with no shard boundaries to merge).
             onIndexUse(tableName, indexName, "rank");
 
-            const { hasMore, rows } = computeRankPage(tableName, indexName, rankPageOptions);
+            const { directions, hasMore, rows } = computeRankPage(tableName, indexName, rankPageOptions);
 
-            return { hasMore, rows };
+            return { directions, hasMore, rows };
         },
 
         async replace(id, document) {

@@ -33,7 +33,7 @@ describe("deriveRuntimeAdvisories", () => {
 
         expect(rows).toHaveLength(1);
         expect(rows[0]?.issueType).toBe("Index utilization");
-        expect(rows[0]?.description).toContain('Index "byTitle" on table "posts" recorded no reads');
+        expect(rows[0]?.description).toContain('Index "byTitle" on table "posts" has recorded no reads');
     });
 
     it("flags a declared index recorded with zero reads as dead", () => {
@@ -86,7 +86,7 @@ describe("deriveRuntimeAdvisories", () => {
 
         expect(rows).toHaveLength(1);
         expect(rows[0]?.entity).toBe("events");
-        expect(rows[0]?.description).toContain('Table "events" was full-scanned 40 times');
+        expect(rows[0]?.description).toContain('Table "events" has been full-scanned 40 times');
     });
 
     it("aggregates scans for the same table across multiple functions", () => {

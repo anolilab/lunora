@@ -341,6 +341,9 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
         args,
         command: "pnpm",
         cwd,
+        // In `--format json` mode stdout is reserved for the single JSON document,
+        // so route wrangler's progress + deployed-URL output to stderr instead.
+        stdoutToStderr: isJsonFormat(options.format),
     };
 
     options.logger.info(`deploying via ${descriptor.command} ${descriptor.args.join(" ")}`);

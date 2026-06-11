@@ -196,7 +196,7 @@ describe("insightsPanel", () => {
         const view = screen.getByTestId("cirrus-insights");
 
         expect(view.textContent).toContain("Index utilization");
-        expect(view.textContent).toContain('Index "byTitle" on table "posts" recorded no reads');
+        expect(view.textContent).toContain('Index "byTitle" on table "posts" has recorded no reads');
     });
 
     it("auto-refreshes advisories when the tab regains focus (no manual Refresh)", async () => {

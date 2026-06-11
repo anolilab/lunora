@@ -366,6 +366,31 @@ export const backfillNames = defineMigration({
                 expect(parsed.descriptor?.args).toContain("deploy");
             });
 
+            it("routes the spawned wrangler's stdout to stderr so it can't corrupt the JSON document", async () => {
+                // Regression: `wrangler deploy` inherits stdio; without redirection
+                // its progress + deployed-URL output interleaves with the JSON on
+                // stdout and breaks `cirrus deploy --format json | jq`.
+                expect.assertions(2);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                await captureStdout(async () => {
+                    await runDeployCommand({ cwd: workdir, format: "json", logger, spawner });
+                });
+
+                expect(calls[0]?.descriptor.stdoutToStderr).toBe(true);
+
+                // Pretty mode keeps wrangler's output inherited on stdout.
+                const pretty = createRecordingSpawner();
+
+                await runDeployCommand({ cwd: workdir, logger, spawner: pretty.spawner });
+
+                expect(pretty.calls[0]?.descriptor.stdoutToStderr).toBeFalsy();
+            });
+
             it("serializes the error into the JSON document when validation fails", async () => {
                 expect.assertions(2);
 

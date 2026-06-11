@@ -37,6 +37,42 @@ interface AdvisorViewProps {
     readonly toolbar?: ReactNode;
 }
 
+/** Map an advisor finding's severity (ERROR/WARN/INFO) onto a studio tab level. */
+const ADVISORY_LEVEL: Record<"ERROR" | "INFO" | "WARN", AdvisorLevel> = { ERROR: "error", INFO: "info", WARN: "warning" };
+
+/**
+ * The minimal finding shape both the static schema advisories (`AdvisoryFinding`
+ * from the `getAdvisories` RPC) and the runtime advisor lints (`Finding` from
+ * `@cirrus/advisor`) structurally satisfy — so a single mapper serves both render
+ * paths instead of two copy-pasted ones that can drift.
+ */
+interface AdvisoryLike {
+    readonly cacheKey: string;
+    readonly detail: string;
+    readonly level: "ERROR" | "INFO" | "WARN";
+    readonly metadata: Record<string, unknown>;
+    readonly remediation: string;
+    readonly title: string;
+}
+
+/**
+ * Map one advisor finding (static or runtime) to an Advisor table row. The
+ * finding's plain-English `title`/`detail`/`remediation` render verbatim (no
+ * i18n), the severity maps through {@link ADVISORY_LEVEL}, and `entity` reads
+ * `metadata.table` when present.
+ */
+const advisoryRow = (finding: AdvisoryLike): AdvisorRow => {
+    const table = typeof finding.metadata["table"] === "string" ? finding.metadata["table"] : undefined;
+
+    return {
+        description: `${finding.detail} ${finding.remediation}`,
+        entity: table,
+        issueType: finding.title,
+        key: finding.cacheKey,
+        level: ADVISORY_LEVEL[finding.level],
+    };
+};
+
 /** The three severity tabs, in Supabase's order. */
 const LEVELS: ReadonlyArray<AdvisorLevel> = ["error", "warning", "info"];
 
@@ -164,4 +200,5 @@ export const AdvisorView = ({ error = null, loading = false, onRefresh, rows, te
     );
 };
 
-export type { AdvisorLevel, AdvisorRow };
+export { advisoryRow };
+export type { AdvisoryLike, AdvisorLevel, AdvisorRow };

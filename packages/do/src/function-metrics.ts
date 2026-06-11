@@ -37,9 +37,11 @@
  * recorded reads USED each declared index to narrow (the complement of the
  * scans table, stamped via `onIndexUse` in `ctx-db.ts`). It's the durable
  * producer behind the advisor `index_utilization` dead-index lint — a declared
- * index with zero recorded reads over the window is dead overhead. Keyed by
- * `(table_name, index_name)` so the row count is bounded by the indexes the app
- * actually exercises; the lint reconciles this against the declared schema to
+ * index with zero recorded reads is dead overhead. The counter is cumulative and
+ * never decays (unlike the time-bucketed buckets table), so a non-zero count
+ * never reverts to dead. Keyed by `(table_name, index_name)` so the row count is
+ * bounded by the indexes the app actually exercises; the lint reconciles this
+ * against the declared schema to
  * find indexes that recorded nothing. Unlike the scans table this is keyed on
  * the index, not the function, since the dead-index signal is per-index across
  * the whole workload.
@@ -96,7 +98,7 @@ interface IndexHit {
     table: string;
 }
 
-/** One declared index's recorded read count over the durable window — the advisor dead-index lint input. */
+/** One declared index's cumulative recorded read count (durable, non-decaying) — the advisor dead-index lint input. */
 interface FunctionMetricIndexHit {
     /** The declared index name. */
     index: string;
@@ -381,8 +383,8 @@ const readFunctionMetricScans = (sql: SqlExec): Map<string, FunctionScanAttribut
 /**
  * Read the per-`(table, index)` hit counts — the advisor dead-index lint input.
  * Each entry is a declared index and how many recorded reads used it to narrow
- * over the durable window; the lint reconciles this against the schema to flag
- * a declared index that appears with zero reads (or not at all) as dead. Ordered
+ * (a cumulative, non-decaying count); the lint reconciles this against the schema
+ * to flag a declared index that appears with zero reads (or not at all) as dead. Ordered
  * by table then index for stable output. Creates the table first so a read on a
  * never-exercised shard returns `[]`.
  */
