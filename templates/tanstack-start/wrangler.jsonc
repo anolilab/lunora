@@ -1,6 +1,6 @@
 {
     "name": "{{name}}",
-    "main": "src/server.ts",
+    "main": "virtual:cirrus/worker",
     "compatibility_date": "2026-06-10",
     "compatibility_flags": ["nodejs_compat"],
     "durable_objects": {

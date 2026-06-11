@@ -59,11 +59,21 @@ ONLY_TEMPLATE="${1:-}"
 # Any template IN this list that passes build is an XPASS (also a failure —
 # remove it from the list when the fix lands).
 # ---------------------------------------------------------------------------
+# tanstack-start: @tanstack/react-start@1.168.25 + @tanstack/start-plugin-core@1.171.17
+# (latest published as of 2026-06-11) produce an UNLOADABLE_DEPENDENCY error for
+# `tanstack-start-import-protection:mock-edge:*` virtual modules when built with Vite 8
+# rolldown — rolldown's native loader doesn't route these \0-prefixed virtual module IDs
+# through the Vite plugin load hook (confirmed against the official e2e test, which uses
+# the unreleased workspace start-plugin-core, and reproduces WITHOUT Cirrus). The template
+# config itself (plugin ordering, virtual:cirrus/worker, getRequest()) IS correct per the
+# Cloudflare + TanStack Start docs. Remove from XFAIL once @tanstack/react-start publishes
+# a build past 1.168.25 with the rolldown fix.
+#
 # (react-router + solid-start templates were removed: their build tools
 # (@react-router/dev, vinxi/@solidjs/start) only support Vite <=7 while Cirrus
 # is standardized on Vite 8 — see the official CF react-router starter which
 # pins vite ^7. Re-add the templates when those frameworks ship Vite 8 support.)
-XFAIL_BUILD=()
+XFAIL_BUILD=(tanstack-start)
 
 # ---------------------------------------------------------------------------
 # Discover templates (dynamic, so adding a new dir is automatically included).

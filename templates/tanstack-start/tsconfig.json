@@ -15,5 +15,5 @@
             "~/*": ["./src/*"]
         }
     },
-    "include": ["src/**/*", "cirrus/**/*", "app.config.ts", "vite.config.ts"]
+    "include": ["src/**/*", "cirrus/**/*", "vite.config.ts"]
 }

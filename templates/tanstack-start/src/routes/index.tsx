@@ -2,7 +2,7 @@ import type { Preloaded, ReturnOf } from "@cirrus/client";
 import { useMutation, usePreloadedQuery } from "@cirrus/react";
 import { createServerClient, preloadQuery } from "@cirrus/react/server";
 import { createFileRoute } from "@tanstack/react-router";
-import { createServerFn } from "@tanstack/react-start/server";
+import { createServerFn, getRequest } from "@tanstack/react-start/server";
 import { useState } from "react";
 
 import { api } from "../../cirrus/_generated/api";
@@ -30,7 +30,10 @@ const channelId = "channel:demo" as const;
  * is needed depends on measured latency in M1 load tests; it is NOT needed
  * for M0 correctness.
  */
-const loadMessages = createServerFn().handler(async ({ request }) => {
+const loadMessages = createServerFn().handler(async () => {
+    // TanStack Start v1 server functions do not receive `request` as a handler
+    // param. Use `getRequest()` from "@tanstack/react-start/server" instead.
+    const request = getRequest();
     // Forward the browser's Cookie header so the CirrusClient's HTTP RPC
     // calls carry the same session cookie the client would send. This is the
     // identity-continuity answer for PLAN4 open question #2: same-origin

@@ -22,8 +22,9 @@ your client and worker share the same origin.
 pnpm build
 ```
 
-Produces a TanStack Start build under `.output/`. Deploy the worker side
-separately with `pnpm deploy` (which runs `cirrus deploy`).
+`vite build` produces a Cloudflare Worker bundle with the TanStack Start SSR
+handler and the Cirrus `/_cirrus/*` RPC layer composed into a single worker.
+Deploy with `pnpm deploy` (which runs `cirrus deploy`).
 
 ## Stack
 
