@@ -32,6 +32,7 @@ const coordinatorWithExport = (rows: ExportRows): QueryCoordinator => {
         orchestrateImport: vi.fn<() => never>(),
         orchestrateMigration: vi.fn<() => never>(),
         orchestrateRank: vi.fn<() => never>(),
+        orchestrateRankPage: vi.fn<() => never>(),
         registry: {} as never,
     };
 };

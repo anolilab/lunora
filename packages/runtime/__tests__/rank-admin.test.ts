@@ -129,3 +129,101 @@ describe("createWorker — admin rank endpoint", () => {
         expect(orchestrateRank).not.toHaveBeenCalled();
     });
 });
+
+const RANKPAGE_URL = "https://app.example/_cirrus/admin/rankpage";
+
+interface PageRow {
+    doc: Record<string, unknown>;
+    key: { partitionKey: string; rowId: string; sortValues: ReadonlyArray<unknown> };
+}
+
+/** Capturing namespace serving a fixed `rankPage` slice per shard (honors `take`). */
+const rankPageNamespace = (calls: ShardCall[], rowsByShard: Record<string, ReadonlyArray<PageRow>>): ShardNamespaceLike => {
+    const stubFor = (shardKey: string) => {
+        return {
+            async fetch(request: Request): Promise<Response> {
+                const body: { args: Record<string, unknown>; functionPath: string } = await request.json();
+
+                calls.push({ authorization: request.headers.get("authorization"), body, shardKey });
+
+                const rows = rowsByShard[shardKey] ?? [];
+                const take = Number(body.args["take"] ?? 100);
+                const slice = rows.slice(0, take);
+
+                return Response.json({ result: { hasMore: take < rows.length, rows: slice } }, { status: 200 });
+            },
+        };
+    };
+
+    return {
+        get: (id) => stubFor((id as { __name: string }).__name),
+        getByName: (name) => stubFor(name),
+        idFromName: (name) => {
+            return { __name: name };
+        },
+    };
+};
+
+const pageRow = (sortValue: number, rowId: string): PageRow => {
+    return { doc: { _id: rowId }, key: { partitionKey: "", rowId, sortValues: [sortValue] } };
+};
+
+const rankPageRequest = (body: Record<string, unknown>, token: string = ADMIN_TOKEN): Request =>
+    new Request(RANKPAGE_URL, { body: JSON.stringify(body), headers: { authorization: `Bearer ${token}` }, method: "POST" });
+
+describe("createWorker — admin rankpage endpoint", () => {
+    it("fans rankPage out and returns the k-way merged global page", async () => {
+        expect.assertions(4);
+
+        const calls: ShardCall[] = [];
+        const namespace = rankPageNamespace(calls, {
+            a: [pageRow(10, "a1"), pageRow(40, "a2")],
+            b: [pageRow(20, "b1"), pageRow(30, "b2")],
+        });
+        const coordinator = createQueryCoordinator({ registry: createStaticShardRegistry({ scores: ["a", "b"] }) });
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, queryCoordinator: coordinator, shardDO: namespace });
+
+        const response = await worker.fetch(rankPageRequest({ index: "lb", table: "scores", take: 100 }), {}, fakeContext);
+
+        expect(response.status).toBe(200);
+
+        const result: { isDone: boolean; ok: number; page: { _id: string }[] } = await response.json();
+
+        expect(result.page.map((d) => d._id)).toEqual(["a1", "b1", "b2", "a2"]);
+        expect(result.isDone).toBe(true);
+        expect(calls.every((c) => c.body.functionPath === "__cirrus_admin__:rankPage" && c.authorization === `Bearer ${ADMIN_TOKEN}`)).toBe(true);
+    });
+
+    it("rejects without the admin bearer", async () => {
+        expect.assertions(1);
+
+        const coordinator = createQueryCoordinator({ registry: createStaticShardRegistry({ scores: ["a"] }) });
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, queryCoordinator: coordinator, shardDO: rankPageNamespace([], {}) });
+
+        const response = await worker.fetch(rankPageRequest({ index: "lb", table: "scores" }, "wrong"), {}, fakeContext);
+
+        expect(response.status).toBe(403);
+    });
+
+    it("400s when no queryCoordinator is configured", async () => {
+        expect.assertions(1);
+
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: rankPageNamespace([], {}) });
+
+        const response = await worker.fetch(rankPageRequest({ index: "lb", table: "scores" }), {}, fakeContext);
+
+        expect(response.status).toBe(400);
+    });
+
+    it("400s on a missing table or index", async () => {
+        expect.assertions(1);
+
+        const coordinator = createQueryCoordinator({ registry: createStaticShardRegistry({ scores: ["a"] }) });
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, queryCoordinator: coordinator, shardDO: rankPageNamespace([], {}) });
+
+        const noTable = await worker.fetch(rankPageRequest({ index: "lb" }), {}, fakeContext);
+        const noIndex = await worker.fetch(rankPageRequest({ table: "scores" }), {}, fakeContext);
+
+        expect([noTable.status, noIndex.status]).toEqual([400, 400]);
+    });
+});

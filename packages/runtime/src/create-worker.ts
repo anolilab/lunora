@@ -807,6 +807,7 @@ const SYNC_PATH = "/_cirrus/admin/sync";
 const CONNECTOR_SYNC_PATH = "/_cirrus/admin/connector/sync";
 const APPLY_PATH = "/_cirrus/admin/apply";
 const RANK_PATH = "/_cirrus/admin/rank";
+const RANKPAGE_PATH = "/_cirrus/admin/rankpage";
 const SCHEDULED_PATH = "/_cirrus/admin/scheduled";
 const SCHEDULED_STATUS_PATH = "/_cirrus/admin/scheduled/status";
 const SCHEDULED_WS_PATH = "/_cirrus/admin/scheduled/ws";
@@ -1191,6 +1192,100 @@ const parseRankRequest = async (request: Request): Promise<RankRequestBody> => {
         rowId: candidate.rowId,
         sortValues: candidate.sortValues,
         table: candidate.table,
+    };
+};
+
+interface RankPageRequestBody {
+    cursor: null | string;
+    directions?: ReadonlyArray<"asc" | "desc">;
+    index: string;
+    partitionKey?: string;
+    table: string;
+    take?: number;
+}
+
+interface RankPageCandidate {
+    cursor?: unknown;
+    directions?: unknown;
+    index?: unknown;
+    partitionKey?: unknown;
+    table?: unknown;
+    take?: unknown;
+}
+
+/** Validate the optional `directions` list, returning the narrowed value or `undefined`. */
+const parseRankPageDirections = (raw: unknown): ReadonlyArray<"asc" | "desc"> | undefined => {
+    if (raw === undefined) {
+        return undefined;
+    }
+
+    if (!Array.isArray(raw) || raw.some((d) => d !== "asc" && d !== "desc")) {
+        throw new CirrusError('Rank page request `directions` must be an array of "asc"|"desc"', { code: "BAD_REQUEST", status: 400 });
+    }
+
+    return raw as ReadonlyArray<"asc" | "desc">;
+};
+
+/** Validate the required `table`/`index` plus the optional `partitionKey`/`take`/`cursor` scalars. */
+const validateRankPageScalars = (candidate: RankPageCandidate): void => {
+    if (typeof candidate.table !== "string" || candidate.table.length === 0) {
+        throw new CirrusError("Rank page request is missing `table`", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    if (typeof candidate.index !== "string" || candidate.index.length === 0) {
+        throw new CirrusError("Rank page request is missing `index`", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    if (candidate.partitionKey !== undefined && typeof candidate.partitionKey !== "string") {
+        throw new CirrusError("Rank page request `partitionKey` must be a string", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    if (candidate.take !== undefined && (typeof candidate.take !== "number" || !Number.isFinite(candidate.take))) {
+        throw new CirrusError("Rank page request `take` must be a number", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    if (candidate.cursor !== undefined && candidate.cursor !== null && typeof candidate.cursor !== "string") {
+        throw new CirrusError("Rank page request `cursor` must be a string or null", { code: "BAD_REQUEST", status: 400 });
+    }
+};
+
+/**
+ * Parse and validate a `POST /_cirrus/admin/rankpage` body. Unlike the
+ * single-row rank endpoint, the caller doesn't supply a key tuple — only the
+ * `table`/`index` to page, an optional `partitionKey` pin, an optional `take`
+ * page size, an optional per-sort-key `directions` list (so the coordinator's
+ * k-way merge breaks ties the same way each shard's `ORDER BY` does), and an
+ * opaque `cursor` from the prior page's `continueCursor`.
+ */
+const parseRankPageRequest = async (request: Request): Promise<RankPageRequestBody> => {
+    let body: unknown;
+
+    try {
+        const text = await readBodyTextWithLimit(request);
+
+        body = text === "" ? {} : JSON.parse(text);
+    } catch (error) {
+        if (error instanceof CirrusError) {
+            throw error;
+        }
+
+        throw new CirrusError("Rank page body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    const candidate = (body ?? {}) as RankPageCandidate;
+
+    validateRankPageScalars(candidate);
+
+    const directions = parseRankPageDirections(candidate.directions);
+
+    return {
+        // eslint-disable-next-line unicorn/no-null -- the wire cursor is `null | string`; normalize an absent cursor to null so the coordinator starts at the first page
+        cursor: typeof candidate.cursor === "string" ? candidate.cursor : null,
+        directions,
+        index: candidate.index as string,
+        partitionKey: typeof candidate.partitionKey === "string" ? candidate.partitionKey : undefined,
+        table: candidate.table as string,
+        take: typeof candidate.take === "number" ? candidate.take : undefined,
     };
 };
 
@@ -1924,6 +2019,51 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
             rowId: rank.rowId,
             sortValues: rank.sortValues,
             table: rank.table,
+        });
+
+        return Response.json(result, {
+            headers: { "content-type": "application/json" },
+            status: 200,
+        });
+    };
+
+    /**
+     * `POST /_cirrus/admin/rankpage` — page a ranked query across every live
+     * shard of a `.shardBy(...)` table. The shard-local per-table `rankPage()`
+     * refuses an index whose partition spans shards (it would return a per-shard
+     * slice, not the global order); this is the path that produces the correct
+     * globally-ranked page by fanning `__cirrus_admin__:rankPage` out via the
+     * coordinator and k-way merging the per-shard slices by the rank-key tuple.
+     *
+     * Admin-gated like the other orchestrators, since the per-shard `rankPage`
+     * RPC it fans out is itself admin-gated — the inbound `Authorization` bearer
+     * is forwarded so each shard's admin gate accepts the fanned-out call.
+     */
+    const handleRankPage = async (request: Request, env: unknown): Promise<Response> => {
+        if (request.method !== "POST") {
+            throw new CirrusError("Rank page endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        if (!checkAdminAuth(request, options.adminToken)) {
+            throw new CirrusError("Admin auth required", { code: "FORBIDDEN", status: 403 });
+        }
+
+        if (!options.queryCoordinator) {
+            throw new CirrusError("Rank page endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const rankPage = await parseRankPageRequest(request);
+
+        const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
+
+        const result = await options.queryCoordinator.orchestrateRankPage(options.shardDO, {
+            cursor: rankPage.cursor,
+            directions: rankPage.directions,
+            headers: forwardedHeaders,
+            index: rankPage.index,
+            partitionKey: rankPage.partitionKey,
+            table: rankPage.table,
+            take: rankPage.take,
         });
 
         return Response.json(result, {
@@ -3443,6 +3583,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         [CONNECTOR_SYNC_PATH]: (request, env) => handleConnectorSync(request, env),
         [APPLY_PATH]: (request, env) => handleApplyCdc(request, env),
         [RANK_PATH]: (request, env) => handleRank(request, env),
+        [RANKPAGE_PATH]: (request, env) => handleRankPage(request, env),
         [SCHEDULED_WS_PATH]: (request) => handleScheduledWebSocket(request),
         [SCHEDULED_CANCEL_PATH]: (request) => handleScheduledCancel(request),
         [SCHEDULED_STATUS_PATH]: (request) => handleSchedulerStatus(request),

@@ -292,6 +292,101 @@ interface ShardRankOutcome {
     shardKey: string;
 }
 
+/**
+ * Per-row rank key as a shard reports it for a `rankPage` slice. Byte-identical
+ * to what the shard's `ORDER BY __partition__, __sort_k&lt;i>__, __id__` compares
+ * on — `partitionKey` is `encodePartitionKey(index.partitionBy, doc)`,
+ * `sortValues[i]` is `serializeSqlValue(doc[sortBy[i].field])` (so always
+ * `null | number | string`, JSON-safe over the wire), and `rowId` is the
+ * `__id__` tiebreak. The coordinator's k-way merge orders by this tuple, so the
+ * cross-shard order is the same total order each shard pages in locally and no
+ * row is dropped or duplicated at a shard boundary.
+ */
+interface RankPageKey {
+    /** Canonical-JSON partition tuple. */
+    partitionKey: string;
+    /** `doc._id` tiebreak. */
+    rowId: string;
+    /** Serialized sort-key values in `index.sortBy` order (`null | number | string`). */
+    sortValues: ReadonlyArray<unknown>;
+}
+
+/** Per-sort-key direction, parallel to a shard's `index.sortBy[i].direction`. */
+type RankPageDirection = "asc" | "desc";
+
+/** One row of a shard's local `rankPage` slice: the hydrated doc plus its rank key. */
+interface RankPageRow {
+    doc: Record<string, unknown>;
+    key: RankPageKey;
+}
+
+/**
+ * A single shard's `rankPage` payload. `rows` is the shard's local ranked slice
+ * (already in `(__partition__, sortcols, __id__)` order); `hasMore` says whether
+ * the shard had rows beyond the slice it returned. This is the structural
+ * contract the coordinator consumes — the shard-do `__cirrus_admin__:rankPage`
+ * admin op returns it (one-line wiring: have the existing `rankPage` reader
+ * attach each row's `key` alongside the hydrated `doc`).
+ */
+interface ShardRankPageResult {
+    hasMore: boolean;
+    rows: ReadonlyArray<RankPageRow>;
+}
+
+/**
+ * Cross-shard ranked-pagination request. Like {@link RankFanOutRequest} there's
+ * no caller-supplied merge — the merge is the fixed k-way merge by the rank-key
+ * tuple. `take` is the global page size; `cursor` is the opaque composite cursor
+ * from the prior page's `continueCursor` (absent → first page). `partitionKey`,
+ * when set, pins a single partition (`encodePartitionKey(index.partitionBy, where)`),
+ * forwarded so each shard scopes its local slice to that partition.
+ *
+ * `directions` is the per-sort-key direction list (`index.sortBy[i].direction`)
+ * the coordinator's comparator needs to break ties the same way each shard's
+ * `ORDER BY` does. `partitionKey` and the `__id__` tiebreak are always ascending
+ * (matching the shard companion's btree), so only the sort columns vary.
+ */
+interface RankPageFanOutRequest {
+    /** Opaque composite cursor from the prior page's `continueCursor`. */
+    cursor?: null | string;
+    /** Per-sort-key directions, in `index.sortBy` order. Missing/short → ascending. */
+    directions?: ReadonlyArray<RankPageDirection>;
+    headers?: Record<string, string>;
+    /** Rank index name on `table`. */
+    index: string;
+    /** Optional partition pin forwarded to each shard's local `rankPage`. */
+    partitionKey?: string;
+    /** Table whose live shard keys the page fans out across. */
+    table: string;
+    /** Global page size; defaults to 100, capped at 1000 (matching the shard-local `rankPage`). */
+    take?: number;
+}
+
+/** One shard's `rankPage` outcome: its local ranked slice, or an error. */
+interface ShardRankPageOutcome {
+    error?: { message: string; timedOut: boolean };
+    hasMore?: boolean;
+    rows?: ReadonlyArray<RankPageRow>;
+    shardKey: string;
+}
+
+interface RankPageFanOutResult {
+    /** Opaque composite cursor for the next page, or `null` when the merge is exhausted. */
+    continueCursor: null | string;
+    /** Shards that errored or timed out. */
+    failed: number;
+    /** `true` when the global merge has no further rows. */
+    isDone: boolean;
+    /** Shards that returned a 2xx slice. */
+    ok: number;
+    /** The globally-ranked page of hydrated docs, in cross-shard rank order. */
+    page: ReadonlyArray<Record<string, unknown>>;
+    /** `true` when at least one shard failed/timed out, so the page may be missing that shard's rows. */
+    partial: boolean;
+    /** Per-shard outcomes, in registry order. */
+    shards: ReadonlyArray<ShardRankPageOutcome>;
+}
+
 interface QueryCoordinator {
     fanOut: <T = unknown>(namespace: ShardNamespaceLike, request: FanOutRequest) => Promise<FanOutResult<T>>;
 
@@ -335,6 +430,18 @@ interface QueryCoordinator {
      * `rank()` path for a partition that spans shards.
      */
     orchestrateRank: (namespace: ShardNamespaceLike, request: RankFanOutRequest) => Promise<RankFanOutResult>;
+
+    /**
+     * Page a ranked query across every live shard of a `.shardBy(...)` table.
+     * Fans `__cirrus_admin__:rankPage` out to each shard, gathers each shard's
+     * local ranked slice (rows tagged with their rank-key tuple), and k-way
+     * merges them by that tuple into one globally-ranked page of `take` rows.
+     * The opaque `continueCursor` is a composite of per-shard cursors so the
+     * next page resumes each shard strictly-after the last row the global page
+     * consumed from it — pages never drop or duplicate a row at a shard
+     * boundary. The cross-shard `rankPage()` path (PLAN5 §7.1 / PLAN2 #3).
+     */
+    orchestrateRankPage: (namespace: ShardNamespaceLike, request: RankPageFanOutRequest) => Promise<RankPageFanOutResult>;
     readonly registry: ShardRegistry;
 }
 
@@ -563,6 +670,272 @@ const rollUpRank = (results: ReadonlyArray<ShardRpcOutcome>): RankFanOutResult =
     }
 
     return { failed, ok, partial: failed > 0, position: before + 1, shards, total };
+};
+
+/**
+ * SQLite storage-class ordering for a single serialized rank-key value.
+ * `serializeSqlValue` only ever produces `null | number | string`, and SQLite's
+ * `ORDER BY` ranks NULL < numbers < text, then by value within a class. The
+ * shard's companion btree (`ORDER BY __partition__, __sort_k&lt;i>__, __id__`) uses
+ * exactly this order, so to merge shard slices without gaps or dupes at a
+ * boundary the coordinator must compare the same way — a naive `a < b` would
+ * mis-order `null` vs numbers and number-vs-string mixes.
+ */
+const RANK_CLASS_NULL = 0;
+const RANK_CLASS_NUMBER = 1;
+const RANK_CLASS_TEXT = 2;
+
+const rankValueClass = (value: unknown): number => {
+    if (value === null || value === undefined) {
+        return RANK_CLASS_NULL;
+    }
+
+    if (typeof value === "number") {
+        return RANK_CLASS_NUMBER;
+    }
+
+    // serializeSqlValue collapses everything else (bigint/object/bool) to
+    // string|number|null, so a non-number, non-null value is text on the wire.
+    return RANK_CLASS_TEXT;
+};
+
+/** Compare two serialized rank values under SQLite ascending order (NULL < number < text). */
+const compareRankValueAsc = (a: unknown, b: unknown): number => {
+    const classA = rankValueClass(a);
+    const classB = rankValueClass(b);
+
+    if (classA !== classB) {
+        return classA < classB ? -1 : 1;
+    }
+
+    if (classA === RANK_CLASS_NULL) {
+        return 0;
+    }
+
+    if (classA === RANK_CLASS_NUMBER) {
+        const numberA = a as number;
+        const numberB = b as number;
+
+        if (numberA < numberB) {
+            return -1;
+        }
+
+        return numberA > numberB ? 1 : 0;
+    }
+
+    // Text: code-unit comparison, matching the shard's BINARY collation default.
+    const textA = String(a);
+    const textB = String(b);
+
+    if (textA < textB) {
+        return -1;
+    }
+
+    return textA > textB ? 1 : 0;
+};
+
+/**
+ * Total order over two rank keys, byte-identical to the shard companion's
+ * `ORDER BY __partition__ ASC, __sort_k&lt;i>__ &lt;dir>, __id__ ASC`. Partition and
+ * the `__id__` tiebreak are always ascending; each sort column honors its
+ * declared direction (`directions[i]`, default `asc`).
+ */
+const compareRankKeys = (a: RankPageKey, b: RankPageKey, directions: ReadonlyArray<RankPageDirection>): number => {
+    const partitionCmp = compareRankValueAsc(a.partitionKey, b.partitionKey);
+
+    if (partitionCmp !== 0) {
+        return partitionCmp;
+    }
+
+    const length = Math.max(a.sortValues.length, b.sortValues.length);
+
+    for (let i = 0; i < length; i += 1) {
+        const valueCmp = compareRankValueAsc(a.sortValues[i], b.sortValues[i]);
+
+        if (valueCmp !== 0) {
+            return directions[i] === "desc" ? -valueCmp : valueCmp;
+        }
+    }
+
+    return compareRankValueAsc(a.rowId, b.rowId);
+};
+
+/**
+ * Composite cross-shard rank-page cursor: the per-shard cursor each shard
+ * resumes from on the next page. A shard whose rows were fully drained on this
+ * page AND that reported no more locally (`hasMore: false`) is omitted — it has
+ * nothing left to contribute. Shards present in `perShard` resume strictly
+ * after the recorded key; absent shards (never paged, or fully exhausted)
+ * restart from their beginning, which is correct because a never-consumed shard
+ * was behind the global frontier and its head will be re-emitted only if it
+ * truly belongs after the cursor (the next page re-merges from each shard's
+ * resume point).
+ */
+interface RankPageCursorState {
+    /** shardKey → the rank key the next page resumes strictly-after. */
+    perShard: Record<string, RankPageKey>;
+}
+
+/** Encode the composite cursor as base64-of-JSON — opaque to callers, same envelope style as the shard-local rank cursor. */
+const encodeRankPageCursor = (state: RankPageCursorState): string => {
+    const json = JSON.stringify(state);
+    const bytes = new TextEncoder().encode(json);
+    let binary = "";
+
+    for (const byte of bytes) {
+        binary += String.fromCodePoint(byte);
+    }
+
+    return btoa(binary);
+};
+
+const decodeRankPageCursor = (cursor: string): RankPageCursorState => {
+    let json: string;
+
+    try {
+        const binary = atob(cursor);
+        const bytes = Uint8Array.from(binary, (character) => character.codePointAt(0) ?? 0);
+
+        json = new TextDecoder().decode(bytes);
+    } catch {
+        return { perShard: {} };
+    }
+
+    try {
+        const parsed = JSON.parse(json) as unknown;
+
+        if (parsed !== null && typeof parsed === "object" && "perShard" in parsed) {
+            const { perShard } = parsed as { perShard?: unknown };
+
+            if (perShard !== null && typeof perShard === "object") {
+                return { perShard: perShard as Record<string, RankPageKey> };
+            }
+        }
+    } catch {
+        // Malformed cursor → start fresh; matches the shard-local reader, which
+        // silently ignores a cursor whose decoded length doesn't fit.
+    }
+
+    return { perShard: {} };
+};
+
+/**
+ * One shard's successfully-fetched slice, normalized for the merge: its rows in
+ * local rank order plus whether the shard had more rows beyond the slice. A
+ * head index walks the rows as the k-way merge consumes them.
+ */
+interface ShardSlice {
+    hasMore: boolean;
+    head: number;
+    rows: ReadonlyArray<RankPageRow>;
+    shardKey: string;
+}
+
+/** Read a `ShardRankPageResult` defensively off an unwrapped admin payload. */
+const readRankPageResult = (payload: unknown): ShardRankPageResult => {
+    const value = (payload ?? {}) as { hasMore?: unknown; rows?: unknown };
+    const rows = Array.isArray(value.rows) ? (value.rows as ReadonlyArray<RankPageRow>) : [];
+
+    return { hasMore: value.hasMore === true, rows };
+};
+
+/**
+ * Pick the slice whose current head row sorts globally-smallest under
+ * {@link compareRankKeys}, or `undefined` when every slice is drained. The
+ * single step of the k-way merge.
+ */
+const pickSmallestHead = (slices: ShardSlice[], directions: ReadonlyArray<RankPageDirection>): ShardSlice | undefined => {
+    let best: ShardSlice | undefined;
+    let bestKey: RankPageKey | undefined;
+
+    for (const slice of slices) {
+        const candidate = slice.rows[slice.head];
+
+        if (candidate === undefined) {
+            continue;
+        }
+
+        if (bestKey === undefined || compareRankKeys(candidate.key, bestKey, directions) < 0) {
+            best = slice;
+            bestKey = candidate.key;
+        }
+    }
+
+    return best;
+};
+
+/**
+ * Build the next composite cursor from each shard's resume key. `anyRemaining`
+ * is true when any shard still has unconsumed rows in its slice or reported more
+ * locally; when none does, the merge is exhausted and the cursor is `null`.
+ * Every shard whose rows we've ever consumed (seeded from the prior cursor,
+ * overwritten this page) carries its resume key forward so a shard that is fully
+ * drained this page — or simply not advanced — never restarts from its
+ * beginning and re-emits already-paged rows.
+ */
+const buildNextRankPageCursor = (slices: ShardSlice[], lastConsumedKey: Record<string, RankPageKey>): null | string => {
+    let anyRemaining = false;
+    const perShard: Record<string, RankPageKey> = {};
+
+    for (const slice of slices) {
+        if (slice.head < slice.rows.length || slice.hasMore) {
+            anyRemaining = true;
+        }
+
+        const resumeKey = lastConsumedKey[slice.shardKey];
+
+        if (resumeKey !== undefined) {
+            perShard[slice.shardKey] = resumeKey;
+        }
+    }
+
+    if (!anyRemaining) {
+        // eslint-disable-next-line unicorn/no-null -- RankPageFanOutResult.continueCursor is `null | string`; null is the documented "no further page" cursor on the wire
+        return null;
+    }
+
+    return encodeRankPageCursor({ perShard });
+};
+
+/**
+ * K-way merge of per-shard ranked slices into one globally-ranked page of up to
+ * `take` rows. Each slice is already locally sorted by {@link compareRankKeys};
+ * we repeatedly take the globally-smallest unconsumed head across shards. The
+ * returned `nextCursor`, per shard, records the last key the page consumed from
+ * that shard so the next page resumes strictly-after it; `isDone` is true only
+ * when every shard is fully drained AND none reported more rows locally.
+ */
+const kWayMergeRankPages = (
+    slices: ShardSlice[],
+    take: number,
+    directions: ReadonlyArray<RankPageDirection>,
+    priorPerShard: Record<string, RankPageKey>,
+): { isDone: boolean; nextCursor: null | string; page: ReadonlyArray<Record<string, unknown>> } => {
+    const page: Record<string, unknown>[] = [];
+    // Seed each shard's resume point from the prior cursor (see
+    // buildNextRankPageCursor); overwritten below for shards this page consumes.
+    const lastConsumedKey: Record<string, RankPageKey> = { ...priorPerShard };
+
+    while (page.length < take) {
+        const best = pickSmallestHead(slices, directions);
+
+        if (best === undefined) {
+            break;
+        }
+
+        const row = best.rows[best.head];
+
+        if (row !== undefined) {
+            page.push(row.doc);
+            lastConsumedKey[best.shardKey] = row.key;
+        }
+
+        best.head += 1;
+    }
+
+    const nextCursor = buildNextRankPageCursor(slices, lastConsumedKey);
+
+    return { isDone: nextCursor === null, nextCursor, page };
 };
 
 /**
@@ -1325,6 +1698,104 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
 
             return rollUpRank(results);
         },
+        async orchestrateRankPage(namespace: ShardNamespaceLike, request: RankPageFanOutRequest): Promise<RankPageFanOutResult> {
+            const keys = await options.registry.listShardKeys(request.table);
+            const take = Math.max(1, Math.min(1000, Math.floor(request.take ?? 100)));
+            const directions = request.directions ?? [];
+            const cursorState = request.cursor ? decodeRankPageCursor(request.cursor) : { perShard: {} };
+
+            // Each shard resumes from its own cursor, so (like cdcSync) we can't
+            // reuse `runBoundedFanOut`'s same-args-to-all model — drive a
+            // bounded per-shard-args worker loop. Over-fetch by 1 per shard
+            // (`take + 1`) so a shard's `hasMore` is observable even when its
+            // returned slice is exactly `take` long, but the merge only ever
+            // emits up to the GLOBAL `take`.
+            const outcomes: ShardRankPageOutcome[] = Array.from({ length: keys.length });
+            let cursor = 0;
+
+            const concurrency = Math.min(maxConcurrency, keys.length);
+
+            const worker = async (): Promise<void> => {
+                // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- bounded-concurrency worker loops until the shared cursor is exhausted (guarded below)
+                while (true) {
+                    const index = cursor;
+
+                    cursor += 1;
+
+                    const shardKey = keys[index];
+
+                    if (index >= keys.length || shardKey === undefined) {
+                        return;
+                    }
+
+                    const shardCursorKey = cursorState.perShard[shardKey];
+                    const args: Record<string, unknown> = {
+                        index: request.index,
+                        table: request.table,
+                        take,
+                    };
+
+                    if (request.partitionKey !== undefined) {
+                        args["partitionKey"] = request.partitionKey;
+                    }
+
+                    if (shardCursorKey !== undefined) {
+                        // Forward the prior page's resume key for THIS shard so
+                        // it pages strictly-after the last globally-consumed row.
+                        args["after"] = shardCursorKey;
+                    }
+
+                    // eslint-disable-next-line no-await-in-loop -- intentional: each worker processes shards sequentially while `concurrency` workers run in parallel
+                    const outcome = await callOneShard(
+                        namespace,
+                        shardKey,
+                        prepareShardRpc({ args, functionPath: "__cirrus_admin__:rankPage", headers: request.headers }),
+                        perShardTimeoutMs,
+                    );
+
+                    if (outcome.kind === "err") {
+                        outcomes[index] = { error: { message: outcome.message, timedOut: outcome.timedOut }, shardKey };
+
+                        continue;
+                    }
+
+                    const payload = readRankPageResult(unwrapResult(outcome.value));
+
+                    outcomes[index] = { hasMore: payload.hasMore, rows: payload.rows, shardKey };
+                }
+            };
+
+            if (concurrency > 0) {
+                await Promise.all(Array.from({ length: concurrency }, () => worker()));
+            }
+
+            const slices: ShardSlice[] = [];
+            let ok = 0;
+            let failed = 0;
+
+            for (const outcome of outcomes) {
+                if (outcome.error) {
+                    failed += 1;
+
+                    continue;
+                }
+
+                ok += 1;
+                slices.push({ hasMore: outcome.hasMore ?? false, head: 0, rows: outcome.rows ?? [], shardKey: outcome.shardKey });
+            }
+
+            const merged = kWayMergeRankPages(slices, take, directions, cursorState.perShard);
+
+            return {
+                continueCursor: merged.nextCursor,
+                failed,
+                isDone: merged.isDone,
+                ok,
+                page: merged.page,
+                partial: failed > 0,
+                shards: outcomes,
+            };
+        },
         registry: options.registry,
     };
 };
@@ -1345,10 +1816,17 @@ export type {
     QueryCoordinatorOptions,
     RankFanOutRequest,
     RankFanOutResult,
+    RankPageDirection,
+    RankPageFanOutRequest,
+    RankPageFanOutResult,
+    RankPageKey,
+    RankPageRow,
     ShardError,
     ShardExportOutcome,
     ShardImportOutcome,
     ShardMigrationOutcome,
     ShardRankOutcome,
+    ShardRankPageOutcome,
+    ShardRankPageResult,
     ShardRegistry,
 };
