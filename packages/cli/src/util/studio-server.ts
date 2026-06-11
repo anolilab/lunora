@@ -179,7 +179,18 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
     });
 
     await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
+        server.once("error", (error: NodeJS.ErrnoException) => {
+            if (error.code === "EADDRINUSE") {
+                reject(
+                    new Error(
+                        `studio port ${String(options.port)} is already in use — pass a different port with --port, or stop the process using it`,
+                        { cause: error },
+                    ),
+                );
+            } else {
+                reject(error);
+            }
+        });
         server.listen(options.port, host, () => {
             resolve();
         });
