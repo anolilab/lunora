@@ -103,25 +103,28 @@ export const runOutboxMutation = async (mutate: () => Promise<unknown>): Promise
  * should read `navigator.onLine` itself, separately from this detector.
  */
 export const createOptimisticOnlineDetector = (): OnlineDetector => {
-    let interval: ReturnType<typeof setInterval> | undefined;
+    const intervals = new Set<ReturnType<typeof setInterval>>();
 
     return {
         dispose: () => {
-            if (interval) {
-                clearInterval(interval);
+            for (const handle of intervals) {
+                clearInterval(handle);
             }
+
+            intervals.clear();
         },
         isOnline: () => true,
         notifyOnline: () => {
             /* no external online signal — see the comment above */
         },
         subscribe: (callback) => {
-            interval = setInterval(callback, OUTBOX_DRAIN_INTERVAL_MS);
+            const handle = setInterval(callback, OUTBOX_DRAIN_INTERVAL_MS);
+
+            intervals.add(handle);
 
             return () => {
-                if (interval) {
-                    clearInterval(interval);
-                }
+                clearInterval(handle);
+                intervals.delete(handle);
             };
         },
     };

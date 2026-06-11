@@ -1,9 +1,9 @@
 /* eslint-disable no-underscore-dangle -- `_id` is the Cirrus document-id field; test fixtures mirror it verbatim */
 import { NonRetriableError } from "@tanstack/offline-transactions";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { Row, SyncWriter } from "../src/internals";
-import { makeDiffEmit, runOutboxMutation, toMap } from "../src/internals";
+import { createOptimisticOnlineDetector, makeDiffEmit, runOutboxMutation, toMap } from "../src/internals";
 
 /** A SyncWriter that records the writes it received, in order. */
 const recordingWriter = (): { ops: ({ key: string; type: "delete" } | { type: "insert" | "update"; value: Row })[]; writer: SyncWriter<Row> } => {
@@ -105,5 +105,73 @@ describe(runOutboxMutation, () => {
 
     it("resolves quietly on success", async () => {
         await expect(runOutboxMutation(() => Promise.resolve("ok"))).resolves.toBeUndefined();
+    });
+});
+
+describe(createOptimisticOnlineDetector, () => {
+    beforeEach(() => {
+        vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+    });
+
+    it("each subscribe call gets its own independent interval", () => {
+        expect.assertions(4);
+
+        const detector = createOptimisticOnlineDetector();
+        const callsA: number[] = [];
+        const callsB: number[] = [];
+
+        const unsubA = detector.subscribe(() => {
+            callsA.push(Date.now());
+        });
+        detector.subscribe(() => {
+            callsB.push(Date.now());
+        });
+
+        // Advance past a tick — both should fire.
+        vi.advanceTimersByTime(5000);
+
+        expect(callsA.length).toBeGreaterThan(0);
+        expect(callsB.length).toBeGreaterThan(0);
+
+        // Unsubscribe A; B must keep firing but A must stop.
+        unsubA();
+        const countABefore = callsA.length;
+        const countBBefore = callsB.length;
+
+        vi.advanceTimersByTime(5000);
+
+        expect(callsA.length).toBe(countABefore);
+        expect(callsB.length).toBeGreaterThan(countBBefore);
+
+        detector.dispose();
+    });
+
+    it("dispose() stops all remaining intervals", () => {
+        expect.assertions(2);
+
+        const detector = createOptimisticOnlineDetector();
+        const callsA: number[] = [];
+        const callsB: number[] = [];
+
+        detector.subscribe(() => {
+            callsA.push(Date.now());
+        });
+        detector.subscribe(() => {
+            callsB.push(Date.now());
+        });
+
+        detector.dispose();
+
+        const countA = callsA.length;
+        const countB = callsB.length;
+
+        vi.advanceTimersByTime(10_000);
+
+        expect(callsA.length).toBe(countA);
+        expect(callsB.length).toBe(countB);
     });
 });
