@@ -21,13 +21,13 @@
     "devDependencies": {
         "@cirrus/cli": "^0.0.0",
         "@cirrus/vite": "^0.0.0",
-        "@sveltejs/adapter-cloudflare": "^7.2.0",
-        "@sveltejs/kit": "^2.64.0",
-        "@sveltejs/vite-plugin-svelte": "^7.1.0",
-        "@types/node": "^25.9.2",
+        "@sveltejs/adapter-cloudflare": "^7.2.8",
+        "@sveltejs/kit": "^2.65.0",
+        "@sveltejs/vite-plugin-svelte": "^7.1.2",
+        "@types/node": "^25.9.3",
         "svelte": "^5.56.3",
         "typescript": "^6.0.3",
         "vite": "^8.0.16",
-        "wrangler": "^4.99.0"
+        "wrangler": "^4.100.0"
     }
 }
