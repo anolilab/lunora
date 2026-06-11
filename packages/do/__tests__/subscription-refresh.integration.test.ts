@@ -520,4 +520,62 @@ describe("shardDO: mutation → subscription-refresh pipeline", () => {
         // Socket B must have received a refresh frame despite the broken sub on A.
         expect(subFrames(wsB, "sub-healthy-B").length).toBeGreaterThan(1);
     });
+
+    // -------------------------------------------------------------------------
+    // Case 6 — PROFILE: N identical subscriptions ⇒ N query runs per change
+    //
+    // Finding #5 (audit): the refresh path executes + serializes per socket, so
+    // N sockets subscribing to the SAME (functionPath, args) trigger N distinct
+    // `executeSubscription` calls on a single write (ReactiveCache is opt-in and
+    // off here). This test locks that fan-out factor in as a measured baseline so
+    // any future cross-socket dedup can prove it collapses N runs → 1.
+    //
+    // It is a PROFILING/characterization test, not a regression guard against an
+    // implemented optimization: today's documented behavior is N runs, and that
+    // is what we assert. If a safe dedup lands later, this assertion is the one
+    // that must flip to `toBe(1)` and gains a fan-out-frame check.
+    // -------------------------------------------------------------------------
+    it("profile: N sockets on the same query+args ⇒ N executeSubscription runs per change (no cross-socket dedup today)", async () => {
+        expect.assertions(3);
+
+        const shard = new SubscriptionRefreshShard(state, {});
+        const socketCount = 5;
+        const sockets: FakeWebSocket[] = [];
+
+        shard.outcomes.set("messages:list", {
+            result: [{ _id: "m1", text: "hello" }],
+            tables: new Set(["messages"]),
+        });
+
+        // N sockets all subscribe to the identical (functionPath, args) pair.
+        for (let index = 0; index < socketCount; index += 1) {
+            const ws = createFakeWebSocket();
+
+            shard.registerSocket(ws);
+            // eslint-disable-next-line no-await-in-loop -- sequential subscribe setup keeps seed ordering deterministic
+            await subscribeSocket(shard, ws, `sub-${String(index)}`, "messages:list");
+            sockets.push(ws);
+        }
+
+        // Seed pass already ran the query once per socket.
+        expect(shard.execCounts.get("messages:list")).toBe(socketCount);
+
+        // One write touching "messages" — every socket's memo intersects "messages".
+        shard.outcomes.set("messages:list", {
+            result: [{ _id: "m1", text: "hello" }, { _id: "m2", text: "world" }],
+            tables: new Set(["messages"]),
+        });
+        shard.changedTableOnRpc = "messages";
+        await shard.writeRpc();
+
+        // The single write re-ran the IDENTICAL query once PER SOCKET — the
+        // characterized N-runs fan-out (would be 1 under cross-socket dedup).
+        expect(shard.execCounts.get("messages:list")).toBe(socketCount * 2);
+
+        // Every socket still received its own refresh frame (correctness is
+        // unaffected by the fan-out; the cost is the duplicate query runs).
+        const refreshed = sockets.every((ws, index) => subFrames(ws, `sub-${String(index)}`).length > 1);
+
+        expect(refreshed).toBe(true);
+    });
 });

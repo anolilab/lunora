@@ -982,6 +982,63 @@ describe("subscriptionListDeltas", () => {
 
         expect(deltas?.[0]?.table).not.toBe("");
     });
+
+    // -------------------------------------------------------------------------
+    // Finding #6 — the optional `frames` sink must produce frame bodies that are
+    // byte-identical to `JSON.stringify(delta)` (so the production caller can
+    // splice them straight into the wire frame without re-serializing the row),
+    // and each row must be stringified exactly once per refresh (no double
+    // serialization across the change-detection compare and the frame payload).
+    // -------------------------------------------------------------------------
+    it("the frames sink yields bodies byte-identical to JSON.stringify(delta) across insert/update/delete", () => {
+        expect.assertions(2);
+
+        // One delete (c), one update (a), one insert (d) — exercises all three
+        // branches while staying at/under the chattiness cap (3 deltas, length-3 next).
+        const prev = JSON.stringify([row("a", { text: "old" }), row("b"), row("c")]);
+        const next = [row("a", { text: "new" }), row("b"), row("d", { text: "fresh" })];
+
+        const frames: string[] = [];
+        const deltas = subscriptionListDeltas(prev, next, "messages", frames);
+
+        expect(deltas).toBeDefined();
+        // Each collected frame body must equal exactly what the old code produced
+        // via `JSON.stringify(delta)` — same key order, same row serialization.
+        expect(frames).toEqual((deltas ?? []).map((delta) => JSON.stringify(delta)));
+    });
+
+    it("serializes each next row exactly once per refresh (no double JSON.stringify per row)", () => {
+        expect.assertions(2);
+
+        // Spy on each next row's serialization via a counting `toJSON`. Both the
+        // change-detection compare and the frame body must reuse a single
+        // fingerprint, so each row's `toJSON` fires exactly once.
+        const counts: Record<string, number> = { a: 0, c: 0 };
+        const countingRow = (id: string, rest: Record<string, unknown>): Record<string, unknown> => {
+            return {
+                _creationTime: 1,
+                _id: id,
+                ...rest,
+                toJSON() {
+                    counts[id] = (counts[id] ?? 0) + 1;
+
+                    return { _creationTime: 1, _id: id, ...rest };
+                },
+            };
+        };
+
+        // `a` survives with a body change (update path, runs the compare);
+        // `c` is brand new (insert path, no compare). Both must be stringified once.
+        const prev = JSON.stringify([row("a", { text: "old" })]);
+        const next = [countingRow("a", { text: "new" }), countingRow("c", { text: "fresh" })];
+
+        const frames: string[] = [];
+
+        subscriptionListDeltas(prev, next, "messages", frames);
+
+        expect(counts["a"]).toBe(1);
+        expect(counts["c"]).toBe(1);
+    });
 });
 
 describe("shardDO subscription delta push", () => {
@@ -1082,5 +1139,46 @@ describe("shardDO subscription delta push", () => {
         }
 
         expect(merged).toEqual(nextResult);
+    });
+
+    // -------------------------------------------------------------------------
+    // Finding #6 — the pushed `{type:"delta"}` frame strings must be byte-for-byte
+    // identical to the legacy `JSON.stringify(delta)`-based encoding, even though
+    // the production path now reuses the diff's per-row fingerprint instead of
+    // re-serializing the delta. Reconstruct the expected wire strings from the
+    // returned deltas and assert exact string equality (not just structural).
+    // -------------------------------------------------------------------------
+    it("pushed delta frame strings are byte-identical to the JSON.stringify(delta) encoding", async () => {
+        expect.assertions(2);
+
+        const shard = new ReexecShard(state, {});
+        const ws = createFakeWebSocket();
+
+        shard.registerSocket(ws);
+
+        const prevResult = [idRow("a", { text: "old" }), idRow("b"), idRow("c")];
+
+        shard.outcomes.set("messages:list", { result: prevResult, tables: new Set(["messages"]) });
+        await subscribeMessages(shard, ws);
+
+        const sentBefore = ws.sent.length;
+
+        // delete c, update a, insert d — all three delta branches in one refresh,
+        // 3 deltas for a length-3 next result (under the chattiness cap).
+        const nextResult = [idRow("a", { text: "new" }), idRow("b"), idRow("d", { text: "hi" })];
+
+        shard.outcomes.set("messages:list", { result: nextResult, tables: new Set(["messages"]) });
+        shard.changedTableOnRpc = "messages";
+        await shard.writeRpc();
+
+        const sentDeltaLines = ws.sent.slice(sentBefore).filter((line) => (JSON.parse(line) as { type: string }).type === "delta");
+
+        // Derive the expected wire strings directly from subscriptionListDeltas,
+        // encoding each delta the legacy way (JSON.stringify(delta)).
+        const expectedDeltas = subscriptionListDeltas(JSON.stringify(prevResult), nextResult, "messages");
+        const expectedLines = (expectedDeltas ?? []).map((delta) => `{"type":"delta","id":"sub-1","delta":${JSON.stringify(delta)}}`);
+
+        expect(sentDeltaLines).toHaveLength(expectedLines.length);
+        expect(sentDeltaLines).toEqual(expectedLines);
     });
 });

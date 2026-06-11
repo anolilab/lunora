@@ -351,6 +351,62 @@ const survivorsKeepOrder = (
     return survivingPrevious.every((id, index) => survivingNext[index] === id);
 };
 
+/** An `_id`-indexed row set: the lookup map plus the preserved insertion order. */
+type RowIndex = { byId: Map<string, Record<string, unknown>>; order: string[] };
+
+/** A diff delta paired with its pre-serialized `delta` frame body (`JSON.stringify(delta)`). */
+type FramedDelta = { delta: MutationDelta; frame: string };
+
+/**
+ * Collect `delete` deltas for every prev row absent from `next`, in prev order.
+ * Each delete's `frame` is byte-identical to `JSON.stringify({key, op, table})`.
+ */
+const collectDeleteDeltas = (previous: RowIndex, next: RowIndex, deltaTable: string, tableJson: string): FramedDelta[] => {
+    const out: FramedDelta[] = [];
+
+    for (const id of previous.order) {
+        if (!next.byId.has(id)) {
+            out.push({
+                delta: { key: id, op: "delete", table: deltaTable },
+                frame: `{"key":${JSON.stringify(id)},"op":"delete","table":${tableJson}}`,
+            });
+        }
+    }
+
+    return out;
+};
+
+/**
+ * Collect `insert`/`update` deltas for every next row that is new or whose body
+ * changed, in next order. Each next row is fingerprinted with a SINGLE
+ * `JSON.stringify` (finding #6) reused for both the `prev !== next` compare and
+ * the `row` slot of the frame; each prev row is fingerprinted once too. Frames
+ * are byte-identical to `JSON.stringify({key, op, row, table})`.
+ */
+const collectUpsertDeltas = (previous: RowIndex, next: RowIndex, deltaTable: string, tableJson: string): FramedDelta[] => {
+    const out: FramedDelta[] = [];
+
+    for (const id of next.order) {
+        const nextRow = next.byId.get(id) as Record<string, unknown>;
+        const previousRow = previous.byId.get(id);
+        const nextFingerprint = JSON.stringify(nextRow);
+        const previousFingerprint = previousRow === undefined ? undefined : JSON.stringify(previousRow);
+
+        if (previousFingerprint === nextFingerprint) {
+            continue;
+        }
+
+        const op = previousFingerprint === undefined ? "insert" : "update";
+
+        out.push({
+            delta: { key: id, op, row: nextRow, table: deltaTable },
+            frame: `{"key":${JSON.stringify(id)},"op":"${op}","row":${nextFingerprint},"table":${tableJson}}`,
+        });
+    }
+
+    return out;
+};
+
 /**
  * Diff the previously-sent list snapshot (`previousJson`, the memo's
  * `lastJson`) against the new query result and produce per-row
@@ -371,8 +427,22 @@ const survivorsKeepOrder = (
  * full new `row`; delete omits it (matching the wire contract `@cirrus/client`
  * parses). Deltas are ordered deletes-then-inserts/updates so the client never
  * sees a transient over-length page.
+ *
+ * Per-row serialization is done exactly **once** per refresh (finding #6). Each
+ * row is stringified a single time into a fingerprint reused for both the
+ * `prev !== next` change-detection compare and — when the caller passes the
+ * optional `frames` sink — the pre-serialized delta frame body. The returned
+ * `MutationDelta[]` shape is unchanged; `frames`, when supplied, receives the
+ * exact `JSON.stringify(delta)` string for each returned delta, in the same
+ * order, so the caller can splice it straight into the `{type:"delta"}` frame
+ * without serializing the delta (and the row inside it) a second time.
  */
-const subscriptionListDeltas = (previousJson: string, nextResult: unknown, table: string): MutationDelta[] | undefined => {
+const subscriptionListDeltas = (
+    previousJson: string,
+    nextResult: unknown,
+    table: string,
+    frames?: string[],
+): MutationDelta[] | undefined => {
     let parsed: unknown;
 
     try {
@@ -399,30 +469,22 @@ const subscriptionListDeltas = (previousJson: string, nextResult: unknown, table
     }
 
     const deltaTable = table === "" ? DELTA_FALLBACK_TABLE : table;
-    const deletes: MutationDelta[] = [];
-    const upserts: MutationDelta[] = [];
-
-    for (const id of previous.order) {
-        if (!next.byId.has(id)) {
-            deletes.push({ key: id, op: "delete", table: deltaTable });
-        }
-    }
-
-    for (const id of next.order) {
-        const nextRow = next.byId.get(id) as Record<string, unknown>;
-        const previousRow = previous.byId.get(id);
-
-        if (previousRow === undefined) {
-            upserts.push({ key: id, op: "insert", row: nextRow, table: deltaTable });
-        } else if (JSON.stringify(previousRow) !== JSON.stringify(nextRow)) {
-            upserts.push({ key: id, op: "update", row: nextRow, table: deltaTable });
-        }
-    }
-
-    const deltas = [...deletes, ...upserts];
+    const tableJson = JSON.stringify(deltaTable);
+    // Deletes precede upserts so the client never sees a transient over-length page.
+    const framed = [...collectDeleteDeltas(previous, next, deltaTable, tableJson), ...collectUpsertDeltas(previous, next, deltaTable, tableJson)];
 
     // (5): a near-total change is better sent as a single snapshot.
-    return deltas.length > next.order.length ? undefined : deltas;
+    if (framed.length > next.order.length) {
+        return undefined;
+    }
+
+    if (frames !== undefined) {
+        for (const { frame } of framed) {
+            frames.push(frame);
+        }
+    }
+
+    return framed.map(({ delta }) => delta);
 };
 
 /**
@@ -3243,6 +3305,49 @@ abstract class ShardDO {
      * of `executeSubscription` calls in lockstep and saturate the DO
      * isolate. Within a single socket we stay sequential — the same
      * subscription set is small (cap of {@link ShardDO.MAX_SUBSCRIPTIONS_PER_SOCKET}).
+     *
+     * ----------------------------------------------------------------------
+     * Audit finding #5 — N identical subscriptions ⇒ N query runs per change.
+     * ----------------------------------------------------------------------
+     * This loop executes `executeSubscription` once PER (socket, sub). When N
+     * sockets subscribe to the SAME `(functionPath, args)`, a single write that
+     * touches a read table re-runs the identical query N times. The N-runs
+     * fan-out is characterized by the `profile:` case in
+     * `subscription-refresh.integration.test.ts`.
+     *
+     * Cross-socket execution dedup (group identical `(functionPath, args)`, run
+     * + serialize once, fan the same frame to every sharing socket) was
+     * INVESTIGATED and DELIBERATELY NOT implemented here, because it would change
+     * observable behavior rather than being a pure optimization:
+     *
+     * (a) Per-socket memo divergence. The frame a socket receives depends on its
+     * OWN `subMemos` entry (`pushSubscriptionData`): one socket may need a
+     * `{type:"delta"}`, a freshly-subscribed socket a full `{type:"data"}`
+     * snapshot, and an up-to-date socket nothing at all. So only the QUERY RUN +
+     * its result can be shared — `pushSubscriptionData` must still run per socket.
+     * Dedup saves the N-1 redundant runs, not the fan-out.
+     *
+     * (b) Side-effect cardinality. The real `executeSubscription` lives in the
+     * codegen subclass and dispatches the user handler, which records function
+     * metrics, scan attribution, and `ctx.log` lines PER RUN. N subscribers today
+     * produce N metric samples / N log lines; collapsing to one run silently
+     * under-counts those in the studio. The base class can't see inside the
+     * override, so it can't make that trade safely.
+     *
+     * (c) Error attribution. A throwing run is contained per (socket, sub) here
+     * (see the catch below, and the integration test's isolation cases). A shared
+     * run would have to fan one failure to every sharing socket while preserving
+     * the "leave memo untouched ⇒ re-run next flush" contract.
+     *
+     * The framework's INTENDED answer to this fan-out already exists: the opt-in
+     * {@link ReactiveCache} (`ShardDOOptions.reactiveCache`). Refreshes run under
+     * {@link ShardDO.withAnonymousIdentity}, so the cache key
+     * `reactiveCacheKey(functionPath, args, null)` is identical across all
+     * sockets — N identical subscriptions collapse to ONE handler run plus N
+     * cache hits, with every per-run side effect honored exactly once by design.
+     * Recommended remediation is to document/enable ReactiveCache for
+     * high-fanout shards rather than bolt a second, semantically-divergent dedup
+     * into this loop.
      */
     private async refreshSubscriptions(changed: Set<string>): Promise<void> {
         const sockets = [...this.state.getWebSockets()];
@@ -3343,17 +3448,23 @@ abstract class ShardDO {
 
         // Try an incremental delta push when there's a prior list to diff
         // against. `undefined` => not diffable, fall back to the snapshot below.
+        // `deltaFrames` receives the pre-serialized `delta` body for each delta
+        // (finding #6) so we never re-`JSON.stringify` a row that the diff has
+        // already fingerprinted.
+        const deltaFrames: string[] = [];
         const deltas =
-            existing === undefined ? undefined : subscriptionListDeltas(existing.lastJson, outcome.result, outcome.tables.values().next().value ?? "");
+            existing === undefined
+                ? undefined
+                : subscriptionListDeltas(existing.lastJson, outcome.result, outcome.tables.values().next().value ?? "", deltaFrames);
 
         memos.set(subId, { lastJson: json, tables: outcome.tables });
 
         if (deltas !== undefined) {
             const idJson = JSON.stringify(subId);
 
-            for (const delta of deltas) {
+            for (const deltaBody of deltaFrames) {
                 try {
-                    ws.send(`{"type":"delta","id":${idJson},"delta":${JSON.stringify(delta)}}`);
+                    ws.send(`{"type":"delta","id":${idJson},"delta":${deltaBody}}`);
                 } catch {
                     /* socket may have been closed mid-flush */
                 }
