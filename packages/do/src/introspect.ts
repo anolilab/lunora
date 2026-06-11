@@ -797,7 +797,12 @@ const findStorageReferences = (sql: SqlExec, storageColumns: Record<string, stri
                 .exec<{
                     id: string;
                     ref: string;
-                }>(`SELECT id, ${resolved.expression} AS ref FROM ${quoted} WHERE ${resolved.expression} IN (${placeholders})`, ...resolved.params, ...resolved.params, ...scanned)
+                }>(
+                    `SELECT id, ${resolved.expression} AS ref FROM ${quoted} WHERE ${resolved.expression} IN (${placeholders})`,
+                    ...resolved.params,
+                    ...resolved.params,
+                    ...scanned,
+                )
                 .toArray();
 
             for (const row of rows) {

@@ -12,7 +12,7 @@ const fakeStringSchema = {
     "~standard": {
         validate: (value: unknown) =>
             typeof value === "string"
-                ? { value: (value).toUpperCase() }
+                ? { value: value.toUpperCase() }
                 : { issues: [{ message: "expected string from fakeSchema", path: [] as PropertyKey[] }] },
         vendor: "fake",
         version: 1 as const,
@@ -57,13 +57,11 @@ describe("v.from() args-map integration", () => {
 
         const send = mutation({
             args: { count: v.number(), name: v.from(fakeStringSchema) },
-             
+
             handler,
         });
 
-        await expect(async () =>
-            send.handler(makeMutationContext(), { count: 1, name: 42 }),
-        ).rejects.toBeInstanceOf(ValidationError);
+        await expect(async () => send.handler(makeMutationContext(), { count: 1, name: 42 })).rejects.toBeInstanceOf(ValidationError);
         expect(handler).not.toHaveBeenCalled();
     });
 

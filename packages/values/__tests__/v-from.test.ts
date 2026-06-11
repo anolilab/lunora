@@ -15,9 +15,11 @@ const fakeZodString = {
 // Fixture that always fails and carries a nested path on the first issue.
 const fakeNestedFail = {
     "~standard": {
-        validate: (_value: unknown) => {return {
-            issues: [{ message: "name too short", path: ["name", "first"] as PropertyKey[] }],
-        }},
+        validate: (_value: unknown) => {
+            return {
+                issues: [{ message: "name too short", path: ["name", "first"] as PropertyKey[] }],
+            };
+        },
         vendor: "fake",
         version: 1 as const,
     },
@@ -26,7 +28,9 @@ const fakeNestedFail = {
 // Async fixture — Standard Schema allows async validate; Cirrus does not.
 const fakeAsync = {
     "~standard": {
-        validate: async (_value: unknown) => {return { value: "ok" }},
+        validate: async (_value: unknown) => {
+            return { value: "ok" };
+        },
         vendor: "fake",
         version: 1 as const,
     },
@@ -38,7 +42,6 @@ const fakeAsync = {
 const fakeThenable = {
     "~standard": {
         validate: (_value: unknown) => {
-             
             const thenable = {
                 // eslint-disable-next-line unicorn/no-thenable -- deliberate: this fixture mimics a non-native thenable that v.from must reject.
                 then: (resolve: (value: unknown) => void): void => {
@@ -81,12 +84,7 @@ describe("v.from()", () => {
     it("(3) non-Standard-Schema input throws at construction time", () => {
         expect.assertions(1);
 
-        expect(() =>
-            v.from(
-                 
-                { not: "a standard schema" } as any,
-            ),
-        ).toThrow("@cirrus/values: v.from() expects a Standard Schema v1 object");
+        expect(() => v.from({ not: "a standard schema" } as any)).toThrow("@cirrus/values: v.from() expects a Standard Schema v1 object");
     });
 
     it("(4) async validate throws synchronously with a clear error", () => {

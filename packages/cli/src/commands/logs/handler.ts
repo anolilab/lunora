@@ -1,4 +1,4 @@
-import type {CommandHandler} from "../../util/command";
+import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
