@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { runInitCommand } from "../../src/commands/init/handler";
+import { isTemplate, runInitCommand } from "../../src/commands/init/handler";
 import type { Logger } from "../../src/util/logger";
 
 const silentLogger = (): Logger => {
@@ -215,6 +215,44 @@ describe("cirrus init", () => {
 
             expect(result.code).toBe(1);
             expect(errors.join("\n")).toContain("template not found in local source");
+        });
+
+        it("isTemplate accepts all 8 real template dir names and next", () => {
+            expect.assertions(10);
+
+            expect(isTemplate("astro")).toBe(true);
+            expect(isTemplate("nuxt")).toBe(true);
+            expect(isTemplate("react-router")).toBe(true);
+            expect(isTemplate("solid-start")).toBe(true);
+            expect(isTemplate("standalone")).toBe(true);
+            expect(isTemplate("sveltekit")).toBe(true);
+            expect(isTemplate("tanstack-start")).toBe(true);
+            expect(isTemplate("vite")).toBe(true);
+            expect(isTemplate("next")).toBe(true);
+            expect(isTemplate("unknown-framework")).toBe(false);
+        });
+
+        it("astro template scaffolds expected files (not vite fallback)", async () => {
+            expect.assertions(5);
+
+            const result = await runInitCommand({
+                cwd: workdir,
+                from: templatesRoot,
+                logger: silentLogger(),
+                name: "astro-app",
+                templateType: "astro",
+            });
+
+            expect(result.code).toBe(0);
+
+            const target = join(workdir, "astro-app");
+
+            // astro.config.mjs is astro-specific — proves we did NOT fall back to vite
+            expect(existsSync(join(target, "astro.config.mjs"))).toBe(true);
+            expect(existsSync(join(target, "cirrus", "schema.ts"))).toBe(true);
+            expect(existsSync(join(target, "wrangler.jsonc"))).toBe(true);
+            // vite.config.ts does NOT exist in the astro template (class-B framework)
+            expect(existsSync(join(target, "vite.config.ts"))).toBe(false);
         });
     });
 });

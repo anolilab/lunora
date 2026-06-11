@@ -18,7 +18,7 @@ const initCommand: Command = {
         {
             alias: "t",
             defaultValue: "vite",
-            description: "Template to scaffold (vite | standalone | tanstack-start | next)",
+            description: "Template to scaffold (vite | standalone | astro | nuxt | react-router | solid-start | sveltekit | tanstack-start | next)",
             name: "template",
             type: String,
         },

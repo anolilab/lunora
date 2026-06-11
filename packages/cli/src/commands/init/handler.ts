@@ -14,7 +14,7 @@ import type { Logger } from "../../util/logger";
 import { patchViteConfig } from "../../util/patch-vite-config";
 import type { InitOptions } from "./index";
 
-type Template = "next" | "standalone" | "tanstack-start" | "vite";
+type Template = "astro" | "next" | "nuxt" | "react-router" | "solid-start" | "standalone" | "sveltekit" | "tanstack-start" | "vite";
 
 interface InitCommandOptions {
     /**
@@ -567,7 +567,16 @@ const runInitCommand = async (options: InitCommandOptions): Promise<InitCommandR
 };
 
 /** Narrow a raw `--template` value to a known {@link Template} (defaults to vite). */
-const isTemplate = (value: unknown): value is Template => value === "vite" || value === "standalone" || value === "next" || value === "tanstack-start";
+const isTemplate = (value: unknown): value is Template =>
+    value === "astro" ||
+    value === "next" ||
+    value === "nuxt" ||
+    value === "react-router" ||
+    value === "solid-start" ||
+    value === "standalone" ||
+    value === "sveltekit" ||
+    value === "tanstack-start" ||
+    value === "vite";
 
 /** `cirrus init [name]` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<InitOptions> = defineHandler<InitOptions>(({ argument, cwd, logger, options }) => {
@@ -586,6 +595,6 @@ const execute: CommandHandler<InitOptions> = defineHandler<InitOptions>(({ argum
     });
 });
 
-export { execute };
+export { execute, isTemplate };
 export type { InitCommandOptions, InitCommandResult, Template };
 export { runInitCommand };
