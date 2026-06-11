@@ -11,9 +11,12 @@ const codegenCommand: Command = {
             return { default: m.execute as CommandExecute<Toolbox> };
         }),
     name: "codegen",
-    options: [{ description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String }],
+    options: [
+        { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
+        { description: "Output format: pretty (default) or json", name: "format", type: String },
+    ],
 };
 
 export { codegenCommand };
 
-export type CodegenOptions = CreateOptions<{ "api-spec": string | undefined }>;
+export type CodegenOptions = CreateOptions<{ "api-spec": string | undefined; format: string | undefined }>;

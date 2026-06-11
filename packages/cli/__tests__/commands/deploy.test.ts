@@ -3,12 +3,30 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runDeployCommand } from "../../src/commands/deploy/handler";
 import type { FetchLike } from "../../src/commands/run/handler";
 import type { Logger } from "../../src/util/logger";
 import { createRecordingSpawner } from "../../src/util/spawn";
+
+/** Run async `body` while capturing everything written to `process.stdout`. */
+const captureStdout = async (body: () => Promise<void>): Promise<string> => {
+    let captured = "";
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array): boolean => {
+        captured += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+
+        return true;
+    });
+
+    try {
+        await body();
+    } finally {
+        spy.mockRestore();
+    }
+
+    return captured;
+};
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "..", "..", "..", "codegen", "__tests__", "fixtures", "simple");
@@ -325,6 +343,65 @@ export const backfillNames = defineMigration({
             // Migration log messages emitted
             expect(infos.some((line) => line.includes("--migrate"))).toBe(true);
             expect(infos.some((line) => line.includes("backfill-names"))).toBe(true);
+        });
+
+        describe("--format json", () => {
+            it("emits a single parseable JSON document with the structured result", async () => {
+                expect.assertions(4);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const stdout = await captureStdout(async () => {
+                    await runDeployCommand({ cwd: workdir, format: "json", logger, spawner });
+                });
+
+                const parsed = JSON.parse(stdout) as { code: number; descriptor: { args: string[] } | null; validation: { problems: unknown[] } };
+
+                expect(parsed.code).toBe(0);
+                expect(parsed).toHaveProperty("validation");
+                expect(parsed.validation.problems).toEqual([]);
+                expect(parsed.descriptor?.args).toContain("deploy");
+            });
+
+            it("serializes the error into the JSON document when validation fails", async () => {
+                expect.assertions(2);
+
+                // No wrangler.jsonc → validation failure, deploy never spawns.
+                const { spawner } = createRecordingSpawner();
+                const { logger } = silentLogger();
+
+                const stdout = await captureStdout(async () => {
+                    await runDeployCommand({ cwd: workdir, format: "json", logger, spawner });
+                });
+
+                const parsed = JSON.parse(stdout) as { code: number; error?: string };
+
+                expect(parsed.code).toBe(1);
+                expect(parsed.error).toBeDefined();
+            });
+
+            it("rejects an unknown --format the same way logs does", async () => {
+                expect.assertions(5);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+                const { calls, spawner } = createRecordingSpawner();
+                const { errors, logger } = silentLogger();
+
+                const stdout = await captureStdout(async () => {
+                    const result = await runDeployCommand({ cwd: workdir, format: "yaml", logger, spawner });
+
+                    expect(result.code).toBe(1);
+                    expect(result.error).toBeDefined();
+                });
+
+                expect(stdout).toBe("");
+                expect(errors.some((line) => line.includes('unknown --format "yaml" — expected pretty | json'))).toBe(true);
+                expect(calls).toHaveLength(0);
+            });
         });
     });
 });

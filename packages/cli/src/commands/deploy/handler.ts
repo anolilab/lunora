@@ -11,6 +11,7 @@ import { parseApiSpec } from "../../util/api-spec";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
+import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import { validateWrangler } from "../../util/wrangler-validator";
@@ -29,6 +30,8 @@ interface DeployCommandOptions {
     env?: string;
     /** Fetch implementation injected in tests for `--migrate` RPC calls. */
     fetchImpl?: FetchLike;
+    /** Output format: `pretty` (default) or `json`. */
+    format?: string;
     /** Set to `false` to disable interactive spinners (test injection). */
     interactive?: boolean;
     logger: Logger;
@@ -91,6 +94,12 @@ interface WranglerD1Shape {
 const resolveComposedWorkerEntry = (cwd: string): string | undefined => (existsSync(join(cwd, "src", "worker.ts")) ? "src/worker.ts" : undefined);
 
 const isInteractive = (options: DeployCommandOptions): boolean => {
+    // `--format json` owns stdout for the JSON document — interactive spinners
+    // would corrupt it, so json mode is always non-interactive.
+    if (isJsonFormat(options.format)) {
+        return false;
+    }
+
     if (options.interactive !== undefined) {
         return options.interactive;
     }
@@ -267,7 +276,7 @@ const checkD1Placeholder = (cwd: string, logger: Logger): string | undefined => 
     return message;
 };
 
-const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCommandResult> => {
+const executeDeploy = async (options: DeployCommandOptions): Promise<DeployCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     const interactive = isInteractive(options);
 
@@ -357,18 +366,44 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
     };
 };
 
+/**
+ * Run a deploy, then (in `--format json` mode) serialize the structured
+ * {@link DeployCommandResult} to stdout. Human/progress logging is routed to
+ * stderr for json output so stdout carries only the single JSON document.
+ */
+const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCommandResult> => {
+    const formatError = validateOutputFormat("deploy", options.format);
+
+    if (formatError !== undefined) {
+        options.logger.error(formatError);
+
+        return { code: 1, descriptor: undefined, error: formatError, validation: { problems: [], wranglerPath: undefined } };
+    }
+
+    const result = await executeDeploy({ ...options, logger: loggerForFormat(options.format, options.logger) });
+
+    if (isJsonFormat(options.format)) {
+        printJson(result);
+    }
+
+    return result;
+};
+
 /** `cirrus deploy` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions>(({ cwd, logger, options }) =>
-    runDeployCommand({
+const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions>(async ({ cwd, logger, options }) => {
+    const result = await runDeployCommand({
         apiSpec: parseApiSpec(options.apiSpec),
         cwd,
         env: options.env,
+        format: options.format,
         logger,
         migrate: options.migrate === true,
         migrateToken: options.migrateToken,
         migrateUrl: options.migrateUrl,
-    }),
-);
+    });
+
+    return { code: result.code };
+});
 
 export { execute };
 export type { DeployCommandOptions, DeployCommandResult };

@@ -18,6 +18,7 @@ const deployCommand: Command = {
     options: [
         { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
         { description: "Cloudflare environment name", name: "env", type: String },
+        { description: "Output format: pretty (default) or json", name: "format", type: String },
         { description: "After a successful deploy, run pending data migrations against the live worker", name: "migrate", type: Boolean },
         { description: "Admin bearer token for --migrate (falls back to CIRRUS_ADMIN_TOKEN)", name: "migrate-token", type: String },
         { description: "Worker URL for --migrate (defaults to the deploy target)", name: "migrate-url", type: String },
@@ -29,6 +30,7 @@ export { deployCommand };
 export type DeployOptions = CreateOptions<{
     "api-spec": string | undefined;
     env: string | undefined;
+    format: string | undefined;
     migrate: boolean | undefined;
     "migrate-token": string | undefined;
     "migrate-url": string | undefined;

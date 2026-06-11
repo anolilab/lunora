@@ -102,6 +102,37 @@ const createLogger = (): Logger => {
 };
 
 /**
+ * Logger whose every channel writes to `process.stderr`. Used by commands in
+ * `--format json` mode so all human/progress output stays off stdout — leaving
+ * stdout for the single JSON document the command prints, so `… --format json`
+ * stays cleanly pipeable (`| jq`). Each line carries a one-character level tag
+ * so the stream is still readable when a human watches it.
+ */
+const createStderrLogger = (): Logger => {
+    const write = (tag: string, message: string): void => {
+        process.stderr.write(`${tag} ${message}\n`);
+    };
+
+    return {
+        debug: (message) => {
+            write("debug", message);
+        },
+        error: (message) => {
+            write("error", message);
+        },
+        info: (message) => {
+            write("info ", message);
+        },
+        success: (message) => {
+            write("ok   ", message);
+        },
+        warn: (message) => {
+            write("warn ", message);
+        },
+    };
+};
+
+/**
  * Direct access to the underlying pail instance for advanced use-cases.
  * A Proxy keeps the public `pail` binding lazy: the real pail is only
  * constructed on first property access, so importing this module (and thus
@@ -117,4 +148,4 @@ const pail: PailLogger = new Proxy({} as PailLogger, {
 });
 
 export type { Logger };
-export { createLogger, getPail, pail };
+export { createLogger, createStderrLogger, getPail, pail };

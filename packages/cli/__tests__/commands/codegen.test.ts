@@ -3,10 +3,28 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runCodegenCommand } from "../../src/commands/codegen/handler";
 import type { Logger } from "../../src/util/logger";
+
+/** Run `body` while capturing everything written to `process.stdout`. */
+const captureStdout = (body: () => void): string => {
+    let captured = "";
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array): boolean => {
+        captured += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+
+        return true;
+    });
+
+    try {
+        body();
+    } finally {
+        spy.mockRestore();
+    }
+
+    return captured;
+};
 
 /** Build a `cirrus/crons.ts` with `count` distinct daily schedules (distinct hours → distinct expressions). */
 const cronsFile = (count: number): string => {
@@ -133,6 +151,38 @@ describe("cirrus codegen", () => {
             expect(advisoryWarnings).toHaveLength(1);
             expect(advisoryWarnings[0]).toContain("attachments");
             expect(advisoryWarnings[0]).toContain("advisory");
+        });
+
+        describe("--format json", () => {
+            it("emits a single parseable JSON document with the structured result", () => {
+                expect.assertions(4);
+
+                const stdout = captureStdout(() => {
+                    runCodegenCommand({ cwd: workdir, format: "json", logger: silentLogger() });
+                });
+
+                const parsed = JSON.parse(stdout) as { advisories: unknown[]; cronTriggers: unknown[]; outputDirectory: string };
+
+                expect(parsed).toHaveProperty("outputDirectory");
+                expect(parsed.outputDirectory).toContain("_generated");
+                expect(Array.isArray(parsed.advisories)).toBe(true);
+                expect(Array.isArray(parsed.cronTriggers)).toBe(true);
+            });
+
+            it("rejects an unknown --format the same way logs does", () => {
+                expect.assertions(3);
+
+                const errors: string[] = [];
+
+                const stdout = captureStdout(() => {
+                    const result = runCodegenCommand({ cwd: workdir, format: "yaml", logger: { ...silentLogger(), error: (message) => errors.push(message) } });
+
+                    expect(result.error).toBeDefined();
+                });
+
+                expect(stdout).toBe("");
+                expect(errors.some((line) => line.includes('unknown --format "yaml" — expected pretty | json'))).toBe(true);
+            });
         });
     });
 });

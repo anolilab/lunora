@@ -3,11 +3,29 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { runVerifyCommand } from "../../src/commands/verify/handler";
 import type { Logger } from "../../src/util/logger";
 import { createRecordingSpawner } from "../../src/util/spawn";
+
+/** Run async `body` while capturing everything written to `process.stdout`. */
+const captureStdout = async (body: () => Promise<void>): Promise<string> => {
+    let captured = "";
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: string | Uint8Array): boolean => {
+        captured += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+
+        return true;
+    });
+
+    try {
+        await body();
+    } finally {
+        spy.mockRestore();
+    }
+
+    return captured;
+};
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "..", "..", "..", "codegen", "__tests__", "fixtures", "simple");
@@ -187,6 +205,58 @@ describe("cirrus verify", () => {
 
             expect(result.code).toBe(0);
             expect(calls).toHaveLength(0);
+        });
+
+        describe("--format json", () => {
+            it("emits a single parseable JSON document with the structured result", async () => {
+                expect.assertions(5);
+
+                writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+                const { logger } = recordingLogger();
+
+                const stdout = await captureStdout(async () => {
+                    await runVerifyCommand({ cwd: workdir, format: "json", logger, typecheck: false });
+                });
+
+                const parsed = JSON.parse(stdout) as { code: number; errors: unknown[]; warnings: unknown[]; wranglerPath: unknown };
+
+                expect(parsed.code).toBe(0);
+                expect(Array.isArray(parsed.errors)).toBe(true);
+                expect(Array.isArray(parsed.warnings)).toBe(true);
+                expect(parsed).toHaveProperty("wranglerPath");
+                expect(parsed.errors).toEqual([]);
+            });
+
+            it("serializes errors into the JSON document on failure", async () => {
+                expect.assertions(2);
+
+                // No wrangler.jsonc → validation error.
+                const { logger } = recordingLogger();
+
+                const stdout = await captureStdout(async () => {
+                    await runVerifyCommand({ cwd: workdir, format: "json", logger, typecheck: false });
+                });
+
+                const parsed = JSON.parse(stdout) as { code: number; errors: string[] };
+
+                expect(parsed.code).toBe(1);
+                expect(parsed.errors.length).toBeGreaterThan(0);
+            });
+
+            it("rejects an unknown --format the same way logs does", async () => {
+                expect.assertions(3);
+
+                const { logger, recorded } = recordingLogger();
+
+                const stdout = await captureStdout(async () => {
+                    const result = await runVerifyCommand({ cwd: workdir, format: "yaml", logger, typecheck: false });
+
+                    expect(result.error).toBeDefined();
+                });
+
+                expect(stdout).toBe("");
+                expect(recorded.errors.some((line) => line.includes('unknown --format "yaml" — expected pretty | json'))).toBe(true);
+            });
         });
     });
 });

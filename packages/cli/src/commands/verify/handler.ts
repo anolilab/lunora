@@ -8,6 +8,7 @@ import { parseApiSpec } from "../../util/api-spec";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
+import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import type { Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import { validateWrangler } from "../../util/wrangler-validator";
@@ -17,6 +18,8 @@ interface VerifyCommandOptions {
     /** Which API spec(s) codegen would emit. Defaults to codegen's `"openapi"` when omitted. */
     apiSpec?: ApiSpec;
     cwd?: string;
+    /** Output format: `pretty` (default) or `json`. */
+    format?: string;
     logger: Logger;
     /** Injectable subprocess runner for the tsc step; defaults to the real spawner. */
     spawner?: Spawner;
@@ -26,6 +29,8 @@ interface VerifyCommandOptions {
 
 interface VerifyCommandResult {
     code: number;
+    /** Set when the run aborted on an invalid `--format` before validation ran. */
+    error?: string;
     errors: ReadonlyArray<string>;
     warnings: ReadonlyArray<string>;
     wranglerPath: string | undefined;
@@ -86,6 +91,17 @@ const reportVerifyResult = (logger: Logger, errors: string[], warnings: string[]
  */
 const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
+    // In `--format json` mode every human/progress line goes to stderr so
+    // stdout carries only the serialized structured result.
+    const logger = loggerForFormat(options.format, options.logger);
+
+    const formatError = validateOutputFormat("verify", options.format);
+
+    if (formatError !== undefined) {
+        options.logger.error(formatError);
+
+        return { code: 1, error: formatError, errors: [], warnings: [], wranglerPath: undefined };
+    }
 
     const validation = validateWrangler({ projectRoot: cwd });
     const errors: string[] = [...validation.report.errors];
@@ -111,20 +127,29 @@ const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCo
         }
     }
 
-    return reportVerifyResult(options.logger, errors, warnings, validation.wranglerPath);
+    const result = reportVerifyResult(logger, errors, warnings, validation.wranglerPath);
+
+    if (isJsonFormat(options.format)) {
+        printJson(result);
+    }
+
+    return result;
 };
 
 /** `cirrus verify` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<VerifyOptions> = defineHandler<VerifyOptions>(({ cwd, logger, options }) =>
-    runVerifyCommand({
+const execute: CommandHandler<VerifyOptions> = defineHandler<VerifyOptions>(async ({ cwd, logger, options }) => {
+    const result = await runVerifyCommand({
         apiSpec: parseApiSpec(options.apiSpec),
         cwd,
+        format: options.format,
         logger,
         // `--no-typecheck` is declared as a `no-*` option but cerebro exposes it
         // under the negated `typecheck` key (false when passed, true when absent).
         typecheck: options.typecheck === false ? false : undefined,
-    }),
-);
+    });
+
+    return { code: result.code };
+});
 
 export { execute };
 export type { VerifyCommandOptions, VerifyCommandResult };
