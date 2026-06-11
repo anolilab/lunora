@@ -17,6 +17,24 @@ describe("defineTable", () => {
         expect(messages.searchIndexes).toEqual([]);
     });
 
+    it("rejects a v.from() column (args-only), including when nested under v.optional/array", () => {
+        expect.assertions(3);
+
+        const fake = {
+            "~standard": {
+                validate: (value: unknown) => {
+                    return { value };
+                },
+                vendor: "fake",
+                version: 1 as const,
+            },
+        };
+
+        expect(() => defineTable({ x: v.from(fake) })).toThrow(/args-only/u);
+        expect(() => defineTable({ x: v.optional(v.from(fake)) })).toThrow(/args-only/u);
+        expect(() => defineTable({ x: v.array(v.from(fake)) })).toThrow(/args-only/u);
+    });
+
     it(".index appends an index definition", () => {
         expect.assertions(3);
 

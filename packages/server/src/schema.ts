@@ -1,4 +1,5 @@
 import type { Validator } from "@cirrus/values";
+import { isOrWrapsFromValidator } from "@cirrus/values";
 
 import type { PrefixedTables, SchemaExtension } from "./plugin";
 import { mergeSchemaExtension } from "./plugin";
@@ -162,9 +163,10 @@ interface VectorIndexOptions {
  */
 const defineTable = <Shape extends Record<string, Validator>>(shape: Shape): TableBuilder<Shape> => {
     // v.from() validators are args-only — they delegate to an external Standard
-    // Schema library and do not map to a concrete SQL column type.
+    // Schema library and do not map to a concrete SQL column type. Reject them
+    // anywhere in a column, including nested under v.optional/array/object/etc.
     for (const [columnName, validator] of Object.entries(shape)) {
-        if (validator.kind === "from") {
+        if (isOrWrapsFromValidator(validator)) {
             throw new Error(`defineTable: column "${columnName}" uses v.from() which is args-only — table columns need a concrete v.* type`);
         }
     }

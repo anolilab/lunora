@@ -32,6 +32,26 @@ const fakeAsync = {
     },
 };
 
+// Non-native thenable — a custom `then` rather than a real Promise. Must be
+// rejected like an async result, not slip past `instanceof Promise` and silently
+// return `undefined`.
+const fakeThenable = {
+    "~standard": {
+        validate: (_value: unknown) => {
+            // eslint-disable-next-line unicorn/no-thenable -- intentional non-native thenable; the test asserts v.from rejects it like a Promise
+            const thenable = {
+                then: (resolve: (value: unknown) => void): void => {
+                    resolve(undefined);
+                },
+            };
+
+            return thenable;
+        },
+        vendor: "fake",
+        version: 1 as const,
+    },
+};
+
 // A real Cirrus validator also satisfies Standard Schema v1 (it exposes ~standard).
 const cirrusValidator = v.number();
 
@@ -83,6 +103,14 @@ describe("v.from()", () => {
         if (!result.ok) {
             expect(result.error.message).toMatch(/async Standard Schema/u);
         }
+    });
+
+    it("(4b) a non-native thenable is rejected like a Promise (not silently passed)", () => {
+        expect.assertions(1);
+
+        const schema = v.from(fakeThenable as unknown as Parameters<typeof v.from>[0]);
+
+        expect(() => schema.parse("anything")).toThrow(/async Standard Schema/u);
     });
 
     it("(5) a Cirrus validator passed through v.from parses unharmed", () => {

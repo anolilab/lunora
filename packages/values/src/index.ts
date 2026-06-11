@@ -21,6 +21,6 @@ export type {
     Validator,
     ValidatorKind,
 } from "./v";
-export { v } from "./v";
+export { isOrWrapsFromValidator, v } from "./v";
 
 export const VERSION = "0.0.0";

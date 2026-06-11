@@ -728,7 +728,11 @@ const from = <S extends StandardSchemaV1>(schema: S): ColumnValidator<InferStand
         createValidator<InferStandardOutput<S>>("from", (value, context) => {
             const result = props.validate(value);
 
-            if (result instanceof Promise) {
+            // Sync-only. Reject native Promises AND non-native thenables — a
+            // thenable slips past `instanceof Promise` and would otherwise fall
+            // through to `result.value` (undefined), silently passing an
+            // unvalidated value to the handler instead of throwing.
+            if (result instanceof Promise || typeof (result as { then?: unknown } | null | undefined)?.then === "function") {
                 throw new ValidationError("v.from(): async Standard Schema validators are not supported in args", {
                     expected: "sync Standard Schema result",
                     path: [...context.path],
@@ -766,6 +770,45 @@ const from = <S extends StandardSchemaV1>(schema: S): ColumnValidator<InferStand
             return (result as { value: InferStandardOutput<S> }).value;
         }),
     ) as ColumnValidator<InferStandardOutput<S>, InferStandardOutput<S>>;
+};
+
+/**
+ * True when `validator` is `v.from(...)` or structurally wraps one through
+ * `v.optional` / `v.array` / `v.object` / `v.record` / `v.union`. `defineTable`
+ * uses it to reject Standard-Schema-backed validators anywhere in a column —
+ * not just at the top level — since they are args-only and have no SQL column
+ * type. The nested children live on the validator's `_meta` (`inner`, `shape`,
+ * `members`, `keyValidator`/`valueValidator`) and are themselves validators.
+ */
+const isOrWrapsFromValidator = (validator: Validator): boolean => {
+    if (validator.kind === "from") {
+        return true;
+    }
+
+    const meta = (validator as { _meta?: Record<string, unknown> })._meta;
+
+    if (!meta) {
+        return false;
+    }
+
+    // Gather candidate nested validators from the structural meta, then recurse.
+    const children: unknown[] = [meta.inner, meta.keyValidator, meta.valueValidator];
+
+    if (Array.isArray(meta.members)) {
+        children.push(...(meta.members as unknown[]));
+    }
+
+    if (meta.shape !== null && typeof meta.shape === "object") {
+        children.push(...(Object.values(meta.shape) as unknown[]));
+    }
+
+    for (const child of children) {
+        if (child !== null && typeof child === "object" && "kind" in child && isOrWrapsFromValidator(child as Validator)) {
+            return true;
+        }
+    }
+
+    return false;
 };
 
 /**
@@ -830,4 +873,4 @@ export type {
     Validator,
     ValidatorKind,
 };
-export { v };
+export { isOrWrapsFromValidator, v };
