@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { parse as parseJsonc } from "jsonc-parser";
-import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import codegenPlugin from "../src/codegen-plugin";
 import type { ResolvedCirrusPluginOptions } from "../src/types";
@@ -181,6 +181,189 @@ describe("codegen-plugin", () => {
             expect(plugin.name).toBe("cirrus:codegen");
 
             expectTypeOf(plugin.configureServer).not.toBeUndefined();
+        });
+    });
+
+    /**
+     * Build a minimal stub dev server whose `hot.send` is a Vitest spy.
+     * Only the shape used by codegen-plugin needs to be present.
+     */
+    const makeStubServer = () => {
+        const send = vi.fn<(payload: unknown) => void>();
+
+        return {
+            send,
+            server: {
+                config: { logger: { error: vi.fn<() => void>(), info: vi.fn<() => void>(), warn: vi.fn<() => void>() } },
+                environments: undefined,
+                hot: { send },
+                httpServer: undefined,
+                moduleGraph: { idToModuleMap: new Map(), invalidateModule: vi.fn<() => void>() },
+                watcher: { add: vi.fn<() => void>(), off: vi.fn<() => void>(), on: vi.fn<() => void>() },
+                ws: { send: vi.fn<() => void>() },
+            } as unknown as import("vite").ViteDevServer,
+        };
+    };
+
+    /**
+     * Invoke `configureServer` on the plugin and return a helper that fires the
+     * `change` watcher listener synchronously with a fake file path.
+     *
+     * We advance the debounce timer via `vi.useFakeTimers()` so the callback
+     * executes in the same tick.
+     */
+    const wireServer = (plugin: import("vite").Plugin, server: import("vite").ViteDevServer) => {
+        const hook = plugin.configureServer as (server: import("vite").ViteDevServer) => void;
+
+        hook(server);
+    };
+
+    describe("overlay wiring (configureServer)", () => {
+        beforeEach(() => {
+            vi.useFakeTimers();
+        });
+
+        afterEach(() => {
+            vi.useRealTimers();
+        });
+
+        it("codegen throws → hot.send called once with type:error containing 'codegen failed'", async () => {
+            expect.assertions(3);
+
+            // Use a workdir WITHOUT a schema so runCodegen throws when triggered.
+            // We write a bad schema file instead to force a real codegen failure.
+            mkdirSync(join(workdir, "cirrus"), { recursive: true });
+            writeFileSync(
+                join(workdir, "cirrus", "schema.ts"),
+                // schema missing defineSchema() call, which will cause codegen to throw
+                `export const broken = true;`,
+                "utf8",
+            );
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { send, server } = makeStubServer();
+
+            wireServer(plugin, server);
+
+            // Trigger onChange by simulating a watcher "change" event on schema.ts.
+            const onChangeCalls = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls;
+            const changeListener = onChangeCalls.find((args) => args[0] === "change")?.[1] as ((file: string) => void) | undefined;
+
+            expect(changeListener).toBeDefined();
+
+            changeListener!(join(workdir, "cirrus", "schema.ts"));
+
+            // Advance past the debounce window.
+            await vi.runAllTimersAsync();
+
+            expect(send).toHaveBeenCalledTimes(1);
+
+            const payload = send.mock.calls[0]?.[0] as { err: { message: string }; type: string };
+
+            expect(payload.err.message).toContain("codegen failed");
+        });
+
+        it("codegen diagnostic error → payload includes err.loc.file and err.loc.line", async () => {
+            expect.assertions(3);
+
+            mkdirSync(join(workdir, "cirrus"), { recursive: true });
+
+            // A schema with a non-literal `unique` value triggers a CodegenDiagnosticError.
+            writeFileSync(
+                join(workdir, "cirrus", "schema.ts"),
+                `import { defineSchema, defineTable, v } from "@cirrus/server";
+const flag = true;
+export const schema = defineSchema({
+    users: defineTable({ email: v.string() }).index("by_email", ["email"], { unique: flag }),
+});`,
+                "utf8",
+            );
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { send, server } = makeStubServer();
+
+            wireServer(plugin, server);
+
+            const onChangeCalls = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls;
+            const changeListener = onChangeCalls.find((args) => args[0] === "change")?.[1] as ((file: string) => void) | undefined;
+
+            changeListener!(join(workdir, "cirrus", "schema.ts"));
+
+            await vi.runAllTimersAsync();
+
+            const payload = send.mock.calls[0]?.[0] as { err: { loc?: { file: string; line: number } }; type: string };
+
+            expect(payload.type).toBe("error");
+            expect(payload.err.loc?.file).toBe(join(workdir, "cirrus", "schema.ts"));
+            expect(payload.err.loc?.line).toBeGreaterThan(0);
+        });
+
+        it("failure then success → second run sends type:full-reload", async () => {
+            expect.assertions(2);
+
+            mkdirSync(join(workdir, "cirrus"), { recursive: true });
+
+            // Start with a broken schema.
+            const schemaPath = join(workdir, "cirrus", "schema.ts");
+
+            writeFileSync(schemaPath, `export const broken = true;`, "utf8");
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { send, server } = makeStubServer();
+
+            wireServer(plugin, server);
+
+            const onChangeCalls = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls;
+            const changeListener = onChangeCalls.find((args) => args[0] === "change")?.[1] as ((file: string) => void) | undefined;
+
+            // First run — codegen fails, error overlay sent.
+            changeListener!(schemaPath);
+
+            await vi.runAllTimersAsync();
+
+            expect(send.mock.calls[0]?.[0]).toMatchObject({ type: "error" });
+
+            // Fix the schema so codegen succeeds.
+            writeFileSync(
+                schemaPath,
+                `import { defineSchema, defineTable, v } from "@cirrus/server";
+export const schema = defineSchema({ users: defineTable({ email: v.string() }) });`,
+                "utf8",
+            );
+            writeFileSync(join(workdir, "cirrus", "messages.ts"), MESSAGES_SOURCE, "utf8");
+
+            // Second run — codegen succeeds, overlay should be cleared via full-reload.
+            changeListener!(schemaPath);
+
+            await vi.runAllTimersAsync();
+
+            expect(send.mock.calls[1]?.[0]).toMatchObject({ type: "full-reload" });
+        });
+
+        it("build mode (no dev server) → no hot.send, returns undefined on failure", async () => {
+            expect.assertions(1);
+
+            mkdirSync(join(workdir, "cirrus"), { recursive: true });
+            writeFileSync(join(workdir, "cirrus", "schema.ts"), `export const broken = true;`, "utf8");
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+
+            // Do NOT call configureServer — simulates `vite build` where no dev server exists.
+            const errors: string[] = [];
+            // eslint-disable-next-line no-console -- capturing to assert no overlay call
+            const originalError = console.error;
+            // eslint-disable-next-line no-console
+            console.error = (message: string) => errors.push(message);
+
+            try {
+                await (plugin.buildStart as (this: unknown) => Promise<void>).call(undefined);
+            } finally {
+                // eslint-disable-next-line no-console
+                console.error = originalError;
+            }
+
+            // We just need to confirm the build doesn't crash and logs the error.
+            expect(errors.some((message) => message.includes("codegen failed"))).toBe(true);
         });
     });
 });

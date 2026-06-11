@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 
-import { runCodegen } from "@cirrus/codegen";
+import { CodegenDiagnosticError, runCodegen } from "@cirrus/codegen";
 import { inferCirrusBindings, reconcileWranglerBindings } from "@cirrus/config";
 import type { Plugin, ViteDevServer } from "vite";
 
@@ -39,14 +39,27 @@ const reconcileBindingsSafely = async (
     }
 };
 
+/** Callbacks injected from the dev-server context into {@link runCodegenSafely}. */
+interface OverlayCallbacks {
+    /** Called on fatal codegen failure to push the error into the browser overlay. */
+    onError: (error: unknown, message: string) => void;
+    /** Called on success when the previous run failed, to clear the overlay. */
+    onSuccess: () => void;
+}
+
 /**
  * Run codegen, returning the absolute directory codegen actually wrote to
  * (so callers can invalidate the *real* output, not an independently-guessed
  * path), or `undefined` when codegen was skipped or failed.
+ *
+ * Pass `overlay` to surface fatal failures in the Vite error overlay during
+ * dev. Omit it (build mode) to keep the current log-and-return-undefined
+ * behaviour.
  */
 const runCodegenSafely = (
     options: Pick<ResolvedCirrusPluginOptions, "apiSpec" | "projectRoot" | "schemaDir">,
     logger: { error: (message: string) => void; info?: (message: string) => void; warn: (message: string) => void },
+    overlay?: OverlayCallbacks,
 ): string | undefined => {
     const schemaPath = join(options.projectRoot, options.schemaDir, "schema.ts");
 
@@ -81,11 +94,19 @@ const runCodegenSafely = (
             logger.warn(`[cirrus] schema advisory [${advisory.level}] ${advisory.name}: ${advisory.detail} — ${advisory.remediation}`);
         }
 
+        // If the previous run failed, clear the browser error overlay now that
+        // codegen succeeded and the generated files are up to date.
+        overlay?.onSuccess();
+
         return resolve(result.outputDirectory);
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
 
         logger.error(`[cirrus] codegen failed: ${message}`);
+
+        // In dev mode, surface the failure in the browser error overlay so the
+        // user sees it immediately without leaving the browser.
+        overlay?.onError(error, message);
 
         return undefined;
     }
@@ -107,6 +128,14 @@ const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
 
     let debounceTimer: ReturnType<typeof setTimeout> | undefined;
 
+    // Captured in configureServer and used to push overlay events. Undefined in
+    // build mode (vite build) — the overlay callbacks are never wired up then.
+    let devServer: ViteDevServer | undefined;
+
+    // Track whether the most recent codegen run failed so we can send a
+    // full-reload (which clears the browser overlay) on the next success.
+    let lastRunFailed = false;
+
     return {
         async buildStart() {
             const logger = {
@@ -124,6 +153,7 @@ const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
                 },
             };
 
+            // Build mode: no devServer, no overlay callbacks.
             const outputDirectory = runCodegenSafely(options, logger);
 
             if (outputDirectory !== undefined) {
@@ -136,6 +166,8 @@ const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
             await reconcileBindingsSafely(options, logger);
         },
         configureServer(server: ViteDevServer) {
+            devServer = server;
+
             server.watcher.add(absoluteSchemaDirectory);
 
             // Reuse the dev server's logger for codegen output. Declared here
@@ -150,6 +182,33 @@ const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
                 },
                 warn: (message: string): void => {
                     server.config.logger.warn(message);
+                },
+            };
+
+            // Overlay callbacks: push failures to the browser and clear on recovery.
+            const overlay: OverlayCallbacks = {
+                onError(error, message) {
+                    lastRunFailed = true;
+
+                    const loc =
+                        error instanceof CodegenDiagnosticError
+                            ? { column: error.column, file: error.file, line: error.line }
+                            : undefined;
+
+                    devServer?.hot.send({
+                        err: {
+                            loc,
+                            message: `[cirrus] codegen failed: ${message}`,
+                            stack: error instanceof Error ? (error.stack ?? "") : "",
+                        },
+                        type: "error",
+                    });
+                },
+                onSuccess() {
+                    if (lastRunFailed) {
+                        lastRunFailed = false;
+                        devServer?.hot.send({ type: "full-reload" });
+                    }
                 },
             };
 
@@ -235,7 +294,7 @@ const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
                         return;
                     }
 
-                    const outputDirectory = runCodegenSafely(options, serverLogger);
+                    const outputDirectory = runCodegenSafely(options, serverLogger, overlay);
 
                     if (outputDirectory !== undefined) {
                         absoluteGeneratedDirectory = outputDirectory;
