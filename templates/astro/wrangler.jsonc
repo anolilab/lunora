@@ -5,6 +5,10 @@
     "main": "src/worker.ts",
     "compatibility_date": "2026-06-10",
     "compatibility_flags": ["nodejs_compat"],
+    // Workers deploy with custom bindings doesn't auto-generate the assets
+    // config, so the static `dist/` (client island JS, etc.) must be bound
+    // explicitly per the @astrojs/cloudflare Workers guide.
+    "assets": { "binding": "ASSETS", "directory": "./dist" },
     "durable_objects": {
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
     },

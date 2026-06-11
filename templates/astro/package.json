@@ -5,10 +5,10 @@
     "type": "module",
     "scripts": {
         "dev": "cirrus dev",
-        "build": "astro build",
+        "build": "cirrus codegen && astro build",
         "preview": "astro preview",
         "codegen": "cirrus codegen",
-        "deploy": "astro build && cirrus deploy"
+        "deploy": "cirrus codegen && astro build && cirrus deploy"
     },
     "dependencies": {
         "@astrojs/cloudflare": "^13.7.0",

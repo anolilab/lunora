@@ -32,6 +32,13 @@
 
 set -euo pipefail
 
+# Disable Astro's anonymous telemetry ping (telemetry.astro.build) so the build
+# is fully offline-deterministic. Harmless for the other frameworks. (Note: the
+# astro template's actual offline-build fix was running `cirrus codegen` before
+# `astro build` in its build script — the @cirrus/astro integration, unlike the
+# Vite plugin, does not run codegen itself.)
+export ASTRO_TELEMETRY_DISABLED=1
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRATCH="$(mktemp -d -t cirrus-tmpl-XXXXXX)"
 trap 'rm -rf "$SCRATCH"' EXIT
@@ -52,9 +59,12 @@ ONLY_TEMPLATE="${1:-}"
 # Any template IN this list that passes build is an XPASS (also a failure —
 # remove it from the list when the fix lands).
 # ---------------------------------------------------------------------------
-# astro: `astro build` fails offline — the Astro CLI fetches integration
-# metadata over the network during the build (network call to the integrations
-# registry, not a template defect). Builds fine with network access.
+# astro: `astro build` (codegen now runs first) fails resolving
+# `../dist/_worker.js/index.js` in src/worker.ts — the REMOVED Astro-5 custom-entry
+# pattern. Astro 6 + @astrojs/cloudflare v13 no longer emit dist/_worker.js; the
+# class-B worker must wrap `@astrojs/cloudflare/handler`'s handle() instead. This
+# is a composition rewrite that also touches @cirrus/astro's withCirrus (it copied
+# the same outdated pattern) — tracked as a deep finding, not a template-config fix.
 #
 # (react-router + solid-start templates were removed: their build tools
 # (@react-router/dev, vinxi/@solidjs/start) only support Vite <=7 while Cirrus
@@ -136,7 +146,8 @@ WSEOF
 # ---------------------------------------------------------------------------
 is_xfail() {
     local name="$1"
-    for xf in "${XFAIL_BUILD[@]}"; do
+    # `${XFAIL_BUILD[@]+...}` guard so an empty array is safe under `set -u`.
+    for xf in "${XFAIL_BUILD[@]+"${XFAIL_BUILD[@]}"}"; do
         [[ "$xf" == "$name" ]] && return 0
     done
     return 1
