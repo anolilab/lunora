@@ -102,6 +102,8 @@ const LATEST_MAJORS: Record<string, number> = {
     "@tanstack/react-router": 1,
     "@tanstack/react-start": 1,
     "@tanstack/router-plugin": 1,
+    "@tanstack/solid-router": 1,
+    "@tanstack/solid-start": 1,
     "@vitejs/plugin-react": 6,
     astro: 6,
     isbot: 5,
@@ -112,6 +114,7 @@ const LATEST_MAJORS: Record<string, number> = {
     "solid-js": 1,
     svelte: 5,
     vite: 8,
+    "vite-plugin-solid": 2,
     "vite-tsconfig-paths": 6,
     vue: 3,
     wrangler: 4,
@@ -126,7 +129,8 @@ const REQUIRED_ADAPTER: Record<string, string | null> = {
     nuxt: "@cirrus/vue",
     standalone: null,
     sveltekit: "@cirrus/svelte",
-    "tanstack-start": "@cirrus/react",
+    "tanstack-start-react": "@cirrus/react",
+    "tanstack-start-solid": "@cirrus/solid",
     vite: "@cirrus/react",
 };
 

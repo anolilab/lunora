@@ -29,6 +29,7 @@ const FRAMEWORK_LABELS: Record<FrameworkDetection["framework"], string> = {
     "solid-start": "SolidStart",
     sveltekit: "SvelteKit",
     "tanstack-start": "TanStack Start",
+    "tanstack-start-solid": "TanStack Start (Solid)",
 };
 
 /**

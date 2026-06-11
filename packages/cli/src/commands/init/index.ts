@@ -5,7 +5,8 @@ const initCommand: Command = {
     description: "Scaffold a new Cirrus project",
     examples: [
         ["cirrus init my-app", "Scaffold with the default (vite) template"],
-        ["cirrus init my-app -t tanstack-start", "Scaffold a TanStack Start app"],
+        ["cirrus init my-app -t tanstack-start-react", "Scaffold a TanStack Start (React) app"],
+        ["cirrus init my-app -t tanstack-start-solid", "Scaffold a TanStack Start (Solid) app"],
         ["cirrus init --here", "Add Cirrus to the current project"],
     ],
     group: "Project",
@@ -18,7 +19,7 @@ const initCommand: Command = {
         {
             alias: "t",
             defaultValue: "vite",
-            description: "Template to scaffold (vite | standalone | astro | nuxt | sveltekit | tanstack-start)",
+            description: "Template to scaffold (vite | standalone | astro | nuxt | sveltekit | tanstack-start-react | tanstack-start-solid)",
             name: "template",
             type: String,
         },

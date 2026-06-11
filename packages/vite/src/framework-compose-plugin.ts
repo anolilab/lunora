@@ -69,6 +69,12 @@ const CLASS_A_WIRING: Readonly<Partial<Record<DetectedFramework, ClassAWiring>>>
         handler: "ssrModule.default",
         imports: 'import * as ssrModule from "@tanstack/react-start/server-entry";',
     },
+    "tanstack-start-solid": {
+        // TanStack Start (Solid)'s server entry default-exports a `{ fetch }`
+        // handler — same shape as the React variant, different package.
+        handler: "ssrModule.default",
+        imports: 'import * as ssrModule from "@tanstack/solid-start/server-entry";',
+    },
 };
 
 /**
@@ -85,14 +91,12 @@ const isAutoComposable = (context: CirrusPluginContext): boolean => {
 /**
  * Whether the `virtual:cirrus/worker` virtual entry should be resolved. This is
  * intentionally independent of `options.cloudflare`: `cloudflare: false` means
- * "don't add @cloudflare/vite-plugin a second time" (the user added it
+ * "don't add the Cloudflare Vite plugin a second time" (the user added it
  * themselves, e.g. to control plugin ordering), NOT "disable the composed worker
  * entry". The worker virtual must be resolvable whenever the CF integration is
  * present — whether Cirrus added it or the user did.
  */
-const isWorkerVirtualActive = (context: CirrusPluginContext): boolean => {
-    return isAutoComposable(context);
-};
+const isWorkerVirtualActive = (context: CirrusPluginContext): boolean => isAutoComposable(context);
 
 /**
  * Build the source of the virtual class-A worker entry. Pure (no fs / no Vite),
@@ -160,7 +164,7 @@ export default {
  * Safety: it is a strict no-op unless `context.framework.class === "A"` with a
  * known wiring. For class-C (SPA) projects and undetected frameworks it
  * resolves/loads nothing. `cloudflare: false` does NOT disable the virtual
- * entry — it only means "don't add @cloudflare/vite-plugin a second time"
+ * entry — it only means "don't add the Cloudflare Vite plugin a second time"
  * (the user supplied it themselves); the composed worker must still be
  * resolvable so the user-supplied CF plugin can find the wrangler `main`.
  */

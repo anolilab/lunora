@@ -125,26 +125,23 @@ describe("cirrus init", () => {
             expect(existsSync(join(target, "cirrus", "schema.ts"))).toBe(true);
         });
 
-        it("tanstack-start template scaffolds router + ssr entries", async () => {
-            expect.assertions(14);
+        it("tanstack-start-react template scaffolds router + route entries", async () => {
+            expect.assertions(10);
 
             const result = await runInitCommand({
                 cwd: workdir,
                 from: templatesRoot,
                 logger: silentLogger(),
                 name: "starter",
-                templateType: "tanstack-start",
+                templateType: "tanstack-start-react",
             });
 
             expect(result.code).toBe(0);
 
             const target = join(workdir, "starter");
 
-            expect(existsSync(join(target, "app.config.ts"))).toBe(true);
             expect(existsSync(join(target, "vite.config.ts"))).toBe(true);
             expect(existsSync(join(target, "src", "router.tsx"))).toBe(true);
-            expect(existsSync(join(target, "src", "client.tsx"))).toBe(true);
-            expect(existsSync(join(target, "src", "ssr.tsx"))).toBe(true);
             expect(existsSync(join(target, "src", "routes", "__root.tsx"))).toBe(true);
             expect(existsSync(join(target, "src", "routes", "index.tsx"))).toBe(true);
             expect(existsSync(join(target, "cirrus", "schema.ts"))).toBe(true);
@@ -153,8 +150,36 @@ describe("cirrus init", () => {
             const pkg = readFileSync(join(target, "package.json"), "utf8");
 
             expect(pkg).toContain("@tanstack/react-start");
-            expect(pkg).toContain("@tanstack/react-router");
-            expect(pkg).toContain("@tanstack/react-query");
+            expect(pkg).toContain("@cirrus/react");
+            expect(pkg).toContain('"name": "starter"');
+        });
+
+        it("tanstack-start-solid template scaffolds router + route entries", async () => {
+            expect.assertions(10);
+
+            const result = await runInitCommand({
+                cwd: workdir,
+                from: templatesRoot,
+                logger: silentLogger(),
+                name: "starter",
+                templateType: "tanstack-start-solid",
+            });
+
+            expect(result.code).toBe(0);
+
+            const target = join(workdir, "starter");
+
+            expect(existsSync(join(target, "vite.config.ts"))).toBe(true);
+            expect(existsSync(join(target, "src", "router.tsx"))).toBe(true);
+            expect(existsSync(join(target, "src", "routes", "__root.tsx"))).toBe(true);
+            expect(existsSync(join(target, "src", "routes", "index.tsx"))).toBe(true);
+            expect(existsSync(join(target, "cirrus", "schema.ts"))).toBe(true);
+            expect(existsSync(join(target, "wrangler.jsonc"))).toBe(true);
+
+            const pkg = readFileSync(join(target, "package.json"), "utf8");
+
+            expect(pkg).toContain("@tanstack/solid-start");
+            expect(pkg).toContain("@cirrus/solid");
             expect(pkg).toContain('"name": "starter"');
         });
 
@@ -217,14 +242,15 @@ describe("cirrus init", () => {
             expect(errors.join("\n")).toContain("template not found in local source");
         });
 
-        it("isTemplate accepts all 6 real template dir names and next", () => {
-            expect.assertions(8);
+        it("isTemplate accepts all 7 real template dir names and next", () => {
+            expect.assertions(9);
 
             expect(isTemplate("astro")).toBe(true);
             expect(isTemplate("nuxt")).toBe(true);
             expect(isTemplate("standalone")).toBe(true);
             expect(isTemplate("sveltekit")).toBe(true);
-            expect(isTemplate("tanstack-start")).toBe(true);
+            expect(isTemplate("tanstack-start-react")).toBe(true);
+            expect(isTemplate("tanstack-start-solid")).toBe(true);
             expect(isTemplate("vite")).toBe(true);
             expect(isTemplate("next")).toBe(true);
             expect(isTemplate("unknown-framework")).toBe(false);

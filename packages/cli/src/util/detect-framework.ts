@@ -19,6 +19,7 @@ const ADAPTER_BY_FRAMEWORK: Readonly<Record<DetectedFramework, string>> = {
     "solid-start": "@cirrus/solid",
     sveltekit: "@cirrus/svelte",
     "tanstack-start": "@cirrus/react",
+    "tanstack-start-solid": "@cirrus/solid",
 };
 
 /** A {@link BaseFrameworkDetection} plus the client-adapter package the `--here` patcher installs/wires. */

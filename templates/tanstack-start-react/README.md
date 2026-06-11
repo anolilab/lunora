@@ -1,6 +1,6 @@
 # {{name}}
 
-A Cirrus app on **TanStack Start**, scaffolded by `cirrus init`.
+A Cirrus app on **TanStack Start (React)**, scaffolded by `cirrus init`.
 
 Real-time queries flow through Cirrus's WebSocket transport while TanStack
 Query owns the client cache and TanStack Router drives navigation. SSR is

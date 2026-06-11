@@ -14,7 +14,7 @@ import type { Logger } from "../../util/logger";
 import { patchViteConfig } from "../../util/patch-vite-config";
 import type { InitOptions } from "./index";
 
-type Template = "astro" | "next" | "nuxt" | "standalone" | "sveltekit" | "tanstack-start" | "vite";
+type Template = "astro" | "next" | "nuxt" | "standalone" | "sveltekit" | "tanstack-start-react" | "tanstack-start-solid" | "vite";
 
 interface InitCommandOptions {
     /**
@@ -573,7 +573,8 @@ const isTemplate = (value: unknown): value is Template =>
     value === "nuxt" ||
     value === "standalone" ||
     value === "sveltekit" ||
-    value === "tanstack-start" ||
+    value === "tanstack-start-react" ||
+    value === "tanstack-start-solid" ||
     value === "vite";
 
 /** `cirrus init [name]` handler (lazy-loaded via the command's `loader`). */

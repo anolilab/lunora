@@ -5,7 +5,7 @@ import { join } from "node:path";
  * The meta-frameworks Cirrus can compose with, plus `"none"` for a standalone
  * SPA / SSR-less project (the current default). Mirrors PLAN4 §2.4.
  */
-type DetectedFramework = "astro" | "none" | "nuxt" | "react-router" | "solid-start" | "sveltekit" | "tanstack-start";
+type DetectedFramework = "astro" | "none" | "nuxt" | "react-router" | "solid-start" | "sveltekit" | "tanstack-start" | "tanstack-start-solid";
 
 /**
  * void's class model (PLAN4 §3). Class A is Vite-native and Cirrus owns the
@@ -36,6 +36,7 @@ interface FrameworkDetection {
  */
 const FRAMEWORK_SIGNATURES: ReadonlyArray<{ class: FrameworkClass; dependency: string; framework: DetectedFramework }> = [
     { class: "A", dependency: "@tanstack/react-start", framework: "tanstack-start" },
+    { class: "A", dependency: "@tanstack/solid-start", framework: "tanstack-start-solid" },
     { class: "A", dependency: "@react-router/dev", framework: "react-router" },
     { class: "A", dependency: "@solidjs/start", framework: "solid-start" },
     { class: "A", dependency: "solid-start", framework: "solid-start" },
