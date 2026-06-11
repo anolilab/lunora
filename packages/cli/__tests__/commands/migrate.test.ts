@@ -4,8 +4,8 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { runMigrateCreateCommand, runMigrateDataCommand, runMigrateGenerateCommand } from "../../src/commands/migrate";
-import type { FetchLike } from "../../src/commands/run";
+import { runMigrateCreateCommand, runMigrateDataCommand, runMigrateGenerateCommand } from "../../src/commands/migrate/handler";
+import type { FetchLike } from "../../src/commands/run/handler";
 import type { Logger } from "../../src/util/logger";
 
 const silentLogger = (): Logger => {

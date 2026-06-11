@@ -128,17 +128,28 @@ Mirror void's class-a/b/c model:
 
 ## 4. Milestones (prove the differentiator first, then broaden)
 
-> **Status (updated):** M0–M3 + M5 shipped. M1 contract, M2 class-A composition,
-> M3 adapters, and the M5 polish are real. **M4 (class-B) is NOT yet working** —
-> a real `cirrus init -t sveltekit` → `vite build` smoke (via a local verdaccio
-> registry) proved the `withCirrus`-wraps-`_worker.js` strategy is clobbered by
-> `@sveltejs/adapter-cloudflare`, which owns the wrangler `main` and writes its own
-> worker there. The composition _code_ is sound (unit-tested); the open problem is
-> the injection point (a `hooks.server` handle, a post-build wrap, or the adapter's
-> custom-entry hooks). The same smoke also surfaced template gaps now fixed
-> (`@cirrus/cli` was missing from every template; the sveltekit scaffold lacked
-> `vite.config.ts`/`app.html`). See `docs/frameworks/bring-your-framework` (class-B
-> note) + `verify-live-loaders`. The in-process `serverQuery` fast-path is also shipped, but
+> **Status (updated):** M0–M5 shipped. **M4 (class-B) now works** — proven by a
+> real `cirrus init -t sveltekit` → `vite build` → `wrangler deploy --dry-run`
+> smoke (via a local verdaccio registry). The injection point was the open
+> problem: `@sveltejs/adapter-cloudflare` overwrites whatever the wrangler `main`
+> field points at, so pointing `main` at `src/worker.ts` clobbered the composition.
+> **Fix:** point `main` at the adapter's _own_ default output
+> (`.svelte-kit/cloudflare/_worker.js`) so the adapter writes there (no clobber);
+> keep `src/worker.ts` as the `withCirrus` wrapper that imports that output and
+> re-exports `ShardDO`; and have `cirrus deploy` pass `src/worker.ts` as the
+> positional deploy entry (which overrides `main`) so the ONE deployed worker is
+> the composed one. The dry-run confirmed a single worker with both
+> `env.SHARD (ShardDO)` and `env.ASSETS` bindings resolved. The same smoke
+> surfaced (and we fixed) template gaps across all 8 templates: missing
+> `@cirrus/cli`, `@cirrus/do`, `typescript`, `@cloudflare/workers-types`; the
+> sveltekit scaffold lacked `vite.config.ts`/`app.html`/`tsconfig.json`; and a
+> latent `v.id("channels")` type error (a branded id to a non-existent table)
+> shipped in every template's sample schema (now `v.string()`). Astro composes on
+> the same `withCirrus` wrapper but `@astrojs/cloudflare` writes to `dist/_worker.js/`
+> (it does NOT clobber `main`), so its existing wiring is structurally sound;
+> Nuxt uses Nitro's output as `main` directly. See
+> `docs/frameworks/bring-your-framework` (class-B note) + `verify-live-loaders`.
+> The in-process `serverQuery` fast-path is also shipped, but
 > intentionally keeps the worker→DO hop (a worker-side `createCaller` is
 > architecturally impossible — dispatch happens inside the DO), so it removes the
 > self-`fetch` loopback while keeping byte-identical identity/RLS semantics.
@@ -162,11 +173,14 @@ wrangler `main` at it. `cirrus init -t tanstack-start` and `-t react-router` wir
 `@cirrus/vue` — each thin glue over `@cirrus/client` with `hydratePreloaded` + provider + a
 live-loader template, and the shared `createMutationRunner`. Each on its packem framework preset.
 
-**M4 — Class-B frameworks. ⚠️ in progress — composition NOT yet working.** The shared
-`withFrameworkWorker` (`@cirrus/runtime`), the per-adapter `withCirrus`, the `@cirrus/astro`
-integration, and the templates exist and unit-test — but a real SvelteKit build proved the
-adapter clobbers the composed `main` (see status note above). The injection point is the open work;
-until it's solved, class-B apps run Cirrus as a separate worker (class-C style).
+**M4 — Class-B frameworks. ✅ SvelteKit validated end-to-end; Astro/Nuxt on the same mechanism.**
+The shared `withFrameworkWorker` (`@cirrus/runtime`), the per-adapter `withCirrus`, the
+`@cirrus/astro` integration, and the templates exist and unit-test. The injection point is solved
+(see status note above): wrangler `main` points at the framework adapter's _own_ output so the
+build can't clobber the `src/worker.ts` composition, and `cirrus deploy` bundles `src/worker.ts`
+as the positional deploy entry. A real `cirrus init -t sveltekit` → `vite build` →
+`wrangler deploy --dry-run src/worker.ts` produced a single worker exporting `ShardDO` with both
+the `SHARD` and `ASSETS` bindings — no separate worker, no class-C fallback.
 
 **M5 — Polish. ✅ shipped.** `cirrus init --here` per framework; dev HMR (the composed worker is an
 ordinary module entry, HMRs under `@cloudflare/vite-plugin`); the "bring your framework" docs matrix;

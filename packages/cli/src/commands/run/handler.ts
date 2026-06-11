@@ -1,4 +1,7 @@
-import type { Logger } from "../util/logger";
+import type { CommandHandler } from "../../util/command";
+import { defineHandler } from "../../util/command";
+import type { Logger } from "../../util/logger";
+import type { RunRpcOptions } from "./index";
 
 type FetchLike = (
     input: string,
@@ -100,5 +103,19 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
     };
 };
 
+/** `cirrus run &lt;functionPath>` handler (lazy-loaded via the command's `loader`). */
+const execute: CommandHandler<RunRpcOptions> = defineHandler<RunRpcOptions>(({ argument, cwd, logger, options }) => {
+    const functionPath = argument[0];
+
+    if (!functionPath) {
+        logger.error("missing function path. Usage: cirrus run <functionPath> [--args <json>]");
+
+        return { code: 1 };
+    }
+
+    return runRpcCommand({ args: options.args, cwd, functionPath, logger, shard: options.shard, url: options.url });
+});
+
+export { execute };
 export type { FetchLike, RunCommandOptions, RunCommandResult };
 export { runRpcCommand };

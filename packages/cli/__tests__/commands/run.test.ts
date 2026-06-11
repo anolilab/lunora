@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { FetchLike } from "../../src/commands/run";
-import { runRpcCommand } from "../../src/commands/run";
+import type { FetchLike } from "../../src/commands/run/handler";
+import { runRpcCommand } from "../../src/commands/run/handler";
 import type { Logger } from "../../src/util/logger";
 
 const silentLogger = (): Logger => {

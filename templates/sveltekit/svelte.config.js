@@ -6,10 +6,12 @@ import { vitePreprocess } from "@sveltejs/vite-plugin-svelte";
  * into a Cloudflare Worker handler emitted at `.svelte-kit/cloudflare/_worker.js`.
  *
  * Cirrus does NOT replace that build (SvelteKit is a Class-B framework — it owns
- * its own CF adapter). Instead `src/worker.ts` imports the adapter's emitted
- * handler and wraps it with `withCirrus` (see `@cirrus/svelte/worker`), then
- * `wrangler.jsonc`'s `main` points at `src/worker.ts` so the deployed Worker is
- * the composed single worker: SvelteKit + Cirrus realtime under `/_cirrus/*`.
+ * its own CF adapter). The adapter overwrites whatever `wrangler.jsonc`'s `main`
+ * points at, so `main` stays on the adapter's own `_worker.js`. `src/worker.ts`
+ * imports that emitted handler, wraps it with `withCirrus` (see
+ * `@cirrus/svelte/worker`), and `cirrus deploy` bundles `src/worker.ts` as the
+ * deploy entry (overriding `main`) so the deployed Worker is the composed single
+ * worker: SvelteKit + Cirrus realtime under `/_cirrus/*`.
  *
  * @type {import("@sveltejs/kit").Config}
  */

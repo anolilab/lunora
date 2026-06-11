@@ -4,8 +4,8 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { DevCommandOptions } from "../../src/commands/dev";
-import { planDevCommand, runDevCommand } from "../../src/commands/dev";
+import type { DevCommandOptions } from "../../src/commands/dev/handler";
+import { planDevCommand, runDevCommand } from "../../src/commands/dev/handler";
 import type { Logger } from "../../src/util/logger";
 
 const silentLogger = (): Logger => {

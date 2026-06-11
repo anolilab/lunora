@@ -1,6 +1,9 @@
-import type { Logger } from "../util/logger";
-import type { SpawnDescriptor, Spawner } from "../util/spawn";
-import { defaultSpawner } from "../util/spawn";
+
+import type { Logger } from "../../util/logger";
+import type { SpawnDescriptor, Spawner } from "../../util/spawn";
+import { defaultSpawner } from "../../util/spawn";
+import { type CommandHandler, defineHandler } from "../../util/command";
+import type { LogsOptions } from "./index";
 
 /** Output formats `wrangler tail` understands. */
 const LOG_FORMATS = new Set(["json", "pretty"]);
@@ -84,5 +87,18 @@ const runLogsCommand = async (options: LogsCommandOptions): Promise<LogsCommandR
     };
 };
 
+/** `cirrus logs [worker]` handler (lazy-loaded via the command's `loader`). */
+const execute: CommandHandler<LogsOptions> = defineHandler<LogsOptions>(({ argument, cwd, logger, options }) =>
+    runLogsCommand({
+        cwd,
+        env: options.env,
+        format: options.format,
+        logger,
+        search: options.search,
+        status: options.status,
+        worker: argument[0],
+    }));
+
+export { execute };
 export type { LogsCommandOptions, LogsCommandResult };
 export { runLogsCommand };

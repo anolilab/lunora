@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { runResetCommand } from "../../src/commands/reset";
+import { runResetCommand } from "../../src/commands/reset/handler";
 import type { Logger } from "../../src/util/logger";
 
 const silentLogger = (): Logger => {

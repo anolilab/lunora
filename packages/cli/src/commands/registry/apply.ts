@@ -2,12 +2,12 @@
  * Applying an item's non-file resources into the project: npm deps /
  * devDependencies + wrangler.jsonc bindings (structural jsonc edits) and
  * `.dev.vars` env-var scaffolding, plus the package.json mutation confirmation.
- * `jsonc-parser` is imported lazily — only the deps/bindings paths need it.
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
 import { DEV_VARS_FILE, parseDevVariableEntries, promptYesNo } from "@cirrus/config";
 import { join } from "@visulima/path";
+import { applyEdits, modify, parse } from "jsonc-parser";
 
 import type { Logger } from "../../util/logger";
 import type { AddCommandOptions, RegistryBinding, RegistryEnvVariable, RegistryManifest } from "./types";
@@ -16,19 +16,17 @@ import type { AddCommandOptions, RegistryBinding, RegistryEnvVariable, RegistryM
  * Add deps to a `package.json` section (`dependencies` or `devDependencies`),
  * structurally so formatting/comments are preserved. Returns the added names.
  */
-const applyDeps = async (
+const applyDeps = (
     deps: Readonly<Record<string, string>>,
     projectRoot: string,
     logger: Logger,
     section: "dependencies" | "devDependencies" = "dependencies",
-): Promise<ReadonlyArray<string>> => {
+): ReadonlyArray<string> => {
     const entries = Object.entries(deps);
 
     if (entries.length === 0) {
         return [];
     }
-
-    const { applyEdits, modify } = await import("jsonc-parser");
 
     const packageJsonPath = join(projectRoot, "package.json");
 
@@ -121,12 +119,10 @@ const applyEnvVariables = (envVariables: ReadonlyArray<RegistryEnvVariable>, pro
 };
 
 /** Apply wrangler.jsonc bindings (structural jsonc edits preserving comments). Returns applied paths. */
-const applyBindings = async (bindings: ReadonlyArray<RegistryBinding>, projectRoot: string, logger: Logger): Promise<ReadonlyArray<string>> => {
+const applyBindings = (bindings: ReadonlyArray<RegistryBinding>, projectRoot: string, logger: Logger): ReadonlyArray<string> => {
     if (bindings.length === 0) {
         return [];
     }
-
-    const { applyEdits, modify, parse } = await import("jsonc-parser");
 
     const candidates = ["wrangler.jsonc", "wrangler.json"];
     const wranglerPath = candidates.map((candidate) => join(projectRoot, candidate)).find((candidate) => existsSync(candidate));
@@ -197,20 +193,20 @@ const applyBindings = async (bindings: ReadonlyArray<RegistryBinding>, projectRo
 };
 
 /** Apply one item's non-file resources (deps, devDeps, bindings, env vars). Returns the deps + bindings added. */
-const applyItemResources = async (manifest: RegistryManifest, cwd: string, logger: Logger): Promise<{ bindings: string[]; deps: string[] }> => {
+const applyItemResources = (manifest: RegistryManifest, cwd: string, logger: Logger): { bindings: string[]; deps: string[] } => {
     const deps: string[] = [];
     const bindings: string[] = [];
 
     if (manifest.deps) {
-        deps.push(...(await applyDeps(manifest.deps, cwd, logger)));
+        deps.push(...applyDeps(manifest.deps, cwd, logger));
     }
 
     if (manifest.devDependencies) {
-        deps.push(...(await applyDeps(manifest.devDependencies, cwd, logger, "devDependencies")));
+        deps.push(...applyDeps(manifest.devDependencies, cwd, logger, "devDependencies"));
     }
 
     if (manifest.bindings) {
-        bindings.push(...(await applyBindings(manifest.bindings, cwd, logger)));
+        bindings.push(...applyBindings(manifest.bindings, cwd, logger));
     }
 
     if (manifest.envVars) {

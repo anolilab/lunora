@@ -5,8 +5,8 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { runDeployCommand } from "../../src/commands/deploy";
-import type { FetchLike } from "../../src/commands/run";
+import { runDeployCommand } from "../../src/commands/deploy/handler";
+import type { FetchLike } from "../../src/commands/run/handler";
 import type { Logger } from "../../src/util/logger";
 import { createRecordingSpawner } from "../../src/util/spawn";
 
@@ -74,6 +74,44 @@ describe("cirrus deploy", () => {
 
             expect(args).toContain("wrangler");
             expect(args).toContain("deploy");
+        });
+
+        it("bundles src/worker.ts as the deploy entry for class-B composition when present", async () => {
+            expect.assertions(3);
+
+            // Class-B (SvelteKit/Astro): the framework's CF adapter owns wrangler
+            // `main`, so the composed worker lives at src/worker.ts and must be
+            // passed positionally to override `main`.
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            mkdirSync(join(workdir, "src"), { recursive: true });
+            writeFileSync(join(workdir, "src", "worker.ts"), "export default { fetch() {} };\nexport const ShardDO = class {};", "utf8");
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { infos, logger } = silentLogger();
+
+            const result = await runDeployCommand({ cwd: workdir, logger, spawner });
+
+            expect(result.code).toBe(0);
+
+            const args = calls[0]?.descriptor.args ?? [];
+
+            expect(args).toContain("src/worker.ts");
+            expect(infos.some((line) => line.includes("class-B composition"))).toBe(true);
+        });
+
+        it("does not add a positional entry when src/worker.ts is absent (class-A/C)", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+
+            const result = await runDeployCommand({ cwd: workdir, logger, spawner });
+
+            expect(result.code).toBe(0);
+            // exec wrangler deploy — three args, no positional entry path
+            expect(calls[0]?.descriptor.args).toStrictEqual(["exec", "wrangler", "deploy"]);
         });
 
         it("forwards --env to wrangler", async () => {

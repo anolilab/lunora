@@ -1,7 +1,10 @@
 /* eslint-disable unicorn/prevent-abbreviations -- "docs" is the user-facing CLI command name (cirrus docs); renaming the identifiers would diverge from the command users type */
-import type { Logger } from "../util/logger";
-import type { OpenUrlOptions } from "../util/open-url";
-import { openUrl } from "../util/open-url";
+
+import type { CommandHandler } from "../../util/command";
+import { defineHandler } from "../../util/command";
+import type { Logger } from "../../util/logger";
+import type { OpenUrlOptions } from "../../util/open-url";
+import { openUrl } from "../../util/open-url";
 
 interface DocsCommandOptions {
     logger: Logger;
@@ -66,6 +69,12 @@ const runDocsCommand = async (options: DocsCommandOptions): Promise<DocsCommandR
     return { code: 0, url };
 };
 
+/** `cirrus docs [section]` handler (lazy-loaded via the command's `loader`). `docs` takes no options. */
+const execute: CommandHandler<Record<string, never>> = defineHandler<Record<string, never>>(({ argument, logger }) =>
+    runDocsCommand({ logger, section: argument[0] }),
+);
+
+export { execute };
 export type { DocsCommandOptions, DocsCommandResult };
 export { runDocsCommand };
 /* eslint-enable unicorn/prevent-abbreviations */

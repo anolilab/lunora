@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { runLogsCommand } from "../../src/commands/logs";
+import { runLogsCommand } from "../../src/commands/logs/handler";
 import type { Logger } from "../../src/util/logger";
 import { createRecordingSpawner } from "../../src/util/spawn";
 

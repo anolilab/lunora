@@ -6,10 +6,13 @@ import { walkSync } from "@visulima/fs";
 import { dirname, join, relative, resolve } from "@visulima/path";
 import { downloadTemplate } from "giget";
 
-import type { DetectedFramework, FrameworkDetection } from "../util/detect-framework";
-import { detectFramework } from "../util/detect-framework";
-import type { Logger } from "../util/logger";
-import { patchViteConfig } from "../util/patch-vite-config";
+import type { CommandHandler } from "../../util/command";
+import { defineHandler } from "../../util/command";
+import type { DetectedFramework, FrameworkDetection } from "../../util/detect-framework";
+import { detectFramework } from "../../util/detect-framework";
+import type { Logger } from "../../util/logger";
+import { patchViteConfig } from "../../util/patch-vite-config";
+import type { InitOptions } from "./index";
 
 type Template = "next" | "standalone" | "tanstack-start" | "vite";
 
@@ -563,5 +566,26 @@ const runInitCommand = async (options: InitCommandOptions): Promise<InitCommandR
     return scaffoldFromRemote(options.source, templateType, target, name, options.logger);
 };
 
+/** Narrow a raw `--template` value to a known {@link Template} (defaults to vite). */
+const isTemplate = (value: unknown): value is Template => value === "vite" || value === "standalone" || value === "next" || value === "tanstack-start";
+
+/** `cirrus init [name]` handler (lazy-loaded via the command's `loader`). */
+const execute: CommandHandler<InitOptions> = defineHandler<InitOptions>(({ argument, cwd, logger, options }) => {
+    const templateRaw = options.template ?? "vite";
+    const template: Template = isTemplate(templateRaw) ? templateRaw : "vite";
+
+    return runInitCommand({
+        allowUnsafeSource: options.allowUnsafeSource === true,
+        cwd,
+        from: options.from,
+        inPlace: options.here === true,
+        logger,
+        name: argument[0],
+        source: options.source,
+        templateType: template,
+    });
+});
+
+export { execute };
 export type { InitCommandOptions, InitCommandResult, Template };
 export { runInitCommand };

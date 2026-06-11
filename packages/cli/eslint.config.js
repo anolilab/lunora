@@ -126,6 +126,19 @@ export default createConfig(
             "markdown/fenced-code-language": "off",
         },
     },
+    // Command handlers (`commands/<name>/handler.ts`) intentionally export `execute`
+    // as a NAMED export so cerebro's lazy `loader: () => import("./handler").then(...)`
+    // resolves it, and so a handler that grows a second export never has to switch
+    // export style (per AGENTS.md "no mixed default + named"). That makes the
+    // execute-only handlers single-named-export, which `import/prefer-default-export`
+    // would otherwise flag — turn it off here so the idiom stays uniform across all
+    // commands.
+    {
+        files: ["**/commands/**/handler.ts"],
+        rules: {
+            "import/prefer-default-export": "off",
+        },
+    },
     // Behavior-breaking autofixers — kept off (not style). sort-objects reorders the
     // keys of JSON.stringify'd wire payloads / canonical objects, changing the bytes on
     // the wire and breaking order-sensitive tests; prefer-expect-type-of rewrites a

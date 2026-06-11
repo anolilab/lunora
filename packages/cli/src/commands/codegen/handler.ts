@@ -1,19 +1,23 @@
 import { runCodegen } from "@cirrus/codegen";
 
-import type { ApiSpec } from "../util/api-spec";
-import type { Logger } from "../util/logger";
+import type { ApiSpec } from "../../util/api-spec";
+import { parseApiSpec } from "../../util/api-spec";
+import type { CommandHandler } from "../../util/command";
+import { defineHandler } from "../../util/command";
+import type { Logger } from "../../util/logger";
+import type { CodegenOptions } from "./index";
 
 /** Cloudflare caps a Worker at 3 Cron Triggers (distinct cron expressions). */
 const CRON_TRIGGER_LIMIT = 3;
 
-export interface CodegenCommandOptions {
+interface CodegenCommandOptions {
     /** Which API spec(s) to emit. Defaults to codegen's `"openapi"` when omitted. */
     apiSpec?: ApiSpec;
     cwd?: string;
     logger: Logger;
 }
 
-export const runCodegenCommand = (options: CodegenCommandOptions): { outputDirectory: string } => {
+const runCodegenCommand = (options: CodegenCommandOptions): { outputDirectory: string } => {
     const projectRoot = options.cwd ?? process.cwd();
 
     const result = runCodegen({ apiSpec: options.apiSpec, projectRoot });
@@ -42,3 +46,13 @@ export const runCodegenCommand = (options: CodegenCommandOptions): { outputDirec
 
     return { outputDirectory: result.outputDirectory };
 };
+
+/** `cirrus codegen` handler (lazy-loaded via the command's `loader`). */
+const execute: CommandHandler<CodegenOptions> = defineHandler<CodegenOptions>(({ cwd, logger, options }) => {
+    runCodegenCommand({ apiSpec: parseApiSpec(options.apiSpec), cwd, logger });
+
+    return { code: 0 };
+});
+
+export { execute, runCodegenCommand };
+export type { CodegenCommandOptions };

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { runInitCommand } from "../../src/commands/init";
+import { runInitCommand } from "../../src/commands/init/handler";
 import type { Logger } from "../../src/util/logger";
 
 const silentLogger = (): Logger => {

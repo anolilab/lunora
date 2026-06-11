@@ -2,9 +2,12 @@ import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs"
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
-import type { Logger } from "../util/logger";
-import type { SpawnDescriptor, Spawner } from "../util/spawn";
-import { defaultSpawner } from "../util/spawn";
+import type { CommandHandler } from "../../util/command";
+import { defineHandler } from "../../util/command";
+import type { Logger } from "../../util/logger";
+import type { SpawnDescriptor, Spawner } from "../../util/spawn";
+import { defaultSpawner } from "../../util/spawn";
+import type { AnalyzeOptions } from "./index";
 
 interface AnalyzeCommandOptions {
     cwd?: string;
@@ -178,5 +181,11 @@ const runAnalyzeCommand = async (options: AnalyzeCommandOptions): Promise<Analyz
     }
 };
 
+/** `cirrus analyze` handler (lazy-loaded via the command's `loader`). */
+const execute: CommandHandler<AnalyzeOptions> = defineHandler<AnalyzeOptions>(({ cwd, logger, options }) =>
+    runAnalyzeCommand({ cwd, json: options.json === true, logger }),
+);
+
+export { execute };
 export type { AnalyzeCommandOptions, AnalyzeCommandResult, AnalyzeFileEntry, AnalyzeReport };
 export { runAnalyzeCommand };

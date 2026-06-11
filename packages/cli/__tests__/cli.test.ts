@@ -1,11 +1,11 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { BOOLEAN_OPTIONS, COMMANDS, runCli } from "../src/cli";
+import { COMMANDS, runCli, VERSION } from "../src/cli";
 
 const testDirectory = dirname(fileURLToPath(import.meta.url));
 const templatesRoot = resolve(testDirectory, "..", "..", "..", "templates");
@@ -38,35 +38,51 @@ describe("cirrus CLI entry", () => {
         writeStderrSpy.mockRestore();
     });
 
-    it("`cirrus --help` prints help and exits 0", async () => {
+    // cerebro renders help/version/usage through its injected logger (not raw
+    // process.stdout), so capture it via the `logger` option and fold in the
+    // stdout spy for anything that bypasses the logger.
+    const captureLogger = (): { lines: string[]; logger: Console } => {
+        const lines: string[] = [];
+        const push = (...arguments_: unknown[]): void => {
+            lines.push(arguments_.map((value) => (typeof value === "string" ? value : JSON.stringify(value))).join(" "));
+        };
+
+        return { lines, logger: { debug: push, error: push, info: push, log: push, raw: push, trace: push, warn: push } as unknown as Console };
+    };
+
+    it("`cirrus --help` lists every command and exits 0", async () => {
         expect.hasAssertions();
 
-        const code = await runCli({ argv: ["--help"] });
+        const { lines, logger } = captureLogger();
+        const code = await runCli({ argv: ["--help"], logger });
 
         expect(code).toBe(0);
-        expect(stdout).toContain("cirrus —");
+
+        const output = `${lines.join("\n")}\n${stdout}`;
 
         for (const command of COMMANDS) {
-            expect(stdout).toContain(command);
+            expect(output).toContain(command);
         }
     });
 
-    it("no args prints help", async () => {
+    it("no args prints usage and exits 0", async () => {
         expect.assertions(2);
 
-        const code = await runCli({ argv: [] });
+        const { lines, logger } = captureLogger();
+        const code = await runCli({ argv: [], logger });
 
         expect(code).toBe(0);
-        expect(stdout).toContain("Usage: cirrus");
+        expect(`${lines.join("\n")}\n${stdout}`).toMatch(/Usage|cirrus <command>/u);
     });
 
-    it("`--version` prints a version", async () => {
+    it("`--version` prints a version and exits 0", async () => {
         expect.assertions(2);
 
-        const code = await runCli({ argv: ["--version"] });
+        const { lines, logger } = captureLogger();
+        const code = await runCli({ argv: ["--version"], logger });
 
         expect(code).toBe(0);
-        expect(stdout.trim()).toMatch(/^\d+\.\d+\.\d+/u);
+        expect(`${lines.join("")}${stdout}`).toContain(VERSION);
     });
 
     it("unknown command exits non-zero", async () => {
@@ -75,7 +91,8 @@ describe("cirrus CLI entry", () => {
         const code = await runCli({ argv: ["zzz-not-real"] });
 
         expect(code).toBe(1);
-        expect(stderr).toContain("unknown command");
+        // cerebro throws "Command \"zzz-not-real\" not found"; runCli logs it to stderr.
+        expect(stderr).toContain("not found");
     });
 
     describe("registry subcommands", () => {
@@ -123,11 +140,11 @@ describe("cirrus CLI entry", () => {
         });
     });
 
-    describe("argv reorder (option-after-positional)", () => {
-        // The published cerebro@2.1.5 swallows space-separated options that
-        // appear after a positional argument into the positional array; we
-        // sidestep that by reordering argv in runCli. These tests pin the
-        // behaviour from the public CLI surface.
+    describe("option-after-positional parsing", () => {
+        // cerebro 3 parses space-separated options that appear after a positional
+        // argument correctly (the 2.1.5 quirk that swallowed them into the
+        // positional array is fixed, so the CLI no longer reorders argv). These
+        // tests pin that behaviour from the public CLI surface.
         let workdir: string;
 
         beforeEach(() => {
@@ -199,36 +216,5 @@ describe("cirrus CLI entry", () => {
 
             expect(existsSync(join(target, "vite.config.ts"))).toBe(true);
         });
-    });
-});
-
-describe("bOOLEAN_OPTIONS stays in sync with command definitions", () => {
-    it("includes every `type: Boolean` option declared across all commands", () => {
-        expect.assertions(2);
-
-        // reorderArgvOptionsFirst relies on this hand-maintained set to know
-        // which flags do NOT consume the next token. If a future command adds
-        // a Boolean flag but forgets to register it here, that flag would
-        // greedily swallow the following positional with no error. This scans
-        // the source for every `{ ..., name: "x", ..., type: Boolean }` option
-        // and asserts membership, so the set can't silently desync.
-        const source = readFileSync(resolve(testDirectory, "..", "src", "cli.ts"), "utf8");
-        // Match option objects whose `type` is Boolean, capturing the `name`.
-        const optionPattern = /\{[^{}]*name:\s*"([a-z][\w-]*)"[^{}]*type:\s*Boolean[^{}]*\}/gu;
-        const booleanNames = new Set<string>();
-
-        for (const match of source.matchAll(optionPattern)) {
-            if (match[1] !== undefined) {
-                booleanNames.add(match[1]);
-            }
-        }
-
-        // Sanity: the scan must find the known Boolean flags, otherwise the
-        // regex broke and the assertion below would pass vacuously.
-        expect(booleanNames.size).toBeGreaterThan(0);
-
-        const missing = [...booleanNames].filter((name) => !BOOLEAN_OPTIONS.has(name));
-
-        expect(missing).toStrictEqual([]);
     });
 });

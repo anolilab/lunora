@@ -7,9 +7,13 @@
 import { runCodegen } from "@cirrus/codegen";
 import { inferCirrusBindings, reconcileWranglerBindings } from "@cirrus/config";
 
-import type { ApiSpec } from "../util/api-spec";
-import type { Logger } from "../util/logger";
-import { validateWrangler } from "../util/wrangler-validator";
+import type { ApiSpec } from "../../util/api-spec";
+import { parseApiSpec } from "../../util/api-spec";
+import type { CommandHandler } from "../../util/command";
+import { defineHandler } from "../../util/command";
+import type { Logger } from "../../util/logger";
+import { validateWrangler } from "../../util/wrangler-validator";
+import type { PrepareOptions } from "./index";
 
 interface PrepareCommandOptions {
     /** Which API spec(s) to emit. Defaults to codegen's `"openapi"` when omitted. */
@@ -102,5 +106,11 @@ const runPrepareCommand = async (options: PrepareCommandOptions): Promise<Prepar
     return { code: 0, validation };
 };
 
+/** `cirrus prepare` handler (lazy-loaded via the command's `loader`). */
+const execute: CommandHandler<PrepareOptions> = defineHandler<PrepareOptions>(({ cwd, logger, options }) =>
+    runPrepareCommand({ apiSpec: parseApiSpec(options.apiSpec), cwd, logger }),
+);
+
+export { execute };
 export type { PrepareCommandOptions, PrepareCommandResult };
 export { runPrepareCommand };

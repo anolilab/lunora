@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { runDocsCommand } from "../../src/commands/docs";
+import { runDocsCommand } from "../../src/commands/docs/handler";
 import type { Logger } from "../../src/util/logger";
 
 const silentLogger = (): Logger => {

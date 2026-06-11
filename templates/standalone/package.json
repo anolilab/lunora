@@ -9,11 +9,14 @@
         "deploy": "cirrus deploy"
     },
     "dependencies": {
+        "@cirrus/do": "^0.0.0",
         "@cirrus/runtime": "^0.0.0",
         "@cirrus/server": "^0.0.0"
     },
     "devDependencies": {
         "@cirrus/cli": "^0.0.0",
+        "@cloudflare/workers-types": "^4.20260610.1",
+        "typescript": "^6.0.3",
         "wrangler": "^4.99.0"
     }
 }

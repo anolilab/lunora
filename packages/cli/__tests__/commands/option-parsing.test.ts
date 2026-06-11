@@ -1,0 +1,75 @@
+import type { OptionDefinition } from "@visulima/cerebro";
+import { Cerebro } from "@visulima/cerebro";
+import { describe, expect, it } from "vitest";
+
+import { devCommand } from "../../src/commands/dev";
+import { verifyCommand } from "../../src/commands/verify";
+
+/**
+ * Guards the option-name → parsed-key mapping that each handler relies on. The
+ * declared option `name` and the key cerebro hands the handler at runtime are NOT
+ * always the same string — hyphenated names camelCase (`worker-port` →
+ * `workerPort`), and `no-*` flags arrive under the *negated positive* key
+ * (`no-studio` → `studio: false`). A handler that reads the wrong key silently
+ * ignores the flag (this happened: `--no-studio`/`--no-typecheck` were dead).
+ *
+ * Rather than re-run a whole command (which spawns wrangler/tsc), we feed the
+ * command's real `options` array into a throwaway cerebro with a capturing stub
+ * and assert the parsed shape the handler destructures.
+ */
+const parseOptions = async (commandName: string, options: ReadonlyArray<OptionDefinition<unknown>>, argv: string[]): Promise<Record<string, unknown>> => {
+    let captured: Record<string, unknown> = {};
+    const cli = new Cerebro("cirrus", { argv });
+
+    cli.addCommand({
+        execute: ({ options: parsed }) => {
+            captured = parsed;
+        },
+        name: commandName,
+        options: [...options],
+    });
+
+    await cli.run({ shouldExitProcess: false });
+
+    return captured;
+};
+
+describe("command option parsing → handler key mapping", () => {
+    it("`dev --no-studio --no-codegen` parses to the negated `studio`/`codegen` keys the handler reads", async () => {
+        expect.assertions(2);
+
+        const parsed = await parseOptions("dev", devCommand.options ?? [], ["dev", "--no-studio", "--no-codegen"]);
+
+        // dev/handler.ts reads `options.studio === false` / `options.codegen === false`.
+        expect(parsed.studio).toBe(false);
+        expect(parsed.codegen).toBe(false);
+    });
+
+    it("`dev` (no flags) leaves studio/codegen enabled (default true)", async () => {
+        expect.assertions(2);
+
+        const parsed = await parseOptions("dev", devCommand.options ?? [], ["dev"]);
+
+        // Absent `--no-*` → the positive key defaults true → handler treats as enabled.
+        expect(parsed.studio).not.toBe(false);
+        expect(parsed.codegen).not.toBe(false);
+    });
+
+    it("`dev --worker-port 9000` camelCases to `workerPort`", async () => {
+        expect.assertions(1);
+
+        const parsed = await parseOptions("dev", devCommand.options ?? [], ["dev", "--worker-port", "9000"]);
+
+        // dev/handler.ts reads `options.workerPort`.
+        expect(parsed.workerPort).toBe(9000);
+    });
+
+    it("`verify --no-typecheck` parses to the negated `typecheck` key the handler reads", async () => {
+        expect.assertions(1);
+
+        const parsed = await parseOptions("verify", verifyCommand.options ?? [], ["verify", "--no-typecheck"]);
+
+        // verify/handler.ts reads `options.typecheck === false`.
+        expect(parsed.typecheck).toBe(false);
+    });
+});

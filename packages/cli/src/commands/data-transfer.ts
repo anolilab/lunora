@@ -15,7 +15,7 @@ import { stat, unlink } from "node:fs/promises";
 
 import resolveAdminBaseUrl from "../util/admin-url";
 import type { Logger } from "../util/logger";
-import type { FetchLike } from "./run";
+import type { FetchLike } from "./run/handler";
 
 const EXPORT_ENDPOINT_PATH = "/_cirrus/admin/export";
 const IMPORT_ENDPOINT_PATH = "/_cirrus/admin/import";

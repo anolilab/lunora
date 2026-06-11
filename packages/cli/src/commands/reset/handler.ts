@@ -3,7 +3,10 @@ import { existsSync, rmSync } from "node:fs";
 import { promptYesNo } from "@cirrus/config";
 import { join } from "@visulima/path";
 
-import type { Logger } from "../util/logger";
+import type { CommandHandler } from "../../util/command";
+import { defineHandler } from "../../util/command";
+import type { Logger } from "../../util/logger";
+import type { ResetOptions } from "./index";
 
 interface ResetCommandOptions {
     all?: boolean;
@@ -62,5 +65,11 @@ const runResetCommand = async (options: ResetCommandOptions): Promise<ResetComma
     return { code: 0, removed };
 };
 
+/** `cirrus reset` handler (lazy-loaded via the command's `loader`). */
+const execute: CommandHandler<ResetOptions> = defineHandler<ResetOptions>(({ cwd, logger, options }) =>
+    runResetCommand({ all: options.all === true, cwd, logger, yes: options.yes === true }),
+);
+
+export { execute };
 export type { ResetCommandOptions, ResetCommandResult };
 export { runResetCommand };

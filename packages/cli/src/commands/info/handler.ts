@@ -6,7 +6,10 @@ import { discoverSchema } from "@cirrus/codegen";
 import { parse as parseJsonc } from "jsonc-parser";
 import { Project } from "ts-morph";
 
-import type { Logger } from "../util/logger";
+import type { CommandHandler } from "../../util/command";
+import { defineHandler } from "../../util/command";
+import type { Logger } from "../../util/logger";
+import type { InfoOptions } from "./index";
 
 interface InfoCommandOptions {
     cwd?: string;
@@ -268,5 +271,11 @@ const runInfoCommand = (options: InfoCommandOptions): InfoCommandResult => {
     return { code: 0, snapshot };
 };
 
+/** `cirrus info` handler (lazy-loaded via the command's `loader`). */
+const execute: CommandHandler<InfoOptions> = defineHandler<InfoOptions>(({ cwd, logger, options }) =>
+    runInfoCommand({ cwd, json: options.json === true, logger }),
+);
+
+export { execute };
 export type { InfoCommandOptions, InfoCommandResult, InfoSnapshot };
 export { collectInfo, runInfoCommand };

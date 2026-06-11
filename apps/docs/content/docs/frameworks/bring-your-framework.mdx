@@ -45,12 +45,13 @@ never collides with your framework's routes. Pages and API go to your framework;
 queries, mutations, and subscriptions go to `/_cirrus/*`. A 500 from your SSR
 handler does not take down the realtime endpoints.
 
-> **Coming soon:** a `composeWorker({ httpRouter, ...cirrusOptions })` helper —
-> thin sugar over `createWorker` — so templates read cleanly, plus an in-process
-> `serverQuery` fast-path that lets an SSR loader call Cirrus _directly_ inside
-> the same worker, skipping the network hop to `/_cirrus/rpc`. Today the HTTP RPC
-> path is used; in Cloudflare's module-worker model that's a same-process
-> loopback, so latency is already near-zero.
+> **Shipped:** a `composeWorker({ httpRouter, ...cirrusOptions })` helper — thin
+> sugar over `createWorker` — so templates read cleanly, plus an in-process
+> `serverQuery` fast-path so an SSR loader can call Cirrus _directly_ inside the
+> same worker instead of round-tripping `/_cirrus/rpc`. (`serverQuery` keeps the
+> worker→Durable-Object hop — dispatch lives inside the DO, so a worker-side
+> `createCaller` is impossible — but drops the self-`fetch` loopback while keeping
+> byte-identical identity/RLS semantics.)
 
 ## The per-framework matrix
 
@@ -60,7 +61,7 @@ mirrors void's class-a/b/c model.
 | Class                                  | Frameworks                                      | Composition strategy                                                                                                                                                                   | Status                                                                  |
 | -------------------------------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
 | **A — Vite-native, we own the entry**  | TanStack Start, React Router (Vite), SolidStart | `createWorker({ httpRouter: <framework SSR handler> })` directly in the worker entry. Cleanest tier; in-process `serverQuery` available here.                                          | TanStack Start proven; React Router + SolidStart templated, in progress |
-| **B — own CF adapter, hook-injection** | SvelteKit, Nuxt, Astro                          | The framework builds its own server; Cirrus composition is injected into its server entry / hooks. Cirrus realtime stays under `/_cirrus/*`; the framework keeps everything else.      | ⚠️ not yet working — see the class-B composition note below             |
+| **B — own CF adapter, hook-injection** | SvelteKit, Nuxt, Astro                          | The framework builds its own server; `src/worker.ts` wraps that output with `withCirrus` (realtime under `/_cirrus/*`) and `cirrus deploy` bundles it as the deploy entry. One worker. | SvelteKit proven end-to-end; Astro/Nuxt wired on the same mechanism     |
 | **C — non-CF or SSR-less**             | static / SPA                                    | No SSR loaders. Ship the client adapter plus a standalone Cirrus worker (the current default for SPA apps). Data is still live; it just hydrates client-side instead of from the HTML. | shipped                                                                 |
 
 **Class A** is the cleanest: we own the Cloudflare worker entry, so we drop the
@@ -70,21 +71,29 @@ fighting their build (the adapter ships `withCirrus()`-style wrappers). **Class
 C** has no SSR loaders, so there's nothing to make live on the server — the client
 adapter still gives you live queries, they just hydrate on the client.
 
-> **⚠️ Class-B composition is not yet working end-to-end (known issue).** A real
-> `cirrus init -t sveltekit` → `vite build` smoke proved that the
-> `withCirrus()`-wraps-the-adapter-output strategy does **not** survive the
-> framework build: `@sveltejs/adapter-cloudflare` (and, by the same shape, Nitro's
-> Cloudflare preset and `@astrojs/cloudflare`) takes ownership of the wrangler
-> `main` entry and **writes its own generated worker there**, clobbering the
-> template's `src/worker.ts` (the `withCirrus` composition + `ShardDO` export).
-> The Cirrus composition _code_ (`withFrameworkWorker` / each adapter's
-> `withCirrus`) is sound and unit-tested — the open problem is the **injection
-> point**: getting the composed worker to be what the framework actually deploys.
-> Candidate fixes (a SvelteKit `hooks.server` `handle` for `/_cirrus/*` rather than
-> a worker wrapper; a post-build wrap step; or the adapter's own custom-entry
-> hooks) are the focus of the remaining M4 work. Until then, run Cirrus as a
-> **separate worker** alongside the framework (class-C style) and point the client
-> at it.
+> **How class-B composition deploys one worker.** The subtlety class-B frameworks
+> introduce is that their Cloudflare adapter owns the build. `@sveltejs/adapter-cloudflare`
+> **overwrites whatever the wrangler `main` field points at** with its own generated
+> worker — so `main` cannot point at the template's `src/worker.ts` (the build would
+> clobber it). The working wiring, proven by a real `cirrus init -t sveltekit` →
+> `vite build` → `wrangler deploy --dry-run` smoke:
+>
+> 1. Point wrangler `main` at the adapter's **own** default output
+>    (`.svelte-kit/cloudflare/_worker.js`) — so the adapter writes there and never
+>    touches `src/worker.ts`.
+> 2. Keep `src/worker.ts` as the `withCirrus` wrapper: it imports that emitted
+>    handler, mounts Cirrus realtime under `/_cirrus/*`, and re-exports `ShardDO`.
+> 3. `cirrus deploy` passes `src/worker.ts` as the **positional** deploy entry,
+>    which overrides `main`, so the single worker Cloudflare runs is the composed
+>    one. (The template's `deploy` script runs `vite build` first so the adapter
+>    output exists.)
+>
+> The dry-run confirms a single worker exporting `ShardDO` with both the `SHARD`
+> (Durable Object) and `ASSETS` bindings — no second worker, no class-C fallback.
+> Astro composes the same way via `src/worker.ts` + `withCirrus`; because
+> `@astrojs/cloudflare` writes to `dist/_worker.js/` (it does **not** clobber `main`),
+> its wiring needs no `main` redirection. Nuxt uses Nitro's emitted server as `main`
+> directly.
 
 ## Client adapters
 
@@ -142,10 +151,13 @@ cirrus init my-app -t standalone       # worker-only, no frontend
 
 `cirrus init -t tanstack-start` is fully wired: it mounts the framework SSR
 handler as the worker's `httpRouter`, ships a sample **live loader** route, and
-sets up the `@cirrus/react` provider. Templates for `react-router`,
-`solid-start`, `sveltekit`, and `nuxt` exist alongside their adapters; they are
-**preview** — scaffoldable but not yet proven end-to-end. An `astro` template is
-still in progress.
+sets up the `@cirrus/react` provider. `cirrus init -t sveltekit` is proven
+end-to-end — its `src/worker.ts` + `wrangler.jsonc` + `cirrus deploy` compose
+into a single worker (verified through `vite build` → `wrangler deploy --dry-run`,
+exporting `ShardDO` with the `SHARD` and `ASSETS` bindings). Templates for
+`react-router`, `solid-start`, `nuxt`, and `astro` exist alongside their
+adapters and are wired on the same composition seam; they are **preview** —
+scaffoldable, not yet each smoke-proven end-to-end.
 
 To add Cirrus to an **existing** meta-framework app, the in-place patcher
 `cirrus init --here` detects your framework from `package.json`, classifies it

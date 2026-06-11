@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { runInitCommand } from "../../src/commands/init";
+import { runInitCommand } from "../../src/commands/init/handler";
 import { detectFramework } from "../../src/util/detect-framework";
 import type { Logger } from "../../src/util/logger";
 

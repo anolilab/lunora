@@ -17,11 +17,14 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import resolveAdminBaseUrl from "../util/admin-url";
-import type { Logger } from "../util/logger";
-import type { StreamingFetchLike } from "./data-transfer";
-import { runExportCommand, runImportCommand } from "./data-transfer";
-import type { FetchLike } from "./run";
+import resolveAdminBaseUrl from "../../util/admin-url";
+import type { CommandHandler } from "../../util/command";
+import { defineHandler } from "../../util/command";
+import type { Logger } from "../../util/logger";
+import type { StreamingFetchLike } from "../data-transfer";
+import { runExportCommand, runImportCommand } from "../data-transfer";
+import type { FetchLike } from "../run/handler";
+import type { BackupOptions } from "./index";
 
 /** Default directory (relative to cwd) backups and their manifest live in. */
 const DEFAULT_BACKUP_DIR = ".cirrus-backups";
@@ -324,5 +327,38 @@ const runBackupCommand = async (options: BackupCommandOptions): Promise<BackupCo
     return runBackupRestore(options, directory);
 };
 
+/** Narrow a raw argument to a known {@link BackupSubcommand}. */
+const isBackupSubcommand = (value: unknown): value is BackupSubcommand => value === "create" || value === "list" || value === "pitr" || value === "restore";
+
+/** `cirrus backup &lt;subcommand>` handler (lazy-loaded via the command's `loader`). */
+const execute: CommandHandler<BackupOptions> = defineHandler<BackupOptions>(({ argument, cwd, logger, options }) => {
+    const sub = argument[0];
+
+    if (!isBackupSubcommand(sub)) {
+        logger.error(`backup: unknown subcommand "${sub ?? ""}" — expected create | list | restore | pitr`);
+
+        return { code: 1 };
+    }
+
+    return runBackupCommand({
+        at: options.at,
+        bookmark: options.bookmark,
+        cwd,
+        dir: options.dir,
+        logger,
+        prod: options.prod === true,
+        restart: options.restart === true,
+        restore: options.restore === true,
+        shard: options.shard,
+        subcommand: sub,
+        tables: options.tables,
+        target: argument[1],
+        token: options.token,
+        url: options.url,
+        yes: options.yes === true,
+    });
+});
+
+export { execute };
 export type { BackupCommandOptions, BackupCommandResult, BackupManifestEntry, BackupSubcommand };
 export { runBackupCommand };

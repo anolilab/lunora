@@ -3,11 +3,15 @@ import { join } from "node:path";
 
 import { runCodegen } from "@cirrus/codegen";
 
-import type { ApiSpec } from "../util/api-spec";
-import type { Logger } from "../util/logger";
-import type { Spawner } from "../util/spawn";
-import { defaultSpawner } from "../util/spawn";
-import { validateWrangler } from "../util/wrangler-validator";
+import type { ApiSpec } from "../../util/api-spec";
+import { parseApiSpec } from "../../util/api-spec";
+import type { CommandHandler } from "../../util/command";
+import { defineHandler } from "../../util/command";
+import type { Logger } from "../../util/logger";
+import type { Spawner } from "../../util/spawn";
+import { defaultSpawner } from "../../util/spawn";
+import { validateWrangler } from "../../util/wrangler-validator";
+import type { VerifyOptions } from "./index";
 
 interface VerifyCommandOptions {
     /** Which API spec(s) codegen would emit. Defaults to codegen's `"openapi"` when omitted. */
@@ -110,5 +114,18 @@ const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCo
     return reportVerifyResult(options.logger, errors, warnings, validation.wranglerPath);
 };
 
+/** `cirrus verify` handler (lazy-loaded via the command's `loader`). */
+const execute: CommandHandler<VerifyOptions> = defineHandler<VerifyOptions>(({ cwd, logger, options }) =>
+    runVerifyCommand({
+        apiSpec: parseApiSpec(options.apiSpec),
+        cwd,
+        logger,
+        // `--no-typecheck` is declared as a `no-*` option but cerebro exposes it
+        // under the negated `typecheck` key (false when passed, true when absent).
+        typecheck: options.typecheck === false ? false : undefined,
+    }),
+);
+
+export { execute };
 export type { VerifyCommandOptions, VerifyCommandResult };
 export { runVerifyCommand };

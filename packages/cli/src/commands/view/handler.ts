@@ -3,9 +3,12 @@ import { join } from "node:path";
 
 import { parse as parseJsonc } from "jsonc-parser";
 
-import type { Logger } from "../util/logger";
-import type { OpenUrlOptions } from "../util/open-url";
-import { openUrl } from "../util/open-url";
+import type { CommandHandler } from "../../util/command";
+import { defineHandler } from "../../util/command";
+import type { Logger } from "../../util/logger";
+import type { OpenUrlOptions } from "../../util/open-url";
+import { openUrl } from "../../util/open-url";
+import type { ViewOptions } from "./index";
 
 interface ViewCommandOptions {
     cwd?: string;
@@ -138,5 +141,11 @@ const runViewCommand = async (options: ViewCommandOptions): Promise<ViewCommandR
     return { code: 0, url };
 };
 
+/** `cirrus view` handler (lazy-loaded via the command's `loader`). */
+const execute: CommandHandler<ViewOptions> = defineHandler<ViewOptions>(({ cwd, logger, options }) =>
+    runViewCommand({ cwd, logger, remote: options.remote === true }),
+);
+
+export { execute };
 export type { ViewCommandOptions, ViewCommandResult };
 export { runViewCommand };

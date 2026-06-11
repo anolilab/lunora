@@ -174,7 +174,7 @@ const runAddCommand = async (options: AddCommandOptions): Promise<AddCommandResu
 
         // --- Diff preview: show file-level changes, mutate nothing ---
         if (options.diff) {
-            await reconcileItems(items, cwd, options.logger, { diff: true });
+            reconcileItems(items, cwd, options.logger, { diff: true });
             options.logger.info("diff: preview only — re-run without --diff to apply");
 
             return empty;
@@ -186,7 +186,7 @@ const runAddCommand = async (options: AddCommandOptions): Promise<AddCommandResu
         }
 
         // --- Reconcile ---
-        const { bindings, deps, skipped, written } = await reconcileItems(items, cwd, options.logger, { overwrite: options.overwrite });
+        const { bindings, deps, skipped, written } = reconcileItems(items, cwd, options.logger, { overwrite: options.overwrite });
 
         reportAddResult(items, deps, written.length, skipped.length, options.logger);
 

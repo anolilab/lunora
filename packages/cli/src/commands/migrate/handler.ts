@@ -12,12 +12,15 @@ import { discoverMigrations, discoverSchema } from "@cirrus/codegen";
 import { join } from "@visulima/path";
 import { Project } from "ts-morph";
 
-import resolveAdminBaseUrl from "../util/admin-url";
-import type { Logger } from "../util/logger";
-import type { SchemaSnapshot } from "../util/migration-diff";
-import { diffSnapshots, renderMigrationFile } from "../util/migration-diff";
-import schemaIrToSnapshot from "../util/schema-snapshot";
-import type { FetchLike } from "./run";
+import resolveAdminBaseUrl from "../../util/admin-url";
+import type { CommandHandler } from "../../util/command";
+import { defineHandler } from "../../util/command";
+import type { Logger } from "../../util/logger";
+import type { SchemaSnapshot } from "../../util/migration-diff";
+import { diffSnapshots, renderMigrationFile } from "../../util/migration-diff";
+import schemaIrToSnapshot from "../../util/schema-snapshot";
+import type { FetchLike } from "../run/handler";
+import type { MigrateOptions } from "./index";
 
 interface MigrateGenerateCommandOptions {
     cwd?: string;
@@ -437,6 +440,56 @@ const runMigrateDataCommand = async (options: MigrateDataCommandOptions): Promis
     return { body, code: response.ok ? 0 : 1, requestUrl };
 };
 
+/** `cirrus migrate &lt;subcommand>` handler (lazy-loaded via the command's `loader`). */
+const execute: CommandHandler<MigrateOptions> = defineHandler<MigrateOptions>(({ argument, cwd, logger, options }) => {
+    const sub = argument[0];
+
+    if (sub === "generate") {
+        return runMigrateGenerateCommand({ cwd, logger, name: argument[1] ?? options.name });
+    }
+
+    if (sub === "create") {
+        const name = argument[1] ?? options.name;
+
+        if (!name) {
+            logger.error("migrate create requires a name. Usage: cirrus migrate create <name> [--table <table>]");
+
+            return { code: 1 };
+        }
+
+        return runMigrateCreateCommand({ cwd, logger, name, table: options.table });
+    }
+
+    if (sub === "up" || sub === "down" || sub === "status") {
+        const id = argument[1] ?? options.name;
+
+        if (!id) {
+            logger.error(`migrate ${sub} requires a migration id. Usage: cirrus migrate ${sub} <id>`);
+
+            return { code: 1 };
+        }
+
+        return runMigrateDataCommand({
+            batchSize: options.batchSize,
+            cwd,
+            dryRun: options.dryRun === true,
+            id,
+            logger,
+            maxBatches: options.steps,
+            prod: options.prod === true,
+            subcommand: sub,
+            token: options.token,
+            url: options.url,
+            yes: options.yes === true,
+        });
+    }
+
+    logger.error(`unknown migrate subcommand: "${sub ?? ""}" — expected generate | create | up | down | status`);
+
+    return { code: 1 };
+});
+
+export { execute };
 export type {
     MigrateCreateCommandOptions,
     MigrateCreateCommandResult,

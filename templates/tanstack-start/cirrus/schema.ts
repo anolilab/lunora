@@ -2,7 +2,7 @@ import { defineSchema, defineTable, v } from "@cirrus/server";
 
 export default defineSchema({
     messages: defineTable({
-        channelId: v.id("channels"),
+        channelId: v.string(),
         text: v.string(),
     })
         .shardBy("channelId")

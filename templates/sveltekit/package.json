@@ -8,10 +8,12 @@
         "build": "vite build",
         "preview": "vite preview",
         "codegen": "cirrus codegen",
-        "deploy": "cirrus deploy"
+        "deploy": "vite build && cirrus deploy",
+        "prepare": "svelte-kit sync"
     },
     "dependencies": {
         "@cirrus/client": "^0.0.0",
+        "@cirrus/do": "^0.0.0",
         "@cirrus/runtime": "^0.0.0",
         "@cirrus/server": "^0.0.0",
         "@cirrus/svelte": "^0.0.0"
@@ -22,7 +24,9 @@
         "@sveltejs/adapter-cloudflare": "^7.2.0",
         "@sveltejs/kit": "^2.64.0",
         "@sveltejs/vite-plugin-svelte": "^7.1.0",
+        "@types/node": "^25.9.2",
         "svelte": "^5.56.3",
+        "typescript": "^6.0.3",
         "vite": "^8.0.16",
         "wrangler": "^4.99.0"
     }

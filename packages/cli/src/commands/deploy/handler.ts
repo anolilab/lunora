@@ -1,15 +1,23 @@
-import { runCodegen } from "@cirrus/codegen";
-import { findWranglerFile, inferCirrusBindings, readWranglerJsonc, reconcileWranglerBindings } from "@cirrus/config";
-import { Spinner } from "@visulima/pail/spinner";
+import { existsSync } from "node:fs";
 
-import type { ApiSpec } from "../util/api-spec";
-import type { Logger } from "../util/logger";
-import type { SpawnDescriptor, Spawner } from "../util/spawn";
-import { defaultSpawner } from "../util/spawn";
-import { validateWrangler } from "../util/wrangler-validator";
-import type { MigrateDataCommandOptions } from "./migrate";
-import { runMigrateDataCommand } from "./migrate";
-import type { FetchLike } from "./run";
+import { discoverMigrations, runCodegen } from "@cirrus/codegen";
+import { findWranglerFile, inferCirrusBindings, readWranglerJsonc, reconcileWranglerBindings } from "@cirrus/config";
+import { join } from "@visulima/path";
+import { Spinner } from "@visulima/spinner";
+import { Project } from "ts-morph";
+
+import type { ApiSpec } from "../../util/api-spec";
+import { parseApiSpec } from "../../util/api-spec";
+import type { CommandHandler } from "../../util/command";
+import { defineHandler } from "../../util/command";
+import type { Logger } from "../../util/logger";
+import type { SpawnDescriptor, Spawner } from "../../util/spawn";
+import { defaultSpawner } from "../../util/spawn";
+import { validateWrangler } from "../../util/wrangler-validator";
+import type { MigrateDataCommandOptions } from "../migrate/handler";
+import { runMigrateDataCommand } from "../migrate/handler";
+import type { FetchLike } from "../run/handler";
+import type { DeployOptions } from "./index";
 
 /** Placeholder written by `reconcileWranglerBindings` for auto-provisioned D1 bindings. */
 const D1_PLACEHOLDER_ID = "<replace-with-d1-create-id>";
@@ -67,6 +75,20 @@ interface WranglerD1Entry {
 interface WranglerD1Shape {
     d1_databases?: ReadonlyArray<WranglerD1Entry>;
 }
+
+/**
+ * Resolve the worker entry `wrangler deploy` should bundle. Class-B frameworks
+ * (SvelteKit, Astro) ship a CF adapter that owns the wrangler `main` field and
+ * overwrites it with its own generated worker at build time — so `main` cannot
+ * itself point at Cirrus's composition. The template instead ships a
+ * `src/worker.ts` that imports that generated handler, wraps it with
+ * `withCirrus` (mounting `/_cirrus/*`), and re-exports `ShardDO`. When that file
+ * exists we pass it as the positional deploy entry so the ONE deployed worker is
+ * the composed one — the positional argument overrides `main`. Class-A/C
+ * templates have no `src/worker.ts` (their `main` already points at the real
+ * entry), so this returns `undefined` and `wrangler` uses `main` as usual.
+ */
+const resolveComposedWorkerEntry = (cwd: string): string | undefined => (existsSync(join(cwd, "src", "worker.ts")) ? "src/worker.ts" : undefined);
 
 const isInteractive = (options: DeployCommandOptions): boolean => {
     if (options.interactive !== undefined) {
@@ -139,10 +161,6 @@ const provisionBindings = async (cwd: string, logger: Logger): Promise<void> => 
  * auditable, and safe.
  */
 const runPostDeployMigrations = async (options: DeployCommandOptions, cwd: string): Promise<number> => {
-    const { discoverMigrations } = await import("@cirrus/codegen");
-    const { Project } = await import("ts-morph");
-    const { join } = await import("@visulima/path");
-
     const project = new Project({ skipAddingFilesFromTsConfig: true });
     const cirrusDirectory = join(cwd, "cirrus");
     let migrations: ReadonlyArray<{ id: string; table: string }>;
@@ -297,6 +315,15 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
 
     const args = ["exec", "wrangler", "deploy"];
 
+    // Class-B composition: bundle the `src/worker.ts` wrapper (which the
+    // framework's CF adapter can't clobber) instead of the adapter-owned `main`.
+    const composedEntry = resolveComposedWorkerEntry(cwd);
+
+    if (composedEntry !== undefined) {
+        args.push(composedEntry);
+        options.logger.info(`class-B composition: deploying ${composedEntry} (overrides wrangler main)`);
+    }
+
     if (options.env !== undefined) {
         args.push("--env", options.env);
     }
@@ -330,5 +357,19 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
     };
 };
 
+/** `cirrus deploy` handler (lazy-loaded via the command's `loader`). */
+const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions>(({ cwd, logger, options }) =>
+    runDeployCommand({
+        apiSpec: parseApiSpec(options.apiSpec),
+        cwd,
+        env: options.env,
+        logger,
+        migrate: options.migrate === true,
+        migrateToken: options.migrateToken,
+        migrateUrl: options.migrateUrl,
+    }),
+);
+
+export { execute };
 export type { DeployCommandOptions, DeployCommandResult };
 export { runDeployCommand };

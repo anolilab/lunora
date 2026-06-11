@@ -1,12 +1,12 @@
 /**
  * Resolving registry items/roots — the `--source` safety gate and the giget
- * fetch/staging layer shared by `add`, `list`, and `view`. `giget` is imported
- * lazily so commands that never fetch (e.g. local `--from`) don't pay for it.
+ * fetch/staging layer shared by `add`, `list`, and `view`.
  */
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 import { join } from "@visulima/path";
+import { downloadTemplate } from "giget";
 
 import type { Logger } from "../../util/logger";
 import parseManifest from "./manifest";
@@ -64,8 +64,6 @@ const sourceGateError = (command: string, options: AddCommandOptions): string | 
  * failure. `label` names the staging subdir (and the temp prefix).
  */
 const fetchToStaging = async (remote: string, label: string, logger: Logger): Promise<{ cleanup: () => void; directory: string }> => {
-    const { downloadTemplate } = await import("giget");
-
     const stagingRoot = mkdtempSync(join(tmpdir(), `cirrus-${label}-fetch-`));
     const stagingDirectory = join(stagingRoot, label);
 

@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { runPrepareCommand } from "../../src/commands/prepare";
+import { runPrepareCommand } from "../../src/commands/prepare/handler";
 import type { Logger } from "../../src/util/logger";
 
 const here = dirname(fileURLToPath(import.meta.url));

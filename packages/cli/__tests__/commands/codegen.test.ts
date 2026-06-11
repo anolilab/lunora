@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { runCodegenCommand } from "../../src/commands/codegen";
+import { runCodegenCommand } from "../../src/commands/codegen/handler";
 import type { Logger } from "../../src/util/logger";
 
 /** Build a `cirrus/crons.ts` with `count` distinct daily schedules (distinct hours → distinct expressions). */

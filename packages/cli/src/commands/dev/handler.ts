@@ -3,14 +3,18 @@ import { spawn as nodeSpawn } from "node:child_process";
 
 import { createConfirm, ensureDevVariables, formatCirrusEvent } from "@cirrus/config";
 
-import type { ApiSpec } from "../util/api-spec";
-import type { CodegenWatcherHandle } from "../util/codegen-watch";
-import { startCodegenWatch } from "../util/codegen-watch";
-import { detectPackageManager, execArgsFor } from "../util/detect-package-manager";
-import type { Logger } from "../util/logger";
-import type { SpawnDescriptor } from "../util/spawn";
-import type { StudioServerHandle } from "../util/studio-server";
-import { startStudioServer } from "../util/studio-server";
+import type { ApiSpec } from "../../util/api-spec";
+import { parseApiSpec } from "../../util/api-spec";
+import type { CodegenWatcherHandle } from "../../util/codegen-watch";
+import { startCodegenWatch } from "../../util/codegen-watch";
+import type { CommandHandler } from "../../util/command";
+import { defineHandler } from "../../util/command";
+import { detectPackageManager, execArgsFor } from "../../util/detect-package-manager";
+import type { Logger } from "../../util/logger";
+import type { SpawnDescriptor } from "../../util/spawn";
+import type { StudioServerHandle } from "../../util/studio-server";
+import { startStudioServer } from "../../util/studio-server";
+import type { DevOptions } from "./index";
 
 /** Default port the embedded studio server listens on (the URL you open). */
 const DEFAULT_STUDIO_PORT = 6173;
@@ -311,5 +315,22 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
     return { code, plan };
 };
 
+/** `cirrus dev` handler (lazy-loaded via the command's `loader`). */
+const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(({ cwd, logger, options }) =>
+    runDevCommand({
+        apiSpec: parseApiSpec(options.apiSpec),
+        // cerebro parses `--no-codegen`/`--no-studio` as the negation of the
+        // `codegen`/`studio` booleans (runtime key drops the `no-` prefix), so a
+        // passed flag arrives as `false`, absent as `true` (the option default).
+        codegen: options.codegen === false ? false : undefined,
+        cwd,
+        logger,
+        port: options.port,
+        studio: options.studio === false ? false : undefined,
+        workerPort: options.workerPort,
+    }),
+);
+
+export { execute };
 export type { DevCommandOptions, DevCommandPlan, WorkerProcess, WorkerSpawner };
 export { planDevCommand, runDevCommand };

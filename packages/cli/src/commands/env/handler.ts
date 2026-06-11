@@ -3,9 +3,12 @@ import { join } from "node:path";
 
 import { DEV_VARS_EXAMPLE_FILE, DEV_VARS_FILE, DEV_VARS_KEY_PATTERN, isPlaceholderValue, parseDevVariableEntries } from "@cirrus/config";
 
-import type { Logger } from "../util/logger";
-import type { SpawnDescriptor, Spawner } from "../util/spawn";
-import { defaultSpawner } from "../util/spawn";
+import type { CommandHandler } from "../../util/command";
+import { defineHandler } from "../../util/command";
+import type { Logger } from "../../util/logger";
+import type { SpawnDescriptor, Spawner } from "../../util/spawn";
+import { defaultSpawner } from "../../util/spawn";
+import type { EnvOptions } from "./index";
 
 type EnvSubcommand = "doctor" | "get" | "list" | "push" | "set" | "unset";
 
@@ -328,5 +331,31 @@ const runEnvCommand = async (options: EnvCommandOptions): Promise<EnvCommandResu
     }
 };
 
+/** Narrow a raw argument to a known {@link EnvSubcommand}. */
+const isEnvSubcommand = (value: unknown): value is EnvSubcommand =>
+    value === "list" || value === "get" || value === "set" || value === "unset" || value === "push" || value === "doctor";
+
+/** `cirrus env &lt;subcommand>` handler (lazy-loaded via the command's `loader`). */
+const execute: CommandHandler<EnvOptions> = defineHandler<EnvOptions>(({ argument, cwd, logger, options }) => {
+    const sub = argument[0];
+
+    if (!isEnvSubcommand(sub)) {
+        logger.error(`env: unknown subcommand "${sub ?? ""}" — expected list | get | set | unset | push | doctor`);
+
+        return { code: 1 };
+    }
+
+    return runEnvCommand({
+        cwd,
+        key: argument[1],
+        logger,
+        prod: options.prod === true,
+        subcommand: sub,
+        value: argument[2],
+        yes: options.yes === true,
+    });
+});
+
+export { execute };
 export type { EnvCommandOptions, EnvCommandResult, EnvSubcommand };
 export { runEnvCommand };

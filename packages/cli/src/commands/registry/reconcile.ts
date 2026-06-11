@@ -2,15 +2,16 @@
  * The file reconcile engine: `schema-extension` AST-merge and the lock-aware
  * `create-or-skip` 3-way upgrade (base = last-written hash, yours = on-disk,
  * theirs = incoming). `--diff` previews; `--overwrite` force-takes theirs.
- * `ts-morph` (via insert-schema-extension) and the diff renderer load lazily.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
 import { dirname, join } from "@visulima/path";
 
+import { insertSchemaExtension } from "../../util/insert-schema-extension";
 import type { Logger } from "../../util/logger";
 import type { RegistryLock } from "../../util/registry-lock";
 import { hashContent, readLock, recordedHash, recordFile, writeLock } from "../../util/registry-lock";
+import renderDiff from "../../util/text-diff";
 import { applyItemResources } from "./apply";
 import type { ReconcileOptions, ReconcileOutcome, RegistryFile, ResolvedItem } from "./types";
 
@@ -19,14 +20,14 @@ import type { ReconcileOptions, ReconcileOutcome, RegistryFile, ResolvedItem } f
  * and AST-merge the item's `.extend(...)` into `cirrus/schema.ts`. In diff
  * mode, just describe the intended merge.
  */
-const reconcileSchemaExtension = async (
+const reconcileSchemaExtension = (
     file: RegistryFile,
     itemKey: string,
     itemDirectory: string,
     projectRoot: string,
     logger: Logger,
     diff: boolean,
-): Promise<ReconcileOutcome> => {
+): ReconcileOutcome => {
     const schemaPath = join(projectRoot, "cirrus", "schema.ts");
 
     if (diff) {
@@ -34,8 +35,6 @@ const reconcileSchemaExtension = async (
 
         return { kind: "skipped", path: schemaPath };
     }
-
-    const { insertSchemaExtension } = await import("../../util/insert-schema-extension");
 
     // The item's `to` points at where its extension *source* lives; copy that
     // (create-if-absent) AND wire it into the shared cirrus/schema.ts.
@@ -70,8 +69,7 @@ const reconcileSchemaExtension = async (
 };
 
 /** Print a `--diff` preview for one whole-file destination; writes nothing. */
-const previewWholeFile = async (file: RegistryFile, current: string, incoming: string, exists: boolean, logger: Logger): Promise<void> => {
-    const { default: renderDiff } = await import("../../util/text-diff");
+const previewWholeFile = (file: RegistryFile, current: string, incoming: string, exists: boolean, logger: Logger): void => {
     const lines = renderDiff(current, incoming);
 
     if (lines.length === 0) {
@@ -91,7 +89,7 @@ const previewWholeFile = async (file: RegistryFile, current: string, incoming: s
  * Reconcile a `create-or-skip` whole file via the lock-aware 3-way rule.
  * `--diff` previews; `--overwrite` force-takes theirs.
  */
-const reconcileWholeFile = async (
+const reconcileWholeFile = (
     file: RegistryFile,
     itemKey: string,
     itemDirectory: string,
@@ -99,7 +97,7 @@ const reconcileWholeFile = async (
     logger: Logger,
     lock: RegistryLock,
     reconcileOptions: ReconcileOptions,
-): Promise<ReconcileOutcome> => {
+): ReconcileOutcome => {
     const destinationPath = join(projectRoot, file.to);
     const incoming = readFileSync(join(itemDirectory, file.from), "utf8");
     const exists = existsSync(destinationPath);
@@ -115,7 +113,7 @@ const reconcileWholeFile = async (
     };
 
     if (reconcileOptions.diff) {
-        await previewWholeFile(file, current, incoming, exists, logger);
+        previewWholeFile(file, current, incoming, exists, logger);
 
         return { kind: "skipped", path: destinationPath };
     }
@@ -163,7 +161,7 @@ const reconcileWholeFile = async (
  * Reconcile one file into the project. `create-or-skip` writes whole files
  * (lock-aware upgrades); `schema-extension` AST-merges into `cirrus/schema.ts`.
  */
-const reconcileFile = async (
+const reconcileFile = (
     file: RegistryFile,
     itemKey: string,
     itemDirectory: string,
@@ -171,7 +169,7 @@ const reconcileFile = async (
     logger: Logger,
     lock: RegistryLock,
     reconcileOptions: ReconcileOptions = {},
-): Promise<ReconcileOutcome> => {
+): ReconcileOutcome => {
     if (file.merge === "schema-extension") {
         return reconcileSchemaExtension(file, itemKey, itemDirectory, projectRoot, logger, reconcileOptions.diff === true);
     }
@@ -180,12 +178,12 @@ const reconcileFile = async (
 };
 
 /** Run the reconcile phase across every resolved item; returns the aggregate outcome. */
-const reconcileItems = async (
+const reconcileItems = (
     items: ReadonlyArray<ResolvedItem>,
     cwd: string,
     logger: Logger,
     reconcileOptions: ReconcileOptions = {},
-): Promise<{ bindings: string[]; deps: string[]; skipped: string[]; written: string[] }> => {
+): { bindings: string[]; deps: string[]; skipped: string[]; written: string[] } => {
     const written: string[] = [];
     const skipped: string[] = [];
     const depsAdded: string[] = [];
@@ -199,8 +197,7 @@ const reconcileItems = async (
     // so two items extending the schema must not interleave their edits.
     for (const { directory, manifest } of items) {
         for (const file of manifest.files) {
-            // eslint-disable-next-line no-await-in-loop
-            const outcome = await reconcileFile(file, manifest.name, directory, cwd, logger, lock, reconcileOptions);
+            const outcome = reconcileFile(file, manifest.name, directory, cwd, logger, lock, reconcileOptions);
 
             (outcome.kind === "written" ? written : skipped).push(outcome.path);
         }
@@ -210,8 +207,7 @@ const reconcileItems = async (
             continue;
         }
 
-        // eslint-disable-next-line no-await-in-loop -- sequential per item (schema/package.json edits are read-modify-write)
-        const applied = await applyItemResources(manifest, cwd, logger);
+        const applied = applyItemResources(manifest, cwd, logger);
 
         depsAdded.push(...applied.deps);
         bindingsApplied.push(...applied.bindings);
