@@ -210,6 +210,14 @@ interface CreateAuthAdminOptions {
      * id (a self-reference) since the trusted admin plane has no acting user.
      */
     impersonatedBy?: string;
+
+    /**
+     * How long (in seconds) an impersonation session lives. Must be a positive
+     * finite integer. Capped at 24 × {@link DEFAULT_IMPERSONATION_SECONDS}
+     * (86 400 s / 24 h). Defaults to {@link DEFAULT_IMPERSONATION_SECONDS}
+     * (3 600 s / 1 h).
+     */
+    impersonationSeconds?: number;
 }
 
 /**
@@ -231,6 +239,8 @@ class CirrusAuthAdminError extends Error {
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 500;
 const DEFAULT_IMPERSONATION_SECONDS = 3600;
+/** Hard ceiling on an impersonation session (24 h). */
+const MAX_IMPERSONATION_SECONDS = DEFAULT_IMPERSONATION_SECONDS * 24;
 /** Hard ceiling on a temporary-ban duration so a huge value can't overflow to an Invalid Date. */
 const MAX_BAN_SECONDS = 100 * 365 * 24 * 60 * 60;
 
@@ -432,7 +442,20 @@ const createAuthAdmin = (auth: CirrusAuth, options: CreateAuthAdminOptions = {})
                     throw new CirrusAuthAdminError("user not found", "USER_NOT_FOUND");
                 }
 
-                const expiresAt = new Date(Date.now() + DEFAULT_IMPERSONATION_SECONDS * 1000);
+                const rawSeconds = options.impersonationSeconds;
+                let ttlSeconds = DEFAULT_IMPERSONATION_SECONDS;
+
+                if (rawSeconds !== undefined) {
+                    if (!Number.isInteger(rawSeconds) || !Number.isFinite(rawSeconds) || rawSeconds <= 0) {
+                        throw new CirrusAuthAdminError(
+                            "impersonationSeconds must be a positive finite integer",
+                            "INVALID_IMPERSONATION_SECONDS",
+                        );
+                    }
+
+                    ttlSeconds = Math.min(rawSeconds, MAX_IMPERSONATION_SECONDS);
+                }
+                const expiresAt = new Date(Date.now() + ttlSeconds * 1000);
                 const session = await context_.internalAdapter.createSession(
                     userId,
                     true,

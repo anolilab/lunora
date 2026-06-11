@@ -193,4 +193,41 @@ describe("createAuthAdmin", () => {
         expect(accounts[0]?.providerId).toBe("credential");
         expect(accounts[0]).not.toHaveProperty("password");
     });
+
+    it("impersonateUser respects a custom impersonationSeconds TTL", async () => {
+        expect.assertions(2);
+
+        const customTtl = 7200; // 2 hours
+        const adminWithTtl = createAuthAdmin(auth, { impersonationSeconds: customTtl });
+        const user = await adminApi.createUser({ email: "ttl@example.com", name: "Ttl" });
+
+        const before = Date.now();
+        const result = await adminWithTtl.impersonateUser({ userId: user.id });
+        const after = Date.now();
+
+        // expiresAt must be roughly `customTtl` seconds from now.
+        const expectedMin = before + customTtl * 1000;
+        const expectedMax = after + customTtl * 1000;
+
+        expect(result.expiresAt).toBeGreaterThanOrEqual(expectedMin);
+        expect(result.expiresAt).toBeLessThanOrEqual(expectedMax);
+    });
+
+    it("impersonateUser rejects invalid impersonationSeconds values", async () => {
+        expect.assertions(3);
+
+        const user = await adminApi.createUser({ email: "invalid-ttl@example.com", name: "Inv" });
+
+        await expect(createAuthAdmin(auth, { impersonationSeconds: 0 }).impersonateUser({ userId: user.id })).rejects.toThrow(
+            /positive finite integer/,
+        );
+
+        await expect(createAuthAdmin(auth, { impersonationSeconds: -60 }).impersonateUser({ userId: user.id })).rejects.toThrow(
+            /positive finite integer/,
+        );
+
+        await expect(createAuthAdmin(auth, { impersonationSeconds: Number.POSITIVE_INFINITY }).impersonateUser({ userId: user.id })).rejects.toThrow(
+            /positive finite integer/,
+        );
+    });
 });
