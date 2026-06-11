@@ -14,12 +14,12 @@
         "@cirrus/react": "^0.0.0",
         "@cirrus/runtime": "^0.0.0",
         "@cirrus/server": "^0.0.0",
-        "react": "^19.0.0",
-        "react-dom": "^19.0.0"
+        "react": "^19.2.7",
+        "react-dom": "^19.2.7"
     },
     "devDependencies": {
         "@cirrus/vite": "^0.0.0",
-        "vite": "^8.0.0",
-        "wrangler": "^4.0.0"
+        "vite": "^8.0.16",
+        "wrangler": "^4.99.0"
     }
 }

@@ -2,6 +2,11 @@
 export default defineNuxtConfig({
     compatibilityDate: "2026-04-07",
 
+    // Nuxt 4 defaults `srcDir` to `app/`. This template keeps app code at the
+    // project root (`app.vue`, `pages/`, `components/`, `plugins/`), so pin
+    // `srcDir` to `.` explicitly — deterministic layout, no compat warning.
+    srcDir: ".",
+
     // Nuxt is a CLASS-B framework (PLAN4 §3): it owns its own Cloudflare adapter
     // via Nitro. PLAN4 M4 composes Cirrus realtime (`/_cirrus/*` + ShardDO) INTO
     // Nitro's emitted Worker via `withCirrus` (`@cirrus/vue/worker`) — see

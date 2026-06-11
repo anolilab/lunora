@@ -64,7 +64,7 @@ resumes the same cookie-based session — one worker, one deploy.
 
 ## Stack
 
-- `astro` (5) — the meta-framework (islands + server endpoints)
+- `astro` (6) — the meta-framework (islands + server endpoints)
 - `@astrojs/cloudflare` — Astro's Cloudflare adapter (owns the server worker)
 - `@astrojs/react` + `react` (19) — the island UI runtime
 - `@cirrus/astro` — the integration + `withCirrus` single-worker composition
