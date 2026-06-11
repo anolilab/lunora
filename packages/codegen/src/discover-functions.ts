@@ -1,7 +1,7 @@
 import { readdirSync, statSync } from "node:fs";
 import { extname, join, relative, sep } from "node:path";
 
-import type { CallExpression, Identifier, Project, PropertyAccessExpression, SourceFile, Symbol as TsSymbol, Type, VariableDeclaration } from "ts-morph";
+import type { CallExpression, Identifier, Project, SourceFile, Symbol as TsSymbol, Type, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import type { FunctionIR, ValidatorIR } from "./ir";
@@ -15,6 +15,10 @@ const ANY_TOKEN_RE = /\bany\b/u;
 
 /** Strips a trailing `.ts` extension from a relative source path. */
 const TS_EXTENSION_RE = /\.ts$/u;
+
+/** Cirrus-relative module path for a source file: dir-relative, POSIX separators, no `.ts`. */
+const cirrusRelativePath = (cirrusDirectory: string, filePath: string): string =>
+    relative(cirrusDirectory, filePath).split(sep).join("/").replace(TS_EXTENSION_RE, "");
 
 /**
  * Internal factory names exported from `@cirrus/server`, mapped to the kind
@@ -463,36 +467,72 @@ const argsFromBuilderChain = (receiver: Node): Record<string, ValidatorIR> => {
     return merged;
 };
 
+/** Procedure classification — kind + visibility — produced by {@link classifyProcedureCall}. */
+interface ProcedureClassification {
+    /** Registration kind: `query` | `mutation` | `action` | `stream`. */
+    kind: string;
+
+    /**
+     * Builder-terminal chain root — the expression to the left of the terminal
+     * `.query(...)` (`c.use(...)`) — so callers can walk it further (e.g. to find
+     * `.use(rls(...))`). Absent for the bare-factory form.
+     */
+    receiver?: Node;
+    visibility: "internal" | "public";
+}
+
 /**
- * Recognise a builder terminal registration (`c.query(...)` / `.mutation(...)`
- * / `.action(...)`). The terminal property name is the kind. The receiver must
- * carry the `__cirrusProcedure` brand so we don't pick up an unrelated method
- * named `query` on some other object. Returns `undefined` when this isn't a Cirrus
- * builder terminal.
+ * Classify an `export const x = …` initializer call as a Cirrus registration —
+ * its kind and visibility — or `undefined` when it isn't one. Handles both the
+ * builder terminal (`c.query(...)`, brand-checked via `__cirrusProcedure` so we
+ * don't pick up an unrelated method named `query` on some other object) and the
+ * bare factory (`query({…})` / `internalQuery({…})`). The single source of truth
+ * for "is this a Cirrus procedure, and is it internal?" — shared by function
+ * discovery here and the RLS-coverage feeder.
  */
-const discoverBuilderProcedure = (call: CallExpression, callee: PropertyAccessExpression): DiscoveredFunction | undefined => {
-    const method = callee.getName();
+const classifyProcedureCall = (call: CallExpression): ProcedureClassification | undefined => {
+    const callee = call.getExpression();
 
-    if (!FUNCTION_KINDS.has(method)) {
-        return undefined;
-    }
+    if (Node.isPropertyAccessExpression(callee)) {
+        const method = callee.getName();
 
-    const receiver = callee.getExpression();
-    const receiverType = receiver.getType();
+        if (!FUNCTION_KINDS.has(method)) {
+            return undefined;
+        }
 
-    if (!receiverType.getProperty("__cirrusProcedure")) {
-        return undefined;
-    }
+        const receiver = callee.getExpression();
 
-    return {
-        args: argsFromBuilderChain(receiver),
-        kind: method,
-        returnType: returnTypeFromBuilderCall(call),
+        if (!receiver.getType().getProperty("__cirrusProcedure")) {
+            return undefined;
+        }
+
         // Internal builders carry an extra `__cirrusVisibility: "internal"`
         // brand the public builders don't declare, so its mere presence marks
         // the procedure internal.
-        visibility: receiverType.getProperty("__cirrusVisibility") ? "internal" : "public",
-    };
+        return { kind: method, receiver, visibility: receiver.getType().getProperty("__cirrusVisibility") ? "internal" : "public" };
+    }
+
+    if (!Node.isIdentifier(callee)) {
+        return undefined;
+    }
+
+    const calleeName = resolveCalleeKind(callee);
+
+    if (!calleeName) {
+        return undefined;
+    }
+
+    if (FUNCTION_KINDS.has(calleeName)) {
+        return { kind: calleeName, visibility: "public" };
+    }
+
+    const internalKind = INTERNAL_FACTORIES[calleeName];
+
+    if (internalKind) {
+        return { kind: internalKind, visibility: "internal" };
+    }
+
+    return undefined;
 };
 
 /**
@@ -534,33 +574,23 @@ const listCirrusSourceFiles = (directory: string, accumulator: string[] = []): s
  * (`c.query(...)`).
  */
 const discoverFromCall = (call: CallExpression): DiscoveredFunction | undefined => {
-    const callee = call.getExpression();
+    const classified = classifyProcedureCall(call);
 
-    if (Node.isPropertyAccessExpression(callee)) {
-        return discoverBuilderProcedure(call, callee);
-    }
-
-    if (!Node.isIdentifier(callee)) {
+    if (!classified) {
         return undefined;
     }
 
-    const calleeName = resolveCalleeKind(callee);
-
-    if (!calleeName) {
-        return undefined;
+    // Builder terminal: pull args/return type from the chain; bare factory: from the call.
+    if (classified.receiver) {
+        return {
+            args: argsFromBuilderChain(classified.receiver),
+            kind: classified.kind,
+            returnType: returnTypeFromBuilderCall(call),
+            visibility: classified.visibility,
+        };
     }
 
-    if (FUNCTION_KINDS.has(calleeName)) {
-        return { args: argsFromCall(call), kind: calleeName, returnType: returnTypeFromCall(call), visibility: "public" };
-    }
-
-    const internalKind = INTERNAL_FACTORIES[calleeName];
-
-    if (internalKind) {
-        return { args: argsFromCall(call), kind: internalKind, returnType: returnTypeFromCall(call), visibility: "internal" };
-    }
-
-    return undefined;
+    return { args: argsFromCall(call), kind: classified.kind, returnType: returnTypeFromCall(call), visibility: classified.visibility };
 };
 
 /**
@@ -748,7 +778,7 @@ const discoverFunctions = (project: Project, cirrusDirectory: string): FunctionI
 
     for (const filePath of filePaths) {
         const source: SourceFile = project.addSourceFileAtPath(filePath);
-        const relativePath = relative(cirrusDirectory, filePath).split(sep).join("/").replace(TS_EXTENSION_RE, "");
+        const relativePath = cirrusRelativePath(cirrusDirectory, filePath);
 
         functions.push(...discoverFileFunctions(source, relativePath));
     }
@@ -760,4 +790,5 @@ const discoverFunctions = (project: Project, cirrusDirectory: string): FunctionI
     return functions;
 };
 
-export { discoverFunctions, listCirrusSourceFiles };
+export type { ProcedureClassification };
+export { cirrusRelativePath, classifyProcedureCall, discoverFunctions, listCirrusSourceFiles };

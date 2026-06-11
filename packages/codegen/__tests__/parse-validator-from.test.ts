@@ -4,7 +4,7 @@
  */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -25,7 +25,7 @@ describe("v.from() in codegen", () => {
     const writeFunction = (relative: string, source: string): void => {
         const full = join(workdir, relative);
 
-        mkdirSync(full.slice(0, Math.max(0, full.lastIndexOf("/"))), { recursive: true });
+        mkdirSync(dirname(full), { recursive: true });
         writeFileSync(full, source);
     };
 

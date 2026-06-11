@@ -1,13 +1,8 @@
-import { relative, sep } from "node:path";
-
 import type { CallExpression, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { listCirrusSourceFiles } from "./discover-functions";
+import { cirrusRelativePath, listCirrusSourceFiles } from "./discover-functions";
 import type { InsertWriteIR } from "./ir";
-
-/** Strips a trailing `.ts` extension from a relative source path. */
-const TS_EXTENSION_RE = /\.ts$/u;
 
 /**
  * True for a `ctx.db.insert(...)` (or bare `db.insert(...)`) call — the database
@@ -64,7 +59,7 @@ const discoverInserts = (project: Project, cirrusDirectory: string): InsertWrite
 
     for (const filePath of listCirrusSourceFiles(cirrusDirectory)) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-        const relativePath = relative(cirrusDirectory, filePath).replace(TS_EXTENSION_RE, "").split(sep).join("/");
+        const relativePath = cirrusRelativePath(cirrusDirectory, filePath);
 
         for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
             if (!isDatabaseInsertCall(call)) {

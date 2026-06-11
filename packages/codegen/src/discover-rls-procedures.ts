@@ -1,13 +1,8 @@
-import { relative, sep } from "node:path";
-
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { listCirrusSourceFiles } from "./discover-functions";
+import { cirrusRelativePath, classifyProcedureCall, listCirrusSourceFiles } from "./discover-functions";
 import type { RlsProcedureIR } from "./ir";
-
-/** Strips a trailing `.ts` extension from a relative source path. */
-const TS_EXTENSION_RE = /\.ts$/u;
 
 // ---------------------------------------------------------------------------
 // Builder-chain helpers
@@ -217,18 +212,11 @@ const tablesAccessedIn = (declaration: TsNode): { tablesRead: string[]; tablesWr
  * procedures that touch policy-covered tables.
  */
 const discoverRlsProcedures = (project: Project, cirrusDirectory: string): RlsProcedureIR[] => {
-    const FUNCTION_KINDS = new Set(["action", "mutation", "query", "stream"]);
-    const INTERNAL_FACTORIES: Record<string, boolean> = {
-        internalAction: true,
-        internalMutation: true,
-        internalQuery: true,
-    };
-
     const procedures: RlsProcedureIR[] = [];
 
     for (const filePath of listCirrusSourceFiles(cirrusDirectory)) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-        const relativePath = relative(cirrusDirectory, filePath).replace(TS_EXTENSION_RE, "").split(sep).join("/");
+        const relativePath = cirrusRelativePath(cirrusDirectory, filePath);
 
         for (const statement of sourceFile.getVariableStatements()) {
             if (!statement.isExported()) {
@@ -236,72 +224,42 @@ const discoverRlsProcedures = (project: Project, cirrusDirectory: string): RlsPr
             }
 
             for (const declaration of statement.getDeclarations()) {
-                const exportName = declaration.getName();
                 const initializer = declaration.getInitializer();
 
                 if (!initializer || !Node.isCallExpression(initializer)) {
                     continue;
                 }
 
-                const callee = initializer.getExpression();
+                // Shared classification (kind + visibility + builder receiver) —
+                // single source of truth with function discovery.
+                const classified = classifyProcedureCall(initializer);
 
+                if (!classified) {
+                    continue;
+                }
+
+                // Only the builder form (`c.use(...).query(...)`) can carry
+                // `.use(rls(...))`; a bare factory has no chain → never uses RLS.
                 let usesRls = false;
                 let rlsTables: string[] = [];
-                let visibility: "internal" | "public" = "public";
 
-                if (Node.isPropertyAccessExpression(callee)) {
-                    // Builder terminal: c.use(...).query(handler)
-                    const method = callee.getName();
-
-                    if (!FUNCTION_KINDS.has(method)) {
-                        continue;
-                    }
-
-                    const receiverType = callee.getExpression().getType();
-
-                    if (!receiverType.getProperty("__cirrusProcedure")) {
-                        // Not a Cirrus builder — skip.
-                        continue;
-                    }
-
-                    if (receiverType.getProperty("__cirrusVisibility")) {
-                        visibility = "internal";
-                    }
-
-                    // Walk the chain for .use(rls(...)).
-                    const chain = rlsFromBuilderChain(callee.getExpression());
+                if (classified.receiver) {
+                    const chain = rlsFromBuilderChain(classified.receiver);
 
                     usesRls = chain.usesRls;
                     rlsTables = chain.rlsTables;
-                } else if (Node.isIdentifier(callee)) {
-                    // Bare factory: query({...}) / internalQuery({...})
-                    const calleeName = callee.getText();
-
-                    if (!FUNCTION_KINDS.has(calleeName) && !INTERNAL_FACTORIES[calleeName]) {
-                        continue;
-                    }
-
-                    if (INTERNAL_FACTORIES[calleeName]) {
-                        visibility = "internal";
-                    }
-
-                    // Bare factory → no builder chain → usesRls always false.
-                    usesRls = false;
-                    rlsTables = [];
-                } else {
-                    continue;
                 }
 
                 const { tablesRead, tablesWritten } = tablesAccessedIn(declaration);
 
                 procedures.push({
-                    exportName,
+                    exportName: declaration.getName(),
                     file: relativePath,
                     rlsTables,
                     tablesRead,
                     tablesWritten,
                     usesRls,
-                    visibility,
+                    visibility: classified.visibility,
                 });
             }
         }
