@@ -42,8 +42,8 @@ describe("templates/*/cirrus scaffold identity", () => {
         expect(sharedFiles.length).toBeGreaterThanOrEqual(2);
     });
 
-    test("at least 8 templates are compared (guards against silent under-discovery)", () => {
-        expect(templateNames.length).toBeGreaterThanOrEqual(8);
+    test("at least 6 templates are compared (guards against silent under-discovery)", () => {
+        expect(templateNames.length).toBeGreaterThanOrEqual(6);
     });
 
     describe.each(templateNames.filter((name) => name !== CANONICAL_TEMPLATE))("templates/%s/cirrus", (templateName) => {

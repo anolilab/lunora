@@ -14,7 +14,7 @@ import type { Logger } from "../../util/logger";
 import { patchViteConfig } from "../../util/patch-vite-config";
 import type { InitOptions } from "./index";
 
-type Template = "astro" | "next" | "nuxt" | "react-router" | "solid-start" | "standalone" | "sveltekit" | "tanstack-start" | "vite";
+type Template = "astro" | "next" | "nuxt" | "standalone" | "sveltekit" | "tanstack-start" | "vite";
 
 interface InitCommandOptions {
     /**
@@ -571,8 +571,6 @@ const isTemplate = (value: unknown): value is Template =>
     value === "astro" ||
     value === "next" ||
     value === "nuxt" ||
-    value === "react-router" ||
-    value === "solid-start" ||
     value === "standalone" ||
     value === "sveltekit" ||
     value === "tanstack-start" ||

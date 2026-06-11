@@ -124,8 +124,6 @@ const LATEST_MAJORS: Record<string, number> = {
 const REQUIRED_ADAPTER: Record<string, string | null> = {
     astro: "@cirrus/react",
     nuxt: "@cirrus/vue",
-    "react-router": "@cirrus/react",
-    "solid-start": "@cirrus/solid",
     standalone: null,
     sveltekit: "@cirrus/svelte",
     "tanstack-start": "@cirrus/react",

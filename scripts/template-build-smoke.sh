@@ -56,22 +56,11 @@ ONLY_TEMPLATE="${1:-}"
 # metadata over the network during the build (network call to the integrations
 # registry, not a template defect). Builds fine with network access.
 #
-# solid-start: `vinxi build` succeeds through the SSR/client/server-fns phases
-# but fails at the Nitro packaging step with ENOENT for the client Vite manifest
-# (.vinxi/build/client/_build/.vite/manifest.json). Root cause: @solidjs/start
-# sets router.base="/_build" but with nitropack@2.13.x the manifest ends up at
-# _build/client/.vite/manifest.json (extra router-name subdir). This is a
-# framework-level incompatibility between @solidjs/start + nitropack + Vite 6;
-# not fixable at the template config level without changing packages/.
-#
-# react-router: `react-router build` (the CF entry.server.tsx is in place, so the
-# server runtime is detected) fails at `generateReactRouterManifestsForBuild` with
-# ENOENT for build/client/.vite/manifest.json. Same class as solid-start: with
-# @react-router/dev@7.17 on Vite 8 + rolldown the client manifest is not emitted
-# where the dev plugin expects it. Framework-level (Vite 8/rolldown) incompat, not
-# fixable at the template config level — revisit when @react-router/dev supports
-# Vite 8's manifest layout.
-XFAIL_BUILD=(astro react-router solid-start)
+# (react-router + solid-start templates were removed: their build tools
+# (@react-router/dev, vinxi/@solidjs/start) only support Vite <=7 while Cirrus
+# is standardized on Vite 8 — see the official CF react-router starter which
+# pins vite ^7. Re-add the templates when those frameworks ship Vite 8 support.)
+XFAIL_BUILD=(astro)
 
 # ---------------------------------------------------------------------------
 # Discover templates (dynamic, so adding a new dir is automatically included).

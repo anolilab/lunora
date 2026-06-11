@@ -1,7 +1,0 @@
-node_modules
-build
-dist
-.wrangler
-.cirrus-cache
-cirrus/_generated
-.react-router

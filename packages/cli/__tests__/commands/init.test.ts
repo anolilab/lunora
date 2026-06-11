@@ -217,13 +217,11 @@ describe("cirrus init", () => {
             expect(errors.join("\n")).toContain("template not found in local source");
         });
 
-        it("isTemplate accepts all 8 real template dir names and next", () => {
-            expect.assertions(10);
+        it("isTemplate accepts all 6 real template dir names and next", () => {
+            expect.assertions(8);
 
             expect(isTemplate("astro")).toBe(true);
             expect(isTemplate("nuxt")).toBe(true);
-            expect(isTemplate("react-router")).toBe(true);
-            expect(isTemplate("solid-start")).toBe(true);
             expect(isTemplate("standalone")).toBe(true);
             expect(isTemplate("sveltekit")).toBe(true);
             expect(isTemplate("tanstack-start")).toBe(true);
