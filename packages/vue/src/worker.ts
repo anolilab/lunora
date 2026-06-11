@@ -1,43 +1,29 @@
 /**
- * `@cirrus/vue/worker` — the **Class-B single-worker composition** entry for Nuxt
- * (PLAN4 §3, M4).
+ * `@cirrus/vue/worker` — framework-worker composition helpers for Nuxt/Nitro.
  *
- * Nuxt owns its own Cloudflare output: Nitro's `cloudflare-module` /
- * `cloudflare-pages` preset emits the Worker. So unlike a Class-A framework
- * (where Cirrus calls `createWorker({ httpRouter })` and owns the entry), here we
- * inject Cirrus realtime into the Worker Nitro already emits — Cirrus mounts
- * only the reserved `/_cirrus/*` plane (RPC, WS, admin) + the `ShardDO`, and
- * Nitro keeps owning every other request.
+ * Exports `withCirrus` (`withFrameworkWorker` from `@cirrus/runtime`), which
+ * wraps a framework's fetch handler as Cirrus's fallback `httpRouter`. Cirrus
+ * mounts only the reserved `/_cirrus/*` plane (RPC, WS, admin) + `ShardDO`;
+ * all other requests fall through to the framework handler.
  *
- * The composition is the framework-neutral `withFrameworkWorker` from
- * `@cirrus/runtime` (one implementation shared with `@cirrus/svelte/worker` and
- * `@cirrus/astro`); `withCirrus` is the Nitro-named alias. It wraps Nitro's
- * `{ fetch }` handler as `composeWorker`'s `httpRouter` (so `/_cirrus/*` + auth +
- * explicit `routes` go to Cirrus and everything else falls through to Nitro), and
- * **preserves Nitro's own `scheduled`** when no Cirrus crons are configured —
- * otherwise Cirrus owns `scheduled` (crons / backup). A Nitro render that throws
- * is contained at the seam as a plain 500 and never takes down the realtime plane.
+ * ## Nitro / Nuxt integration
  *
- * This entry is **socket-free and Vue-free** — it touches only `Request` /
- * `Response` / `@cirrus/runtime`, never `vue` or the browser composables — so it
- * is safe to bundle into Nitro's server worker. (Mirrors how `@cirrus/vue/server`
- * is a separate, browser-global-free entry.)
+ * Nitro does **not** expose its emitted fetch handler as an importable virtual
+ * module — there is no `#nitro-cloudflare-handler` or equivalent specifier in
+ * any documented Nitro API. Single-worker composition of `/_cirrus/*` into a
+ * Nitro output via `withCirrus` is therefore not achievable through any
+ * supported mechanism.
  *
- * ## Nitro integration point
+ * The supported integration for Nuxt is a **two-worker split**:
+ * - The Nuxt/Nitro SSR worker (`wrangler.jsonc`, `cloudflare_module` preset)
+ *   handles all pages and server routes.
+ * - A separate standalone Cirrus worker (`wrangler.cirrus.jsonc`, `cirrus/server.ts`)
+ *   owns `/_cirrus/*` + `ShardDO`.
+ * - `runtimeConfig.public.cirrusUrl` (NUXT_PUBLIC_CIRRUS_URL) tells the SSR
+ *   loader and the browser client where to reach the Cirrus worker.
  *
- * The composed Worker must be the module Wrangler runs, and it must export the
- * `ShardDO` Durable Object class. A thin server entry re-exports Nitro's handler
- * wrapped in `withCirrus`, alongside the DO class:
- *
- * ```ts
- * // server-entry.ts (the worker Wrangler points `main` at)
- * import nitroHandler from "#nitro-cloudflare-handler"; // Nitro's emitted { fetch }
- * import { withCirrus } from "@cirrus/vue/worker";
- * import worker from "./cirrus/worker"; // Cirrus options + ShardDO re-export
- *
- * export { ShardDO } from "@cirrus/do";
- * export default withCirrus(nitroHandler, (env) => ({ shardDO: env.SHARD, ...worker.options }));
- * ```
+ * `withCirrus` remains useful for other frameworks whose build toolchain
+ * genuinely exposes the emitted handler as an importable module.
  */
 export type {
     CirrusWorker as ComposedWorker,

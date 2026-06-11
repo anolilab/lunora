@@ -9,29 +9,28 @@ export default defineNuxtConfig({
     // `srcDir` to `.` explicitly — deterministic layout, no compat warning.
     srcDir: ".",
 
-    // Nuxt is a CLASS-B framework (PLAN4 §3): it owns its own Cloudflare adapter
-    // via Nitro. PLAN4 M4 composes Cirrus realtime (`/_cirrus/*` + ShardDO) INTO
-    // Nitro's emitted Worker via `withCirrus` (`@cirrus/vue/worker`) — see
-    // `server/cirrus-entry.ts` + the README ("Class-B composition"). The
-    // `cloudflare-module` preset is used because it lets us supply a custom
-    // server entry that wraps Nitro's handler; `entrypoint` points Wrangler's
-    // build at the composed entry, and `wrangler.jsonc`'s `main` matches it.
+    // Two-worker split: Nuxt uses the standard `cloudflare_module` Nitro preset
+    // with no custom entrypoint. Cirrus realtime (`/_cirrus/*` + ShardDO) runs in
+    // a SEPARATE Cloudflare Worker — see `wrangler.cirrus.jsonc` + `cirrus/server.ts`.
+    //
+    // Why two workers? Nitro does not expose its emitted fetch handler as an
+    // importable virtual module (`#nitro-cloudflare-handler` is not a real
+    // specifier). `nitro.cloudflare.entrypoint` is also undocumented and absent
+    // from the Nitro API surface. Without a documented hook to intercept Nitro's
+    // handler, composing `/_cirrus/*` into the Nitro output is not achievable
+    // through any supported mechanism. The two-worker split is the documented path.
     nitro: {
-        cloudflare: {
-            // The composed single-worker entry (wraps Nitro's handler with
-            // `withCirrus`, re-exports `ShardDO`). Adjust the option name to your
-            // Nitro version's custom-entry hook if it differs.
-            entrypoint: "~/server/cirrus-entry",
-        },
-        preset: "cloudflare-module",
+        preset: "cloudflare_module",
     },
 
     runtimeConfig: {
         public: {
-            // Client-side: the worker origin the browser `CirrusClient` connects
-            // its WebSocket to. Empty string = same origin as the page — which is
-            // now the common case, since Cirrus realtime is co-located in the
-            // SAME Worker as Nuxt (single-worker composition, M4).
+            // URL of the separate Cirrus worker. Required in production — set via
+            // NUXT_PUBLIC_CIRRUS_URL (e.g. https://my-app-cirrus.workers.dev).
+            // During local dev: run `wrangler dev --config wrangler.cirrus.jsonc`
+            // in a second terminal and set
+            //   NUXT_PUBLIC_CIRRUS_URL=http://localhost:8788
+            // (or whatever port wrangler dev assigns) in `.dev.vars`.
             cirrusUrl: "",
         },
     },
@@ -40,9 +39,8 @@ export default defineNuxtConfig({
     // is present when page components and server routes import the typed API.
     // `cloudflare: false` — Nuxt uses its own CF adapter (Nitro preset) and
     // doesn't need @cloudflare/vite-plugin wired through here.
-    // `validateWrangler: false` — the wrangler main field points at Nitro's
-    // emitted output (.output/server/index.mjs) which doesn't exist until
-    // after the build completes; validation happens at `cirrus deploy` time.
+    // `validateWrangler: false` — validation happens at `cirrus deploy` time
+    // (wrangler.cirrus.jsonc's main is `cirrus/server.ts`, built by wrangler).
     vite: {
         plugins: [cirrus({ cloudflare: false, validateWrangler: false })],
     },

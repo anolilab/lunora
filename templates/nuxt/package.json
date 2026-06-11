@@ -8,7 +8,9 @@
         "build": "nuxt build",
         "preview": "nuxt preview",
         "codegen": "cirrus codegen",
-        "deploy": "nuxt build && cirrus deploy"
+        "deploy:cirrus": "wrangler deploy --config wrangler.cirrus.jsonc",
+        "deploy:nuxt": "nuxt build && wrangler deploy --config wrangler.jsonc",
+        "deploy": "pnpm run deploy:cirrus && pnpm run deploy:nuxt"
     },
     "dependencies": {
         "@cirrus/client": "^0.0.0",
@@ -22,7 +24,6 @@
     "devDependencies": {
         "@cirrus/cli": "^0.0.0",
         "@cirrus/vite": "^0.0.0",
-        "nitro-cloudflare-dev": "^0.2.2",
         "typescript": "^6.0.3",
         "wrangler": "^4.100.0"
     }

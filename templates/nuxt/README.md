@@ -21,75 +21,79 @@ loader is live.
 4. `plugins/cirrus.client.ts` provides the browser `CirrusClient` to the app via
    `createCirrus`, so `useQuery` / `useMutation` / `hydratePreloaded` resolve it.
 
-## Single-worker composition (Class-B, PLAN4 M4)
+## Two-worker architecture
 
-Nuxt is a **Class-B** framework in PLAN4's integration matrix (§3): it owns its
-own Cloudflare worker entry through **Nitro's `cloudflare-module` preset**, rather
-than letting Cirrus own `createWorker`. So unlike the Class-A TanStack Start
-template (where the worker entry calls `createWorker({ httpRouter })` directly),
-Cirrus's realtime plane is **injected into the Worker Nitro emits** — Nitro keeps
-owning every request, Cirrus mounts only the reserved `/_cirrus/*` endpoints
-(RPC, WebSocket, admin) plus the `ShardDO`. **One Worker, one deploy.**
+This template uses a **two-worker split** — the documented, supported way to run
+Cirrus alongside Nuxt on Cloudflare Workers.
 
-The seam is `@cirrus/vue`'s `withCirrus` wrapper (the Vue-free
-`@cirrus/vue/worker` entry), which wraps Nitro's emitted handler as Cirrus's
-fallback `httpRouter`:
+**Why two workers?** Nitro does not expose its emitted fetch handler as an
+importable virtual module. There is no `#nitro-cloudflare-handler` specifier and
+`nitro.cloudflare.entrypoint` is undocumented and absent from the Nitro API.
+Without a hook to intercept Nitro's handler, composing `/_cirrus/*` into the
+Nitro output is not achievable through any supported mechanism.
 
-- **`server/cirrus-entry.ts`** is the composed Worker entry. It imports Nitro's
-  emitted handler, wraps it with `withCirrus(nitroHandler, cirrusOptions(env))`,
-  and re-exports the `ShardDO` class — so the composed Worker and the DO ship
-  from one module graph (no double-bundling, the central Class-B risk in PLAN4
-  §5 #4). Reserved `/_cirrus/*` requests route into Cirrus; everything else falls
-  through to Nitro. A Nitro SSR render that throws is isolated at the seam
-  (surfaced as a 500) and can never take down realtime.
-- **`cirrus/worker.ts`** builds the Cirrus options (the same shape a Class-A
-  template hands `createWorker`, minus `httpRouter`) and constructs the `ShardDO`
-  via `createShardDO()`.
-- **`nuxt.config.ts`** uses the `cloudflare-module` preset and points
-  `nitro.cloudflare.entrypoint` at `server/cirrus-entry`, so Nitro builds the
-  composed entry as the Worker.
-- **`wrangler.jsonc`**'s `main` points at Nitro's emitted output, and the `SHARD`
-  Durable Object binding is satisfied by the `ShardDO` that entry exports.
+### Worker 1 — Nuxt SSR (`wrangler.jsonc`)
 
-Because Cirrus is co-located in the same Worker, the SSR loader
-(`server/api/messages.get.ts`) reaches `/_cirrus/rpc` on its **own origin**
-(derived from the inbound request), and the browser client connects its WebSocket
-to the **same origin** as the page (`cirrusUrl: ""`). No second deploy, no
-cross-origin token exchange.
+Built by `nuxt build` (Nitro `cloudflare_module` preset). Handles all page
+requests, API routes, and SSR. The emitted `.output/server/index.mjs` is the
+worker entry — no custom entrypoint, no `ShardDO` export.
 
-> **Honest scope note.** Nuxt/Nitro's real Cloudflare build does not run inside
-> the Cirrus monorepo (Nuxt is not a workspace member), so the composition files
-> in this template are a **contract-level scaffold**: they show the exact wiring
-> `cirrus init -t nuxt` produces in a real Nuxt app. The `#cirrus/nitro-handler`
-> import in `server/cirrus-entry.ts` resolves to Nitro's emitted handler at build
-> time in that app. If your Nitro version's custom-entry hook differs from
-> `nitro.cloudflare.entrypoint`, apply the same `withCirrus(...)` wrap in whatever
-> server-entry / `defineNitroPlugin` hook your preset exposes — the contract is
-> identical (see `@cirrus/vue/worker`'s `withCirrus` JSDoc for both shapes).
+### Worker 2 — Cirrus realtime (`wrangler.cirrus.jsonc`)
+
+A standalone Cirrus worker (`cirrus/server.ts`) that owns:
+- `/_cirrus/*` — RPC and WebSocket realtime traffic
+- `ShardDO` — the Durable Object for state + subscriptions
+
+This worker is identical in shape to the `standalone` template.
+
+### Wiring the two workers together
+
+Set `NUXT_PUBLIC_CIRRUS_URL` to the Cirrus worker's URL (e.g.
+`https://{{name}}-cirrus.workers.dev`). This configures:
+- `runtimeConfig.public.cirrusUrl` — used by `server/api/messages.get.ts` to
+  reach `/_cirrus/rpc` during SSR.
+- `plugins/cirrus.client.ts` — the browser `CirrusClient` connects its WebSocket
+  to this URL.
+
+### Key files
+
+- **`cirrus/server.ts`** — standalone Cirrus worker entry; exports `ShardDO` and
+  calls `createWorker`. Wrangler reads this via `wrangler.cirrus.jsonc`.
+- **`wrangler.cirrus.jsonc`** — Cirrus worker config with the `SHARD` DO binding
+  and migration. Deploy with `wrangler deploy --config wrangler.cirrus.jsonc`.
+- **`wrangler.jsonc`** — Nuxt SSR worker config. Deploy with `nuxt build &&
+  wrangler deploy` (or `pnpm deploy`).
+- **`nuxt.config.ts`** — uses `cloudflare_module` preset (standard; no custom
+  entrypoint).
 
 ## Develop
 
 ```bash
-pnpm install
-pnpm dev
+# Terminal 1 — Cirrus worker (RPC + WebSocket + ShardDO)
+wrangler dev --config wrangler.cirrus.jsonc
+
+# Terminal 2 — Nuxt SSR (set the cirrus port from terminal 1)
+NUXT_PUBLIC_CIRRUS_URL=http://localhost:8788 pnpm dev
 ```
 
-`pnpm dev` runs `cirrus dev`, which brings up the composed worker (Nuxt SSR +
-Cirrus realtime under one origin) for local development.
+`pnpm dev` runs `cirrus dev` for the Nuxt side. Start the Cirrus worker first so
+`NUXT_PUBLIC_CIRRUS_URL` is known.
 
-## Build
+## Build and deploy
 
 ```bash
-pnpm build
-```
+# 1. Deploy the Cirrus worker first (get its URL)
+wrangler deploy --config wrangler.cirrus.jsonc
+#   → https://{{name}}-cirrus.workers.dev
 
-Produces the composed Nuxt/Nitro Worker under `.output/` — one Worker that serves
-both Nuxt SSR and Cirrus realtime. Deploy it with `pnpm deploy` (`cirrus deploy`).
+# 2. Build and deploy the Nuxt SSR worker
+NUXT_PUBLIC_CIRRUS_URL=https://{{name}}-cirrus.workers.dev pnpm build
+wrangler deploy --config wrangler.jsonc
+```
 
 ## Stack
 
-- `nuxt` — the Vue meta-framework (Nitro server engine)
-- `@cirrus/vue` — Vue composables for Cirrus (live `useQuery`, optimistic
-  `useMutation`, `hydratePreloaded`) + the `withCirrus` single-worker composition
-  (`@cirrus/vue/worker`)
+- `nuxt` — the Vue meta-framework (Nitro server engine, `cloudflare_module` preset)
+- `@cirrus/vue` — Vue composables for Cirrus (`useQuery`, `useMutation`,
+  `hydratePreloaded`)
 - `@cirrus/*` — the realtime backend on Cloudflare Workers + Durable Objects
