@@ -1,8 +1,8 @@
-
+import type {CommandHandler} from "../../util/command";
+import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
-import { type CommandHandler, defineHandler } from "../../util/command";
 import type { LogsOptions } from "./index";
 
 /** Output formats `wrangler tail` understands. */
@@ -97,7 +97,8 @@ const execute: CommandHandler<LogsOptions> = defineHandler<LogsOptions>(({ argum
         search: options.search,
         status: options.status,
         worker: argument[0],
-    }));
+    }),
+);
 
 export { execute };
 export type { LogsCommandOptions, LogsCommandResult };

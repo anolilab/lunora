@@ -26,9 +26,7 @@ describe("auth_api_call_without_headers", () => {
     it("flags a call with hasHeaders: false", () => {
         expect.assertions(2);
 
-        const calls: AdvisorAuthApiCall[] = [
-            { exportName: "createOrg", file: "orgs", hasHeaders: false, line: 10, method: "createOrganization" },
-        ];
+        const calls: AdvisorAuthApiCall[] = [{ exportName: "createOrg", file: "orgs", hasHeaders: false, line: 10, method: "createOrganization" }];
         const findings = run(calls);
 
         expect(findings).toHaveLength(1);
@@ -44,9 +42,7 @@ describe("auth_api_call_without_headers", () => {
     it("does not flag a call with hasHeaders: true", () => {
         expect.assertions(1);
 
-        const calls: AdvisorAuthApiCall[] = [
-            { exportName: "createOrg", file: "orgs", hasHeaders: true, line: 10, method: "createOrganization" },
-        ];
+        const calls: AdvisorAuthApiCall[] = [{ exportName: "createOrg", file: "orgs", hasHeaders: true, line: 10, method: "createOrganization" }];
 
         expect(run(calls)).toHaveLength(0);
     });

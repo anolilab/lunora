@@ -794,12 +794,10 @@ const findStorageReferences = (sql: SqlExec, storageColumns: Record<string, stri
             // IN), so its bound path params are supplied twice, ahead of the key
             // list — matching the SQL textual order.
             const rows = sql
-                .exec<{ id: string; ref: string }>(
-                    `SELECT id, ${resolved.expression} AS ref FROM ${quoted} WHERE ${resolved.expression} IN (${placeholders})`,
-                    ...resolved.params,
-                    ...resolved.params,
-                    ...scanned,
-                )
+                .exec<{
+                    id: string;
+                    ref: string;
+                }>(`SELECT id, ${resolved.expression} AS ref FROM ${quoted} WHERE ${resolved.expression} IN (${placeholders})`, ...resolved.params, ...resolved.params, ...scanned)
                 .toArray();
 
             for (const row of rows) {

@@ -447,10 +447,7 @@ const createAuthAdmin = (auth: CirrusAuth, options: CreateAuthAdminOptions = {})
 
                 if (rawSeconds !== undefined) {
                     if (!Number.isInteger(rawSeconds) || !Number.isFinite(rawSeconds) || rawSeconds <= 0) {
-                        throw new CirrusAuthAdminError(
-                            "impersonationSeconds must be a positive finite integer",
-                            "INVALID_IMPERSONATION_SECONDS",
-                        );
+                        throw new CirrusAuthAdminError("impersonationSeconds must be a positive finite integer", "INVALID_IMPERSONATION_SECONDS");
                     }
 
                     ttlSeconds = Math.min(rawSeconds, MAX_IMPERSONATION_SECONDS);

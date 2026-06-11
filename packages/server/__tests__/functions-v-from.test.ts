@@ -12,7 +12,7 @@ const fakeStringSchema = {
     "~standard": {
         validate: (value: unknown) =>
             typeof value === "string"
-                ? { value: (value as string).toUpperCase() }
+                ? { value: (value).toUpperCase() }
                 : { issues: [{ message: "expected string from fakeSchema", path: [] as PropertyKey[] }] },
         vendor: "fake",
         version: 1 as const,
@@ -57,12 +57,12 @@ describe("v.from() args-map integration", () => {
 
         const send = mutation({
             args: { count: v.number(), name: v.from(fakeStringSchema) },
-            // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- testing that handler is never reached
+             
             handler,
         });
 
         await expect(async () =>
-            send.handler(makeMutationContext(), { count: 1, name: 42 } as unknown as { count: number; name: string }),
+            send.handler(makeMutationContext(), { count: 1, name: 42 }),
         ).rejects.toBeInstanceOf(ValidationError);
         expect(handler).not.toHaveBeenCalled();
     });

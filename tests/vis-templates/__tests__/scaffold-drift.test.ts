@@ -65,10 +65,13 @@ describe("templates/*/cirrus scaffold identity", () => {
                     );
                 }
 
-                expect(candidateContent, [
-                    `templates/${templateName}/cirrus/${file} differs from the canonical copy in templates/${CANONICAL_TEMPLATE}/cirrus/${file}.`,
-                    `The cirrus/ scaffold is intentionally identical across all templates — apply your change to every template (or update the canonical copy and propagate).`,
-                ].join("\n")).toBe(canonicalContent);
+                expect(
+                    candidateContent,
+                    [
+                        `templates/${templateName}/cirrus/${file} differs from the canonical copy in templates/${CANONICAL_TEMPLATE}/cirrus/${file}.`,
+                        `The cirrus/ scaffold is intentionally identical across all templates — apply your change to every template (or update the canonical copy and propagate).`,
+                    ].join("\n"),
+                ).toBe(canonicalContent);
             });
         });
     });

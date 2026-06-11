@@ -9,55 +9,6 @@ import type { RlsProcedureIR } from "./ir";
 // ---------------------------------------------------------------------------
 
 /**
- * Walk a builder chain leftward from `receiver` (the expression to the left of
- * the terminal `.query(...)` / `.mutation(...)` call) and return `true` when any
- * `.use(rls(...))` step is found, together with the statically-readable table
- * names from the `rls(policies)` argument.
- *
- * Structure recognised (leftward):
- *
- *   c.use(rls([{ table: "documents", on: "read", when: ... }])).query(handler)
- *   ───────────────────── receiver ──────────────────────────── ─── terminal ───
- *
- * The chain is a nested `CallExpression` tree; each step is:
- *   - a `CallExpression` whose callee is a `PropertyAccessExpression`
- *   - the property name is the builder method (`.use`, `.input`, `.output`, …)
- *   - the argument is the middleware / validator / etc.
- *
- * We recognise a `.use(rls(...))` step when the property name is `"use"` and
- * the first argument is a `CallExpression` whose callee is an `Identifier` (or
- * `PropertyAccessExpression` with name) `"rls"`.
- */
-const rlsFromBuilderChain = (receiver: TsNode): { rlsTables: string[]; usesRls: boolean } => {
-    let node: TsNode = receiver;
-    let usesRls = false;
-    const rlsTables: string[] = [];
-
-    while (Node.isCallExpression(node)) {
-        const chainCallee = node.getExpression();
-
-        if (!Node.isPropertyAccessExpression(chainCallee)) {
-            break;
-        }
-
-        if (chainCallee.getName() === "use") {
-            const argument = node.getArguments()[0];
-
-            if (argument && isRlsCall(argument)) {
-                usesRls = true;
-
-                // Extract table names from the rls(policies) argument array.
-                rlsTables.push(...extractPolicyTables(argument as CallExpression));
-            }
-        }
-
-        node = chainCallee.getExpression();
-    }
-
-    return { rlsTables, usesRls };
-};
-
-/**
  * True when `node` is a `CallExpression` whose callee resolves to the name
  * `"rls"` — either a bare identifier (`rls(policies)`) or a property access
  * (`rlsModule.rls(policies)`). We match by name rather than import origin so
@@ -120,6 +71,53 @@ const extractPolicyTables = (rlsCall: CallExpression): string[] => {
     return tables;
 };
 
+/**
+ * Walk a builder chain leftward from `receiver` (the expression to the left of
+ * the terminal `.query(...)` / `.mutation(...)` call) and return `true` when any
+ * `.use(rls(...))` step is found, together with the statically-readable table
+ * names from the `rls(policies)` argument.
+ *
+ * Structure recognised (leftward) — in `c.use(rls([...])).query(handler)` the
+ * `c.use(rls([...]))` portion is the receiver and `.query(handler)` is terminal.
+ *
+ * The chain is a nested `CallExpression` tree; each step is:
+ * a `CallExpression` whose callee is a `PropertyAccessExpression`, where the
+ * property name is the builder method (`.use`, `.input`, `.output`, …) and the
+ * argument is the middleware / validator / etc.
+ *
+ * We recognise a `.use(rls(...))` step when the property name is `"use"` and
+ * the first argument is a `CallExpression` whose callee is an `Identifier` (or
+ * `PropertyAccessExpression` with name) `"rls"`.
+ */
+const rlsFromBuilderChain = (receiver: TsNode): { rlsTables: string[]; usesRls: boolean } => {
+    let node: TsNode = receiver;
+    let usesRls = false;
+    const rlsTables: string[] = [];
+
+    while (Node.isCallExpression(node)) {
+        const chainCallee = node.getExpression();
+
+        if (!Node.isPropertyAccessExpression(chainCallee)) {
+            break;
+        }
+
+        if (chainCallee.getName() === "use") {
+            const argument = node.getArguments()[0];
+
+            if (argument && isRlsCall(argument)) {
+                usesRls = true;
+
+                // Extract table names from the rls(policies) argument array.
+                rlsTables.push(...extractPolicyTables(argument as CallExpression));
+            }
+        }
+
+        node = chainCallee.getExpression();
+    }
+
+    return { rlsTables, usesRls };
+};
+
 // ---------------------------------------------------------------------------
 // Table-access discovery inside a function body
 // ---------------------------------------------------------------------------
@@ -139,8 +137,8 @@ const READ_METHODS = new Set(["findFirst", "findFirstOrThrow", "findMany", "get"
  */
 const WRITE_METHODS = new Set(["delete", "insert", "patch", "replace"]);
 
-/** True when `call` is a `ctx.db.<method>(...)` or bare `db.<method>(...)` call. */
-const isDbCall = (call: CallExpression, methodSet: Set<string>): boolean => {
+/** True when `call` is a `ctx.db.&lt;method>(...)` or bare `db.&lt;method>(...)` call. */
+const isDatabaseCall = (call: CallExpression, methodSet: Set<string>): boolean => {
     const callee = call.getExpression();
 
     if (!Node.isPropertyAccessExpression(callee) || !methodSet.has(callee.getName())) {
@@ -157,10 +155,10 @@ const isDbCall = (call: CallExpression, methodSet: Set<string>): boolean => {
 };
 
 /**
- * String-literal first argument of a `ctx.db.<method>("table", ...)` call, or
+ * String-literal first argument of a `ctx.db.&lt;method>("table", ...)` call, or
  * `""` when the argument is not a string literal (dynamic table — not lintable).
  */
-const tableArgOf = (call: CallExpression): string => {
+const tableArgumentOf = (call: CallExpression): string => {
     const argument = call.getArguments()[0];
 
     return argument && Node.isStringLiteral(argument) ? argument.getLiteralText() : "";
@@ -177,14 +175,14 @@ const tablesAccessedIn = (declaration: TsNode): { tablesRead: string[]; tablesWr
     const tablesWritten = new Set<string>();
 
     for (const call of declaration.getDescendantsOfKind(SyntaxKind.CallExpression)) {
-        if (isDbCall(call, READ_METHODS)) {
-            const table = tableArgOf(call);
+        if (isDatabaseCall(call, READ_METHODS)) {
+            const table = tableArgumentOf(call);
 
             if (table !== "") {
                 tablesRead.add(table);
             }
-        } else if (isDbCall(call, WRITE_METHODS)) {
-            const table = tableArgOf(call);
+        } else if (isDatabaseCall(call, WRITE_METHODS)) {
+            const table = tableArgumentOf(call);
 
             if (table !== "") {
                 tablesWritten.add(table);
@@ -211,6 +209,41 @@ const tablesAccessedIn = (declaration: TsNode): { tablesRead: string[]; tablesWr
  * `rlsTables`. Both forms are still included so the lint can flag bare-factory
  * procedures that touch policy-covered tables.
  */
+const procedureIrFromDeclaration = (declaration: TsNode, relativePath: string): RlsProcedureIR | undefined => {
+    if (!Node.isVariableDeclaration(declaration)) {
+        return undefined;
+    }
+
+    const initializer = declaration.getInitializer();
+
+    if (!initializer || !Node.isCallExpression(initializer)) {
+        return undefined;
+    }
+
+    // Shared classification (kind + visibility + builder receiver) —
+    // single source of truth with function discovery.
+    const classified = classifyProcedureCall(initializer);
+
+    if (!classified) {
+        return undefined;
+    }
+
+    // Only the builder form (`c.use(...).query(...)`) can carry
+    // `.use(rls(...))`; a bare factory has no chain → never uses RLS.
+    const chain = classified.receiver ? rlsFromBuilderChain(classified.receiver) : { rlsTables: [], usesRls: false };
+    const { tablesRead, tablesWritten } = tablesAccessedIn(declaration);
+
+    return {
+        exportName: declaration.getName(),
+        file: relativePath,
+        rlsTables: chain.rlsTables,
+        tablesRead,
+        tablesWritten,
+        usesRls: chain.usesRls,
+        visibility: classified.visibility,
+    };
+};
+
 const discoverRlsProcedures = (project: Project, cirrusDirectory: string): RlsProcedureIR[] => {
     const procedures: RlsProcedureIR[] = [];
 
@@ -224,43 +257,11 @@ const discoverRlsProcedures = (project: Project, cirrusDirectory: string): RlsPr
             }
 
             for (const declaration of statement.getDeclarations()) {
-                const initializer = declaration.getInitializer();
+                const ir = procedureIrFromDeclaration(declaration, relativePath);
 
-                if (!initializer || !Node.isCallExpression(initializer)) {
-                    continue;
+                if (ir) {
+                    procedures.push(ir);
                 }
-
-                // Shared classification (kind + visibility + builder receiver) —
-                // single source of truth with function discovery.
-                const classified = classifyProcedureCall(initializer);
-
-                if (!classified) {
-                    continue;
-                }
-
-                // Only the builder form (`c.use(...).query(...)`) can carry
-                // `.use(rls(...))`; a bare factory has no chain → never uses RLS.
-                let usesRls = false;
-                let rlsTables: string[] = [];
-
-                if (classified.receiver) {
-                    const chain = rlsFromBuilderChain(classified.receiver);
-
-                    usesRls = chain.usesRls;
-                    rlsTables = chain.rlsTables;
-                }
-
-                const { tablesRead, tablesWritten } = tablesAccessedIn(declaration);
-
-                procedures.push({
-                    exportName: declaration.getName(),
-                    file: relativePath,
-                    rlsTables,
-                    tablesRead,
-                    tablesWritten,
-                    usesRls,
-                    visibility: classified.visibility,
-                });
             }
         }
     }

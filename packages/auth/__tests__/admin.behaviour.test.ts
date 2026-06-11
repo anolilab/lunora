@@ -218,13 +218,9 @@ describe("createAuthAdmin", () => {
 
         const user = await adminApi.createUser({ email: "invalid-ttl@example.com", name: "Inv" });
 
-        await expect(createAuthAdmin(auth, { impersonationSeconds: 0 }).impersonateUser({ userId: user.id })).rejects.toThrow(
-            /positive finite integer/,
-        );
+        await expect(createAuthAdmin(auth, { impersonationSeconds: 0 }).impersonateUser({ userId: user.id })).rejects.toThrow(/positive finite integer/);
 
-        await expect(createAuthAdmin(auth, { impersonationSeconds: -60 }).impersonateUser({ userId: user.id })).rejects.toThrow(
-            /positive finite integer/,
-        );
+        await expect(createAuthAdmin(auth, { impersonationSeconds: -60 }).impersonateUser({ userId: user.id })).rejects.toThrow(/positive finite integer/);
 
         await expect(createAuthAdmin(auth, { impersonationSeconds: Number.POSITIVE_INFINITY }).impersonateUser({ userId: user.id })).rejects.toThrow(
             /positive finite integer/,

@@ -40,7 +40,7 @@ export type { MutationHook } from "./use-mutation";
 export { useMutation } from "./use-mutation";
 export type { PageItemOf, PaginatedArgs } from "./use-paginated-query";
 export { usePaginatedQuery } from "./use-paginated-query";
-export { hydratePreloaded,default as usePreloadedQuery } from "./use-preloaded-query";
+export { hydratePreloaded, default as usePreloadedQuery } from "./use-preloaded-query";
 export type { HeartbeatReference, ListPresentReference, UsePresenceOptions, UsePresenceResult } from "./use-presence";
 export { usePresence } from "./use-presence";
 export { default as useQuery } from "./use-query";

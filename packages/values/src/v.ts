@@ -706,6 +706,30 @@ const any = (): ColumnValidator<unknown, unknown> => asColumn(createValidator<un
 type InferStandardOutput<S extends StandardSchemaV1> = S["~standard"]["types"] extends { output: infer O } ? O : unknown;
 
 /**
+ * Build the issue path from a Standard Schema issue's `path` segments. Each
+ * segment is either a `PropertyKey` or a `{ key: PropertyKey }` object; only
+ * string/number keys are kept. Typed loosely (a read-only array of `unknown`)
+ * so the runtime narrowing is genuine rather than elided by the static type.
+ */
+const standardIssuePath = (path: ReadonlyArray<unknown> | undefined): (number | string)[] => {
+    const issuePath: (number | string)[] = [];
+
+    if (!path) {
+        return issuePath;
+    }
+
+    for (const segment of path) {
+        const key = typeof segment === "object" && segment !== null && "key" in segment ? (segment as { key: PropertyKey }).key : (segment as PropertyKey);
+
+        if (typeof key === "string" || typeof key === "number") {
+            issuePath.push(key);
+        }
+    }
+
+    return issuePath;
+};
+
+/**
  * Wrap any Standard Schema v1 validator (`zod`, `valibot`, `arktype`, …) so it
  * can be used as an **args** validator in `query`/`mutation`/`action`. The
  * wrapped validator's output type is inferred from `~standard.types.output`
@@ -718,15 +742,20 @@ type InferStandardOutput<S extends StandardSchemaV1> = S["~standard"]["types"] e
  * validation is synchronous and throws when a Promise is returned.
  */
 const from = <S extends StandardSchemaV1>(schema: S): ColumnValidator<InferStandardOutput<S>, InferStandardOutput<S>> => {
-    const props = schema["~standard"];
+    // Cast through a loose shape: the static type guarantees `~standard`, but
+    // `v.from` is a runtime boundary (callers pass untyped values via `as any`),
+    // so the guard below must actually run.
+    const props = (schema as { "~standard"?: { validate?: unknown; version?: number } })["~standard"];
 
-    if (!props || props.version !== 1 || typeof props.validate !== "function") {
+    if (props?.version !== 1 || typeof props.validate !== "function") {
         throw new Error('@cirrus/values: v.from() expects a Standard Schema v1 object (missing or invalid "~standard")');
     }
 
+    const validate = props.validate as StandardSchemaV1["~standard"]["validate"];
+
     return asColumn(
         createValidator<InferStandardOutput<S>>("from", (value, context) => {
-            const result = props.validate(value);
+            const result = validate(value);
 
             // Sync-only. Reject native Promises AND non-native thenables — a
             // thenable slips past `instanceof Promise` and would otherwise fall
@@ -740,36 +769,20 @@ const from = <S extends StandardSchemaV1>(schema: S): ColumnValidator<InferStand
                 });
             }
 
-            if ("issues" in result && result.issues != null && result.issues.length > 0) {
+            if ("issues" in result && result.issues !== undefined && result.issues.length > 0) {
                 const first = result.issues[0];
-                // Build the path from the first issue's path segments (if any),
-                // appended to the current context path. Standard Schema path
-                // entries are either PropertyKey or { key: PropertyKey } objects.
-                const issuePath: (number | string)[] = [];
-
-                if (first?.path) {
-                    for (const segment of first.path) {
-                        const key = typeof segment === "object" && segment !== null && "key" in segment ? (segment as { key: PropertyKey }).key : segment;
-
-                        if (typeof key === "string" || typeof key === "number") {
-                            issuePath.push(key);
-                        }
-                    }
-                }
-
                 const message = first?.message ?? "Standard Schema validation failed";
-                const fullPath = [...context.path, ...issuePath];
 
                 throw new ValidationError(message, {
                     expected: "valid value",
-                    path: fullPath,
+                    path: [...context.path, ...standardIssuePath(first?.path)],
                     received: describeValue(value),
                 });
             }
 
             return (result as { value: InferStandardOutput<S> }).value;
         }),
-    ) as ColumnValidator<InferStandardOutput<S>, InferStandardOutput<S>>;
+    );
 };
 
 /**

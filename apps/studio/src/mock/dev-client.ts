@@ -99,12 +99,14 @@ const FUNCTIONS = [
 const now = 1_749_300_120_000;
 
 const minuteBuckets = (n: number, base: number, jitter: number): { bucketMs: number; calls: number; errors: number; path: string }[] =>
-    Array.from({ length: n }, (_, index) => {return {
-        bucketMs: now - (n - index) * 60_000,
-        calls: Math.round(base + Math.sin(index / 2) * jitter + jitter),
-        errors: index % 7 === 0 ? 1 : 0,
-        path: "messages:list",
-    }});
+    Array.from({ length: n }, (_, index) => {
+        return {
+            bucketMs: now - (n - index) * 60_000,
+            calls: Math.round(base + Math.sin(index / 2) * jitter + jitter),
+            errors: index % 7 === 0 ? 1 : 0,
+            path: "messages:list",
+        };
+    });
 
 /** Fixed payload per admin reference; shared by `query` and `subscribe`. */
 const dataFor = (reference: string, args: unknown): unknown => {
@@ -124,11 +126,13 @@ const dataFor = (reference: string, args: unknown): unknown => {
                 attempts: 214,
                 failureRate: 0.04,
                 failures: 9,
-                history: Array.from({ length: 30 }, (_, index) => {return {
-                    attempts: 6 + (index % 4),
-                    bucketMs: now - (30 - index) * 60_000,
-                    failures: index % 9 === 0 ? 1 : 0,
-                }}),
+                history: Array.from({ length: 30 }, (_, index) => {
+                    return {
+                        attempts: 6 + (index % 4),
+                        bucketMs: now - (30 - index) * 60_000,
+                        failures: index % 9 === 0 ? 1 : 0,
+                    };
+                }),
                 sinceMs: now - 3_600_000,
             };
         }
@@ -283,85 +287,154 @@ const noop = (): void => {};
 /** A plain mock client cast to {@link CirrusClient}, for the dev harness only. */
 const createDevMockClient = (): CirrusClient =>
     ({
-        action: async (): Promise<unknown> => {return {}},
-        banAuthUser: async (input: { userId: string }): Promise<unknown> => {return { banned: true, id: input.userId }},
-        cancelScheduledJob: async (): Promise<{ cancelled: boolean }> => {return { cancelled: true }},
+        action: async (): Promise<unknown> => {
+            return {};
+        },
+        banAuthUser: async (input: { userId: string }): Promise<unknown> => {
+            return { banned: true, id: input.userId };
+        },
+        cancelScheduledJob: async (): Promise<{ cancelled: boolean }> => {
+            return { cancelled: true };
+        },
         close: noop,
         connectionStatus: (): string => "connected",
-        createAuthUser: async (input: { email: string; name: string; role?: string }): Promise<unknown> => {return {
-            createdAt: now,
-            email: input.email,
-            emailVerified: false,
-            id: "usr_new",
-            name: input.name,
-            role: input.role ?? "user",
-        }},
-        impersonateAuthUser: async (input: { userId: string }): Promise<unknown> => {return {
-            expiresAt: now + 3_600_000,
-            token: `mock-impersonation-token-for-${input.userId}`,
-            user: { id: input.userId },
-        }},
-        listAuthSessions: async (): Promise<unknown> => {return {
-            rows: [
-                { createdAt: now - 3_600_000, expiresAt: now + 86_400_000, id: "ses_1", ipAddress: "127.0.0.1", userAgent: "Mozilla/5.0", userId: "usr_ada" },
-            ],
-            total: 1,
-        }},
-        listAuthUsers: async (): Promise<unknown> => {return {
-            rows: [
-                {
-                    banned: false,
-                    createdAt: 1_749_100_000_000,
-                    email: "ada@example.com",
-                    emailVerified: true,
-                    id: "usr_ada",
-                    image: undefined,
-                    name: "Ada Lovelace",
-                    role: "admin",
+        createAuthUser: async (input: { email: string; name: string; role?: string }): Promise<unknown> => {
+            return {
+                createdAt: now,
+                email: input.email,
+                emailVerified: false,
+                id: "usr_new",
+                name: input.name,
+                role: input.role ?? "user",
+            };
+        },
+        impersonateAuthUser: async (input: { userId: string }): Promise<unknown> => {
+            return {
+                expiresAt: now + 3_600_000,
+                token: `mock-impersonation-token-for-${input.userId}`,
+                user: { id: input.userId },
+            };
+        },
+        listAuthSessions: async (): Promise<unknown> => {
+            return {
+                rows: [
+                    {
+                        createdAt: now - 3_600_000,
+                        expiresAt: now + 86_400_000,
+                        id: "ses_1",
+                        ipAddress: "127.0.0.1",
+                        userAgent: "Mozilla/5.0",
+                        userId: "usr_ada",
+                    },
+                ],
+                total: 1,
+            };
+        },
+        listAuthUsers: async (): Promise<unknown> => {
+            return {
+                rows: [
+                    {
+                        banned: false,
+                        createdAt: 1_749_100_000_000,
+                        email: "ada@example.com",
+                        emailVerified: true,
+                        id: "usr_ada",
+                        image: undefined,
+                        name: "Ada Lovelace",
+                        role: "admin",
+                    },
+                    {
+                        banned: false,
+                        createdAt: 1_749_050_000_000,
+                        email: "grace@example.com",
+                        emailVerified: true,
+                        id: "usr_grace",
+                        image: undefined,
+                        name: "Grace Hopper",
+                        role: "user",
+                    },
+                    {
+                        banned: true,
+                        banReason: "spam",
+                        createdAt: 1_749_000_000_000,
+                        email: "lin@example.com",
+                        emailVerified: false,
+                        id: "usr_lin",
+                        image: undefined,
+                        name: "Lin Clark",
+                        role: "user",
+                    },
+                ],
+                total: 42,
+            };
+        },
+        fetchOpenApi: async (): Promise<unknown> => {
+            return {
+                info: { title: "Cirrus API (mock)", version: "0.0.0" },
+                openapi: "3.1.0",
+                paths: {
+                    "/_cirrus/rpc#messages:list": {
+                        post: {
+                            operationId: "messages:list",
+                            responses: { default: { description: "RPC error." } },
+                            summary: "query messages:list",
+                            tags: ["messages"],
+                        },
+                    },
+                    "/_cirrus/rpc#messages:send": {
+                        post: {
+                            operationId: "messages:send",
+                            responses: { default: { description: "RPC error." } },
+                            summary: "mutation messages:send",
+                            tags: ["messages"],
+                        },
+                    },
+                    "/_cirrus/rpc#posts:publish": {
+                        post: {
+                            operationId: "posts:publish",
+                            responses: { default: { description: "RPC error." } },
+                            summary: "mutation posts:publish",
+                            tags: ["posts"],
+                        },
+                    },
                 },
-                {
-                    banned: false,
-                    createdAt: 1_749_050_000_000,
-                    email: "grace@example.com",
-                    emailVerified: true,
-                    id: "usr_grace",
-                    image: undefined,
-                    name: "Grace Hopper",
-                    role: "user",
-                },
-                {
-                    banned: true,
-                    banReason: "spam",
-                    createdAt: 1_749_000_000_000,
-                    email: "lin@example.com",
-                    emailVerified: false,
-                    id: "usr_lin",
-                    image: undefined,
-                    name: "Lin Clark",
-                    role: "user",
-                },
-            ],
-            total: 42,
-        }},
-        fetchOpenApi: async (): Promise<unknown> => {return {
-            info: { title: "Cirrus API (mock)", version: "0.0.0" },
-            openapi: "3.1.0",
-            paths: {
-                "/_cirrus/rpc#messages:list": { post: { operationId: "messages:list", responses: { default: { description: "RPC error." } }, summary: "query messages:list", tags: ["messages"] } },
-                "/_cirrus/rpc#messages:send": { post: { operationId: "messages:send", responses: { default: { description: "RPC error." } }, summary: "mutation messages:send", tags: ["messages"] } },
-                "/_cirrus/rpc#posts:publish": { post: { operationId: "posts:publish", responses: { default: { description: "RPC error." } }, summary: "mutation posts:publish", tags: ["posts"] } },
-            },
-            tags: [{ name: "messages" }, { name: "posts" }],
-        }},
-        fetchOpenRpc: async (): Promise<unknown> => {return {
-            info: { title: "Cirrus RPC (mock)", version: "0.0.0" },
-            methods: [
-                { name: "messages:list", params: [{ name: "args", schema: { properties: { channelId: { type: "string" }, limit: { type: "number" } }, required: ["channelId"], type: "object" } }], result: { name: "result", schema: {} }, "x-cirrus-function-kind": "query", "x-tags": [{ name: "messages" }] },
-                { name: "messages:send", params: [{ name: "args", schema: { properties: { text: { type: "string" } }, required: ["text"], type: "object" } }], result: { name: "result", schema: {} }, "x-cirrus-function-kind": "mutation", "x-tags": [{ name: "messages" }] },
-                { name: "posts:publish", params: [{ name: "args", schema: { properties: { id: { type: "string" } }, required: ["id"], type: "object" } }], result: { name: "result", schema: {} }, "x-cirrus-function-kind": "mutation", "x-tags": [{ name: "posts" }] },
-            ],
-            openrpc: "1.3.2",
-        }},
+                tags: [{ name: "messages" }, { name: "posts" }],
+            };
+        },
+        fetchOpenRpc: async (): Promise<unknown> => {
+            return {
+                info: { title: "Cirrus RPC (mock)", version: "0.0.0" },
+                methods: [
+                    {
+                        name: "messages:list",
+                        params: [
+                            {
+                                name: "args",
+                                schema: { properties: { channelId: { type: "string" }, limit: { type: "number" } }, required: ["channelId"], type: "object" },
+                            },
+                        ],
+                        result: { name: "result", schema: {} },
+                        "x-cirrus-function-kind": "query",
+                        "x-tags": [{ name: "messages" }],
+                    },
+                    {
+                        name: "messages:send",
+                        params: [{ name: "args", schema: { properties: { text: { type: "string" } }, required: ["text"], type: "object" } }],
+                        result: { name: "result", schema: {} },
+                        "x-cirrus-function-kind": "mutation",
+                        "x-tags": [{ name: "messages" }],
+                    },
+                    {
+                        name: "posts:publish",
+                        params: [{ name: "args", schema: { properties: { id: { type: "string" } }, required: ["id"], type: "object" } }],
+                        result: { name: "result", schema: {} },
+                        "x-cirrus-function-kind": "mutation",
+                        "x-tags": [{ name: "posts" }],
+                    },
+                ],
+                openrpc: "1.3.2",
+            };
+        },
         listFunctions: async (): Promise<unknown> => [
             { kind: "query", path: "messages:list" },
             { kind: "mutation", path: "messages:send" },
@@ -378,8 +451,20 @@ const createDevMockClient = (): CirrusClient =>
             // walk; content-types + a `tag` so thumbnails and metadata sort demo.
             // Filtered by prefix to mimic R2's prefix listing.
             const all = [
-                { customMetadata: { tag: "profile" }, httpMetadata: { contentType: "image/png" }, key: "uploads/avatar-ada.png", size: 20_480, uploaded: now - 86_400_000 },
-                { customMetadata: { tag: "marketing" }, httpMetadata: { contentType: "image/jpeg" }, key: "uploads/cover.jpg", size: 153_600, uploaded: now - 172_800_000 },
+                {
+                    customMetadata: { tag: "profile" },
+                    httpMetadata: { contentType: "image/png" },
+                    key: "uploads/avatar-ada.png",
+                    size: 20_480,
+                    uploaded: now - 86_400_000,
+                },
+                {
+                    customMetadata: { tag: "marketing" },
+                    httpMetadata: { contentType: "image/jpeg" },
+                    key: "uploads/cover.jpg",
+                    size: 153_600,
+                    uploaded: now - 172_800_000,
+                },
                 { httpMetadata: { contentType: "text/csv" }, key: "exports/2026/report.csv", size: 8192, uploaded: now - 3_600_000 },
                 { httpMetadata: { contentType: "application/pdf" }, key: "exports/2026/summary.pdf", size: 51_200, uploaded: now - 7_200_000 },
                 { httpMetadata: { contentType: "text/plain" }, key: "readme.txt", size: 512, uploaded: now - 600_000 },
@@ -387,62 +472,90 @@ const createDevMockClient = (): CirrusClient =>
 
             return { objects: all.filter((object) => object.key.startsWith(options.prefix ?? "")) };
         },
-        deleteStorageObject: async (key: string): Promise<unknown> => {return { deleted: true, key }},
+        deleteStorageObject: async (key: string): Promise<unknown> => {
+            return { deleted: true, key };
+        },
         // Real placeholder images for image keys (so thumbnails render); a fake URL otherwise.
         signedStorageUrl: async (key: string): Promise<string> =>
             IMAGE_KEY_RE.test(key) ? `https://picsum.photos/seed/${encodeURIComponent(key)}/320` : `https://mock.cdn.example/${key}?sig=dev`,
-        uploadStorageObject: async (options: { key: string }): Promise<unknown> => {return { etag: "dev-etag", key: options.key }},
-        mutation: async (): Promise<unknown> => {return {}},
+        uploadStorageObject: async (options: { key: string }): Promise<unknown> => {
+            return { etag: "dev-etag", key: options.key };
+        },
+        mutation: async (): Promise<unknown> => {
+            return {};
+        },
         onConnectionStatus: (): (() => void) => noop,
         query: async (function_: Ref, args: unknown): Promise<unknown> => dataFor(function_.__cirrusRef, args),
-        readGlobalTablePage: async (): Promise<unknown> => {return {
-            columns: ["key", "enabled", "rollout"],
-            rows: [
-                { enabled: true, key: "new-dashboard", rollout: 100 },
-                { enabled: false, key: "ai-suggestions", rollout: 0 },
-            ],
-            total: 12,
-        }},
+        readGlobalTablePage: async (): Promise<unknown> => {
+            return {
+                columns: ["key", "enabled", "rollout"],
+                rows: [
+                    { enabled: true, key: "new-dashboard", rollout: 100 },
+                    { enabled: false, key: "ai-suggestions", rollout: 0 },
+                ],
+                total: 12,
+            };
+        },
         cancelAuthOrgInvitation: async (): Promise<void> => {},
         deleteAuthPasskey: async (): Promise<void> => {},
         disableAuthTwoFactor: async (): Promise<void> => {},
-        getAuthCapabilities: async (): Promise<unknown> => {return { accounts: true, admin: true, organization: true, passkey: true, twoFactor: true }},
+        getAuthCapabilities: async (): Promise<unknown> => {
+            return { accounts: true, admin: true, organization: true, passkey: true, twoFactor: true };
+        },
         listAuthAccounts: async (): Promise<unknown> => [
             { accountId: "ada@example.com", createdAt: 1_749_100_000_000, id: "acc_cred", providerId: "credential", userId: "usr_ada" },
             { accountId: "12345", createdAt: 1_749_100_000_000, id: "acc_gh", providerId: "github", userId: "usr_ada" },
         ],
-        listAuthOrganizations: async (): Promise<unknown> => {return {
-            rows: [{ createdAt: 1_749_000_000_000, id: "org_acme", name: "Acme Inc", slug: "acme" }],
-            total: 1,
-        }},
-        listAuthOrgInvitations: async (): Promise<unknown> => {return {
-            rows: [{ email: "new@example.com", id: "inv_1", organizationId: "org_acme", role: "member", status: "pending" }],
-            total: 1,
-        }},
-        listAuthOrgMembers: async (): Promise<unknown> => {return {
-            rows: [{ createdAt: 1_749_000_000_000, id: "mem_1", organizationId: "org_acme", role: "owner", userId: "usr_ada" }],
-            total: 1,
-        }},
-        listAuthPasskeys: async (): Promise<unknown> => [{ createdAt: 1_749_100_000_000, deviceType: "singleDevice", id: "pk_1", name: "MacBook", userId: "usr_ada" }],
+        listAuthOrganizations: async (): Promise<unknown> => {
+            return {
+                rows: [{ createdAt: 1_749_000_000_000, id: "org_acme", name: "Acme Inc", slug: "acme" }],
+                total: 1,
+            };
+        },
+        listAuthOrgInvitations: async (): Promise<unknown> => {
+            return {
+                rows: [{ email: "new@example.com", id: "inv_1", organizationId: "org_acme", role: "member", status: "pending" }],
+                total: 1,
+            };
+        },
+        listAuthOrgMembers: async (): Promise<unknown> => {
+            return {
+                rows: [{ createdAt: 1_749_000_000_000, id: "mem_1", organizationId: "org_acme", role: "owner", userId: "usr_ada" }],
+                total: 1,
+            };
+        },
+        listAuthPasskeys: async (): Promise<unknown> => [
+            { createdAt: 1_749_100_000_000, deviceType: "singleDevice", id: "pk_1", name: "MacBook", userId: "usr_ada" },
+        ],
         removeAuthOrgMember: async (): Promise<void> => {},
         removeAuthUser: async (): Promise<void> => {},
         revokeAuthSession: async (): Promise<void> => {},
         revokeAuthUserSessions: async (): Promise<void> => {},
         setAuthToken: noop,
         setAuthUserPassword: async (): Promise<void> => {},
-        setAuthUserRole: async (input: { role: string; userId: string }): Promise<unknown> => {return { id: input.userId, role: input.role }},
-        unbanAuthUser: async (input: { userId: string }): Promise<unknown> => {return { banned: false, id: input.userId }},
+        setAuthUserRole: async (input: { role: string; userId: string }): Promise<unknown> => {
+            return { id: input.userId, role: input.role };
+        },
+        unbanAuthUser: async (input: { userId: string }): Promise<unknown> => {
+            return { banned: false, id: input.userId };
+        },
         unlinkAuthAccount: async (): Promise<void> => {},
-        updateAuthUser: async (input: { userId: string }): Promise<unknown> => {return { id: input.userId }},
+        updateAuthUser: async (input: { userId: string }): Promise<unknown> => {
+            return { id: input.userId };
+        },
         subscribe: (function_: Ref, args: unknown, callback: (value: unknown) => void): (() => void) => {
             // Emit once on the next tick so the panel paints with data, the same
             // shape its `query` path would return.
-            queueMicrotask(() => { callback(dataFor(function_.__cirrusRef, args)); });
+            queueMicrotask(() => {
+                callback(dataFor(function_.__cirrusRef, args));
+            });
 
             return noop;
         },
         subscribeScheduledJobs: (callback: (jobs: unknown) => void): (() => void) => {
-            queueMicrotask(() => { callback([{ id: "job_1", name: "clear presence", runAt: now + 60_000 }]); });
+            queueMicrotask(() => {
+                callback([{ id: "job_1", name: "clear presence", runAt: now + 60_000 }]);
+            });
 
             return noop;
         },

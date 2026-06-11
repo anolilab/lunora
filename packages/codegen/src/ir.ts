@@ -249,6 +249,7 @@ export interface RlsProcedureIR {
     exportName: string;
     /** Source file relative to `&lt;projectRoot>/cirrus/`, without extension. */
     file: string;
+
     /**
      * Table names extracted from the `rls(policies)` array literal. Empty when the
      * policies argument is not a statically-readable array literal.

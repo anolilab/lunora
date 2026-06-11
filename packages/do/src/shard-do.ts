@@ -26,7 +26,16 @@ import type {
     SubscriptionsResult,
     TableIndexInfo,
 } from "./introspect";
-import { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, findStorageReferences, listTables, MAX_PAGE_SIZE, readTablePage, selectMatchingIds, summarizeSubscriptions } from "./introspect";
+import {
+    ADMIN_FUNCTION_PREFIX,
+    ADMIN_FUNCTIONS,
+    findStorageReferences,
+    listTables,
+    MAX_PAGE_SIZE,
+    readTablePage,
+    selectMatchingIds,
+    summarizeSubscriptions,
+} from "./introspect";
 import { LogBuffer } from "./log-buffer";
 import { armRestore, readBookmark } from "./pitr";
 import type { ReactiveCacheOptions } from "./reactive-cache";
@@ -855,8 +864,8 @@ const parsePositiveInt = (raw: string | undefined): number | undefined => {
  * (even in dev); when the var is unset/empty it falls back to `devDefault` —
  * which the caller passes as {@link isDevEnvironment}, so a dev deployment
  * streams every successful dispatch by default while production stays quiet
- * unless an operator opts in. (Errors always stream regardless — see
- * `recordRequestLog`.)
+ * unless an operator opts in. Errors always stream regardless — see
+ * `recordRequestLog`.
  */
 const parseEmit = (raw: string | undefined, devDefault: boolean): boolean => {
     if (raw === "1" || raw === "true") {

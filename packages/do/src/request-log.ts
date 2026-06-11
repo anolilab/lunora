@@ -505,5 +505,24 @@ const readRequestLog = (sql: SqlExec, options: ReadRequestLogOptions = {}): Requ
     });
 };
 
-export { appendRequestLogEntry, emitLogEvent, emitRequestLogEvent, ensureRequestLogTable, readRequestLog, redactArgs, renderLogMessage, REQUEST_LOG_RETENTION, REQUEST_LOG_TABLE };
-export type { AppendRequestLogEntry, ContextLogLevel, LogEventInput, ReadRequestLogOptions, RequestLogEntry, RequestLogResult, RequestLogWriteOptions, RequestOutcome };
+export {
+    appendRequestLogEntry,
+    emitLogEvent,
+    emitRequestLogEvent,
+    ensureRequestLogTable,
+    readRequestLog,
+    redactArgs,
+    renderLogMessage,
+    REQUEST_LOG_RETENTION,
+    REQUEST_LOG_TABLE,
+};
+export type {
+    AppendRequestLogEntry,
+    ContextLogLevel,
+    LogEventInput,
+    ReadRequestLogOptions,
+    RequestLogEntry,
+    RequestLogResult,
+    RequestLogWriteOptions,
+    RequestOutcome,
+};

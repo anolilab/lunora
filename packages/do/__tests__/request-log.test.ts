@@ -322,14 +322,30 @@ describe("emitLogEvent (ctx.log → console)", () => {
 
         const log = vi.spyOn(console, "log").mockImplementation(() => {});
 
-        emitLogEvent({ args: ["hello", { token: "s3cr3t" }], functionPath: "messages:list", level: "info", message: 'hello {"token":"s3cr3t"}', shardKey: "room-9", ts: 1000, userId: "user-1" });
+        emitLogEvent({
+            args: ["hello", { token: "s3cr3t" }],
+            functionPath: "messages:list",
+            level: "info",
+            message: 'hello {"token":"s3cr3t"}',
+            shardKey: "room-9",
+            ts: 1000,
+            userId: "user-1",
+        });
 
         expect(log).toHaveBeenCalledTimes(1);
 
         const line = log.mock.calls.at(0)?.at(0) as string;
         const event = JSON.parse(line) as Record<string, unknown>;
 
-        expect(event).toMatchObject({ function: "messages:list", level: "info", message: 'hello {"token":"s3cr3t"}', shard: "room-9", source: "cirrus", type: "log", userId: "user-1" });
+        expect(event).toMatchObject({
+            function: "messages:list",
+            level: "info",
+            message: 'hello {"token":"s3cr3t"}',
+            shard: "room-9",
+            source: "cirrus",
+            type: "log",
+            userId: "user-1",
+        });
         // The structured `args` array is deliberately omitted from the console event;
         // it stays on the opt-in `onLog` sink. (The secret is still in `message` here
         // because the developer chose to log the object — same as a raw console.log.)

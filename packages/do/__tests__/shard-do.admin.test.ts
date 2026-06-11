@@ -208,7 +208,9 @@ describe("shardDO admin introspection", () => {
             }
 
             // eslint-disable-next-line class-methods-use-this -- test stub mirroring the codegen override
-            protected override tableIndexes(table: string): { fields: string[]; name: string; type: "index" | "rank" | "search" | "vector"; unique?: boolean }[] {
+            protected override tableIndexes(
+                table: string,
+            ): { fields: string[]; name: string; type: "index" | "rank" | "search" | "vector"; unique?: boolean }[] {
                 return table === "posts"
                     ? [
                           { fields: ["authorId"], name: "byAuthor", type: "index" },
@@ -301,8 +303,7 @@ describe("shardDO admin introspection", () => {
 
         // A socket whose attachment is read back via `deserializeAttachment`,
         // mirroring the workerd hibernation surface `readAttachment` uses.
-        const makeSocket = (attachment: SocketAttachment): WebSocket =>
-            ({ deserializeAttachment: () => attachment }) as unknown as WebSocket;
+        const makeSocket = (attachment: SocketAttachment): WebSocket => ({ deserializeAttachment: () => attachment }) as unknown as WebSocket;
 
         const sockets: WebSocket[] = [
             makeSocket({ admin: true, subs: { "s-1": { args: { room: "general" }, functionPath: "messages:list", table: "messages" } } }),
@@ -794,7 +795,7 @@ describe("shardDO admin data migrations", () => {
         vi.restoreAllMocks();
     });
 
-    it("lets an explicit CIRRUS_REQUEST_LOG_EMIT=false silence summaries even in dev", async () => {
+    it("lets an explicit request-log emit of `false` silence summaries even in dev", async () => {
         expect.assertions(1);
 
         const log = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -818,7 +819,15 @@ describe("shardDO admin data migrations", () => {
 
         // Forwarded to the programmatic sink, args un-redacted, attributed.
         expect(seen).toStrictEqual([
-            { args: ["loaded", { count: 3 }], functionPath: "messages:list", level: "info", message: 'loaded {"count":3}', shardKey: undefined, ts: expect.any(Number), userId: undefined },
+            {
+                args: ["loaded", { count: 3 }],
+                functionPath: "messages:list",
+                level: "info",
+                message: 'loaded {"count":3}',
+                shardKey: undefined,
+                ts: expect.any(Number),
+                userId: undefined,
+            },
         ]);
 
         // Structured console event for the dev terminal / Workers Logs.

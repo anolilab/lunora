@@ -207,7 +207,7 @@ describe("id", () => {
 });
 
 describe("storage", () => {
-    it("parses an object key as a string and tags itself kind \"storage\"", () => {
+    it('parses an object key as a string and tags itself kind "storage"', () => {
         expect.assertions(2);
 
         const validator = v.storage();

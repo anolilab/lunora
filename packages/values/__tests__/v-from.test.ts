@@ -15,9 +15,9 @@ const fakeZodString = {
 // Fixture that always fails and carries a nested path on the first issue.
 const fakeNestedFail = {
     "~standard": {
-        validate: (_value: unknown) => ({
+        validate: (_value: unknown) => {return {
             issues: [{ message: "name too short", path: ["name", "first"] as PropertyKey[] }],
-        }),
+        }},
         vendor: "fake",
         version: 1 as const,
     },
@@ -26,7 +26,7 @@ const fakeNestedFail = {
 // Async fixture — Standard Schema allows async validate; Cirrus does not.
 const fakeAsync = {
     "~standard": {
-        validate: async (_value: unknown) => ({ value: "ok" }),
+        validate: async (_value: unknown) => {return { value: "ok" }},
         vendor: "fake",
         version: 1 as const,
     },
@@ -38,8 +38,9 @@ const fakeAsync = {
 const fakeThenable = {
     "~standard": {
         validate: (_value: unknown) => {
-            // eslint-disable-next-line unicorn/no-thenable -- intentional non-native thenable; the test asserts v.from rejects it like a Promise
+             
             const thenable = {
+                // eslint-disable-next-line unicorn/no-thenable -- deliberate: this fixture mimics a non-native thenable that v.from must reject.
                 then: (resolve: (value: unknown) => void): void => {
                     resolve(undefined);
                 },
@@ -69,15 +70,12 @@ describe("v.from()", () => {
         expect.assertions(3);
 
         const schema = v.from(fakeNestedFail);
-        const result = schema.safeParse({ name: { first: "a" } });
+        const result = schema.safeParse({ name: { first: "a" } }) as { error: ValidationError; ok: false };
 
         expect(result.ok).toBe(false);
-
-        if (!result.ok) {
-            expect(result.error).toBeInstanceOf(ValidationError);
-            // The issue's path ["name", "first"] should appear in the error path
-            expect(result.error.path).toEqual(["name", "first"]);
-        }
+        expect(result.error).toBeInstanceOf(ValidationError);
+        // The issue's path ["name", "first"] should appear in the error path
+        expect(result.error.path).toEqual(["name", "first"]);
     });
 
     it("(3) non-Standard-Schema input throws at construction time", () => {
@@ -85,7 +83,7 @@ describe("v.from()", () => {
 
         expect(() =>
             v.from(
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any, @typescript-eslint/no-unsafe-argument -- testing invalid input
+                 
                 { not: "a standard schema" } as any,
             ),
         ).toThrow("@cirrus/values: v.from() expects a Standard Schema v1 object");
@@ -96,13 +94,10 @@ describe("v.from()", () => {
 
         const schema = v.from(fakeAsync);
         // The async validate returns a Promise; v.from should throw synchronously.
-        const result = schema.safeParse("anything");
+        const result = schema.safeParse("anything") as { error: ValidationError; ok: false };
 
         expect(result.ok).toBe(false);
-
-        if (!result.ok) {
-            expect(result.error.message).toMatch(/async Standard Schema/u);
-        }
+        expect(result.error.message).toMatch(/async Standard Schema/u);
     });
 
     it("(4b) a non-native thenable is rejected like a Promise (not silently passed)", () => {

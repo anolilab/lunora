@@ -11,7 +11,11 @@ const FUNCTIONS: FunctionDescriptor[] = [{ kind: "query", path: "messages:list" 
 
 const SPEC: Record<string, unknown> = {
     openapi: "3.1.0",
-    paths: { "/_cirrus/rpc#messages:list": { post: { operationId: "messages:list", summary: "query: messages:list", tags: ["messages"], "x-cirrus-function-kind": "query" } } },
+    paths: {
+        "/_cirrus/rpc#messages:list": {
+            post: { operationId: "messages:list", summary: "query: messages:list", tags: ["messages"], "x-cirrus-function-kind": "query" },
+        },
+    },
 };
 
 const RPC_SPEC: Record<string, unknown> = {

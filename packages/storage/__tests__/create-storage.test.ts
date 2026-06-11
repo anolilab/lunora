@@ -142,9 +142,9 @@ describe("createStorage", () => {
         await expect(storage.upload("doc.bin", new ArrayBuffer(4), { allowedContentTypes: [] })).rejects.toThrow(/contentType is required/);
 
         // … and rejects any value because the list includes nothing.
-        await expect(
-            storage.upload("doc.bin", new ArrayBuffer(4), { allowedContentTypes: [], contentType: "image/png" }),
-        ).rejects.toThrow(/not in allowedContentTypes/);
+        await expect(storage.upload("doc.bin", new ArrayBuffer(4), { allowedContentTypes: [], contentType: "image/png" })).rejects.toThrow(
+            /not in allowedContentTypes/,
+        );
     });
 
     it("upload() with allowedContentTypes:undefined is unrestricted", async () => {

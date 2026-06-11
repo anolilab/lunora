@@ -123,6 +123,13 @@ const parseBuilderMember = (member: string, args: ReadonlyArray<Node>): Validato
             return { inner: parseArgument(first, { kind: "any" }), kind: "array" };
         }
 
+        case "from": {
+            // v.from(externalSchema) — the external Standard Schema validator's
+            // output type is not statically recoverable at codegen time.
+            // Emit an `unknown`-typed IR node so generated api types compile.
+            return { kind: "from" };
+        }
+
         case "id": {
             return { kind: "id", tableName: first && Node.isStringLiteral(first) ? first.getLiteralText() : "_unknown_" };
         }
@@ -161,13 +168,6 @@ const parseBuilderMember = (member: string, args: ReadonlyArray<Node>): Validato
                 kind: "union",
                 members: args.filter((argument): argument is Expression => Node.isExpression(argument)).map((argument) => parseValidator(argument)),
             };
-        }
-
-        case "from": {
-            // v.from(externalSchema) — the external Standard Schema validator's
-            // output type is not statically recoverable at codegen time.
-            // Emit an `unknown`-typed IR node so generated api types compile.
-            return { kind: "from" };
         }
 
         default: {

@@ -225,7 +225,10 @@ describe("shardDO: mutation → subscription-refresh pipeline", () => {
 
         // Mutate: update the messages query result; write touches "messages" only.
         shard.outcomes.set("messages:list", {
-            result: [{ _id: "m1", text: "hello" }, { _id: "m2", text: "world" }],
+            result: [
+                { _id: "m1", text: "hello" },
+                { _id: "m2", text: "world" },
+            ],
             tables: new Set(["messages"]),
         });
         shard.changedTableOnRpc = "messages";
@@ -326,7 +329,10 @@ describe("shardDO: mutation → subscription-refresh pipeline", () => {
 
         // First mutation: add second row.
         shard.outcomes.set("messages:list", {
-            result: [{ _id: "m1", text: "first" }, { _id: "m2", text: "second" }],
+            result: [
+                { _id: "m1", text: "first" },
+                { _id: "m2", text: "second" },
+            ],
             tables: new Set(["messages"]),
         });
         shard.changedTableOnRpc = "messages";
@@ -338,7 +344,11 @@ describe("shardDO: mutation → subscription-refresh pipeline", () => {
 
         // Second mutation: add third row.
         shard.outcomes.set("messages:list", {
-            result: [{ _id: "m1", text: "first" }, { _id: "m2", text: "second" }, { _id: "m3", text: "third" }],
+            result: [
+                { _id: "m1", text: "first" },
+                { _id: "m2", text: "second" },
+                { _id: "m3", text: "third" },
+            ],
             tables: new Set(["messages"]),
         });
         shard.changedTableOnRpc = "messages";

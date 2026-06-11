@@ -190,10 +190,7 @@ const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
                 onError(error, message) {
                     lastRunFailed = true;
 
-                    const loc =
-                        error instanceof CodegenDiagnosticError
-                            ? { column: error.column, file: error.file, line: error.line }
-                            : undefined;
+                    const loc = error instanceof CodegenDiagnosticError ? { column: error.column, file: error.file, line: error.line } : undefined;
 
                     devServer?.hot.send({
                         err: {
