@@ -109,6 +109,10 @@ const proxyUpgrade = (request: IncomingMessage, clientSocket: Duplex, head: Buff
  */
 export const startStudioServer = async (options: StudioServerOptions): Promise<StudioServerHandle> => {
     const host = options.host ?? "127.0.0.1";
+    // Editing defaults on only for a loopback bind — the developer's own machine.
+    // A non-loopback bind (explicit opt-in) stays read-only, matching the Vite
+    // dev route's stance; writes are admin-token-gated either way.
+    const isLoopback = host === "127.0.0.1" || host === "localhost" || host === "::1";
     const worker = new URL(options.workerOrigin);
     // Resolve `@cirrus/studio` from THIS module (a `@cirrus/cli` file, which
     // depends on it) rather than from the shared `@cirrus/studio-host` (which
@@ -118,6 +122,7 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
     const html = renderStudioHtml({
         adminToken: resolveAdminToken(options.cwd),
         basePath: "/",
+        dataEditable: isLoopback,
         scriptSrc: "/studio.js",
         styleHref: "/styles.css",
     });
@@ -166,7 +171,7 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
         }
 
         // Everything else is an SPA route → serve the document (history fallback),
-        // so a hard load of a deep link like `/globals` boots the router there.
+        // so a hard load of a deep link like `/data` boots the router there.
         sendAsset(response, document, "text/html; charset=utf-8");
     });
 

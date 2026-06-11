@@ -15,6 +15,17 @@ describe("renderStudioHtml", () => {
         expect(html).not.toContain("__CIRRUS_ADMIN_TOKEN__");
     });
 
+    it("injects the editable flag only when dataEditable is set", () => {
+        expect.assertions(2);
+
+        const editable = renderStudioHtml({ basePath: "/", dataEditable: true, scriptSrc: "/studio.js", styleHref: "/styles.css" });
+        const readonly = renderStudioHtml({ basePath: "/", scriptSrc: "/studio.js", styleHref: "/styles.css" });
+
+        // eslint-disable-next-line no-secrets/no-secrets -- a static JS assignment string, not a credential
+        expect(editable).toContain("window.__CIRRUS_DATA_EDITABLE__=true;");
+        expect(readonly).not.toContain("__CIRRUS_DATA_EDITABLE__");
+    });
+
     it("injects the admin token when provided, escaping `<` for safe inline embedding", () => {
         expect.assertions(2);
 

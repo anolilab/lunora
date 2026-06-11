@@ -84,7 +84,7 @@ const createStudioHandler = (
         const pathname = pathnameOf(request.url ?? "");
 
         // Own the mount and everything under it (`/__cirrus`, `/__cirrus/`,
-        // `/__cirrus/globals`, …); anything else passes through.
+        // `/__cirrus/data`, …); anything else passes through.
         if (pathname !== STUDIO_PATH && !pathname.startsWith(`${STUDIO_PATH}/`)) {
             next();
 
@@ -103,7 +103,7 @@ const createStudioHandler = (
 
         // Static assets are exact paths; every other route under the mount is an
         // SPA route and gets the history fallback (the document) below, so a hard
-        // load of a deep link like `/__cirrus/globals` boots the router there.
+        // load of a deep link like `/__cirrus/data` boots the router there.
         if (pathname === STUDIO_SCRIPT_PATH || pathname === STUDIO_STYLE_PATH) {
             // Re-read the bytes when the built studio files change on disk so a
             // mid-session `@cirrus/studio` rebuild is served without a restart.
@@ -138,6 +138,9 @@ const createStudioHandler = (
             // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime value can be undefined on a mocked server even though the type says string
             adminToken: resolveAdminToken(server.config.root ?? process.cwd()),
             basePath: STUDIO_PATH,
+            // Loopback-only dev route (it 403s on a non-loopback bind), so the
+            // developer owns the data — let them edit rows by default.
+            dataEditable: true,
             scriptSrc: STUDIO_SCRIPT_PATH,
             styleHref: STUDIO_STYLE_PATH,
         });

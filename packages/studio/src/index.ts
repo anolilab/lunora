@@ -103,6 +103,8 @@ export type { SqlEditorPanelProps } from "./sql-editor-panel";
 export { SqlEditorPanel } from "./sql-editor-panel";
 export type { StudioProps, StudioTab } from "./studio";
 export { Studio } from "./studio";
+export type { TableEditorProps } from "./table-editor";
+export { TableEditor } from "./table-editor";
 export { default as STUDIO_ROOT_CLASS } from "./theme-constants";
 export type { FunctionDescriptor, FunctionKind, RunStatus } from "./types";
 export { DEFAULT_AUTO_REFRESH_MS, useAutoRefresh } from "./use-auto-refresh";

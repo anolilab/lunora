@@ -751,7 +751,7 @@ describe("dataBrowser — editable", () => {
         expect(call[1]).toMatchObject({ doc: { text: "patched" }, id: "m2", op: "patch", table: "messages" });
     });
 
-    it("toggling Live subscribes to readTablePage and renders pushed rows", async () => {
+    it("is always live: subscribes to readTablePage on load and renders pushed rows", async () => {
         expect.assertions(2);
 
         const mock = createBrowserClient();
@@ -761,10 +761,8 @@ describe("dataBrowser — editable", () => {
         fireEvent.click(await screen.findByTestId("db-table-messages"));
         await screen.findByTestId("db-page");
 
-        fireEvent.click(screen.getByTestId("db-live"));
-
-        // Live opens both a readTablePage and a listTables subscription; assert
-        // the page one is among them (order isn't contractual).
+        // No Live toggle — loading a page opens both a readTablePage and a listTables
+        // subscription; assert the page one is among them (order isn't contractual).
         const references = mock.subscribe.mock.calls.map((call) => (call[0] as { __cirrusRef: string }).__cirrusRef);
 
         expect(references).toContain(ADMIN_FUNCTIONS.readTablePage);
@@ -785,16 +783,15 @@ describe("dataBrowser — editable", () => {
 
         fireEvent.click(await screen.findByTestId("db-table-messages"));
         await screen.findByTestId("db-page");
-        fireEvent.click(screen.getByTestId("db-live"));
 
-        const callsAfterToggle = mock.subscribe.mock.calls.length;
+        const callsAfterLoad = mock.subscribe.mock.calls.length;
 
         // Typing into the shard-key input changes `shardKey` state but not the
         // loaded page descriptor, so the live channel must NOT tear down and
         // re-subscribe per keystroke to shards that were never loaded.
         fireEvent.change(screen.getByTestId("db-shard-input"), { target: { value: "tenant-7" } });
 
-        expect(mock.subscribe).toHaveBeenCalledTimes(callsAfterToggle);
+        expect(mock.subscribe).toHaveBeenCalledTimes(callsAfterLoad);
     });
 
     it("live pushes a refreshed table list (new tables appear without a reload)", async () => {
@@ -806,7 +803,6 @@ describe("dataBrowser — editable", () => {
 
         fireEvent.click(await screen.findByTestId("db-table-messages"));
         await screen.findByTestId("db-page");
-        fireEvent.click(screen.getByTestId("db-live"));
 
         // A live listTables push adds a table the initial load didn't include.
         act(() => {

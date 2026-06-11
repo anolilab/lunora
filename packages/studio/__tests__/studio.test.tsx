@@ -110,4 +110,31 @@ describe("studio", () => {
 
         expect(secondaryNav.hasAttribute("hidden")).toBe(false);
     });
+
+    it("wires the secondary nav as an ARIA tablist and rolls focus with arrow keys", async () => {
+        expect.assertions(5);
+
+        render(renderStudio(createClient()));
+
+        // Open a domain with several sub-pages (logs owns logs/audit/schedule/realtime).
+        fireEvent.click(await screen.findByTestId("dash-rail-logs"));
+
+        const logsTab = await screen.findByTestId("dash-tab-logs");
+        const auditTab = screen.getByTestId("dash-tab-audit");
+
+        // The active tab controls the panel, which is labelled back by that tab.
+        expect(logsTab.getAttribute("aria-controls")).toBe("dash-panel");
+        expect(screen.getByTestId("dash-panel").getAttribute("aria-labelledby")).toBe("dash-tab-logs");
+
+        // Roving tabindex: only the selected tab sits in the tab order.
+        expect(logsTab.tabIndex).toBe(0);
+        expect(auditTab.tabIndex).toBe(-1);
+
+        // ArrowDown from the focused tab moves focus to the next one (without navigating).
+        logsTab.focus();
+        fireEvent.keyDown(logsTab, { key: "ArrowDown" });
+
+        // eslint-disable-next-line testing-library/no-node-access -- no jest-dom toHaveFocus matcher is configured; activeElement is the only way to assert the roving-tabindex focus move.
+        expect(document.activeElement).toBe(auditTab);
+    });
 });

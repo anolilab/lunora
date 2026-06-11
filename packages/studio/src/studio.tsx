@@ -20,13 +20,11 @@ import type { CommandItem } from "./command-palette";
 import { CommandPalette } from "./command-palette";
 import { Skeleton } from "./components/ui/skeleton";
 import DashboardsPanel from "./dashboards-panel";
-import { DataBrowser } from "./data-browser";
 import { ErrorBoundary } from "./error-boundary";
 import { ExportImportPanel } from "./export-import";
 import { FileBrowser } from "./file-browser";
 import { FunctionRunner } from "./function-runner";
 import { FunctionStatsPanel } from "./function-stats";
-import { GlobalDataBrowser } from "./global-data-browser";
 import { HealthPanel } from "./health-panel";
 import { HomePanel } from "./home-panel";
 import { useT } from "./i18n-context";
@@ -46,6 +44,7 @@ import SecurityAdvisorPanel from "./security-advisor-panel";
 import { SettingsPanel } from "./settings-panel";
 import { SqlEditorPanel } from "./sql-editor-panel";
 import SubscriptionsPanel from "./subscriptions-panel";
+import { TableEditor } from "./table-editor";
 import type { FunctionDescriptor } from "./types";
 import { UsersPanel } from "./users-panel";
 
@@ -58,7 +57,6 @@ type StudioTab =
     | "export"
     | "files"
     | "functions"
-    | "globals"
     | "health"
     | "home"
     | "insights"
@@ -87,7 +85,7 @@ interface StudioProps {
 
     /**
      * Make the data tab editable (insert/edit/delete rows). Off by default so
-     * the studio is read-only unless the host opts in; see {@link DataBrowser}.
+     * the studio is read-only unless the host opts in; see {@link TableEditor}.
      */
     readonly dataEditable?: boolean;
 
@@ -163,7 +161,6 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
     export: <path d="M12 3v11m0 0 4-4m-4 4-4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />,
     files: <path d="M4 7a2 2 0 0 1 2-2h3l2 2.5h7a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7Z" />,
     functions: <path d="m9 8-4 4 4 4m6-8 4 4-4 4" />,
-    globals: <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm0 0c2.5-2 3.8-5.3 3.8-9S14.5 5 12 3M12 21c-2.5-2-3.8-5.3-3.8-9S9.5 5 12 3M3.5 9h17M3.5 15h17" />,
     health: <path d="M3 12h4l2 6 4-14 2 8h6" />,
     home: <path d="M3 11.5 12 4l9 7.5M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9" />,
     insights: <path d="M12 3a6 6 0 0 0-3.6 10.8c.5.4.8.9.9 1.5l.2 1.2h5l.2-1.2c.1-.6.4-1.1.9-1.5A6 6 0 0 0 12 3ZM9.5 20.5h5M10 18h4" />,
@@ -196,7 +193,7 @@ type NavGroup = { readonly key: NavGroupKey; readonly tabs: ReadonlyArray<Studio
  */
 const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
     { key: "home", tabs: ["home"] },
-    { key: "tableEditor", tabs: ["data", "globals"] },
+    { key: "tableEditor", tabs: ["data"] },
     { key: "sql", tabs: ["sql", "functions", "api"] },
     { key: "database", tabs: ["schema", "migrations", "export", "pitr"] },
     { key: "auth", tabs: ["users", "organizations"] },
@@ -245,7 +242,6 @@ const TabIcon = ({ tab }: { readonly tab: StudioTab }): ReactElement => (
 const TABS = [
     "home",
     "data",
-    "globals",
     "sql",
     "functions",
     "api",
@@ -273,7 +269,7 @@ const TABS = [
  * an internally-scrolling grid), rather than the default top-aligned, page-scrolled
  * content. The Table editor and SQL editor render as full-height database consoles.
  */
-const FULL_HEIGHT_TABS = new Set<StudioTab>(["api", "data", "globals", "sql"]);
+const FULL_HEIGHT_TABS = new Set<StudioTab>(["api", "data", "sql"]);
 
 /** Resolve the active tab from a router pathname (`/logs` → `logs`); unknown paths fall back to `home`. */
 const tabFromPathname = (pathname: string): StudioTab => {
@@ -308,7 +304,6 @@ const StudioLayout = (): ReactElement => {
             export: t("Export / Import"),
             files: t("Files"),
             functions: t("Functions"),
-            globals: t("Global Tables"),
             health: t("Health"),
             home: t("Home"),
             insights: t("Performance"),
@@ -348,11 +343,10 @@ const StudioLayout = (): ReactElement => {
             api: t("Interactive OpenAPI reference and copy-paste snippets for your functions."),
             audit: t("A durable log of admin state-changing operations."),
             dashboards: t("Chart widgets backed by saved read-only SQL queries."),
-            data: t("Browse and edit rows in your shard tables."),
+            data: t("Browse and edit rows across your shard and global tables."),
             export: t("Export a shard to NDJSON, or import rows from it."),
             files: t("Browse objects in your R2 storage buckets."),
             functions: t("Run registered queries, mutations, and actions."),
-            globals: t("Read-only view of your global D1 tables."),
             health: t("At-a-glance connection, error, and shard signals."),
             home: t("Connection, health, and advisor summary for your deployment."),
             insights: t("Surface slow functions, error spikes, and cache problems."),
@@ -420,6 +414,52 @@ const StudioLayout = (): ReactElement => {
         setNavCollapsed((collapsed) => !collapsed);
     }, []);
 
+    // Roving-tabindex keyboard support for the secondary-nav tablist (ARIA tabs
+    // pattern, vertical + manual activation): Up/Down move focus between the
+    // sub-page tabs, Home/End jump to the ends. Only the selected tab sits in the
+    // tab order (`tabIndex` below); Enter/Space (native button) then activates the
+    // focused tab, which navigates. Focus moves without changing the route, so it
+    // never fires a navigation the user didn't ask for. The handler lives on each
+    // tab (already focusable) rather than the tablist container, so the container
+    // itself never becomes a tab stop.
+    const onTabKeyDown = useCallback((event: React.KeyboardEvent<HTMLButtonElement>): void => {
+        if (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Home" && event.key !== "End") {
+            return;
+        }
+
+        const list = event.currentTarget.parentElement;
+
+        if (list === null) {
+            return;
+        }
+
+        const buttons = [...list.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+        const activeIndex = buttons.indexOf(event.currentTarget);
+        let nextIndex: number;
+
+        switch (event.key) {
+            case "ArrowDown": {
+                nextIndex = (activeIndex + 1) % buttons.length;
+                break;
+            }
+            case "ArrowUp": {
+                nextIndex = (activeIndex - 1 + buttons.length) % buttons.length;
+                break;
+            }
+            case "End": {
+                nextIndex = buttons.length - 1;
+                break;
+            }
+            default: {
+                nextIndex = 0;
+                break;
+            }
+        }
+
+        event.preventDefault();
+        buttons[nextIndex]?.focus();
+    }, []);
+
     return (
         <div
             className={cn("grid min-h-0 flex-1", navCollapsed ? "grid-cols-[3rem_minmax(0,1fr)]" : "grid-cols-[3rem_13.5rem_minmax(0,1fr)]")}
@@ -478,27 +518,34 @@ const StudioLayout = (): ReactElement => {
                 </button>
             </nav>
 
-            {/* Secondary nav — the active area's title + its tabs. Hidden when collapsed. */}
+            {/* Secondary nav — the active area's title + its tabs. Hidden when collapsed.
+                Only the inner list carries `role="tablist"` (a tablist may contain
+                only tabs, so the heading stays outside it); the list is labelled by
+                that heading and the tabs control the shared panel region. */}
             <div
-                aria-label={t("Studio sections")}
                 className={cn("flex flex-col overflow-y-auto border-e border-border bg-sidebar", navCollapsed && "hidden")}
                 data-testid="dash-tabs"
                 hidden={navCollapsed}
-                role="tablist"
             >
                 <header className="flex h-12 shrink-0 items-center px-4">
-                    <h2 className="text-[15px] font-semibold tracking-tight text-foreground">{groupLabel[activeGroup.key]}</h2>
+                    <h2 className="text-[15px] font-semibold tracking-tight text-foreground" id="dash-tabs-heading">
+                        {groupLabel[activeGroup.key]}
+                    </h2>
                 </header>
-                <div className="flex flex-col gap-px px-2 pb-3">
+                <div aria-labelledby="dash-tabs-heading" aria-orientation="vertical" className="flex flex-col gap-px px-2 pb-3" role="tablist">
                     {activeGroup.tabs.map((tab) => (
                         <button
+                            aria-controls="dash-panel"
                             aria-selected={current === tab}
                             className="relative flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-start text-[13px] text-muted-foreground outline-none transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:bg-sidebar-accent focus-visible:text-sidebar-accent-foreground aria-selected:bg-sidebar-accent aria-selected:font-medium aria-selected:text-sidebar-accent-foreground [&_svg]:opacity-70 aria-selected:[&_svg]:opacity-100"
                             data-tab={tab}
                             data-testid={`dash-tab-${tab}`}
+                            id={`dash-tab-${tab}`}
                             key={tab}
                             onClick={selectTab}
+                            onKeyDown={onTabKeyDown}
                             role="tab"
+                            tabIndex={current === tab ? 0 : -1}
                             type="button"
                         >
                             <TabIcon tab={tab} />
@@ -508,7 +555,13 @@ const StudioLayout = (): ReactElement => {
                 </div>
             </div>
 
-            <div className="flex min-w-0 flex-col overflow-hidden bg-background" data-testid="dash-panel" role="tabpanel">
+            <div
+                aria-labelledby={`dash-tab-${current}`}
+                className="flex min-w-0 flex-col overflow-hidden bg-background"
+                data-testid="dash-panel"
+                id="dash-panel"
+                role="tabpanel"
+            >
                 {/* Page header per section — a Studio-style title bar. */}
                 <header className="flex shrink-0 flex-col gap-0.5 border-b border-border px-6 py-4">
                     <h1 className="text-lg font-semibold tracking-tight text-foreground">{tabLabel[current]}</h1>
@@ -599,7 +652,7 @@ const buildRouter = ({
         api: <ApiTab functions={functions} initialShardKey={initialShardKey} openApiSpec={openApiSpec} openRpcSpec={openRpcSpec} />,
         audit: <AuditPanel initialShardKey={initialShardKey} />,
         dashboards: <DashboardsPanel initialShardKey={initialShardKey} />,
-        data: <DataBrowser editable={dataEditable} initialShardKey={initialShardKey} />,
+        data: <TableEditor editable={dataEditable} initialShardKey={initialShardKey} />,
         export: <ExportImportPanel initialShardKey={initialShardKey} />,
         files: <FileBrowser />,
         functions: (
@@ -608,7 +661,6 @@ const buildRouter = ({
                 <FunctionRunner functions={functions} />
             </div>
         ),
-        globals: <GlobalDataBrowser />,
         health: <HealthPanel initialShardKey={initialShardKey} />,
         home: <HomePanel initialShardKey={initialShardKey} />,
         insights: <InsightsPanel initialShardKey={initialShardKey} />,

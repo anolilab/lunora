@@ -15,14 +15,20 @@ const forAttribute = (value: string): string => value.replaceAll("&", "&amp;").r
  * never through a bundler/transform — so the studio stays a static tool,
  * decoupled from the host project's build. A small inline script publishes the
  * per-server config on `globalThis` before the bundle loads: the mount basepath
- * (so the router stays under its mount) and, when present, the admin token (so
- * the studio auto-authenticates instead of prompting).
+ * (so the router stays under its mount), the admin token when present (so the
+ * studio auto-authenticates instead of prompting), and an editable flag when the
+ * host is a loopback dev server (so the data browser allows edits).
  */
 const renderStudioHtml = (config: StudioHtmlConfig): string => {
     const settings = [`window.__CIRRUS_BASE_PATH__=${forInlineScript(config.basePath)};`];
 
     if (config.adminToken !== undefined && config.adminToken !== "") {
         settings.push(`window.__CIRRUS_ADMIN_TOKEN__=${forInlineScript(config.adminToken)};`);
+    }
+
+    if (config.dataEditable === true) {
+        // eslint-disable-next-line no-secrets/no-secrets -- a static JS assignment string, not a credential
+        settings.push("window.__CIRRUS_DATA_EDITABLE__=true;");
     }
 
     return `<!doctype html>

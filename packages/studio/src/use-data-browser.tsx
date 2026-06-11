@@ -14,7 +14,6 @@ import type { StagedChange, StagedEditsModel } from "./staged-edits";
 import { useStagedEdits } from "./staged-edits";
 import useDebounced from "./use-debounced";
 import useLiveAdmin from "./use-live-admin";
-import { useLiveToggle } from "./use-live-toggle";
 
 /**
  * Convert TanStack's sorting state into the `readTablePage` `orderBy` arg. The
@@ -100,7 +99,6 @@ interface DataBrowserModel {
     hasNext: boolean;
     hasPrevious: boolean;
     jumpToPage: (page: number) => void;
-    live: boolean;
     liveError: string | undefined;
     loadTables: () => void;
     navigateToRef: (target: string, id: string) => void;
@@ -115,7 +113,6 @@ interface DataBrowserModel {
     pageSize: number;
     rangeEnd: number;
     rangeStart: number;
-    refreshPage: () => void;
     saveEdit: () => void;
     selectedTable: null | string;
     selectTable: (table: string) => void;
@@ -131,7 +128,6 @@ interface DataBrowserModel {
     table: DataBrowserTableModel;
     tables: TableInfo[] | null;
     tablesError: null | string;
-    toggleLive: () => void;
     total: number;
     viewMode: "json" | "table";
     writeError: null | string;
@@ -145,7 +141,19 @@ interface DataBrowserModel {
  * from the component so behavior, fetch sequencing, and effect dependencies are
  * unchanged — the component is now just markup wiring.
  */
-const useDataBrowser = ({ initialShardKey, pageSize: initialPageSize }: { initialShardKey: string | undefined; pageSize: number }): DataBrowserModel => {
+const useDataBrowser = ({
+    initialShardKey,
+    onSelectTable,
+    pageSize: initialPageSize,
+    tableParam,
+}: {
+    initialShardKey: string | undefined;
+    /** Called whenever the selected table changes, so the host can mirror it to the URL. */
+    onSelectTable: ((table: string) => void) | undefined;
+    pageSize: number;
+    /** The table named in the URL — drives the selection so browser back/forward works. */
+    tableParam: string | undefined;
+}): DataBrowserModel => {
     const client = useCirrus();
 
     // Rows-per-page is user-adjustable (the pagination footer's selector); the
@@ -205,7 +213,12 @@ const useDataBrowser = ({ initialShardKey, pageSize: initialPageSize }: { initia
     const [editingCell, setEditingCell] = useState<null | { column: string; rowId: string }>(null);
     const [committing, setCommitting] = useState<boolean>(false);
 
-    const { live, liveError, setLiveError, toggle } = useLiveToggle();
+    // The data browser is always live (Convex-style): the readTablePage + listTables
+    // admin subscriptions stay open while a page is loaded, so writes stream in with
+    // no manual Refresh/Live toggle. `liveError` surfaces a rejected subscription
+    // (e.g. the client carries no admin `wsToken`); the initial one-shot fetch still
+    // populated the grid, so data stays visible — it just stops updating.
+    const [liveError, setLiveError] = useState<string | undefined>(undefined);
 
     // The page descriptor the live channel tracks. Set only when a page actually
     // loads (in fetchPage), so the live subscription follows what's displayed —
@@ -279,11 +292,11 @@ const useDataBrowser = ({ initialShardKey, pageSize: initialPageSize }: { initia
         fireAndForget(fetchTables(debouncedShard));
     }, [fetchTables, debouncedShard]);
 
-    // Live channel: while toggled on, the server re-pushes the loaded window
-    // whenever its table is written (dependency-scoped to that table). Keyed on
-    // the `loaded` descriptor so it tracks exactly the displayed shard/table/page
-    // — never a half-typed shard key or a table switch whose offset reset is
-    // still pending — and only runs once a page has actually loaded.
+    // Live channel: the server re-pushes the loaded window whenever its table is
+    // written (dependency-scoped to that table). Keyed on the `loaded` descriptor
+    // so it tracks exactly the displayed shard/table/page — never a half-typed shard
+    // key or a table switch whose offset reset is still pending — and runs as soon
+    // as a page has loaded (always-on; there is no Live toggle to gate it).
     useLiveAdmin(
         ADMIN_FUNCTIONS.readTablePage,
         {
@@ -300,7 +313,7 @@ const useDataBrowser = ({ initialShardKey, pageSize: initialPageSize }: { initia
             setLiveError(undefined);
             setPage(result as TablePage);
         },
-        live && loaded !== null,
+        loaded !== null,
         setLiveError,
     );
 
@@ -317,9 +330,14 @@ const useDataBrowser = ({ initialShardKey, pageSize: initialPageSize }: { initia
             setLiveError(undefined);
             setTables(result as TableInfo[]);
         },
-        live && loaded !== null,
+        loaded !== null,
         setLiveError,
     );
+
+    // The table last applied to the selection, mirrored in a ref so the URL-reconcile
+    // effect below can tell its own optimistic selections (which set this) apart from
+    // an external change (browser back/forward), and only re-select for the latter.
+    const appliedTableRef = useRef<null | string>(null);
 
     const selectTable = useCallback(
         (table: string): void => {
@@ -331,9 +349,12 @@ const useDataBrowser = ({ initialShardKey, pageSize: initialPageSize }: { initia
             stagedEdits.clear();
             setEditingCell(null);
             setSelectedTable(table);
+            appliedTableRef.current = table;
             fireAndForget(fetchPage(shardKey, table, 0, ""));
+            // Mirror the selection to the URL so it's shareable and back/forward works.
+            onSelectTable?.(table);
         },
-        [fetchPage, shardKey, stagedEdits],
+        [fetchPage, onSelectTable, shardKey, stagedEdits],
     );
 
     // Follow a foreign-key cell: switch to the target table and search for the
@@ -345,13 +366,40 @@ const useDataBrowser = ({ initialShardKey, pageSize: initialPageSize }: { initia
             setFilters([]);
             filtersRef.current = [];
             setSelectedTable(targetTable);
+            appliedTableRef.current = targetTable;
             setFilter(id);
             // Seed the page immediately with the search applied; the debounced
             // effect would otherwise fire a second time with the same value.
             fireAndForget(fetchPage(shardKey, targetTable, 0, id));
+            onSelectTable?.(targetTable);
         },
-        [fetchPage, shardKey],
+        [fetchPage, onSelectTable, shardKey],
     );
+
+    // Reconcile the URL's table into the selection. Fires on first load (deep link)
+    // and on browser back/forward; an in-app selection already set `appliedTableRef`
+    // to this value, so those are skipped and never double-fetch. The actual select
+    // is deferred to a microtask so its state resets don't run synchronously inside
+    // the effect, and `appliedTableRef` is claimed up front to coalesce repeat fires.
+    //
+    // NB: `GlobalDataBrowser` has the structurally identical twin of this effect.
+    // Kept inline rather than shared because each browser's `selectTable` differs —
+    // this one also resets sort/filter/staged state and is shard-keyed; only the
+    // ~6-line reconcile wiring would be common.
+    useEffect(() => {
+        /* eslint-disable react-you-might-not-need-an-effect/no-event-handler -- URL → selection sync: open the table named in the URL (deep link / browser back-forward). There is no user event to hook into; the ref guard + microtask keep it from re-firing or looping. */
+        if (tableParam === undefined || tableParam === "" || tableParam === appliedTableRef.current) {
+            return;
+        }
+
+        appliedTableRef.current = tableParam;
+        const target = tableParam;
+
+        queueMicrotask(() => {
+            selectTable(target);
+        });
+        /* eslint-enable react-you-might-not-need-an-effect/no-event-handler */
+    }, [tableParam, selectTable]);
 
     const goToPage = useCallback(
         (nextOffset: number): void => {
@@ -574,10 +622,6 @@ const useDataBrowser = ({ initialShardKey, pageSize: initialPageSize }: { initia
         setViewMode("json");
     }, []);
 
-    const refreshPage = useCallback((): void => {
-        goToPage(offset);
-    }, [goToPage, offset]);
-
     const bulkDelete = useCallback((): void => {
         fireAndForget(drainBulk(DELETE_ROWS, { filters: toFilterClauses(filtersRef.current), search, table: selectedTable }));
     }, [drainBulk, search, selectedTable]);
@@ -718,7 +762,6 @@ const useDataBrowser = ({ initialShardKey, pageSize: initialPageSize }: { initia
         hasNext,
         hasPrevious,
         jumpToPage,
-        live,
         liveError,
         loadTables,
         navigateToRef,
@@ -733,7 +776,6 @@ const useDataBrowser = ({ initialShardKey, pageSize: initialPageSize }: { initia
         pageSize,
         rangeEnd,
         rangeStart,
-        refreshPage,
         saveEdit,
         selectedTable,
         selectTable,
@@ -749,7 +791,6 @@ const useDataBrowser = ({ initialShardKey, pageSize: initialPageSize }: { initia
         table,
         tables,
         tablesError,
-        toggleLive: toggle,
         total,
         viewMode,
         writeError,

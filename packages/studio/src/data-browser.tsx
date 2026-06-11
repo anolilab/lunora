@@ -1,4 +1,4 @@
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { useCallback, useMemo, useState } from "react";
 
 import type { TableInfo } from "./admin";
@@ -10,12 +10,11 @@ import type { EditableFilter } from "./data-filters";
 import { DataFilters } from "./data-filters";
 import { GridPagination, TableListSidebar } from "./data-grid";
 import { CellDetailDialog, GridActionsBar } from "./grid-features";
-import { LiveToggle } from "./live-toggle";
+import { useT } from "./i18n-context";
 import { RowDetailDrawer } from "./row-detail";
 import RowFormEditor from "./row-form";
 import { ShardInput } from "./shard-input";
 import { StagedDiffPanel } from "./staged-edits";
-import { StorageTierBadge } from "./storage-tier";
 import { useDataBrowser } from "./use-data-browser";
 
 interface DataBrowserProps {
@@ -25,10 +24,45 @@ interface DataBrowserProps {
      * default — the browser is read-only unless the host opts in.
      */
     readonly editable?: boolean;
+
+    /**
+     * Names of the `.global()` (D1-backed) tables. A `v.id` ref cell whose target
+     * is one of these is followed cross-tier via `onNavigateToGlobal` instead of
+     * being read from this shard (where it doesn't exist). Supplied by the Table
+     * editor; defaults to none when the browser is used standalone.
+     */
+    readonly globalTableNames?: ReadonlySet<string>;
     /** Shard key the browser targets on first load. Defaults to the root shard. */
     readonly initialShardKey?: string;
+
+    /**
+     * Follow a `v.id` ref whose target is a global table — the Table editor switches
+     * to the global tier and opens that table. When omitted (standalone use), a ref
+     * to a global table falls through to the in-shard read (and surfaces its error).
+     */
+    readonly onNavigateToGlobal?: (table: string, id: string) => void;
+
+    /**
+     * Called whenever the open table changes, so the host can mirror it to the URL
+     * (the Table editor pushes `?table=…`). Omitted in standalone use.
+     */
+    readonly onSelectTable?: (table: string) => void;
     /** Rows requested per page. Clamped server-side to `[1, 500]`. */
     readonly pageSize?: number;
+
+    /**
+     * The schema/source selector rendered at the top of the table-list sidebar —
+     * the Table editor's `schema public ▾` switch. Supplied when this browser is
+     * composed into the Table editor; omitted when it's used alone.
+     */
+    readonly schemaSwitch?: ReactNode;
+
+    /**
+     * The table named in the URL. Drives the selection — a deep link or browser
+     * back/forward to a different `?table=…` re-opens that table. Supplied by the
+     * Table editor; omitted in standalone use (selection stays purely in-component).
+     */
+    readonly tableParam?: string;
 }
 
 const DEFAULT_PAGE_SIZE = 50;
@@ -41,39 +75,47 @@ const CONTROL_BTN =
     "inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-50 aria-pressed:bg-accent aria-pressed:text-accent-foreground";
 
 /**
- * The table-list sidebar header: the storage-tier badge and the shard-key picker,
- * stacked for the narrow full-height rail. The table list auto-loads for the
- * (debounced) shard key — no manual "Load tables" button — with the sidebar's
- * refresh icon for an on-demand re-fetch. Presentational: the parent owns the
- * shard-key state.
+ * The table-list sidebar header: the schema/source switch (when the browser is
+ * composed into the Table editor) and the shard-key picker, stacked for the
+ * narrow full-height rail. The table list auto-loads for the (debounced) shard
+ * key — no manual "Load tables" button — with the sidebar's refresh icon for an
+ * on-demand re-fetch. Presentational: the parent owns the shard-key state.
  */
-const DataBrowserSidebarHeader = ({ onShardChange, shardKey }: { onShardChange: (value: string) => void; shardKey: string }): ReactElement => (
-    <div className="flex shrink-0 flex-col items-start gap-2 border-b border-border p-3">
-        <StorageTierBadge tier="shard" />
+const DataBrowserSidebarHeader = ({
+    onShardChange,
+    schemaSwitch,
+    shardKey,
+}: {
+    onShardChange: (value: string) => void;
+    schemaSwitch?: ReactNode;
+    shardKey: string;
+}): ReactElement => (
+    <div className="flex shrink-0 flex-col items-stretch gap-2 border-b border-border p-3">
+        {schemaSwitch}
         <ShardInput onChange={onShardChange} testId="db-shard-input" value={shardKey} />
     </div>
 );
 
 /**
- * The page's view toggle / refresh / live / search / add-row controls. All state
- * lives in the parent; this component is purely the control bar markup.
+ * The page's view toggle / live status / search / add-row controls. All state
+ * lives in the parent; this component is purely the control bar markup. The grid
+ * is always live (Convex-style) — there is no Refresh or Live toggle; a passive
+ * indicator shows the stream is healthy, and flips to "Live unavailable" only when
+ * the admin subscription is rejected (the grid still shows its last-fetched rows).
  */
 const DataBrowserViewControls = ({
     columns,
     editable,
     filter,
     filters,
-    live,
     liveError,
     onAddRow,
     onBulkDelete,
     onClearTable,
     onFilterChange,
     onFiltersChange,
-    onRefresh,
     onShowJson,
     onShowTable,
-    onToggleLive,
     total,
     viewMode,
 }: {
@@ -81,51 +123,57 @@ const DataBrowserViewControls = ({
     editable: boolean;
     filter: string;
     filters: EditableFilter[];
-    live: boolean;
     liveError: string | undefined;
     onAddRow: () => void;
     onBulkDelete: () => void;
     onClearTable: () => void;
     onFilterChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
     onFiltersChange: (filters: EditableFilter[]) => void;
-    onRefresh: () => void;
     onShowJson: () => void;
     onShowTable: () => void;
-    onToggleLive: () => void;
     total: number;
     viewMode: "json" | "table";
-}): ReactElement => (
-    <div className="flex flex-col gap-2" data-testid="db-view-toggle">
-        <div className="flex flex-wrap items-center gap-1.5">
-            <button aria-pressed={viewMode === "table"} className={CONTROL_BTN} data-testid="db-view-table" onClick={onShowTable} type="button">
-                Table
-            </button>
-            <button aria-pressed={viewMode === "json"} className={CONTROL_BTN} data-testid="db-view-json" onClick={onShowJson} type="button">
-                JSON
-            </button>
-            <button className={CONTROL_BTN} data-testid="db-refresh" onClick={onRefresh} type="button">
-                Refresh
-            </button>
-            <LiveToggle live={live} liveError={liveError} onToggle={onToggleLive} prefix="db" />
-            {editable && (
-                <button className={CONTROL_BTN} data-testid="db-add-row" onClick={onAddRow} type="button">
-                    Add row
+}): ReactElement => {
+    const t = useT();
+
+    return (
+        <div className="flex flex-col gap-2" data-testid="db-view-toggle">
+            <div className="flex flex-wrap items-center gap-1.5">
+                <button aria-pressed={viewMode === "table"} className={CONTROL_BTN} data-testid="db-view-table" onClick={onShowTable} type="button">
+                    Table
                 </button>
-            )}
-            {editable && total > 0 && (filter !== "" || filters.length > 0) && (
-                <ConfirmButton confirmLabel={`Delete ${total.toString()} matching?`} onConfirm={onBulkDelete} testId="db-bulk-delete">
-                    {`Delete ${total.toString()} matching`}
-                </ConfirmButton>
-            )}
-            {editable && total > 0 && filter === "" && filters.length === 0 && (
-                <ConfirmButton confirmLabel={`Clear all ${total.toString()} rows?`} onConfirm={onClearTable} testId="db-clear-table">
-                    {`Clear table (${total.toString()})`}
-                </ConfirmButton>
-            )}
+                <button aria-pressed={viewMode === "json"} className={CONTROL_BTN} data-testid="db-view-json" onClick={onShowJson} type="button">
+                    JSON
+                </button>
+                <span
+                    className="inline-flex items-center gap-1.5 px-1 text-xs font-medium text-muted-foreground"
+                    data-testid="db-live-indicator"
+                    role="status"
+                    title={liveError === undefined ? t("Live — changes stream in automatically") : t("Live unavailable: {liveError}", { liveError })}
+                >
+                    <span aria-hidden="true" className={`size-1.5 rounded-full ${liveError === undefined ? "bg-emerald-500" : "bg-muted-foreground/50"}`} />
+                    {liveError === undefined ? t("Live") : t("Live unavailable")}
+                </span>
+                {editable && (
+                    <button className={CONTROL_BTN} data-testid="db-add-row" onClick={onAddRow} type="button">
+                        Add row
+                    </button>
+                )}
+                {editable && total > 0 && (filter !== "" || filters.length > 0) && (
+                    <ConfirmButton confirmLabel={`Delete ${total.toString()} matching?`} onConfirm={onBulkDelete} testId="db-bulk-delete">
+                        {`Delete ${total.toString()} matching`}
+                    </ConfirmButton>
+                )}
+                {editable && total > 0 && filter === "" && filters.length === 0 && (
+                    <ConfirmButton confirmLabel={`Clear all ${total.toString()} rows?`} onConfirm={onClearTable} testId="db-clear-table">
+                        {`Clear table (${total.toString()})`}
+                    </ConfirmButton>
+                )}
+            </div>
+            <DataFilters columns={columns} filters={filters} onFiltersChange={onFiltersChange} onSearchChange={onFilterChange} search={filter} />
         </div>
-        <DataFilters columns={columns} filters={filters} onFiltersChange={onFiltersChange} onSearchChange={onFilterChange} search={filter} />
-    </div>
-);
+    );
+};
 
 /**
  * Read-only data browser for a single shard's SQLite database. Lists the user
@@ -144,7 +192,16 @@ const DataBrowserViewControls = ({
  * touches the server — pagination still flows through `readTablePage`. All of
  * that state lives in {@link useDataBrowser}; this component is just the markup.
  */
-export const DataBrowser = ({ editable = false, initialShardKey, pageSize: initialPageSize = DEFAULT_PAGE_SIZE }: DataBrowserProps): ReactElement => {
+export const DataBrowser = ({
+    editable = false,
+    globalTableNames,
+    initialShardKey,
+    onNavigateToGlobal,
+    onSelectTable,
+    pageSize: initialPageSize = DEFAULT_PAGE_SIZE,
+    schemaSwitch,
+    tableParam,
+}: DataBrowserProps): ReactElement => {
     const {
         addRow,
         bulkDelete,
@@ -165,7 +222,6 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize: initi
         hasNext,
         hasPrevious,
         jumpToPage,
-        live,
         liveError,
         loadTables,
         navigateToRef,
@@ -180,7 +236,6 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize: initi
         pageSize,
         rangeEnd,
         rangeStart,
-        refreshPage,
         saveEdit,
         selectedTable,
         selectTable,
@@ -196,11 +251,10 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize: initi
         table,
         tables,
         tablesError,
-        toggleLive,
         total,
         viewMode,
         writeError,
-    } = useDataBrowser({ initialShardKey, pageSize: initialPageSize });
+    } = useDataBrowser({ initialShardKey, onSelectTable, pageSize: initialPageSize, tableParam });
 
     // The row whose full document the detail drawer is showing, if any. Pure
     // view state — kept out of the data hook since it touches no fetch logic.
@@ -219,6 +273,22 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize: initi
         setExpandedCell(null);
     }, []);
 
+    // Follow a `v.id` ref cell. Targets in another storage tier (a `.global()` D1
+    // table) can't be read from this shard, so route those to the global tier via
+    // `onNavigateToGlobal`; same-tier (shard) targets use the in-shard navigation.
+    const handleNavigateRef = useCallback(
+        (target: string, id: string): void => {
+            if (onNavigateToGlobal !== undefined && globalTableNames?.has(target) === true) {
+                onNavigateToGlobal(target, id);
+
+                return;
+            }
+
+            navigateToRef(target, id);
+        },
+        [globalTableNames, navigateToRef, onNavigateToGlobal],
+    );
+
     // The inline-edit context passed down to every grid cell.
     const edit = useMemo<GridEdit>(() => {
         return {
@@ -227,18 +297,18 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize: initi
             editableColumn,
             editingCell,
             onExpandCell,
-            onNavigateRef: navigateToRef,
+            onNavigateRef: handleNavigateRef,
             refs: page?.refs,
             stage,
             stagedValue,
             startEdit: startCellEdit,
         };
-    }, [cancelCellEdit, editable, editableColumn, editingCell, onExpandCell, navigateToRef, page?.refs, stage, stagedValue, startCellEdit]);
+    }, [cancelCellEdit, editable, editableColumn, editingCell, onExpandCell, handleNavigateRef, page?.refs, stage, stagedValue, startCellEdit]);
 
     return (
         <div className="flex h-full min-w-0" data-testid="cirrus-data-browser">
             <TableListSidebar
-                header={<DataBrowserSidebarHeader onShardChange={setShardKey} shardKey={shardKey} />}
+                header={<DataBrowserSidebarHeader onShardChange={setShardKey} schemaSwitch={schemaSwitch} shardKey={shardKey} />}
                 onReload={loadTables}
                 onSelect={selectTable}
                 prefix="db"
@@ -273,17 +343,14 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize: initi
                                 editable={editable}
                                 filter={filter}
                                 filters={filters}
-                                live={live}
                                 liveError={liveError}
                                 onAddRow={addRow}
                                 onBulkDelete={bulkDelete}
                                 onClearTable={clearTable}
                                 onFilterChange={onFilterChange}
                                 onFiltersChange={onFiltersChange}
-                                onRefresh={refreshPage}
                                 onShowJson={showJson}
                                 onShowTable={showTable}
-                                onToggleLive={toggleLive}
                                 total={total}
                                 viewMode={viewMode}
                             />
@@ -385,7 +452,7 @@ export const DataBrowser = ({ editable = false, initialShardKey, pageSize: initi
             </div>
 
             {inspecting !== null && page !== null && (
-                <RowDetailDrawer columns={page.columns} onClose={closeInspect} onNavigate={navigateToRef} refs={page.refs} row={inspecting} />
+                <RowDetailDrawer columns={page.columns} onClose={closeInspect} onNavigate={handleNavigateRef} refs={page.refs} row={inspecting} />
             )}
 
             {expandedCell !== null && <CellDetailDialog column={expandedCell.column} onClose={closeExpandedCell} value={expandedCell.value} />}
