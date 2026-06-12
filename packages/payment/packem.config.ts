@@ -6,7 +6,7 @@ import transformer from "@visulima/packem/transformer/esbuild";
 export default defineConfig({
     runtime: "node",
     failOnWarn: false,
-    externals: [/^@cirrus\//, /^stripe($|\/)/],
+    externals: [/^@cirrus\//, /^dinero\.js($|\/)/, /^stripe($|\/)/],
     rollup: {
         dts: {
             oxc: true,

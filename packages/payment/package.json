@@ -58,7 +58,8 @@
     },
     "dependencies": {
         "@cirrus/server": "workspace:*",
-        "@cirrus/values": "workspace:*"
+        "@cirrus/values": "workspace:*",
+        "dinero.js": "2.0.2"
     },
     "devDependencies": {
         "@cloudflare/workers-types": "catalog:cloudflare",

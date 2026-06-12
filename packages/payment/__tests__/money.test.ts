@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { CirrusPaymentError } from "../src/errors";
-import { addMoney, compareMoney, fromMoneyJSON, isZeroDecimalCurrency, money, subtractMoney, toMoneyJSON, zeroMoney } from "../src/money";
+import { addMoney, allocateMoney, compareMoney, fromMoneyJSON, isZeroDecimalCurrency, money, subtractMoney, toMoneyJSON, zeroMoney } from "../src/money";
 
 describe("money", () => {
     it("constructs from number and bigint and uppercases the currency", () => {
@@ -28,6 +28,17 @@ describe("money", () => {
     it("flags zero-decimal currencies", () => {
         expect(isZeroDecimalCurrency("JPY")).toBe(true);
         expect(isZeroDecimalCurrency("usd")).toBe(false);
+    });
+
+    it("allocates an amount across ratios, remainder and all", () => {
+        const parts = allocateMoney(money(1000, "USD"), [60n, 40n]);
+
+        expect(parts.map((part) => part.minorUnits)).toEqual([600n, 400n]);
+
+        // A non-divisible split still sums back to the original (remainder distributed).
+        const thirds = allocateMoney(money(1000, "USD"), [1n, 1n, 1n]);
+
+        expect(thirds.reduce((total, part) => total + part.minorUnits, 0n)).toBe(1000n);
     });
 
     it("round-trips the JSON wire form without precision loss", () => {

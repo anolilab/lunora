@@ -141,8 +141,9 @@ packages/payment/
 
 **Subexports:** `.`, `./webhook`, `./adapter`, `./schema`, `./providers/stripe` (etc.), `./types`, `./package.json`.
 
-**Dependencies:** `@cirrus/server`, `@cirrus/values` (deps); `@cirrus/runtime`, `@cirrus/do`, `@cirrus/d1`,
-`@cirrus/scheduler`, `@cirrus/auth` (peer/optional where appropriate). Provider SDKs as **optional peerDependencies**.
+**Dependencies:** `@cirrus/server`, `@cirrus/values`, `dinero.js` (deps — dinero backs the money helpers);
+`@cirrus/runtime`, `@cirrus/do`, `@cirrus/d1`, `@cirrus/scheduler`, `@cirrus/auth` (peer/optional where appropriate).
+Provider SDKs (`stripe`, …) as **optional peerDependencies**.
 
 ### Core interfaces (sketch)
 
@@ -305,6 +306,20 @@ Non-negotiables that the implementation (not just the plan) has to satisfy — s
 - **Future tiers:** entitlements/usage metering (Phase 4); React UI kit; `vis generate cirrus-payment` scaffolding;
   provider-migration tooling (dual-register reconciliation).
 
+## 8a. Build vs. reuse (npm audit)
+
+We checked npm before hand-rolling each building block. Verdict: take the official **provider SDKs** as runtime
+deps and reuse **dinero.js** for money; keep the rest hand-rolled (small, zero-extra-dep, better fit than the
+libraries).
+
+| Building block | npm option considered | Decision |
+| --- | --- | --- |
+| Provider APIs | `stripe`, `@polar-sh/sdk`, `@lemonsqueezy/lemonsqueezy.js`, `@paddle/paddle-node-sdk` | **Reuse** (optional peer deps; client injected). |
+| Money arithmetic | [dinero.js v2 `bigint`](https://github.com/dinerojs/dinero.js) | **Reuse.** Backs `addMoney`/`subtractMoney`/`compareMoney` + `allocateMoney` (proration/seat splits). Public `Money` stays a JSON-safe `(minorUnits, currency)` pair; dinero is internal. |
+| Stripe webhook verify | `stripe` SDK `webhooks.constructEventAsync(…, webCrypto)` | **Hand-roll.** The SDK path needs `Stripe.createSubtleCryptoProvider()` (a static, not on the injected instance), which fights the structural-injection design. Our WebCrypto `verifyStripeSignature` (raw body + replay window) is leaner. |
+| State machine | [xstate](https://npmtrends.com/robot3-vs-state-machine-vs-xstate) (~17 kB), [robot3](https://blog.logrocket.com/comparing-state-machines-xstate-vs-robot/) (~1.2 kB) | **Hand-roll.** A projection FSM is two static transition tables + a guard; xstate is overkill on a Worker, robot3 still a dep for a lookup. robot3 is the pick *if* the general `@cirrus/machine` primitive (decision #6) ever lands. |
+| Unified multi-provider SDK | PayLayer, unify-payment, … | **Don't reuse** — all immature solo projects (§2a). Own the abstraction. |
+
 ## 9. Sources
 
 - npm unified SDKs: [@paylayer/core](https://www.npmjs.com/package/@paylayer/core) ·
@@ -317,6 +332,11 @@ Non-negotiables that the implementation (not just the plan) has to satisfy — s
 - Entitlements/auth: [Better Auth Stripe plugin](https://better-auth.com/docs/plugins/stripe) ·
   [Better Auth Autumn plugin](https://better-auth.com/docs/plugins/autumn) ·
   [useautumn/autumn](https://github.com/useautumn/autumn) · [Autumn docs](https://docs.useautumn.com/welcome)
+- Build-vs-reuse: [dinero.js](https://github.com/dinerojs/dinero.js) ·
+  [currency.js vs dinero](https://npm-compare.com/accounting,currency.js,dinero.js,money) ·
+  [xstate vs robot](https://blog.logrocket.com/comparing-state-machines-xstate-vs-robot/) ·
+  [stripe-node Workers template](https://github.com/stripe-samples/stripe-node-cloudflare-worker-template) ·
+  [Stripe webhook signatures](https://docs.stripe.com/webhooks/signature)
 - Medusa payment module: [medusajs/medusa](https://github.com/medusajs/medusa) ·
   [Payment Module Provider](https://docs.medusajs.com/resources/commerce-modules/payment/payment-provider) ·
   [getWebhookActionAndData](https://docs.medusajs.com/resources/references/payment/getWebhookActionAndData) ·

@@ -6,7 +6,18 @@ export type { PaymentErrorCode } from "./errors";
 export { CirrusPaymentError } from "./errors";
 export { default as idempotencyKey } from "./idempotency";
 export type { MoneyJSON } from "./money";
-export { addMoney, compareMoney, fromMoneyJSON, isZeroDecimalCurrency, isZeroMoney, money, subtractMoney, toMoneyJSON, zeroMoney } from "./money";
+export {
+    addMoney,
+    allocateMoney,
+    compareMoney,
+    fromMoneyJSON,
+    isZeroDecimalCurrency,
+    isZeroMoney,
+    money,
+    subtractMoney,
+    toMoneyJSON,
+    zeroMoney,
+} from "./money";
 export type { StripeAdapterOptions, StripeClientLike } from "./providers/stripe";
 export { createStripeAdapter } from "./providers/stripe";
 export { default as paymentTables } from "./schema";

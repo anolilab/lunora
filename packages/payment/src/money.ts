@@ -1,29 +1,42 @@
+/**
+ * Money helpers, backed by dinero.js (bigint calculator).
+ *
+ * The public {@link Money} type stays a JSON-friendly `(minorUnits: bigint, currency)` pair — the
+ * stable wire/store representation — while arithmetic, comparison, and allocation delegate to
+ * dinero.js so rounding, remainder distribution (proration), and currency scales are handled by a
+ * maintained library rather than hand-rolled. dinero's bigint build ships a currency object per
+ * ISO-4217 code with the correct exponent (USD=2, JPY=0), so no exponent table is needed here.
+ */
+import { toSnapshot } from "dinero.js";
+import { add, allocate, compare, dinero, subtract } from "dinero.js/bigint";
+
 import { CirrusPaymentError } from "./errors";
 import type { CurrencyCode, Money } from "./types";
 
-/**
- * ISO-4217 currencies with no minor unit — the integer amount is already the major unit
- * (e.g. JPY 500 = ¥500). This matches how Stripe represents zero-decimal currencies, so our
- * `minorUnits` maps 1:1 onto provider amounts without conversion.
- */
-const ZERO_DECIMAL_CURRENCIES: ReadonlySet<string> = new Set([
-    "BIF",
-    "CLP",
-    "DJF",
-    "GNF",
-    "JPY",
-    "KMF",
-    "KRW",
-    "MGA",
-    "PYG",
-    "RWF",
-    "UGX",
-    "VND",
-    "VUV",
-    "XAF",
-    "XOF",
-    "XPF",
-]);
+// ISO-4217 minor-unit exponents (digits after the decimal). Default 2; these are the exceptions.
+const ZERO_DECIMAL = new Set(["BIF", "CLP", "DJF", "GNF", "JPY", "KMF", "KRW", "MGA", "PYG", "RWF", "UGX", "VND", "VUV", "XAF", "XOF", "XPF"]);
+const THREE_DECIMAL = new Set(["BHD", "IQD", "JOD", "KWD", "LYD", "OMR", "TND"]);
+
+const exponentFor = (code: string): bigint => {
+    if (ZERO_DECIMAL.has(code)) {
+        return 0n;
+    }
+
+    return THREE_DECIMAL.has(code) ? 3n : 2n;
+};
+
+/** Builds a dinero bigint currency object for an ISO-4217 code. */
+const currencyFor = (code: CurrencyCode) => {
+    return { base: 10n, code: code.toUpperCase(), exponent: exponentFor(code.toUpperCase()) };
+};
+
+const toDinero = (value: Money) => dinero({ amount: value.minorUnits, currency: currencyFor(value.currency) });
+
+const fromDinero = (value: ReturnType<typeof toDinero>): Money => {
+    const snapshot = toSnapshot(value);
+
+    return { currency: snapshot.currency.code, minorUnits: snapshot.amount };
+};
 
 const assertSameCurrency = (a: Money, b: Money): void => {
     if (a.currency !== b.currency) {
@@ -31,7 +44,8 @@ const assertSameCurrency = (a: Money, b: Money): void => {
     }
 };
 
-export const isZeroDecimalCurrency = (currency: CurrencyCode): boolean => ZERO_DECIMAL_CURRENCIES.has(currency.toUpperCase());
+/** True when the currency has no minor unit (e.g. JPY). */
+export const isZeroDecimalCurrency = (currency: CurrencyCode): boolean => exponentFor(currency.toUpperCase()) === 0n;
 
 /** Construct money. Currency is normalized to uppercase; never use floats for amounts. */
 export const money = (minorUnits: bigint | number, currency: CurrencyCode): Money => {
@@ -45,25 +59,27 @@ export const zeroMoney = (currency: CurrencyCode): Money => money(0n, currency);
 export const addMoney = (a: Money, b: Money): Money => {
     assertSameCurrency(a, b);
 
-    return money(a.minorUnits + b.minorUnits, a.currency);
+    return fromDinero(add(toDinero(a), toDinero(b)));
 };
 
 export const subtractMoney = (a: Money, b: Money): Money => {
     assertSameCurrency(a, b);
 
-    return money(a.minorUnits - b.minorUnits, a.currency);
+    return fromDinero(subtract(toDinero(a), toDinero(b)));
 };
 
 /** Compares two same-currency amounts, returning -1, 0, or 1. */
 export const compareMoney = (a: Money, b: Money): -1 | 0 | 1 => {
     assertSameCurrency(a, b);
 
-    if (a.minorUnits < b.minorUnits) {
-        return -1;
-    }
-
-    return a.minorUnits > b.minorUnits ? 1 : 0;
+    return compare(toDinero(a), toDinero(b));
 };
+
+/**
+ * Split an amount across integer ratios, distributing the remainder to the smallest unit so the
+ * parts always sum back to the original. The basis for seat/proration math.
+ */
+export const allocateMoney = (amount: Money, ratios: ReadonlyArray<bigint>): Money[] => allocate(toDinero(amount), [...ratios]).map((part) => fromDinero(part));
 
 export const isZeroMoney = (a: Money): boolean => a.minorUnits === 0n;
 
