@@ -40,14 +40,7 @@ export type {
     WorkerOptions,
 } from "./create-worker";
 export { composeWorker, createWorker, defineRpcEnvelope, withFrameworkWorker } from "./create-worker";
-export type {
-    CrossShardCounter,
-    CrossShardQueryPage,
-    CrossShardReader,
-    CrossShardReaderArgs,
-    CrossShardRelationCapabilities,
-    CrossShardRelationOptions,
-} from "./cross-shard-relations";
+export type { CrossShardCounter, CrossShardReader, CrossShardRelationCapabilities, CrossShardRelationOptions } from "./cross-shard-relations";
 export { createCrossShardRelationCapabilities } from "./cross-shard-relations";
 export type { DynamicShardRegistry, DynamicShardRegistryOptions } from "./dynamic-shard-registry";
 export { createDynamicShardRegistry, DEFAULT_REGISTRY_CACHE_TTL_MS, SHARD_REGISTRY_DO_NAME } from "./dynamic-shard-registry";

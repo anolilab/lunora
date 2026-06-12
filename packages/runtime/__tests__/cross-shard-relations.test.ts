@@ -1,3 +1,4 @@
+import { RELATION_FUNCTION_PREFIX } from "@cirrus/do";
 import { describe, expect, it } from "vitest";
 
 import type { ExecutionContextLike } from "../src/create-worker";
@@ -41,7 +42,8 @@ const createShardCluster = (rowsByShard: Record<string, Record<string, unknown>[
 
             return {
                 fetch: async (request: Request) => {
-                    const body = await request.json();
+                    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- workers-types Request.json() is typed `unknown` under tsc (eslint's view sees `any`); the cast is required by `lint:types`
+                    const body = (await request.json()) as { args: Record<string, unknown>; functionPath: string };
 
                     seen.push({ args: body.args, functionPath: body.functionPath, shardKey, userId: request.headers.get("x-cirrus-userid") });
 
@@ -173,5 +175,85 @@ describe("createCrossShardRelationCapabilities", () => {
         });
 
         await expect(capabilities.crossShardReader("local", { where: {} })).rejects.toThrow(/worker returned 403/u);
+    });
+
+    it("default-denies the reserved fan-out under the open posture (no authorize* configured)", async () => {
+        expect.assertions(2);
+
+        // SECURITY: a worker with NEITHER `authorizeFanOut` NOR `authorizeShard`
+        // runs the historical open posture. A normal function fan-out is merely
+        // warned-and-allowed there, but the reserved relation read (raw,
+        // RLS-blind, function-less) must be hard-denied so it can't become a
+        // full-table exfiltration primitive.
+        const cluster = createShardCluster({ s1: [{ _id: "l1" }] }, {});
+        const worker = createWorker({
+            queryCoordinator: createQueryCoordinator({ registry: createStaticShardRegistry({ local: ["s1", "s2"] }) }),
+            shardDO: cluster.namespace,
+        });
+        const capabilities = createCrossShardRelationCapabilities({
+            fetch: ((request: Request) => worker.fetch(request, {}, fakeContext)) as typeof globalThis.fetch,
+            origin: "https://worker.test",
+        });
+
+        await expect(capabilities.crossShardReader("local", { where: {} })).rejects.toThrow(/worker returned 403/u);
+        // The denial fires before dispatch — no shard was reached.
+        expect(cluster.seen).toHaveLength(0);
+    });
+
+    it("throws on a partial fan-out (a failing shard) instead of returning truncated rows", async () => {
+        expect.assertions(1);
+
+        // s1 serves its row; s2 errors (500). The coordinator returns 200 with s1
+        // merged + s2 in `errors` — but a relation read must be all-or-nothing.
+        const namespace: ShardNamespaceLike = {
+            get: (id) => {
+                const shardKey = (id as { __name: string }).__name;
+
+                return {
+                    fetch: async () => (shardKey === "s2" ? new Response("boom", { status: 500 }) : Response.json([{ _id: "l1" }])),
+                };
+            },
+            idFromName: (name) => {
+                return { __name: name };
+            },
+        };
+        const worker = createWorker({
+            authorizeFanOut: () => true,
+            queryCoordinator: createQueryCoordinator({ registry: createStaticShardRegistry({ local: ["s1", "s2"] }) }),
+            shardDO: namespace,
+        });
+        const capabilities = createCrossShardRelationCapabilities({
+            fetch: ((request: Request) => worker.fetch(request, {}, fakeContext)) as typeof globalThis.fetch,
+            origin: "https://worker.test",
+        });
+
+        await expect(capabilities.crossShardReader("local", { where: {} })).rejects.toThrow(/failed on 1 of 2 shard\(s\)/u);
+    });
+
+    it("keeps the worker's fan-out-only gate in sync with @cirrus/do's reserved prefix", async () => {
+        expect.assertions(2);
+
+        // Drift guard: the worker's single-shard rejection (create-worker.ts) and
+        // the DO's interception (@cirrus/do) both hinge on the SAME reserved
+        // prefix literal across a security boundary. `@cirrus/do` is a type-only
+        // devDep of the runtime, so the prefix can't be imported into runtime
+        // SOURCE — but the test may value-import it to assert the worker rejects
+        // exactly `<prefix>read` on a single-shard envelope.
+        expect(RELATION_FUNCTION_PREFIX).toBe("__cirrus_relation__:");
+
+        const cluster = createShardCluster({ s1: [{ _id: "l1" }] }, {});
+        const worker = buildWorker(cluster);
+
+        const response = await worker.fetch(
+            new Request("https://worker.test/_cirrus/rpc", {
+                body: JSON.stringify({ args: { table: "local" }, functionPath: `${RELATION_FUNCTION_PREFIX}read`, shardKey: "s1" }),
+                headers: { "content-type": "application/json" },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(403);
     });
 });
