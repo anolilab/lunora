@@ -32,6 +32,18 @@ const DATA_MIGRATION_STATE_TABLE = "__cirrus_migrations";
 /** Rows fetched and rewritten per batch when neither the migration nor the caller specifies one. */
 const DEFAULT_BATCH_SIZE = 100;
 
+/**
+ * A run-state row stuck in `in_progress` is reclaimable once its `updated_at`
+ * is older than this. The runner touches `updated_at` after every batch (and on
+ * claim), so a healthy run never crosses it; only a runner that crashed or had
+ * its DO evicted mid-batch — leaving its claim orphaned — does. Generous enough
+ * to clear a slow batch (large `batchSize` over a contended shard) without
+ * letting a single deserialized request reclaim a peer that is merely between
+ * `await`s; small enough that a genuinely dead runner doesn't wedge the
+ * migration for long. 30s mirrors the per-shard fan-out timeout order.
+ */
+const STALE_CLAIM_TIMEOUT_MS = 30_000;
+
 type MigrationDirection = "down" | "up";
 
 type MigrationStatus = "completed" | "failed" | "in_progress";
@@ -200,6 +212,65 @@ const persistState = (sql: SqlExec, state: PersistedState): void => {
     );
 };
 
+/**
+ * Atomically claim the `(id, direction)` run so exactly one concurrent runner
+ * proceeds. A Durable Object is single-threaded and serializes storage, but two
+ * in-flight `runDataMigration` invocations on the same instance interleave at
+ * the loop's `await` boundaries: without a claim both would read the same
+ * `in_progress` state and reprocess the same batch. This claim is a single
+ * synchronous `INSERT … ON CONFLICT` with no `await` inside it, so it runs to
+ * completion before any peer can observe a half-updated row — the winner flips
+ * `status` to `in_progress` and bumps `updated_at`; every loser sees
+ * `changes() === 0`.
+ *
+ * Claimable when the row is absent, already this runner's resumable
+ * `in_progress`/`failed` progress in the SAME direction, an opposite-direction
+ * run, OR a stale `in_progress` claim whose `updated_at` predates
+ * {@link STALE_CLAIM_TIMEOUT_MS} (a crashed runner must not wedge the migration
+ * forever). A `completed` row in the same direction is intentionally NOT
+ * claimable — re-running a finished migration stays the idempotent no-op the
+ * caller handles before claiming. The `WHERE` therefore rejects only a *fresh*
+ * same-direction `in_progress` peer.
+ */
+const claimMigration = (sql: SqlExec, id: string, direction: MigrationDirection, now: number): boolean => {
+    runSql(
+        sql,
+        `INSERT INTO "${DATA_MIGRATION_STATE_TABLE}"
+            (id, direction, status, cursor, processed, changed, started_at, updated_at, error)
+         VALUES (?, ?, 'in_progress', NULL, 0, 0, ?, ?, NULL)
+         ON CONFLICT(id) DO UPDATE SET
+            status = 'in_progress',
+            updated_at = excluded.updated_at
+         WHERE
+            "${DATA_MIGRATION_STATE_TABLE}".direction <> excluded.direction
+            OR "${DATA_MIGRATION_STATE_TABLE}".status <> 'in_progress'
+            OR "${DATA_MIGRATION_STATE_TABLE}".updated_at IS NULL
+            OR "${DATA_MIGRATION_STATE_TABLE}".updated_at <= excluded.updated_at - ${String(STALE_CLAIM_TIMEOUT_MS)}`,
+        id,
+        direction,
+        now,
+        now,
+    );
+
+    return runSql<{ changed: number }>(sql, `SELECT changes() AS changed`).one().changed > 0;
+};
+
+/**
+ * Release this invocation's claim on an incomplete run so a *later* resume can
+ * re-claim it without waiting out {@link STALE_CLAIM_TIMEOUT_MS}. Called only on
+ * the clean `maxBatches`-bounded return: at that point every `await` has
+ * resolved and the runner is genuinely no longer in flight, so there is no live
+ * peer to interleave with — the run is paused, not held. We mark it reclaimable
+ * by back-dating `updated_at` to the epoch (always older than `now - timeout`),
+ * leaving status/cursor/counts intact so the resume picks up exactly where this
+ * invocation stopped. A concurrent peer never reaches this path (it loses the
+ * claim and returns a no-op before entering the loop), and a crash/throw goes
+ * through the `failed` branch instead — so this never widens the race.
+ */
+const releaseClaim = (sql: SqlExec, id: string): void => {
+    runSql(sql, `UPDATE "${DATA_MIGRATION_STATE_TABLE}" SET updated_at = 0 WHERE id = ? AND status = 'in_progress'`, id);
+};
+
 /** One persisted run-state row, decoded for callers (admin RPC, CLI status). */
 interface MigrationStatusRow {
     changed: number;
@@ -294,20 +365,52 @@ const runDataMigration = async (options: RunDataMigrationOptions): Promise<Migra
 
         const existing = readState(sql, migration.id);
 
-        if (existing?.direction === direction) {
-            if (existing.status === "completed") {
-                // eslint-disable-next-line unicorn/no-null -- MigrationRunResult.cursor: a completed run reports null (no resume point), matching the wire shape
-                return { changed: existing.changed, cursor: null, direction, dryRun, id: migration.id, processed: existing.processed, status: "completed" };
-            }
+        if (existing?.direction === direction && existing.status === "completed") {
+            // Idempotent re-run of a finished migration: a no-op before any
+            // claim, so a redundant invocation never touches the row.
+            // eslint-disable-next-line unicorn/no-null -- MigrationRunResult.cursor: a completed run reports null (no resume point), matching the wire shape
+            return { changed: existing.changed, cursor: null, direction, dryRun, id: migration.id, processed: existing.processed, status: "completed" };
+        }
 
-            cursor = existing.cursor;
-            processed = existing.processed;
-            changed = existing.changed;
-            startedAt = existing.startedAt ?? startedAt;
-        } else if (existing) {
+        if (existing && existing.direction !== direction) {
             // Opposite direction — discard the prior run's progress so this one
-            // starts fresh (and `started_at` resets on the next INSERT).
+            // starts fresh (and `started_at` resets on the claim INSERT). Done
+            // synchronously, immediately before the claim, so no peer slips in.
             deleteState(sql, migration.id);
+        }
+
+        // Atomic in-flight guard. Exactly one of two interleaved invocations on
+        // this single-threaded DO wins the claim (flips status to in_progress +
+        // touches updated_at in one synchronous statement); the loser sees
+        // `changes() === 0` and returns the active run's state without entering
+        // the batch loop, so the table is migrated ONCE. A stale in_progress
+        // claim (a crashed/evicted runner, updated_at older than the timeout) is
+        // reclaimable here too.
+        const claimed = claimMigration(sql, migration.id, direction, clock());
+
+        if (!claimed) {
+            const active = readState(sql, migration.id);
+
+            return {
+                changed: active?.changed ?? 0,
+                cursor: active?.cursor ?? cursor,
+                direction,
+                dryRun,
+                id: migration.id,
+                processed: active?.processed ?? 0,
+                status: active?.status ?? "in_progress",
+            };
+        }
+
+        // We hold the claim — resume from our own persisted progress (the claim
+        // preserved cursor/counts for a same-direction resumable row).
+        const resume = existing?.direction === direction ? existing : undefined;
+
+        if (resume) {
+            cursor = resume.cursor;
+            processed = resume.processed;
+            changed = resume.changed;
+            startedAt = resume.startedAt ?? startedAt;
         }
     }
 
@@ -381,6 +484,13 @@ const runDataMigration = async (options: RunDataMigrationOptions): Promise<Migra
         }
 
         throw error;
+    }
+
+    if (!dryRun && !isDone) {
+        // Paused on the `maxBatches` limit, not finished. Drop our claim so the
+        // next invocation can resume immediately rather than waiting out the
+        // stale-claim timeout (see releaseClaim).
+        releaseClaim(sql, migration.id);
     }
 
     // eslint-disable-next-line unicorn/no-null -- MigrationRunResult.cursor: null on completion (no resume point), matching the wire shape

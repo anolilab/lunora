@@ -252,6 +252,143 @@ describe("runDataMigration", () => {
         });
     });
 
+    describe("runDataMigration — concurrent runners", () => {
+        it("two simultaneous run() calls migrate the table exactly once (one wins, the loser no-ops)", async () => {
+            expect.assertions(4);
+
+            const writer = setupWriter();
+
+            await seed(writer);
+
+            // Gate the first `findMany` so the second runner can enter the
+            // read-decide window before the first persists any progress — the
+            // exact interleave two overlapping migrate requests hit on one DO.
+            let release: () => void = () => {};
+            const firstFindManyEntered = new Promise<void>((resolve) => {
+                release = resolve;
+            });
+            let gated = false;
+
+            const original = writer.findMany.bind(writer);
+            const gatedWriter: DatabaseWriterLike = {
+                ...writer,
+                findMany: async (table, options) => {
+                    if (!gated) {
+                        gated = true;
+                        // Let the second runner run up to its own claim before
+                        // the first runner's first batch resolves.
+                        await firstFindManyEntered;
+                    }
+
+                    return original(table, options);
+                },
+            };
+
+            const first = runDataMigration({ migration: bumpVersion, sql: harness.sql, writer: gatedWriter });
+
+            // Second runner races in while the first is parked on the gate. It
+            // must lose the atomic claim and no-op without touching a row.
+            const second = await runDataMigration({ migration: bumpVersion, sql: harness.sql, writer: gatedWriter });
+
+            expect(second.status).toBe("in_progress");
+            expect(second.processed).toBe(0);
+
+            // Release the winner and let it finish.
+            release();
+
+            const winner = await first;
+
+            expect(winner).toEqual({ changed: 5, cursor: null, direction: "up", dryRun: false, id: "bump-version", processed: 5, status: "completed" });
+
+            // Each row bumped exactly once — double-processing would yield 2.
+            const snapshot = await allUsers(writer);
+
+            expect(snapshot.map((document) => document["version"])).toEqual([1, 1, 1, 1, 1]);
+        });
+
+        it("reclaims a stale in_progress claim (crashed runner) whose updated_at predates the timeout", async () => {
+            expect.assertions(3);
+
+            const writer = setupWriter();
+
+            await seed(writer);
+
+            // Simulate a runner that crashed mid-batch: it claimed and persisted
+            // progress for the first 2 rows but never released the claim (no
+            // maxBatches return, no failure). Its updated_at is then well past
+            // the 30s reclaim window.
+            const crashedAt = 1_700_000_000_000;
+
+            await runDataMigration({ batchSize: 2, clock: () => crashedAt, maxBatches: 1, migration: bumpVersion, sql: harness.sql, writer });
+
+            // Re-stamp it as a still-held (in_progress, non-zero updated_at)
+            // claim, then age it past the timeout — the back-date overrides the
+            // release-on-return marker, reproducing an orphaned in-flight claim.
+            harness.raw(
+                `UPDATE "${DATA_MIGRATION_STATE_TABLE}" SET status = 'in_progress', updated_at = ? WHERE id = ?`,
+                crashedAt - 60_000,
+                "bump-version",
+            );
+
+            expect(stateRow("bump-version")).toMatchObject({ processed: 2, status: "in_progress" });
+
+            // A fresh runner sees the stale claim, reclaims it, and resumes from
+            // the persisted cursor — finishing the remaining rows exactly once.
+            const resumed = await runDataMigration({ batchSize: 2, clock: () => crashedAt + 120_000, migration: bumpVersion, sql: harness.sql, writer });
+
+            expect(resumed).toMatchObject({ processed: 5, status: "completed" });
+
+            const snapshot = await allUsers(writer);
+
+            expect(snapshot.map((document) => document["version"])).toEqual([1, 1, 1, 1, 1]);
+        });
+
+        it("an in-flight claim (parked mid-batch) blocks a second runner even at the same wall-clock", async () => {
+            expect.assertions(2);
+
+            const writer = setupWriter();
+
+            await seed(writer);
+
+            // Gate the first runner inside its first batch so its claim is held
+            // (not yet released) when the second runner attempts to claim.
+            let release: () => void = () => {};
+            const firstFindManyEntered = new Promise<void>((resolve) => {
+                release = resolve;
+            });
+            let gated = false;
+
+            const original = writer.findMany.bind(writer);
+            const gatedWriter: DatabaseWriterLike = {
+                ...writer,
+                findMany: async (table, options) => {
+                    if (!gated) {
+                        gated = true;
+                        await firstFindManyEntered;
+                    }
+
+                    return original(table, options);
+                },
+            };
+
+            // Same fixed clock for both — so the loser cannot win on a stale
+            // timeout; it must lose purely because the claim is in-flight.
+            const at = 1_700_000_000_000;
+            const first = runDataMigration({ clock: () => at, migration: bumpVersion, sql: harness.sql, writer: gatedWriter });
+            const blocked = await runDataMigration({ clock: () => at, migration: bumpVersion, sql: harness.sql, writer: gatedWriter });
+
+            expect(blocked.status).toBe("in_progress");
+
+            release();
+            await first;
+
+            // Migrated exactly once despite the overlap.
+            const snapshot = await allUsers(writer);
+
+            expect(snapshot.map((document) => document["version"])).toEqual([1, 1, 1, 1, 1]);
+        });
+    });
+
     describe("runDataMigration — down", () => {
         it("reverses via the down transform, discarding the completed up state", async () => {
             expect.assertions(3);
