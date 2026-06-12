@@ -30,7 +30,8 @@
         "lint:prettier:fix": "prettier --write .",
         "lint:types": "tsc --noEmit",
         "bench": "vitest bench --run",
-        "test": "vitest run"
+        "test": "vitest run",
+        "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
         "@bomb.sh/tab": "0.0.15",
@@ -52,6 +53,7 @@
         "@cirrus/studio-host": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
+        "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"

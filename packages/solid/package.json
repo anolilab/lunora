@@ -32,7 +32,8 @@
         "lint:prettier": "prettier --check .",
         "lint:prettier:fix": "prettier --write .",
         "lint:types": "tsc --noEmit",
-        "test": "vitest run"
+        "test": "vitest run",
+        "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
         "@cirrus/client": "workspace:*",
@@ -45,6 +46,7 @@
         "@testing-library/jest-dom": "catalog:frontend",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
+        "@vitest/coverage-v8": "catalog:test",
         "babel-preset-solid": "catalog:build",
         "esbuild": "catalog:build",
         "jsdom": "catalog:frontend",

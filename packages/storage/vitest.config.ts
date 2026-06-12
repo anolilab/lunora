@@ -1,5 +1,27 @@
 import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
-import { defineConfig } from "vitest/config";
+import { defineConfig, coverageConfigDefaults } from "vitest/config";
+
+// Mirror of the shared `tools/get-vitest-config` coverage block. The workers
+// pool relies on `defineConfig` (not the shared helper, which would break the
+// `@cloudflare/vitest-pool-workers` projects), so coverage is wired inline here.
+const coverage = {
+    ...coverageConfigDefaults,
+    provider: "v8" as const,
+    reporter: ["clover", "cobertura", "lcov", "text", "html"],
+    include: ["src"],
+    exclude: [
+        ...(coverageConfigDefaults.exclude ?? []),
+        "__fixtures__/**",
+        "__bench__/**",
+        "scripts/**",
+        "src/**/types.ts",
+        "src/module.d.ts",
+        "src/reset.d.ts",
+        "e2e",
+        "**/node_modules/**",
+        "**/dist/**",
+    ],
+};
 
 /**
  * Two-project Vitest config (matches @cirrus/scheduler / @cirrus/client):
@@ -16,6 +38,7 @@ const runWorkerd = process.env.CIRRUS_WORKERD_TESTS === "1";
 
 export default defineConfig({
     test: {
+        coverage,
         projects: runWorkerd
             ? [
                   {

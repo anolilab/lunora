@@ -28,13 +28,15 @@
         "lint:prettier": "pnpm exec prettier --check .",
         "lint:prettier:fix": "pnpm exec prettier --write .",
         "lint:types": "pnpm exec tsc --noEmit",
-        "test": "pnpm exec vitest run"
+        "test": "pnpm exec vitest run",
+        "test:coverage": "pnpm exec vitest run --coverage"
     },
     "devDependencies": {
         "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
+        "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test",

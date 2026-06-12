@@ -28,6 +28,7 @@
         "lint:prettier:fix": "prettier --write .",
         "lint:types": "tsc --noEmit",
         "test": "vitest run",
+        "test:coverage": "vitest run --coverage",
         "bench": "vitest bench --run"
     },
     "dependencies": {
@@ -41,6 +42,7 @@
         "@cirrus/server": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
+        "@vitest/coverage-v8": "catalog:test",
         "drizzle-orm": "catalog:drizzle",
         "esbuild": "catalog:build",
         "typescript": "catalog:tsc",

@@ -28,7 +28,8 @@
         "lint:prettier": "prettier --check .",
         "lint:prettier:fix": "prettier --write .",
         "lint:types": "tsc --noEmit",
-        "test": "vitest run"
+        "test": "vitest run",
+        "test:coverage": "vitest run --coverage"
     },
     "devDependencies": {
         "@cirrus/do": "workspace:*",
@@ -37,6 +38,7 @@
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
+        "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
         "fake-indexeddb": "catalog:test",
         "typescript": "catalog:tsc",

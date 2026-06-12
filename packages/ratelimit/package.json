@@ -29,6 +29,7 @@
         "lint:prettier:fix": "pnpm exec prettier --write .",
         "lint:types": "pnpm exec tsc --noEmit",
         "test": "pnpm exec vitest run",
+        "test:coverage": "pnpm exec vitest run --coverage",
         "bench": "pnpm exec vitest bench --run"
     },
     "devDependencies": {
@@ -36,6 +37,7 @@
         "@cirrus/values": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
+        "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"

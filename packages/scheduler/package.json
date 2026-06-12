@@ -28,6 +28,7 @@
         "lint:prettier:fix": "prettier --write .",
         "lint:types": "tsc --noEmit",
         "test": "vitest run",
+        "test:coverage": "vitest run --coverage",
         "bench": "vitest bench --run"
     },
     "devDependencies": {
@@ -35,6 +36,7 @@
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
+        "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test",
