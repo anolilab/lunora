@@ -2,12 +2,14 @@ import { createCerebro } from "@visulima/cerebro";
 import completionCommand from "@visulima/cerebro/command/completion";
 import versionCommand from "@visulima/cerebro/command/version";
 
+import { addCommand } from "./commands/add";
 import { analyzeCommand } from "./commands/analyze";
 import { backupCommand } from "./commands/backup";
 import { codegenCommand } from "./commands/codegen";
 import { deployCommand } from "./commands/deploy";
 import { devCommand } from "./commands/dev";
 import documentationCommand from "./commands/docs";
+import { doctorCommand } from "./commands/doctor";
 import { envCommand } from "./commands/env";
 import { exportCommand } from "./commands/export";
 import { importCommand } from "./commands/import";
@@ -26,6 +28,7 @@ import { createLogger } from "./util/logger";
 /** Every command name the CLI registers (drives the `CommandName` type + tests). */
 const COMMANDS = [
     "init",
+    "add",
     "dev",
     "codegen",
     "deploy",
@@ -39,6 +42,7 @@ const COMMANDS = [
     "backup",
     "verify",
     "info",
+    "doctor",
     "env",
     "analyze",
     "view",
@@ -53,6 +57,7 @@ const VERSION = "0.0.0";
 /** The command objects, in display order; each lazy-loads its handler. */
 const CLI_COMMANDS = [
     initCommand,
+    addCommand,
     devCommand,
     codegenCommand,
     deployCommand,
@@ -66,6 +71,7 @@ const CLI_COMMANDS = [
     backupCommand,
     verifyCommand,
     infoCommand,
+    doctorCommand,
     envCommand,
     analyzeCommand,
     viewCommand,

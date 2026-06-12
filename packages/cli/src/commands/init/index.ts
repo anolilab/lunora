@@ -43,6 +43,18 @@ const initCommand: Command = {
             name: "here",
             type: Boolean,
         },
+        {
+            alias: "i",
+            description: "After scaffolding, offer to add auth + email (defaults on when stdin is a TTY)",
+            name: "interactive",
+            type: Boolean,
+        },
+        {
+            alias: "y",
+            description: "Skip the auth/email offer; scaffold only",
+            name: "yes",
+            type: Boolean,
+        },
     ],
 };
 
@@ -52,6 +64,8 @@ export type InitOptions = CreateOptions<{
     "allow-unsafe-source": boolean | undefined;
     from: string | undefined;
     here: boolean | undefined;
+    interactive: boolean | undefined;
     source: string | undefined;
     template: string | undefined;
+    yes: boolean | undefined;
 }>;

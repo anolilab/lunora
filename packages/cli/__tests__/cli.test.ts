@@ -131,9 +131,11 @@ describe("cirrus CLI entry", () => {
             expect(stderr).toContain("unknown subcommand");
         });
 
-        it("the former top-level `add` command is gone", async () => {
+        it("the top-level `add` is a feature command — `add presence` (a registry item, not a feature) is rejected", async () => {
             expect.assertions(1);
 
+            // `cirrus add` adds FEATURES (auth/email); a component like
+            // `presence` is still added via `registry add`.
             const code = await runCli({ argv: ["add", "presence"] });
 
             expect(code).toBe(1);
