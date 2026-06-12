@@ -1,6 +1,7 @@
 export { formatAdvisories, lintSchema } from "./advisor";
 export { CodegenDiagnosticError, diagnosticAt } from "./diagnostics";
 export { default as discoverAuthApiCalls } from "./discover-authapi-calls";
+export { CONTAINERS_FILENAME, discoverContainers } from "./discover-containers";
 export { default as discoverCrons } from "./discover-crons";
 export { discoverFunctions } from "./discover-functions";
 export { default as discoverHttpRoutes } from "./discover-http-routes";
@@ -12,6 +13,7 @@ export { default as discoverSchema } from "./discover-schema";
 export { default as discoverStorageRulesMetadata } from "./discover-storage-rules";
 export {
     emitApi,
+    emitContainers,
     emitCrons,
     emitDataModel,
     emitDrizzleSchema,
@@ -24,6 +26,7 @@ export {
 } from "./emit";
 export type {
     AuthApiCallIR,
+    ContainerIR,
     CronJobIR,
     FunctionIR,
     HttpRouteIR,

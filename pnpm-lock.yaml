@@ -1108,6 +1108,9 @@ importers:
       '@cirrus/advisor':
         specifier: workspace:*
         version: link:../advisor
+      '@cirrus/container':
+        specifier: workspace:*
+        version: link:../container
       '@cirrus/scheduler':
         specifier: workspace:*
         version: link:../scheduler

@@ -181,6 +181,31 @@ export interface CronJobIR {
 }
 
 /**
+ * A container lifted from a `defineContainer()` export in
+ * `cirrus/containers.ts`. Carries everything the emitters and the config layer
+ * need to wire wrangler (`containers[]` + the Durable Object binding +
+ * migration class) and the generated `_generated/containers.ts` DO class.
+ * Names are derived via `@cirrus/container`'s shared helpers so codegen and
+ * the config layer can never disagree.
+ */
+export interface ContainerIR {
+    /** Durable Object binding name, e.g. `CONTAINER_TRANSCODER`. */
+    bindingName: string;
+    /** Generated DO class name, e.g. `TranscoderContainer`. */
+    className: string;
+    /** The `cirrus/containers.ts` export name, e.g. `transcoder`. */
+    exportName: string;
+    /** Normalized image source (Dockerfile path + build context, or registry reference). */
+    image: { buildContext: string; dockerfilePath: string; kind: "dockerfile" } | { kind: "registry"; reference: string };
+    /** Static `instanceType`, when declared. */
+    instanceType?: string | { diskMb?: number; memoryMib?: number; vcpu?: number };
+    /** Static `maxInstances`, when declared. */
+    maxInstances?: number;
+    /** Static wrangler `containers[].name` override, when declared. */
+    name?: string;
+}
+
+/**
  * A `ctx.db.query("table")…` read discovered in a function body, reduced to what
  * the `filter_without_index` advisor lint needs: which table, whether the chain
  * narrows with an index, and whether it filters. `table` is `""` when the
