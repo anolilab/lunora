@@ -17,6 +17,7 @@ const baseInferred = (overrides: Partial<InferredBindings> = {}): InferredBindin
         durableObjects: [SHARD],
         needsD1: false,
         signals: [],
+        usesAi: false,
         usesAuth: false,
         usesScheduler: false,
         usesStorage: false,
@@ -81,6 +82,36 @@ describe("reconcileWranglerBindings", () => {
         expect(result.added).toContain("DB (D1)");
         expect(readConfig().d1_databases[0].binding).toBe("DB");
         expect(result.warnings.join(" ")).toMatch(/placeholder database_id/u);
+    });
+
+    it("adds the parameterless ai binding when @cirrus/ai is inferred", () => {
+        expect.assertions(2);
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesAi: true }));
+
+        expect(result.added).toContain("AI (Workers AI)");
+        expect(readConfig().ai.binding).toBe("AI");
+    });
+
+    it("does not re-add the ai binding when one already exists", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(root, "wrangler.jsonc"),
+            `{
+    "name": "cirrus-app",
+    "compatibility_date": "2026-04-07",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "ai": { "binding": "AI" },
+}
+`,
+            "utf8",
+        );
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesAi: true }));
+
+        expect(result.changed).toBe(false);
     });
 
     it("does not re-add or re-warn for a DB binding that already exists", () => {

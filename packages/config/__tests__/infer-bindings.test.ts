@@ -166,4 +166,40 @@ describe("inferCirrusBindings", () => {
 
         expect(result.needsD1).toBe(true);
     });
+
+    it("infers AI from a @cirrus/ai import", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("cirrus/summarize.ts", `import { generateText } from "@cirrus/ai";\nexport const summarize = () => generateText;`);
+
+        const result = await inferCirrusBindings({ projectRoot: root });
+
+        expect(result.usesAi).toBe(true);
+        expect(result.signals.some((signal) => signal.includes("AI"))).toBe(true);
+    });
+
+    it("infers AI from an env.AI access without importing @cirrus/ai", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("cirrus/classify.ts", "export const handler = (c) => c.env.AI.run('@cf/meta/llama-3.1-8b-instruct', {});");
+
+        const result = await inferCirrusBindings({ projectRoot: root });
+
+        expect(result.usesAi).toBe(true);
+    });
+
+    it("does not infer AI for a project that uses neither @cirrus/ai nor env.AI", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+
+        const result = await inferCirrusBindings({ projectRoot: root });
+
+        expect(result.usesAi).toBe(false);
+    });
 });

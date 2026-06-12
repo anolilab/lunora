@@ -64,10 +64,12 @@ const TYPE_ONLY_EXPORT_PATTERNS: Record<DurableObjectClass, RegExp> = {
 };
 
 const ENV_DB_PATTERN = /\benv\s*\.\s*DB\b/;
+const ENV_AI_PATTERN = /\benv\s*\.\s*AI\b/;
 const TYPE_ONLY_IMPORT_PATTERN = /^\s*import\s+type\b/;
 const IMPORT_AUTH_PATTERN = /\bfrom\s+["']@cirrus\/auth["']/;
 const IMPORT_SCHEDULER_PATTERN = /\bfrom\s+["']@cirrus\/scheduler["']/;
 const IMPORT_STORAGE_PATTERN = /\bfrom\s+["']@cirrus\/storage["']/;
+const IMPORT_AI_PATTERN = /\bfrom\s+["']@cirrus\/ai["']/;
 
 interface DurableObjectSpec {
     binding: string;
@@ -81,6 +83,8 @@ interface InferredBindings {
     needsD1: boolean;
     /** Human-readable provenance for each inferred binding / hint, for logging. */
     signals: string[];
+    /** `@cirrus/ai` is imported or `env.AI` is used → needs the `ai` Workers AI binding. */
+    usesAi: boolean;
     /** `@cirrus/auth` is imported (sessions may be D1- or `SessionDO`-backed). */
     usesAuth: boolean;
     /** `@cirrus/scheduler` is imported. */
@@ -92,16 +96,18 @@ interface InferredBindings {
 /** Which capabilities a unit of source imports. Pure value, no mutation. */
 interface Capabilities {
     needsD1: boolean;
+    usesAi: boolean;
     usesAuth: boolean;
     usesScheduler: boolean;
     usesStorage: boolean;
 }
 
-const NO_CAPABILITIES: Capabilities = { needsD1: false, usesAuth: false, usesScheduler: false, usesStorage: false };
+const NO_CAPABILITIES: Capabilities = { needsD1: false, usesAi: false, usesAuth: false, usesScheduler: false, usesStorage: false };
 
 const mergeCapabilities = (a: Capabilities, b: Capabilities): Capabilities => {
     return {
         needsD1: a.needsD1 || b.needsD1,
+        usesAi: a.usesAi || b.usesAi,
         usesAuth: a.usesAuth || b.usesAuth,
         usesScheduler: a.usesScheduler || b.usesScheduler,
         usesStorage: a.usesStorage || b.usesStorage,
@@ -120,6 +126,10 @@ const capabilityForImportSource = (source: string): Capabilities => {
 
     if (source === "@cirrus/storage") {
         return { ...NO_CAPABILITIES, usesStorage: true };
+    }
+
+    if (source === "@cirrus/ai") {
+        return { ...NO_CAPABILITIES, usesAi: true };
     }
 
     return NO_CAPABILITIES;
@@ -152,6 +162,7 @@ const lexCapabilities = (code: string): Capabilities => {
 const regexCapabilities = (code: string): Capabilities => {
     return {
         needsD1: false,
+        usesAi: IMPORT_AI_PATTERN.test(code),
         usesAuth: IMPORT_AUTH_PATTERN.test(code),
         usesScheduler: IMPORT_SCHEDULER_PATTERN.test(code),
         usesStorage: IMPORT_STORAGE_PATTERN.test(code),
@@ -168,7 +179,7 @@ const capabilitiesFromSource = (code: string): Capabilities => {
         capabilities = regexCapabilities(code);
     }
 
-    return mergeCapabilities(capabilities, { ...NO_CAPABILITIES, needsD1: ENV_DB_PATTERN.test(code) });
+    return mergeCapabilities(capabilities, { ...NO_CAPABILITIES, needsD1: ENV_DB_PATTERN.test(code), usesAi: ENV_AI_PATTERN.test(code) });
 };
 
 /** Recursively collect scannable source files under `directory`. */
@@ -305,6 +316,10 @@ const describeSignals = (durableObjects: DurableObjectSpec[], needsD1: boolean, 
         signals.push("DB (.global() table declared)");
     }
 
+    if (capabilities.usesAi) {
+        signals.push("AI (@cirrus/ai imported or env.AI used)");
+    }
+
     if (capabilities.usesAuth && !exported.has("SessionDO")) {
         signals.push("hint: @cirrus/auth is imported but no SessionDO is exported (sessions are D1-backed, or export SessionDO for DO-backed sessions)");
     }
@@ -341,6 +356,7 @@ const inferCirrusBindings = async (options: InferOptions): Promise<InferredBindi
         durableObjects,
         needsD1,
         signals: describeSignals(durableObjects, needsD1, capabilities),
+        usesAi: capabilities.usesAi,
         usesAuth: capabilities.usesAuth,
         usesScheduler: capabilities.usesScheduler,
         usesStorage: capabilities.usesStorage,

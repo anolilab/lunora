@@ -43,6 +43,7 @@ interface MigrationEntry {
 }
 
 interface WranglerShape {
+    ai?: { binding?: string };
     d1_databases?: ReadonlyArray<{ binding?: string }>;
     durable_objects?: { bindings?: ReadonlyArray<DurableObjectBinding> };
     migrations?: ReadonlyArray<MigrationEntry>;
@@ -172,6 +173,19 @@ const reconcileD1 = (text: string, parsed: WranglerShape): ReconcileStep => {
 };
 
 /**
+ * Add the `ai` Workers AI binding for `@cirrus/ai` / `env.AI` usage, if absent.
+ * Unlike R2 (user-defined bucket name), the binding is parameterless —
+ * `{ "binding": "AI" }` — so it can be written safely like `DB`. Pure.
+ */
+const reconcileAi = (text: string, parsed: WranglerShape): ReconcileStep => {
+    if (typeof parsed.ai?.binding === "string" && parsed.ai.binding.length > 0) {
+        return { added: [], text };
+    }
+
+    return { added: ["AI (Workers AI)"], text: applyModify(text, ["ai"], { binding: "AI" }) };
+};
+
+/**
  * Reconcile inferred Durable Object / D1 bindings into `wrangler.jsonc`.
  *
  * Writes only when something is missing; returns `changed: false` when the
@@ -196,10 +210,11 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
 
     // Each step rewrites `text` but reads the original `parsed`; this is only
     // safe because the steps touch disjoint top-level keys (durable_objects /
-    // migrations vs d1_databases). A future step that depends on a key an
+    // migrations vs d1_databases vs ai). A future step that depends on a key an
     // earlier step mutated must re-parse rather than reuse `parsed`.
     const doStep = reconcileDurableObjects(original, parsed, inferred.durableObjects);
     const d1Step = inferred.needsD1 ? reconcileD1(doStep.text, parsed) : { added: [], text: doStep.text };
+    const aiStep = inferred.usesAi ? reconcileAi(d1Step.text, parsed) : { added: [], text: d1Step.text };
 
     // A freshly-written DB binding carries a placeholder id; surface it so the
     // user runs `wrangler d1 create` before the deploy reaches wrangler (which
@@ -210,13 +225,13 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
         );
     }
 
-    if (d1Step.text === original) {
+    if (aiStep.text === original) {
         return { added: [], changed: false, reason: "bindings already in sync", warnings, wranglerPath };
     }
 
-    writeFileSync(wranglerPath, d1Step.text, "utf8");
+    writeFileSync(wranglerPath, aiStep.text, "utf8");
 
-    return { added: [...doStep.added, ...d1Step.added], changed: true, warnings, wranglerPath };
+    return { added: [...doStep.added, ...d1Step.added, ...aiStep.added], changed: true, warnings, wranglerPath };
 };
 
 export type { ReconcileBindingsResult };
