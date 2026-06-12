@@ -3128,6 +3128,20 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
                 if (!allowed) {
                     throw new CirrusError("Forbidden fan-out", { code: "FORBIDDEN_FANOUT", status: 403 });
                 }
+            } else if (envelope.functionPath.startsWith("__cirrus_relation__:")) {
+                // SECURITY: the reserved `__cirrus_relation__:*` fan-out reads RAW,
+                // RLS-blind rows from every shard (reverse cross-backend relations)
+                // and — unlike `__cirrus_admin__:*` — carries no DO-level token
+                // backstop. So it must NEVER fall into the warn-and-allow
+                // open-posture branch below: that would hand any caller a
+                // function-less full-table dump across all shards. Default-deny it
+                // whenever `authorizeFanOut` is absent, independent of
+                // `authorizeShard` (enabling reverse cross-backend relations
+                // REQUIRES configuring `authorizeFanOut`).
+                throw new CirrusError("reverse cross-backend relation reads (`__cirrus_relation__:*`) require `authorizeFanOut` to be configured on the worker", {
+                    code: "FORBIDDEN_FANOUT",
+                    status: 403,
+                });
             } else if (options.authorizeShard) {
                 // `authorizeShard` is configured but `authorizeFanOut`
                 // is not. Fan-out is a privileged op (it bypasses the

@@ -17,16 +17,13 @@
  * for `:read`, a count for `:count`. The coordinator merges them with `concat`
  * (rows) / `sum` (counts).
  *
- * The identity headers are taken from the per-request context the generated
- * `createShardDO` threads into the `d1` factory, so the fan-out can run as the
- * same user the originating global query runs as. Whether those headers reach
- * each shard depends on the worker endpoint: a deployment whose `resolveIdentity`
- * honours the forwarded `x-cirrus-userid` (an internal-trust endpoint) propagates
- * the caller; the public `/_cirrus/rpc`, which re-resolves identity from
- * credentials, does not. This is currently forward-looking: the reserved
- * `__cirrus_relation__:*` reader reads the child through the raw ctx-db (no read
- * policy applied — matching same-backend relation reads, which also bypass RLS),
- * so the rows it returns are identity-independent today.
+ * The reserved `__cirrus_relation__:*` reader reads the child through the raw
+ * ctx-db (no read policy applied — matching same-backend relation reads, which
+ * also bypass RLS), so the rows it returns are identity-independent. The
+ * `x-cirrus-userid` / `x-cirrus-identity` headers are still forwarded from the
+ * per-request context the generated `createShardDO` threads into the `d1`
+ * factory, but the public `/_cirrus/rpc` re-resolves identity from credentials
+ * and ignores them — so they have no effect today (see the per-shard reader).
  *
  * RE-ENTRANCY: the originating global query executes INSIDE a ShardDO; the
  * fan-out loops back through the worker to the child shards. The host shard and
@@ -36,25 +33,20 @@
  * naturally separates the global-query host from the child shards.
  */
 
-/** A page of child rows, structurally matching `@cirrus/d1`'s `findMany` return. */
-interface CrossShardQueryPage {
-    continueCursor: null | string;
-    isDone: boolean;
-    page: Record<string, unknown>[];
-}
+// Type-only: keeps `@cirrus/runtime` free of a hard (value) dependency on
+// `@cirrus/do` while reusing its canonical writer types (see the alias note).
+import type { DatabaseWriterLike } from "@cirrus/do";
 
-/** Per-relation read arguments forwarded from `resolveWith` (the FK filter + nested shape). */
-interface CrossShardReaderArgs {
-    orderBy?: unknown;
-    where?: Record<string, unknown>;
-    with?: Record<string, unknown>;
-}
-
-/** Reader capability: structurally `@cirrus/d1`'s `DatabaseWriterLike["findMany"]`. */
-type CrossShardReader = (table: string, args?: CrossShardReaderArgs) => Promise<CrossShardQueryPage>;
-
-/** Counter capability: structurally `@cirrus/d1`'s `DatabaseWriterLike["count"]`. */
-type CrossShardCounter = (table: string, where?: Record<string, unknown>) => Promise<number>;
+/**
+ * Reader / counter capabilities, typed against the SAME canonical
+ * `DatabaseWriterLike` the `@cirrus/d1` ctx-db derives its `crossShardReader` /
+ * `crossShardCounter` options from (`DatabaseWriterLike["findMany"]` /
+ * `["count"]`) — so the pair drops straight into `createD1CtxDb` with no cast and
+ * no structural drift. The import is type-only: `@cirrus/runtime` keeps no hard
+ * (value) dependency on `@cirrus/do`.
+ */
+type CrossShardCounter = DatabaseWriterLike["count"];
+type CrossShardReader = DatabaseWriterLike["findMany"];
 
 interface CrossShardRelationOptions {
     /**
@@ -101,9 +93,13 @@ const buildIdentityHeaders = (options: CrossShardRelationOptions): Record<string
 };
 
 /**
- * POST a `fanOut` envelope to the worker and return the merged `data`. Throws a
- * descriptive error on a non-2xx so the failure surfaces as the relation read's
- * error rather than silently dropping rows.
+ * POST a `fanOut` envelope to the worker and return the merged `data`. Throws on
+ * a non-2xx, AND on a partial fan-out (any shard failed/timed out): the
+ * coordinator returns HTTP 200 with the surviving shards merged and the rest in
+ * `errors`, but for a relation feeding a parent row a partial `concat`/`sum`
+ * reads as silent data loss (dropped children / undercounted `_count`). So a
+ * relation read is all-or-nothing — surface the failure rather than hand back a
+ * truncated result.
  */
 const fanOutRelation = async (options: CrossShardRelationOptions, body: Record<string, unknown>, label: string): Promise<unknown> => {
     const doFetch = options.fetch ?? globalThis.fetch;
@@ -119,7 +115,14 @@ const fanOutRelation = async (options: CrossShardRelationOptions, body: Record<s
         throw new Error(`cross-shard relation ${label} failed: worker returned ${String(response.status)}`);
     }
 
-    const result = await response.json();
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- workers-types Response.json() is typed `unknown` under tsc (eslint's view sees `any`); the cast is required by `lint:types`
+    const result = (await response.json()) as { data?: unknown; failed?: unknown; ok?: unknown };
+
+    if (typeof result.failed === "number" && result.failed > 0) {
+        const reached = (typeof result.ok === "number" ? result.ok : 0) + result.failed;
+
+        throw new Error(`cross-shard relation ${label} failed on ${String(result.failed)} of ${String(reached)} shard(s) — refusing to return a partial result`);
+    }
 
     return result.data;
 };
@@ -141,7 +144,7 @@ const createCrossShardRelationCapabilities = (options: CrossShardRelationOptions
             "read",
         );
 
-        // eslint-disable-next-line unicorn/no-null -- `continueCursor: null` mirrors @cirrus/d1's QueryPage shape (the "no more pages" sentinel)
+        // eslint-disable-next-line unicorn/no-null -- `continueCursor: null` is @cirrus/do's QueryPage "no more pages" sentinel
         return { continueCursor: null, isDone: true, page: Array.isArray(data) ? (data as Record<string, unknown>[]) : [] };
     };
 
@@ -162,5 +165,5 @@ const createCrossShardRelationCapabilities = (options: CrossShardRelationOptions
     return { crossShardCounter, crossShardReader };
 };
 
-export type { CrossShardCounter, CrossShardQueryPage, CrossShardReader, CrossShardReaderArgs, CrossShardRelationCapabilities, CrossShardRelationOptions };
+export type { CrossShardCounter, CrossShardReader, CrossShardRelationCapabilities, CrossShardRelationOptions };
 export { createCrossShardRelationCapabilities };

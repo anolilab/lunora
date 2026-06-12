@@ -94,7 +94,7 @@ export const ShardDO = createShardDO({
         return createD1CtxDb({
             ...(crossShard
                 ? {
-                      crossShardCounter: crossShard.crossShardCounter as D1CtxDbOptions["crossShardCounter"],
+                      crossShardCounter: crossShard.crossShardCounter,
                       crossShardReader: crossShard.crossShardReader,
                   }
                 : {}),
