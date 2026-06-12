@@ -42,6 +42,14 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
         },
+        "./query": {
+            "types": "./dist/query/index.d.ts",
+            "import": "./dist/query/index.mjs"
+        },
+        "./ssr": {
+            "types": "./dist/ssr/index.d.ts",
+            "import": "./dist/ssr/index.mjs"
+        },
         "./package.json": "./package.json"
     },
     "scripts": {

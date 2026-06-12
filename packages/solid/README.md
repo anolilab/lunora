@@ -84,7 +84,7 @@ render(
 ## Related
 
 - [`@cirrus/client`](https://www.npmjs.com/package/@cirrus/client) — the framework-neutral browser SDK this adapter wraps.
-- [`@cirrus/ssr`](https://www.npmjs.com/package/@cirrus/ssr) — the server preload contract behind `@cirrus/solid/server`.
+- `@cirrus/client/ssr` — the server preload contract behind `@cirrus/solid/server`.
 - [`@cirrus/react`](https://www.npmjs.com/package/@cirrus/react) — the same contract for React.
 
 ## Supported Node.js Versions

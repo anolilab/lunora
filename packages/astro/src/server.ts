@@ -1,6 +1,6 @@
 /**
  * Server-side data-loading helpers for the Astro integration — re-exported from
- * `@cirrus/ssr`, the framework-neutral server contract (one implementation
+ * `@cirrus/client/ssr`, the framework-neutral server contract (one implementation
  * shared across every adapter, not re-declared here).
  *
  * Opens no WebSocket and touches no browser globals, so it is safe to import
@@ -15,5 +15,5 @@
  * server/composition seam and delegates the client-side "SSR-seed → live"
  * handoff to the chosen adapter.
  */
-export type { ArgsOf, AuthLike, FunctionReference, HeadersSource, Preloaded, ReturnOf, ServerClientOptions, ServerSession } from "@cirrus/ssr";
-export { createServerClient, deserializePreloaded, getServerSession, preloadedQueryResult, preloadQuery, serializePreloaded } from "@cirrus/ssr";
+export type { ArgsOf, AuthLike, FunctionReference, HeadersSource, Preloaded, ReturnOf, ServerClientOptions, ServerSession } from "@cirrus/client/ssr";
+export { createServerClient, deserializePreloaded, getServerSession, preloadedQueryResult, preloadQuery, serializePreloaded } from "@cirrus/client/ssr";

@@ -42,6 +42,10 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
         },
+        "./studio-host": {
+            "types": "./dist/studio-host/index.d.ts",
+            "import": "./dist/studio-host/index.mjs"
+        },
         "./package.json": "./package.json"
     },
     "scripts": {
@@ -68,6 +72,14 @@
         "esbuild": "catalog:build",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
+    },
+    "peerDependencies": {
+        "@cirrus/studio": "workspace:*"
+    },
+    "peerDependenciesMeta": {
+        "@cirrus/studio": {
+            "optional": true
+        }
     },
     "engines": {
         "node": "^22.15.0 || >=24.10.0"

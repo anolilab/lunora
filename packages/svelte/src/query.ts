@@ -1,5 +1,5 @@
 import type { ArgsOf, CirrusClient, FunctionReference, ReturnOf, SubscriptionErrorCallback } from "@cirrus/client";
-import { createQuerySubscription } from "@cirrus/query-core";
+import { createQuerySubscription } from "@cirrus/client/query";
 import type { Readable } from "svelte/store";
 import { readable } from "svelte/store";
 
@@ -59,7 +59,7 @@ export function query<F extends FunctionReference>(
     const options = (hasExplicitClient ? maybeOptions : (argumentsOrOptions as QueryStoreOptions | undefined)) ?? {};
 
     return readable<ReturnOf<F> | undefined>(undefined, (set) =>
-        // The shared `@cirrus/query-core` state machine owns the subscribe +
+        // The shared `@cirrus/client/query` state machine owns the subscribe +
         // cleanup: it replays the last value synchronously when one exists and
         // pushes every subsequent delta into the store, and its returned teardown
         // is the store's stop callback, so the WS subscription closes when the

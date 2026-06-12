@@ -15,7 +15,7 @@
  * required to build or test it.
  *
  * Server-side preload helpers (`createServerClient`, `preloadQuery`) live in the
- * socket-free `@cirrus/svelte/server` entry (a re-export of `@cirrus/ssr`, the
+ * socket-free `@cirrus/svelte/server` entry (a re-export of `@cirrus/client/ssr`, the
  * framework-neutral server contract) — import them there in your SvelteKit
  * `+page.ts` / `+layout.ts` load.
  */

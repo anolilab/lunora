@@ -79,8 +79,8 @@ client.close();
 ## Related
 
 - [`@cirrus/react`](https://www.npmjs.com/package/@cirrus/react) — React hooks built on this client.
-- [`@cirrus/query-core`](https://www.npmjs.com/package/@cirrus/query-core) — shared live-query state machine for UI adapters.
-- [`@cirrus/ssr`](https://www.npmjs.com/package/@cirrus/ssr) — server-side preloading over this client's HTTP transport.
+- `@cirrus/client/query` — the shared live-query state machine every UI adapter builds on (subpath of this package).
+- `@cirrus/client/ssr` — server-side preloading over this client's HTTP transport (subpath of this package).
 
 ## Supported Node.js Versions
 

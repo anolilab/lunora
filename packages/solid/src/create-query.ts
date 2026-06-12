@@ -1,5 +1,5 @@
 import type { ArgsOf, FunctionReference, ReturnOf } from "@cirrus/client";
-import { createQuerySubscription } from "@cirrus/query-core";
+import { createQuerySubscription } from "@cirrus/client/query";
 import type { Accessor } from "solid-js";
 import { createEffect, createSignal, on, onCleanup } from "solid-js";
 
@@ -44,7 +44,7 @@ export const createQuery = <F extends FunctionReference>(
     // tearing down the previous subscription via `onCleanup` before opening the
     // next. A static (non-accessor) `args` resolves once and never re-runs. The
     // skip-handling, subscribe, and cleanup are owned by the shared
-    // `@cirrus/query-core` state machine; this binds it to a Solid signal. The
+    // `@cirrus/client/query` state machine; this binds it to a Solid signal. The
     // `() => …` setter forms keep Solid from mistaking a function-valued server
     // result for an updater.
     createEffect(

@@ -12,7 +12,7 @@
  * PLAN4's "your loaders are live" reactive-loader handoff).
  *
  * Server-side preloading (`createServerClient`, `preloadQuery`) lives in the
- * socket-free `@cirrus/solid/server` entry (a re-export of `@cirrus/ssr`, the
+ * socket-free `@cirrus/solid/server` entry (a re-export of `@cirrus/client/ssr`, the
  * framework-neutral server contract) — call it from your SolidStart route loader
  * and hand the resulting `Preloaded` token to `hydratePreloaded`.
  */

@@ -1,7 +1,7 @@
 "use client";
 
 import type { ArgsOf, FunctionReference, ReturnOf } from "@cirrus/client";
-import { createQuerySubscription } from "@cirrus/query-core";
+import { createQuerySubscription } from "@cirrus/client/query";
 import { useEffect, useRef, useState } from "react";
 
 import { useCirrus } from "./cirrus-provider";
@@ -45,7 +45,7 @@ const useSubscription = <F extends FunctionReference>(
         const { args: currentArgs, fn: currentFunction } = subscribeRef.current;
 
         // The subscribe → snapshot → error → cleanup lifecycle lives in the shared
-        // `@cirrus/query-core` state machine; this hook only binds it to React
+        // `@cirrus/client/query` state machine; this hook only binds it to React
         // state. The error sink maps the client's `SubscriptionError` back to an
         // `Error` (the public `UseSubscriptionResult` shape) and is deferred out
         // of the synchronous effect body so it isn't a state adjustment made

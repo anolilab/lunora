@@ -4,7 +4,7 @@
  *
  * It's a tiny `node:http` server that:
  * - serves the prebuilt static `@cirrus/studio` bundle (with the admin token
- * and basepath injected, via the shared `@cirrus/studio-host` helpers), and
+ * and basepath injected, via the shared `@cirrus/config/studio-host` helpers), and
  * - reverse-proxies `/_cirrus/*` — both HTTP and the WebSocket upgrade — to the
  * `wrangler dev` worker.
  *
@@ -17,8 +17,7 @@ import { createServer, request as httpRequest } from "node:http";
 import { connect } from "node:net";
 import type { Duplex } from "node:stream";
 
-// eslint-disable-next-line import/no-extraneous-dependencies -- bundled at build time (packem inlines it), so it's a devDependency, not a runtime dep consumers must install
-import { loadStudioAssets, renderStudioHtml, resolveAdminToken, studioAssetsStamp } from "@cirrus/studio-host";
+import { loadStudioAssets, renderStudioHtml, resolveAdminToken, studioAssetsStamp } from "@cirrus/config/studio-host";
 
 /** Request paths the studio server reverse-proxies to the worker (admin RPC, RPC, WS). */
 const PROXY_PREFIX = "/_cirrus";
@@ -115,7 +114,7 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
     const isLoopback = host === "127.0.0.1" || host === "localhost" || host === "::1";
     const worker = new URL(options.workerOrigin);
     // Resolve `@cirrus/studio` from THIS module (a `@cirrus/cli` file, which
-    // depends on it) rather than from the shared `@cirrus/studio-host` (which
+    // depends on it) rather than from the shared `@cirrus/config/studio-host` (which
     // doesn't).
     let assets = loadStudioAssets(options.logger, import.meta.url);
     let assetsStamp = studioAssetsStamp(import.meta.url);

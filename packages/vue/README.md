@@ -75,7 +75,7 @@ const { mutate, pending } = useMutation(api.messages.send);
 ## Related
 
 - [`@cirrus/client`](https://www.npmjs.com/package/@cirrus/client) — the framework-neutral browser SDK this adapter wraps.
-- [`@cirrus/ssr`](https://www.npmjs.com/package/@cirrus/ssr) — the server preload contract behind `@cirrus/vue/server`.
+- `@cirrus/client/ssr` — the server preload contract behind `@cirrus/vue/server`.
 - [`@cirrus/react`](https://www.npmjs.com/package/@cirrus/react) — the same contract for React.
 
 ## Supported Node.js Versions

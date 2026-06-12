@@ -160,12 +160,12 @@ The reactive-loader contract is shipped for React today via `@cirrus/react`
 (`createServerClient`, `preloadQuery`, `usePreloadedQuery`) and proven end-to-end
 on the TanStack Start template (`cirrus init -t tanstack-start`).
 
-A dedicated `@cirrus/ssr` entrypoint — promoting `createServerClient` /
-`preloadQuery` plus a `getServerSession` cookie helper and a `createLoaderClient`
-convenience wrapper into one framework-neutral package — is in progress, along
-with Solid, Svelte, and Vue adapters that expose the same hydrate-then-subscribe
-handoff idiomatically. See [Bring your framework](/docs/frameworks/bring-your-framework)
-for the per-framework status.
+A framework-neutral server entrypoint — `@cirrus/client/ssr`, promoting
+`createServerClient` / `preloadQuery` plus a `getServerSession` cookie helper —
+backs each adapter's `/server` entry, with Solid, Svelte, and Vue adapters that
+expose the same hydrate-then-subscribe handoff idiomatically. See
+[Bring your framework](/docs/frameworks/bring-your-framework) for the
+per-framework status.
 
 ## See also
 

@@ -49,7 +49,8 @@ export default defineConfig({
                       extends: true,
                       test: {
                           environment: "node",
-                          include: ["__tests__/*.test.ts"],
+                          exclude: ["__tests__/workerd/**"],
+                          include: ["__tests__/**/*.test.ts"],
                           name: "mocks",
                       },
                   },
@@ -74,7 +75,8 @@ export default defineConfig({
                       extends: true,
                       test: {
                           environment: "node",
-                          include: ["__tests__/*.test.ts"],
+                          exclude: ["__tests__/workerd/**"],
+                          include: ["__tests__/**/*.test.ts"],
                           name: "mocks",
                       },
                   },

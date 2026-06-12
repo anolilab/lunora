@@ -1,5 +1,5 @@
 import type { ArgsOf, CirrusClient, FunctionReference, ReturnOf, Unsubscribe } from "@cirrus/client";
-import { createQuerySubscription } from "@cirrus/query-core";
+import { createQuerySubscription } from "@cirrus/client/query";
 import type { MaybeRefOrGetter, Ref } from "vue";
 import { getCurrentScope, onScopeDispose, shallowRef, toValue, watch } from "vue";
 
@@ -78,7 +78,7 @@ export const useQuery = <F extends FunctionReference>(
     // tears down the previous subscription before opening the next, and also runs
     // when the surrounding effect scope stops (component unmount). A plain-value
     // `args` resolves once and the watcher never re-fires. The skip-handling,
-    // subscribe, and cleanup are owned by the shared `@cirrus/query-core` state
+    // subscribe, and cleanup are owned by the shared `@cirrus/client/query` state
     // machine; this composable only binds it to a Vue `ref`.
     watch(
         () => toValue(args),

@@ -239,8 +239,8 @@ describe("preloadQuery (server re-export)", () => {
     });
 });
 
-describe("@cirrus/ssr re-exports (one server entry)", () => {
-    it("createServerClient is sourced from @cirrus/ssr and runs RPC against the url", async () => {
+describe("@cirrus/client/ssr re-exports (one server entry)", () => {
+    it("createServerClient is sourced from @cirrus/client/ssr and runs RPC against the url", async () => {
         expect.assertions(2);
 
         const fetchImpl = mockFetch({ count: 11 });

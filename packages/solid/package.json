@@ -60,9 +60,7 @@
         "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
-        "@cirrus/client": "workspace:*",
-        "@cirrus/query-core": "workspace:*",
-        "@cirrus/ssr": "workspace:*"
+        "@cirrus/client": "workspace:*"
     },
     "devDependencies": {
         "@babel/core": "catalog:build",

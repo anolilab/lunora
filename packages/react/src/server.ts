@@ -1,6 +1,6 @@
 import type { ArgsOf, CirrusClient, FunctionReference, ReturnOf } from "@cirrus/client";
-import type { ServerClientOptions } from "@cirrus/ssr";
-import { createServerClient } from "@cirrus/ssr";
+import type { ServerClientOptions } from "@cirrus/client/ssr";
+import { createServerClient } from "@cirrus/client/ssr";
 import type { QueryClient } from "@tanstack/react-query";
 
 import { cirrusQueryKey } from "./query-key";
@@ -113,7 +113,7 @@ export type { ArgsOf, FunctionReference, Preloaded, ReturnOf } from "@cirrus/cli
 // is a pure serializer (server-safe); `HydrationBoundary` carries its own client
 // boundary from TanStack, so re-exporting it here is just a convenience pass-through.
 export { preloadedQueryResult, preloadQuery } from "@cirrus/client";
-// `createServerClient`/`ServerClientOptions` are sourced from `@cirrus/ssr`, the
+// `createServerClient`/`ServerClientOptions` are sourced from `@cirrus/client/ssr`, the
 // framework-neutral home of the server contract, so there is one implementation
 // shared across every adapter. They are re-exported (not re-implemented) here so
 // existing `import { createServerClient } from "@cirrus/react/server"` keeps
@@ -121,6 +121,6 @@ export { preloadedQueryResult, preloadQuery } from "@cirrus/client";
 // `serializePreloaded`/`deserializePreloaded` dehydrate helpers, and
 // `preloadQuery` are re-exported too so a React SSR loader can get everything it
 // needs from this one entry.
-export type { AuthLike, HeadersSource, ServerClientOptions, ServerSession } from "@cirrus/ssr";
-export { createServerClient, deserializePreloaded, getServerSession, serializePreloaded } from "@cirrus/ssr";
+export type { AuthLike, HeadersSource, ServerClientOptions, ServerSession } from "@cirrus/client/ssr";
+export { createServerClient, deserializePreloaded, getServerSession, serializePreloaded } from "@cirrus/client/ssr";
 export { dehydrate, HydrationBoundary } from "@tanstack/react-query";

@@ -13,7 +13,7 @@
  * falls through to Astro's SSR handler — one worker, one deploy. `cirrus` is the
  * matching `astro.config` integration.
  *
- * Seam 2 — reactive-loader server helpers: the framework-neutral `@cirrus/ssr`
+ * Seam 2 — reactive-loader server helpers: the framework-neutral `@cirrus/client/ssr`
  * contract (`createServerClient`, `preloadQuery`, `getServerSession`,
  * `serializePreloaded`) is re-exported from `@cirrus/astro/server` for use in
  * Astro server endpoints / `.astro` frontmatter. Preload a query there, then

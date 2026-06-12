@@ -65,9 +65,7 @@
     },
     "dependencies": {
         "@cirrus/client": "workspace:*",
-        "@cirrus/query-core": "workspace:*",
-        "@cirrus/runtime": "workspace:*",
-        "@cirrus/ssr": "workspace:*"
+        "@cirrus/runtime": "workspace:*"
     },
     "devDependencies": {
         "@types/node": "catalog:types",

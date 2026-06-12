@@ -14,7 +14,7 @@ export default createConfig(
         // `astro` in this package's deps (here: the optional `astro` peer). That
         // block imports `eslint-plugin-astro`, which the monorepo doesn't install —
         // and this package ships NO `.astro` files (only TS sources + a re-export
-        // of `@cirrus/ssr`). Disable it explicitly so lint doesn't fail to resolve
+        // of `@cirrus/client/ssr`). Disable it explicitly so lint doesn't fail to resolve
         // a plugin we don't need. (The Astro *templates* live under `templates/`,
         // which is outside any workspace package and isn't linted here.)
         astro: false,

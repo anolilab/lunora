@@ -1,13 +1,13 @@
 import type { ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 
-// Shared studio-hosting helpers, inlined at build time (devDependency, so
-// packem bundles rather than externalizes them). `@cirrus/cli`'s `cirrus dev`
-// inlines the same module, so the Vite route and the CLI server render an
-// identical studio.
-import type { StudioAssets } from "@cirrus/studio-host";
-// eslint-disable-next-line import/no-extraneous-dependencies -- devDependency on purpose: packem bundles it at build time (see the note above) rather than externalizing it
-import { loadStudioAssets, renderStudioHtml, resolveAdminToken, studioAssetsStamp } from "@cirrus/studio-host";
+// Shared studio-hosting helpers from the internal `@cirrus/config` layer.
+// `@cirrus/cli`'s `cirrus dev` imports the same module, so the Vite route and
+// the CLI server render an identical studio. The heavy `@cirrus/studio` SPA it
+// hosts stays an optional peer — these helpers resolve its prebuilt assets
+// lazily (and degrade gracefully when it isn't installed).
+import type { StudioAssets } from "@cirrus/config/studio-host";
+import { loadStudioAssets, renderStudioHtml, resolveAdminToken, studioAssetsStamp } from "@cirrus/config/studio-host";
 import type { Plugin, ViteDevServer } from "vite";
 
 /** Dev-server path the studio SPA is served from. */

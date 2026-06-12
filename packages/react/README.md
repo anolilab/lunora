@@ -94,9 +94,7 @@ function MessageList({ room }: { room: string }) {
 
 ## Related
 
-- [`@cirrus/client`](https://www.npmjs.com/package/@cirrus/client) — the browser SDK these hooks wrap.
-- [`@cirrus/query-core`](https://www.npmjs.com/package/@cirrus/query-core) — shared live-query state machine.
-- [`@cirrus/ssr`](https://www.npmjs.com/package/@cirrus/ssr) — server-side preloading used by `@cirrus/react/server`.
+- [`@cirrus/client`](https://www.npmjs.com/package/@cirrus/client) — the browser SDK these hooks wrap. Its `@cirrus/client/query` subpath is the shared live-query state machine, and `@cirrus/client/ssr` provides the server-side preloading used by `@cirrus/react/server`.
 
 ## Supported Node.js Versions
 

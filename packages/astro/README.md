@@ -79,7 +79,7 @@ export default {
 
 ## Related
 
-- [`@cirrus/ssr`](https://www.npmjs.com/package/@cirrus/ssr) — the server preload contract re-exported by `@cirrus/astro/server`.
+- `@cirrus/client/ssr` — the server preload contract re-exported by `@cirrus/astro/server`.
 - [`@cirrus/runtime`](https://www.npmjs.com/package/@cirrus/runtime) — the Worker runtime `withCirrus` composes with.
 - [`@cirrus/react`](https://www.npmjs.com/package/@cirrus/react) — an island adapter for hydrating preloaded queries live.
 - [`@cirrus/solid`](https://www.npmjs.com/package/@cirrus/solid) — another island adapter for live hydration.
