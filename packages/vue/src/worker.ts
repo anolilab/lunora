@@ -15,12 +15,9 @@
  * supported mechanism.
  *
  * The supported integration for Nuxt is a **two-worker split**:
- * - The Nuxt/Nitro SSR worker (`wrangler.jsonc`, `cloudflare_module` preset)
- *   handles all pages and server routes.
- * - A separate standalone Cirrus worker (`wrangler.cirrus.jsonc`, `cirrus/server.ts`)
- *   owns `/_cirrus/*` + `ShardDO`.
- * - `runtimeConfig.public.cirrusUrl` (NUXT_PUBLIC_CIRRUS_URL) tells the SSR
- *   loader and the browser client where to reach the Cirrus worker.
+ * - The Nuxt/Nitro SSR worker (`wrangler.jsonc`, `cloudflare_module` preset) handles all pages and server routes.
+ * - A separate standalone Cirrus worker (`wrangler.cirrus.jsonc`, `cirrus/server.ts`) owns `/_cirrus/*` + `ShardDO`.
+ * - `runtimeConfig.public.cirrusUrl` (NUXT_PUBLIC_CIRRUS_URL) tells the SSR loader and the browser client where to reach the Cirrus worker.
  *
  * `withCirrus` remains useful for other frameworks whose build toolchain
  * genuinely exposes the emitted handler as an importable module.
