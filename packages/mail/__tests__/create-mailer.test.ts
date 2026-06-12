@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
+import type { MailboxSink } from "../src/capture-transport";
+import { createCaptureTransport } from "../src/capture-transport";
 import createMailer from "../src/create-mailer";
 import type { MailTransport, QueueLike, SendPayload } from "../src/types";
 
@@ -102,5 +104,56 @@ describe("createMailer", () => {
         const mailer = createMailer({ from: "x@x.test", transport });
 
         await expect(mailer.queue({ subject: "x", text: "y", to: "a@x.test" })).rejects.toThrow(QUEUE_PATTERN);
+    });
+
+    it("queue() records into the capture sink when no queue binding is configured", async () => {
+        expect.assertions(3);
+
+        const recorded: SendPayload[] = [];
+        const sink: MailboxSink = {
+            record: vi.fn<MailboxSink["record"]>(async (mail: SendPayload) => {
+                recorded.push(mail);
+
+                return { id: "captured-1" };
+            }),
+        };
+        const mailer = createMailer({ from: "Default <noreply@x.test>", transport: createCaptureTransport(sink) });
+
+        const result = await mailer.queue({ html: "<p>hi</p>", subject: "Queued", to: "a@x.test" });
+
+        expect(result).toEqual({ queued: true });
+        expect(recorded).toHaveLength(1);
+        expect(recorded[0]).toMatchObject({
+            from: "Default <noreply@x.test>",
+            html: "<p>hi</p>",
+            subject: "Queued",
+            to: "a@x.test",
+        });
+    });
+
+    it("queue() still enqueues (not captures) when a real queue binding is provided with a capture transport", async () => {
+        expect.assertions(3);
+
+        const recorded: SendPayload[] = [];
+        const sink: MailboxSink = {
+            record: vi.fn<MailboxSink["record"]>(async (mail: SendPayload) => {
+                recorded.push(mail);
+
+                return { id: "captured-1" };
+            }),
+        };
+        const queueMessages: unknown[] = [];
+        const queue: QueueLike = {
+            send: vi.fn<QueueLike["send"]>(async (payload: unknown) => {
+                queueMessages.push(payload);
+            }),
+        };
+        const mailer = createMailer({ from: "Default <noreply@x.test>", queue, transport: createCaptureTransport(sink) });
+
+        const result = await mailer.queue({ subject: "Queued", text: "hi", to: "a@x.test" });
+
+        expect(result).toEqual({ queued: true });
+        expect(queueMessages).toHaveLength(1);
+        expect(recorded).toHaveLength(0);
     });
 });

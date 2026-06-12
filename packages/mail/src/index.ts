@@ -1,5 +1,12 @@
+export type { CapturedMail, MailboxSink } from "./capture-transport";
+export { createCaptureTransport } from "./capture-transport";
+export type { CloudflareSend, CloudflareTransportOptions } from "./cloudflare-transport";
+export { createCloudflareTransport } from "./cloudflare-transport";
 export { default as createMailer } from "./create-mailer";
+export type { FromEnvOptions, MailEnv } from "./from-env";
+export { createCaptureSink, createMailerFromEnv, shouldCaptureMail } from "./from-env";
 export type { QueuedSend } from "./queue";
 export { consumeQueuedSend, toQueuedPayload } from "./queue";
 export { default as renderEmail } from "./render";
+export { default as createResendTransport } from "./resend-transport";
 export type { CirrusMailOptions, Mailer, MailTransport, QueueLike, SendOptions, SendPayload } from "./types";

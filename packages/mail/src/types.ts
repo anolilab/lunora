@@ -44,13 +44,21 @@ export interface SendOptions {
 }
 
 export interface CirrusMailOptions {
-    /** API key for the default Resend transport. Ignored when `transport` is set. */
+    /** API key for the Resend transport (bring-your-own-provider). Ignored when `transport` or `cloudflareSend` is set. */
     apiKey?: string;
+
+    /**
+     * RFC 822 send callback bound to the Worker's `send_email` binding. When set
+     * (and no explicit `transport` is supplied) the default transport is
+     * Cloudflare Email Workers — Cirrus's default provider. Ignored when
+     * `transport` is set.
+     */
+    cloudflareSend?: (from: string, to: string, raw: string) => Promise<void>;
     /** Default sender (`Name &lt;addr@host>` or bare email). */
     from: string;
     /** Default queue binding for `mailer.queue()`. */
     queue?: QueueLike;
-    /** Override the underlying transport. Useful for tests + multi-provider setups. */
+    /** Override the underlying transport. Useful for tests, the dev capture transport, + multi-provider setups. */
     transport?: MailTransport;
 }
 
