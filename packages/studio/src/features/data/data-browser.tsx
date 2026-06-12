@@ -6,16 +6,18 @@ import { ShardInput } from "../../components/shard-input";
 import { EmptyState } from "../../components/ui/empty-state";
 import { useT } from "../../i18n/i18n-context";
 import type { TableInfo } from "../../lib/admin";
-import type { GridEdit, TableRow } from "./data-browser-grid";
+import type { GridEdit, GridReferences, TableRow } from "./data-browser-grid";
 import { DataBrowserTableView } from "./data-browser-grid";
 import type { EditableFilter } from "./data-filters";
 import { DataFilters } from "./data-filters";
-import { GridPagination, TableListSidebar, TransposedTable } from "./data-grid";
+import { TransposedTable } from "./data-grid";
 import { CellDetailDialog, GridActionsBar } from "./grid-features";
+import GridPagination from "./grid-pagination";
 import { useDataBrowser } from "./hooks/use-data-browser";
 import { RowDetailDrawer } from "./row-detail";
 import RowFormEditor from "./row-form";
 import { StagedDiffPanel } from "./staged-edits";
+import { TableListSidebar } from "./table-list-sidebar";
 
 interface DataBrowserProps {
     /**
@@ -306,14 +308,17 @@ export const DataBrowser = ({
             editableColumn,
             editingCell,
             onExpandCell,
-            onNavigateRef: handleNavigateRef,
-            onPreviewRef: previewRef,
-            refs: page?.refs,
             stage,
             stagedValue,
             startEdit: startCellEdit,
         };
-    }, [cancelCellEdit, editable, editableColumn, editingCell, onExpandCell, handleNavigateRef, previewRef, page?.refs, stage, stagedValue, startCellEdit]);
+    }, [cancelCellEdit, editable, editableColumn, editingCell, onExpandCell, stage, stagedValue, startCellEdit]);
+
+    // The foreign-key context passed alongside it: the column → table map plus the
+    // navigate/preview handlers a ref cell needs.
+    const references = useMemo<GridReferences>(() => {
+        return { columns: page?.refs, onNavigate: handleNavigateRef, onPreview: previewRef };
+    }, [handleNavigateRef, page?.refs, previewRef]);
 
     return (
         <div className="flex h-full min-w-0" data-testid="cirrus-data-browser">
@@ -431,6 +436,7 @@ export const DataBrowser = ({
                                 onDelete={onRowDelete}
                                 onEdit={onRowEdit}
                                 onInspect={setInspecting}
+                                refs={references}
                                 scrollRef={table.scrollRef}
                                 scrollToIndex={table.scrollToIndex}
                                 table={table.table}

@@ -9,7 +9,9 @@ import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import { useT } from "../../i18n/i18n-context";
 import { CLOUDFLARE_D1_URL } from "../../lib/cf-links";
 import { errorMessage, fireAndForget } from "../../lib/internal";
-import { CellValue, GridContainer, GridPagination, TableListSidebar } from "./data-grid";
+import { CellValue, GridContainer } from "./data-grid";
+import GridPagination from "./grid-pagination";
+import { TableListSidebar } from "./table-list-sidebar";
 
 interface GlobalDataBrowserProps {
     /**

@@ -263,9 +263,10 @@ const sortIndicator = (sorted: "asc" | "desc" | false): string => {
 
 /**
  * Inline-edit wiring threaded into every grid cell: whether editing is enabled,
- * which columns accept it, the cell currently open for editing, the staged-edit
- * buffer, and the foreign-key context (so ref cells still render as links). Built
- * by `DataBrowser` and passed down to {@link EditableCell}.
+ * which columns accept it, the cell currently open for editing, and the staged-edit
+ * buffer. The separate {@link GridReferences} carries the foreign-key context so a ref
+ * cell reads only what it needs rather than the whole edit bag. Both are built by
+ * `DataBrowser` and passed down to {@link EditableCell}.
  */
 interface GridEdit {
     cancelEdit: () => void;
@@ -273,12 +274,22 @@ interface GridEdit {
     editableColumn: (column: string) => boolean;
     editingCell: null | { column: string; rowId: string };
     onExpandCell: (column: string, value: unknown) => void;
-    onNavigateRef: (target: string, id: string) => void;
-    onPreviewRef: (target: string, id: string) => Promise<Record<string, unknown> | null>;
-    refs: Record<string, string> | undefined;
     stage: StagedEditsModel["stage"];
     stagedValue: StagedEditsModel["stagedValue"];
     startEdit: (rowId: string, column: string) => void;
+}
+
+/**
+ * Foreign-key context for a grid cell: the column → referenced-table map (so a
+ * ref column renders as a link), plus how to navigate to and how to preview the
+ * referenced row. Kept separate from {@link GridEdit} so the ref cell reads only
+ * the FK wiring, not the inline-edit state.
+ */
+interface GridReferences {
+    /** Column name → referenced table, for the columns that are foreign keys. */
+    columns: Record<string, string> | undefined;
+    onNavigate: (target: string, id: string) => void;
+    onPreview: (target: string, id: string) => Promise<Record<string, unknown> | null>;
 }
 
 /** Borderless expand affordance shown on cell hover — opens the full value + copy. */
@@ -379,11 +390,11 @@ const CellEditor = ({
  * editable and the column isn't a meta column — double-click opens an inline
  * {@link CellEditor} that stages the change.
  */
-const EditableCell = memo(({ cell, edit }: { cell: Cell<TableRow, unknown>; edit: GridEdit }): ReactElement => {
+const EditableCell = memo(({ cell, edit, refs }: { cell: Cell<TableRow, unknown>; edit: GridEdit; refs: GridReferences }): ReactElement => {
     const column = cell.column.id;
     const rawValue = cell.getValue();
     const id = rowId(cell.row.original);
-    const target = edit.refs?.[column];
+    const target = refs.columns?.[column];
 
     if (target !== undefined && (typeof rawValue === "string" || typeof rawValue === "number") && String(rawValue) !== "") {
         // Keyed on target:id so a reused cell instance (an idless row at the same
@@ -393,8 +404,8 @@ const EditableCell = memo(({ cell, edit }: { cell: Cell<TableRow, unknown>; edit
                 column={column}
                 id={String(rawValue)}
                 key={`${target}:${String(rawValue)}`}
-                onNavigate={edit.onNavigateRef}
-                onPreview={edit.onPreviewRef}
+                onNavigate={refs.onNavigate}
+                onPreview={refs.onPreview}
                 target={target}
             />
         );
@@ -605,6 +616,7 @@ const DataBrowserTableView = ({
     onDelete,
     onEdit,
     onInspect,
+    refs,
     scrollRef,
     scrollToIndex,
     table,
@@ -617,6 +629,7 @@ const DataBrowserTableView = ({
     onDelete: (id: null | string) => void;
     onEdit: (id: null | string, original: TableRow) => void;
     onInspect: (original: TableRow) => void;
+    refs: GridReferences;
     scrollRef: React.RefObject<HTMLDivElement | null>;
     scrollToIndex: (index: number) => void;
     table: Table<TableRow>;
@@ -727,7 +740,7 @@ const DataBrowserTableView = ({
                             key={cell.id}
                             style={pinned ? pinnedDataCellStyle(cell.column.getSize()) : sizedCellStyle(cell.column.getSize())}
                         >
-                            <EditableCell cell={cell} edit={edit} />
+                            <EditableCell cell={cell} edit={edit} refs={refs} />
                         </td>
                     );
                 })}
@@ -919,4 +932,4 @@ const useDataBrowserTable = (page: TablePage | null, sorting: SortingState, onSo
 };
 
 export { DataBrowserTableView, rowId, useDataBrowserTable };
-export type { DataBrowserTableModel, GridEdit, TableRow };
+export type { DataBrowserTableModel, GridEdit, GridReferences, TableRow };
