@@ -4,7 +4,7 @@
 // preload the query over HTTP RPC, ship the snapshot in the HTML, and hand the
 // `Preloaded` token to the React island for the SSR-seed → live handoff.
 //
-// `@cirrus/astro/server` re-exports the framework-neutral `@cirrus/ssr`
+// `@cirrus/astro/server` re-exports the framework-neutral `@cirrus/client/ssr`
 // contract — `createServerClient` only opens a socket on `.subscribe()`, and we
 // only call `preloadQuery` (HTTP RPC), so no live connection is made here.
 import { createServerClient, preloadQuery } from "@cirrus/astro/server";
