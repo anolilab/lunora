@@ -279,6 +279,21 @@ interface CronJobDispatch {
 }
 
 /**
+ * One scheduled cron invocation as the discovery endpoint surfaces it: a
+ * {@link CronJobDispatch} flattened together with the `cron` expression that
+ * fires it. Cloudflare exposes no runtime cron introspection, so the injected
+ * `cronJobs` map is the only source of truth; the studio renders these read-only.
+ */
+interface CronJobInfo {
+    args?: Record<string, unknown>;
+    /** The compiled cron expression, e.g. `"0 9 * * *"`. */
+    cron: string;
+    functionPath: string;
+    name: string;
+    shardKey?: string;
+}
+
+/**
  * R2-like sink for scheduled backups. Structurally a subset of `@cirrus/storage`'s
  * `R2BucketLike` (and of the raw R2 binding), so passing `env.BACKUPS` straight
  * through satisfies it. `put` writes the NDJSON snapshot and its manifest
@@ -819,6 +834,7 @@ const STORAGE_URL_PATH = "/_cirrus/admin/storage/url";
 // mirror that ceiling here so an over-max request is clamped, not a 500.
 const MAX_STORAGE_EXPIRES_IN_SECONDS = 7 * 24 * 60 * 60;
 const FUNCTIONS_PATH = "/_cirrus/admin/functions";
+const CRON_JOBS_PATH = "/_cirrus/admin/cron-jobs";
 const OPENAPI_PATH = "/_cirrus/admin/openapi";
 const OPENRPC_PATH = "/_cirrus/admin/openrpc";
 const GLOBAL_TABLES_PATH = "/_cirrus/admin/global/tables";
@@ -2936,6 +2952,33 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         return Response.json({ functions }, { headers: { "content-type": "application/json" }, status: 200 });
     };
 
+    const handleCronJobs = (request: Request): Response => {
+        if (request.method !== "GET") {
+            throw new CirrusError("Cron-jobs endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        const registry = requireAdminOption(request, options.cronJobs, {
+            code: "CRON_JOBS_NOT_CONFIGURED",
+            message: "cron-jobs endpoint requires a `cronJobs` map on the worker",
+        });
+
+        // Flatten the `cron expression → dispatches[]` map into a flat, sorted list
+        // — one row per scheduled invocation. Cloudflare exposes no runtime cron
+        // introspection, so this injected map is the only source of truth; the
+        // studio renders it read-only alongside the dynamic scheduler jobs.
+        const jobs: CronJobInfo[] = Object.entries(registry)
+            .flatMap(([cron, dispatches]) => dispatches.map((dispatch) => {return {
+                args: dispatch.args,
+                cron,
+                functionPath: dispatch.functionPath,
+                name: dispatch.name,
+                shardKey: dispatch.shardKey,
+            }}))
+            .toSorted((a, b) => a.name.localeCompare(b.name));
+
+        return Response.json({ jobs }, { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
     const handleOpenApi = (request: Request): Response => {
         if (request.method !== "GET") {
             throw new CirrusError("OpenAPI endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
@@ -3687,6 +3730,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         [STORAGE_PATH]: (request) => handleStorage(request),
         [STORAGE_URL_PATH]: (request) => handleStorageSignedUrl(request),
         [FUNCTIONS_PATH]: (request) => handleFunctionsList(request),
+        [CRON_JOBS_PATH]: (request) => handleCronJobs(request),
         [OPENAPI_PATH]: (request) => handleOpenApi(request),
         [OPENRPC_PATH]: (request) => handleOpenRpc(request),
         [GLOBAL_TABLES_PATH]: (request) => handleGlobalTables(request),
@@ -3906,6 +3950,7 @@ export type {
     CirrusWorker,
     CronHandler,
     CronJobDispatch,
+    CronJobInfo,
     ExecutionContextLike,
     FrameworkHostHandler,
     FrameworkWorkerOptions,

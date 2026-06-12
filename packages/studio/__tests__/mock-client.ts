@@ -3,6 +3,7 @@ import type {
     AuthSession,
     AuthUser,
     CirrusClient,
+    CronJobInfo,
     FunctionDescriptor,
     FunctionReference,
     GlobalTableInfo,
@@ -32,6 +33,7 @@ interface MockClientHooks {
     fetchOpenApi: ReturnType<typeof vi.fn>;
     fetchOpenRpc: ReturnType<typeof vi.fn>;
     getAuthCapabilities: ReturnType<typeof vi.fn>;
+    getCronJobs: ReturnType<typeof vi.fn>;
     impersonateAuthUser: ReturnType<typeof vi.fn>;
     listAuthAccounts: ReturnType<typeof vi.fn>;
     listAuthOrganizations: ReturnType<typeof vi.fn>;
@@ -86,6 +88,7 @@ interface MockClientImpls {
     cancelScheduledJob?: (id: string) => { cancelled: boolean };
     fetchOpenApi?: () => Record<string, unknown>;
     fetchOpenRpc?: () => Record<string, unknown>;
+    getCronJobs?: () => CronJobInfo[];
     listAuthSessions?: (options: { limit?: number; offset?: number; userId?: string }) => AuthPage<AuthSession>;
     listAuthUsers?: (options: ListAuthUsersOptions) => AuthPage<AuthUser>;
     listFunctions?: () => FunctionDescriptor[];
@@ -107,6 +110,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
     const fetchOpenApi = vi.fn<() => Promise<Record<string, unknown>>>(async () => impls.fetchOpenApi?.() ?? { openapi: "3.1.0", paths: {} });
     const fetchOpenRpc = vi.fn<() => Promise<Record<string, unknown>>>(async () => impls.fetchOpenRpc?.() ?? { methods: [], openrpc: "1.3.2" });
     const listScheduledJobs = vi.fn<() => Promise<ScheduleRecord[]>>(async () => impls.listScheduledJobs?.() ?? []);
+    const getCronJobs = vi.fn<() => Promise<CronJobInfo[]>>(async () => impls.getCronJobs?.() ?? []);
     const cancelScheduledJob = vi.fn<(id: string) => Promise<{ cancelled: boolean }>>(
         async (id: string) => impls.cancelScheduledJob?.(id) ?? { cancelled: true },
     );
@@ -266,6 +270,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         deleteStorageObject,
         fetchOpenApi,
         fetchOpenRpc,
+        getCronJobs,
         listAuthSessions,
         listAuthUsers,
         listFunctions,
@@ -293,6 +298,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         emitJobs,
         fetchOpenApi,
         fetchOpenRpc,
+        getCronJobs,
         listAuthSessions,
         listAuthUsers,
         listFunctions,

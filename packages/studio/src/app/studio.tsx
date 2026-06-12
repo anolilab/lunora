@@ -35,8 +35,8 @@ import { AuditPanel } from "../features/logs/audit-panel";
 import { LogDrainsPanel } from "../features/logs/log-drains-panel";
 import { LogsPanel } from "../features/logs/logs-panel";
 import { MailPanel } from "../features/logs/mail-panel";
-import type { ScheduledJobsProps } from "../features/logs/scheduled-jobs";
-import { ScheduledJobs } from "../features/logs/scheduled-jobs";
+import type { SchedulePanelProps } from "../features/logs/schedule-panel";
+import { SchedulePanel } from "../features/logs/schedule-panel";
 import SubscriptionsPanel from "../features/logs/subscriptions-panel";
 import DashboardsPanel from "../features/reports/dashboards-panel";
 import { HealthPanel } from "../features/reports/health-panel";
@@ -144,15 +144,22 @@ interface StudioProps {
 
     /**
      * Override how the schedule tab cancels a job. Defaults to the client's
-     * scheduler admin endpoint; see {@link ScheduledJobs}.
+     * scheduler admin endpoint; see {@link SchedulePanel}.
      */
-    readonly scheduledCancel?: ScheduledJobsProps["cancelJob"];
+    readonly scheduledCancel?: SchedulePanelProps["scheduledCancel"];
+
+    /**
+     * Override how the schedule tab's Cron triggers sub-view loads triggers.
+     * Defaults to the client's `/_cirrus/admin/cron-jobs` endpoint; see
+     * {@link SchedulePanel}.
+     */
+    readonly scheduledCron?: SchedulePanelProps["loadCronJobs"];
 
     /**
      * Override how the schedule tab loads jobs. Defaults to the client's
      * scheduler admin endpoint, so the tab works without extra wiring.
      */
-    readonly scheduledLoad?: ScheduledJobsProps["loadJobs"];
+    readonly scheduledLoad?: SchedulePanelProps["scheduledLoad"];
 }
 
 /** Props the inner shell renders with — everything except the i18n wiring. */
@@ -687,6 +694,7 @@ const buildRouter = ({
     openRpcSpec,
     runAsIdentity = false,
     scheduledCancel,
+    scheduledCron,
     scheduledLoad,
 }: StudioShellProps) => {
     const rootRoute = createRootRoute({ component: StudioLayout });
@@ -718,7 +726,7 @@ const buildRouter = ({
         mail: <MailPanel />,
         realtime: <SubscriptionsPanel initialShardKey={initialShardKey} />,
         rls: <RlsPanel />,
-        schedule: <ScheduledJobs cancelJob={scheduledCancel} loadJobs={scheduledLoad} />,
+        schedule: <SchedulePanel loadCronJobs={scheduledCron} scheduledCancel={scheduledCancel} scheduledLoad={scheduledLoad} />,
         schema: <SchemaRoutePanel initialShardKey={initialShardKey} />,
         security: <SecurityAdvisorPanel />,
         settings: <SettingsPanel initialShardKey={initialShardKey} />,
@@ -777,14 +785,27 @@ const StudioShell = ({
     openRpcSpec,
     runAsIdentity,
     scheduledCancel,
+    scheduledCron,
     scheduledLoad,
 }: StudioShellProps): ReactElement => {
     // Rebuild the router only when a panel-affecting prop changes (keyed on the
     // individual props, not the unstable `props` identity), so navigation state
     // survives unrelated re-renders.
     const router = useMemo(
-        () => buildRouter({ basePath, dataEditable, functions, initialShardKey, openApiSpec, openRpcSpec, runAsIdentity, scheduledCancel, scheduledLoad }),
-        [basePath, dataEditable, functions, initialShardKey, openApiSpec, openRpcSpec, runAsIdentity, scheduledCancel, scheduledLoad],
+        () =>
+            buildRouter({
+                basePath,
+                dataEditable,
+                functions,
+                initialShardKey,
+                openApiSpec,
+                openRpcSpec,
+                runAsIdentity,
+                scheduledCancel,
+                scheduledCron,
+                scheduledLoad,
+            }),
+        [basePath, dataEditable, functions, initialShardKey, openApiSpec, openRpcSpec, runAsIdentity, scheduledCancel, scheduledCron, scheduledLoad],
     );
 
     return <RouterProvider router={router} />;
@@ -811,6 +832,7 @@ export const Studio = ({
     openRpcSpec,
     runAsIdentity,
     scheduledCancel,
+    scheduledCron,
     scheduledLoad,
 }: StudioProps): ReactElement => {
     const shell = (
@@ -823,6 +845,7 @@ export const Studio = ({
             openRpcSpec={openRpcSpec}
             runAsIdentity={runAsIdentity}
             scheduledCancel={scheduledCancel}
+            scheduledCron={scheduledCron}
             scheduledLoad={scheduledLoad}
         />
     );

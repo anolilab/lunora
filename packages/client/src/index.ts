@@ -28,6 +28,7 @@ export type {
     BookmarkStorage,
     CirrusClientOptions,
     ClientMessage,
+    CronJobInfo,
     FunctionArgumentDescriptor,
     FunctionDescriptor,
     FunctionReference,

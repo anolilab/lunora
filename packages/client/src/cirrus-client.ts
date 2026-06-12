@@ -20,6 +20,7 @@ import type {
     BookmarkStorage,
     CirrusClientOptions,
     ClientMessage,
+    CronJobInfo,
     FunctionDescriptor,
     FunctionReference,
     GlobalTableInfo,
@@ -71,6 +72,7 @@ const SCHEDULED_CANCEL_PATH = "/_cirrus/admin/scheduled/cancel";
 const STORAGE_PATH = "/_cirrus/admin/storage";
 const STORAGE_URL_PATH = "/_cirrus/admin/storage/url";
 const FUNCTIONS_PATH = "/_cirrus/admin/functions";
+const CRON_JOBS_PATH = "/_cirrus/admin/cron-jobs";
 const OPENAPI_PATH = "/_cirrus/admin/openapi";
 const OPENRPC_PATH = "/_cirrus/admin/openrpc";
 const GLOBAL_TABLES_PATH = "/_cirrus/admin/global/tables";
@@ -891,6 +893,25 @@ class CirrusClient {
         const body = (await this.adminFetch(FUNCTIONS_PATH, "GET")) as { functions?: FunctionDescriptor[] };
 
         return body.functions ?? [];
+    }
+
+    /**
+     * List the code-defined cron triggers (the `cronJobs()` map injected on the
+     * worker), each flattened to its firing `cron` expression. Hits the
+     * admin-gated `GET /_cirrus/admin/cron-jobs` endpoint — the worker must be
+     * built with a `cronJobs` map and `adminToken`, and this client's auth token
+     * must match. These are static (Cloudflare exposes no runtime cron
+     * introspection), so the studio renders them read-only alongside the dynamic
+     * scheduler jobs.
+     */
+    public async getCronJobs(): Promise<CronJobInfo[]> {
+        if (this.closed) {
+            throw new Error("CirrusClient is closed");
+        }
+
+        const body = (await this.adminFetch(CRON_JOBS_PATH, "GET")) as { jobs?: CronJobInfo[] };
+
+        return body.jobs ?? [];
     }
 
     /**

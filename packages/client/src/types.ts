@@ -379,6 +379,22 @@ export interface FunctionDescriptor {
     path: string;
 }
 
+/**
+ * One code-defined cron trigger, as returned by the worker's
+ * `GET /_cirrus/admin/cron-jobs` endpoint: the `cron` expression that fires it,
+ * the `&lt;file>:&lt;function>` path it invokes, its human `name`, and any bound
+ * `args` / `shardKey`. Static for the deployment (Cloudflare exposes no runtime
+ * cron introspection), so the studio renders these read-only.
+ */
+export interface CronJobInfo {
+    args?: Record<string, unknown>;
+    /** The compiled cron expression, e.g. `"0 9 * * *"`. */
+    cron: string;
+    functionPath: string;
+    name: string;
+    shardKey?: string;
+}
+
 /** A `.global()` (D1-backed) table plus its row count, from `/_cirrus/admin/global/tables`. */
 export interface GlobalTableInfo {
     name: string;

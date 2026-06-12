@@ -1359,6 +1359,41 @@ describe("cirrusClient", () => {
 
             await expect(client.listFunctions()).resolves.toEqual([]);
         });
+
+        it("getCronJobs GETs the admin endpoint and unwraps the list", async () => {
+            expect.assertions(3);
+
+            const jobs = [
+                { cron: "0 9 * * *", functionPath: "report:daily", name: "daily digest" },
+                { cron: "*/5 * * * *", functionPath: "presence:clear", name: "clear presence", shardKey: "acme" },
+            ];
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ jobs }));
+
+            const client = new CirrusClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            await expect(client.getCronJobs()).resolves.toEqual(jobs);
+
+            const [requestUrl, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+
+            expect(requestUrl).toBe("https://app.example/_cirrus/admin/cron-jobs");
+            expect(init.method).toBe("GET");
+        });
+
+        it("getCronJobs defaults to an empty array when jobs are absent", async () => {
+            expect.assertions(1);
+
+            const client = new CirrusClient({
+                fetch: async () => jsonResponse({}),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            await expect(client.getCronJobs()).resolves.toEqual([]);
+        });
     });
 
     // --- Global (D1) tables admin -----------------------------------------------
