@@ -16,22 +16,30 @@ const deployCommand: Command = {
         }),
     name: "deploy",
     options: [
+        { description: "Override the schema-drift gate (deploy even with breaking schema drift and no migration)", name: "allow-schema-drift", type: Boolean },
         { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
         { description: "Cloudflare environment name", name: "env", type: String },
         { description: "Output format: pretty (default) or json", name: "format", type: String },
         { description: "After a successful deploy, run pending data migrations against the live worker", name: "migrate", type: Boolean },
         { description: "Admin bearer token for --migrate (falls back to CIRRUS_ADMIN_TOKEN)", name: "migrate-token", type: String },
         { description: "Worker URL for --migrate (defaults to the deploy target)", name: "migrate-url", type: String },
+        {
+            description: "Re-bless the committed schema baseline (cirrus/.cirrus-schema.json) with the current shape",
+            name: "update-schema-baseline",
+            type: Boolean,
+        },
     ],
 };
 
 export { deployCommand };
 
 export type DeployOptions = CreateOptions<{
+    "allow-schema-drift": boolean | undefined;
     "api-spec": string | undefined;
     env: string | undefined;
     format: string | undefined;
     migrate: boolean | undefined;
     "migrate-token": string | undefined;
     "migrate-url": string | undefined;
+    "update-schema-baseline": boolean | undefined;
 }>;

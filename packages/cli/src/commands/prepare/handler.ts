@@ -4,6 +4,7 @@
  * Returns `code: 0` only when both codegen and validation pass.
  * Idempotent and safe to run in CI before `cirrus deploy`.
  */
+import type { CodegenResult } from "@cirrus/codegen";
 import { runCodegen } from "@cirrus/codegen";
 import { inferCirrusBindings, reconcileWranglerBindings } from "@cirrus/config";
 
@@ -12,20 +13,27 @@ import { parseApiSpec } from "../../util/api-spec";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
+import { runSchemaDriftGate } from "../../util/schema-drift-gate";
 import { validateWrangler } from "../../util/wrangler-validator";
 import type { PrepareOptions } from "./index";
 
 interface PrepareCommandOptions {
+    /** Override the schema-drift gate — proceed even with breaking drift and no new migration. */
+    allowSchemaDrift?: boolean;
     /** Which API spec(s) to emit. Defaults to codegen's `"openapi"` when omitted. */
     apiSpec?: ApiSpec;
     cwd?: string;
     logger: Logger;
+    /** Re-bless the committed schema baseline with the current shape. */
+    updateSchemaBaseline?: boolean;
 }
 
 interface PrepareCommandResult {
     code: number;
-    /** Set when the run aborted in an early phase (codegen / validation). */
+    /** Set when the run aborted in an early phase (codegen / validation / drift gate). */
     error?: string;
+    /** The schema-drift gate verdict. */
+    schemaDrift?: { blocked: boolean; reason: string };
     validation: {
         problems: ReadonlyArray<string>;
         wranglerPath: string | undefined;
@@ -68,8 +76,10 @@ const runPrepareCommand = async (options: PrepareCommandOptions): Promise<Prepar
 
     options.logger.info("running codegen");
 
+    let codegen: CodegenResult;
+
     try {
-        runCodegen({ apiSpec: options.apiSpec, projectRoot: cwd });
+        codegen = runCodegen({ apiSpec: options.apiSpec, projectRoot: cwd });
         options.logger.success("codegen complete");
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
@@ -79,6 +89,25 @@ const runPrepareCommand = async (options: PrepareCommandOptions): Promise<Prepar
         return {
             code: 1,
             error: `codegen failed: ${message}`,
+            validation: { problems: [], wranglerPath: undefined },
+        };
+    }
+
+    // Schema-drift gate — block when breaking schema changes ship without a new
+    // data migration. CI-friendly: `cirrus prepare` is the canonical pre-deploy
+    // step, so the gate lives here as well as in `cirrus deploy`.
+    const gate = runSchemaDriftGate({
+        allowDrift: options.allowSchemaDrift === true,
+        codegen,
+        logger: options.logger,
+        updateBaseline: options.updateSchemaBaseline === true,
+    });
+
+    if (gate.blocked) {
+        return {
+            code: 1,
+            error: "schema drift gate blocked prepare",
+            schemaDrift: { blocked: true, reason: gate.reason },
             validation: { problems: [], wranglerPath: undefined },
         };
     }
@@ -108,7 +137,13 @@ const runPrepareCommand = async (options: PrepareCommandOptions): Promise<Prepar
 
 /** `cirrus prepare` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<PrepareOptions> = defineHandler<PrepareOptions>(({ cwd, logger, options }) =>
-    runPrepareCommand({ apiSpec: parseApiSpec(options.apiSpec), cwd, logger }),
+    runPrepareCommand({
+        allowSchemaDrift: options.allowSchemaDrift === true,
+        apiSpec: parseApiSpec(options.apiSpec),
+        cwd,
+        logger,
+        updateSchemaBaseline: options.updateSchemaBaseline === true,
+    }),
 );
 
 export { execute };

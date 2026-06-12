@@ -1,0 +1,238 @@
+import { describe, expect, it } from "vitest";
+
+import type { SchemaIR, TableIR } from "../src/ir";
+import {
+    buildSchemaSnapshot,
+    diffSchemaSnapshots,
+    evaluateSchemaDrift,
+    parseSchemaSnapshot,
+    SCHEMA_SNAPSHOT_VERSION,
+    serializeSchemaSnapshot,
+} from "../src/schema-drift";
+
+/** Build a minimal `TableIR` with the given field shape; extras (indexes/relations/shardMode) optional. */
+const table = (name: string, shape: TableIR["shape"], extra: Partial<TableIR> = {}): TableIR => {
+    return {
+        indexes: [],
+        name,
+        rankIndexes: [],
+        relations: [],
+        searchIndexes: [],
+        shape,
+        shardMode: "root",
+        vectorIndexes: [],
+        ...extra,
+    };
+};
+
+const schema = (tables: TableIR[]): SchemaIR => {
+    return { tables, vectorIndexes: [] };
+};
+
+const stringField = { kind: "string" } as const;
+const numberField = { kind: "number" } as const;
+const optionalString = { inner: { kind: "string" }, kind: "optional" } as const;
+
+describe("schema-drift", () => {
+    describe("buildSchemaSnapshot", () => {
+        it("captures field kinds + optionality, sorts tables and migration ids", () => {
+            expect.assertions(4);
+
+            const snapshot = buildSchemaSnapshot(
+                schema([table("users", { name: stringField, nickname: optionalString }), table("messages", { text: stringField })]),
+                ["m2", "m1"],
+            );
+
+            // tables sorted alphabetically (messages before users)
+            expect(Object.keys(snapshot.tables)).toStrictEqual(["messages", "users"]);
+            expect(snapshot.tables.users?.fields.nickname).toStrictEqual({ kind: "string", optional: true });
+            expect(snapshot.tables.users?.fields.name).toStrictEqual({ kind: "string", optional: false });
+            // migration ids sorted
+            expect(snapshot.migrationIds).toStrictEqual(["m1", "m2"]);
+        });
+
+        it("encodes shard mode as a stable string", () => {
+            expect.assertions(3);
+
+            const snapshot = buildSchemaSnapshot(
+                schema([
+                    table("a", { x: stringField }),
+                    table("b", { x: stringField }, { shardMode: "global" }),
+                    table("c", { x: stringField }, { shardMode: { field: "tenantId", kind: "shardBy" } }),
+                ]),
+                [],
+            );
+
+            expect(snapshot.tables.a?.shardMode).toBe("root");
+            expect(snapshot.tables.b?.shardMode).toBe("global");
+            expect(snapshot.tables.c?.shardMode).toBe("shardBy:tenantId");
+        });
+    });
+
+    describe("serialize / parse round-trip", () => {
+        it("round-trips a snapshot and rejects wrong-version / garbage", () => {
+            expect.assertions(4);
+
+            const snapshot = buildSchemaSnapshot(schema([table("users", { name: stringField })]), ["m1"]);
+            const serialized = serializeSchemaSnapshot(snapshot);
+
+            expect(serialized.endsWith("\n")).toBe(true);
+            expect(parseSchemaSnapshot(serialized)).toStrictEqual(snapshot);
+            expect(parseSchemaSnapshot("not json")).toBeUndefined();
+            expect(parseSchemaSnapshot(JSON.stringify({ tables: {}, version: 999 }))).toBeUndefined();
+        });
+    });
+
+    describe("diffSchemaSnapshots classification", () => {
+        const baseline = buildSchemaSnapshot(schema([table("users", { age: numberField, name: stringField })]), []);
+
+        it("treats a brand-new optional field as safe and a new required field as breaking", () => {
+            expect.assertions(2);
+
+            const safe = diffSchemaSnapshots(
+                baseline,
+                buildSchemaSnapshot(schema([table("users", { age: numberField, bio: optionalString, name: stringField })]), []),
+            );
+            const breaking = diffSchemaSnapshots(
+                baseline,
+                buildSchemaSnapshot(schema([table("users", { age: numberField, name: stringField, role: stringField })]), []),
+            );
+
+            expect(safe.changes).toStrictEqual([{ severity: "safe", summary: "added optional field users.bio", type: "addedOptionalField" }]);
+            expect(breaking.changes.some((c) => c.type === "addedRequiredField" && c.severity === "breaking")).toBe(true);
+        });
+
+        it("flags dropped fields, type changes, and optional→required as breaking", () => {
+            expect.assertions(3);
+
+            const dropped = diffSchemaSnapshots(baseline, buildSchemaSnapshot(schema([table("users", { name: stringField })]), []));
+            const retyped = diffSchemaSnapshots(baseline, buildSchemaSnapshot(schema([table("users", { age: stringField, name: stringField })]), []));
+            const tightened = diffSchemaSnapshots(
+                buildSchemaSnapshot(schema([table("users", { name: optionalString })]), []),
+                buildSchemaSnapshot(schema([table("users", { name: stringField })]), []),
+            );
+
+            expect(dropped.changes.some((c) => c.type === "removedField" && c.severity === "breaking")).toBe(true);
+            expect(retyped.changes.some((c) => c.type === "changedFieldKind" && c.severity === "breaking")).toBe(true);
+            expect(tightened.changes.some((c) => c.type === "fieldOptionalToRequired" && c.severity === "breaking")).toBe(true);
+        });
+
+        it("treats required→optional widening and a new table as safe", () => {
+            expect.assertions(2);
+
+            const widened = diffSchemaSnapshots(
+                buildSchemaSnapshot(schema([table("users", { name: stringField })]), []),
+                buildSchemaSnapshot(schema([table("users", { name: optionalString })]), []),
+            );
+            const newTable = diffSchemaSnapshots(
+                baseline,
+                buildSchemaSnapshot(schema([table("users", { age: numberField, name: stringField }), table("posts", { title: stringField })]), []),
+            );
+
+            expect(widened.changes).toStrictEqual([{ severity: "safe", summary: "field users.name became optional", type: "fieldRequiredToOptional" }]);
+            expect(newTable.changes.some((c) => c.type === "addedTable" && c.severity === "safe")).toBe(true);
+        });
+
+        it("flags a dropped table, removed index, removed relation, and changed shard mode as breaking", () => {
+            expect.assertions(4);
+
+            const withExtras = buildSchemaSnapshot(
+                schema([
+                    table(
+                        "users",
+                        { name: stringField },
+                        {
+                            indexes: [{ fields: ["name"], name: "by_name", unique: false }],
+                            relations: [{ field: "authorId", kind: "many", name: "posts", references: "_id", table: "posts" }],
+                        },
+                    ),
+                    table("posts", { title: stringField }),
+                ]),
+                [],
+            );
+
+            const dropped = diffSchemaSnapshots(withExtras, buildSchemaSnapshot(schema([table("users", { name: stringField })]), []));
+            const reshard = diffSchemaSnapshots(
+                buildSchemaSnapshot(schema([table("users", { name: stringField })]), []),
+                buildSchemaSnapshot(schema([table("users", { name: stringField }, { shardMode: { field: "tenantId", kind: "shardBy" } })]), []),
+            );
+
+            expect(dropped.changes.some((c) => c.type === "removedTable" && c.severity === "breaking")).toBe(true);
+            expect(dropped.changes.some((c) => c.type === "removedIndex" && c.severity === "breaking")).toBe(true);
+            expect(dropped.changes.some((c) => c.type === "removedRelation" && c.severity === "breaking")).toBe(true);
+            expect(reshard.changes.some((c) => c.type === "changedShardMode" && c.severity === "breaking")).toBe(true);
+        });
+    });
+
+    describe("evaluateSchemaDrift gate", () => {
+        const baseline = buildSchemaSnapshot(schema([table("users", { name: stringField })]), []);
+
+        it("passes additive-only drift (new optional field)", () => {
+            expect.assertions(2);
+
+            const current = buildSchemaSnapshot(schema([table("users", { bio: optionalString, name: stringField })]), []);
+            const decision = evaluateSchemaDrift({ baseline, current });
+
+            expect(decision.blocked).toBe(false);
+            expect(decision.reason).toContain("additive/safe");
+        });
+
+        it("blocks breaking drift when no new migration was added", () => {
+            expect.assertions(3);
+
+            const current = buildSchemaSnapshot(schema([table("users", { name: numberField })]), []);
+            const decision = evaluateSchemaDrift({ baseline, current });
+
+            expect(decision.blocked).toBe(true);
+            expect(decision.reason).toContain("deploy blocked");
+            expect(decision.reason).toContain("changed type");
+        });
+
+        it("passes breaking drift when a NEW migration id is present", () => {
+            expect.assertions(3);
+
+            const current = buildSchemaSnapshot(schema([table("users", { name: numberField })]), ["fix-name-type"]);
+            const decision = evaluateSchemaDrift({ baseline, current });
+
+            expect(decision.blocked).toBe(false);
+            expect(decision.newMigrationIds).toStrictEqual(["fix-name-type"]);
+            expect(decision.reason).toContain("new migration(s) were added");
+        });
+
+        it("passes breaking drift when overridden with allowDrift", () => {
+            expect.assertions(2);
+
+            const current = buildSchemaSnapshot(schema([table("users", { name: numberField })]), []);
+            const decision = evaluateSchemaDrift({ allowDrift: true, baseline, current });
+
+            expect(decision.blocked).toBe(false);
+            expect(decision.reason).toContain("overridden by --allow-schema-drift");
+        });
+
+        it("never blocks a first-ever capture (no baseline)", () => {
+            expect.assertions(1);
+
+            const current = buildSchemaSnapshot(schema([table("users", { name: stringField })]), []);
+            const decision = evaluateSchemaDrift({ baseline: undefined, current });
+
+            expect(decision.blocked).toBe(false);
+        });
+
+        it("a re-added migration id (already in baseline) does not satisfy the gate", () => {
+            expect.assertions(1);
+
+            const withMigration = buildSchemaSnapshot(schema([table("users", { name: stringField })]), ["m1"]);
+            // breaking change but the only migration id is the same one the baseline already knew.
+            const current = buildSchemaSnapshot(schema([table("users", { name: numberField })]), ["m1"]);
+            const decision = evaluateSchemaDrift({ baseline: withMigration, current });
+
+            expect(decision.blocked).toBe(true);
+        });
+    });
+
+    it("exposes the snapshot version", () => {
+        expect.assertions(1);
+
+        expect(SCHEMA_SNAPSHOT_VERSION).toBe(1);
+    });
+});

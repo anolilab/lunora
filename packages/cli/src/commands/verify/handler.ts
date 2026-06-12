@@ -9,12 +9,15 @@ import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import { runSchemaDriftGate } from "../../util/schema-drift-gate";
 import type { Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import { validateWrangler } from "../../util/wrangler-validator";
 import type { VerifyOptions } from "./index";
 
 interface VerifyCommandOptions {
+    /** Override the schema-drift gate — report breaking drift as a warning instead of an error. */
+    allowSchemaDrift?: boolean;
     /** Which API spec(s) codegen would emit. Defaults to codegen's `"openapi"` when omitted. */
     apiSpec?: ApiSpec;
     cwd?: string;
@@ -108,7 +111,15 @@ const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCo
     const warnings: string[] = [...validation.report.warnings];
 
     try {
-        runCodegen({ apiSpec: options.apiSpec, dryRun: true, projectRoot: cwd });
+        // `dryRun` keeps `cirrus/_generated/` untouched but still returns the
+        // current schema snapshot, so the read-only drift gate can run without
+        // mutating any file (verify never writes — see `readOnly: true`).
+        const codegen = runCodegen({ apiSpec: options.apiSpec, dryRun: true, projectRoot: cwd });
+        const gate = runSchemaDriftGate({ allowDrift: options.allowSchemaDrift === true, codegen, logger, readOnly: true });
+
+        if (gate.blocked) {
+            errors.push(gate.reason);
+        }
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
 
@@ -139,6 +150,7 @@ const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCo
 /** `cirrus verify` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<VerifyOptions> = defineHandler<VerifyOptions>(async ({ cwd, logger, options }) => {
     const result = await runVerifyCommand({
+        allowSchemaDrift: options.allowSchemaDrift === true,
         apiSpec: parseApiSpec(options.apiSpec),
         cwd,
         format: options.format,

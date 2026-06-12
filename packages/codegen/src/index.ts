@@ -34,7 +34,25 @@ export { buildOpenApiDocument, emitOpenApi, emitOpenApiModule } from "./openapi"
 export type { OpenRpcEmitInput } from "./openrpc";
 export { buildOpenRpcDocument, emitOpenRpc, emitOpenRpcModule, OPENRPC_VERSION } from "./openrpc";
 export type { CodegenOptions, CodegenResult } from "./run-codegen";
-export { runCodegen } from "./run-codegen";
+export { runCodegen, SCHEMA_SNAPSHOT_FILENAME } from "./run-codegen";
+export type {
+    DriftChange,
+    FieldSnapshot,
+    IndexSnapshot,
+    RelationSnapshot,
+    SchemaDrift,
+    SchemaDriftDecision,
+    SchemaSnapshot,
+    TableSnapshot,
+} from "./schema-drift";
+export {
+    buildSchemaSnapshot,
+    diffSchemaSnapshots,
+    evaluateSchemaDrift,
+    parseSchemaSnapshot,
+    SCHEMA_SNAPSHOT_VERSION,
+    serializeSchemaSnapshot,
+} from "./schema-drift";
 export { CIRRUS_ERROR_CODES, validatorIrToJsonSchema } from "./schema-ir";
 export type { Finding } from "@cirrus/advisor";
 

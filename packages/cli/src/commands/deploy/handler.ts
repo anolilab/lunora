@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 
+import type { CodegenResult } from "@cirrus/codegen";
 import { discoverMigrations, runCodegen } from "@cirrus/codegen";
 import { findWranglerFile, inferCirrusBindings, readWranglerJsonc, reconcileWranglerBindings } from "@cirrus/config";
 import { join } from "@visulima/path";
@@ -12,6 +13,7 @@ import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import { runSchemaDriftGate } from "../../util/schema-drift-gate";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
 import { validateWrangler } from "../../util/wrangler-validator";
@@ -24,6 +26,8 @@ import type { DeployOptions } from "./index";
 const D1_PLACEHOLDER_ID = "<replace-with-d1-create-id>";
 
 interface DeployCommandOptions {
+    /** Override the schema-drift gate — deploy even with breaking drift and no new migration. */
+    allowSchemaDrift?: boolean;
     /** Which API spec(s) codegen emits. Defaults to codegen's `"openapi"` when omitted. */
     apiSpec?: ApiSpec;
     cwd?: string;
@@ -57,6 +61,8 @@ interface DeployCommandOptions {
     migrateUrl?: string;
     skipCodegen?: boolean;
     spawner?: Spawner;
+    /** Re-bless the committed schema baseline with the current shape (accepts breaking drift). */
+    updateSchemaBaseline?: boolean;
 }
 
 interface DeployCommandResult {
@@ -64,6 +70,8 @@ interface DeployCommandResult {
     descriptor: SpawnDescriptor | undefined;
     /** Set when the run aborted before reaching the wrangler invocation. */
     error?: string;
+    /** The schema-drift gate verdict, when it ran (skipped on `--skip-codegen`). */
+    schemaDrift?: { blocked: boolean; reason: string };
     validation: {
         problems: ReadonlyArray<string>;
         wranglerPath: string | undefined;
@@ -222,8 +230,12 @@ const runPostDeployMigrations = async (options: DeployCommandOptions, cwd: strin
     return 0;
 };
 
-/** Run codegen (with optional spinner), returning an error message or `undefined` on success. */
-const runCodegenStep = (cwd: string, interactive: boolean, logger: Logger, apiSpec: ApiSpec | undefined): string | undefined => {
+/**
+ * Run codegen (with optional spinner). Returns the {@link CodegenResult} on
+ * success (the deploy needs its schema snapshot for the drift gate), or an
+ * `{ error }` message on failure.
+ */
+const runCodegenStep = (cwd: string, interactive: boolean, logger: Logger, apiSpec: ApiSpec | undefined): { error?: string; result?: CodegenResult } => {
     let codegenSpinner: Spinner | undefined;
 
     if (interactive) {
@@ -234,14 +246,14 @@ const runCodegenStep = (cwd: string, interactive: boolean, logger: Logger, apiSp
     }
 
     try {
-        runCodegen({ apiSpec, projectRoot: cwd });
+        const result = runCodegen({ apiSpec, projectRoot: cwd });
         codegenSpinner?.succeed("codegen complete");
 
         if (!codegenSpinner) {
             logger.success("codegen complete");
         }
 
-        return undefined;
+        return { result };
     } catch (error: unknown) {
         codegenSpinner?.failed("codegen failed");
 
@@ -249,7 +261,7 @@ const runCodegenStep = (cwd: string, interactive: boolean, logger: Logger, apiSp
 
         logger.error(`codegen failed: ${message}`);
 
-        return `codegen failed: ${message}`;
+        return { error: `codegen failed: ${message}` };
     }
 };
 
@@ -280,14 +292,42 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
     const cwd = options.cwd ?? process.cwd();
     const interactive = isInteractive(options);
 
-    if (!options.skipCodegen) {
-        const codegenError = runCodegenStep(cwd, interactive, options.logger, options.apiSpec);
+    let codegen: CodegenResult | undefined;
 
-        if (codegenError !== undefined) {
+    if (!options.skipCodegen) {
+        const codegenStep = runCodegenStep(cwd, interactive, options.logger, options.apiSpec);
+
+        if (codegenStep.error !== undefined) {
             return {
                 code: 1,
                 descriptor: undefined,
-                error: codegenError,
+                error: codegenStep.error,
+                validation: { problems: [], wranglerPath: undefined },
+            };
+        }
+
+        codegen = codegenStep.result;
+    }
+
+    // Schema-drift gate: block when the schema has breaking changes (dropped/
+    // retyped/now-required field, dropped table/index/relation, re-shard, …) and
+    // no NEW `defineMigration` was added since the committed baseline. Mirrors the
+    // D1-placeholder guard's early-abort + actionable message. Skipped on
+    // `--skip-codegen` (no fresh snapshot to gate on).
+    if (codegen !== undefined) {
+        const gate = runSchemaDriftGate({
+            allowDrift: options.allowSchemaDrift === true,
+            codegen,
+            logger: options.logger,
+            updateBaseline: options.updateSchemaBaseline === true,
+        });
+
+        if (gate.blocked) {
+            return {
+                code: 1,
+                descriptor: undefined,
+                error: "schema drift gate blocked deploy",
+                schemaDrift: { blocked: true, reason: gate.reason },
                 validation: { problems: [], wranglerPath: undefined },
             };
         }
@@ -395,6 +435,7 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
 /** `cirrus deploy` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions>(async ({ cwd, logger, options }) => {
     const result = await runDeployCommand({
+        allowSchemaDrift: options.allowSchemaDrift === true,
         apiSpec: parseApiSpec(options.apiSpec),
         cwd,
         env: options.env,
@@ -403,6 +444,7 @@ const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions>(asyn
         migrate: options.migrate === true,
         migrateToken: options.migrateToken,
         migrateUrl: options.migrateUrl,
+        updateSchemaBaseline: options.updateSchemaBaseline === true,
     });
 
     return { code: result.code };

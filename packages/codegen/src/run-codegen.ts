@@ -18,6 +18,16 @@ import discoverSchema from "./discover-schema";
 import { emitApi, emitCrons, emitDataModel, emitDrizzleSchema, emitFunctions, emitServer, emitShard, emitWranglerCronTriggers } from "./emit";
 import { buildOpenApiDocument, emitOpenApiModule } from "./openapi";
 import { buildOpenRpcDocument, emitOpenRpcModule } from "./openrpc";
+import type { SchemaSnapshot } from "./schema-drift";
+import { buildSchemaSnapshot, serializeSchemaSnapshot } from "./schema-drift";
+
+/**
+ * Committed, tracked baseline file holding the blessed structural schema
+ * snapshot the pre-deploy drift gate diffs against. Lives in `cirrus/` (NOT the
+ * gitignored `_generated/`) so it is committed alongside `schema.ts`. Leading
+ * dot keeps it tucked away next to the schema it describes.
+ */
+const SCHEMA_SNAPSHOT_FILENAME = ".cirrus-schema.json";
 
 const writeIfChanged = (filePath: string, content: string): void => {
     // Avoid spurious writes (and downstream HMR reloads) when the rendered
@@ -134,6 +144,20 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const openApiModuleContent = emitOpenApiModule(openApiDocument);
     const openRpcModuleContent = emitOpenRpcModule(openRpcDocument);
 
+    // Structural schema snapshot for the pre-deploy drift gate. Built from the
+    // discovered schema + the declared migration ids; the CLI gate diffs the
+    // CURRENT snapshot against the committed baseline. Always computed (cheap,
+    // pure) and returned in `CodegenResult`; the baseline file is (re-)blessed
+    // only when it is absent (first capture) or `updateSchemaBaseline` is set —
+    // so a routine codegen run never silently moves the goalposts the gate
+    // measures against.
+    const schemaSnapshot = buildSchemaSnapshot(
+        schema,
+        migrations.map((migration) => migration.id),
+    );
+    const schemaSnapshotPath = join(cirrusDirectory, SCHEMA_SNAPSHOT_FILENAME);
+    const schemaSnapshotExists = existsSync(schemaSnapshotPath);
+
     const outputDirectory = join(cirrusDirectory, "_generated");
 
     if (!options.dryRun) {
@@ -163,6 +187,14 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
             writeIfChanged(join(outputDirectory, "openrpc.json"), openRpcContent);
             writeIfChanged(join(outputDirectory, "openrpc.ts"), openRpcModuleContent);
         }
+
+        // Bless the schema baseline on first capture (so a project gets a
+        // committed snapshot the moment it runs codegen) or when explicitly
+        // asked to refresh it. The CLI gate reads the existing baseline BEFORE
+        // calling codegen, so re-blessing here never hides drift from that run.
+        if (!schemaSnapshotExists || options.updateSchemaBaseline === true) {
+            writeIfChanged(schemaSnapshotPath, serializeSchemaSnapshot(schemaSnapshot));
+        }
     }
 
     return {
@@ -183,6 +215,8 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
             shard: shardContent,
         },
         outputDirectory,
+        schemaSnapshot,
+        schemaSnapshotPath,
     };
 };
 
@@ -220,6 +254,15 @@ export interface CodegenOptions {
     lint?: boolean;
     /** Project root containing the `cirrus/` directory. */
     projectRoot: string;
+
+    /**
+     * Re-bless the committed schema-drift baseline (`cirrus/.cirrus-schema.json`)
+     * with the current structural snapshot. The baseline is ALWAYS written on
+     * first capture (when the file is absent); set this to overwrite an existing
+     * one — e.g. after the developer has added the data migration that justifies
+     * a breaking change. Ignored when `dryRun` is true.
+     */
+    updateSchemaBaseline?: boolean;
 }
 
 export interface CodegenResult {
@@ -269,4 +312,18 @@ export interface CodegenResult {
         shard: string;
     };
     outputDirectory: string;
+
+    /**
+     * The CURRENT structural schema snapshot computed this run (tables + field
+     * kinds/optionality + indexes/relations/shard mode + declared migration ids).
+     * The pre-deploy drift gate diffs this against the committed baseline read
+     * from {@link CodegenResult.schemaSnapshotPath}. Always present, even on a
+     * `dryRun`.
+     */
+    schemaSnapshot: SchemaSnapshot;
+
+    /** Absolute path of the committed baseline file (`cirrus/.cirrus-schema.json`). */
+    schemaSnapshotPath: string;
 }
+
+export { SCHEMA_SNAPSHOT_FILENAME };

@@ -11,9 +11,21 @@ const prepareCommand: Command = {
             return { default: m.execute as CommandExecute<Toolbox> };
         }),
     name: "prepare",
-    options: [{ description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String }],
+    options: [
+        { description: "Override the schema-drift gate (proceed even with breaking schema drift and no migration)", name: "allow-schema-drift", type: Boolean },
+        { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
+        {
+            description: "Re-bless the committed schema baseline (cirrus/.cirrus-schema.json) with the current shape",
+            name: "update-schema-baseline",
+            type: Boolean,
+        },
+    ],
 };
 
 export { prepareCommand };
 
-export type PrepareOptions = CreateOptions<{ "api-spec": string | undefined }>;
+export type PrepareOptions = CreateOptions<{
+    "allow-schema-drift": boolean | undefined;
+    "api-spec": string | undefined;
+    "update-schema-baseline": boolean | undefined;
+}>;

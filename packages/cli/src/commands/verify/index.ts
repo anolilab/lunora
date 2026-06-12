@@ -15,6 +15,7 @@ const verifyCommand: Command = {
         }),
     name: "verify",
     options: [
+        { description: "Treat breaking schema drift as a warning instead of a failure", name: "allow-schema-drift", type: Boolean },
         { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
         { description: "Output format: pretty (default) or json", name: "format", type: String },
         { description: "Skip the TypeScript type-check step", name: "no-typecheck", type: Boolean },
@@ -25,4 +26,9 @@ export { verifyCommand };
 
 // `--no-typecheck` is declared as a `no-*` option but cerebro exposes it at
 // runtime under the negated `typecheck` key (false when passed, true when absent).
-export type VerifyOptions = CreateOptions<{ "api-spec": string | undefined; format: string | undefined; typecheck: boolean | undefined }>;
+export type VerifyOptions = CreateOptions<{
+    "allow-schema-drift": boolean | undefined;
+    "api-spec": string | undefined;
+    format: string | undefined;
+    typecheck: boolean | undefined;
+}>;
