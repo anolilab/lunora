@@ -37,6 +37,10 @@ type StorageAuthLike = {
 
 /** The wrappable subset of `ctx.storage`. Methods absent on a read-only storage are simply not wrapped. */
 interface WrappableStorage {
+    /** Select a named bucket; the returned accessor is wrapped + enforced too. */
+    bucket?: (name: string) => WrappableStorage;
+    /** The bucket this accessor targets — scopes which `(bucket, op)` rules apply. */
+    bucketName?: string;
     delete?: (key: string) => Promise<void>;
     download?: (key: string) => Promise<unknown>;
     generateUploadUrl?: (key: string, options?: unknown) => Promise<string>;
@@ -78,8 +82,6 @@ const storageRules = <Context extends StorageContextIn = StorageContextIn>(
     options: StorageRulesOptions = {},
 ): Middleware<Context, Context> => {
     const rolePermissions = indexRolePermissions(options.roles);
-    // Which operations are governed at all — an op with no rule stays unrestricted.
-    const governed = new Set<StorageOperation>(rules.map((rule) => rule.on));
 
     return async ({ ctx, next }) => {
         const auth: StorageAuthLike = ctx.auth ?? {};
@@ -103,18 +105,96 @@ const storageRules = <Context extends StorageContextIn = StorageContextIn>(
             userId: auth.userId ?? null,
         };
 
-        /** Throw `FORBIDDEN` unless the op is unguarded or a matching rule allows the key. */
-        const assertAllowed = (op: StorageOperation, key: string): void => {
-            if (!governed.has(op)) {
+        /**
+         * Throw `FORBIDDEN` unless the op is unguarded for `bucketName` or a
+         * matching rule allows the key. Rules are scoped to the accessor's bucket;
+         * a storage with no `bucketName` tag (legacy/un-tagged) can't be scoped, so
+         * every rule for the op applies.
+         */
+        const assertAllowed = (op: StorageOperation, key: string, bucketName: string | undefined): void => {
+            const applicable = rules.filter((rule) => rule.on === op && (bucketName === undefined || rule.bucket === bucketName));
+
+            if (applicable.length === 0) {
                 return;
             }
 
             const context: StorageRuleContext<Context> = { auth: authContext, ctx, key };
-            const allowed = rules.some((rule) => rule.on === op && prefixMatches(rule.prefix, key) && rule.when(context) === true);
+            const allowed = applicable.some((rule) => prefixMatches(rule.prefix, key) && rule.when(context) === true);
 
             if (!allowed) {
-                throw new CirrusError("FORBIDDEN", `storage ${op} on "${key}" denied by access rule`);
+                throw new CirrusError("FORBIDDEN", `storage ${op} on "${key}"${bucketName === undefined ? "" : ` in bucket "${bucketName}"`} denied by access rule`);
             }
+        };
+
+        // Recursively wrap a storage accessor: enforce each method against the
+        // accessor's bucket, and wrap the `bucket(name)` selector so a switched
+        // bucket is enforced too. Spreads the original so untouched methods (and a
+        // read-only storage's absent write methods) pass through.
+        const wrapStorage = (storage: WrappableStorage): WrappableStorage => {
+            const { bucketName } = storage;
+            const wrapped: WrappableStorage = { ...storage };
+
+            if (storage.download !== undefined) {
+                wrapped.download = (key) => {
+                    assertAllowed("read", key, bucketName);
+
+                    return storage.download?.(key) as Promise<unknown>;
+                };
+            }
+
+            if (storage.getMetadata !== undefined) {
+                wrapped.getMetadata = (key) => {
+                    assertAllowed("read", key, bucketName);
+
+                    return storage.getMetadata?.(key) as Promise<unknown>;
+                };
+            }
+
+            if (storage.getSignedUrl !== undefined) {
+                wrapped.getSignedUrl = (key, signOptions) => {
+                    assertAllowed("read", key, bucketName);
+
+                    return storage.getSignedUrl?.(key, signOptions) as Promise<string>;
+                };
+            }
+
+            if (storage.getUrl !== undefined) {
+                wrapped.getUrl = (key) => {
+                    assertAllowed("read", key, bucketName);
+
+                    return storage.getUrl?.(key) as string;
+                };
+            }
+
+            if (storage.store !== undefined) {
+                wrapped.store = (key, body, storeOptions) => {
+                    assertAllowed("write", key, bucketName);
+
+                    return storage.store?.(key, body, storeOptions) as Promise<unknown>;
+                };
+            }
+
+            if (storage.generateUploadUrl !== undefined) {
+                wrapped.generateUploadUrl = (key, uploadOptions) => {
+                    assertAllowed("write", key, bucketName);
+
+                    return storage.generateUploadUrl?.(key, uploadOptions) as Promise<string>;
+                };
+            }
+
+            if (storage.delete !== undefined) {
+                wrapped.delete = (key) => {
+                    assertAllowed("delete", key, bucketName);
+
+                    return storage.delete?.(key) as Promise<void>;
+                };
+            }
+
+            if (storage.bucket !== undefined) {
+                wrapped.bucket = (name) => wrapStorage(storage.bucket?.(name) as WrappableStorage);
+            }
+
+            return wrapped;
         };
 
         const storage = ctx.storage as undefined | WrappableStorage;
@@ -123,67 +203,7 @@ const storageRules = <Context extends StorageContextIn = StorageContextIn>(
             return next();
         }
 
-        // Spread the original so untouched methods (and read-only storages
-        // lacking write methods) pass through; override only the ones present.
-        const wrapped: WrappableStorage = { ...storage };
-
-        if (storage.download !== undefined) {
-            wrapped.download = (key) => {
-                assertAllowed("read", key);
-
-                return storage.download?.(key) as Promise<unknown>;
-            };
-        }
-
-        if (storage.getMetadata !== undefined) {
-            wrapped.getMetadata = (key) => {
-                assertAllowed("read", key);
-
-                return storage.getMetadata?.(key) as Promise<unknown>;
-            };
-        }
-
-        if (storage.getSignedUrl !== undefined) {
-            wrapped.getSignedUrl = (key, signOptions) => {
-                assertAllowed("read", key);
-
-                return storage.getSignedUrl?.(key, signOptions) as Promise<string>;
-            };
-        }
-
-        if (storage.getUrl !== undefined) {
-            wrapped.getUrl = (key) => {
-                assertAllowed("read", key);
-
-                return storage.getUrl?.(key) as string;
-            };
-        }
-
-        if (storage.store !== undefined) {
-            wrapped.store = (key, body, storeOptions) => {
-                assertAllowed("write", key);
-
-                return storage.store?.(key, body, storeOptions) as Promise<unknown>;
-            };
-        }
-
-        if (storage.generateUploadUrl !== undefined) {
-            wrapped.generateUploadUrl = (key, uploadOptions) => {
-                assertAllowed("write", key);
-
-                return storage.generateUploadUrl?.(key, uploadOptions) as Promise<string>;
-            };
-        }
-
-        if (storage.delete !== undefined) {
-            wrapped.delete = (key) => {
-                assertAllowed("delete", key);
-
-                return storage.delete?.(key) as Promise<void>;
-            };
-        }
-
-        return next({ ctx: { storage: wrapped } });
+        return next({ ctx: { storage: wrapStorage(storage) } });
     };
 };
 

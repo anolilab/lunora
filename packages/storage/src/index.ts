@@ -1,3 +1,5 @@
+export type { BucketStorage } from "./bucket-storage";
+export { default as createBucketStorage } from "./bucket-storage";
 export { createStorage, scopeKey } from "./create-storage";
 export type { PresignedUrlParams } from "./presigned-url";
 export { buildPresignedUrl } from "./presigned-url";

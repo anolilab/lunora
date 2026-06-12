@@ -18,6 +18,8 @@ describe("queryCtx.storage / MutationCtx.storage", () => {
         // Build a minimal `ReadOnlyStorage` double and verify it satisfies
         // both `QueryCtx["storage"]` and `MutationCtx["storage"]`.
         const storage: ReadOnlyStorage = {
+            bucket: () => storage,
+            bucketName: "default",
             download: async (_key) => null,
             getMetadata: async (_key) => null,
             getSignedUrl: async (key, options) => `signed://${key}?expires=${String(options?.expiresInSeconds ?? 60)}`,
@@ -64,6 +66,8 @@ describe("queryCtx.storage / MutationCtx.storage", () => {
         const calls: { expiresInSeconds?: number; key: string }[] = [];
 
         const storage: ReadOnlyStorage = {
+            bucket: () => storage,
+            bucketName: "default",
             download: async () => null,
             getMetadata: async () => null,
             getSignedUrl: async (key, options) => {

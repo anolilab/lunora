@@ -186,3 +186,83 @@ describe("storageRules — write/delete path", () => {
         expect(fake.calls).toEqual([{ key: "user/u1/old.png", method: "delete" }]);
     });
 });
+
+/** A bucket-tagged fake storage: `default` + `avatars`, each recording calls, with `bucket(name)` switching. */
+interface BucketedFakeStorage {
+    calls: { bucket: string; key: string; method: string }[];
+    storage: BucketedFakeAccessor;
+}
+
+interface BucketedFakeAccessor {
+    bucket: (name: string) => BucketedFakeAccessor;
+    bucketName: string;
+    download: (key: string) => Promise<undefined>;
+    store: (key: string, body: unknown) => Promise<{ etag: string; key: string }>;
+}
+
+const createBucketedFakeStorage = (): BucketedFakeStorage => {
+    const calls: { bucket: string; key: string; method: string }[] = [];
+
+    const make = (bucketName: string): BucketedFakeAccessor => {
+        return {
+            bucket: (name: string) => make(name),
+            bucketName,
+            download: async (key: string): Promise<undefined> => {
+                calls.push({ bucket: bucketName, key, method: "download" });
+
+                return undefined;
+            },
+            store: async (key: string): Promise<{ etag: string; key: string }> => {
+                calls.push({ bucket: bucketName, key, method: "store" });
+
+                return { etag: "e", key };
+            },
+        };
+    };
+
+    return { calls, storage: make("default") };
+};
+
+interface BucketedContext {
+    auth: { roles: string[]; userId: null | string };
+    storage: BucketedFakeAccessor;
+}
+
+const makeBucketedContext = (fake: BucketedFakeStorage, userId: null | string): BucketedContext => {
+    return { auth: { roles: [], userId }, storage: fake.storage };
+};
+
+describe("storageRules — bucket scoping", () => {
+    it("enforces a rule only on its own bucket, leaving sibling buckets open", async () => {
+        expect.assertions(2);
+
+        // A read rule on `avatars` only. The `default` bucket has no rule → open.
+        const rule = defineStorageRule<BucketedContext>({ bucket: "avatars", on: "read", when: ({ auth, key }) => key.startsWith(`user/${auth.userId ?? ""}/`) });
+
+        const fake = createBucketedFakeStorage();
+        const handler = cirrus.action.use(rulesForTest<BucketedContext>([rule])).action(async ({ ctx }) => {
+            // default bucket is ungoverned → allowed even though the key wouldn't match the avatars rule
+            await ctx.storage.download("anything/x.png");
+            // avatars bucket is governed → this owner-scoped key is allowed
+            await ctx.storage.bucket("avatars").download("user/u1/a.png");
+        });
+
+        await handler.handler(makeBucketedContext(fake, "u1"), {});
+
+        expect(fake.calls).toContainEqual({ bucket: "default", key: "anything/x.png", method: "download" });
+        expect(fake.calls).toContainEqual({ bucket: "avatars", key: "user/u1/a.png", method: "download" });
+    });
+
+    it("denies a read on the targeted bucket when its rule rejects the key", async () => {
+        expect.assertions(1);
+
+        const rule = defineStorageRule<BucketedContext>({ bucket: "avatars", on: "read", when: ({ auth, key }) => key.startsWith(`user/${auth.userId ?? ""}/`) });
+
+        const fake = createBucketedFakeStorage();
+        const handler = cirrus.action
+            .use(rulesForTest<BucketedContext>([rule]))
+            .action(async ({ ctx }) => ctx.storage.bucket("avatars").download("user/u2/secret.png"));
+
+        await expect(handler.handler(makeBucketedContext(fake, "u1"), {})).rejects.toThrow(/bucket "avatars"/);
+    });
+});

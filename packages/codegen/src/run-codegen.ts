@@ -125,7 +125,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
 
     const dataModelContent = emitDataModel(schema);
     const apiContent = emitApi(functions);
-    const serverContent = emitServer(hasAi);
+    const serverContent = emitServer(hasAi, schema);
     const functionsContent = emitFunctions(functions, migrations);
     const shardContent = emitShard(schema, advisories, rlsMetadata, hasAi, storageRulesMetadata);
     const cronsContent = emitCrons(crons);

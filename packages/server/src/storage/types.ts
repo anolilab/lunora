@@ -47,7 +47,12 @@ export interface StorageRuleContext<Context = unknown> {
 
 /** A registered storage rule as stored in the rule table. */
 export interface StorageRule<Context = unknown> {
-    /** Logical bucket the rule applies to. Informational today (one bucket per `ctx.storage`); surfaced in the studio for grouping. */
+    /**
+     * Logical bucket the rule governs — matched against the accessor's bucket
+     * (`ctx.storage.bucketName`, or the bucket selected via `ctx.storage.bucket(name)`).
+     * A rule only applies to operations on its own bucket. The unnamed bucket is
+     * `"default"`. Also surfaced in the studio's access-rules view.
+     */
     readonly bucket: string;
     readonly on: StorageOperation;
     /** Optional key-prefix scope; the rule only governs keys under it. Absent ⇒ the whole bucket. */

@@ -693,7 +693,17 @@ interface StorageMetadata {
  * trip), so the read-only surface keeps `download` and `getSignedUrl`. The
  * full {@link Storage} surface stays on `ActionCtx`.
  */
-interface ReadOnlyStorage {
+interface ReadOnlyStorage<Buckets extends string = string> {
+    /**
+     * Select a named bucket (declared via `v.storage("name")`). The returned
+     * accessor's operations target that bucket — `ctx.storage.bucket("avatars")
+     * .download(key)`. The bare `ctx.storage` targets the default bucket.
+     */
+    bucket: (name: Buckets) => ReadOnlyStorage<Buckets>;
+
+    /** The bucket this accessor's operations target (the default for the bare `ctx.storage`). */
+    readonly bucketName: string;
+
     /** Fetch the body of an existing object. Returns `null` when absent. */
     download: (key: string) => Promise<ReadableStream | null>;
 
@@ -709,7 +719,10 @@ interface ReadOnlyStorage {
     getUrl: (key: string) => string;
 }
 
-interface Storage extends ReadOnlyStorage {
+interface Storage<Buckets extends string = string> extends ReadOnlyStorage<Buckets> {
+    /** Select a named bucket; the returned accessor exposes the full read/write surface. */
+    bucket: (name: Buckets) => Storage<Buckets>;
+
     delete: (key: string) => Promise<void>;
 
     /**

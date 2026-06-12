@@ -164,7 +164,7 @@ export const summarize = action({ args: { text: v.string() }, handler: async (ct
 
             // The typed contexts widen `db` to the generated per-table facade while
             // intersecting the legacy structural reader/writer for back-compat.
-            expect(result.generated.server).toContain('export interface QueryCtx extends Omit<QueryCtxBase, "db">');
+            expect(result.generated.server).toContain('export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage">');
             expect(result.generated.server).toContain("readonly db: DatabaseReader & DatabaseReaderFacade;");
             expect(result.generated.server).toContain("readonly db: DatabaseWriter & DatabaseWriterFacade;");
             // server.ts is the builder file user code imports, so it must NOT import
@@ -177,6 +177,20 @@ export const summarize = action({ args: { text: v.string() }, handler: async (ct
             // The typed `v` whose `id(...)` autocompletes the schema's tables.
             // eslint-disable-next-line no-secrets/no-secrets -- generated TS type signature, not a credential
             expect(result.generated.server).toContain("id: <T extends TableName>(table: T) => ColumnValidator<IdOfTable<T>, IdOfTable<T>>;");
+        });
+
+        it("narrows ctx.storage to the declared bucket names", () => {
+            expect.assertions(3);
+
+            const result = runCodegen({ projectRoot: workdir });
+
+            // `StorageBucketName` is emitted (at minimum the default bucket) and
+            // `ctx.storage` is narrowed to it on every context.
+            expect(result.generated.server).toContain('export type StorageBucketName = "default"');
+            // eslint-disable-next-line no-secrets/no-secrets -- generated TS type annotation, not a secret
+            expect(result.generated.server).toContain("readonly storage: ReadOnlyStorage<StorageBucketName>;");
+             
+            expect(result.generated.server).toContain("readonly storage: StorageBase<StorageBucketName>;");
         });
 
         it("emits a typed createCaller covering public and internal functions", () => {

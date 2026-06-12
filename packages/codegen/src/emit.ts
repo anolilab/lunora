@@ -696,8 +696,35 @@ const renderCaller = (functions: ReadonlyArray<FunctionIR>): { implementation: s
  * `undefined` (TypeError: reading 'string'). The dispatch table that *does*
  * import every function module lives in `_generated/functions.ts` instead.
  */
-const emitServer = (hasAi = false): string => {
+
+/**
+ * Distinct bucket names the schema declares — `"default"` (the unnamed bucket)
+ * plus every `v.storage("name")` bucket. Drives the generated `StorageBucketName`
+ * union so `ctx.storage.bucket(name)` is autocompleted + checked. Sorted, with
+ * `"default"` always first.
+ */
+const buildStorageBucketNames = (schema: SchemaIR): string[] => {
+    const named = new Set<string>();
+
+    for (const table of schema.tables) {
+        for (const validator of Object.values(table.shape)) {
+            const resolved = validator.kind === "optional" && validator.inner ? validator.inner : validator;
+
+            if (resolved.kind === "storage" && typeof resolved.bucket === "string" && resolved.bucket !== "") {
+                named.add(resolved.bucket);
+            }
+        }
+    }
+
+    return ["default", ...[...named].toSorted((a, b) => a.localeCompare(b))];
+};
+
+const emitServer = (hasAi = false, schema?: SchemaIR): string => {
     /* eslint-disable no-secrets/no-secrets -- the emitted typed-`v` signature (`ColumnValidator<IdOfTable<T>, ...>`) is dense generated TS spread across this template, not a credential */
+    // The union of declared storage buckets, narrowing `ctx.storage.bucket(name)`.
+    const storageBucketUnion = buildStorageBucketNames(schema ?? { tables: [], vectorIndexes: [] })
+        .map((name) => JSON.stringify(name))
+        .join(" | ");
     // When the project uses Workers AI, the generated ActionCtx carries a typed
     // `ai` helper (from `@cirrus/ai`). Inference is an external, non-deterministic
     // call, so — like `ctx.fetch` — it lives on ActionCtx only, not on the
@@ -724,34 +751,43 @@ import type {
     InferArgs,
     MutationCtx as MutationCtxBase,
     QueryCtx as QueryCtxBase,
+    ReadOnlyStorage,
     RegisteredAction,
     RegisteredMutation,
     RegisteredQuery,
+    Storage as StorageBase,
 } from "@cirrus/server";
 
 import type { DatabaseReaderFacade, DatabaseWriterFacade, Id as IdOfTable, OrmReader, OrmWriter, TableName } from "./dataModel.js";
 ${aiTypeImport}
 export type { DataModel, Doc, Id, TableName } from "./dataModel.js";
 
+/** Storage buckets this schema declares (\`v.storage("name")\`), narrowing \`ctx.storage.bucket(name)\`. */
+export type StorageBucketName = ${storageBucketUnion};
+
 /**
  * Project-typed contexts. The base contexts from \`@cirrus/server\` are
  * untyped against the schema; here \`db\` is widened to the generated per-table
  * facade (\`ctx.db.<table>.findMany(...)\`) while keeping the legacy structural
- * \`db.get\`/\`db.query\` surface for back-compat.
+ * \`db.get\`/\`db.query\` surface for back-compat, and \`storage\` is narrowed so
+ * \`ctx.storage.bucket(name)\` autocompletes the declared buckets.
  */
-export interface QueryCtx extends Omit<QueryCtxBase, "db"> {
+export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"> {
     readonly db: DatabaseReader & DatabaseReaderFacade;
     readonly orm: OrmReader;
+    readonly storage: ReadOnlyStorage<StorageBucketName>;
 }
 
-export interface MutationCtx extends Omit<MutationCtxBase, "db"> {
+export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"> {
     readonly db: DatabaseWriter & DatabaseWriterFacade;
     readonly orm: OrmWriter;
+    readonly storage: ReadOnlyStorage<StorageBucketName>;
 }
 
-export interface ActionCtx extends Omit<ActionCtxBase, "db"> {
+export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"> {
     readonly db: DatabaseWriter & DatabaseWriterFacade;
-    readonly orm: OrmWriter;${aiActionField}
+    readonly orm: OrmWriter;
+    readonly storage: StorageBase<StorageBucketName>;${aiActionField}
 }
 
 /** \`query()\` bound to this project's typed {@link QueryCtx}. */
@@ -998,6 +1034,7 @@ const buildStorageColumns = (schema: SchemaIR): Record<string, string[]> => {
 
     return byTable;
 };
+
 
 /** One flattened index entry per table, mirroring `@cirrus/do`'s `TableIndexInfo`. */
 interface EmittedTableIndex {
@@ -1454,6 +1491,25 @@ const storageStub = {
         throw new Error("ctx.storage: no storage configured. Pass \`storage\` to createShardDO().");
     },
 };
+
+// Make any \`config.storage\` result bucket-aware so \`ctx.storage.bucket(name)\`
+// always resolves. A \`createBucketStorage(...)\` result already carries
+// \`.bucket\`/\`.bucketName\` and is returned as-is; a single \`createStorage(...)\`
+// (or the stub) is tagged as the \`"default"\` bucket, where \`.bucket(name)\` is the
+// identity (single-bucket apps address one binding under every name).
+const asBucketStorage = (raw: unknown): unknown => {
+    const candidate = (raw ?? {}) as { bucket?: unknown };
+
+    if (typeof candidate.bucket === "function") {
+        return candidate;
+    }
+
+    const self: Record<string, unknown> = { ...(candidate as Record<string, unknown>), bucketName: "default" };
+
+    self.bucket = () => self;
+
+    return self;
+};
 ${globalDatabaseStub}${vectorsStub}${aiStub}${bindTableHelper}
 // Bound in-process \`ctx.run*\` composition depth so a self- or cyclically-
 // referencing call fails loudly with a clear error instead of overflowing the
@@ -1802,7 +1858,7 @@ ${vectorsBuild}${aiBuild}
             // and \`ctx.db.system._storage\` so both read the same R2 binding. The
             // \`storageStub\` fallback satisfies SystemReaderStorageLike structurally
             // (its \`list\`/\`getMetadata\` throw the "no storage configured" error).
-            const storage = (config.storage?.(env) ?? storageStub) as unknown as SystemReaderStorageLike;
+            const storage = asBucketStorage(config.storage?.(env) ?? storageStub) as unknown as SystemReaderStorageLike;
 ${globalDatabaseLine}            const db: DatabaseWriterLike = createShardCtxDb(${databaseOptions});
 ${facadeBlock}
             // \`ctx.log\`: each call is captured + attributed to the executing
