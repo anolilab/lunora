@@ -34,6 +34,7 @@ import type {
     ServerDataMessage,
     ServerErrorMessage,
     ServerMessage,
+    ShardTrafficResult,
     StorageListPage,
     StorageObject,
     Unsubscribe,
@@ -62,6 +63,7 @@ const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
  * reconnect can never grow the queue unbounded.
  */
 const MAX_PENDING_STREAMS = 64;
+const SHARD_TRAFFIC_PATH = "/_cirrus/admin/shard-traffic";
 const SCHEDULED_PATH = "/_cirrus/admin/scheduled";
 const SCHEDULED_STATUS_PATH = "/_cirrus/admin/scheduled/status";
 const SCHEDULED_WS_PATH = "/_cirrus/admin/scheduled/ws";
@@ -716,6 +718,28 @@ class CirrusClient {
         }
 
         return (await this.rpc(function_.__cirrusRef, args as Record<string, unknown>, options.shardKey)) as ReturnOf<F>;
+    }
+
+    // --- Advisor admin ------------------------------------------------------
+
+    /**
+     * Read the cross-shard request distribution for a `.shardBy(...)` table —
+     * the feed the studio's `hot_shard` advisor lint consumes. Hits the
+     * admin-gated `POST /_cirrus/admin/shard-traffic` endpoint, which fans the
+     * cheap per-shard `getMetrics` read out across every live shard and returns
+     * each shard's `{ shardKey, requests }` total (a failed shard surfaces with
+     * `requests: 0`). Requires the worker to be built with a `queryCoordinator`
+     * and `adminToken`, and this client's auth token to match; defaults any
+     * absent field so an older worker yields an empty-but-valid shape.
+     */
+    public async shardTraffic(table: string): Promise<ShardTrafficResult> {
+        if (this.closed) {
+            throw new Error("CirrusClient is closed");
+        }
+
+        const body = (await this.adminFetch(SHARD_TRAFFIC_PATH, "POST", { table })) as Partial<ShardTrafficResult>;
+
+        return { failed: body.failed ?? 0, ok: body.ok ?? 0, shards: body.shards ?? [] };
     }
 
     // --- Scheduler admin ----------------------------------------------------

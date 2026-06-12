@@ -1,3 +1,4 @@
+import type { AdvisorShardTraffic } from "@cirrus/advisor";
 import { useCirrus } from "@cirrus/react";
 import { useNavigate } from "@tanstack/react-router";
 import type { ReactElement } from "react";
@@ -10,6 +11,7 @@ import type {
     FunctionStatsResult,
     MetricsIndexHit,
     MetricsSnapshot,
+    ShardTrafficResult,
     TableIndexesResult,
     TableInfo,
 } from "./admin";
@@ -30,6 +32,15 @@ import { ShardInput } from "./shard-input";
 interface InsightsPanelProps {
     /** Shard key the snapshots target on first load. Defaults to the root shard. */
     readonly initialShardKey?: string;
+    /**
+     * Fan the cross-shard traffic feed out for `table`, returning each shard's
+     * `{ shardKey, requests }` total — the input the `hot_shard` advisor lint
+     * needs. Defaults to `client.shardTraffic(table)` (the admin-gated
+     * `POST /_cirrus/admin/shard-traffic` fan-out). Best-effort: a rejection
+     * leaves `hot_shard` dormant rather than blanking the panel. Injectable so
+     * tests can drive the skew without a worker.
+     */
+    readonly loadShardTraffic?: (table: string) => Promise<ShardTrafficResult>;
 }
 
 const GET_ADVISORIES = adminRef(ADMIN_FUNCTIONS.getAdvisories);
@@ -117,7 +128,7 @@ const AddIndexButton = ({ onJump, table }: AddIndexButtonProps): ReactElement =>
  * `missing-index` row carries an inline "add the index" jump to the Schema tab.
  * Both reads are best-effort — one failing still yields the other's insights.
  */
-export const InsightsPanel = ({ initialShardKey }: InsightsPanelProps): ReactElement => {
+export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPanelProps): ReactElement => {
     const client = useCirrus();
     const navigate = useNavigate();
     const t = useT();
@@ -132,8 +143,19 @@ export const InsightsPanel = ({ initialShardKey }: InsightsPanelProps): ReactEle
     // worker, where the runtime lints simply find nothing.
     const [indexHits, setIndexHits] = useState<MetricsIndexHit[] | null>(null);
     const [declaredIndexes, setDeclaredIndexes] = useState<DeclaredIndex[] | null>(null);
+    // The cross-shard request distribution feeding the hot_shard lint. Fanned
+    // out on demand (not on the metrics hot path) and best-effort — null when
+    // the worker predates the shard-traffic endpoint, so hot_shard stays quiet.
+    const [shardTraffic, setShardTraffic] = useState<AdvisorShardTraffic[] | null>(null);
     const [error, setError] = useState<null | string>(null);
     const [loading, setLoading] = useState<boolean>(false);
+
+    // Default the shard-traffic fan-out to the client's admin RPC; an injected
+    // override lets tests drive a skewed distribution without a worker.
+    const fanShardTraffic = useMemo(
+        () => loadShardTraffic ?? ((table: string): Promise<ShardTrafficResult> => client.shardTraffic(table)),
+        [client, loadShardTraffic],
+    );
 
     const refresh = useCallback(
         async (shard: string): Promise<void> => {
@@ -167,8 +189,13 @@ export const InsightsPanel = ({ initialShardKey }: InsightsPanelProps): ReactEle
             // metrics reads — a worker without listTables / listTableIndexes (or
             // without an admin token for them) just yields no declared indexes,
             // so the dead-index check stays quiet rather than failing the panel.
+            let tableNames: string[] = [];
+
             try {
                 const tables = (await client.query(LIST_TABLES, {}, callOptions(shard))) as TableInfo[];
+
+                tableNames = tables.map((table) => table.name);
+
                 const indexResults = await Promise.allSettled(
                     tables.map(
                         async (table) =>
@@ -193,9 +220,33 @@ export const InsightsPanel = ({ initialShardKey }: InsightsPanelProps): ReactEle
                 setDeclaredIndexes(null);
             }
 
+            // Fan the cross-shard traffic feed out so the hot_shard lint can see
+            // cross-shard skew — the one input a single shard's snapshot can't
+            // supply. Off the metrics hot path and best-effort: a rejection (older
+            // worker / no admin token) leaves hot_shard dormant rather than
+            // blanking the panel. Driven by any one table's live shard set — a DO
+            // holds every table, so each shard's getMetrics request total is the
+            // same regardless of which table seeds the fan-out; we dedupe by
+            // shardKey to be safe.
+            try {
+                const traffic = await fanShardTraffic(tableNames[0] ?? "");
+                const byShard = new Map<string, AdvisorShardTraffic>();
+
+                for (const entry of traffic.shards) {
+                    if (!byShard.has(entry.shardKey)) {
+                        byShard.set(entry.shardKey, { requests: entry.requests, shardKey: entry.shardKey });
+                    }
+                }
+
+                setShardTraffic([...byShard.values()]);
+            } catch {
+                // shard-traffic endpoint unavailable — leave hot_shard dormant.
+                setShardTraffic(null);
+            }
+
             setLoading(false);
         },
-        [client],
+        [client, fanShardTraffic],
     );
 
     useEffect(() => {
@@ -249,12 +300,14 @@ export const InsightsPanel = ({ initialShardKey }: InsightsPanelProps): ReactEle
         [insights],
     );
 
-    // Runtime advisor lints (dead index + hot scan) over the recorded metrics.
-    // Same verbatim advisory mapping as the static getAdvisories findings — no
-    // new i18n. shardTraffic is omitted, so hot_shard stays dormant here.
+    // Runtime advisor lints (dead index + hot scan + hot shard) over the recorded
+    // metrics. Same verbatim advisory mapping as the static getAdvisories findings
+    // — no new i18n. The shardTraffic feed (fanned out above) flows in so hot_shard
+    // fires on a genuine cross-shard skew; hot-scan findings for tables the
+    // missing-index insight already owns are suppressed so a hot table renders once.
     const runtimeRows = useMemo<AdvisorRow[]>(
-        () => deriveRuntimeAdvisories({ declaredIndexes: declaredIndexes ?? [], functions, indexHits, suppressHotScanTables: missingIndexTables }),
-        [declaredIndexes, functions, indexHits, missingIndexTables],
+        () => deriveRuntimeAdvisories({ declaredIndexes: declaredIndexes ?? [], functions, indexHits, shardTraffic, suppressHotScanTables: missingIndexTables }),
+        [declaredIndexes, functions, indexHits, missingIndexTables, shardTraffic],
     );
 
     const rows = useMemo<AdvisorRow[]>(() => {

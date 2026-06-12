@@ -415,6 +415,16 @@ interface QueryCoordinator {
      * boundary. The cross-shard `rankPage()` path (PLAN5 §7.1 / PLAN2 #3).
      */
     orchestrateRankPage: (namespace: ShardNamespaceLike, request: RankPageFanOutRequest) => Promise<RankPageFanOutResult>;
+
+    /**
+     * Fan the `__cirrus_admin__:getMetrics` admin RPC out to every live shard of
+     * a table and collect each shard's lifetime `requests` total into a per-shard
+     * `{ shardKey, requests }` distribution. The feed the studio's `hot_shard`
+     * advisor lint needs: a single shard's snapshot can't reveal cross-shard
+     * skew, so this fans the cheap metrics read out and returns the whole shard
+     * set's request volumes (a failed shard surfaces as `requests: 0`).
+     */
+    orchestrateShardTraffic: (namespace: ShardNamespaceLike, request: ShardTrafficFanOutRequest) => Promise<ShardTrafficFanOutResult>;
     readonly registry: ShardRegistry;
 }
 
@@ -531,6 +541,51 @@ interface ApplyCdcFanOutResult {
     applied: number;
     failed: number;
     ok: number;
+}
+
+/* -------------------------------------------------------------------------- */
+/* Cross-shard traffic feed (hot_shard advisor lint)                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Cross-shard traffic request. Like {@link MigrationFanOutRequest} there is no
+ * caller-supplied merge — each shard's `__cirrus_admin__:getMetrics` payload
+ * carries its own lifetime `requests` total, and {@link rollUpShardTraffic}
+ * collects them into one `{ shardKey, requests }` entry per shard. `headers`
+ * must carry the admin bearer the per-shard `getMetrics` gate requires.
+ *
+ * `table` drives shard discovery: the registry's live shard keys for the table
+ * are the shards fanned out to. This is the feed the studio's `hot_shard`
+ * runtime advisor consumes to compute cross-shard skew — a single shard's
+ * snapshot can't, so the panel fans this out on demand.
+ */
+interface ShardTrafficFanOutRequest {
+    headers?: Record<string, string>;
+    /** Table whose live shard keys the traffic fan-out runs across. */
+    table: string;
+}
+
+/** One shard's traffic total, mirroring the advisor's `AdvisorShardTraffic` (sans the optional `group`). */
+interface ShardTrafficEntry {
+    /** Lifetime request count read off the shard's `getMetrics` snapshot; `0` for a shard that failed/timed out. */
+    requests: number;
+    /** The shard key (the DO id name); `""` for the unnamed root shard. */
+    shardKey: string;
+}
+
+interface ShardTrafficFanOutResult {
+    /** Shards that errored or timed out (their `requests` are reported as `0`). */
+    failed: number;
+    /** Shards that returned a 2xx `getMetrics` snapshot. */
+    ok: number;
+
+    /**
+     * Per-shard request totals, in registry order. Shaped to plug straight into
+     * the advisor's `LintContext.shardTraffic` so the `hot_shard` lint can
+     * compute the cross-shard share. A failed shard still appears (with
+     * `requests: 0`) so callers see the full shard set.
+     */
+    shards: ReadonlyArray<ShardTrafficEntry>;
 }
 
 const DEFAULT_CONCURRENCY = 16;
@@ -1008,6 +1063,39 @@ const rollUpApplyCdc = (results: ReadonlyArray<ShardRpcOutcome>): ApplyCdcFanOut
     }
 
     return { applied, failed, ok };
+};
+
+/** Read a shard's lifetime `requests` total defensively off an unwrapped `getMetrics` payload. */
+const readShardRequests = (payload: unknown): number => {
+    const snapshot = (payload ?? {}) as { requests?: unknown };
+
+    return typeof snapshot.requests === "number" && Number.isFinite(snapshot.requests) && snapshot.requests >= 0 ? snapshot.requests : 0;
+};
+
+/**
+ * Fold per-shard `getMetrics` outcomes into a {@link ShardTrafficFanOutResult}:
+ * one `{ shardKey, requests }` entry per shard, in registry order. A failed /
+ * timed-out shard still gets an entry (with `requests: 0`) so the caller sees
+ * the full shard set; only ok shards contribute a positive count. The result is
+ * shaped to feed the advisor's `hot_shard` lint directly.
+ */
+const rollUpShardTraffic = (results: ReadonlyArray<ShardRpcOutcome>): ShardTrafficFanOutResult => {
+    const shards: ShardTrafficEntry[] = [];
+    let ok = 0;
+    let failed = 0;
+
+    for (const result of results) {
+        if (result.kind === "err") {
+            failed += 1;
+            shards.push({ requests: 0, shardKey: result.shardKey });
+            continue;
+        }
+
+        ok += 1;
+        shards.push({ requests: readShardRequests(unwrapResult(result.value)), shardKey: result.shardKey });
+    }
+
+    return { failed, ok, shards };
 };
 
 /** Sum the per-shard import counts/errors into a single roll-up. */
@@ -1799,6 +1887,23 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
                 shards: outcomes,
             };
         },
+        async orchestrateShardTraffic(namespace: ShardNamespaceLike, request: ShardTrafficFanOutRequest): Promise<ShardTrafficFanOutResult> {
+            const keys = await options.registry.listShardKeys(request.table);
+
+            // Every shard receives the same (empty-args) `getMetrics` admin RPC;
+            // each returns its own lifetime request total. Reuses the same
+            // same-args-to-all `runBoundedFanOut` path as the rank/migration
+            // orchestrators — the bearer in `headers` satisfies each shard's
+            // admin gate.
+            const trafficRequest: ShardRpcRequest = {
+                functionPath: "__cirrus_admin__:getMetrics",
+                headers: request.headers,
+            };
+
+            const results = await runBoundedFanOut(namespace, keys, trafficRequest, maxConcurrency, perShardTimeoutMs);
+
+            return rollUpShardTraffic(results);
+        },
         registry: options.registry,
     };
 };
@@ -1832,4 +1937,7 @@ export type {
     ShardRankPageOutcome,
     ShardRankPageResult,
     ShardRegistry,
+    ShardTrafficEntry,
+    ShardTrafficFanOutRequest,
+    ShardTrafficFanOutResult,
 };

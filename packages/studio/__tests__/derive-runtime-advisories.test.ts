@@ -143,6 +143,53 @@ describe("deriveRuntimeAdvisories", () => {
 
         expect(rows).toHaveLength(2);
     });
+
+    it("fires hot_shard when one shard takes a disproportionate share of cross-shard traffic", () => {
+        expect.assertions(3);
+
+        // One shard handles 80 of 100 requests across 2 active shards — over the
+        // 0.5 share threshold and past the 50-request minimum → hot_shard fires.
+        const rows = deriveRuntimeAdvisories({
+            shardTraffic: [
+                { requests: 80, shardKey: "tenant_busy" },
+                { requests: 20, shardKey: "tenant_quiet" },
+            ],
+        });
+
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.issueType).toBe("Hot shard");
+        expect(rows[0]?.description).toContain('shard "tenant_busy"');
+    });
+
+    it("does not fire hot_shard on an even cross-shard distribution", () => {
+        expect.assertions(1);
+
+        // ~33% each across three shards — no shard clears the 0.5 dominant-share bar.
+        const rows = deriveRuntimeAdvisories({
+            shardTraffic: [
+                { requests: 40, shardKey: "tenant_a" },
+                { requests: 40, shardKey: "tenant_b" },
+                { requests: 40, shardKey: "tenant_c" },
+            ],
+        });
+
+        expect(rows).toHaveLength(0);
+    });
+
+    it("does not fire hot_shard below the minimum-total-requests floor", () => {
+        expect.assertions(1);
+
+        // A 90% share, but only 10 total requests — too sparse for the proportion
+        // to be trustworthy, so the lint stays quiet.
+        const rows = deriveRuntimeAdvisories({
+            shardTraffic: [
+                { requests: 9, shardKey: "tenant_busy" },
+                { requests: 1, shardKey: "tenant_quiet" },
+            ],
+        });
+
+        expect(rows).toHaveLength(0);
+    });
 });
 
 describe("declaredIndexesFor", () => {

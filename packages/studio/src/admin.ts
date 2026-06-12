@@ -692,3 +692,32 @@ export interface ImportShardResult {
     errors: ImportError[];
     inserted: Record<string, number>;
 }
+
+/* -------------------------------------------------------------------------- */
+/* Cross-shard traffic feed (hot_shard advisor lint)                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One shard's request total from the worker's `POST /_cirrus/admin/shard-traffic`
+ * endpoint, mirroring `@cirrus/runtime`'s `ShardTrafficEntry`. `requests` is the
+ * shard's lifetime dispatch count (`0` for a shard that failed/timed out);
+ * `shardKey` is the DO id name (`""` for the root shard). The cross-shard feed
+ * the `hot_shard` runtime advisor consumes to compute skew.
+ */
+export interface ShardTrafficEntry {
+    requests: number;
+    shardKey: string;
+}
+
+/**
+ * Payload of a `POST /_cirrus/admin/shard-traffic` call, mirroring the runtime
+ * coordinator's shard-traffic fan-out result: one `{ shardKey, requests }` entry
+ * per live shard plus the ok / failed counts. Fanned out on demand (not on the
+ * metrics hot path) so the panel can feed `hot_shard` the whole shard set's
+ * request volumes.
+ */
+export interface ShardTrafficResult {
+    failed: number;
+    ok: number;
+    shards: ShardTrafficEntry[];
+}
