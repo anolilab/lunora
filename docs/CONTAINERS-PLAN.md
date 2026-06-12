@@ -85,14 +85,48 @@ default path.
   pull from the Cloudflare Registry (use a local Dockerfile `FROM` it);
   `dev.enable_containers` / `dev.container_engine` tune behavior.
 
+### Runtime & operational facts (these shape our DX)
+
+- **Images must be `linux/amd64`.** Biggest dev-machine footgun (Apple
+  Silicon): builds need `--platform linux/amd64`. Our doctor/preflight should
+  catch arm64 images before wrangler's error does.
+- **Disk is ephemeral.** Fresh disk on every (re)start; persistence means R2
+  (FUSE) or the upcoming snapshots. Natural tie-in for `@cirrus/storage`.
+- **Cold starts: 1–3 s** (image-size dependent); the DO and its container are
+  **not guaranteed co-located** — calls from actions must tolerate a network
+  hop both ways.
+- **Rolling deploys:** on update, instances get `SIGTERM`, then `SIGKILL`
+  after 15 minutes. Container processes should handle SIGTERM (exec-form
+  `ENTRYPOINT` in our scaffolded Dockerfiles, documented shutdown hooks).
+- **OOM = restart**, no swap. Pick instance types accordingly.
+- **Logs require `observability.enabled` in wrangler.jsonc** (7-day retention
+  on Paid). `CLOUDFLARE_DURABLE_OBJECT_ID` and friends
+  (`CLOUDFLARE_APPLICATION_ID`, `CLOUDFLARE_LOCATION`, `CLOUDFLARE_REGION`,
+  `CLOUDFLARE_COUNTRY_A2`) are auto-injected for correlation.
+- **Secrets:** Worker Secrets / Secrets Store, surfaced to the container via
+  `envVars` (class-level) or per-instance env at `start()`. No separate
+  container-secret system to integrate.
+- **Containers can reach Worker bindings** (D1, R2, KV, DOs) via *outbound
+  handlers*: plain HTTP from the container to virtual hostnames, intercepted
+  and resolved inside the Workers runtime. The container can also address its
+  own DO. (Big Phase 3 opportunity — see below.)
+- **Egress control:** `enableInternet` on the Container class gates outbound
+  internet access.
+
 ### Limits & pricing (for docs/limits.mdx)
 
 - Instance types: `lite`, `basic`, `standard-1..4`; custom types up to
   4 vCPU / 12 GiB / 20 GB disk. Account caps: 1,500 concurrent vCPU,
   6 TiB memory, 30 TB disk (raisable via support).
-- Requires Workers Paid ($5/mo). Since GA, vCPU is billed on **active CPU**
-  (~$0.00002 per vCPU-second); memory/disk billed while instances run. Idle
-  (slept) containers cost nothing in CPU.
+- Requires Workers Paid ($5/mo). Billing starts at first request and stops at
+  sleep (scale-to-zero). vCPU is **active-CPU** billed ($0.000020/vCPU-s,
+  375 vCPU-min/mo included); memory ($0.0000025/GiB-s, 25 GiB-h included) and
+  disk ($0.00000007/GB-s, 200 GB-h included) are billed on *provisioned*
+  instance-type size while running.
+- **Network egress is billed separately**: $0.025/GB NA+EU (1 TB/mo
+  included), $0.05/GB Oceania/Korea/Taiwan, $0.04/GB elsewhere (500 GB/mo
+  included) — worth a loud note in docs since Workers users aren't used to
+  egress fees.
 
 ### What Cloudflare does *not* provide (gaps we may want to fill)
 
@@ -144,7 +178,9 @@ export const transcoder = defineContainer({
     instanceType: "standard-1", // or { vcpu, memoryMib, diskMb }
     maxInstances: 5,
     sleepAfter: "5m",
-    env: { LOG_LEVEL: "info" }, // static; secrets flow via .dev.vars / wrangler secrets
+    env: { LOG_LEVEL: "info" }, // static, baked into the generated class
+    secrets: ["TRANSCODER_API_KEY"], // names of Worker secrets forwarded as env
+    enableInternet: false, // default false in cirrus: opt into egress (it's billed)
 });
 ```
 
@@ -200,24 +236,30 @@ Hook the existing seams (no new architecture):
 | Seam                                      | Change                                                                                                                                                                                                                                                                                |
 | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `src/infer-bindings.ts`                   | New capability: `@cirrus/container` import + discovered `defineContainer` exports → inferred `containers[]` entries, DO bindings, migration classes.                                                                                                                                  |
-| `src/reconcile-bindings.ts`               | Extend `WranglerShape` with `containers`; new `reconcileContainers()` writes `containers[]`, the DO bindings, and appends a `new_sqlite_classes` migration tag — idempotent like the existing DO reconciliation.                                                                       |
-| `src/wrangler-validator.ts`               | Validate: every `containers[].class_name` has a matching DO binding **and** a sqlite migration; Dockerfile path exists (or ref looks like a registry image); `instance_type` is a known name or a custom object within Cloudflare's bounds; warn when `max_instances` is missing.      |
+| `src/reconcile-bindings.ts`               | Extend `WranglerShape` with `containers`; new `reconcileContainers()` writes `containers[]`, the DO bindings, **appends a new migration tag** with `new_sqlite_classes` (never mutates an existing tag — DO migration tags are append-only), and enables `observability` so container logs actually show up. Idempotent like the existing DO reconciliation. |
+| `src/wrangler-validator.ts`               | Validate: every `containers[].class_name` has a matching DO binding **and** a sqlite migration; Dockerfile path exists (or ref looks like a registry image); `instance_type` is a known name or a custom object within Cloudflare's bounds; declared `secrets` exist in `.dev.vars` scaffolding; warn when `max_instances` is missing, when a pool's `.any(n)` size could exceed `max_instances`, and when `observability` is off. |
 
 ### 3.5 CLI (`@cirrus/cli`)
 
 - `cirrus deploy` (existing 4-step pipeline in
   `packages/cli/src/commands/deploy/handler.ts`): add a **preflight Docker
   check** (`docker info`) when any container uses a Dockerfile source, with an
-  actionable error ("install Docker or switch `image` to a registry ref").
-  The actual build+push stays delegated to `wrangler deploy` — no custom
-  pipeline.
+  actionable error ("install Docker or switch `image` to a registry ref"),
+  plus an **amd64 check** — registry refs and local builds must target
+  `linux/amd64` (Apple Silicon is the common failure mode; our scaffolded
+  Dockerfiles and any railpack invocation pass `--platform linux/amd64`
+  explicitly). The actual build+push stays delegated to `wrangler deploy` —
+  no custom pipeline.
 - New `cirrus containers` subcommand group (thin wrappers, lazy-loaded like
   the rest): `build`, `push`, `images list`, `images delete` → forwarded to
   `wrangler containers …`. Main value: CI recipes ("build/push in one job,
   `cirrus deploy` in another") documented once.
 - `vis generate cirrus-container --name=transcoder` internal template:
   scaffolds `containers/transcoder/Dockerfile` + AST-appends the
-  `defineContainer` export to `cirrus/containers.ts`.
+  `defineContainer` export to `cirrus/containers.ts`. The Dockerfile template
+  bakes in the operational best practices: exec-form `ENTRYPOINT` (so
+  `SIGTERM` reaches the process during rollouts), `EXPOSE` for the default
+  port (required by local dev), and an amd64-safe base image.
 
 ### 3.6 Vite / local dev (`@cirrus/vite`)
 
@@ -229,7 +271,22 @@ Hook the existing seams (no new architecture):
     `vite dev`.
 - Respect/forward `dev.enable_containers` and `dev.container_engine`.
 
-### 3.7 Docs & templates
+### 3.7 Testing story
+
+Containers don't run inside `vitest-pool-workers`, so the unit-test path
+cannot depend on Docker:
+
+- `@cirrus/container` ships a **test double**: `ctx.containers.<name>` backed
+  by a user-provided `fetch` handler (mirrors how `ctx.ai` is mocked). Action
+  tests stay Docker-free and deterministic.
+- Integration tests that need the real thing run against `wrangler dev` /
+  `vite dev` with Docker present — gated in CI behind a label/conditional job
+  so the default test matrix stays container-free.
+- Our own package CI: the example app's container build runs in one dedicated
+  workflow job (Docker is available on GitHub runners), not in every
+  package's test run.
+
+### 3.8 Docs & templates
 
 - New `apps/docs/content/docs/containers.mdx`: authoring, routing patterns
   (per-entity vs pool), pricing/limits, CI split, local-dev caveats.
@@ -258,17 +315,39 @@ CLI group · CI guide · `vis generate cirrus-container`.
 **Phase 3 — Beyond the platform**
 Pool helpers with health/backoff on top of `getRandom` · poor-man's
 autoscaling (scheduler-driven pool resize) until Cloudflare ships native
-autoscaling · studio panel for container state (`getState()`) · advisor rules
-(e.g. container fetch inside a query, missing `sleepAfter`, oversized
-instance type).
+autoscaling · **container→Cirrus bridge**: expose selected queries/mutations
+to the container via the outbound-handler mechanism (the container calls a
+virtual hostname, the handler resolves it inside the Workers runtime — a
+typed client for container code, generated by codegen) · studio panel for
+container state (`getState()`) + per-instance log correlation via
+`CLOUDFLARE_DURABLE_OBJECT_ID` · dev-overlay log streaming for containers
+(extend the existing log-stream plugin) · advisor rules (container fetch
+inside a query, missing `sleepAfter`, oversized instance type,
+`enableInternet` left on without egress use).
 
-## 5. Open questions
+**Related, explicitly out of scope:** Cloudflare **Sandboxes** (GA alongside
+Containers) is a higher-level SDK on top of Containers for AI code execution.
+If/when `@cirrus/ai` wants code interpreters, it should consume Sandboxes
+directly rather than us rebuilding it on `defineContainer`.
 
-1. Package name: `@cirrus/container` (singular, matches `@cirrus/do`) vs
-   `@cirrus/containers` (matches the platform name). Leaning singular.
-2. Should `defineContainer` allow per-instance env at `start()` time in
-   Phase 1, or is class-level `envVars` + secrets enough to start?
-3. Where do container *secrets* land — reuse `.dev.vars` scaffolding from
-   `@cirrus/config` (likely yes, zero new concepts)?
-4. Do we expose WebSocket passthrough on the ctx stub in Phase 1 (the
-   underlying `fetch` supports it) or defer until someone asks?
+## 5. Decisions (formerly open questions)
+
+1. **Package name: `@cirrus/container`** (singular). Matches the singular
+   convention of `@cirrus/storage`/`@cirrus/scheduler`/`@cirrus/mail`, and
+   avoids import-site confusion with `@cloudflare/containers`, which the
+   generated code imports in the same files.
+2. **Per-instance env: Phase 2.** Phase 1 ships class-level `env` +
+   `secrets`; the platform's per-instance env at `start()` is exposed later
+   as a non-breaking optional argument (`.get(id, { env })`) together with
+   the sandbox-style use cases that actually need it. Retrofitting is cheap;
+   shrinking an over-built API is not.
+3. **Secrets reuse the existing pipeline.** `defineContainer({ secrets })`
+   names Worker secrets; codegen forwards `this.env.<NAME>` into the
+   container's `envVars`. Locally they come from `.dev.vars` (already
+   scaffolded by `@cirrus/config`), in production from `wrangler secret` /
+   Secrets Store. Zero new concepts, and the validator can check that
+   declared secrets are scaffolded.
+4. **WebSocket passthrough: Phase 1.** `Container.fetch()` already proxies
+   WebSocket upgrades, so it's free to expose — and Cirrus is a real-time
+   framework; shipping containers without WS would be off-brand. `ctx`-side
+   API: just `fetch` with an `Upgrade` request, no separate method.
