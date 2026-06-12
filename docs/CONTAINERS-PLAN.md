@@ -170,7 +170,7 @@ import { defineContainer } from "@cirrus/container";
 
 export const transcoder = defineContainer({
     // exactly one source:
-    image: "./containers/transcoder", // dir containing a Dockerfile (default path)
+    image: "./containers/transcoder", // dir → normalized to <dir>/Dockerfile + image_build_context=<dir>; a path ending in "Dockerfile" is used as-is
     // image: { registry: "docker.io/acme/transcoder:1.4" },  // pre-built
     // image: { build: "./services/transcoder" },              // Phase 2: railpack
 
@@ -179,14 +179,20 @@ export const transcoder = defineContainer({
     maxInstances: 5,
     sleepAfter: "5m",
     env: { LOG_LEVEL: "info" }, // static, baked into the generated class
-    secrets: ["TRANSCODER_API_KEY"], // names of Worker secrets forwarded as env
-    enableInternet: false, // default false in cirrus: opt into egress (it's billed)
+    secrets: ["TRANSCODER_API_KEY"], // names of Worker secrets forwarded as env at DO construction
+    // enableInternet defaults to true — the platform default. Turning egress
+    // off by default would silently break containers that call external APIs;
+    // an advisor rule (Phase 3) nudges instead when egress looks unused.
 });
 ```
 
 This mirrors `defineSchema`/`defineTable`: declarative config in `cirrus/`,
 everything else generated. Convention: containers live in
 `cirrus/containers.ts`, Dockerfiles under `containers/<name>/`.
+
+Note on `--env`: `containers[]` is written at the top level like the other
+reconciled bindings; per-environment container overrides are out of scope for
+Phase 1 (same stance the reconciler already takes for DO/D1/AI bindings).
 
 ### 3.2 Consumption: `ctx.containers` on **actions only**
 
@@ -218,16 +224,38 @@ export const transcode = action({
 
 ### 3.3 Codegen
 
-`@cirrus/codegen` discovers `cirrus/containers.ts` and emits into
-`_generated/`:
+`@cirrus/codegen` discovers `cirrus/containers.ts` (new
+`discoverContainers`, ts-morph based like `discoverAiUsage`) and emits
+`_generated/containers.ts`:
 
-1. A `Container`-extending DO class per definition
-   (`class TranscoderContainer extends Container { defaultPort = 8080; sleepAfter = "5m"; … }`),
-   re-exported from the worker entry so the binding actually resolves.
+1. One **thin** DO class per definition delegating to a runtime base so the
+   emitted string template stays trivial and the behavior stays unit-testable
+   in `@cirrus/container`:
+
+   ```ts
+   import { CirrusContainer } from "@cirrus/container";
+   import { transcoder } from "../containers";
+
+   export class TranscoderContainer extends CirrusContainer {
+       constructor(ctx: DurableObjectState, env: Env) {
+           super(ctx, env, transcoder); // applies defaultPort/sleepAfter/env and merges declared secrets from `env` into envVars
+       }
+   }
+   ```
+
+   The user's worker entry must re-export these (wrangler requires the DO
+   class exported from the entry): templates/init add
+   `export * from "./cirrus/_generated/containers"`, the class-A virtual
+   worker injects it automatically, and binding inference — which already
+   keys DO provisioning on entry exports — simply gains the generated class
+   names, so a missing re-export surfaces as the existing actionable hint
+   instead of a late wrangler error.
 2. The typed `ctx.containers` surface on `ActionCtx` (only when containers
-   exist, matching the `ctx.ai` pattern).
+   exist, matching the `ctx.ai` pattern), built from the `CONTAINER_*` env
+   bindings via a `containerClient(namespace)` helper in `@cirrus/container`.
 3. Binding names: `CONTAINER_TRANSCODER` ⇄ class `TranscoderContainer`
-   (derived, stable, collision-checked against `SHARD`/`SESSION`/etc.).
+   (derived from the export name, stable, collision-checked against
+   `SHARD`/`SESSION`/`SCHEDULER`).
 
 ### 3.4 Config: inference, reconciliation, validation (`@cirrus/config`)
 
@@ -236,8 +264,8 @@ Hook the existing seams (no new architecture):
 | Seam                                      | Change                                                                                                                                                                                                                                                                                |
 | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `src/infer-bindings.ts`                   | New capability: `@cirrus/container` import + discovered `defineContainer` exports → inferred `containers[]` entries, DO bindings, migration classes.                                                                                                                                  |
-| `src/reconcile-bindings.ts`               | Extend `WranglerShape` with `containers`; new `reconcileContainers()` writes `containers[]`, the DO bindings, **appends a new migration tag** with `new_sqlite_classes` (never mutates an existing tag — DO migration tags are append-only), and enables `observability` so container logs actually show up. Idempotent like the existing DO reconciliation. |
-| `src/wrangler-validator.ts`               | Validate: every `containers[].class_name` has a matching DO binding **and** a sqlite migration; Dockerfile path exists (or ref looks like a registry image); `instance_type` is a known name or a custom object within Cloudflare's bounds; declared `secrets` exist in `.dev.vars` scaffolding; warn when `max_instances` is missing, when a pool's `.any(n)` size could exceed `max_instances`, and when `observability` is off. |
+| `src/reconcile-bindings.ts`               | Extend `WranglerShape` with `containers`; new `reconcileContainers()` writes `containers[]`, the DO bindings, **appends a new migration tag** with `new_sqlite_classes` (never mutates an existing tag — DO migration tags are append-only), and sets `observability.enabled` **only when the key is absent** (an explicit `false` is a user billing decision and is respected, with a warning). Idempotent like the existing DO reconciliation. |
+| `src/wrangler-validator.ts`               | Validate: every `containers[].class_name` has a matching DO binding **and** a sqlite migration; Dockerfile path exists (or ref looks like a registry image); `instance_type` is a known name or a custom object within Cloudflare's bounds; warn when `max_instances` is missing and when `observability` is off (container logs are invisible without it). `.any(n)` pool-size checks only apply when `n` is a literal — anything else is a Phase 3 advisor concern, not a validator one. |
 
 ### 3.5 CLI (`@cirrus/cli`)
 
@@ -273,8 +301,9 @@ Hook the existing seams (no new architecture):
 
 ### 3.7 Testing story
 
-Containers don't run inside `vitest-pool-workers`, so the unit-test path
-cannot depend on Docker:
+Container workloads shouldn't be assumed runnable inside
+`vitest-pool-workers` (and even where they are, requiring Docker in unit
+tests is wrong), so the unit-test path cannot depend on Docker:
 
 - `@cirrus/container` ships a **test double**: `ctx.containers.<name>` backed
   by a user-provided `fetch` handler (mirrors how `ctx.ai` is mocked). Action
