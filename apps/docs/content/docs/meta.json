@@ -32,6 +32,7 @@
         "addons/mail",
         "addons/storage",
         "addons/scheduler",
+        "addons/ai",
         "addons/studio",
         "---Migrating---",
         "migrating/from-convex",
