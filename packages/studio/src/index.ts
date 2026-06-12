@@ -2,6 +2,8 @@ export type {
     AuditEntry,
     AuditLogResult,
     CacheStats,
+    CapturedMail,
+    CapturedMailResult,
     DeployInfo,
     ExportRow,
     FilterClause,
@@ -80,6 +82,8 @@ export type { InsightsPanelProps } from "./insights-panel";
 export { InsightsPanel } from "./insights-panel";
 export type { LogsPanelProps } from "./logs-panel";
 export { LogsPanel } from "./logs-panel";
+export type { MailPanelProps } from "./mail-panel";
+export { MailPanel } from "./mail-panel";
 export type { AggregateMetrics, ShardMetricsResult } from "./metrics-aggregate";
 export { aggregateMetrics, shardsToAggregate } from "./metrics-aggregate";
 export type { MetricsPanelProps } from "./metrics-panel";

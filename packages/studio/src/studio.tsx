@@ -33,6 +33,7 @@ import { InsightsPanel } from "./insights-panel";
 import { fireAndForget } from "./internal";
 import { cn } from "./lib/utils";
 import { LogsPanel } from "./logs-panel";
+import { MailPanel } from "./mail-panel";
 import { MetricsPanel } from "./metrics-panel";
 import { MigrationsPanel } from "./migrations";
 import { OrganizationsPanel } from "./organizations-panel";
@@ -61,6 +62,7 @@ type StudioTab =
     | "home"
     | "insights"
     | "logs"
+    | "mail"
     | "metrics"
     | "migrations"
     | "organizations"
@@ -165,6 +167,7 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
     home: <path d="M3 11.5 12 4l9 7.5M5 10v9a1 1 0 0 0 1 1h4v-6h4v6h4a1 1 0 0 0 1-1v-9" />,
     insights: <path d="M12 3a6 6 0 0 0-3.6 10.8c.5.4.8.9.9 1.5l.2 1.2h5l.2-1.2c.1-.6.4-1.1.9-1.5A6 6 0 0 0 12 3ZM9.5 20.5h5M10 18h4" />,
     logs: <path d="M5 6h14M5 10h14M5 14h9M5 18h11" />,
+    mail: <path d="M4 5h16v14H4V5Zm0 1.5 8 6 8-6" />,
     metrics: <path d="M5 20V10m6.5 10V4M18 20v-7M3 20h18" />,
     migrations: <path d="M4 12a8 8 0 0 1 13.7-5.6L20 8M20 4v4h-4M20 12a8 8 0 0 1-13.7 5.6L4 16m0 4v-4h4" />,
     organizations: <path d="M3 21V8l6-4 6 4v13M9 21v-5h2v5M15 11h6v10M18 14v.01M18 17v.01M6 9v.01M6 12v.01M6 15v.01" />,
@@ -200,7 +203,7 @@ const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
     { key: "storage", tabs: ["files"] },
     { key: "reports", tabs: ["dashboards", "metrics", "health"] },
     { key: "advisors", tabs: ["security", "insights"] },
-    { key: "logs", tabs: ["logs", "audit", "schedule", "realtime"] },
+    { key: "logs", tabs: ["logs", "audit", "schedule", "realtime", "mail"] },
     { key: "settings", tabs: ["settings"] },
 ];
 
@@ -259,6 +262,7 @@ const TABS = [
     "insights",
     "logs",
     "realtime",
+    "mail",
     "audit",
     "schedule",
     "settings",
@@ -312,6 +316,7 @@ const StudioLayout = (): ReactElement => {
             migrations: t("Migrations"),
             organizations: t("Organizations"),
             pitr: t("Time Travel"),
+            mail: t("Mail"),
             realtime: t("Realtime"),
             schedule: t("Scheduled"),
             schema: t("Schema"),
@@ -355,6 +360,7 @@ const StudioLayout = (): ReactElement => {
             migrations: t("Review migration status and run them."),
             organizations: t("Browse and manage organizations, members, and invitations."),
             pitr: t("Restore a shard to a point in the last 30 days."),
+            mail: t("Email your app sent, captured in dev."),
             realtime: t("Active WebSocket subscriptions on this shard."),
             schedule: t("Inspect and cancel scheduled jobs."),
             schema: t("Inspect each table and its columns."),
@@ -669,6 +675,7 @@ const buildRouter = ({
         migrations: <MigrationsPanel initialShardKey={initialShardKey} />,
         organizations: <OrganizationsPanel />,
         pitr: <PitrPanel initialShardKey={initialShardKey} />,
+        mail: <MailPanel />,
         realtime: <SubscriptionsPanel initialShardKey={initialShardKey} />,
         schedule: <ScheduledJobs cancelJob={scheduledCancel} loadJobs={scheduledLoad} />,
         schema: <SchemaRoutePanel initialShardKey={initialShardKey} />,
