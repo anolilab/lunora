@@ -3,6 +3,7 @@ import { cirrusD1Adapter, createAuth, createAuthAdmin, ensureMigrated, handleAut
 import { admin, organization, passkey, twoFactor } from "@cirrus/auth/plugins";
 import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@cirrus/d1";
 import { createD1CtxDb, listGlobalTables, readGlobalTablePage } from "@cirrus/d1";
+import { createMailerFromEnv } from "@cirrus/mail";
 import type { ExecutionContextLike, GlobalIntrospector, ScheduledControllerLike, ShardNamespaceLike } from "@cirrus/runtime";
 import { createWorker } from "@cirrus/runtime";
 import type { DurableObjectNamespaceLike } from "@cirrus/scheduler";
@@ -106,6 +107,8 @@ interface Env {
     CIRRUS_WORKER_ORIGIN?: string;
     DB: unknown;
     FILES: R2BucketLike;
+    /** Sender address for auth (verification / reset) email; captured into the studio Mail tab in dev. */
+    MAIL_FROM?: string;
     /** Public base URL R2 objects resolve against — used to mint signed URLs. */
     PUBLIC_STORAGE_BASE_URL?: string;
     SCHEDULER: DurableObjectNamespaceLike & ShardNamespaceLike;
@@ -140,7 +143,18 @@ const authOptions = (env: Env): CirrusAuthOptions => {
 
     return {
         baseURL: env.AUTH_URL,
-        emailAndPassword: { enabled: true },
+        emailAndPassword: {
+            enabled: true,
+            // Forgot-password mail routes through @cirrus/mail; in dev (and the
+            // E2E run) it's captured into the studio's Mail tab — see mail-reset.spec.ts.
+            sendResetPassword: async ({ url, user }) => {
+                await createMailerFromEnv(env as unknown as Record<string, unknown>).send({
+                    subject: "Reset your password",
+                    text: `Reset your password:\n${url}`,
+                    to: user.email,
+                });
+            },
+        },
         plugins: [admin({ defaultRole: "user" }), organization({ allowUserToCreateOrganization: true }), twoFactor(), passkey()],
         secret: env.AUTH_SECRET,
     };
