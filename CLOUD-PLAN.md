@@ -1,11 +1,13 @@
 # Cirrus Cloud — Managed Platform Plan
 
-> Direction doc, 2026-06-12. Synthesized from three research passes: (1) a repo-grounded
+> Direction doc, 2026-06-12. Synthesized from four research passes: (1) a repo-grounded
 > inventory of the control-plane primitives Cirrus already ships, (2) a teardown of
-> Convex's managed cloud (the product model to copy), and (3) a survey of Cloudflare
+> Convex's managed cloud (the product model to copy), (3) a survey of Cloudflare
 > primitives + OSS prior art for building a deploy platform on Cloudflare (the
-> implementation substrate). Companion docs: `VOID-TEARDOWN.md` (DX reference),
-> `CONVEX-PARITY.md` (feature parity), `STUDIO-VS-CLOUDFLARE.md` (dashboard boundary).
+> implementation substrate), and (4) a Supabase platform teardown (open-core
+> packaging, branching/preview DX, and the platform-API growth model). Companion docs:
+> `VOID-TEARDOWN.md` (DX reference), `CONVEX-PARITY.md` (feature parity),
+> `STUDIO-VS-CLOUDFLARE.md` (dashboard boundary).
 
 ---
 
@@ -49,14 +51,15 @@ Why now:
 
 ## 1. Reference models (what each one contributes)
 
-| Reference                                                                                               | What we take from it                                                                                                                                                                                                                                                                                                           |
-| ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Convex Cloud**                                                                                        | The product model: teams → projects → three deployment classes (prod, **per-developer dev**, **TTL'd per-branch previews**); deploy-key types that encode the target (`prod` / `dev:…` / `preview:team:project`); `deploy --cmd` wrapping the frontend build + injecting the backend URL; a deliberately small management API. |
-| **void** (`VOID-TEARDOWN.md`)                                                                           | The DX bar: one-command deploy with NDJSON progress events, schema-drift gate, post-deploy migration handshake before traffic switch, rollback, remote-binding dev, `auth login/whoami/token` + `project link/list/logs/rollback` CLI verbs.                                                                                   |
-| **PartyKit** ([partykit/partykit](https://github.com/partykit/partykit))                                | The deploy UX + the **managed-vs-BYO split**: build locally (esbuild facade injecting DO class exports — exactly our `ShardDO`/`SessionDO` shape), push the bundle to the platform API, get `{name}.{user}.partykit.dev`; setting `CLOUDFLARE_API_TOKEN` flips the same CLI to the customer's own account ("cloud-prem").      |
-| **cloudflare/vibesdk** ([repo](https://github.com/cloudflare/vibesdk))                                  | The most complete open end-to-end reference of a control plane on WfP: dispatch namespace deploys, D1+Drizzle control-plane DB, R2/KV, wildcard subdomain routing. Study before writing ours.                                                                                                                                  |
-| **workers-for-platforms-example** ([repo](https://github.com/cloudflare/workers-for-platforms-example)) | Minimal dispatcher skeleton (hostname → tenant → `env.DISPATCHER.get(script, …, { limits, outbound })`).                                                                                                                                                                                                                       |
-| **Alchemy** ([sam-goodwin/alchemy](https://github.com/sam-goodwin/alchemy))                             | TS-native, embeddable IaC for CF resources (no wrangler dependency, runs inside a CLI) — candidate provisioning engine or design model for ours.                                                                                                                                                                               |
+| Reference                                                                                               | What we take from it                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Convex Cloud**                                                                                        | The product model: teams → projects → three deployment classes (prod, **per-developer dev**, **TTL'd per-branch previews**); deploy-key types that encode the target (`prod` / `dev:…` / `preview:team:project`); `deploy --cmd` wrapping the frontend build + injecting the backend URL; a deliberately small management API.                                                                                                         |
+| **void** (`VOID-TEARDOWN.md`)                                                                           | The DX bar: one-command deploy with NDJSON progress events, schema-drift gate, post-deploy migration handshake before traffic switch, rollback, remote-binding dev, `auth login/whoami/token` + `project link/list/logs/rollback` CLI verbs.                                                                                                                                                                                           |
+| **PartyKit** ([partykit/partykit](https://github.com/partykit/partykit))                                | The deploy UX + the **managed-vs-BYO split**: build locally (esbuild facade injecting DO class exports — exactly our `ShardDO`/`SessionDO` shape), push the bundle to the platform API, get `{name}.{user}.partykit.dev`; setting `CLOUDFLARE_API_TOKEN` flips the same CLI to the customer's own account ("cloud-prem").                                                                                                              |
+| **cloudflare/vibesdk** ([repo](https://github.com/cloudflare/vibesdk))                                  | The most complete open end-to-end reference of a control plane on WfP: dispatch namespace deploys, D1+Drizzle control-plane DB, R2/KV, wildcard subdomain routing. Study before writing ours.                                                                                                                                                                                                                                          |
+| **workers-for-platforms-example** ([repo](https://github.com/cloudflare/workers-for-platforms-example)) | Minimal dispatcher skeleton (hostname → tenant → `env.DISPATCHER.get(script, …, { limits, outbound })`).                                                                                                                                                                                                                                                                                                                               |
+| **Alchemy** ([sam-goodwin/alchemy](https://github.com/sam-goodwin/alchemy))                             | TS-native, embeddable IaC for CF resources (no wrangler dependency, runs inside a CLI) — candidate provisioning engine or design model for ours.                                                                                                                                                                                                                                                                                       |
+| **Supabase**                                                                                            | The open-core cut line at fleet scale (every per-project service OSS; everything fleet-shaped — provisioning, branching, billing — proprietary); **one Studio codebase serving cloud + self-host behind an `IS_PLATFORM` flag**; Branching 2.0 preview-environment DX (per-Git-branch, Git-optional, PR comments/check runs); the Management API + OAuth-apps growth engine (>60% of new projects provisioned by AI builders via API). |
 
 ---
 
@@ -123,6 +126,14 @@ scripts.update`, `d1.database.create`, `r2.buckets.create`, `customHostnames`).
   `@cirrus/config` becomes the dashboard's guided setup.
 - **Tokens:** today's single static `CIRRUS_ADMIN_TOKEN` becomes platform-issued,
   role-scoped (admin / viewer / ci), per-deployment, rotatable, audited.
+- **Public platform API (design for it, ship later).** Supabase's growth lesson:
+    > 60% of their new projects are now provisioned by third-party AI builders
+    > (Lovable/v0-style) through their Management API + OAuth apps (PKCE, scoped tokens),
+    > including the Vercel-Marketplace billed-through-partner model; Convex exposes the
+    > same surface (OAuth apps + embeddable dashboard). The internal deploy API above
+    > should be designed with token scopes/PATs so it can later be published as
+    > `api.cirrus.dev/v1` + OAuth apps without a rewrite — that is the channel through
+    > which app-builder platforms would put Cirrus backends under _their_ users' apps.
 
 ### 2.3 Cloud dev DX (the actual point of all this)
 
@@ -140,9 +151,20 @@ Three rungs, shipped in this order:
    you have a backend." (Convex shipped cloud-dev-first then retrofitted local; we
    have the luxury of keeping local-first as the default and making cloud dev opt-in —
    local stays quota-free and offline-capable.)
-3. **Preview deployments** — `CIRRUS_DEPLOY_KEY=preview:…` in Vercel/Netlify/GH Actions
-    - `cirrus deploy --cmd 'npm run build'` provisions a fresh TTL'd deployment named
-      after the branch and injects the client URL env var into the frontend build.
+3. **Preview deployments** — `CIRRUS_DEPLOY_KEY=preview:…` plus
+   `cirrus deploy --cmd 'npm run build'` in Vercel/Netlify/GH Actions provisions a
+   fresh TTL'd deployment named after the branch and injects the client URL env var
+   into the frontend build. Borrow Supabase Branching's refinements: a GitHub app
+   posting PR comments + check runs; a "backend changes only" filter (only branch when
+   `cirrus/` changes — their `supabase/`-dir filter); **persistent vs ephemeral**
+   branches (staging vs per-PR); auto-delete on PR merge/close; dashboard-created
+   branches with no Git required (Branching 2.0's lesson for the AI-builder audience).
+   And fix their two worst pain points, which our substrate makes cheap: (a) Supabase
+   previews start _empty_ (no data branching; users maintain 10k-line `seed.sql`) and
+   cost $0.01344/h of dedicated compute each — ours are a dispatch-namespace script +
+   fresh DO namespace/D1 with ~zero idle cost, and DO storage + D1 Time Travel make a
+   **fork-production-data** option feasible; (b) their branch compute bills outside
+   spend caps — preview usage must respect plan caps, no surprise bills.
 
 ---
 
@@ -164,7 +186,14 @@ Three rungs, shipped in this order:
 - **Studio** (`packages/studio`, 16 panels) — becomes the hosted dashboard with a
   deployment-selector shell around it (Convex renders the _same_ full dashboard for
   prod/dev/preview deployments; so do we). `mountStudio({ baseUrl, adminToken })` is
-  already the right seam.
+  already the right seam. Adopt Supabase's single-codebase pattern: their cloud
+  dashboard and self-host Studio are literally the same app gated by an `IS_PLATFORM`
+  flag (platform-only panels — orgs, branching, billing — simply don't render
+  self-hosted). One studio, two skins; big trust signal, low maintenance.
+- **Advisors** (`@cirrus/advisor`) — already mirrors Supabase's splinter model (OSS
+  rule pack rendered in the dashboard). Their gap worth closing from day one: expose
+  advisor results via CLI/CI (and later the platform API/MCP) — Supabase users are
+  still asking for this.
 - **Observability** — function metrics, correlated request log, health/insights panels
   are the differentiated "app-observation" features no generic PaaS has
   (`STUDIO-VS-CLOUDFLARE.md`'s "beat" column is the managed tier's selling point).
@@ -187,10 +216,13 @@ Three rungs, shipped in this order:
 
 ## 4. Product / business shape
 
-- **Open core, Convex-style split.** Everything that runs a _single_ deployment stays
-  OSS exactly as today (runtime, DO, studio, CLI, BYO-account deploy). The multi-tenant
-  control plane is the product. Decide the control-plane license deliberately (Convex
-  uses FSL-1.1→Apache-2.0 to block competing hosts; our packages are currently
+- **Open core, Convex/Supabase-style split.** Everything that runs a _single_
+  deployment stays OSS exactly as today (runtime, DO, studio, CLI, advisor rules,
+  BYO-account deploy). The multi-tenant control plane is the product. Supabase draws
+  exactly this line (every per-project service is OSS; provisioning/branching/billing/
+  fleet are closed, with portability via standard tooling rather than an open control
+  plane) and it demonstrably converts. Decide the control-plane license deliberately
+  (Convex uses FSL-1.1→Apache-2.0 to block competing hosts; our packages are currently
   permissive — the control plane likely lives in a separate repo).
 - **Two deploy targets, one CLI** (PartyKit's cleanest idea): `cirrus deploy` →
   managed cloud when logged in / `CIRRUS_DEPLOY_KEY` present; → user's own CF account
@@ -203,6 +235,13 @@ Three rungs, shipped in this order:
 - **Platform cost floor:** WfP add-on $25/mo (20M req, 60M CPU-ms, 1k scripts incl.) +
   Workers Paid + Advanced Certificate Manager — negligible relative to the build cost;
   unit economics are well-defined from day one.
+- **Structural cost advantage over Supabase — market it.** Supabase's
+  dedicated-VM-per-project isolation forces their most-hated behaviors: free projects
+  **pause after 1 week** of inactivity, provisioning takes minutes, and every preview
+  branch burns $0.01344/h. A Cirrus project/preview is a script in a dispatch
+  namespace + DOs that scale to zero natively — near-zero idle cost, sub-second
+  creation. "Free projects never pause; previews are free until used" is a direct,
+  truthful jab at both Supabase (pausing) and Convex (dev usage burning plan quota).
 
 ---
 
@@ -220,8 +259,11 @@ Ordered so every phase ships standalone DX value even if we stop there.
   `cirrus init && cirrus deploy` → live URL in under a minute with zero Cloudflare
   account, zero wrangler config, zero D1 placeholder editing.
 - **Phase 2 — Preview + cloud dev deployments.** Deploy-key types, branch-named TTL'd
-  previews with `--cmd` + URL injection (Vercel/Netlify/GH Actions recipes),
-  per-developer dev deployments with push-on-save + log tail.
+  previews with `--cmd` + URL injection (Vercel/Netlify/GH Actions recipes), GitHub
+  app (PR comments/check runs, `cirrus/`-only filter, auto-delete on merge/close),
+  persistent branches, per-developer dev deployments with push-on-save + log tail.
+  Stretch (differentiator): fork-production-data previews via DO storage snapshot +
+  D1 Time Travel — needs a spike; neither Supabase nor Convex offers it.
 - **Phase 3 — Hosted studio.** Multi-tenant shell over `packages/studio`; admin-RPC
   proxy with ACL/audit/rate limits; team invites; guided secret setup.
 - **Phase 4 — Domains, billing, ops.** Custom hostnames (CF for SaaS), usage metering →
@@ -271,5 +313,16 @@ Convex: [dev workflow](https://docs.convex.dev/understanding/workflow) ·
 [local deployments](https://docs.convex.dev/cli/local-deployments) ·
 [management API](https://docs.convex.dev/management-api) ·
 [self-hosting](https://docs.convex.dev/self-hosting) · [pricing](https://www.convex.dev/pricing).
+Supabase: [architecture](https://supabase.com/docs/guides/getting-started/architecture) ·
+[features matrix (cloud vs self-host)](https://supabase.com/docs/guides/getting-started/features) ·
+[Branching 2.0](https://supabase.com/blog/branching-2-0) ·
+[branching docs](https://supabase.com/docs/guides/deployment/branching) ·
+[branching usage/billing](https://supabase.com/docs/guides/platform/manage-your-usage/branching) ·
+[Management API](https://supabase.com/docs/reference/api/introduction) ·
+[OAuth integrations](https://supabase.com/docs/guides/integrations/build-a-supabase-oauth-integration) ·
+[Vercel Marketplace](https://supabase.com/docs/guides/integrations/vercel-marketplace) ·
+[splinter (advisors)](https://github.com/supabase/splinter) ·
+[Pulumi case study (fleet orchestration)](https://www.pulumi.com/case-studies/supabase/) ·
+[pricing](https://supabase.com/pricing).
 void: `VOID-TEARDOWN.md` (this repo) · [void guide](https://void.cloud/guide/) ·
 [VoidZero joins Cloudflare](https://voidzero.dev/posts/voidzero-cloudflare).
