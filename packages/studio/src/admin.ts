@@ -54,6 +54,7 @@ export const ADMIN_FUNCTIONS = {
     runMigration: "__cirrus_admin__:runMigration",
     runSql: "__cirrus_admin__:runSql",
     sendTestMail: "__cirrus_admin__:sendTestMail",
+    storageOrphans: "__cirrus_admin__:storageOrphans",
     storageReferences: "__cirrus_admin__:storageReferences",
     writeRow: "__cirrus_admin__:writeRow",
 } as const;
@@ -667,6 +668,35 @@ export interface StorageReference {
 export interface StorageReferenceResult {
     references: Record<string, StorageReference[]>;
     storageColumns: Record<string, string[]>;
+}
+
+/**
+ * One record field whose `v.storage()` value points at an object key that does
+ * NOT exist in the bucket — a **dangling reference**, mirroring `@cirrus/do`'s
+ * `DanglingReference`. `table`/`id`/`column` locate the owning record's field;
+ * `key` is the missing object it references. The inverse of an orphan: the file
+ * is gone, the record still points at it.
+ */
+export interface DanglingReference {
+    column: string;
+    id: string;
+    key: string;
+    table: string;
+}
+
+/**
+ * Payload of a `__cirrus_admin__:storageOrphans` call, mirroring `@cirrus/do`'s
+ * `DanglingReferenceResult` — the inverse of the records↔files join. Given the
+ * bucket's live object keys, `references` lists every record `v.storage()` field
+ * pointing at a key the bucket no longer has. `scanned` is how many storage-field
+ * values were examined; `truncated` is `true` when a scan/result cap clipped the
+ * set (the studio surfaces "showing the first N"). CF's R2 browser can never make
+ * this join.
+ */
+export interface DanglingReferenceResult {
+    references: DanglingReference[];
+    scanned: number;
+    truncated: boolean;
 }
 
 /** Direction a data migration is run in. Mirrors `@cirrus/do`. */

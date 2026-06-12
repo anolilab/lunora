@@ -57,6 +57,7 @@ import { appendRequestLogEntry, emitLogEvent, emitRequestLogEvent, ensureRequest
 import { buildSecurityAudit } from "./security-audit";
 import { buildSettings, isDevEnvironment } from "./settings";
 import { runReadonlySql } from "./sql-console";
+import { findDanglingReferences } from "./storage-correlation";
 import type { TransactionSqlLike } from "./transaction";
 import { ConflictError } from "./transaction";
 import type { MutationDelta, RpcRequest, SocketAttachment, SubscriptionEnvelope, SubscriptionQuery } from "./types";
@@ -3490,12 +3491,39 @@ abstract class ShardDO {
             return { result: { migrations: readMigrationStatus(sql, id) }, tables: new Set([ADMIN_WILDCARD]) };
         }
 
-        if (functionPath === ADMIN_FUNCTIONS.storageReferences) {
-            return this.readAdminStorageReferences(sql, args);
+        const storage = this.readAdminStorageSignal(functionPath, sql, args);
+
+        if (storage) {
+            return storage;
         }
 
         // eslint-disable-next-line unicorn/no-null -- `null` signals "not a recognized admin read", matching the subscription-outcome contract codegen subclasses implement
         return null;
+    }
+
+    /**
+     * Resolve the storage↔schema correlation admin reads — the file browser's
+     * records↔files join (`storageReferences`, object→owning-record + per-key
+     * orphans) and its inverse (`storageOrphans`, dangling references: records
+     * pointing at a missing object). Both scan only the schema's declared
+     * `v.storage()` columns. Returns `undefined` for any other path so
+     * {@link readAdminOp} falls through; folded into one helper to keep that
+     * dispatcher under its complexity budget.
+     */
+    private readAdminStorageSignal(
+        functionPath: string,
+        sql: SqlExec,
+        args: Record<string, unknown>,
+    ): undefined | { result: unknown; tables: Set<string> } {
+        if (functionPath === ADMIN_FUNCTIONS.storageReferences) {
+            return this.readAdminStorageReferences(sql, args);
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.storageOrphans) {
+            return this.readAdminStorageOrphans(sql, args);
+        }
+
+        return undefined;
     }
 
     /**
@@ -3510,6 +3538,31 @@ abstract class ShardDO {
         const keys = Array.isArray(args["keys"]) ? args["keys"].filter((key): key is string => typeof key === "string") : [];
 
         return { result: findStorageReferences(sql, this.storageColumns(), keys), tables: new Set([ADMIN_WILDCARD]) };
+    }
+
+    /**
+     * Resolve a `storageOrphans` admin read — the inverse of the records↔files
+     * join: given the set of object keys that actually exist in the bucket
+     * (`liveKeys`, the studio's enumerated listing), return every record
+     * `v.storage()` field whose value points at a key the bucket DOES NOT have — a
+     * **dangling reference**. CF's R2 browser can never make this join. Scans only
+     * the schema's declared storage columns through {@link findDanglingReferences},
+     * bounded with a `truncated` flag (logged once when set). Carries the
+     * {@link ADMIN_WILDCARD} (it spans every storage table) so a live subscription
+     * re-runs on any write.
+     */
+    private readAdminStorageOrphans(sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } {
+        const liveKeys = Array.isArray(args["liveKeys"]) ? args["liveKeys"].filter((key): key is string => typeof key === "string") : [];
+        const result = findDanglingReferences(sql, this.storageColumns(), liveKeys);
+
+        if (result.truncated) {
+            // eslint-disable-next-line no-console -- intentional operational notice: the dangling-reference scan was clipped by its bound, so the studio's view is partial
+            console.warn(
+                `[@cirrus/do] storageOrphans scan truncated after checking ${String(result.scanned)} storage references; reporting the first ${String(result.references.length)} dangling reference(s).`,
+            );
+        }
+
+        return { result, tables: new Set([ADMIN_WILDCARD]) };
     }
 
     /**

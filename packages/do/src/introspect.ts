@@ -62,6 +62,7 @@ const ADMIN_FUNCTIONS = {
     runMigration: "__cirrus_admin__:runMigration",
     runSql: "__cirrus_admin__:runSql",
     sendTestMail: "__cirrus_admin__:sendTestMail",
+    storageOrphans: "__cirrus_admin__:storageOrphans",
     storageReferences: "__cirrus_admin__:storageReferences",
     writeRow: "__cirrus_admin__:writeRow",
 } as const;
