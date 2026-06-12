@@ -168,37 +168,55 @@ Three rungs, shipped in this order:
 
 ### 2.4 Known WfP constraints to engineer around
 
-Found while checking the substrate against what Cirrus actually ships; these go into
-the Phase 1 spike checklist (§5):
+Found while checking the substrate against what Cirrus actually ships, then verified
+against the Cloudflare docs (2026-06-12; WfP reference/limits page, KV/D1/R2 limits
+pages, WfP isolation + gotcha notes). These go into the Phase 1 spike checklist (§5):
 
 - **Cron Triggers do not fire for namespaced user Workers** — `triggers.crons` is
-  **silently dropped** on dispatch-namespace uploads (the schedules API only exists for
-  account-level scripts; [workers-sdk#13840](https://github.com/cloudflare/workers-sdk/issues/13840)).
+  **silently dropped** on dispatch-namespace uploads. Note the official WfP limits
+  page does not document this; the evidence is the API surface (the schedules
+  subresource only exists for account-level scripts) plus
+  [workers-sdk#13840](https://github.com/cloudflare/workers-sdk/issues/13840).
   Impact: `@cirrus/scheduler`'s cron entry point (`cronJobs()` → `scheduled()` handler).
   Mitigation is cheap because the heavy lifting already lives in `SchedulerDO` on **DO
   alarms, which work fine in namespaced Workers** (`runAfter`/`runAt` unaffected): the
   platform runs one account-level cron ticker Worker that fans tick events out through
   the dispatcher to each tenant's `scheduled()` path (tenants' cron specs are known to
   the control plane from codegen output).
+- **No gradual deployments for user Workers** (the one limitation the official WfP
+  limits page _does_ state): every upload deploys all-at-once to 100% of traffic.
+  So the deploy API's `rollback` is platform-side — the control plane retains
+  prior bundles (R2) and re-uploads; canary/percentage rollout, if ever offered,
+  lives in the dispatcher's routing logic, not in Cloudflare versions.
 - **Queue consumers (verify)** — namespaced Workers can hold producer bindings, but a
   queue _consumer_ is configured on an account-level Worker; assume tenant Workers
   cannot be consumers until proven otherwise. Impact: `@cirrus/mail`'s queue-backed
   sends and the scheduler's queue-workpool variant. Mitigation mirrors crons: a
   platform-owned consumer Worker that dispatches batches back into the tenant Worker,
   or fall back to the DO-alarm workpool on the managed tier.
-- **Per-tenant resource provisioning hits account limits unevenly** — D1
-  databases (~50k/account) and R2 buckets are fine at scale; **KV namespaces are
-  capped (~1000/account)**, so if any Cirrus capability binds KV per tenant it must
-  multiplex one shared namespace via key prefixes instead. DO classes ship inside each
-  tenant script, so they don't consume account-level namespaces.
+- **Per-tenant resource provisioning hits account limits unevenly** (verified
+  numbers) — D1: 50,000 databases/account on paid, **raisable by request to
+  millions** (explicitly supported for per-tenant patterns); R2: 1,000,000
+  buckets/account; **KV: 1,000 namespaces/account on _every_ plan**, so any
+  per-tenant KV must multiplex one shared namespace via key prefixes. DO classes
+  ship inside each tenant script — DO namespaces are unlimited under WfP.
+- **Control-plane API throughput** — the Cloudflare client API allows **1,200
+  requests / 5 min per account** (200/s per IP). Provisioning (D1 create + script
+  upload + secrets) costs several calls per deployment, so deploy orchestration
+  needs a queue with backoff — relevant once preview deployments multiply.
+- **Outbound Worker trade-offs** — it intercepts only `fetch()` (not DO or mTLS
+  binding calls), and enabling it **disables TCP `connect()`** in user Workers.
+  Cirrus doesn't use raw TCP today; re-check before ever adopting a TCP-based driver.
 - **Email sending binding (verify)** — `@cirrus/mail`'s default transport (Cloudflare
   Email Workers `send_email` binding) has unknown support inside dispatch namespaces;
   Resend (HTTP) works regardless and is the safe managed-tier default.
 - **EU data residency** — Durable Objects support **jurisdiction restrictions**
-  (`jurisdiction: "eu"`) at ID-creation time and D1 supports location hints; expose a
-  per-project region/jurisdiction toggle early — it is cheap now and a GDPR
-  prerequisite for European customers later (Supabase's regionality is a real
-  selling point we can partially match).
+  (`jurisdiction: "eu"` | `"fedramp"`) at ID-creation time and **R2 buckets support
+  the same jurisdictions**; D1 only has _location hints_ (placement preference, not
+  a residency guarantee). So an honest per-project "EU" toggle = DO jurisdiction +
+  R2 jurisdiction, with D1 hinted-EU documented as best-effort. Cheap to expose
+  early; a GDPR prerequisite for European customers later (Supabase's regionality
+  is a real selling point we can partially match).
 
 ---
 
@@ -357,6 +375,11 @@ Cloudflare: [WfP docs](https://developers.cloudflare.com/cloudflare-for-platform
 [DO facets / Dynamic Workers](https://blog.cloudflare.com/durable-object-facets-dynamic-workers/) ·
 [CF for SaaS plans](https://developers.cloudflare.com/cloudflare-for-platforms/cloudflare-for-saas/plans/) ·
 [WfP observability](https://developers.cloudflare.com/cloudflare-for-platforms/workers-for-platforms/configuration/observability/) ·
+[WfP limits](https://developers.cloudflare.com/cloudflare-for-platforms/workers-for-platforms/reference/limits/) ·
+[KV limits](https://developers.cloudflare.com/kv/platform/limits/) ·
+[D1 limits](https://developers.cloudflare.com/d1/platform/limits/) ·
+[R2 limits](https://developers.cloudflare.com/r2/platform/limits/) ·
+[API rate limits](https://developers.cloudflare.com/fundamentals/api/reference/limits/) ·
 [crons dropped in dispatch namespaces (workers-sdk#13840)](https://github.com/cloudflare/workers-sdk/issues/13840).
 Repos: [workers-for-platforms-example](https://github.com/cloudflare/workers-for-platforms-example) ·
 [vibesdk](https://github.com/cloudflare/vibesdk) · [cloudflare-typescript](https://github.com/cloudflare/cloudflare-typescript) ·
