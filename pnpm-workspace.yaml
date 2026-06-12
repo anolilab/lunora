@@ -26,6 +26,22 @@ overrides:
   tmp@<=0.2.3: ^0.2.4
 
 catalogs:
+  ai:
+    # Vercel AI SDK v6 core + Cloudflare's official Workers AI provider. The
+    # provider peers `ai ^6.0.0` / `@ai-sdk/provider ^3.0.0`. Workers AI is the
+    # zero-config default; the `@ai-sdk/*` providers below are optional
+    # bring-your-own (declared as optional peers on @cirrus/ai) so an app stays
+    # Workers-AI-only unless it opts into another provider.
+    #
+    # EXACT-pinned (no caret): v6 shipped inside the 1440-minute maturity window,
+    # so each version is allow-listed by exact name@version in
+    # `minimumReleaseAgeExclude` below. A caret would let pnpm drift to a newer
+    # patch that is NOT excluded and would then be gated. To bump: update the
+    # version here AND its matching exclude entry together.
+    ai: 6.0.202
+    workers-ai-provider: 3.1.14
+    "@ai-sdk/anthropic": 3.0.83
+    "@ai-sdk/openai": 3.0.70
   build:
     "@babel/core": ^7.29.7
     "@babel/preset-react": ^7.29.7
@@ -199,6 +215,10 @@ allowBuilds:
 #   - 'better-auth@1.6.13 || 1.6.14'
 # When bumping a dependency, UPDATE its existing line — do not append a new one.
 minimumReleaseAgeExclude:
+  - '@ai-sdk/anthropic@3.0.83'
+  - '@ai-sdk/gateway@3.0.128'
+  - '@ai-sdk/openai@3.0.70'
+  - '@ai-sdk/provider-utils@4.0.28'
   - '@better-auth/core@1.6.16'
   - '@better-auth/drizzle-adapter@1.6.16'
   - '@better-auth/kysely-adapter@1.6.16'
@@ -295,6 +315,7 @@ minimumReleaseAgeExclude:
   - '@visulima/vis-binding-linux-x64-musl@1.0.0-alpha.34'
   - '@visulima/vis-binding-win32-arm64-msvc@1.0.0-alpha.34'
   - '@visulima/vis-binding-win32-x64-msvc@1.0.0-alpha.34'
+  - 'ai@6.0.202'
   - 'better-auth@1.6.16'
   - 'deslop-js@0.0.21'
   - 'eslint-plugin-react-dom@5.8.17'
