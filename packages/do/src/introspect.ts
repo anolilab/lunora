@@ -10,6 +10,20 @@ import type { SqlExec } from "./ctx-db";
 const ADMIN_FUNCTION_PREFIX = "__cirrus_admin__:";
 
 /**
+ * Reserved `functionPath` prefix for cross-shard relation reads. Backs reverse
+ * cross-backend relations: a `.global()` (D1) parent loading a shard-local
+ * child whose rows span every shard. Like {@link ADMIN_FUNCTION_PREFIX} these
+ * travel the `/_cirrus/rpc` → shard `/rpc` path and are intercepted before user
+ * dispatch — but they are NOT admin-token-gated. Instead they run under the
+ * forwarded caller identity and are reachable ONLY via the Query Coordinator's
+ * fan-out (the worker refuses the prefix on a single-shard envelope), so a
+ * direct client RPC can never reach them. `:read` returns the bare child-row
+ * array, `:count` a bare number, so the coordinator's `concat`/`sum` merge
+ * composes the per-shard results.
+ */
+const RELATION_FUNCTION_PREFIX = "__cirrus_relation__:";
+
+/**
  * Fully-qualified reserved paths the data browser invokes. The
  * `__cirrus_admin__:` prefix is spelled out inline rather than interpolated so
  * the values stay emittable under `--isolatedDeclarations`.
@@ -892,7 +906,7 @@ const summarizeSubscriptions = (attachments: SocketAttachmentLike[]): Subscripti
     return { connections, totalConnections: connections.length, totalSubscriptions };
 };
 
-export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, findStorageReferences, listTables, MAX_PAGE_SIZE, readTablePage, selectMatchingIds, summarizeSubscriptions };
+export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, findStorageReferences, listTables, MAX_PAGE_SIZE, readTablePage, RELATION_FUNCTION_PREFIX, selectMatchingIds, summarizeSubscriptions };
 export type {
     AdvisoriesResult,
     AdvisoryFinding,

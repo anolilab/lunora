@@ -78,7 +78,7 @@ export interface ShardDOConfig {
     observability?: (env: Record<string, unknown>) => LogSink | undefined;
     scheduler?: (env: Record<string, unknown>) => unknown;
     storage?: (env: Record<string, unknown>) => unknown;
-    d1?: (env: Record<string, unknown>) => DatabaseWriterLike | undefined;
+    d1?: (env: Record<string, unknown>, request?: { identity?: Record<string, unknown>; userId?: string }) => DatabaseWriterLike | undefined;
 }
 
 const schedulerStub = {
@@ -226,6 +226,37 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             this.ensureMigrated();
 
             return registered.handler(this.buildCtx({ functionPath }), args);
+        }
+
+        protected override async runRelationFanoutRead(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
+            const table = typeof args["table"] === "string" ? args["table"] : "";
+            const definition = (schema as unknown as SchemaLike).tables[table];
+
+            if (!definition) {
+                throw Object.assign(new Error(`__cirrus_relation__: unknown table "${table}"`), { code: "UNKNOWN_TABLE", name: "CirrusError", status: 404 });
+            }
+
+            // Only shard-local tables live in this DO's SQLite; a `.global()`
+            // table lives in D1 and must never be fanned out across shards.
+            if (definition.shardMode?.kind === "global") {
+                throw Object.assign(new Error(`__cirrus_relation__: table "${table}" is global, not shard-local`), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+            }
+
+            this.ensureMigrated();
+
+            const { db } = this.buildCtx({ functionPath }) as { db: DatabaseWriterLike };
+            const where = (args["where"] ?? undefined) as Record<string, unknown> | undefined;
+
+            if (functionPath === "__cirrus_relation__:count") {
+                return db.count(table, where);
+            }
+
+            // `orderBy` / `where` / `with` arrive JSON-serialized through the
+            // fan-out envelope (their compile-time types are erased), so cast the
+            // reconstructed args to the writer's argument type.
+            const result = await db.findMany(table, { orderBy: args["orderBy"], where, with: args["with"] } as Parameters<DatabaseWriterLike["findMany"]>[1]);
+
+            return result.page;
         }
 
         protected override async executeSubscription(functionPath: string, args: Record<string, unknown>): Promise<{ result: unknown; tables: Set<string> } | null> {
@@ -509,7 +540,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // `storageStub` fallback satisfies SystemReaderStorageLike structurally
             // (its `list`/`getMetadata` throw the "no storage configured" error).
             const storage = (config.storage?.(env) ?? storageStub) as unknown as SystemReaderStorageLike;
-            const globalDb: DatabaseWriterLike = config.d1?.(env) ?? globalDbStub;
+            const globalDb: DatabaseWriterLike = config.d1?.(env, { identity, userId }) ?? globalDbStub;
             const db: DatabaseWriterLike = createShardCtxDb({
                 broadcast: (delta) => {
                     this.recordChangedTable(delta.table);

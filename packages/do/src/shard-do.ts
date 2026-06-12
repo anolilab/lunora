@@ -41,6 +41,7 @@ import {
     listTables,
     MAX_PAGE_SIZE,
     readTablePage,
+    RELATION_FUNCTION_PREFIX,
     selectMatchingIds,
     summarizeSubscriptions,
 } from "./introspect";
@@ -1583,6 +1584,19 @@ abstract class ShardDO {
             this.currentIndexHits = new Set<string>();
 
             try {
+                // Reserved cross-shard relation read/count (reverse cross-backend
+                // relations). Served BEFORE user dispatch and returned BARE (row
+                // array / number) — never `{ result }`-wrapped — so the Query
+                // Coordinator's `concat`/`sum` merge composes the per-shard
+                // values. Runs under the forwarded identity stashed above; the
+                // worker refuses this prefix on a single-shard envelope, so it's
+                // only reachable through the authorizeFanOut-gated fan-out path.
+                if (payload.functionPath.startsWith(RELATION_FUNCTION_PREFIX)) {
+                    const value = await this.runRelationFanoutRead(payload.functionPath, payload.args ?? {});
+
+                    return jsonResponse(value, 200, this.currentResponseBookmark);
+                }
+
                 const result = await this.handleRpc(payload.functionPath, payload.args ?? {});
                 const durationMs = Date.now() - dispatchStartedAt;
 
@@ -1790,6 +1804,31 @@ abstract class ShardDO {
 
     /** Subclasses implement function dispatch. */
     public abstract handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown>;
+
+    /**
+     * Serve a reserved {@link RELATION_FUNCTION_PREFIX} fan-out read/count for
+     * reverse cross-backend relations (a `.global()` parent loading a
+     * shard-local child that spans every shard). Returns a BARE value — the
+     * child-row array for `__cirrus_relation__:read`, a number for
+     * `__cirrus_relation__:count` — so the coordinator's `concat`/`sum` merge
+     * composes the per-shard results. Runs under the forwarded caller identity
+     * (the `x-cirrus-userid` / `x-cirrus-identity` headers stashed for the
+     * request), never the admin token.
+     *
+     * The base class is schema-agnostic, so it cannot build the ctx-db needed to
+     * read the child table; the codegen subclass overrides this with a
+     * schema-aware implementation. Reaching the base default means the prefix was
+     * dispatched against a ShardDO with no generated schema bound.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this with a schema-aware reader that uses `this`
+    protected runRelationFanoutRead(_functionPath: string, _args: Record<string, unknown>): Promise<unknown> {
+        throw Object.assign(new Error("__cirrus_relation__: no schema bound — the base ShardDO cannot serve cross-shard relation reads"), {
+            code: "NOT_IMPLEMENTED",
+            name: "CirrusError",
+            status: 500,
+        });
+    }
+
     protected get sql(): unknown {
         return this.state.storage.sql;
     }

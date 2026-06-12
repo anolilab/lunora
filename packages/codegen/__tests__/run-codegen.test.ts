@@ -596,7 +596,7 @@ describe("run-codegen", () => {
         });
 
         it("binds every table facade through the shard ctx-db (which routes `.global()` ops to D1)", () => {
-            expect.assertions(6);
+            expect.assertions(9);
 
             const schema: SchemaIR = {
                 tables: [
@@ -627,9 +627,9 @@ describe("run-codegen", () => {
             const output = emitShard(schema);
 
             // The D1 config thunk + fallback stub appear only because a `.global()` table exists.
-            expect(output).toContain("d1?: (env: Record<string, unknown>) => DatabaseWriterLike | undefined;");
+            expect(output).toContain("d1?: (env: Record<string, unknown>, request?: { identity?: Record<string, unknown>; userId?: string }) => DatabaseWriterLike | undefined;");
             expect(output).toContain("const globalDbStub: DatabaseWriterLike");
-            expect(output).toContain("const globalDb: DatabaseWriterLike = config.d1?.(env) ?? globalDbStub;");
+            expect(output).toContain("const globalDb: DatabaseWriterLike = config.d1?.(env, { identity, userId }) ?? globalDbStub;");
 
             // `globalDb` is passed into the shard ctx-db so the generic
             // `ctx.db.insert("<global>", …)`/`query`/… methods route to D1 (not just
@@ -643,6 +643,15 @@ describe("run-codegen", () => {
             // facade straight to `globalDb` would skip those.
             expect(output).toContain('facade["messages"] = bindTableFacade(db, "messages");');
             expect(output).toContain('facade["users"] = bindTableFacade(db, "users");');
+
+            // Reverse cross-backend relations: the `__cirrus_relation__:read`/`:count`
+            // fan-out override is emitted only when a `.global()` table exists (a
+            // reverse relation needs a global parent), reading the shard-local child
+            // through the schema-aware ctx-db and returning a BARE value for the
+            // coordinator's concat/sum merge.
+            expect(output).toContain("protected override async runRelationFanoutRead(functionPath: string, args: Record<string, unknown>): Promise<unknown>");
+            expect(output).toContain('if (functionPath === "__cirrus_relation__:count") {');
+            expect(output).toContain("return result.page;");
         });
 
         it("omits the D1 facade plumbing when no table is `.global()`", () => {

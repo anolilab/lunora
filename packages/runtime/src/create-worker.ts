@@ -3230,6 +3230,21 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
             throw new CirrusError("RPC envelope cannot set both `shardKey` and `fanOut`", { code: "BAD_REQUEST", status: 400 });
         }
 
+        // Reserved cross-shard relation reads (reverse cross-backend relations)
+        // are fan-out-only. A single-shard envelope naming the
+        // `__cirrus_relation__:` prefix would bypass the `authorizeFanOut` gate
+        // and read one shard's raw rows directly, so refuse it — the only
+        // legitimate caller is the coordinator's fan-out, which carries a
+        // `fanOut` spec and is authorized through `authorizeRpcEnvelope`. The
+        // literal prefix is inlined (not imported from `@cirrus/do`) to keep the
+        // runtime free of a hard `@cirrus/do` dependency.
+        if (!envelope.fanOut && envelope.functionPath.startsWith("__cirrus_relation__:")) {
+            throw new CirrusError("`__cirrus_relation__:*` is a fan-out-only reserved RPC and cannot be dispatched to a single shard", {
+                code: "FORBIDDEN",
+                status: 403,
+            });
+        }
+
         // Refuse fan-out envelopes that arrive without a coordinator
         // configured BEFORE we invoke `resolveIdentity` — otherwise the
         // hook would be called for a request that's already destined for

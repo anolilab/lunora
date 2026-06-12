@@ -5,7 +5,7 @@ import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@cirrus/d1";
 import { createD1CtxDb, listGlobalTables, readGlobalTablePage } from "@cirrus/d1";
 import { createMailerFromEnv } from "@cirrus/mail";
 import type { ExecutionContextLike, GlobalIntrospector, ScheduledControllerLike, ShardNamespaceLike } from "@cirrus/runtime";
-import { createWorker } from "@cirrus/runtime";
+import { createCrossShardRelationCapabilities, createWorker } from "@cirrus/runtime";
 import type { DurableObjectNamespaceLike } from "@cirrus/scheduler";
 import { createScheduler } from "@cirrus/scheduler";
 import type { R2BucketLike } from "@cirrus/storage";
@@ -67,10 +67,40 @@ export const ShardDO = createShardDO({
     // / `query` / `get` on a global table through this writer (and the per-table
     // `ctx.db.<global>` facade shares it), so global reads/writes land in D1 — not the
     // DO's local SQLite. The D1 ctx-db auto-provisions the tables on first use.
-    d1: (env) => {
+    d1: (env, request) => {
         const shardEnv = env as ShardEnv;
 
-        return shardEnv.DB ? createD1CtxDb({ exec: buildExec(shardEnv.DB), schema: schema as unknown as D1CtxDbOptions["schema"] }) : undefined;
+        if (!shardEnv.DB) {
+            return undefined;
+        }
+
+        // Reverse cross-backend relations: when the worker origin is known, give
+        // the D1 ctx-db cross-shard reader/counter capabilities so a `.global()`
+        // parent can load a shard-local child relation by fanning the read out
+        // across every shard (forwarding the originating caller identity). The
+        // fan-out POSTs `__cirrus_relation__:read`/`:count` to `/_cirrus/rpc`, so
+        // a multi-shard deployment must additionally configure `queryCoordinator`
+        // + `authorizeFanOut` on `buildWorker` (see the note there). Without an
+        // origin the capabilities are omitted and the ctx-db throws its clear
+        // "wire a cross-shard reader" error if such a relation is loaded.
+        const crossShard = shardEnv.CIRRUS_WORKER_ORIGIN
+            ? createCrossShardRelationCapabilities({
+                  identity: request?.identity,
+                  origin: shardEnv.CIRRUS_WORKER_ORIGIN,
+                  userId: request?.userId,
+              })
+            : undefined;
+
+        return createD1CtxDb({
+            ...(crossShard
+                ? {
+                      crossShardCounter: crossShard.crossShardCounter as D1CtxDbOptions["crossShardCounter"],
+                      crossShardReader: crossShard.crossShardReader,
+                  }
+                : {}),
+            exec: buildExec(shardEnv.DB),
+            schema: schema as unknown as D1CtxDbOptions["schema"],
+        });
     },
     scheduler: (env) => {
         const shardEnv = env as ShardEnv;
@@ -228,6 +258,16 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
         routes: {},
         // Exposes /_cirrus/admin/scheduled so the studio can list/cancel jobs.
         schedulerDO: env.SCHEDULER,
+        // Reverse cross-backend relations (a `.global()` parent loading a
+        // shard-local child) fan a read out across every shard via
+        // `__cirrus_relation__:read`/`:count` on `/_cirrus/rpc`. A multi-shard
+        // (`.shardBy()`) deployment that uses them must add a `queryCoordinator`
+        // (over a shard registry) plus an `authorizeFanOut` that permits those
+        // two reserved paths — omitted here because the playground runs the
+        // default single-DO topology, where the host shard and the child shard
+        // are the same DO (fanning back into it would re-enter its input gate).
+        // The `d1` factory above still wires the cross-shard capabilities so the
+        // path is ready the moment a real shard topology configures the above.
         shardDO: env.SHARD,
         // Exposes /_cirrus/admin/storage so the studio's file browser can
         // page through R2 objects, delete, and upload. Omitted when no bucket is

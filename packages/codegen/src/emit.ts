@@ -1105,7 +1105,9 @@ const emitShard = (schema: SchemaIR, advisories: ReadonlyArray<Finding> = [], rl
     // arrives via an optional `d1` config thunk; when omitted (or for projects
     // with no global tables), reads/writes to a global table hit `globalDbStub`
     // and throw a descriptive error.
-    const d1ConfigField = hasGlobalTables ? `\n    d1?: (env: Record<string, unknown>) => DatabaseWriterLike | undefined;` : "";
+    const d1ConfigField = hasGlobalTables
+        ? `\n    d1?: (env: Record<string, unknown>, request?: { identity?: Record<string, unknown>; userId?: string }) => DatabaseWriterLike | undefined;`
+        : "";
 
     const globalDatabaseStub = hasGlobalTables
         ? `
@@ -1246,7 +1248,55 @@ const vectorsStub: VectorSearchLike = {
     // Declared BEFORE `db` so it can be passed into `createShardCtxDb({ globalDb })`:
     // the generic `ctx.db.insert("<global>", …)`/`query`/… methods route through
     // it to D1 (matching the property-style `ctx.db.<global>` facade below).
-    const globalDatabaseLine = hasGlobalTables ? `            const globalDb: DatabaseWriterLike = config.d1?.(env) ?? globalDbStub;\n` : "";
+    // Pass the per-request identity into the \`d1\` factory so a cross-backend
+    // reader it builds (reverse relations) can forward \`x-cirrus-userid\` /
+    // \`x-cirrus-identity\` on the fan-out — each shard then applies its own
+    // identity-scoped read. \`userId\`/\`identity\` are in scope from \`buildCtx\`.
+    const globalDatabaseLine = hasGlobalTables
+        ? `            const globalDb: DatabaseWriterLike = config.d1?.(env, { identity, userId }) ?? globalDbStub;\n`
+        : "";
+
+    // Reverse cross-backend relations: a \`.global()\` (D1) parent loading a
+    // shard-local child whose rows span every shard. The Query Coordinator
+    // fans \`__cirrus_relation__:read\`/\`:count\` out to each shard; this override
+    // serves them from the schema-aware ctx-db under the forwarded identity and
+    // returns a BARE value (row array / number) for the \`concat\`/\`sum\` merge.
+    // Only emitted when the project has \`.global()\` tables (a reverse relation
+    // needs a global parent); otherwise the base hook's throw is unreachable.
+    const relationFanoutOverride = hasGlobalTables
+        ? `
+        protected override async runRelationFanoutRead(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
+            const table = typeof args["table"] === "string" ? args["table"] : "";
+            const definition = (schema as unknown as SchemaLike).tables[table];
+
+            if (!definition) {
+                throw Object.assign(new Error(\`__cirrus_relation__: unknown table "\${table}"\`), { code: "UNKNOWN_TABLE", name: "CirrusError", status: 404 });
+            }
+
+            // Only shard-local tables live in this DO's SQLite; a \`.global()\`
+            // table lives in D1 and must never be fanned out across shards.
+            if (definition.shardMode?.kind === "global") {
+                throw Object.assign(new Error(\`__cirrus_relation__: table "\${table}" is global, not shard-local\`), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+            }
+
+            this.ensureMigrated();
+
+            const { db } = this.buildCtx({ functionPath }) as { db: DatabaseWriterLike };
+            const where = (args["where"] ?? undefined) as Record<string, unknown> | undefined;
+
+            if (functionPath === "__cirrus_relation__:count") {
+                return db.count(table, where);
+            }
+
+            // \`orderBy\` / \`where\` / \`with\` arrive JSON-serialized through the
+            // fan-out envelope (their compile-time types are erased), so cast the
+            // reconstructed args to the writer's argument type.
+            const result = await db.findMany(table, { orderBy: args["orderBy"], where, with: args["with"] } as Parameters<DatabaseWriterLike["findMany"]>[1]);
+
+            return result.page;
+        }
+`
+        : "";
 
     const facadeBlock = hasTables
         ? `\n            const facade = db as unknown as Record<string, ReturnType<typeof bindTableFacade>>;
@@ -1395,7 +1445,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
             return registered.handler(this.buildCtx({ functionPath }), args);
         }
-
+${relationFanoutOverride}
         protected override async executeSubscription(functionPath: string, args: Record<string, unknown>): Promise<{ result: unknown; tables: Set<string> } | null> {
             const registered = CIRRUS_FUNCTIONS[functionPath];
 
