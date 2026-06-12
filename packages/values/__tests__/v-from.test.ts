@@ -124,4 +124,78 @@ describe("v.from()", () => {
 
         expect(v.from(fakeZodString).kind).toBe("from");
     });
+
+    it("handles a failing issue with no path field (no segments appended)", () => {
+        expect.assertions(2);
+
+        // No `path` on the issue — the `if (first?.path)` guard is skipped, so
+        // only the context path (here: empty, top-level) is used.
+        const noPath = {
+            "~standard": {
+                validate: (_value: unknown) => ({ issues: [{ message: "boom" }] }),
+                vendor: "fake",
+                version: 1 as const,
+            },
+        };
+        const result = v.from(noPath).safeParse("x") as { error: ValidationError; ok: false };
+
+        expect(result.ok).toBe(false);
+        expect(result.error.path).toEqual([]);
+    });
+
+    it("unwraps a structured { key } path segment and keeps numeric keys", () => {
+        expect.assertions(2);
+
+        // Standard Schema permits `{ key: PropertyKey }` path entries — the object
+        // branch of the segment-narrowing must read `.key`. Mix a numeric key (the
+        // `typeof key === "number"` branch) with a string key.
+        const structured = {
+            "~standard": {
+                validate: (_value: unknown) => ({ issues: [{ message: "bad", path: [{ key: "items" }, { key: 0 }] }] }),
+                vendor: "fake",
+                version: 1 as const,
+            },
+        };
+        const result = v.from(structured).safeParse("x") as { error: ValidationError; ok: false };
+
+        expect(result.ok).toBe(false);
+        expect(result.error.path).toEqual(["items", 0]);
+    });
+
+    it("drops a non-string/number path segment (e.g. a symbol key)", () => {
+        expect.assertions(2);
+
+        // A symbol key is neither string nor number, so the
+        // `typeof key === "string" || typeof key === "number"` guard skips it.
+        const sym = Symbol("s");
+        const symbolKeyed = {
+            "~standard": {
+                validate: (_value: unknown) => ({ issues: [{ message: "bad", path: [sym, "kept"] }] }),
+                vendor: "fake",
+                version: 1 as const,
+            },
+        };
+        const result = v.from(symbolKeyed).safeParse("x") as { error: ValidationError; ok: false };
+
+        expect(result.ok).toBe(false);
+        // Only the string segment survives; the symbol is filtered out.
+        expect(result.error.path).toEqual(["kept"]);
+    });
+
+    it("falls back to a default message when the issue carries none", () => {
+        expect.assertions(2);
+
+        // No `message` on the issue — the `first?.message ?? "..."` fallback.
+        const noMessage = {
+            "~standard": {
+                validate: (_value: unknown) => ({ issues: [{ path: [] as PropertyKey[] }] }),
+                vendor: "fake",
+                version: 1 as const,
+            },
+        };
+        const result = v.from(noMessage as unknown as Parameters<typeof v.from>[0]).safeParse("x") as { error: ValidationError; ok: false };
+
+        expect(result.ok).toBe(false);
+        expect(result.error.message).toBe("Standard Schema validation failed");
+    });
 });
