@@ -3019,13 +3019,15 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         // introspection, so this injected map is the only source of truth; the
         // studio renders it read-only alongside the dynamic scheduler jobs.
         const jobs: CronJobInfo[] = Object.entries(registry)
-            .flatMap(([cron, dispatches]) => dispatches.map((dispatch) => {return {
-                args: dispatch.args,
-                cron,
-                functionPath: dispatch.functionPath,
-                name: dispatch.name,
-                shardKey: dispatch.shardKey,
-            }}))
+            .flatMap(([cron, dispatches]) =>
+                dispatches.map((dispatch) => {return {
+                    args: dispatch.args,
+                    cron,
+                    functionPath: dispatch.functionPath,
+                    name: dispatch.name,
+                    shardKey: dispatch.shardKey,
+                }}),
+            )
             .toSorted((a, b) => a.name.localeCompare(b.name));
 
         return Response.json({ jobs }, { headers: { "content-type": "application/json" }, status: 200 });

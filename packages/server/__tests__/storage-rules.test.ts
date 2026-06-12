@@ -13,6 +13,7 @@ const cirrus = initCirrus.dataModel<Record<string, never>>().create();
 interface FakeStorage {
     calls: { key: string; method: string }[];
     storage: {
+        bucketName: string;
         delete: (key: string) => Promise<void>;
         download: (key: string) => Promise<undefined>;
         getUrl: (key: string) => string;
@@ -26,6 +27,7 @@ const createFakeStorage = (): FakeStorage => {
     return {
         calls,
         storage: {
+            bucketName: "avatars",
             delete: async (key: string): Promise<void> => {
                 calls.push({ key, method: "delete" });
             },
@@ -264,5 +266,40 @@ describe("storageRules — bucket scoping", () => {
             .action(async ({ ctx }) => ctx.storage.bucket("avatars").download("user/u2/secret.png"));
 
         await expect(handler.handler(makeBucketedContext(fake, "u1"), {})).rejects.toThrow(/bucket "avatars"/);
+    });
+});
+
+describe("storageRules — allowlist (privileged methods dropped)", () => {
+    it("drops upload / list / getPresignedUrl / multipart so they can't evade the rules", async () => {
+        expect.assertions(5);
+
+        // A write rule that denies everything; were `upload` passed through it would bypass it.
+        const rule = defineStorageRule<TestContext>({ bucket: "avatars", on: "write", when: () => false });
+
+        // A backing storage carrying the privileged R2 escape hatches alongside `store`.
+        const backing = {
+            bucketName: "avatars",
+            createMultipartUpload: () => {return {}},
+            getPresignedUrl: async () => "https://r2.example/presigned",
+            list: async () => {return { objects: [] }},
+            resumeMultipartUpload: () => {return {}},
+            store: async (key: string) => {return { etag: "e", key }},
+            upload: async (key: string) => {return { etag: "e", key }},
+        };
+
+        let exposed: Record<string, unknown> = {};
+        const context = { auth: { roles: [], userId: "u1" }, storage: backing };
+        const handler = cirrus.action.use(rulesForTest([rule])).action(async ({ ctx }) => {
+            exposed = ctx.storage;
+        });
+
+        await handler.handler(context, {});
+
+        // The gated alias survives (and would enforce); the raw siblings are gone.
+        expect(typeof exposed.store).toBe("function");
+        expect(exposed.upload).toBeUndefined();
+        expect(exposed.list).toBeUndefined();
+        expect(exposed.getPresignedUrl).toBeUndefined();
+        expect(exposed.createMultipartUpload).toBeUndefined();
     });
 });

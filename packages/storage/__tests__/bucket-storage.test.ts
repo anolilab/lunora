@@ -38,12 +38,17 @@ describe("createBucketStorage", () => {
         expect(avatars.getUrl("p.png")).toBe("avatars://p.png");
     });
 
-    it("falls back to the first key when no default is given or present", () => {
-        expect.assertions(1);
+    it("tags the bare accessor 'default' (delegating to the first binding) when no default is designated", () => {
+        expect.assertions(3);
 
         const storage = createBucketStorage({ first: fakeBucket("first"), second: fakeBucket("second") });
 
-        expect(storage.bucketName).toBe("first");
+        // Bare accessor is named "default" — the name rules + the union steer to —
+        // even though it delegates to the first binding.
+        expect(storage.bucketName).toBe("default");
+        expect(storage.getUrl("a")).toBe("first://a");
+        // The named buckets remain individually addressable.
+        expect(storage.bucket("second").getUrl("b")).toBe("second://b");
     });
 
     it("throws on an unknown bucket name", () => {

@@ -699,11 +699,12 @@ const renderCaller = (functions: ReadonlyArray<FunctionIR>): { implementation: s
 
 /**
  * Distinct bucket names the schema declares — `"default"` (the unnamed bucket)
- * plus every `v.storage("name")` bucket. Drives the generated `StorageBucketName`
- * union so `ctx.storage.bucket(name)` is autocompleted + checked. Sorted, with
- * `"default"` always first.
+ * plus every `v.storage("name")` column bucket and every bucket named in a
+ * `defineStorageRule({ bucket })`. Drives the generated `StorageBucketName` union
+ * so `ctx.storage.bucket(name)` is autocompleted + checked (and a rule's bucket
+ * is reachable even when no column references it). Sorted, `"default"` first.
  */
-const buildStorageBucketNames = (schema: SchemaIR): string[] => {
+const buildStorageBucketNames = (schema: SchemaIR, ruleBuckets: ReadonlyArray<string> = []): string[] => {
     const named = new Set<string>();
 
     for (const table of schema.tables) {
@@ -716,13 +717,19 @@ const buildStorageBucketNames = (schema: SchemaIR): string[] => {
         }
     }
 
+    for (const bucket of ruleBuckets) {
+        if (bucket !== "" && bucket !== "default") {
+            named.add(bucket);
+        }
+    }
+
     return ["default", ...[...named].toSorted((a, b) => a.localeCompare(b))];
 };
 
-const emitServer = (hasAi = false, schema?: SchemaIR): string => {
+const emitServer = (hasAi = false, schema?: SchemaIR, storageRuleBuckets: ReadonlyArray<string> = []): string => {
     /* eslint-disable no-secrets/no-secrets -- the emitted typed-`v` signature (`ColumnValidator<IdOfTable<T>, ...>`) is dense generated TS spread across this template, not a credential */
     // The union of declared storage buckets, narrowing `ctx.storage.bucket(name)`.
-    const storageBucketUnion = buildStorageBucketNames(schema ?? { tables: [], vectorIndexes: [] })
+    const storageBucketUnion = buildStorageBucketNames(schema ?? { tables: [], vectorIndexes: [] }, storageRuleBuckets)
         .map((name) => JSON.stringify(name))
         .join(" | ");
     // When the project uses Workers AI, the generated ActionCtx carries a typed

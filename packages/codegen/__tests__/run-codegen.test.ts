@@ -193,6 +193,18 @@ export const summarize = action({ args: { text: v.string() }, handler: async (ct
             expect(result.generated.server).toContain("readonly storage: StorageBase<StorageBucketName>;");
         });
 
+        it("unions storage-rule buckets into StorageBucketName even with no v.storage column", () => {
+            expect.assertions(2);
+
+            // No schema storage columns; a rule references the "exports" bucket — it
+            // must still be addressable via `ctx.storage.bucket("exports")`.
+            const server = emitServer(false, { tables: [], vectorIndexes: [] }, ["exports", "avatars"]);
+
+            expect(server).toContain('export type StorageBucketName = "default" | "avatars" | "exports"');
+            // De-duped + "default" always first.
+            expect(server).not.toContain('"default" | "default"');
+        });
+
         it("emits a typed createCaller covering public and internal functions", () => {
             expect.assertions(7);
 

@@ -28,8 +28,12 @@ interface BucketStorage extends Storage {
  * // → ctx.storage.bucket("avatars").store() // the avatars bucket
  * ```
  *
- * The default bucket is `options.default`, else the `"default"` key when
- * present, else the first registered bucket.
+ * The bare accessor is tagged `"default"` — the canonical name a
+ * `defineStorageRule({ bucket: "default" })` rule and the generated
+ * `StorageBucketName` union both use — unless `options.default` names another
+ * bucket (then the bare accessor takes that name). The binding it delegates to is
+ * `options.default`, else the `"default"` key when present, else the first
+ * registered bucket. Named buckets are reached with `bucket(name)`.
  */
 const createBucketStorage = (buckets: Record<string, Storage>, options: { default?: string } = {}): BucketStorage => {
     const names = Object.keys(buckets);
@@ -39,26 +43,37 @@ const createBucketStorage = (buckets: Record<string, Storage>, options: { defaul
         throw new Error("@cirrus/storage: createBucketStorage requires at least one bucket");
     }
 
-    const defaultName = options.default ?? (buckets.default ? "default" : firstName);
-
-    if (!buckets[defaultName]) {
-        throw new Error(`@cirrus/storage: default bucket "${defaultName}" is not in the bucket map (have: ${names.join(", ")})`);
+    if (options.default !== undefined && !buckets[options.default]) {
+        throw new Error(`@cirrus/storage: default bucket "${options.default}" is not in the bucket map (have: ${names.join(", ")})`);
     }
 
+    // The bare `ctx.storage` is tagged `"default"` unless an explicit default
+    // names another bucket, so a `{ bucket: "default" }` rule reliably guards it
+    // and the tag stays consistent with `asBucketStorage` (single-bucket apps).
+    const defaultTag = options.default ?? "default";
+    const defaultBinding = buckets[defaultTag] ?? buckets[firstName];
+
+    if (defaultBinding === undefined) {
+        throw new Error(`@cirrus/storage: default bucket "${defaultTag}" is not in the bucket map (have: ${names.join(", ")})`);
+    }
+
+    const addressable = [...new Set([defaultTag, ...names])];
+
+    // Resolve `name` to a fresh, immutably-tagged accessor. `defaultTag` maps to
+    // the default binding; any other name to its registered bucket (unknown →
+    // throw). Spreading the target's (closure-based, `this`-free) methods, then
+    // layering the bucket identity + selector, keeps each accessor independent.
     const make = (name: string): BucketStorage => {
-        const target = buckets[name];
+        const target = name === defaultTag ? defaultBinding : buckets[name];
 
         if (!target) {
-            throw new Error(`@cirrus/storage: no bucket registered for "${name}". Known buckets: ${names.join(", ")}`);
+            throw new Error(`@cirrus/storage: no bucket registered for "${name}". Known buckets: ${addressable.join(", ")}`);
         }
 
-        // Spread the target's (closure-based, `this`-free) methods, then layer on
-        // the bucket identity + selector. A fresh object per `bucket(name)` call
-        // is cheap and keeps each accessor immutably tagged.
         return { ...target, bucket: (next: string) => make(next), bucketName: name };
     };
 
-    return make(defaultName);
+    return make(defaultTag);
 };
 
 export default createBucketStorage;
