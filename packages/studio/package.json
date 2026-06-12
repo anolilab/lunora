@@ -55,6 +55,7 @@
         "tailwind-merge": "catalog:ui"
     },
     "devDependencies": {
+        "@cirrus/mail": "workspace:*",
         "@tailwindcss/cli": "catalog:vite",
         "@testing-library/dom": "catalog:frontend",
         "@testing-library/react": "catalog:frontend",

@@ -8,6 +8,7 @@ import type {
     GlobalTableInfo,
     GlobalTablePage,
     ScheduleRecord,
+    ShardTrafficResult,
     StorageListPage,
 } from "@cirrus/client";
 import { vi } from "vitest";
@@ -52,6 +53,7 @@ interface MockClientHooks {
     revokeAuthUserSessions: ReturnType<typeof vi.fn>;
     setAuthUserPassword: ReturnType<typeof vi.fn>;
     setAuthUserRole: ReturnType<typeof vi.fn>;
+    shardTraffic: ReturnType<typeof vi.fn>;
     signedStorageUrl: ReturnType<typeof vi.fn>;
     subscribe: ReturnType<typeof vi.fn>;
     subscribeScheduledJobs: ReturnType<typeof vi.fn>;
@@ -93,6 +95,7 @@ interface MockClientImpls {
     mutation?: Impl;
     query?: Impl;
     readGlobalTablePage?: (options: { limit?: number; offset?: number; table: string }) => GlobalTablePage;
+    shardTraffic?: (table: string) => ShardTrafficResult;
     signedStorageUrl?: (key: string) => string;
 }
 
@@ -120,6 +123,9 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
     );
     const signedStorageUrl = vi.fn<(key: string) => Promise<string>>(
         async (key: string) => impls.signedStorageUrl?.(key) ?? `https://mock.example/${key}?sig=test`,
+    );
+    const shardTraffic = vi.fn<(table: string) => Promise<ShardTrafficResult>>(
+        async (table: string) => impls.shardTraffic?.(table) ?? { failed: 0, ok: 0, shards: [] },
     );
     const listGlobalTables = vi.fn<() => Promise<GlobalTableInfo[]>>(async () => impls.listGlobalTables?.() ?? []);
     const readGlobalTablePage = vi.fn<(options: { limit?: number; offset?: number; table: string }) => Promise<GlobalTablePage>>(
@@ -269,6 +275,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         mutation,
         query,
         readGlobalTablePage,
+        shardTraffic,
         signedStorageUrl,
         subscribe,
         subscribeScheduledJobs,
@@ -295,6 +302,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         mutation,
         query,
         readGlobalTablePage,
+        shardTraffic,
         signedStorageUrl,
         subscribe,
         subscribeScheduledJobs,

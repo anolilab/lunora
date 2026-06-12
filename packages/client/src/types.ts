@@ -300,6 +300,30 @@ export interface SchedulerStatus {
 }
 
 /**
+ * One shard's request volume, as returned by the worker's
+ * `POST /_cirrus/admin/shard-traffic` endpoint. The cross-shard traffic feed
+ * the studio's `hot_shard` advisor lint consumes: `requests` is the shard's
+ * lifetime dispatch total, `shardKey` the DO id name (`""` for the root shard).
+ */
+export interface ShardTrafficEntry {
+    requests: number;
+    shardKey: string;
+}
+
+/**
+ * The whole-shard-set traffic distribution returned by the worker's
+ * `POST /_cirrus/admin/shard-traffic` endpoint. `shards` is one entry per live
+ * shard (a failed shard surfaces with `requests: 0`); `ok`/`failed` count the
+ * shards that returned vs. errored. Shaped to feed the advisor's `hot_shard`
+ * lint after the studio tags each entry with its sharded function `group`.
+ */
+export interface ShardTrafficResult {
+    failed: number;
+    ok: number;
+    shards: ShardTrafficEntry[];
+}
+
+/**
  * One object in the storage bucket, as returned by the worker's
  * `GET /_cirrus/admin/storage` endpoint. Mirrors `@cirrus/storage`'s
  * `R2ObjectLike` structurally.

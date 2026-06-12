@@ -2,7 +2,7 @@ import { CirrusProvider } from "@cirrus/react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import type { AdvisoryFinding, FunctionStatsResult, MetricsSnapshot, ShardMetrics } from "../src/admin";
+import type { AdvisoryFinding, FunctionStatsResult, MetricsSnapshot, ShardMetrics, ShardTrafficResult } from "../src/admin";
 import { ADMIN_FUNCTIONS } from "../src/admin";
 import { InsightsPanel } from "../src/insights-panel";
 import type { MockClientHooks } from "./mock-client";
@@ -56,6 +56,31 @@ const SCAN_STATS: FunctionStatsResult = {
 };
 
 const EMPTY_STATS: FunctionStatsResult = { functions: [], sinceMs: 1_700_000_000_000 };
+
+/** A skewed cross-shard distribution — one shard owns 80% — so hot_shard fires. */
+const loadSkewedTraffic = async (): Promise<ShardTrafficResult> => {
+    return {
+        failed: 0,
+        ok: 2,
+        shards: [
+            { requests: 80, shardKey: "tenant_busy" },
+            { requests: 20, shardKey: "tenant_quiet" },
+        ],
+    };
+};
+
+/** An even cross-shard distribution — ~33% each — so no shard clears the hot-share bar. */
+const loadEvenTraffic = async (): Promise<ShardTrafficResult> => {
+    return {
+        failed: 0,
+        ok: 3,
+        shards: [
+            { requests: 40, shardKey: "tenant_a" },
+            { requests: 40, shardKey: "tenant_b" },
+            { requests: 40, shardKey: "tenant_c" },
+        ],
+    };
+};
 
 /** One static schema advisory (codegen-time lint) the DO serves via getAdvisories. */
 const FK_ADVISORY: AdvisoryFinding = {
@@ -285,5 +310,93 @@ describe("insightsPanel", () => {
         const error = await screen.findByTestId("cirrus-insights-error");
 
         expect(error.textContent).toBe("ADMIN_FORBIDDEN");
+    });
+
+    it("renders a hot_shard advisory when the cross-shard traffic feed is skewed", async () => {
+        expect.assertions(2);
+
+        // One shard absorbs 80 of 100 requests across two shards — the runtime
+        // hot_shard lint fires once the studio feeds it the cross-shard feed.
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.getMetrics) {
+                    return HEALTHY;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.getFunctionStats) {
+                    return EMPTY_STATS;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.getAdvisories) {
+                    return { advisories: [] };
+                }
+
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "messages", rowCount: 3 }];
+                }
+
+                if (reference === ADMIN_FUNCTIONS.listTableIndexes) {
+                    return { indexes: [] };
+                }
+
+                throw new Error(`unexpected ${reference}`);
+            },
+        });
+
+        render(
+            <CirrusProvider client={mock.asClient}>
+                <InsightsPanel loadShardTraffic={loadSkewedTraffic} />
+            </CirrusProvider>,
+        );
+
+        // hot_shard is WARN-severity → the Warnings tab.
+        fireEvent.click(await screen.findByTestId("cirrus-insights-tab-warning"));
+        await screen.findByText("Hot shard");
+
+        const view = screen.getByTestId("cirrus-insights");
+
+        expect(view.textContent).toContain("Hot shard");
+        expect(view.textContent).toContain('shard "tenant_busy"');
+    });
+
+    it("renders no hot_shard advisory on an even cross-shard distribution", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.getMetrics) {
+                    return HEALTHY;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.getFunctionStats) {
+                    return EMPTY_STATS;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.getAdvisories) {
+                    return { advisories: [] };
+                }
+
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return [{ name: "messages", rowCount: 3 }];
+                }
+
+                if (reference === ADMIN_FUNCTIONS.listTableIndexes) {
+                    return { indexes: [] };
+                }
+
+                throw new Error(`unexpected ${reference}`);
+            },
+        });
+
+        render(
+            <CirrusProvider client={mock.asClient}>
+                <InsightsPanel loadShardTraffic={loadEvenTraffic} />
+            </CirrusProvider>,
+        );
+
+        // The empty-state lands once the (only) tab has no rows.
+        const empty = await screen.findByTestId("cirrus-insights-empty");
+
+        expect(empty.textContent).toContain("No errors detected");
     });
 });

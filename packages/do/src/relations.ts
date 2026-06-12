@@ -14,12 +14,22 @@
  * dialects. Nested `with` recurses for free: the injected fetcher re-enters
  * its own `findMany`, which calls `resolveWith` again on the child page.
  *
- * Cross-backend scope: a **shard-local parent → global (D1) child** is
- * supported — the injected `fetcher`/`counter` route the child's queries to the
- * D1 writer, so it's a single bounded read. The reverse (a **global parent →
- * shard-local child**) is rejected: that child spans every DO and would need a
- * Query Coordinator fan-out the loader can't issue. Same-backend relations
- * route straight back to the local writer.
+ * Cross-backend scope: BOTH directions are supported, and routing is the
+ * injected `fetcher`/`counter`'s job — `resolveWith` itself is backend-agnostic.
+ * Forward (shard-local parent → global D1 child) is a single bounded `IN (...)`
+ * read routed to the D1 writer. Reverse (global D1 parent → shard-local child):
+ * the child's rows span every shard DO, so the D1 ctx-db routes the child's
+ * read/count to an injected cross-shard reader built on the Query Coordinator's
+ * RLS-correct `fanOut` (identity forwarded → RLS per shard). When that
+ * capability isn't wired the injected fetcher throws a clear "not supported"
+ * error, so the loader never pre-rejects the direction itself. Same-backend
+ * relations route straight back to the local writer.
+ *
+ * Ordering caveat (reverse direction only): a `many` relation with `orderBy` +
+ * `limit` whose children span MULTIPLE shards is grouped correctly but globally
+ * ordered by per-shard-ordered concatenation, not a global merge-sort — so the
+ * order+cap is best-effort across shards. `one` and `_count` are exact, and a
+ * child sharded by its parent lives on one shard, so its ordering is exact too.
  */
 
 import type { TableDefinitionLike } from "./ctx-db";
@@ -69,8 +79,6 @@ interface ResolveWithOptions {
     with: WithInput;
 }
 
-const isGlobal = (definition: TableDefinitionLike | undefined): boolean => definition?.shardMode?.kind === "global";
-
 /** Distinct, non-nullish values of `field` across `rows`, preserving first-seen order. */
 const distinctValues = (rows: Record<string, unknown>[], field: string): unknown[] => {
     const seen = new Set<unknown>();
@@ -113,21 +121,14 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
             throw new Error(`unknown relation "${name}" on table "${tableName}"`);
         }
 
-        // A **global** (D1) parent can't load a **shard-local** child: that
-        // child's rows are partitioned across every DO, so resolving it would
-        // need a Query Coordinator fan-out the loader can't issue. Reject it.
-        //
-        // The reverse — a shard-local parent loading a **global** child — is a
-        // single bounded `IN (...)` read against D1, so it's allowed. The
-        // injected `fetcher`/`counter` route the global child's queries to the
-        // D1 writer (see the DO's `routeBackend`); a same-backend
-        // relation routes straight back to the local writer.
-        if (isGlobal(parentDefinition) && !isGlobal(schema.tables[relation.table])) {
-            throw new Error(
-                `cross-backend relation '${tableName}.${name}': a global table cannot load the shard-local relation '${relation.table}' (it spans every shard) — not supported`,
-            );
-        }
-
+        // Backend routing is the injected `fetcher`/`counter`'s job, not the
+        // loader's. A **global** (D1) parent → **shard-local** child is now
+        // supported: the D1 ctx-db routes such a child's read/count to an
+        // injected cross-shard reader built on the Query Coordinator's
+        // RLS-correct `fanOut`. If that capability isn't wired, the injected
+        // fetcher throws a clear "not supported" error — so we no longer
+        // pre-throw here. The forward direction and same-backend relations are
+        // unaffected.
         return relation;
     };
 

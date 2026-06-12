@@ -82,6 +82,9 @@ export type {
     ShardRankPageOutcome,
     ShardRankPageResult,
     ShardRegistry,
+    ShardTrafficEntry,
+    ShardTrafficFanOutRequest,
+    ShardTrafficFanOutResult,
 } from "./query-coordinator";
 export { createQueryCoordinator, createStaticShardRegistry, mergeStrategyForAggregate } from "./query-coordinator";
 export type { ResolvedShard, ShardNamespaceLike } from "./resolve-shard";

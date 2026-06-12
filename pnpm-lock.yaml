@@ -1171,6 +1171,9 @@ importers:
         specifier: catalog:drizzle
         version: 0.45.2(@cloudflare/workers-types@4.20260610.1)(@opentelemetry/api@1.9.1)(kysely@0.28.17)
     devDependencies:
+      '@cirrus/mail':
+        specifier: workspace:*
+        version: link:../mail
       '@cirrus/vectors':
         specifier: workspace:*
         version: link:../vectors
@@ -1605,6 +1608,9 @@ importers:
         specifier: catalog:ui
         version: 3.6.0
     devDependencies:
+      '@cirrus/mail':
+        specifier: workspace:*
+        version: link:../mail
       '@tailwindcss/cli':
         specifier: catalog:vite
         version: 4.3.0

@@ -45,6 +45,8 @@ export type {
     SchedulerPoolStatus,
     SchedulerStatus,
     ServerMessage,
+    ShardTrafficEntry,
+    ShardTrafficResult,
     StorageListPage,
     StorageObject,
     Unsubscribe,

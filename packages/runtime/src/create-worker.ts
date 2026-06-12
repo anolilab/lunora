@@ -6,7 +6,7 @@ import { describeArguments } from "./describe-args";
 import { CirrusError, isStructuralCirrusError, isStructuralConflictError, toErrorResponse } from "./errors";
 import type { ObservabilityEvent, ObservabilitySink } from "./observability";
 import { emitRpcEvent } from "./observability";
-import type { FanOutSpec, QueryCoordinator } from "./query-coordinator";
+import type { FanOutSpec, QueryCoordinator, RankPageFanOutRequest } from "./query-coordinator";
 import type { ResolvedShard, ShardNamespaceLike } from "./resolve-shard";
 import { resolveShard } from "./resolve-shard";
 
@@ -808,6 +808,7 @@ const CONNECTOR_SYNC_PATH = "/_cirrus/admin/connector/sync";
 const APPLY_PATH = "/_cirrus/admin/apply";
 const RANK_PATH = "/_cirrus/admin/rank";
 const RANKPAGE_PATH = "/_cirrus/admin/rankpage";
+const SHARD_TRAFFIC_PATH = "/_cirrus/admin/shard-traffic";
 const SCHEDULED_PATH = "/_cirrus/admin/scheduled";
 const SCHEDULED_STATUS_PATH = "/_cirrus/admin/scheduled/status";
 const SCHEDULED_WS_PATH = "/_cirrus/admin/scheduled/ws";
@@ -1195,15 +1196,6 @@ const parseRankRequest = async (request: Request): Promise<RankRequestBody> => {
     };
 };
 
-interface RankPageRequestBody {
-    cursor: null | string;
-    directions?: ReadonlyArray<"asc" | "desc">;
-    index: string;
-    partitionKey?: string;
-    table: string;
-    take?: number;
-}
-
 interface RankPageCandidate {
     cursor?: unknown;
     directions?: unknown;
@@ -1256,8 +1248,13 @@ const validateRankPageScalars = (candidate: RankPageCandidate): void => {
  * page size, an optional per-sort-key `directions` list (so the coordinator's
  * k-way merge breaks ties the same way each shard's `ORDER BY` does), and an
  * opaque `cursor` from the prior page's `continueCursor`.
+ *
+ * Validates once at the HTTP edge and produces the coordinator's
+ * {@link RankPageFanOutRequest} directly (minus `headers`, which the route
+ * injects at the call site from the forward context) — there's no separate
+ * in-process request type for the route→coordinator hand-off to drift against.
  */
-const parseRankPageRequest = async (request: Request): Promise<RankPageRequestBody> => {
+const parseRankPageRequest = async (request: Request): Promise<Omit<RankPageFanOutRequest, "headers">> => {
     let body: unknown;
 
     try {
@@ -1287,6 +1284,40 @@ const parseRankPageRequest = async (request: Request): Promise<RankPageRequestBo
         table: candidate.table as string,
         take: typeof candidate.take === "number" ? candidate.take : undefined,
     };
+};
+
+interface ShardTrafficRequestBody {
+    table: string;
+}
+
+/**
+ * Parse and validate a `POST /_cirrus/admin/shard-traffic` body. The caller
+ * supplies only the `table` whose live shards the traffic fan-out runs across;
+ * the worker carries no schema, so the table name is the whole request. The
+ * fanned `getMetrics` op is fixed, so nothing else is accepted.
+ */
+const parseShardTrafficRequest = async (request: Request): Promise<ShardTrafficRequestBody> => {
+    let body: unknown;
+
+    try {
+        const text = await readBodyTextWithLimit(request);
+
+        body = text === "" ? {} : JSON.parse(text);
+    } catch (error) {
+        if (error instanceof CirrusError) {
+            throw error;
+        }
+
+        throw new CirrusError("Shard-traffic body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    const candidate = (body ?? {}) as { table?: unknown };
+
+    if (typeof candidate.table !== "string" || candidate.table.length === 0) {
+        throw new CirrusError("Shard-traffic request is missing `table`", { code: "BAD_REQUEST", status: 400 });
+    }
+
+    return { table: candidate.table };
 };
 
 const forwardToShard = async (namespace: ShardNamespaceLike, shardKey: string, request: Request): Promise<Response> => {
@@ -2057,13 +2088,48 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
 
         const result = await options.queryCoordinator.orchestrateRankPage(options.shardDO, {
-            cursor: rankPage.cursor,
-            directions: rankPage.directions,
+            ...rankPage,
             headers: forwardedHeaders,
-            index: rankPage.index,
-            partitionKey: rankPage.partitionKey,
-            table: rankPage.table,
-            take: rankPage.take,
+        });
+
+        return Response.json(result, {
+            headers: { "content-type": "application/json" },
+            status: 200,
+        });
+    };
+
+    /**
+     * `POST /_cirrus/admin/shard-traffic` — collect the per-shard request volume
+     * across every live shard of a `.shardBy(...)` table, the feed the studio's
+     * `hot_shard` advisor lint needs. A single shard's `getMetrics` snapshot
+     * can't reveal cross-shard skew, so this fans the cheap metrics read out via
+     * the coordinator and returns the whole shard set's `{ shardKey, requests }`
+     * totals.
+     *
+     * Admin-gated like the other orchestrators, since the per-shard `getMetrics`
+     * RPC it fans out is itself admin-gated — the inbound `Authorization` bearer
+     * is forwarded so each shard's admin gate accepts the fanned-out call.
+     */
+    const handleShardTraffic = async (request: Request, env: unknown): Promise<Response> => {
+        if (request.method !== "POST") {
+            throw new CirrusError("Shard-traffic endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        if (!checkAdminAuth(request, options.adminToken)) {
+            throw new CirrusError("Admin auth required", { code: "FORBIDDEN", status: 403 });
+        }
+
+        if (!options.queryCoordinator) {
+            throw new CirrusError("Shard-traffic endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const trafficRequest = await parseShardTrafficRequest(request);
+
+        const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
+
+        const result = await options.queryCoordinator.orchestrateShardTraffic(options.shardDO, {
+            headers: forwardedHeaders,
+            table: trafficRequest.table,
         });
 
         return Response.json(result, {
@@ -3584,6 +3650,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         [APPLY_PATH]: (request, env) => handleApplyCdc(request, env),
         [RANK_PATH]: (request, env) => handleRank(request, env),
         [RANKPAGE_PATH]: (request, env) => handleRankPage(request, env),
+        [SHARD_TRAFFIC_PATH]: (request, env) => handleShardTraffic(request, env),
         [SCHEDULED_WS_PATH]: (request) => handleScheduledWebSocket(request),
         [SCHEDULED_CANCEL_PATH]: (request) => handleScheduledCancel(request),
         [SCHEDULED_STATUS_PATH]: (request) => handleSchedulerStatus(request),

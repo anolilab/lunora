@@ -14,6 +14,14 @@
  * browser.
  */
 
+// Type-only import of the canonical captured-mail wire type. `@cirrus/mail` owns
+// the shape; this import is erased at build time, so the DO runtime bundle stays
+// free of any `@cirrus/mail` *runtime* dependency (mail is a type-only devDep).
+// The mirrors below (`RecordMailInput` / `CapturedMailRow`) exist so the DO need
+// not couple to mail at runtime; the structural drift guards at the bottom of
+// this file break the build if a mirror drifts from the canonical source.
+import type { CapturedMail, SendPayload } from "@cirrus/mail";
+
 import type { SqlCursor, SqlExec } from "./ctx-db";
 
 /** Reserved captured-mail table. Auto-hidden from the data browser by the `__cirrus` prefix. */
@@ -37,7 +45,15 @@ const MAX_BODY_CHARS: number = 256 * 1024;
 const capBody = (value: string | undefined): string | undefined =>
     value !== undefined && value.length > MAX_BODY_CHARS ? `${value.slice(0, MAX_BODY_CHARS)}\n… [truncated by the dev mail catcher]` : value;
 
-/** Fields recorded for one captured message — the rendered, validated `SendPayload`. */
+/**
+ * Fields recorded for one captured message — the rendered, validated payload.
+ *
+ * Documented mirror of `@cirrus/mail`'s `SendPayload` (the captured-mail wire
+ * type minus the sink-assigned `id`/`capturedAt`). The DO must not take a
+ * runtime dep on `@cirrus/mail`, so the fields are restated here; the drift
+ * guard below fails the build if this diverges from the canonical `SendPayload`.
+ * Source of truth: `@cirrus/mail`'s `types.ts` / `capture-transport.ts`.
+ */
 interface RecordMailInput {
     bcc?: string[];
     cc?: string[];
@@ -50,7 +66,15 @@ interface RecordMailInput {
     to: string | string[];
 }
 
-/** One captured message as served by `__cirrus_admin__:getCapturedMail`. */
+/**
+ * One captured message as served by `__cirrus_admin__:getCapturedMail`.
+ *
+ * Documented mirror of `@cirrus/mail`'s canonical `CapturedMail`
+ * (`SendPayload` + `id` + `capturedAt`). Restated here to keep the DO free of a
+ * `@cirrus/mail` runtime dep; the drift guard below fails the build if this
+ * diverges from the canonical type. Source of truth: `@cirrus/mail`'s
+ * `capture-transport.ts`.
+ */
 interface CapturedMailRow {
     bcc?: string[];
     capturedAt: number;
@@ -213,6 +237,41 @@ const clearCapturedMail = (sql: SqlExec): { cleared: true } => {
 
     return { cleared: true };
 };
+
+/* ------------------------------------------------------------------------- *
+ * Compile-time drift guards.
+ *
+ * `RecordMailInput` and `CapturedMailRow` are hand-maintained mirrors of types
+ * owned by `@cirrus/mail` (kept local so the DO needs no `@cirrus/mail` runtime
+ * dep). The exact, bidirectional structural checks below break the
+ * `@cirrus/do` build the moment a mirror diverges from the canonical shape —
+ * including a field added on EITHER side — so the three captured-mail shapes
+ * (mail / do / studio) can't silently drift apart.
+ *
+ * To extend the captured-mail shape: add the field to `@cirrus/mail`'s
+ * `SendPayload` (and thus `CapturedMail`) first, then mirror it here; these
+ * guards tell you precisely when the mirror is out of date.
+ * ------------------------------------------------------------------------- */
+
+/** True iff `A` and `B` are structurally identical (invariant in both directions). */
+// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- the twin-conditional `Equal` idiom needs the once-used `T` on each side.
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
+
+/** Resolves to its argument only when it is exactly `true`; a `false` (drift) is a type error at the use site. */
+type Expect<T extends true> = T;
+
+/*
+ * Pure type-level guards — `Expect<Equal<…>>` errors the moment a mirror stops
+ * matching its canonical `@cirrus/mail` type. Both are `export`ed (and so exempt
+ * from `noUnusedLocals`) but NOT re-exported from `index.ts`, so they stay out of
+ * the package's public API while still failing the build on drift. They emit no
+ * runtime code.
+ *
+ * `CapturedMailRow` mirrors the canonical `CapturedMail` (`SendPayload` + id + capturedAt).
+ * `RecordMailInput` mirrors the canonical `SendPayload` (captured-mail minus id/capturedAt).
+ */
+export type AssertCapturedMailRowMatchesCapturedMail = Expect<Equal<CapturedMailRow, CapturedMail>>;
+export type AssertRecordMailInputMatchesSendPayload = Expect<Equal<RecordMailInput, SendPayload>>;
 
 export { clearCapturedMail, ensureMailTable, MAIL_RETENTION, MAIL_TABLE, MAX_BODY_CHARS, readCapturedMail, recordCapturedMail };
 export type { CapturedMailRow, RecordMailInput };
