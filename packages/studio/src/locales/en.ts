@@ -615,6 +615,10 @@ const MESSAGE_IDS = [
     "Missing object",
     "→",
     "Showing the first {count} dangling references — the scan was truncated.",
+    // Phase-7 polish — empty-state descriptions + missed i18n strings.
+    "Per-function call counts, error rates, and latency land here after your first request.",
+    "Function and request logs for this shard show up here as your app handles traffic.",
+    "No tables in this shard.",
 ] as const;
 
 /** A known studio message id — one of the entries in {@link MESSAGE_IDS}. */

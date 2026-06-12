@@ -6,6 +6,7 @@ import type { FunctionCallStat, FunctionStatsResult } from "./admin";
 import { ADMIN_FUNCTIONS } from "./admin";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
+import { EmptyState } from "./components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
 import { useT } from "./i18n-context";
 import { adminRef, callOptions, errorMessage, fireAndForget, formatTimestamp } from "./internal";
@@ -213,9 +214,25 @@ export const FunctionStatsPanel = ({ functions, initialShardKey }: FunctionStats
             )}
 
             {stats !== null && sorted.length === 0 && error === null && (
-                <p className="text-sm text-muted-foreground" data-testid="fs-empty">
-                    {t("No functions have run on this shard yet.")}
-                </p>
+                <EmptyState
+                    description={t("Per-function call counts, error rates, and latency land here after your first request.")}
+                    icon={
+                        <svg
+                            aria-hidden="true"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={1.6}
+                            viewBox="0 0 24 24"
+                        >
+                            <path d="M3 3v18h18" />
+                            <path d="M7 14l4-4 3 3 5-6" />
+                        </svg>
+                    }
+                    testId="fs-empty"
+                    title={t("No functions have run on this shard yet.")}
+                />
             )}
 
             {sorted.length > 0 && (

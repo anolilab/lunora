@@ -347,7 +347,11 @@ export const SchemaViewer = ({ initialShardKey, initialTable }: SchemaViewerProp
                             </p>
                         )}
 
-                        {tables !== null && tables.length === 0 && <p data-testid="sc-empty">No tables in this shard.</p>}
+                        {tables !== null && tables.length === 0 && (
+                            <p className="text-sm text-muted-foreground" data-testid="sc-empty">
+                                {t("No tables in this shard.")}
+                            </p>
+                        )}
 
                         {tables !== null && tables.length > 0 && (
                             <ul data-testid="sc-table-list">
@@ -402,7 +406,11 @@ export const SchemaViewer = ({ initialShardKey, initialTable }: SchemaViewerProp
                             </p>
                         )}
 
-                        {globalTables !== null && globalTables.length === 0 && <p data-testid="sc-global-empty">No global tables.</p>}
+                        {globalTables !== null && globalTables.length === 0 && (
+                            <p className="text-sm text-muted-foreground" data-testid="sc-global-empty">
+                                {t("No global tables.")}
+                            </p>
+                        )}
 
                         {globalTables !== null && globalTables.length > 0 && (
                             <ul data-testid="sc-global-table-list">
