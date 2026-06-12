@@ -42,11 +42,15 @@
 | 5   | ✅ shipped | All 8 templates wired into `cirrus init -t` — `fadee182` |
 | 6   | ✅ shipped | `--format json` on `verify`/`deploy`/`codegen` (stdout JSON, logs to stderr) — `51f0ae89` |
 
-### Remaining follow-ups (non-gating)
+### Follow-ups — all cleared (2026-06-12)
 
-- **`hot_shard` cross-shard feed** — the lint is built but inert until the studio aggregates per-shard traffic (Feature 4 caveat above).
-- **Tech-debt flagged by review, deliberately deferred** — extract the rank-page machinery out of the ~4k-line `shard-do.ts` / `ctx-db.ts`; share the one rankPage request type across its three validation boundaries.
-- **`@cirrus/values` branch-coverage pass** — the one investigate-first item still untouched (run `test:coverage`, read the branch report before adding tests).
+The three remaining follow-ups were all completed and merged to `alpha`:
+
+- ✅ **`hot_shard` cross-shard feed** — `orchestrateShardTraffic` + `/_cirrus/admin/shard-traffic` route + studio fan-out now feed `shardTraffic`, so the lint fires end-to-end (`da70d632`).
+- ✅ **Tech-debt extraction** — rank-page read machinery extracted to `packages/do/src/ctx-db-rank-page.ts` (ctx-db.ts 3688 → 3428, `9a57fe3e`); the route→coordinator rankPage request type unified (`261e7563`).
+- ✅ **`@cirrus/values` branch coverage** — 76.5% → 99.45% (`9fa7677e`); one defensive branch documented as intentionally unreachable.
+
+Integration notes worth keeping: the mail dedup's `do → mail` edge had to be reverted (`346a7d91`) because it closed a `mail → react → client → do` build cycle — the DO keeps a hand-maintained mirror of the captured-mail shape (the studio consumer imports the canonical `@cirrus/mail` type). Two thermo-nuclear review rounds ran over the integration (round-1 fixes `4be8a83a`; round-2 clean). Known minor gap: `@cirrus/values` has no `test:coverage` script (coverage was run via `vitest run --coverage` with a temporary `@vitest/coverage-v8` install).
 
 ---
 
@@ -94,7 +98,7 @@ _All three investigate-first findings were profiled and closed — see the Resol
 - ~~**#5 cross-socket dedup**~~ — RESOLVED: profiled, deliberately not implemented (changes metric/error semantics); ReactiveCache is the lever.
 - ~~**#12 D1 rank query plan**~~ — RESOLVED: `EXPLAIN QUERY PLAN` confirmed the partition index is used (MULTI-INDEX OR / covering). False positive.
 - ~~**#13 paginated refcount**~~ — RESOLVED: churn test written, no double-detach; refcounting is sound. Test kept as a guard.
-- **`@cirrus/values` coverage** — still open: run `pnpm --filter "@cirrus/values" run test:coverage` and read the branch report before writing tests.
+- ~~**`@cirrus/values` coverage**~~ — DONE (`9fa7677e`): branch coverage 76.5% → 99.45%. Nothing left open.
 
 ## Findings considered and rejected this run (do not re-audit)
 
