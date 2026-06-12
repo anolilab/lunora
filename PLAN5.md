@@ -127,9 +127,20 @@ single-worker composition sugar, framework detection in `@cirrus/vite`, and all 
 
 ---
 
-## Phase 5 — Remote-binding dev `[independent; start in parallel with Phase 0]`
+## Phase 5 — Remote-binding dev `[independent; start in parallel with Phase 0]` — ✅ done via platform (design pivot)
 
 The one in-scope DX gap (`VOID-TEARDOWN.md` §4.5). Proxy local dev bindings to deployed resources.
+
+> **Status (2026-06-12): shipped via a different mechanism.** Cirrus does NOT hand-roll the
+> custom HTTP proxy below (5.1/5.2 `ProxyD1Database`/`/__cirrus/{d1,kv,r2}` routes were never
+> built). Instead it leans on **wrangler 4's native remote-binding mode** (`"remote": true` per
+> binding): `resolveRemoteEnabled` + `materializeRemoteWranglerConfig` + `planRemoteBindings`
+> (`packages/config/src/remote-bindings.ts`), wired into `cirrus dev` (`--remote` /
+> `CIRRUS_REMOTE` / `cirrus.json` `remote`) and the Vite dev path
+> (`packages/vite/src/remote-bindings-plugin.ts`). DOs stay local (5.3 boundary honored).
+> So `cirrus dev --remote` reads/writes deployed D1/KV/R2 today — the custom proxy protocol
+> in 5.1/5.2 is intentionally abandoned (superseded by the platform). The sub-steps below are
+> kept for historical context.
 
 ### 5.1 — Deployed-side binding handler `[P]`
 
@@ -152,29 +163,78 @@ The one in-scope DX gap (`VOID-TEARDOWN.md` §4.5). Proxy local dev bindings to 
 
 ## Phase 6 — Small additive gaps vs void `[independent; each P]`
 
-### 6.1 — Standard Schema input validation for functions `[P]`
+### 6.1 — Standard Schema input validation for functions `[P]` — ✅ shipped
 
-- **Does:** let `query`/`mutation`/`action` args accept any Standard Schema validator (zod/valibot/arktype) via `schema["~standard"].validate`, alongside the existing `v.*`. Schema-lib-agnostic, no coupling.
+- **Shipped.** `v.from(schema)` (`packages/values/src/v.ts`) accepts any Standard Schema v1
+  validator (zod/valibot/arktype) and validates via `schema["~standard"].validate` (sync-only,
+  args-only via `isOrWrapsFromValidator`); function args validate it through the normal
+  `parseValidatorMap`/`validateArgs` path (`packages/server/src/functions.ts`). `@cirrus/values`
+  also exposes `~standard` on every native validator for the reverse interop.
+- **Does (original):** let `query`/`mutation`/`action` args accept any Standard Schema validator (zod/valibot/arktype) via `schema["~standard"].validate`, alongside the existing `v.*`. Schema-lib-agnostic, no coupling.
 - **Files:** `packages/values/` or `packages/server/` arg-validation seam; codegen type extraction.
 - **Done-when:** a function declared with a zod schema validates + types end-to-end.
 
-### 6.2 — `@cirrus/ai` (Workers AI helper) `[P]`
+### 6.2 — `@cirrus/ai` (Workers AI helper) `[P]` — ✅ shipped (package + inference + ctx.ai)
 
-- **Does:** small additive package wrapping the `AI` binding (`run/stream`), mirroring void's `void/ai`; binding inference already extensible (add `AI`).
-- **Done-when:** `ai.run(model, input)` works in a function; binding auto-reconciled.
+- **Status (2026-06-12):** **fully shipped.**
+    - **Package:** `packages/ai/` on Vercel AI SDK v6 + `workers-ai-provider` (decision below),
+      provider-agnostic, lint/type clean, 13 unit tests. AI SDK v6 exact-pinned in the `ai` catalog +
+      allow-listed in `minimumReleaseAgeExclude` (v6 shipped inside the 24h maturity window).
+    - **Binding inference:** `@cirrus/config` infers `AI` from a `@cirrus/ai` import **or** `env.AI`
+      use and auto-reconciles `"ai": { "binding": "AI" }` into `wrangler.jsonc` (`infer-bindings.ts`
+      `usesAi` + `reconcile-bindings.ts` `reconcileAi`; +5 tests).
+    - **`ctx.ai` codegen wiring:** `@cirrus/codegen` detects AI use (`discover-ai-usage.ts`:
+      `@cirrus/ai` import or `ctx.ai` read) and, when present, emits the `@cirrus/ai` import + a
+      `createAi({ binding: env.AI })` build (with a throwing stub fallback) into the ShardDO and a
+      typed `readonly ai: CirrusAi` on the generated **ActionCtx** (inference is an external call →
+      action-only, like `ctx.fetch`). **No core `@cirrus/server` coupling** — the field is added in
+      the generated `_generated/server.ts` (`emitServer`), so the AI SDK never enters non-AI workers.
+      Gated, so existing golden fixtures stay byte-identical; +5 codegen tests (180 total).
+    - **Provider-agnostic:** Workers AI (`env.AI`) is the zero-config default; `ctx.ai.model(id)` /
+      `ctx.ai.embeddingModel(id)` resolve Workers AI from a string, and any AI SDK model object
+      (`@ai-sdk/openai` / `@ai-sdk/anthropic` / …) passes straight through — no lock-in.
+- **Decision (build-vs-reuse, see `AI-PACKAGE-RESEARCH.md`):** build on the **Vercel AI SDK v6 core +
+  `workers-ai-provider`** (Cloudflare-official, in the `cloudflare/ai` monorepo). Pinned:
+  `ai@^6.0.202` + `workers-ai-provider@^3.1.14` (peers `ai ^6.0.0`). NOT void's hand-rolled binding
+  wrapper (locks to Workers AI only, re-implements tools/stream/structured output by hand); NOT
+  TanStack AI (no Workers AI adapter, pre-1.0).
+- **Provider-agnostic:** Workers AI (`env.AI`) is the zero-config default, but `ctx.ai`'s helpers
+  accept any AI SDK `LanguageModel`, so apps can drop in `@ai-sdk/openai` / `@ai-sdk/anthropic` /
+  `@ai-sdk/google` / OpenRouter (optional bring-your-own peers, optionally via AI Gateway) without
+  lock-in. `@cirrus/ai` deps stay `ai` + `workers-ai-provider`; external providers are optional peers.
+- **Does:** additive **server** package over the `AI` binding. Wire `env.AI → createWorkersAI`,
+  expose `ctx.ai` in functions, re-export `streamText`/`generateText`/`generateObject`/`embed`/`tool`,
+  keep a raw `ctx.ai.run(model, input)` escape hatch, and pair `embed` with `@cirrus/vectors` for RAG.
+- **Files:** new `packages/ai/`; `packages/config/src/infer-bindings.ts` (add `AI`).
+- **Done-when:** `ctx.ai`/`streamText` works inside a function against `env.AI`; `embed`→`@cirrus/vectors`
+  round-trips; the `AI` binding is auto-reconciled into `wrangler.jsonc`.
+- **Deferred (Layer B, separate item):** client chat hooks — stream tokens over Cirrus's own
+  transport; if a client SDK is used, prefer TanStack AI via its `custom` connection adapter (the
+  one seam that rides Cirrus's WS subscriptions) over `@ai-sdk/react`'s fixed data-stream `useChat`.
 
 ---
 
-## Phase 7 — Backend correctness follow-ups (from PLAN2) `[independent; P]`
+## Phase 7 — Backend correctness follow-ups (from PLAN2) `[independent; P]` — ✅ both shipped
 
-### 7.1 — Cross-shard `rankPage` k-way merge `[P]`
+### 7.1 — Cross-shard `rankPage` k-way merge `[P]` — ✅ shipped
 
-- **Does:** finish PLAN2 #3 — `orchestrateRankPage` coordinator whose comparison is byte-identical to each shard's `ORDER BY __partition__,sortcols,__id__` (encodePartitionKey + serializeSqlValue) so pages don't drop/duplicate at boundaries. Plus client sugar that builds the rank key tuple.
+- **Shipped.** `orchestrateRankPage` + `kWayMergeRankPages` (`packages/runtime/src/query-coordinator.ts`)
+  fan `__cirrus_admin__:rankPage` to every live shard and merge with `compareRankKeys` — ordering
+  by `__partition__` (encodePartitionKey) → sort columns (per `index.sortBy` direction) → `__id__`,
+  byte-identical to each shard's `ORDER BY` via `serializeSqlValue`/`RankPageKey`, returning an
+  opaque composite `continueCursor` so pages don't drop/duplicate at boundaries.
+- **Does (original):** finish PLAN2 #3 — `orchestrateRankPage` coordinator whose comparison is byte-identical to each shard's `ORDER BY __partition__,sortcols,__id__` (encodePartitionKey + serializeSqlValue) so pages don't drop/duplicate at boundaries. Plus client sugar that builds the rank key tuple.
 - **Done-when:** real-coordinator fan-out test paginates a cross-shard rankIndex without gaps/dupes.
 
-### 7.2 — Reverse cross-backend relations `[P]`
+### 7.2 — Reverse cross-backend relations `[P]` — ✅ shipped
 
-- **Does:** finish PLAN2 #7 — global-parent → shard-local-child relation loading via fan-out (currently throws).
+- **Shipped.** Global-parent → shard-local-child loading works via fan-out: `serveRelationFanout`
+  (`packages/do/src/relation-fanout.ts`) serves reserved `__cirrus_relation__:read`/`:count`;
+  `createCrossShardRelationCapabilities` (`packages/runtime/src/cross-shard-relations.ts`) fans out
+  via `/_cirrus/rpc` and merges with identity propagation; the worker gate default-denies
+  `__cirrus_relation__:*` unless `authorizeFanOut` is set; codegen emits a `runRelationFanoutRead`
+  override only for projects with `.global()` tables. Tests in `cross-shard-relations.test.ts`.
+- **Does (original):** finish PLAN2 #7 — global-parent → shard-local-child relation loading via fan-out (currently throws).
 - **Done-when:** loading a global parent with its shard-local children works across shards.
 
 ---

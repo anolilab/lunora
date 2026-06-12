@@ -19,7 +19,16 @@
 > **Update 2026-06-07 (Tier 1 keystone landed).** The three differentiator items **1.1**
 > (structured correlated request log — the keystone), **1.2** (causal full-scan / missing-index
 > attribution), and **2.2** (writer-routed bulk ops) shipped together on
-> `feat/plan3-observability`. Only **1.3 Files→schema join** remains in Tier 1.
+> `feat/plan3-observability`. Only **1.3 Files→schema join** remained in Tier 1.
+>
+> **Update 2026-06-12 (Tier 1 complete).** **1.3 Files→schema join shipped** — built
+> natively (not via the R2-Explorer vendor lift): `v.storage()` references, orphan
+> detection (`file-item.tsx`), and record↔file joins (`storageReferences` admin RPC).
+> Tier 1 is now fully shipped. Also confirmed done since: **2.1** (data-browser
+> decomposed to ~463 lines + `use-data-browser` hook + staged-edits stage→diff→commit)
+> and **3.1** (CF deep-links on all overlapping panels: Logs→Workers Logs, Files→R2,
+> Globals→D1, Metrics→DO, Settings→bindings, via `lib/cf-links.ts`). The only remaining
+> Tier-4 open item is the TanStack-Query-for-studio decision (bespoke admin hooks work today).
 
 ## Thesis
 
@@ -113,30 +122,33 @@ function / tables read without an index" signal, and render the causal chain in 
 `recordFunctionCall` site; surface via `getFunctionStats` or a sibling RPC. Client:
 Insights gains "missing index" / "full scan" insight kinds with a deep-link to fix.
 
-### 1.3 Files → schema join (copy-safe lift) `[matrix: Files]`
+### 1.3 Files → schema join (copy-safe lift) `[matrix: Files]` — ✅ shipped
 
-**Today.** Files is a thin R2 browser — largely redundant with CF's R2 object browser.
+**Shipped (2026-06-12).** The Files panel is now app-aware: `v.storage()` references in the
+schema mark which columns point at an R2 object; the `storageReferences` admin RPC resolves
+which **record** owns each object; the file browser renders per-object reference badges and
+an **orphan** badge when no row references an object (`file-item.tsx` `FileReferences`,
+`use-file-browser.ts`). Folders/breadcrumbs, expiry-aware share links, thumbnails, metadata
+sort, and bulk delete also landed (R2-Explorer parity). Built natively rather than vendoring
+R2-Explorer.
 
-**Target.** Make it app-aware: which **record** owns a file (storage references in the
+**Original target.** Make it app-aware: which **record** owns a file (storage references in the
 schema), typed buckets, app-context signed URLs, **orphan detection** (objects no row
-references). CF can't join R2 to the data model.
-
-**Mapping.** **Vendor MIT components from [R2-Explorer](https://github.com/G4brym/R2-Explorer)**
-(folders, sharable links w/ password+expiry) — keep the MIT header, as we already do for
-the TanStack scripts — and wire them to `@cirrus/storage` typed buckets + schema refs.
-The only major copy-safe lift available.
+references). CF can't join R2 to the data model. _(Original mapping suggested vendoring MIT
+components from [R2-Explorer](https://github.com/G4brym/R2-Explorer); the parity features were
+re-implemented natively instead.)_
 
 ---
 
 ## Tier 2 — Depth & ergonomics (borrow ideas)
 
-### 2.1 Data browser: staged edits + decomposition
+### 2.1 Data browser: staged edits + decomposition — ✅ shipped
 
-- Adopt **Outerbase Studio**'s "stage all edits → preview diff → commit" data-editing
-  UX (idea, re-implemented — Outerbase is AGPL, no code).
-- **Debt:** `data-browser.tsx` is ~1160 lines (over the 1k guideline). Extract the
-  `useDataBrowser` hook into its own module before further growth.
-- Optional: surface column types so the filter builder offers type-correct operators.
+- **Shipped.** The Outerbase-style "stage all edits → preview diff → commit" data-editing UX
+  is in place (`staged-edits.tsx`: `useStagedEdits` + `StagedDiffPanel` with Commit/Discard).
+- **Debt resolved.** `data-browser.tsx` was decomposed (~1160 → ~463 lines); the
+  `useDataBrowser` controller hook now lives in its own `use-data-browser.tsx` module.
+- Optional (still open): surface column types so the filter builder offers type-correct operators.
 
 ### 2.2 Writer-routed bulk operations — ✅ shipped
 
@@ -172,11 +184,12 @@ The only major copy-safe lift available.
 
 ## Tier 3 — Hand-off & settings (cirrus = app lens, CF = infra plane)
 
-### 3.1 Cloudflare deep-links
+### 3.1 Cloudflare deep-links — ✅ shipped
 
-From every overlapping panel, link out to the _infra plane_ (not an apology — a handoff):
-Logs → Workers Logs, Files → the R2 bucket, Globals → D1 console (raw SQL/Time-Travel),
-Metrics → the DO analytics page. Small, high-clarity change.
+From every overlapping panel, link out to the _infra plane_ (not an apology — a handoff).
+**Shipped** via `lib/cf-links.ts`: Logs → Workers Logs, Files → the R2 bucket, Globals →
+D1 console, Metrics → the DO analytics page, Settings → bindings/secrets. The remaining
+panels are cirrus-only (no CF counterpart) and intentionally don't link out.
 
 ### 3.2 Settings area (read-only) — ✅ shipped
 
@@ -222,16 +235,15 @@ studio links out; it never half-reimplements them.
 ## Recommended sequencing
 
 ```
-Tier 1 (differentiators):  1.1 request log ✅ → 1.2 causal attribution ✅ → 1.3 Files (R2-Explorer)
-Tier 2 (depth):            2.1 data-browser decomposition + staged edits · 2.2 bulk ops ✅ · 2.3 SLO ✅
-Tier 3 (hand-off):         3.1 CF deep-links (quick) · 3.2 Settings ✅ · 3.3 Logpush emit ✅
-Tier 4:                    backups ✅ · integrations · TanStack decision
+Tier 1 (differentiators):  1.1 request log ✅ → 1.2 causal attribution ✅ → 1.3 Files→schema join ✅
+Tier 2 (depth):            2.1 data-browser decomposition + staged edits ✅ · 2.2 bulk ops ✅ · 2.3 SLO ✅
+Tier 3 (hand-off):         3.1 CF deep-links ✅ · 3.2 Settings ✅ · 3.3 Logpush emit ✅
+Tier 4:                    backups ✅ · integrations (deferred) · TanStack decision (open)
 ```
 
-**1.1 (structured correlated request log) — the keystone — is now shipped**, along with
-1.2 (causal attribution), 2.2 (bulk ops), and 3.3 (Logpush emit). Next up: **1.3
-Files→schema join** (R2-Explorer lift, the last Tier-1 item) and the cheap **3.1 CF
-deep-links**, which can land anytime.
+**Tiers 1–3 are fully shipped.** The only remaining open item is the Tier-4 TanStack-Query
+decision for the studio's own data fetching (bespoke admin hooks work today) — see the
+realtime-dashboard note below. External integrations stay deferred (Logpush + 3.3 emit).
 
 ## Open questions
 
