@@ -1220,6 +1220,54 @@ describe("cirrusClient", () => {
             await expect(client.listStorageObjects()).resolves.toEqual({ cursor: undefined, objects: [] });
         });
 
+        it("listStorageObjects forwards the selected bucket as a query param", async () => {
+            expect.assertions(1);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ objects: [] }));
+
+            const client = new CirrusClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            await client.listStorageObjects({ bucket: "media", prefix: "p/" });
+
+            const [requestUrl] = fetchMock.mock.calls[0] as unknown as [string];
+
+            expect(new URL(requestUrl).searchParams.get("bucket")).toBe("media");
+        });
+
+        it("listStorageBuckets GETs the buckets endpoint and unwraps the list", async () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ buckets: ["default", "media"] }));
+
+            const client = new CirrusClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            await expect(client.listStorageBuckets()).resolves.toEqual(["default", "media"]);
+
+            const [requestUrl] = fetchMock.mock.calls[0] as unknown as [string];
+
+            expect(new URL(requestUrl).pathname).toBe("/_cirrus/admin/storage/buckets");
+        });
+
+        it("listStorageBuckets defaults to an empty array", async () => {
+            expect.assertions(1);
+
+            const client = new CirrusClient({
+                fetch: async () => jsonResponse({}),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            await expect(client.listStorageBuckets()).resolves.toEqual([]);
+        });
+
         it("deleteStorageObject DELETEs the key and normalises the result", async () => {
             expect.assertions(4);
 

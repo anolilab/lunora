@@ -47,6 +47,7 @@ interface MockClientHooks {
     listFunctions: ReturnType<typeof vi.fn>;
     listGlobalTables: ReturnType<typeof vi.fn>;
     listScheduledJobs: ReturnType<typeof vi.fn>;
+    listStorageBuckets: ReturnType<typeof vi.fn>;
     listStorageObjects: ReturnType<typeof vi.fn>;
     listVectorIndexes: ReturnType<typeof vi.fn>;
     mutation: ReturnType<typeof vi.fn>;
@@ -98,7 +99,8 @@ interface MockClientImpls {
     listFunctions?: () => FunctionDescriptor[];
     listGlobalTables?: () => GlobalTableInfo[];
     listScheduledJobs?: () => ScheduleRecord[];
-    listStorageObjects?: (options: { cursor?: string; limit?: number; prefix?: string }) => StorageListPage;
+    listStorageBuckets?: () => string[];
+    listStorageObjects?: (options: { bucket?: string; cursor?: string; limit?: number; prefix?: string }) => StorageListPage;
     listVectorIndexes?: () => VectorIndexSummary[];
     mutation?: Impl;
     query?: Impl;
@@ -120,8 +122,9 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
     const cancelScheduledJob = vi.fn<(id: string) => Promise<{ cancelled: boolean }>>(
         async (id: string) => impls.cancelScheduledJob?.(id) ?? { cancelled: true },
     );
-    const listStorageObjects = vi.fn<(options?: { cursor?: string; limit?: number; prefix?: string }) => Promise<StorageListPage>>(
-        async (options: { cursor?: string; limit?: number; prefix?: string } = {}) => impls.listStorageObjects?.(options) ?? { objects: [] },
+    const listStorageBuckets = vi.fn<() => Promise<string[]>>(async () => impls.listStorageBuckets?.() ?? []);
+    const listStorageObjects = vi.fn<(options?: { bucket?: string; cursor?: string; limit?: number; prefix?: string }) => Promise<StorageListPage>>(
+        async (options: { bucket?: string; cursor?: string; limit?: number; prefix?: string } = {}) => impls.listStorageObjects?.(options) ?? { objects: [] },
     );
     const deleteStorageObject = vi.fn<(key: string) => Promise<{ deleted: boolean; key: string }>>(async (key: string) => {
         return { deleted: true, key };
@@ -286,6 +289,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         listFunctions,
         listGlobalTables,
         listScheduledJobs,
+        listStorageBuckets,
         listStorageObjects,
         listVectorIndexes,
         mutation,
@@ -316,6 +320,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         listFunctions,
         listGlobalTables,
         listScheduledJobs,
+        listStorageBuckets,
         listStorageObjects,
         listVectorIndexes,
         mutation,

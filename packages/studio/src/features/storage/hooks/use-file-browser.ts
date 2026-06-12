@@ -38,6 +38,10 @@ const THUMBNAIL_URL_TTL = 3600;
 /** The flat view-model the {@link useFileBrowser} controller hands to the panel. */
 interface FileBrowserModel {
     readonly allSelected: boolean;
+    /** The selected bucket (`""` = the worker's default bucket). */
+    readonly bucket: string;
+    /** Storage bucket names the worker exposes; empty hides the picker (single-bucket). */
+    readonly buckets: ReadonlyArray<string>;
     readonly bulkDelete: () => void;
     readonly busy: boolean;
     /** Enumerate the bucket and resolve the dangling references (records pointing at missing objects) on `referenceShard`. */
@@ -87,6 +91,8 @@ interface FileBrowserModel {
     readonly referenceShard: string;
     /** Resolve a thumbnail URL at a fixed TTL (independent of `expiry`). */
     readonly resolveUrl: (key: string) => Promise<string>;
+    /** Switch the active bucket (resets navigation + re-lists). */
+    readonly selectBucket: (name: string) => void;
     readonly selected: ReadonlySet<string>;
     readonly setDraftPrefix: (prefix: string) => void;
     readonly setReferenceShard: (shard: string) => void;
@@ -180,6 +186,41 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
     const [danglingReferences, setDanglingReferences] = useState<DanglingReference[] | undefined>(undefined);
     const [danglingBusy, setDanglingBusy] = useState<boolean>(false);
     const [danglingTruncated, setDanglingTruncated] = useState<boolean>(false);
+    // Multi-bucket support: the picker's options + the selected bucket (`""` = the
+    // worker's default bucket). All storage ops are scoped to it. Empty `buckets`
+    // (single-bucket / older worker) hides the picker entirely.
+    const [buckets, setBuckets] = useState<string[]>([]);
+    const [bucket, setBucket] = useState<string>("");
+
+    useEffect(() => {
+        const token = { cancelled: false };
+
+        fireAndForget(
+            (async (): Promise<void> => {
+                try {
+                    const names = await client.listStorageBuckets();
+
+                    if (!token.cancelled) {
+                        setBuckets(names);
+
+                        // Default-select the first bucket so the picker's value matches
+                        // a real option; leaving `""` would show no selection.
+                        const [first] = names;
+
+                        if (first !== undefined) {
+                            setBucket((current) => (current === "" ? first : current));
+                        }
+                    }
+                } catch {
+                    // Single-bucket deployment or a worker predating the picker: no picker.
+                }
+            })(),
+        );
+
+        return () => {
+            token.cancelled = true;
+        };
+    }, [client]);
 
     const list = useCallback(
         async (searchPrefix: string, cursor: string | undefined, append: boolean): Promise<void> => {
@@ -187,7 +228,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
             setBusy(true);
 
             try {
-                const page = await client.listStorageObjects({ cursor, limit: pageSize, prefix: searchPrefix });
+                const page = await client.listStorageObjects({ bucket, cursor, limit: pageSize, prefix: searchPrefix });
 
                 setObjects((previous) => (append && previous !== undefined ? [...previous, ...page.objects] : page.objects));
                 setNextCursor(page.cursor);
@@ -201,7 +242,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
                 setBusy(false);
             }
         },
-        [client, pageSize],
+        [bucket, client, pageSize],
     );
 
     useEffect(() => {
@@ -323,7 +364,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
 
     // Resolve a viewable (signed) URL for a thumbnail at a FIXED ttl — decoupled
     // from `expiry` so the Copy-URL dropdown never re-fetches every thumbnail.
-    const resolveUrl = useCallback((key: string): Promise<string> => client.signedStorageUrl(key, { expiresInSeconds: THUMBNAIL_URL_TTL }), [client]);
+    const resolveUrl = useCallback((key: string): Promise<string> => client.signedStorageUrl(key, { bucket, expiresInSeconds: THUMBNAIL_URL_TTL }), [bucket, client]);
 
     const showList = useCallback((): void => {
         setView("list");
@@ -359,7 +400,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
                 try {
                     for (const key of selected) {
                         // eslint-disable-next-line no-await-in-loop -- one delete per selected object; sequential so a failure pins the offending key
-                        await client.deleteStorageObject(key);
+                        await client.deleteStorageObject(key, { bucket });
                     }
 
                     await list(prefix, undefined, false);
@@ -380,7 +421,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
             fireAndForget(
                 (async (): Promise<void> => {
                     try {
-                        const url = await client.signedStorageUrl(key, { expiresInSeconds: expiry });
+                        const url = await client.signedStorageUrl(key, { bucket, expiresInSeconds: expiry });
 
                         await copyToClipboard(url);
                         setCopiedKey(key);
@@ -390,7 +431,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
                 })(),
             );
         },
-        [client, expiry],
+        [bucket, client, expiry],
     );
 
     // Resolve a (signed) URL for the object and trigger a browser download. The
@@ -402,7 +443,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
             fireAndForget(
                 (async (): Promise<void> => {
                     try {
-                        const url = await client.signedStorageUrl(key, { expiresInSeconds: expiry });
+                        const url = await client.signedStorageUrl(key, { bucket, expiresInSeconds: expiry });
                         const filename = key.slice(key.lastIndexOf("/") + 1) || key;
 
                         triggerDownload(url, filename);
@@ -412,7 +453,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
                 })(),
             );
         },
-        [client, expiry],
+        [bucket, client, expiry],
     );
 
     // Clear the "Copied" indicator a couple of seconds after a copy, so it reads as
@@ -439,7 +480,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
             fireAndForget(
                 (async (): Promise<void> => {
                     try {
-                        await client.deleteStorageObject(key);
+                        await client.deleteStorageObject(key, { bucket });
                         await list(prefix, undefined, false);
                     } catch (error_) {
                         setError(errorMessage(error_));
@@ -449,7 +490,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
                 })(),
             );
         },
-        [client, list, prefix],
+        [bucket, client, list, prefix],
     );
 
     const onFile = useCallback(
@@ -466,7 +507,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
                     try {
                         const body = await file.arrayBuffer();
 
-                        await client.uploadStorageObject({ body, contentType: file.type === "" ? undefined : file.type, key });
+                        await client.uploadStorageObject({ body, bucket, contentType: file.type === "" ? undefined : file.type, key });
                         await list(prefix, undefined, false);
                     } catch (error_) {
                         setError(errorMessage(error_));
@@ -476,7 +517,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
                 })(),
             );
         },
-        [client, list, prefix],
+        [bucket, client, list, prefix],
     );
 
     // The orphan check spans the whole bucket against `referenceShard`'s records,
@@ -503,7 +544,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
 
                     do {
                         // eslint-disable-next-line no-await-in-loop -- bucket enumeration is inherently sequential (each page's cursor drives the next)
-                        const page = await client.listStorageObjects({ cursor, limit: ORPHAN_LIST_PAGE_SIZE });
+                        const page = await client.listStorageObjects({ bucket, cursor, limit: ORPHAN_LIST_PAGE_SIZE });
 
                         for (const object of page.objects) {
                             liveKeys.push(object.key);
@@ -525,10 +566,24 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
                 }
             })(),
         );
-    }, [client, referenceShard]);
+    }, [bucket, client, referenceShard]);
+
+    // Switch buckets: reset navigation to the initial prefix; the `list` callback's
+    // identity changes (it closes over `bucket`), so the mount effect re-lists.
+    const selectBucket = useCallback(
+        (name: string): void => {
+            setBucket(name);
+            setPrefix(initialPrefix ?? "");
+            setDraftPrefix(initialPrefix ?? "");
+            setObjects(undefined);
+        },
+        [initialPrefix],
+    );
 
     return {
         allSelected,
+        bucket,
+        buckets,
         bulkDelete,
         busy,
         checkOrphans,
@@ -561,6 +616,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
         referenceShard,
         references,
         resolveUrl,
+        selectBucket,
         selected,
         setDraftPrefix,
         setReferenceShard,

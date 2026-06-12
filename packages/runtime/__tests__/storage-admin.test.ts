@@ -57,14 +57,14 @@ describe("createWorker — storage admin endpoint", () => {
         expect(body.error.code).toBe("STORAGE_NOT_CONFIGURED");
     });
 
-    it("forwards prefix / cursor / limit to the lister and returns the page", async () => {
+    it("forwards prefix / cursor / limit / bucket to the lister and returns the page", async () => {
         expect.assertions(3);
 
         const storageList = vi.fn<StorageListFunction>(async () => PAGE);
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageList });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/storage?prefix=avatars/&cursor=z&limit=25", {
+            new Request("https://app.example/_cirrus/admin/storage?prefix=avatars/&cursor=z&limit=25&bucket=media", {
                 headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
                 method: "GET",
             }),
@@ -74,7 +74,37 @@ describe("createWorker — storage admin endpoint", () => {
 
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toEqual(PAGE);
-        expect(storageList).toHaveBeenCalledWith("avatars/", { cursor: "z", limit: 25 });
+        expect(storageList).toHaveBeenCalledWith("avatars/", { bucket: "media", cursor: "z", limit: 25 });
+    });
+
+    it("lists the configured buckets for the file-browser picker", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageBuckets: ["default", "media"] });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_cirrus/admin/storage/buckets", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({ buckets: ["default", "media"] });
+    });
+
+    it("returns an empty bucket list (not an error) when none are configured", async () => {
+        expect.assertions(2);
+
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_cirrus/admin/storage/buckets", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual({ buckets: [] });
     });
 
     it("rejects an unsupported method (405)", async () => {
@@ -152,7 +182,7 @@ describe("createWorker — storage admin delete", () => {
 
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toEqual({ deleted: true, key: "avatars/a.png" });
-        expect(storageDelete).toHaveBeenCalledWith("avatars/a.png");
+        expect(storageDelete).toHaveBeenCalledWith("avatars/a.png", { bucket: undefined });
     });
 });
 
@@ -268,7 +298,7 @@ describe("createWorker — storage admin signed URL", () => {
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toEqual({ key: "avatars/a.png", url: "https://cdn.example/avatars/a.png?sig=abc" });
         // No `expiresIn` query → the host gets `undefined` (its own default applies).
-        expect(storageSignedUrl).toHaveBeenCalledWith("avatars/a.png", { expiresInSeconds: undefined });
+        expect(storageSignedUrl).toHaveBeenCalledWith("avatars/a.png", { bucket: undefined, expiresInSeconds: undefined });
     });
 
     it("forwards a positive expiresIn as the share-link lifetime", async () => {
@@ -287,7 +317,7 @@ describe("createWorker — storage admin signed URL", () => {
         );
 
         expect(response.status).toBe(200);
-        expect(storageSignedUrl).toHaveBeenCalledWith("a.png", { expiresInSeconds: 900 });
+        expect(storageSignedUrl).toHaveBeenCalledWith("a.png", { bucket: undefined, expiresInSeconds: 900 });
     });
 
     it("clamps an over-max expiresIn to the 7-day ceiling", async () => {
@@ -307,6 +337,6 @@ describe("createWorker — storage admin signed URL", () => {
 
         // The worker clamps to 7 days (604800s) instead of letting the host throw a 500.
         expect(response.status).toBe(200);
-        expect(storageSignedUrl).toHaveBeenCalledWith("a.png", { expiresInSeconds: 604_800 });
+        expect(storageSignedUrl).toHaveBeenCalledWith("a.png", { bucket: undefined, expiresInSeconds: 604_800 });
     });
 });

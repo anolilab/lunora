@@ -186,33 +186,38 @@ type FunctionRegistryLike = Record<string, FunctionRegistryEntry>;
  * compatible with `@cirrus/storage`'s `Storage["list"]` — the runtime stays free
  * of a hard dependency on the storage package.
  */
-type StorageListFunction = (prefix?: string, options?: { cursor?: string; limit?: number }) => Promise<{ cursor?: string; objects: StorageObject[] }>;
+type StorageListFunction = (
+    prefix?: string,
+    options?: { bucket?: string; cursor?: string; limit?: number },
+) => Promise<{ cursor?: string; objects: StorageObject[] }>;
 
 /**
- * Deletes one object from the storage bucket for the admin file browser.
+ * Deletes one object from a storage bucket for the admin file browser.
  * Structurally compatible with `@cirrus/storage`'s `Storage["delete"]`, so
- * passing `createStorage(...).delete` satisfies it.
+ * passing `createStorage(...).delete` satisfies it. The optional `bucket` selects
+ * a named bucket for a multi-bucket deployment (ignored by single-bucket hosts).
  */
-type StorageDeleteFunction = (key: string) => Promise<void> | void;
+type StorageDeleteFunction = (key: string, options?: { bucket?: string }) => Promise<void> | void;
 
 /**
- * Uploads one object to the storage bucket for the admin file browser. Mirrors
+ * Uploads one object to a storage bucket for the admin file browser. Mirrors
  * `@cirrus/storage`'s `Storage["upload"]` (only the bits the admin endpoint
- * needs): the key, the raw bytes, and an optional content-type.
+ * needs): the key, the raw bytes, an optional content-type, and an optional
+ * target `bucket` for multi-bucket deployments.
  */
 type StorageUploadFunction = (
     key: string,
     body: ArrayBuffer,
-    options?: { contentType?: string },
+    options?: { bucket?: string; contentType?: string },
 ) => Promise<{ etag?: string; key: string }> | { etag?: string; key: string };
 
 /**
  * Mints a (signed or public) URL for one object so the admin file browser can
  * offer a "copy URL" action. The optional `expiresInSeconds` lets the caller pick
- * a share-link lifetime (the host clamps it). Structurally compatible with
- * `@cirrus/storage`'s `Storage["getSignedUrl"]` / `Storage["getUrl"]`.
+ * a share-link lifetime (the host clamps it); `bucket` selects a named bucket.
+ * Structurally compatible with `@cirrus/storage`'s `Storage["getSignedUrl"]`.
  */
-type StorageSignedUrlFunction = (key: string, options?: { expiresInSeconds?: number }) => Promise<string> | string;
+type StorageSignedUrlFunction = (key: string, options?: { bucket?: string; expiresInSeconds?: number }) => Promise<string> | string;
 
 /** One `.global()` table plus its row count. Mirrors `@cirrus/d1`'s `GlobalTableInfo`. */
 interface GlobalTableInfo {
@@ -686,6 +691,16 @@ interface WorkerOptions {
     shardDO: ShardNamespaceLike;
 
     /**
+     * Names of the storage buckets the studio's file browser offers in its bucket
+     * picker, backing `GET /_cirrus/admin/storage/buckets`. Supply the keys of a
+     * multi-bucket `createBucketStorage({...})` so the operator can switch buckets;
+     * the selected name is forwarded to the storage ops as `options.bucket`. Omit
+     * it (single-bucket deployments) and the picker is hidden — the ops target the
+     * default bucket.
+     */
+    storageBuckets?: string[];
+
+    /**
      * Deletes one object, backing the admin-gated `DELETE /_cirrus/admin/storage`
      * endpoint the studio's file browser calls. Passing
      * `createStorage(...).delete` satisfies it. Omit it and the endpoint responds
@@ -880,6 +895,7 @@ const SCHEDULED_WS_PATH = "/_cirrus/admin/scheduled/ws";
 const SCHEDULED_CANCEL_PATH = "/_cirrus/admin/scheduled/cancel";
 const STORAGE_PATH = "/_cirrus/admin/storage";
 const STORAGE_URL_PATH = "/_cirrus/admin/storage/url";
+const STORAGE_BUCKETS_PATH = "/_cirrus/admin/storage/buckets";
 // `@cirrus/storage`'s `buildSignedUrl` rejects an `expiresInSeconds` over 7 days;
 // mirror that ceiling here so an over-max request is clamped, not a 500.
 const MAX_STORAGE_EXPIRES_IN_SECONDS = 7 * 24 * 60 * 60;
@@ -2881,11 +2897,24 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
 
         const url = new URL(request.url);
         const result = await storageList(queryParameter(url, "prefix"), {
+            bucket: queryParameter(url, "bucket"),
             cursor: queryParameter(url, "cursor"),
             ...parsePaging(request),
         });
 
         return Response.json(result, { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
+    const handleStorageBuckets = (request: Request): Response => {
+        if (request.method !== "GET") {
+            throw new CirrusError("Storage-buckets endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        assertAdminAuthorized(request);
+
+        // Always 200 (even with no buckets configured) so the studio simply hides
+        // the picker rather than treating absence as an error.
+        return Response.json({ buckets: options.storageBuckets ?? [] }, { headers: { "content-type": "application/json" }, status: 200 });
     };
 
     /** Read a required `key` off the request URL or throw a 400. */
@@ -2905,9 +2934,10 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
             message: "storage delete requires a `storageDelete` function on the worker",
         });
 
-        const key = requireStorageKey(new URL(request.url));
+        const url = new URL(request.url);
+        const key = requireStorageKey(url);
 
-        await storageDelete(key);
+        await storageDelete(key, { bucket: queryParameter(url, "bucket") });
 
         return Response.json({ deleted: true, key }, { headers: { "content-type": "application/json" }, status: 200 });
     };
@@ -2927,7 +2957,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         const headerContentType = request.headers.get("content-type");
         const contentType = headerContentType === null || headerContentType === "" ? undefined : headerContentType;
 
-        const result = await storageUpload(key, body, { contentType });
+        const result = await storageUpload(key, body, { bucket: queryParameter(url, "bucket"), contentType });
 
         return Response.json(result, { headers: { "content-type": "application/json" }, status: 200 });
     };
@@ -2972,7 +3002,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         // so clamp here to keep an over-max request a valid URL rather than a 500.
         const expiresInRaw = Number(queryParameter(url, "expiresIn") ?? "");
         const expiresInSeconds = Number.isFinite(expiresInRaw) && expiresInRaw > 0 ? Math.min(expiresInRaw, MAX_STORAGE_EXPIRES_IN_SECONDS) : undefined;
-        const signedUrl = await storageSignedUrl(key, { expiresInSeconds });
+        const signedUrl = await storageSignedUrl(key, { bucket: queryParameter(url, "bucket"), expiresInSeconds });
 
         return Response.json({ key, url: signedUrl }, { headers: { "content-type": "application/json" }, status: 200 });
     };
@@ -3830,6 +3860,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         [SCHEDULED_PATH]: (request) => handleScheduledList(request),
         [STORAGE_PATH]: (request) => handleStorage(request),
         [STORAGE_URL_PATH]: (request) => handleStorageSignedUrl(request),
+        [STORAGE_BUCKETS_PATH]: (request) => handleStorageBuckets(request),
         [FUNCTIONS_PATH]: (request) => handleFunctionsList(request),
         [CRON_JOBS_PATH]: (request) => handleCronJobs(request),
         [OPENAPI_PATH]: (request) => handleOpenApi(request),

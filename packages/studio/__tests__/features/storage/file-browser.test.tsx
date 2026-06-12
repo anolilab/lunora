@@ -385,7 +385,7 @@ describe("fileBrowser", () => {
                 }
             });
 
-            expect(mock.deleteStorageObject).toHaveBeenCalledWith("a.png");
+            expect(mock.deleteStorageObject).toHaveBeenCalledWith("a.png", { bucket: "" });
 
             // The post-delete re-list re-calls listStorageObjects (mount + refresh).
             await waitFor(() => {
@@ -422,7 +422,7 @@ describe("fileBrowser", () => {
             });
 
             // The download requests a signed link, then clicks the transient anchor.
-            expect(mock.signedStorageUrl).toHaveBeenCalledWith("a.png", { expiresInSeconds: 3600 });
+            expect(mock.signedStorageUrl).toHaveBeenCalledWith("a.png", { bucket: "", expiresInSeconds: 3600 });
             expect(click).toHaveBeenCalledWith();
 
             click.mockRestore();
@@ -449,8 +449,44 @@ describe("fileBrowser", () => {
             });
 
             // The copy action requests a link with the toolbar's default 1h lifetime.
-            expect(mock.signedStorageUrl).toHaveBeenCalledWith("a.png", { expiresInSeconds: 3600 });
+            expect(mock.signedStorageUrl).toHaveBeenCalledWith("a.png", { bucket: "", expiresInSeconds: 3600 });
             expect(writeText).toHaveBeenCalledWith("https://mock.example/a.png?sig=test");
+        });
+    });
+
+    describe("bucket picker", () => {
+        it("hides the picker when the worker exposes no buckets", async () => {
+            expect.assertions(1);
+
+            render(renderBrowser(createClient()));
+
+            await screen.findByTestId("fb-table");
+
+            expect(screen.queryByTestId("fb-bucket")).toBeNull();
+        });
+
+        it("shows the picker and re-lists the selected bucket", async () => {
+            expect.assertions(2);
+
+            const mock = createMockClient({
+                listStorageBuckets: () => ["default", "media"],
+                listStorageObjects: (): StorageListPage => PAGE_ONE,
+            });
+
+            render(renderBrowser(mock));
+
+            const picker = await screen.findByTestId("fb-bucket");
+
+            // First load defaults to the first bucket.
+            await waitFor(() => {
+                expect(mock.listStorageObjects).toHaveBeenCalledWith(expect.objectContaining({ bucket: "default" }));
+            });
+
+            fireEvent.change(picker, { target: { value: "media" } });
+
+            await waitFor(() => {
+                expect(mock.listStorageObjects).toHaveBeenCalledWith(expect.objectContaining({ bucket: "media" }));
+            });
         });
     });
 });

@@ -9,10 +9,15 @@ import type { FileView } from "./hooks/use-file-browser";
 import { SHARE_LIFETIMES } from "./storage-entries";
 
 interface FileBrowserToolbarProps {
+    /** The selected bucket (`""` = default); drives the picker's value. */
+    readonly bucket: string;
+    /** Bucket names; an empty list hides the picker (single-bucket deployment). */
+    readonly buckets: ReadonlyArray<string>;
     readonly busy: boolean;
     readonly draftPrefix: string;
     readonly expiry: number;
     readonly fileInputRef: RefObject<HTMLInputElement | null>;
+    readonly onBucketChange: (name: string) => void;
     readonly onExpiryChange: (seconds: number) => void;
     readonly onFileChange: (event: ChangeEvent<HTMLInputElement>) => void;
     readonly onList: () => void;
@@ -27,10 +32,13 @@ interface FileBrowserToolbarProps {
  * every value + handler comes from the controller's view-model.
  */
 const FileBrowserToolbar = ({
+    bucket,
+    buckets,
     busy,
     draftPrefix,
     expiry,
     fileInputRef,
+    onBucketChange,
     onExpiryChange,
     onFileChange,
     onList,
@@ -45,6 +53,13 @@ const FileBrowserToolbar = ({
         [onPrefixChange],
     );
 
+    const onBucketSelect = useCallback(
+        (event: ChangeEvent<HTMLSelectElement>): void => {
+            onBucketChange(event.target.value);
+        },
+        [onBucketChange],
+    );
+
     const onExpirySelect = useCallback(
         (event: ChangeEvent<HTMLSelectElement>): void => {
             onExpiryChange(Number.parseInt(event.target.value, 10));
@@ -54,6 +69,21 @@ const FileBrowserToolbar = ({
 
     return (
         <div className="flex flex-wrap items-center gap-2">
+            {buckets.length > 0 && (
+                <select
+                    aria-label={t("Bucket")}
+                    className="h-8 rounded-md border border-border bg-background px-1 outline-none focus-visible:border-ring"
+                    data-testid="fb-bucket"
+                    onChange={onBucketSelect}
+                    value={bucket}
+                >
+                    {buckets.map((name) => (
+                        <option key={name} value={name}>
+                            {name}
+                        </option>
+                    ))}
+                </select>
+            )}
             <Input
                 aria-label={t("Key prefix")}
                 className="h-8 w-64 max-w-full"

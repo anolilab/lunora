@@ -122,10 +122,13 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
     return (
         <div className="flex flex-col gap-3" data-testid="cirrus-file-browser">
             <FileBrowserToolbar
+                bucket={vm.bucket}
+                buckets={vm.buckets}
                 busy={vm.busy}
                 draftPrefix={vm.draftPrefix}
                 expiry={vm.expiry}
                 fileInputRef={fileInputRef}
+                onBucketChange={vm.selectBucket}
                 onExpiryChange={vm.onExpiryChange}
                 onFileChange={onFileChange}
                 onList={vm.listFirst}

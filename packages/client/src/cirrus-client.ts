@@ -47,6 +47,9 @@ import type {
 const RPC_PATH = "/_cirrus/rpc";
 const WS_PATH = "/_cirrus/ws";
 
+/** Build the `&bucket=…` query fragment for a storage admin request, or `""` when no bucket is selected. */
+const bucketQuery = (bucket?: string): string => (bucket === undefined || bucket === "" ? "" : `&bucket=${encodeURIComponent(bucket)}`);
+
 /**
  * Keepalive frame sent on the heartbeat. MUST match the request payload the
  * server registers via `setWebSocketAutoResponse` (`@cirrus/do`'s ShardDO
@@ -73,6 +76,7 @@ const SCHEDULED_WS_PATH = "/_cirrus/admin/scheduled/ws";
 const SCHEDULED_CANCEL_PATH = "/_cirrus/admin/scheduled/cancel";
 const STORAGE_PATH = "/_cirrus/admin/storage";
 const STORAGE_URL_PATH = "/_cirrus/admin/storage/url";
+const STORAGE_BUCKETS_PATH = "/_cirrus/admin/storage/buckets";
 const FUNCTIONS_PATH = "/_cirrus/admin/functions";
 const CRON_JOBS_PATH = "/_cirrus/admin/cron-jobs";
 const OPENAPI_PATH = "/_cirrus/admin/openapi";
@@ -961,7 +965,7 @@ class CirrusClient {
      * `adminToken`, and this client's auth token must match. Powers
      * `@cirrus/studio`'s file browser.
      */
-    public async listStorageObjects(options: { cursor?: string; limit?: number; prefix?: string } = {}): Promise<StorageListPage> {
+    public async listStorageObjects(options: { bucket?: string; cursor?: string; limit?: number; prefix?: string } = {}): Promise<StorageListPage> {
         if (this.closed) {
             throw new Error("CirrusClient is closed");
         }
@@ -980,6 +984,10 @@ class CirrusClient {
             params.set("limit", String(options.limit));
         }
 
+        if (options.bucket !== undefined && options.bucket !== "") {
+            params.set("bucket", options.bucket);
+        }
+
         const query = params.toString();
         const path = query === "" ? STORAGE_PATH : `${STORAGE_PATH}?${query}`;
         const body = (await this.adminFetch(path, "GET")) as { cursor?: string; objects?: StorageObject[] };
@@ -993,15 +1001,31 @@ class CirrusClient {
      * with a `storageDelete` function and `adminToken`. Powers the studio file
      * browser's per-row delete; resolves `{ deleted, key }`.
      */
-    public async deleteStorageObject(key: string): Promise<{ deleted: boolean; key: string }> {
+    public async deleteStorageObject(key: string, options?: { bucket?: string }): Promise<{ deleted: boolean; key: string }> {
         if (this.closed) {
             throw new Error("CirrusClient is closed");
         }
 
-        const path = `${STORAGE_PATH}?key=${encodeURIComponent(key)}`;
+        const path = `${STORAGE_PATH}?key=${encodeURIComponent(key)}${bucketQuery(options?.bucket)}`;
         const body = (await this.adminFetch(path, "DELETE")) as { deleted?: boolean; key?: string };
 
         return { deleted: body.deleted ?? true, key: body.key ?? key };
+    }
+
+    /**
+     * List the storage bucket names the worker exposes, for the studio file
+     * browser's bucket picker. Hits the admin-gated
+     * `GET /_cirrus/admin/storage/buckets` endpoint — always resolves (an empty
+     * array when the worker configures no `storageBuckets`, i.e. single-bucket).
+     */
+    public async listStorageBuckets(): Promise<string[]> {
+        if (this.closed) {
+            throw new Error("CirrusClient is closed");
+        }
+
+        const body = (await this.adminFetch(STORAGE_BUCKETS_PATH, "GET")) as { buckets?: string[] };
+
+        return body.buckets ?? [];
     }
 
     /**
@@ -1011,12 +1035,12 @@ class CirrusClient {
      * `storageUpload` function and `adminToken`. Powers the studio file
      * browser's upload control; resolves `{ etag?, key }`.
      */
-    public async uploadStorageObject(options: { body: ArrayBuffer | Blob; contentType?: string; key: string }): Promise<{ etag?: string; key: string }> {
+    public async uploadStorageObject(options: { body: ArrayBuffer | Blob; bucket?: string; contentType?: string; key: string }): Promise<{ etag?: string; key: string }> {
         if (this.closed) {
             throw new Error("CirrusClient is closed");
         }
 
-        const path = `${STORAGE_PATH}?key=${encodeURIComponent(options.key)}`;
+        const path = `${STORAGE_PATH}?key=${encodeURIComponent(options.key)}${bucketQuery(options.bucket)}`;
         const body = (await this.adminFetch(path, "PUT", options.body, options.contentType)) as { etag?: string; key?: string };
 
         return { etag: body.etag, key: body.key ?? options.key };
@@ -1033,14 +1057,14 @@ class CirrusClient {
      * `StorageSignedUrlFunction` options (a `password` / download-limit are noted
      * as future fields there).
      */
-    public async signedStorageUrl(key: string, options?: { expiresInSeconds?: number }): Promise<string> {
+    public async signedStorageUrl(key: string, options?: { bucket?: string; expiresInSeconds?: number }): Promise<string> {
         if (this.closed) {
             throw new Error("CirrusClient is closed");
         }
 
         const expiresInSeconds = options?.expiresInSeconds;
         const expiryQuery = expiresInSeconds === undefined ? "" : `&expiresIn=${encodeURIComponent(expiresInSeconds.toString())}`;
-        const path = `${STORAGE_URL_PATH}?key=${encodeURIComponent(key)}${expiryQuery}`;
+        const path = `${STORAGE_URL_PATH}?key=${encodeURIComponent(key)}${expiryQuery}${bucketQuery(options?.bucket)}`;
         const body = (await this.adminFetch(path, "GET")) as { url?: string };
 
         if (typeof body.url !== "string") {
