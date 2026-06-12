@@ -129,6 +129,25 @@ const storageStub = {
     },
 };
 
+// Make any `config.storage` result bucket-aware so `ctx.storage.bucket(name)`
+// always resolves. A `createBucketStorage(...)` result already carries
+// `.bucket`/`.bucketName` and is returned as-is; a single `createStorage(...)`
+// (or the stub) is tagged as the `"default"` bucket, where `.bucket(name)` is the
+// identity (single-bucket apps address one binding under every name).
+const asBucketStorage = (raw: unknown): unknown => {
+    const candidate = (raw ?? {}) as { bucket?: unknown };
+
+    if (typeof candidate.bucket === "function") {
+        return candidate;
+    }
+
+    const self: Record<string, unknown> = { ...(candidate as Record<string, unknown>), bucketName: "default" };
+
+    self.bucket = () => self;
+
+    return self;
+};
+
 const globalDbStub: DatabaseWriterLike = {
     aggregate: async () => {
         throw new Error("ctx.db.<globalTable>: no D1 binding configured. Pass `d1` to createShardDO().");
@@ -563,7 +582,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             // and `ctx.db.system._storage` so both read the same R2 binding. The
             // `storageStub` fallback satisfies SystemReaderStorageLike structurally
             // (its `list`/`getMetadata` throw the "no storage configured" error).
-            const storage = (config.storage?.(env) ?? storageStub) as unknown as SystemReaderStorageLike;
+            const storage = asBucketStorage(config.storage?.(env) ?? storageStub) as unknown as SystemReaderStorageLike;
             const globalDb: DatabaseWriterLike = config.d1?.(env, { identity, userId }) ?? globalDbStub;
             const db: DatabaseWriterLike = createShardCtxDb({
                 broadcast: (delta) => {

@@ -19,34 +19,43 @@ import type {
     InferArgs,
     MutationCtx as MutationCtxBase,
     QueryCtx as QueryCtxBase,
+    ReadOnlyStorage,
     RegisteredAction,
     RegisteredMutation,
     RegisteredQuery,
+    Storage as StorageBase,
 } from "@cirrus/server";
 
 import type { DatabaseReaderFacade, DatabaseWriterFacade, Id as IdOfTable, OrmReader, OrmWriter, TableName } from "./dataModel.js";
 
 export type { DataModel, Doc, Id, TableName } from "./dataModel.js";
 
+/** Storage buckets this schema declares (`v.storage("name")`), narrowing `ctx.storage.bucket(name)`. */
+export type StorageBucketName = "default";
+
 /**
  * Project-typed contexts. The base contexts from `@cirrus/server` are
  * untyped against the schema; here `db` is widened to the generated per-table
  * facade (`ctx.db.<table>.findMany(...)`) while keeping the legacy structural
- * `db.get`/`db.query` surface for back-compat.
+ * `db.get`/`db.query` surface for back-compat, and `storage` is narrowed so
+ * `ctx.storage.bucket(name)` autocompletes the declared buckets.
  */
-export interface QueryCtx extends Omit<QueryCtxBase, "db"> {
+export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"> {
     readonly db: DatabaseReader & DatabaseReaderFacade;
     readonly orm: OrmReader;
+    readonly storage: ReadOnlyStorage<StorageBucketName>;
 }
 
-export interface MutationCtx extends Omit<MutationCtxBase, "db"> {
+export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"> {
     readonly db: DatabaseWriter & DatabaseWriterFacade;
     readonly orm: OrmWriter;
+    readonly storage: ReadOnlyStorage<StorageBucketName>;
 }
 
-export interface ActionCtx extends Omit<ActionCtxBase, "db"> {
+export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"> {
     readonly db: DatabaseWriter & DatabaseWriterFacade;
     readonly orm: OrmWriter;
+    readonly storage: StorageBase<StorageBucketName>;
 }
 
 /** `query()` bound to this project's typed {@link QueryCtx}. */
