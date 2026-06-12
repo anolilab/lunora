@@ -10,7 +10,7 @@ import type { GridEdit, TableRow } from "./data-browser-grid";
 import { DataBrowserTableView } from "./data-browser-grid";
 import type { EditableFilter } from "./data-filters";
 import { DataFilters } from "./data-filters";
-import { GridPagination, TableListSidebar } from "./data-grid";
+import { GridPagination, TableListSidebar, TransposedTable } from "./data-grid";
 import { CellDetailDialog, GridActionsBar } from "./grid-features";
 import { useDataBrowser } from "./hooks/use-data-browser";
 import { RowDetailDrawer } from "./row-detail";
@@ -263,6 +263,13 @@ export const DataBrowser = ({
         setInspecting(null);
     }, []);
 
+    // Whether the table view is transposed (fields as rows, records as columns) —
+    // pure view state for reading wide tables. Reset implicitly per render of the grid.
+    const [transposed, setTransposed] = useState<boolean>(false);
+    const onToggleTranspose = useCallback((): void => {
+        setTransposed((current) => !current);
+    }, []);
+
     // The cell whose full value the expand dialog is showing, if any. Opened from
     // the per-cell expand affordance; pure view state like `inspecting`.
     const [expandedCell, setExpandedCell] = useState<null | { column: string; value: unknown }>(null);
@@ -361,8 +368,10 @@ export const DataBrowser = ({
                                     editable={editable}
                                     name={selectedTable ?? "export"}
                                     onBulkDelete={onBulkDeleteSelected}
+                                    onToggleTranspose={onToggleTranspose}
                                     rows={page.rows}
                                     table={table.table}
+                                    transposed={transposed}
                                 />
                             )}
 
@@ -410,7 +419,9 @@ export const DataBrowser = ({
                             </div>
                         )}
 
-                        {viewMode === "table" && page.rows.length > 0 && (
+                        {viewMode === "table" && page.rows.length > 0 && transposed && <TransposedTable columns={page.columns} rows={page.rows} />}
+
+                        {viewMode === "table" && page.rows.length > 0 && !transposed && (
                             <DataBrowserTableView
                                 edit={edit}
                                 editable={editable}

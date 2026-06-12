@@ -1,9 +1,25 @@
-import type { ReactElement, ReactNode } from "react";
-import { memo, useCallback, useMemo, useState } from "react";
+import type { Rect, Virtualizer } from "@tanstack/react-virtual";
+import { observeElementRect, useVirtualizer } from "@tanstack/react-virtual";
+import type { CSSProperties, ReactElement, ReactNode } from "react";
+import { memo, useCallback, useMemo, useRef, useState } from "react";
 
 import { useT } from "../../i18n/i18n-context";
 import { formatCell } from "../../lib/internal";
 import { cn } from "../../lib/utils";
+
+/** Estimated height of one sidebar table row, used to size the virtualized list. */
+const TABLE_ROW_HEIGHT = 34;
+
+/**
+ * Rect observer that floors a zero-height viewport to a usable height so the
+ * virtualizer mounts a bounded row set under jsdom (which reports every box as
+ * 0×0). A no-op in a real browser, where the scroll container has its CSS height.
+ * Same trick the logs panel uses for its virtualized table.
+ */
+const observeListRect = (instance: Virtualizer<HTMLUListElement, Element>, callback: (rect: Rect) => void): (() => void) | undefined =>
+    observeElementRect(instance, (rect) => {
+        callback(rect.height > 0 ? rect : { height: 600, width: rect.width });
+    });
 
 /**
  * One grid cell's value, rendered Outerbase/Supabase-style: a `null`/`undefined`
@@ -19,6 +35,55 @@ const CellValue = memo(({ value }: { readonly value: unknown }): ReactElement =>
     return <span title={formatCell(value)}>{formatCell(value)}</span>;
 });
 
+/**
+ * The loaded page flipped on its diagonal: each column becomes a row (the field
+ * name in a sticky leading column) and each record becomes a column. The readable
+ * shape for a wide table with only a handful of rows, where the normal grid would
+ * scroll horizontally forever. Read-only — a view transform over the same rows.
+ */
+const TransposedTable = ({
+    columns,
+    rows,
+}: {
+    readonly columns: ReadonlyArray<string>;
+    readonly rows: ReadonlyArray<Record<string, unknown>>;
+}): ReactElement => {
+    const t = useT();
+
+    return (
+        <div className="min-h-0 flex-1 overflow-auto" data-testid="db-transposed">
+            <table className="border-collapse text-xs">
+                <thead className="sticky top-0 z-10 bg-muted">
+                    <tr>
+                        <th className="border-b border-e border-border px-3 py-1.5 text-start font-medium text-muted-foreground">{t("Field")}</th>
+                        {rows.map((_, index) => (
+                            // eslint-disable-next-line react-x/no-array-index-key -- a raw result row has no stable identity; column position is the only key
+                            <th className="border-b border-border px-3 py-1.5 text-start font-medium text-muted-foreground tabular-nums" key={index}>
+                                {t("Row {n}", { n: index + 1 })}
+                            </th>
+                        ))}
+                    </tr>
+                </thead>
+                <tbody>
+                    {columns.map((column) => (
+                        <tr className="hover:bg-muted/40" key={column}>
+                            <th className="border-b border-e border-border px-3 py-1.5 text-start font-mono font-medium whitespace-nowrap" scope="row">
+                                {column}
+                            </th>
+                            {rows.map((row, index) => (
+                                // eslint-disable-next-line react-x/no-array-index-key -- raw row has no stable id; position is the only key
+                                <td className="max-w-md truncate border-b border-border px-3 py-1.5 font-mono" key={index}>
+                                    <CellValue value={row[column]} />
+                                </td>
+                            ))}
+                        </tr>
+                    ))}
+                </tbody>
+            </table>
+        </div>
+    );
+};
+
 /** One row in the table sidebar: a table name and its current row count. */
 interface TableListItem {
     readonly name: string;
@@ -30,19 +95,25 @@ interface TableListButtonProps {
     readonly onSelect: (name: string) => void;
     readonly prefix: string;
     readonly selected: boolean;
+    /** Pixel offset from the top of the virtualized list (absolute-positions the row). */
+    readonly start: number;
 }
 
 /**
- * One sidebar table entry. Extracted so each binds its `onClick` through a stable
- * `useCallback` (closing over the table name) rather than a fresh inline closure.
+ * One sidebar table entry, absolutely positioned at its virtualized `start`.
+ * Extracted so each binds its `onClick` through a stable `useCallback` (closing
+ * over the table name) and its position `style` through a `useMemo`.
  */
-const TableListButton = ({ item, onSelect, prefix, selected }: TableListButtonProps): ReactElement => {
+const TableListButton = ({ item, onSelect, prefix, selected, start }: TableListButtonProps): ReactElement => {
     const onClick = useCallback((): void => {
         onSelect(item.name);
     }, [item.name, onSelect]);
+    const style = useMemo<CSSProperties>(() => {
+        return { insetInline: 0, position: "absolute", top: 0, transform: `translateY(${String(start)}px)` };
+    }, [start]);
 
     return (
-        <li>
+        <li style={style}>
             <button
                 aria-pressed={selected}
                 className={cn(
@@ -84,6 +155,7 @@ interface TableListSidebarProps {
 const TableListSidebar = ({ header, onReload, onSelect, prefix, reloadLabel, selected, tables }: TableListSidebarProps): ReactElement => {
     const t = useT();
     const [query, setQuery] = useState<string>("");
+    const scrollRef = useRef<HTMLUListElement | null>(null);
 
     const onQueryChange = useCallback((event: React.ChangeEvent<HTMLInputElement>): void => {
         setQuery(event.target.value);
@@ -94,6 +166,20 @@ const TableListSidebar = ({ header, onReload, onSelect, prefix, reloadLabel, sel
 
         return needle === "" ? tables : tables.filter((item) => item.name.toLowerCase().includes(needle));
     }, [query, tables]);
+
+    // Virtualize the list so a schema with hundreds of tables only mounts the rows
+    // in view (+ overscan) instead of one button per table.
+    const virtualizer = useVirtualizer({
+        count: filtered.length,
+        estimateSize: () => TABLE_ROW_HEIGHT,
+        getScrollElement: () => scrollRef.current,
+        observeElementRect: observeListRect,
+        overscan: 12,
+    });
+    const virtualRows = virtualizer.getVirtualItems();
+    const trackStyle = useMemo<CSSProperties>(() => {
+        return { height: filtered.length * TABLE_ROW_HEIGHT };
+    }, [filtered.length]);
 
     return (
         <aside className="flex h-full w-60 shrink-0 flex-col border-e border-border bg-sidebar" data-testid={`${prefix}-table-list`}>
@@ -134,10 +220,16 @@ const TableListSidebar = ({ header, onReload, onSelect, prefix, reloadLabel, sel
                     value={query}
                 />
             </div>
-            <ul className="flex flex-1 flex-col gap-px overflow-y-auto p-1.5">
-                {filtered.map((item) => (
-                    <TableListButton item={item} key={item.name} onSelect={onSelect} prefix={prefix} selected={selected === item.name} />
-                ))}
+            <ul className="relative flex-1 overflow-y-auto p-1.5" data-testid={`${prefix}-table-list-rows`} ref={scrollRef}>
+                {/* Spacer that gives the scroll container its full virtual height. */}
+                <li aria-hidden="true" style={trackStyle} />
+                {virtualRows.map((vrow) => {
+                    const item = filtered[vrow.index];
+
+                    return item === undefined ? null : (
+                        <TableListButton item={item} key={item.name} onSelect={onSelect} prefix={prefix} selected={selected === item.name} start={vrow.start} />
+                    );
+                })}
             </ul>
         </aside>
     );
@@ -352,5 +444,5 @@ const GridContainer = ({
     </div>
 );
 
-export { CellValue, GridContainer, GridPagination, TableListSidebar };
+export { CellValue, GridContainer, GridPagination, TableListSidebar, TransposedTable };
 export type { TableListItem };

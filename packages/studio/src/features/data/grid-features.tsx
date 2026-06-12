@@ -10,6 +10,7 @@ import {
     DropdownMenuGroup,
     DropdownMenuItem,
     DropdownMenuLabel,
+    DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu";
 import { ModalShell } from "../../components/ui/modal-shell";
@@ -159,6 +160,10 @@ const ColumnToggle = ({ column }: { readonly column: Column<GridRow> }): ReactEl
  */
 const ColumnsMenu = ({ table }: { readonly table: Table<GridRow> }): ReactElement => {
     const t = useT();
+    const allVisible = table.getIsAllColumnsVisible();
+    const onToggleAll = useCallback((): void => {
+        table.toggleAllColumnsVisible(!allVisible);
+    }, [allVisible, table]);
 
     return (
         <DropdownMenu>
@@ -168,6 +173,11 @@ const ColumnsMenu = ({ table }: { readonly table: Table<GridRow> }): ReactElemen
             <DropdownMenuContent align="end" className="max-h-80 overflow-y-auto">
                 <DropdownMenuGroup>
                     <DropdownMenuLabel>{t("Columns")}</DropdownMenuLabel>
+                    {/* Show-all / hide-all toggle so a wide table's columns flip in one click. */}
+                    <DropdownMenuCheckboxItem checked={allVisible} closeOnClick={false} data-testid="grid-columns-all" onCheckedChange={onToggleAll}>
+                        {allVisible ? t("Hide all") : t("Show all")}
+                    </DropdownMenuCheckboxItem>
+                    <DropdownMenuSeparator />
                     {table.getAllLeafColumns().map((column) => (
                         <ColumnToggle column={column} key={column.id} />
                     ))}
@@ -283,16 +293,21 @@ const GridActionsBar = ({
     editable,
     name,
     onBulkDelete,
+    onToggleTranspose,
     rows,
     table,
+    transposed,
 }: {
     readonly columns: ReadonlyArray<string>;
     readonly editable: boolean;
     readonly name: string;
     readonly onBulkDelete: (ids: ReadonlyArray<string>) => void;
+    readonly onToggleTranspose: () => void;
     readonly rows: ReadonlyArray<GridRow>;
     readonly table: Table<GridRow>;
+    readonly transposed: boolean;
 }): ReactElement => {
+    const t = useT();
     const selected = table.getSelectedRowModel().rows;
 
     const onClear = useCallback((): void => {
@@ -308,6 +323,16 @@ const GridActionsBar = ({
         <div className="flex flex-wrap items-center gap-1.5" data-testid="grid-actions">
             <ExportMenu columns={columns} name={name} rows={rows} />
             <ColumnsMenu table={table} />
+            <button
+                aria-pressed={transposed}
+                className={CONTROL_BTN}
+                data-testid="grid-transpose"
+                onClick={onToggleTranspose}
+                title={t("Swap rows and columns")}
+                type="button"
+            >
+                {t("Transpose")}
+            </button>
             {selected.length > 0 && <SelectionBar count={selected.length} editable={editable} onClear={onClear} onDelete={onDelete} />}
         </div>
     );

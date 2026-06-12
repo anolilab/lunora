@@ -331,6 +331,58 @@ describe("dataBrowser", () => {
         expect(rowTexts()).toEqual(["world", "hello", "again"]);
     });
 
+    it("transposes the grid (fields as rows) and back", async () => {
+        expect.assertions(3);
+
+        const mock = createBrowserClient();
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-rows");
+
+        // Toggle transpose: the virtualized grid is replaced by the transposed table,
+        // whose row headers are the column names.
+        fireEvent.click(screen.getByTestId("grid-transpose"));
+
+        const transposed = await screen.findByTestId("db-transposed");
+
+        expect(within(transposed).getByText("text")).toBeDefined();
+        expect(screen.queryByTestId("db-rows")).toBeNull();
+
+        // Toggle back to the normal grid.
+        fireEvent.click(screen.getByTestId("grid-transpose"));
+
+        await expect(screen.findByTestId("db-rows")).resolves.toBeDefined();
+    });
+
+    it("virtualizes the table sidebar so a huge schema mounts only a subset", async () => {
+        expect.assertions(2);
+
+        const many = Array.from({ length: 200 }, (_, index) => {
+            return { name: `t${index.toString()}`, rowCount: 0 };
+        });
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return many;
+                }
+
+                return { columns: ["__id__"], rows: [], total: 0 };
+            },
+        });
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        // The first table mounts; the full 200 do not (only the visible window + overscan).
+        await screen.findByTestId("db-table-t0");
+
+        const mounted = screen.getAllByTestId(/^db-table-t\d+$/u);
+
+        expect(mounted.length).toBeGreaterThan(0);
+        expect(mounted.length).toBeLessThan(200);
+    });
+
     it("clears the sort on the third click", async () => {
         expect.assertions(2);
 

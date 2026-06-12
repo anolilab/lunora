@@ -377,6 +377,12 @@ const MESSAGE_IDS = [
     "keyword",
     // Data-grid features (export, columns, selection, cell expand).
     "Columns",
+    "Show all",
+    "Hide all",
+    "Transpose",
+    "Swap rows and columns",
+    "Field",
+    "Row {n}",
     "CSV",
     "{count} selected",
     "Delete {count}",
