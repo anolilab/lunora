@@ -6,6 +6,7 @@
         "moduleResolution": "bundler",
         "types": ["node"],
         "paths": {
+            "@cirrus/auth/plugins": ["../packages/auth/dist/plugins.d.ts"],
             "@cirrus/*": ["../packages/*/dist/index.d.ts"],
             "better-auth/plugins/generic-oauth": ["../packages/auth/node_modules/better-auth/dist/plugins/generic-oauth/index.d.mts"]
         }

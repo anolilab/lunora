@@ -35,6 +35,7 @@
  */
 import type { CirrusAuth } from "@cirrus/auth";
 import { createAuth, ensureMigrated, handleAuthRequest } from "@cirrus/auth";
+import { createMailerFromEnv } from "@cirrus/mail";
 
 /**
  * The Worker env bindings this module needs. Cirrus generates a richer `Env`
@@ -52,10 +53,52 @@ export interface AuthEnv {
 }
 
 /**
+ * Send a transactional auth email (verification link, password reset) through
+ * `@cirrus/mail`. In a dev environment this is captured into the studio's Mail
+ * inbox; in production it delivers via the `SEND_EMAIL` binding (or
+ * `RESEND_API_KEY`). `createMailerFromEnv` owns the capture-vs-deliver decision,
+ * so auth mail behaves exactly like `api.mail.sendEmail`.
+ *
+ * If mail isn't set up yet (`MAIL_FROM` unset — you haven't run `cirrus add
+ * email`), the link is logged to the console instead so sign-up / reset still
+ * work in dev. Cast through the full `env` since the mailer reads bindings
+ * (`SHARD`, `SEND_EMAIL`) and vars (`MAIL_FROM`) outside {@link AuthEnv}'s slice.
+ */
+const sendAuthEmail = async (env: AuthEnv, message: { subject: string; text: string; to: string }): Promise<void> => {
+    const fullEnv = env as unknown as Record<string, unknown>;
+
+    if (typeof fullEnv["MAIL_FROM"] !== "string") {
+        // Mail not configured — log the link so the flow still works in dev. Run `cirrus add email`.
+        // eslint-disable-next-line no-console -- dev fallback: surface the auth link when no mailer is set up
+        console.log(`[auth] email → ${message.to}: ${message.subject}\n${message.text}`);
+
+        return;
+    }
+
+    const cloudflareSend = async (from: string, to: string, raw: string): Promise<void> => {
+        const { EmailMessage } = await import("cloudflare:email");
+        const binding = fullEnv["SEND_EMAIL"] as { send: (m: InstanceType<typeof EmailMessage>) => Promise<void> } | undefined;
+
+        if (binding === undefined) {
+            throw new Error("auth: no SEND_EMAIL binding to deliver mail — run `cirrus add email` or set RESEND_API_KEY.");
+        }
+
+        await binding.send(new EmailMessage(from, to, raw));
+    };
+
+    await createMailerFromEnv(fullEnv, { cloudflareSend }).send(message);
+};
+
+/**
  * Construct the better-auth instance. Edit freely — add `socialProviders`,
  * `plugins` (from `@cirrus/auth/plugins`), or a `session` policy
  * (`sessionPresets` from `@cirrus/auth`). The `auth-clerk` / `auth-auth0`
  * registry items scaffold provider snippets you merge into the options here.
+ *
+ * Email/password sign-up enables verification + a forgot-password reset; both
+ * deliver through {@link sendAuthEmail} (captured into the studio Mail tab in
+ * dev). Edit the subjects/bodies — or swap to a React template via
+ * `@cirrus/mail`'s `renderEmail` — to taste.
  */
 export const buildAuth = (env: AuthEnv): CirrusAuth =>
     createAuth({
@@ -63,7 +106,17 @@ export const buildAuth = (env: AuthEnv): CirrusAuth =>
         // better-auth accepts a D1Database directly; cast since AuthEnv keeps
         // `DB` opaque (your generated `Env` types it precisely).
         database: env.DB as never,
-        emailAndPassword: { enabled: true },
+        emailAndPassword: {
+            enabled: true,
+            sendResetPassword: async ({ url, user }) => {
+                await sendAuthEmail(env, { subject: "Reset your password", text: `Reset your password:\n${url}`, to: user.email });
+            },
+        },
+        emailVerification: {
+            sendVerificationEmail: async ({ url, user }) => {
+                await sendAuthEmail(env, { subject: "Verify your email address", text: `Verify your email address:\n${url}`, to: user.email });
+            },
+        },
         secret: env.BETTER_AUTH_SECRET,
     });
 
