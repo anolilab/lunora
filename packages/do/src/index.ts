@@ -123,6 +123,8 @@ export type {
 export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage, selectMatchingIds } from "./introspect";
 export type { LogEntry, LogLevel } from "./log-buffer";
 export { LogBuffer } from "./log-buffer";
+export type { CapturedMailRow, RecordMailInput } from "./mail-catcher";
+export { clearCapturedMail, ensureMailTable, MAIL_RETENTION, MAIL_TABLE, readCapturedMail, recordCapturedMail } from "./mail-catcher";
 export { default as NotFoundError } from "./not-found-error";
 export type { PitrBookmarkResult, PitrRestoreArgs, PitrRestoreResult, PitrStorage } from "./pitr";
 export { armRestore, readBookmark } from "./pitr";
