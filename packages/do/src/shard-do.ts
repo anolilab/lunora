@@ -31,6 +31,7 @@ import type {
     FunctionStatsResult,
     OrderByClause,
     RlsPoliciesResult,
+    StorageRulesResult,
     SubscriptionsResult,
     TableIndexInfo,
 } from "./introspect";
@@ -2105,6 +2106,20 @@ abstract class ShardDO {
     }
 
     /**
+     * Storage access-rule metadata for this deployment, surfaced via
+     * `__cirrus_admin__:storageRules` to the studio's read-only access-rules
+     * view: which `defineStorageRule`s gate which `(bucket, on, prefix)`.
+     * Statically discovered by `@cirrus/codegen` from every
+     * `.use(storageRules(...))` chain and emitted into the generated subclass,
+     * which overrides this. The base class can't see the user's `cirrus/`
+     * sources, so it reports none. Never includes the `when` predicate.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this with the generated storage-rule metadata
+    protected storageRulesMetadata(): StorageRulesResult {
+        return { rules: [] };
+    }
+
+    /**
      * Runtime advisories derived from observed signal — currently `unused_index`:
      * a declared index a query has never exercised since this instance woke. To
      * keep noise down it only inspects tables that have used *some* index (so a
@@ -3620,6 +3635,13 @@ abstract class ShardDO {
             // policies + roles the studio's inspector lists. Schema-wide, so it
             // carries the wildcard like the other static-introspection reads.
             return this.rlsMetadata();
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.storageRules) {
+            // Read-only storage access-rule metadata (codegen-emitted, via
+            // `storageRulesMetadata()`): the rules the studio's access-rules view
+            // lists. Schema-wide, like the other static-introspection reads.
+            return this.storageRulesMetadata();
         }
 
         return undefined;

@@ -1,0 +1,188 @@
+/**
+ * Tests for the storage-rules DSL + middleware — the object-storage analogue of
+ * `rls.test.ts`. A handwritten fake `ctx.storage` captures every call; the
+ * middleware wraps it and enforces the rules before delegating.
+ */
+import { describe, expect, it } from "vitest";
+
+import type { Middleware, StorageRule } from "../src/index";
+import { CirrusError, defineStorageRule, defineStorageRules, initCirrus, storageRules } from "../src/index";
+
+const cirrus = initCirrus.dataModel<Record<string, never>>().create();
+
+interface FakeStorage {
+    calls: { key: string; method: string }[];
+    storage: {
+        delete: (key: string) => Promise<void>;
+        download: (key: string) => Promise<undefined>;
+        getUrl: (key: string) => string;
+        store: (key: string, body: unknown) => Promise<{ etag: string; key: string }>;
+    };
+}
+
+const createFakeStorage = (): FakeStorage => {
+    const calls: { key: string; method: string }[] = [];
+
+    return {
+        calls,
+        storage: {
+            delete: async (key: string): Promise<void> => {
+                calls.push({ key, method: "delete" });
+            },
+            download: async (key: string): Promise<undefined> => {
+                calls.push({ key, method: "download" });
+
+                return undefined;
+            },
+            getUrl: (key: string): string => {
+                calls.push({ key, method: "getUrl" });
+
+                return `https://cdn.example/${key}`;
+            },
+            store: async (key: string): Promise<{ etag: string; key: string }> => {
+                calls.push({ key, method: "store" });
+
+                return { etag: "e", key };
+            },
+        },
+    };
+};
+
+interface TestContext {
+    auth: { roles: string[]; userId: null | string };
+    storage: FakeStorage["storage"];
+}
+
+const makeContext = (fake: FakeStorage, userId: null | string, roles: string[] = []): TestContext => {
+    return { auth: { roles, userId }, storage: fake.storage };
+};
+
+const rulesForTest = <Context>(rules: ReadonlyArray<StorageRule<Context>>): Middleware<any, any> =>
+    (storageRules as unknown as (r: ReadonlyArray<StorageRule<Context>>) => Middleware<any, any>)(rules);
+
+describe("defineStorageRules — duplicate detection", () => {
+    it("throws on the same (bucket, on, prefix) with the same decision function", () => {
+        expect.assertions(1);
+
+        const when = (): boolean => true;
+        const rule = defineStorageRule<TestContext>({ bucket: "avatars", on: "read", prefix: "user/", when });
+
+        expect(() => defineStorageRules([rule, rule])).toThrow(/duplicate rule/);
+    });
+
+    it("allows distinct rules for the same (bucket, on)", () => {
+        expect.assertions(1);
+
+        const a = defineStorageRule<TestContext>({ bucket: "avatars", on: "read", prefix: "user/", when: () => true });
+        const b = defineStorageRule<TestContext>({ bucket: "avatars", on: "read", prefix: "public/", when: () => true });
+
+        expect(defineStorageRules([a, b])).toHaveLength(2);
+    });
+});
+
+describe("storageRules — read path", () => {
+    it("allows a read whose key matches an allowing rule's prefix", async () => {
+        expect.assertions(1);
+
+        const rule = defineStorageRule<TestContext>({
+            bucket: "avatars",
+            on: "read",
+            when: ({ auth, key }) => key.startsWith(`user/${auth.userId ?? ""}/`),
+        });
+
+        const fake = createFakeStorage();
+        const handler = cirrus.action.use(rulesForTest<TestContext>([rule])).action(async ({ ctx }) => ctx.storage.download("user/u1/a.png"));
+
+        await handler.handler(makeContext(fake, "u1"), {});
+
+        expect(fake.calls).toEqual([{ key: "user/u1/a.png", method: "download" }]);
+    });
+
+    it("denies a read for a key another user owns", async () => {
+        expect.assertions(2);
+
+        const rule = defineStorageRule<TestContext>({
+            bucket: "avatars",
+            on: "read",
+            when: ({ auth, key }) => key.startsWith(`user/${auth.userId ?? ""}/`),
+        });
+
+        const fake = createFakeStorage();
+        const handler = cirrus.action.use(rulesForTest<TestContext>([rule])).action(async ({ ctx }) => ctx.storage.download("user/u2/secret.png"));
+
+        await expect(handler.handler(makeContext(fake, "u1"), {})).rejects.toThrow(CirrusError);
+        expect(fake.calls).toEqual([]);
+    });
+
+    it("leaves an operation with no rules unrestricted (opt-in)", async () => {
+        expect.assertions(1);
+
+        // Only a `read` rule is declared; `delete` is ungoverned and passes through.
+        const rule = defineStorageRule<TestContext>({ bucket: "avatars", on: "read", when: () => false });
+
+        const fake = createFakeStorage();
+        const handler = cirrus.action.use(rulesForTest<TestContext>([rule])).action(async ({ ctx }) => ctx.storage.delete("anything"));
+
+        await handler.handler(makeContext(fake, "u1"), {});
+
+        expect(fake.calls).toEqual([{ key: "anything", method: "delete" }]);
+    });
+});
+
+describe("storageRules — prefix scoping + default-deny", () => {
+    it("locks down every read on the bucket once any read rule exists (key outside all prefixes is denied)", async () => {
+        expect.assertions(1);
+
+        const rule = defineStorageRule<TestContext>({ bucket: "avatars", on: "read", prefix: "user/", when: () => true });
+
+        const fake = createFakeStorage();
+        const handler = cirrus.action.use(rulesForTest<TestContext>([rule])).action(async ({ ctx }) => ctx.storage.getUrl("public/logo.png"));
+
+        await expect(handler.handler(makeContext(fake, "u1"), {})).rejects.toThrow(/denied by access rule/);
+    });
+
+    it("applies OR across multiple rules — any allowing rule grants the op", async () => {
+        expect.assertions(1);
+
+        const own = defineStorageRule<TestContext>({
+            bucket: "avatars",
+            on: "read",
+            prefix: "user/",
+            when: ({ auth, key }) => key.startsWith(`user/${auth.userId ?? ""}/`),
+        });
+        const shared = defineStorageRule<TestContext>({ bucket: "avatars", on: "read", prefix: "public/", when: () => true });
+
+        const fake = createFakeStorage();
+        const handler = cirrus.action.use(rulesForTest<TestContext>([own, shared])).action(async ({ ctx }) => ctx.storage.getUrl("public/logo.png"));
+
+        const url = await handler.handler(makeContext(fake, "u1"), {});
+
+        expect(url).toBe("https://cdn.example/public/logo.png");
+    });
+});
+
+describe("storageRules — write/delete path", () => {
+    it("denies a write that no rule allows", async () => {
+        expect.assertions(1);
+
+        const rule = defineStorageRule<TestContext>({ bucket: "avatars", on: "write", when: ({ auth, key }) => key.startsWith(`user/${auth.userId ?? ""}/`) });
+
+        const fake = createFakeStorage();
+        const handler = cirrus.action.use(rulesForTest<TestContext>([rule])).action(async ({ ctx }) => ctx.storage.store("user/u2/x.png", new ArrayBuffer(1)));
+
+        await expect(handler.handler(makeContext(fake, "u1"), {})).rejects.toThrow(/storage write/);
+    });
+
+    it("allows a delete the rule grants", async () => {
+        expect.assertions(1);
+
+        const rule = defineStorageRule<TestContext>({ bucket: "avatars", on: "delete", when: ({ auth, key }) => key.startsWith(`user/${auth.userId ?? ""}/`) });
+
+        const fake = createFakeStorage();
+        const handler = cirrus.action.use(rulesForTest<TestContext>([rule])).action(async ({ ctx }) => ctx.storage.delete("user/u1/old.png"));
+
+        await handler.handler(makeContext(fake, "u1"), {});
+
+        expect(fake.calls).toEqual([{ key: "user/u1/old.png", method: "delete" }]);
+    });
+});

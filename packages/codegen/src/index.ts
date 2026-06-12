@@ -9,6 +9,7 @@ export { default as discoverMigrations } from "./discover-migrations";
 export { default as discoverQueries } from "./discover-queries";
 export { discoverRlsMetadata, default as discoverRlsProcedures } from "./discover-rls-procedures";
 export { default as discoverSchema } from "./discover-schema";
+export { default as discoverStorageRulesMetadata } from "./discover-storage-rules";
 export { emitApi, emitCrons, emitDataModel, emitDrizzleSchema, emitFunctions, emitServer, emitShard, emitVectors, emitWranglerCronTriggers, GENERATED_HEADER } from "./emit";
 export type {
     AuthApiCallIR,
@@ -25,6 +26,8 @@ export type {
     RlsProcedureIR,
     RlsRoleIR,
     SchemaIR,
+    StorageRuleIR,
+    StorageRulesMetadataIR,
     TableIR,
     ValidatorIR,
     VectorIndexIR,

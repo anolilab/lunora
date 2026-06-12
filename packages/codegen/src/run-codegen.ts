@@ -15,6 +15,7 @@ import discoverMigrations from "./discover-migrations";
 import discoverQueries from "./discover-queries";
 import discoverRlsProcedures, { discoverRlsMetadata } from "./discover-rls-procedures";
 import discoverSchema from "./discover-schema";
+import discoverStorageRulesMetadata from "./discover-storage-rules";
 import { emitApi, emitCrons, emitDataModel, emitDrizzleSchema, emitFunctions, emitServer, emitShard, emitVectors, emitWranglerCronTriggers } from "./emit";
 import { buildOpenApiDocument, emitOpenApiModule } from "./openapi";
 import { buildOpenRpcDocument, emitOpenRpcModule } from "./openrpc";
@@ -112,6 +113,11 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // discovered from every `.use(rls(...))` chain — never the `when` predicate.
     const rlsMetadata = discoverRlsMetadata(project, cirrusDirectory);
 
+    // Read-only storage access-rule metadata (the studio's access-rules view),
+    // statically discovered from every `.use(storageRules(...))` chain and
+    // emitted into the generated ShardDO's `storageRulesMetadata()` override.
+    const storageRulesMetadata = discoverStorageRulesMetadata(project, cirrusDirectory);
+
     // Whether any function uses Workers AI (imports `@cirrus/ai` or reads
     // `ctx.ai`). Gates wiring `ctx.ai` into the generated ShardDO + the typed
     // ActionCtx — so non-AI projects never import the AI SDK into their worker.
@@ -121,7 +127,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const apiContent = emitApi(functions);
     const serverContent = emitServer(hasAi);
     const functionsContent = emitFunctions(functions, migrations);
-    const shardContent = emitShard(schema, advisories, rlsMetadata, hasAi);
+    const shardContent = emitShard(schema, advisories, rlsMetadata, hasAi, storageRulesMetadata);
     const cronsContent = emitCrons(crons);
     const vectorsContent = emitVectors(schema.vectorIndexes);
     const drizzleFiles = emitDrizzleSchema(schema);

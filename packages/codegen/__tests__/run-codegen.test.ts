@@ -591,6 +591,29 @@ export const summarize = action({ args: { text: v.string() }, handler: async (ct
         });
     });
 
+    describe("emitShard — storage rules", () => {
+        it("emits the discovered storage rules into the storageRulesMetadata() override", () => {
+            expect.assertions(3);
+
+            const schema: SchemaIR = { tables: [], vectorIndexes: [] };
+            const output = emitShard(schema, [], undefined, false, {
+                rules: [{ bucket: "avatars", file: "avatars", on: "read", prefix: "user/", procedure: "upload" }],
+            });
+
+            expect(output).toContain("protected override storageRulesMetadata(): StorageRulesResult {");
+            expect(output).toContain('"bucket": "avatars"');
+            expect(output).toContain('"prefix": "user/"');
+        });
+
+        it("emits an empty storage-rules metadata when none are declared", () => {
+            expect.assertions(1);
+
+            const output = emitShard({ tables: [], vectorIndexes: [] });
+
+            expect(output).toContain("const CIRRUS_STORAGE_RULES: StorageRulesResult = {");
+        });
+    });
+
     describe("emitShard", () => {
         it("wires @cirrus/vectors auto-sync when the schema declares vector indexes", () => {
             expect.assertions(7);

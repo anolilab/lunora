@@ -14,10 +14,10 @@ export type {
     TerminalKind,
 } from "./builder/index";
 export { initCirrus } from "./builder/index";
-export type { CirrusErrorCode } from "./error";
-export { CirrusError } from "./error";
 export type { EnvAccessor, EnvKeyFailure, EnvShape, InferEnv } from "./env";
 export { CirrusEnvError, defineEnv, redactSecrets } from "./env";
+export type { CirrusErrorCode } from "./error";
+export { CirrusError } from "./error";
 export type { FacadeEntry, FacadeWriterLike, OrmLike } from "./facade";
 export { bindOrm, bindTableFacade } from "./facade";
 export type { ActionDefinition, MutationDefinition, QueryDefinition } from "./functions";
@@ -58,6 +58,15 @@ export type {
     VectorizeOptions,
 } from "./schema";
 export { defineAggregateIndex, defineRankIndex, defineSchema, defineTable, defineVectorIndex } from "./schema";
+export type {
+    DefineStorageRuleInput,
+    StorageOperation,
+    StorageRule,
+    StorageRuleContext,
+    StorageRuleDecision,
+    StorageRulesOptions,
+} from "./storage/index";
+export { defineStorageRule, defineStorageRules, storageRules } from "./storage/index";
 export type {
     ActionCtx,
     AggregateIndexDefinition,

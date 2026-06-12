@@ -313,6 +313,28 @@ export interface RlsMetadataIR {
     roles: RlsRoleIR[];
 }
 
+/** One statically-discovered `defineStorageRule({ bucket, on, prefix })` entry from a `.use(storageRules(...))` chain. */
+export interface StorageRuleIR {
+    bucket: string;
+    /** Relative to `cirrus/`. */
+    file: string;
+    on: "delete" | "list" | "read" | "write";
+    /** Optional key-prefix scope; absent ⇒ the whole bucket. */
+    prefix?: string;
+    /** The exported procedure that installed the rule. */
+    procedure: string;
+}
+
+/**
+ * Schema-wide storage-access-rule metadata emitted into the generated ShardDO so
+ * the studio's read-only inspector can list, per bucket, which operations are
+ * gated and under what key prefix. Aggregated across every
+ * `.use(storageRules(...))` chain — descriptive only, never the predicate logic.
+ */
+export interface StorageRulesMetadataIR {
+    rules: StorageRuleIR[];
+}
+
 /**
  * A typed REST route declared with the `httpRoute.&lt;verb>("/path")…` builder in
  * `@cirrus/server` and mounted on `httpRouter()`. Captured statically from the

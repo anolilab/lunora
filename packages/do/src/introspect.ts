@@ -64,6 +64,7 @@ const ADMIN_FUNCTIONS = {
     sendTestMail: "__cirrus_admin__:sendTestMail",
     storageOrphans: "__cirrus_admin__:storageOrphans",
     storageReferences: "__cirrus_admin__:storageReferences",
+    storageRules: "__cirrus_admin__:storageRules",
     writeRow: "__cirrus_admin__:writeRow",
 } as const;
 
@@ -287,6 +288,32 @@ interface RlsRoleMetadata {
 interface RlsPoliciesResult {
     policies: RlsPolicyMetadata[];
     roles: RlsRoleMetadata[];
+}
+
+/**
+ * One storage access-rule entry, surfaced by `__cirrus_admin__:storageRules` to
+ * the studio's read-only access-rules view. Mirrors `@cirrus/codegen`'s
+ * `StorageRuleIR`: the rule's `bucket` + `on` operation + optional key `prefix`
+ * and the procedure whose `.use(storageRules(...))` chain declared it. Never the
+ * `when` predicate — only its existence is reported. The codegen subclass
+ * overrides the `storageRulesMetadata()` hook with these.
+ */
+interface StorageRuleMetadata {
+    /** Logical bucket the rule applies to. */
+    bucket: string;
+    /** Source file (relative to `cirrus/`, without extension) the rule is declared in. */
+    file: string;
+    /** Operation gated: `read`/`write`/`delete`/`list`. */
+    on: "delete" | "list" | "read" | "write";
+    /** Optional key-prefix scope; absent ⇒ the whole bucket. */
+    prefix?: string;
+    /** Export name of the procedure whose builder chain declared the rule. */
+    procedure: string;
+}
+
+/** Payload of a `__cirrus_admin__:storageRules` call: the schema's storage access rules for the studio's inspector. */
+interface StorageRulesResult {
+    rules: StorageRuleMetadata[];
 }
 
 /** Payload of a `__cirrus_admin__:getFunctionStats` call. */
@@ -931,6 +958,8 @@ export type {
     SortDirection,
     StorageReference,
     StorageReferenceResult,
+    StorageRuleMetadata,
+    StorageRulesResult,
     SubscriptionConnection,
     SubscriptionInfo,
     SubscriptionsResult,

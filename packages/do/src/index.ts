@@ -118,6 +118,8 @@ export type {
     SettingEntry,
     SettingKind,
     SettingsResult,
+    StorageRuleMetadata,
+    StorageRulesResult,
     TableIndexesResult,
     TableIndexInfo,
     TableInfo,

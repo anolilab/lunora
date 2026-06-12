@@ -45,6 +45,7 @@ import { SchemaViewer } from "../features/schema/schema-viewer";
 import { SettingsPanel } from "../features/settings/settings-panel";
 import { SqlEditorPanel } from "../features/sql/sql-editor-panel";
 import { FileBrowser } from "../features/storage/file-browser";
+import { StorageRulesPanel } from "../features/storage/storage-rules-panel";
 import { VectorBrowser } from "../features/vectors/vector-browser";
 import { useT } from "../i18n/i18n-context";
 import { StudioI18nProvider } from "../i18n/i18n-provider";
@@ -82,6 +83,7 @@ type StudioTab =
     | "security"
     | "settings"
     | "sql"
+    | "storageRules"
     | "users"
     | "vectors";
 
@@ -209,6 +211,7 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
     schedule: <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm0-13.5V12l4 2" />,
     schema: <path d="M4 5h16v14H4V5Zm0 5h16M10 10v9M4 14.5h16" />,
     sql: <path d="M4 5h16v14H4V5Zm3 4 3 3-3 3m6 0h4" />,
+    storageRules: <path d="M12 3 5 6v5c0 4.5 3 7.8 7 9 4-1.2 7-4.5 7-9V6l-7-3Zm-3.5 8h7M8.5 14h7" />,
     security: <path d="M12 3 5 6v5c0 4.5 3 7.8 7 9 4-1.2 7-4.5 7-9V6l-7-3Zm-2.5 8.5 2 2 4-4" />,
     settings: (
         <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm7.4-3a7.4 7.4 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7.3 7.3 0 0 0-2-1.2l-.4-2.6H10.5l-.4 2.6a7.3 7.3 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6a7.4 7.4 0 0 0 0 2.4l-2 1.6 2 3.4 2.4-1a7.3 7.3 0 0 0 2 1.2l.4 2.6h3.6l.4-2.6a7.3 7.3 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6a7.4 7.4 0 0 0 .1-1.2Z" />
@@ -234,7 +237,7 @@ const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
     { key: "sql", tabs: ["sql", "functions", "api"] },
     { key: "database", tabs: ["schema", "migrations", "vectors", "export", "pitr"] },
     { key: "auth", tabs: ["users", "organizations", "authSessions", "authConfig"] },
-    { key: "storage", tabs: ["files"] },
+    { key: "storage", tabs: ["files", "storageRules"] },
     { key: "reports", tabs: ["dashboards", "metrics", "health"] },
     { key: "advisors", tabs: ["security", "rls", "insights"] },
     { key: "logs", tabs: ["logs", "audit", "schedule", "realtime", "mail", "drains"] },
@@ -292,6 +295,7 @@ const TABS = [
     "authSessions",
     "authConfig",
     "files",
+    "storageRules",
     "dashboards",
     "metrics",
     "health",
@@ -366,6 +370,7 @@ const StudioLayout = (): ReactElement => {
             security: t("Security"),
             settings: t("Settings"),
             sql: t("SQL editor"),
+            storageRules: t("Access Rules"),
             users: t("Users"),
             vectors: t("Vectors"),
         };
@@ -415,6 +420,7 @@ const StudioLayout = (): ReactElement => {
             security: t("Review admin gates, credentials, and log redaction."),
             settings: t("Read-only deployment config — vars, secrets, and bindings."),
             sql: t("Run read-only SQL against a shard."),
+            storageRules: t("Inspect storage access rules — per bucket, operation, and key prefix."),
             users: t("Manage auth users — roles, bans, sessions, and identity."),
             vectors: t("Browse Vectorize indexes and run similarity searches."),
         };
@@ -737,6 +743,7 @@ const buildRouter = ({
         security: <SecurityAdvisorPanel />,
         settings: <SettingsPanel initialShardKey={initialShardKey} />,
         sql: <SqlEditorPanel initialShardKey={initialShardKey} />,
+        storageRules: <StorageRulesPanel />,
         users: <UsersPanel />,
         vectors: <VectorBrowser />,
     };

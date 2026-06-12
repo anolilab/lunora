@@ -1,0 +1,75 @@
+/**
+ * Public types for the Storage Access Rules DSL — the object-storage analogue
+ * of Row-Level Security (`../rls`).
+ *
+ * A rule is a pure function: it reads the request context plus the key the
+ * operation targets and returns `true` (allow), `false` (deny), or `undefined`
+ * (opt this rule out). Rules never mutate state.
+ *
+ * The middleware (`storageRules(rules)`) installs into a builder via `.use()` —
+ * rules only apply to procedures whose chain includes that middleware, so
+ * storage authorization is opt-in per procedure, never global.
+ *
+ * The `Permission` / `Role` capability layer is shared verbatim with RLS so a
+ * single role set backs both `ctx.db` and `ctx.storage` checks.
+ */
+import type { Permission, Role } from "../rls/types";
+
+/**
+ * Operations a storage rule can gate. `read` covers `download` / `getMetadata`
+ * / `getSignedUrl` / `getUrl`; `write` covers `store` / `generateUploadUrl`;
+ * `delete` is `delete`; `list` is a prefix listing (governed via the file
+ * browser / admin path, not `ctx.storage` which has no `list`).
+ */
+export type StorageOperation = "delete" | "list" | "read" | "write";
+
+/** A rule's decision. `true` allows, `false` denies, `undefined` opts this rule out. */
+export type StorageRuleDecision = boolean | undefined;
+
+/**
+ * Context handed to a storage rule. `auth` mirrors RLS's `PolicyContext.auth`
+ * (the per-request userId / roles / identity and the `can(permission)` helper),
+ * so a rule reads `({ auth, key }) => key.startsWith(`user/${auth.userId}/`)`.
+ * `key` is the object key the operation targets (for `list`, the listing
+ * prefix). `ctx` is the full procedure context the middleware closed over.
+ */
+export interface StorageRuleContext<Context = unknown> {
+    readonly auth: {
+        readonly can: (permission: Permission | string) => boolean;
+        readonly identity?: Record<string, unknown> | null;
+        readonly roles: ReadonlyArray<string>;
+        readonly userId: null | string;
+    };
+    readonly ctx: Context;
+    /** The object key the operation targets (the listing prefix for `list`). */
+    readonly key: string;
+}
+
+/** A registered storage rule as stored in the rule table. */
+export interface StorageRule<Context = unknown> {
+    /** Logical bucket the rule applies to. Informational today (one bucket per `ctx.storage`); surfaced in the studio for grouping. */
+    readonly bucket: string;
+    readonly on: StorageOperation;
+    /** Optional key-prefix scope; the rule only governs keys under it. Absent ⇒ the whole bucket. */
+    readonly prefix?: string;
+    readonly when: (context: StorageRuleContext<Context>) => StorageRuleDecision;
+}
+
+/** Input accepted by `defineStorageRule`. The result is the same shape. */
+export interface DefineStorageRuleInput<Context = unknown> {
+    bucket: string;
+    on: StorageOperation;
+    prefix?: string;
+    when: (context: StorageRuleContext<Context>) => StorageRuleDecision;
+}
+
+/**
+ * Options for the `storageRules(rules, options)` middleware. `roles` registers
+ * the role→permission grants that back `ctx.auth.can(...)`, exactly as RLS's
+ * `RlsOptions.roles` does — fail-closed for unlisted roles.
+ */
+export interface StorageRulesOptions {
+    readonly roles?: ReadonlyArray<Role>;
+}
+
+export type { Permission, Role } from "../rls/types";

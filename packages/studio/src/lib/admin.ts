@@ -56,6 +56,7 @@ export const ADMIN_FUNCTIONS = {
     sendTestMail: "__cirrus_admin__:sendTestMail",
     storageOrphans: "__cirrus_admin__:storageOrphans",
     storageReferences: "__cirrus_admin__:storageReferences",
+    storageRules: "__cirrus_admin__:storageRules",
     writeRow: "__cirrus_admin__:writeRow",
 } as const;
 
@@ -369,6 +370,33 @@ export interface RlsRoleMetadata {
 export interface RlsPoliciesResult {
     policies: RlsPolicyMetadata[];
     roles: RlsRoleMetadata[];
+}
+
+/** The operation a storage access rule gates, mirroring `@cirrus/do`'s `StorageRuleMetadata["on"]`. */
+export type StorageOperation = "delete" | "list" | "read" | "write";
+
+/**
+ * One storage access-rule entry, mirroring `@cirrus/do`'s `StorageRuleMetadata`.
+ * Read-only metadata for the access-rules view: the rule's `bucket` + `on`
+ * operation + optional key `prefix` and the procedure whose
+ * `.use(storageRules(...))` chain declared it. Never the `when` predicate.
+ */
+export interface StorageRuleMetadata {
+    /** Logical bucket the rule applies to. */
+    bucket: string;
+    /** Source file (relative to `cirrus/`, without extension) the rule is declared in. */
+    file: string;
+    /** Operation gated by the rule. */
+    on: StorageOperation;
+    /** Optional key-prefix scope; absent ⇒ the whole bucket. */
+    prefix?: string;
+    /** Export name of the procedure whose builder chain declared the rule. */
+    procedure: string;
+}
+
+/** Payload of a `__cirrus_admin__:storageRules` call, mirroring `@cirrus/do`'s `StorageRulesResult`. */
+export interface StorageRulesResult {
+    rules: StorageRuleMetadata[];
 }
 
 /** Severity of a buffered log entry, mirroring `@cirrus/do`'s `LogLevel`. */

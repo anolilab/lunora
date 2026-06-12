@@ -686,6 +686,16 @@ const MESSAGE_IDS = [
     "Searching…",
     "vectors",
     "Vectors",
+    // Storage access rules view.
+    "(whole bucket)",
+    "Access Rules",
+    "Bucket",
+    "Inspect storage access rules — per bucket, operation, and key prefix.",
+    "No defineStorageRule is wired through .use(storageRules(...)) in this deployment. Add one to gate object access by key prefix.",
+    "No storage rules defined",
+    "Operation",
+    "Storage rules are declared in code with defineStorageRule and gate ctx.storage access per bucket. This view is read-only.",
+    "Write",
 ] as const;
 
 /** A known studio message id — one of the entries in {@link MESSAGE_IDS}. */
