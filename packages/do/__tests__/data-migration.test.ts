@@ -343,6 +343,53 @@ describe("runDataMigration", () => {
             expect(snapshot.map((document) => document["version"])).toEqual([1, 1, 1, 1, 1]);
         });
 
+        it("heartbeats the claim mid-batch so a long single batch can't be reclaimed", async () => {
+            expect.assertions(3);
+
+            const writer = setupWriter();
+
+            await seed(writer);
+
+            // A clock that advances 8s on every read. With a 10s heartbeat
+            // interval and a single batch of 5 rows, the runner must refresh
+            // `updated_at` PARTWAY through the batch — not only at the end —
+            // otherwise a batch longer than the 30s stale window would let a peer
+            // steal the claim and double-process.
+            let now = 1_700_000_000_000;
+            const clock = (): number => {
+                now += 8000;
+
+                return now;
+            };
+
+            // After each row's rewrite, record the claim's persisted `updated_at`
+            // so we can prove it climbed during the batch (before the end persist).
+            const observedUpdatedAt: number[] = [];
+            const original = writer.replace.bind(writer);
+            const probingWriter: DatabaseWriterLike = {
+                ...writer,
+                replace: async (id, document) => {
+                    await original(id, document);
+                    observedUpdatedAt.push(Number(stateRow("bump-version")?.["updated_at"] ?? 0));
+                },
+            };
+
+            const result = await runDataMigration({ clock, migration: bumpVersion, sql: harness.sql, writer: probingWriter });
+
+            expect(result).toMatchObject({ processed: 5, status: "completed" });
+
+            const snapshot = await allUsers(writer);
+
+            expect(snapshot.map((document) => document["version"])).toEqual([1, 1, 1, 1, 1]);
+
+            // The first observation is the claim stamp; a later one is greater,
+            // proving an in-batch heartbeat fired (without it, every observation
+            // would equal the claim stamp — the end persist runs after the loop).
+            const claimStamp = observedUpdatedAt[0] ?? 0;
+
+            expect(observedUpdatedAt.some((stamp) => stamp > claimStamp)).toBe(true);
+        });
+
         it("an in-flight claim (parked mid-batch) blocks a second runner even at the same wall-clock", async () => {
             expect.assertions(2);
 

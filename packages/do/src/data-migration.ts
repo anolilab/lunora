@@ -34,15 +34,28 @@ const DEFAULT_BATCH_SIZE = 100;
 
 /**
  * A run-state row stuck in `in_progress` is reclaimable once its `updated_at`
- * is older than this. The runner touches `updated_at` after every batch (and on
- * claim), so a healthy run never crosses it; only a runner that crashed or had
- * its DO evicted mid-batch — leaving its claim orphaned — does. Generous enough
- * to clear a slow batch (large `batchSize` over a contended shard) without
- * letting a single deserialized request reclaim a peer that is merely between
- * `await`s; small enough that a genuinely dead runner doesn't wedge the
- * migration for long. 30s mirrors the per-shard fan-out timeout order.
+ * is older than this. The runner touches `updated_at` after every batch, on
+ * claim, AND on a {@link CLAIM_HEARTBEAT_INTERVAL_MS} heartbeat WITHIN a batch,
+ * so a healthy run — even one whose single batch runs longer than this timeout —
+ * never crosses it; only a runner that crashed or had its DO evicted mid-batch,
+ * leaving its claim orphaned, does. Generous enough to absorb a heartbeat
+ * interval plus one slow row without letting a deserialized request reclaim a
+ * peer that is merely between `await`s; small enough that a genuinely dead
+ * runner doesn't wedge the migration for long. 30s mirrors the per-shard
+ * fan-out timeout order.
  */
 const STALE_CLAIM_TIMEOUT_MS = 30_000;
+
+/**
+ * How often, mid-batch, the runner refreshes its claim's `updated_at`. Without
+ * this, the only heartbeat during a batch is the claim timestamp, so a single
+ * batch (caller-tunable `batchSize` × arbitrary user `transform`) that runs
+ * longer than {@link STALE_CLAIM_TIMEOUT_MS} would let a concurrent runner steal
+ * the claim and double-process the batch. Heartbeating every 10s keeps a live
+ * runner's claim fresh as long as no SINGLE row takes longer than the timeout.
+ * Comfortably below the 30s stale window so a heartbeat always lands first.
+ */
+const CLAIM_HEARTBEAT_INTERVAL_MS = 10_000;
 
 type MigrationDirection = "down" | "up";
 
@@ -271,6 +284,16 @@ const releaseClaim = (sql: SqlExec, id: string): void => {
     runSql(sql, `UPDATE "${DATA_MIGRATION_STATE_TABLE}" SET updated_at = 0 WHERE id = ? AND status = 'in_progress'`, id);
 };
 
+/**
+ * Refresh a held claim's `updated_at` mid-batch (the {@link CLAIM_HEARTBEAT_INTERVAL_MS}
+ * heartbeat) so a long-running batch never lets the claim look stale to a peer.
+ * Guarded on `status = 'in_progress'` so it can only touch a live claim — never
+ * a `completed`/`failed` row.
+ */
+const touchClaim = (sql: SqlExec, id: string, now: number): void => {
+    runSql(sql, `UPDATE "${DATA_MIGRATION_STATE_TABLE}" SET updated_at = ? WHERE id = ? AND status = 'in_progress'`, now, id);
+};
+
 /** One persisted run-state row, decoded for callers (admin RPC, CLI status). */
 interface MigrationStatusRow {
     changed: number;
@@ -416,6 +439,9 @@ const runDataMigration = async (options: RunDataMigrationOptions): Promise<Migra
 
     let isDone = false;
     let batches = 0;
+    // Last time we refreshed the claim's `updated_at`. Seeded at the claim time
+    // so the first heartbeat lands one interval into a long batch.
+    let lastHeartbeatAt = startedAt;
 
     try {
         while (!isDone && batches < maxBatches) {
@@ -435,6 +461,19 @@ const runDataMigration = async (options: RunDataMigrationOptions): Promise<Migra
                         await writer.replace(String(document["_id"]), { ...next, _creationTime: document["_creationTime"], _id: document["_id"] });
                     }
                 }
+
+                // Mid-batch heartbeat: keep the claim fresh so a batch that runs
+                // longer than the stale-claim window can't be reclaimed out from
+                // under this live runner. Cheap, in-DO write; only when we hold a
+                // claim (non-dry-run) and an interval has elapsed.
+                if (!dryRun) {
+                    const now = clock();
+
+                    if (now - lastHeartbeatAt >= CLAIM_HEARTBEAT_INTERVAL_MS) {
+                        touchClaim(sql, migration.id, now);
+                        lastHeartbeatAt = now;
+                    }
+                }
             }
 
             cursor = batch.continueCursor;
@@ -442,6 +481,8 @@ const runDataMigration = async (options: RunDataMigrationOptions): Promise<Migra
             batches += 1;
 
             if (!dryRun) {
+                const batchEndedAt = clock();
+
                 persistState(sql, {
                     changed,
                     // eslint-disable-next-line unicorn/no-null -- bound to the SQLite cursor column: a finished run stores NULL
@@ -453,8 +494,12 @@ const runDataMigration = async (options: RunDataMigrationOptions): Promise<Migra
                     processed,
                     startedAt,
                     status: isDone ? "completed" : "in_progress",
-                    updatedAt: clock(),
+                    updatedAt: batchEndedAt,
                 });
+
+                // The end-of-batch persist already refreshed `updated_at`, so the
+                // next batch's heartbeat interval starts from here.
+                lastHeartbeatAt = batchEndedAt;
 
                 // Progress notification is best-effort: the batch's rows are
                 // already persisted, so a flush/push failure must neither abort
