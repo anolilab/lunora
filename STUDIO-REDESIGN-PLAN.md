@@ -24,14 +24,14 @@
    pinned bottom. Active item gets a subtle filled background.
 3. **Secondary nav** (~250px): large section title at top, then **grouped lists**
    under small-caps gray headers (`MANAGE`, `CONFIGURATION`, `DATABASE
-   MANAGEMENT`, `PLATFORM`, `TOOLS`, `COLLECTIONS`, `QUERIES`). Collapsible
+MANAGEMENT`, `PLATFORM`, `TOOLS`, `COLLECTIONS`, `QUERIES`). Collapsible
    groups, a search box, `+ New` actions, `NEW` badges, external-link arrows.
 4. **Content**: large page title (~28px bold) + one-line subtitle, then the panel.
 
 **Patterns:**
 
 - **Accent**: Supabase green (`#3ECF8E`) for primary buttons (`Run`, `New
-  bucket`, `Add user`, `Learn more`) and active states. Otherwise a tight,
+bucket`, `Add user`, `Learn more`) and active states. Otherwise a tight,
   neutral zinc palette, system font, hairline borders, `rounded-md` cards.
 - **Empty states**: centered card — outline icon, bold heading, muted sub-line,
   one green primary action (e.g. "Create a file bucket → + New bucket").
@@ -49,18 +49,18 @@ Today `studio.tsx` renders a grouped **single-level** vertical sidebar
 (`NAV_GROUPS`) driving 16 flat tabs. The redesign promotes this to Supabase's
 **two-level** model: icon rail (domain) → secondary nav (sub-pages) → content.
 
-| Icon-rail item (new) | Maps from our group/tabs            | Supabase analog              |
-| -------------------- | ----------------------------------- | ---------------------------- |
-| **Home**             | _new_ overview (health + insights digest) | Home (Get connected + Advisor) |
-| **Table editor**     | `data` (+ `globals` as a schema switch) | Table Editor                 |
-| **SQL / Functions**  | `functions` (run query/mutation/action) | SQL Editor / Edge Functions  |
-| **Database**         | `schema`, `migrations`, `export`, `pitr` | Database (Schema/Migrations/Tools) |
-| **Auth**             | `users`                             | Authentication → Users       |
-| **Storage**          | `files`                             | Storage → Files (Buckets/Policies) |
-| **Reports**          | `metrics`, `health`                 | Reports / Observability      |
-| **Advisors**         | `insights`                          | Advisors (security/perf)     |
-| **Logs**             | `logs`, `audit`, `schedule`         | Logs & Analytics (Collections) |
-| **Settings** (bottom)| `settings`                          | Project Settings             |
+| Icon-rail item (new)  | Maps from our group/tabs                  | Supabase analog                    |
+| --------------------- | ----------------------------------------- | ---------------------------------- |
+| **Home**              | _new_ overview (health + insights digest) | Home (Get connected + Advisor)     |
+| **Table editor**      | `data` (+ `globals` as a schema switch)   | Table Editor                       |
+| **SQL / Functions**   | `functions` (run query/mutation/action)   | SQL Editor / Edge Functions        |
+| **Database**          | `schema`, `migrations`, `export`, `pitr`  | Database (Schema/Migrations/Tools) |
+| **Auth**              | `users`                                   | Authentication → Users             |
+| **Storage**           | `files`                                   | Storage → Files (Buckets/Policies) |
+| **Reports**           | `metrics`, `health`                       | Reports / Observability            |
+| **Advisors**          | `insights`                                | Advisors (security/perf)           |
+| **Logs**              | `logs`, `audit`, `schedule`               | Logs & Analytics (Collections)     |
+| **Settings** (bottom) | `settings`                                | Project Settings                   |
 
 `globals` (D1 `.global()` tables) becomes a **schema selector** inside Table
 editor (mirrors Supabase's `schema public ▾`), not a separate tab. `export` and
@@ -68,25 +68,25 @@ editor (mirrors Supabase's `schema public ▾`), not a separate tab. `export` an
 
 ## 3. Panel-by-panel redesign notes
 
-| Current panel (`src/…`)        | Redesign                                                                 |
-| ------------------------------ | ------------------------------------------------------------------------ |
-| `data-browser.tsx`             | Rebuild as Table Editor: virtualized grid (TanStack virtual — already a dep), toolbar (search/column/sort/refresh), schema switch, row-detail side sheet. Add Outerbase-style **staged edits → preview-diff → commit** (idea, not copied). |
-| `global-data-browser.tsx`      | Fold into Table Editor as a schema/source (`globals`).                   |
-| `function-runner.tsx` + `function-stats.tsx` | SQL/Functions section: editor pane + resizable results with `Results/Explain/Chart`-style tabs; stats as a side list. |
-| `schema-viewer.tsx` / `schema-graph.tsx` | Database → Schema Visualizer (xyflow optional; we have a graph already). |
-| `migrations.tsx`               | Database → Migrations list.                                              |
-| `export-import.tsx`            | Database → Tools → Export / Import.                                      |
-| `pitr-panel.tsx`               | Database → Tools → Time Travel.                                          |
-| `users-panel.tsx`             | Auth → Users grid (1-to-1 with Supabase columns/toolbar/footer).         |
-| `file-browser.tsx`             | Storage → Files with Buckets/Policies tabs + bucket empty-state.         |
-| `metrics-panel.tsx` + `sparkline.tsx` | Reports cards + charts (recharts).                               |
-| `health-panel.tsx`             | Home digest + Reports.                                                   |
-| `insights-panel.tsx` + `derive-insights.ts` | Advisors ("found no issues" empty-state, severity list).   |
-| `logs-panel.tsx`               | Logs explorer: query editor + results, Collections sub-nav.             |
-| `audit-panel.tsx`             | Logs → Audit collection.                                                 |
-| `scheduled-jobs.tsx`           | Logs → Cron collection.                                                  |
-| `settings-panel.tsx`           | Settings (keep the Cloudflare-dashboard deep-link for bindings/secrets). |
-| chrome: `connection-badge`, `live-toggle`, `shard-input` | Move into top bar + secondary-nav headers. |
+| Current panel (`src/…`)                                  | Redesign                                                                                                                                                                                                                                   |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `data-browser.tsx`                                       | Rebuild as Table Editor: virtualized grid (TanStack virtual — already a dep), toolbar (search/column/sort/refresh), schema switch, row-detail side sheet. Add Outerbase-style **staged edits → preview-diff → commit** (idea, not copied). |
+| `global-data-browser.tsx`                                | Fold into Table Editor as a schema/source (`globals`).                                                                                                                                                                                     |
+| `function-runner.tsx` + `function-stats.tsx`             | SQL/Functions section: editor pane + resizable results with `Results/Explain/Chart`-style tabs; stats as a side list.                                                                                                                      |
+| `schema-viewer.tsx` / `schema-graph.tsx`                 | Database → Schema Visualizer (xyflow optional; we have a graph already).                                                                                                                                                                   |
+| `migrations.tsx`                                         | Database → Migrations list.                                                                                                                                                                                                                |
+| `export-import.tsx`                                      | Database → Tools → Export / Import.                                                                                                                                                                                                        |
+| `pitr-panel.tsx`                                         | Database → Tools → Time Travel.                                                                                                                                                                                                            |
+| `users-panel.tsx`                                        | Auth → Users grid (1-to-1 with Supabase columns/toolbar/footer).                                                                                                                                                                           |
+| `file-browser.tsx`                                       | Storage → Files with Buckets/Policies tabs + bucket empty-state.                                                                                                                                                                           |
+| `metrics-panel.tsx` + `sparkline.tsx`                    | Reports cards + charts (recharts).                                                                                                                                                                                                         |
+| `health-panel.tsx`                                       | Home digest + Reports.                                                                                                                                                                                                                     |
+| `insights-panel.tsx` + `derive-insights.ts`              | Advisors ("found no issues" empty-state, severity list).                                                                                                                                                                                   |
+| `logs-panel.tsx`                                         | Logs explorer: query editor + results, Collections sub-nav.                                                                                                                                                                                |
+| `audit-panel.tsx`                                        | Logs → Audit collection.                                                                                                                                                                                                                   |
+| `scheduled-jobs.tsx`                                     | Logs → Cron collection.                                                                                                                                                                                                                    |
+| `settings-panel.tsx`                                     | Settings (keep the Cloudflare-dashboard deep-link for bindings/secrets).                                                                                                                                                                   |
+| chrome: `connection-badge`, `live-toggle`, `shard-input` | Move into top bar + secondary-nav headers.                                                                                                                                                                                                 |
 
 ## 4. shadcn component inventory
 
@@ -148,7 +148,7 @@ hugeicons (configured in `components.json`).
   block and edit it into Supabase's exact 48px icon rail + 250px collapsible
   sub-nav (not a from-scratch rail, not the block as-is).
 - **1-to-1 depth → layout + interactions in Phase 1.** Match layout/IA/spacing
-  *and* clone the key micro-interactions (collapsible rail, ⌘K palette grouping,
+  _and_ clone the key micro-interactions (collapsible rail, ⌘K palette grouping,
   active transitions, inline grid edit) from Phase 1 onward, not deferred.
 
 Ready to implement Phase 1 on approval.
