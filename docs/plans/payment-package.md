@@ -128,7 +128,8 @@ packages/payment/
 │   ├── create-payment.ts   # createPayment({ provider, store, auth? }) facade factory
 │   ├── adapter.ts          # PaymentAdapter interface + registry
 │   ├── webhook.ts          # verify → normalize → dispatch → sync (registerPaymentRoutes)
-│   ├── store.ts            # sync-store interface (DO-backed / D1-backed)
+│   ├── store.ts            # PaymentStore interface + in-memory impl
+│   ├── database-store.ts   # createDatabasePaymentStore(ctx.db) — rides the app ShardDO
 │   ├── schema.ts           # defineSchema tables: products, prices, customers, subscriptions, checkouts,
 │   │                       #   payment_sessions, payments, captures, refunds, invoices, events (webhook log)
 │   └── providers/
@@ -259,9 +260,9 @@ Non-negotiables that the implementation (not just the plan) has to satisfy — s
 - **Phase 0 — scaffold:** `vis generate cirrus-package` → `@cirrus/payment`; types, adapter interface, facade, schema,
   DO-backed store, full Stripe adapter, raw-body webhook verification + idempotent sync, **outbound idempotency keys**,
   **mutation ownership/authz guards**, FSM transition tests + webhook fixtures. _Single-provider, working._
-- **Phase 1 — DX wiring + reliability:** codegen `ctx.payments` on `ActionCtx`; `@cirrus/config` binding inference;
-  `.dev.vars` scaffolding; **scheduled reconciliation sweep**; observability (failed-payment / drift metrics);
-  example app.
+- **Phase 1 — DX wiring + reliability:** ✅ `createDatabasePaymentStore(ctx.db)` (rides the app ShardDO); _next:_
+  codegen `ctx.payments` on `ActionCtx`; `@cirrus/config` binding inference; `.dev.vars` scaffolding; **scheduled
+  reconciliation sweep**; observability (failed-payment / drift metrics); example app.
 - **Phase 2 — Polar adapter** + React components + `.global()`/D1 read path.
 - **Phase 3 — Lemon Squeezy + Paddle adapters**; provider-migration story (dual-register).
 - **Phase 4 — entitlements tier** (`check`/`track` à la Autumn): features, credits, usage metering, seat counts.
@@ -273,7 +274,9 @@ Non-negotiables that the implementation (not just the plan) has to satisfy — s
    idempotent webhook application keyed by event id) — a match for Cirrus's default single-DO topology with OCC.
    Mirror into D1 only when the app opts into `.global()` low-latency reads. `.shardBy(referenceId)` remains
    available but is **off by default**; payment volume rarely justifies it and a single DO keeps idempotency and
-   uniqueness invariants trivial.
+   uniqueness invariants trivial. _Realized_ via `createDatabasePaymentStore(ctx.db)` over the merged `paymentTables`
+   — no bespoke `PaymentDO` class; payment state rides the app's existing ShardDO and inherits its OCC, reactivity,
+   sharding, and `.global()`/D1 read path.
 2. **Entitlements → thin native derive-from-subscription layer (Phase 4), Autumn adapter _seam_, no bundled Autumn.**
    Deriving `plan`/`features` from already-synced subscription state is cheap and stays in-Worker; a Postgres+Docker
    service does not belong in the Workers runtime. Full usage-metering/credits is deferred behind an **optional**

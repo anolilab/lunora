@@ -1,0 +1,121 @@
+import { describe, expect, it } from "vitest";
+
+import type { PaymentDatabase, PaymentRow } from "../src/database-store";
+import { createDatabasePaymentStore } from "../src/database-store";
+import { money } from "../src/money";
+import type { Customer, PaymentSession, Subscription } from "../src/types";
+
+// In-memory PaymentDatabase that mirrors the equality-filter semantics ctx.db provides.
+const makeDb = (): PaymentDatabase => {
+    const tables = new Map<string, Map<string, PaymentRow>>();
+    let sequence = 0;
+
+    const tableOf = (table: string): Map<string, PaymentRow> => {
+        const existing = tables.get(table);
+
+        if (existing) {
+            return existing;
+        }
+
+        const created = new Map<string, PaymentRow>();
+
+        tables.set(table, created);
+
+        return created;
+    };
+
+    const matches = (row: PaymentRow, where: Record<string, unknown>): boolean => Object.entries(where).every(([key, value]) => row[key] === value);
+
+    return {
+        findFirst: async (table, where) => [...tableOf(table).values()].find((row) => matches(row, where)) ?? null,
+        findMany: async (table, where) => [...tableOf(table).values()].filter((row) => matches(row, where)),
+        insert: async (table, document) => {
+            sequence += 1;
+            const id = `id_${String(sequence)}`;
+
+            tableOf(table).set(id, { ...document, _id: id });
+
+            return id;
+        },
+        patch: async (id, patch) => {
+            for (const rows of tables.values()) {
+                const row = rows.get(id);
+
+                if (row) {
+                    rows.set(id, { ...row, ...patch });
+
+                    return;
+                }
+            }
+        },
+    };
+};
+
+const customer: Customer = { createdAt: 1, email: "a@b.test", id: "cus_1", provider: "stripe", referenceId: "user_1" };
+
+const session: PaymentSession = {
+    amount: money(1000, "USD"),
+    capturedAmount: money(1000, "USD"),
+    createdAt: 1,
+    id: "pi_1",
+    provider: "stripe",
+    referenceId: "user_1",
+    refundedAmount: money(0, "USD"),
+    state: "captured",
+    updatedAt: 1,
+};
+
+const subscription: Subscription = {
+    cancelAtPeriodEnd: false,
+    createdAt: 1,
+    currentPeriodEnd: 999,
+    id: "sub_1",
+    priceId: "price_1",
+    provider: "stripe",
+    quantity: 2,
+    referenceId: "user_1",
+    state: "active",
+    updatedAt: 1,
+};
+
+describe("createDatabasePaymentStore", () => {
+    it("round-trips a customer through the row codec", async () => {
+        const store = createDatabasePaymentStore(makeDb());
+
+        await store.upsertCustomer(customer);
+
+        await expect(store.getCustomerByReference("stripe", "user_1")).resolves.toEqual(customer);
+    });
+
+    it("round-trips a payment session, preserving bigint money", async () => {
+        const store = createDatabasePaymentStore(makeDb());
+
+        await store.upsertPaymentSession(session);
+
+        const loaded = await store.getPaymentSession("stripe", "pi_1");
+
+        expect(loaded).toEqual(session);
+        expect(loaded?.capturedAmount.minorUnits).toBe(1000n);
+    });
+
+    it("upserts in place rather than duplicating", async () => {
+        const db = makeDb();
+        const store = createDatabasePaymentStore(db);
+
+        await store.upsertSubscription(subscription);
+        await store.upsertSubscription({ ...subscription, state: "canceled" });
+
+        const all = await store.listSubscriptionsByReference("user_1");
+
+        expect(all).toHaveLength(1);
+        expect(all[0]?.state).toBe("canceled");
+    });
+
+    it("dedupes events via markEventProcessed", async () => {
+        const store = createDatabasePaymentStore(makeDb());
+
+        await expect(store.markEventProcessed("stripe", "evt_1")).resolves.toBe(true);
+        await expect(store.markEventProcessed("stripe", "evt_1")).resolves.toBe(false);
+        await expect(store.markEventProcessed("stripe", "evt_2")).resolves.toBe(true);
+    });
+});

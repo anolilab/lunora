@@ -2,6 +2,8 @@ export type { AdapterRegistry, PaymentAdapter, WebhookInput } from "./adapter";
 export { createAdapterRegistry } from "./adapter";
 export type { AuthorizeReference, CirrusPayment, CreatePaymentOptions } from "./create-payment";
 export { createPayment } from "./create-payment";
+export type { PaymentDatabase, PaymentRow } from "./database-store";
+export { createDatabasePaymentStore } from "./database-store";
 export type { PaymentErrorCode } from "./errors";
 export { CirrusPaymentError } from "./errors";
 export { default as idempotencyKey } from "./idempotency";
