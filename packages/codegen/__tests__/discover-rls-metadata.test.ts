@@ -12,6 +12,7 @@ import { discoverRlsMetadata } from "../src/discover-rls-procedures";
 // declared inline (the isolated test project has no workspace module
 // resolution). `.use` returns the same builder so the `.use(rls(...)).query(...)`
 // chain type-checks and the chain walk finds the `rls(...)` call.
+// eslint-disable-next-line no-secrets/no-secrets -- the high-entropy match is a TypeScript type name inside this test source fixture, not a credential
 const PREAMBLE = `
     interface Policy { table: string; on: string; when: (context: unknown) => unknown }
     interface Role { name: string; description?: string; permissions?: unknown[] }
