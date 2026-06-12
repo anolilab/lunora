@@ -18,7 +18,7 @@ import { writeFileSync } from "node:fs";
 
 import { applyEdits, modify } from "jsonc-parser";
 
-import type { DurableObjectSpec, InferredBindings } from "./infer-bindings";
+import type { DurableObjectSpec, InferredBindings, InferredContainer } from "./infer-bindings";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 
 const FORMATTING = { formattingOptions: { insertSpaces: true, tabSize: 4 } } as const;
@@ -42,12 +42,18 @@ interface MigrationEntry {
     tag?: string;
 }
 
+interface ContainerEntry {
+    class_name?: string;
+}
+
 interface WranglerShape {
     ai?: { binding?: string };
+    containers?: ReadonlyArray<ContainerEntry>;
     d1_databases?: ReadonlyArray<{ binding?: string }>;
     durable_objects?: { bindings?: ReadonlyArray<DurableObjectBinding> };
     migrations?: ReadonlyArray<MigrationEntry>;
     name?: string;
+    observability?: { enabled?: boolean };
     r2_buckets?: ReadonlyArray<{ binding?: string }>;
 }
 
@@ -100,6 +106,21 @@ const collectWarnings = (inferred: InferredBindings, parsed?: WranglerShape): st
 
     if (inferred.usesScheduler && !exported.has("SchedulerDO")) {
         warnings.push("@cirrus/scheduler is used but the worker entry exports no SchedulerDO; export it so the SCHEDULER binding can be provisioned.");
+    }
+
+    for (const container of inferred.containers) {
+        if (!container.exported) {
+            warnings.push(
+                `container "${container.exportName}" is declared but ${container.className} is not exported by the worker entry; add \`export * from "./cirrus/_generated/containers"\` so its binding can be provisioned.`,
+            );
+        }
+    }
+
+    // Container logs are invisible without Workers observability. An absent key
+    // is reconciled to enabled below; an explicit `false` is a user billing
+    // decision we respect — but flag, since it silently swallows container logs.
+    if (inferred.containers.length > 0 && parsed?.observability?.enabled === false) {
+        warnings.push("containers are declared but observability is explicitly disabled in wrangler.jsonc — container logs will not be captured.");
     }
 
     return warnings;
@@ -185,6 +206,85 @@ const reconcileAi = (text: string, parsed: WranglerShape): ReconcileStep => {
     return { added: ["AI (Workers AI)"], text: applyModify(text, ["ai"], { binding: "AI" }) };
 };
 
+/** Map a camelCase custom instance type onto wrangler's snake_case fields. Pure. */
+// eslint-disable-next-line sonarjs/function-return-type -- wrangler's instance_type IS a string-or-object union
+const wranglerInstanceType = (instanceType: NonNullable<InferredContainer["instanceType"]>): Record<string, unknown> | string => {
+    if (typeof instanceType === "string") {
+        return instanceType;
+    }
+
+    const custom: Record<string, unknown> = {};
+
+    if (instanceType.diskMb !== undefined) {
+        custom.disk_mb = instanceType.diskMb;
+    }
+
+    if (instanceType.memoryMib !== undefined) {
+        custom.memory_mib = instanceType.memoryMib;
+    }
+
+    if (instanceType.vcpu !== undefined) {
+        custom.vcpu = instanceType.vcpu;
+    }
+
+    return custom;
+};
+
+/** Render one wrangler `containers[]` entry from an inferred container. Pure. */
+const containerEntryFor = (container: InferredContainer): Record<string, unknown> => {
+    const entry: Record<string, unknown> = {
+        class_name: container.className,
+        image: container.image.kind === "dockerfile" ? container.image.dockerfilePath : container.image.reference,
+    };
+
+    if (container.image.kind === "dockerfile") {
+        entry.image_build_context = container.image.buildContext;
+    }
+
+    if (container.instanceType !== undefined) {
+        entry.instance_type = wranglerInstanceType(container.instanceType);
+    }
+
+    if (container.maxInstances !== undefined) {
+        entry.max_instances = container.maxInstances;
+    }
+
+    if (container.name !== undefined) {
+        entry.name = container.name;
+    }
+
+    return entry;
+};
+
+/**
+ * Add any missing `containers[]` entries (matched by `class_name`) and switch
+ * `observability` on when the key is entirely absent — container logs are
+ * invisible without it, but an explicit `enabled: false` is a user billing
+ * decision and is left untouched (`collectWarnings` flags it instead). The
+ * Durable Object bindings + migration classes for containers ride through
+ * `reconcileDurableObjects` with the built-in DOs. Pure.
+ */
+const reconcileContainers = (text: string, parsed: WranglerShape, containers: ReadonlyArray<InferredContainer>): ReconcileStep => {
+    const existing = parsed.containers ?? [];
+    const existingClasses = new Set(existing.map((entry) => entry.class_name));
+    const missing = containers.filter((container) => !existingClasses.has(container.className));
+
+    let nextText = text;
+    const added: string[] = [];
+
+    if (missing.length > 0) {
+        nextText = applyModify(nextText, ["containers"], [...existing, ...missing.map((container) => containerEntryFor(container))]);
+        added.push(...missing.map((container) => `containers/${container.className}`));
+    }
+
+    if (parsed.observability === undefined) {
+        nextText = applyModify(nextText, ["observability"], { enabled: true });
+        added.push("observability (container logs)");
+    }
+
+    return { added, text: nextText };
+};
+
 /**
  * Reconcile inferred Durable Object / D1 bindings into `wrangler.jsonc`.
  *
@@ -208,13 +308,26 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
     // Hints are filtered against the existing config so a wired-up project is quiet.
     const warnings = collectWarnings(inferred, parsed);
 
+    // Only exported container classes are provisionable — wrangler rejects a
+    // class_name the worker doesn't export. Their DO bindings + migration
+    // classes ride through `reconcileDurableObjects` alongside the built-ins.
+    const exportedContainers = inferred.containers.filter((container) => container.exported);
+    const requiredDurableObjects: DurableObjectSpec[] = [
+        ...inferred.durableObjects,
+        ...exportedContainers.map((container) => {
+            return { binding: container.bindingName, className: container.className };
+        }),
+    ];
+
     // Each step rewrites `text` but reads the original `parsed`; this is only
     // safe because the steps touch disjoint top-level keys (durable_objects /
-    // migrations vs d1_databases vs ai). A future step that depends on a key an
-    // earlier step mutated must re-parse rather than reuse `parsed`.
-    const doStep = reconcileDurableObjects(original, parsed, inferred.durableObjects);
+    // migrations vs d1_databases vs ai vs containers / observability). A future
+    // step that depends on a key an earlier step mutated must re-parse rather
+    // than reuse `parsed`.
+    const doStep = reconcileDurableObjects(original, parsed, requiredDurableObjects);
     const d1Step = inferred.needsD1 ? reconcileD1(doStep.text, parsed) : { added: [], text: doStep.text };
     const aiStep = inferred.usesAi ? reconcileAi(d1Step.text, parsed) : { added: [], text: d1Step.text };
+    const containerStep = exportedContainers.length > 0 ? reconcileContainers(aiStep.text, parsed, exportedContainers) : { added: [], text: aiStep.text };
 
     // A freshly-written DB binding carries a placeholder id; surface it so the
     // user runs `wrangler d1 create` before the deploy reaches wrangler (which
@@ -225,13 +338,13 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
         );
     }
 
-    if (aiStep.text === original) {
+    if (containerStep.text === original) {
         return { added: [], changed: false, reason: "bindings already in sync", warnings, wranglerPath };
     }
 
-    writeFileSync(wranglerPath, aiStep.text, "utf8");
+    writeFileSync(wranglerPath, containerStep.text, "utf8");
 
-    return { added: [...doStep.added, ...d1Step.added, ...aiStep.added], changed: true, warnings, wranglerPath };
+    return { added: [...doStep.added, ...d1Step.added, ...aiStep.added, ...containerStep.added], changed: true, warnings, wranglerPath };
 };
 
 export type { ReconcileBindingsResult };

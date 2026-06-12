@@ -14,6 +14,7 @@ const SESSION: DurableObjectSpec = { binding: "SESSION", className: "SessionDO" 
 
 const baseInferred = (overrides: Partial<InferredBindings> = {}): InferredBindings => {
     return {
+        containers: [],
         durableObjects: [SHARD],
         needsD1: false,
         signals: [],
@@ -226,5 +227,108 @@ describe("reconcileWranglerBindings", () => {
 
         expect(result.changed).toBe(false);
         expect(result.reason).toContain("not found");
+    });
+
+    describe("containers", () => {
+        const TRANSCODER = {
+            bindingName: "CONTAINER_TRANSCODER",
+            className: "TranscoderContainer",
+            exported: true,
+            exportName: "transcoder",
+            image: { buildContext: "./containers/transcoder", dockerfilePath: "./containers/transcoder/Dockerfile", kind: "dockerfile" as const },
+            instanceType: "standard-1" as const,
+            maxInstances: 5,
+        };
+
+        it("provisions the containers entry, DO binding, migration class, and observability", () => {
+            expect.assertions(6);
+
+            const result = reconcileWranglerBindings(root, baseInferred({ containers: [TRANSCODER] }));
+
+            expect(result.changed).toBe(true);
+
+            const config = readConfig();
+
+            expect(config.containers).toEqual([
+                {
+                    class_name: "TranscoderContainer",
+                    image: "./containers/transcoder/Dockerfile",
+                    image_build_context: "./containers/transcoder",
+                    instance_type: "standard-1",
+                    max_instances: 5,
+                },
+            ]);
+            expect(config.durable_objects.bindings).toContainEqual({ class_name: "TranscoderContainer", name: "CONTAINER_TRANSCODER" });
+            expect(config.migrations.flatMap((migration: { new_sqlite_classes?: string[] }) => migration.new_sqlite_classes ?? [])).toContain(
+                "TranscoderContainer",
+            );
+            expect(config.observability).toEqual({ enabled: true });
+            // The hand-written comment must survive the structural edits.
+            expect(readFileSync(join(root, "wrangler.jsonc"), "utf8")).toContain("a hand-written comment");
+        });
+
+        it("is idempotent — a second run is a no-op", () => {
+            expect.assertions(1);
+
+            reconcileWranglerBindings(root, baseInferred({ containers: [TRANSCODER] }));
+
+            const second = reconcileWranglerBindings(root, baseInferred({ containers: [TRANSCODER] }));
+
+            expect(second.changed).toBe(false);
+        });
+
+        it("skips an unexported container and warns instead", () => {
+            expect.assertions(3);
+
+            const result = reconcileWranglerBindings(root, baseInferred({ containers: [{ ...TRANSCODER, exported: false }] }));
+
+            expect(result.changed).toBe(false);
+            expect(result.warnings.join(" ")).toContain("not exported by the worker entry");
+            expect(readConfig().containers).toBeUndefined();
+        });
+
+        it("respects an explicit observability opt-out, with a warning", () => {
+            expect.assertions(2);
+
+            writeFileSync(
+                join(root, "wrangler.jsonc"),
+                `{
+    "name": "cirrus-app",
+    "compatibility_date": "2026-04-07",
+    "observability": { "enabled": false },
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+}
+`,
+                "utf8",
+            );
+
+            const result = reconcileWranglerBindings(root, baseInferred({ containers: [TRANSCODER] }));
+
+            expect(readConfig().observability).toEqual({ enabled: false });
+            expect(result.warnings.join(" ")).toContain("observability is explicitly disabled");
+        });
+
+        it("writes a registry image without a build context", () => {
+            expect.assertions(1);
+
+            const registryContainer = { ...TRANSCODER, image: { kind: "registry" as const, reference: "docker.io/acme/transcoder:1.4" } };
+
+            reconcileWranglerBindings(root, baseInferred({ containers: [registryContainer] }));
+
+            expect(readConfig().containers).toEqual([
+                { class_name: "TranscoderContainer", image: "docker.io/acme/transcoder:1.4", instance_type: "standard-1", max_instances: 5 },
+            ]);
+        });
+
+        it("writes a custom instance type with wrangler field names", () => {
+            expect.assertions(1);
+
+            const customContainer = { ...TRANSCODER, instanceType: { memoryMib: 4096, vcpu: 1 } };
+
+            reconcileWranglerBindings(root, baseInferred({ containers: [customContainer] }));
+
+            expect(readConfig().containers[0].instance_type).toEqual({ memory_mib: 4096, vcpu: 1 });
+        });
     });
 });

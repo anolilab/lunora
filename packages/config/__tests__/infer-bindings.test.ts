@@ -202,4 +202,69 @@ describe("inferCirrusBindings", () => {
 
         expect(result.usesAi).toBe(false);
     });
+
+    const CONTAINERS_TS = `import { defineContainer } from "@cirrus/container";
+
+export const transcoder = defineContainer({ image: "./containers/transcoder", maxInstances: 5 });
+`;
+
+    it("infers a declared container as exported via the star re-export", async () => {
+        expect.assertions(3);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("cirrus/containers.ts", CONTAINERS_TS);
+        write(
+            "src/server/index.ts",
+            `${ENTRY_SHARD_ONLY}
+export * from "../../cirrus/_generated/containers.js";
+`,
+        );
+
+        const result = await inferCirrusBindings({ projectRoot: root });
+
+        expect(result.containers).toHaveLength(1);
+        expect(result.containers[0]).toMatchObject({ bindingName: "CONTAINER_TRANSCODER", className: "TranscoderContainer", exported: true });
+        expect(result.signals.join(" ")).toContain('container "transcoder" declared and exported');
+    });
+
+    it("infers a declared container as exported via a named re-export", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("cirrus/containers.ts", CONTAINERS_TS);
+        write(
+            "src/server/index.ts",
+            `${ENTRY_SHARD_ONLY}
+export { TranscoderContainer } from "../../cirrus/_generated/containers.js";
+`,
+        );
+
+        const result = await inferCirrusBindings({ projectRoot: root });
+
+        expect(result.containers[0]).toMatchObject({ exported: true });
+    });
+
+    it("flags a declared container the entry does not export", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("cirrus/containers.ts", CONTAINERS_TS);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+
+        const result = await inferCirrusBindings({ projectRoot: root });
+
+        expect(result.containers[0]).toMatchObject({ exported: false });
+        expect(result.signals.join(" ")).toContain("not exported by the worker entry");
+    });
+
+    it("reports no containers for a project without cirrus/containers.ts", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+
+        const result = await inferCirrusBindings({ projectRoot: root });
+
+        expect(result.containers).toEqual([]);
+    });
 });

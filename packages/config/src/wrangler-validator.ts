@@ -11,6 +11,10 @@
  * the project's schema, and returns the existing
  * `{ problems, wranglerPath }` shape kept for backward compatibility.
  */
+import { existsSync } from "node:fs";
+import { dirname } from "node:path";
+
+import join from "./path";
 import type { SchemaInfo } from "./schema-info";
 import { discoverSchemaInfo } from "./schema-info";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
@@ -39,11 +43,24 @@ interface TailConsumer {
     service?: string;
 }
 
+/** A wrangler `containers[]` entry (parsed from untrusted JSONC). */
+interface WranglerContainerEntry {
+    class_name?: string;
+    image?: string;
+    instance_type?: string | { disk_mb?: number; memory_mib?: number; vcpu?: number };
+    max_instances?: number;
+}
+
 interface WranglerConfig {
     compatibility_date?: string;
     compatibility_flags?: ReadonlyArray<string>;
+    // Parsed from untrusted JSONC, so individual entries may be `null` or
+    // otherwise malformed; `validateContainers` guards against that at runtime.
+    containers?: ReadonlyArray<WranglerContainerEntry | null | undefined>;
     d1_databases?: ReadonlyArray<{ binding?: string }>;
     durable_objects?: { bindings?: ReadonlyArray<WranglerDurableObjectBinding> };
+    migrations?: ReadonlyArray<{ new_classes?: ReadonlyArray<string>; new_sqlite_classes?: ReadonlyArray<string> } | null | undefined>;
+    observability?: { enabled?: boolean };
     r2_buckets?: ReadonlyArray<{ binding?: string }>;
     // Parsed from untrusted JSONC, so individual entries may be `null` or
     // otherwise malformed; the validators below guard against that at runtime.
@@ -74,6 +91,129 @@ const validateVectorizeBindings = (wrangler: WranglerConfig, vectorIndexNames: R
         if (!declaredIndexNames.has(indexName)) {
             errors.push(`schema declares vector index "${indexName}"; wrangler "vectorize" must include a binding with index_name "${indexName}"`);
         }
+    }
+};
+
+/** Named instance types Cloudflare accepts (plus the legacy `dev`/`standard` aliases). */
+const NAMED_INSTANCE_TYPES = new Set(["basic", "dev", "lite", "standard", "standard-1", "standard-2", "standard-3", "standard-4"]);
+
+/** Documented bounds for custom instance types. */
+const CUSTOM_INSTANCE_LIMITS = { disk_mb: 20_000, memory_mib: 12_288, vcpu: 4 } as const;
+
+/** Validate one entry's `instance_type` (named or custom object). */
+const validateInstanceType = (entry: WranglerContainerEntry, label: string, errors: string[]): void => {
+    const instanceType = entry.instance_type;
+
+    if (instanceType === undefined) {
+        return;
+    }
+
+    if (typeof instanceType === "string") {
+        if (!NAMED_INSTANCE_TYPES.has(instanceType)) {
+            errors.push(
+                `${label} has unknown instance_type "${instanceType}" — expected lite, basic, standard-1..4, or a custom { vcpu, memory_mib, disk_mb } object`,
+            );
+        }
+
+        return;
+    }
+
+    for (const [field, limit] of Object.entries(CUSTOM_INSTANCE_LIMITS) as ReadonlyArray<[keyof typeof CUSTOM_INSTANCE_LIMITS, number]>) {
+        const value = instanceType[field];
+
+        if (value !== undefined && (typeof value !== "number" || value <= 0 || value > limit)) {
+            errors.push(`${label} custom instance_type ${field} must be a positive number ≤ ${String(limit)} (got ${String(value)})`);
+        }
+    }
+};
+
+/** Shared lookups + sinks for one `containers[]` entry validation pass. */
+interface ContainerEntryChecks {
+    boundClasses: ReadonlySet<string | undefined>;
+    errors: string[];
+    nonSqliteClasses: ReadonlySet<string>;
+    sqliteClasses: ReadonlySet<string>;
+    warnings: string[];
+}
+
+/**
+ * Validate one `containers[]` entry: a `class_name` + `image`, a matching
+ * `durable_objects` binding, and the class registered in a
+ * `new_sqlite_classes` migration (containers require SQLite-backed DOs — a
+ * `new_classes` registration deploys, then fails at runtime). Extracted from
+ * {@link validateContainers} to keep its cognitive complexity bounded.
+ */
+const validateContainerEntry = (entry: WranglerContainerEntry | null | undefined, label: string, checks: ContainerEntryChecks): void => {
+    const { boundClasses, errors, nonSqliteClasses, sqliteClasses, warnings } = checks;
+
+    if (!entry || typeof entry !== "object" || typeof entry.class_name !== "string" || entry.class_name.length === 0) {
+        errors.push(`${label} must have a non-empty "class_name" naming its container-enabled Durable Object class`);
+
+        return;
+    }
+
+    if (typeof entry.image !== "string" || entry.image.length === 0) {
+        errors.push(`${label} ("${entry.class_name}") must have an "image" — a Dockerfile path or a registry reference`);
+    }
+
+    if (!boundClasses.has(entry.class_name)) {
+        errors.push(
+            `${label} class "${entry.class_name}" has no matching durable_objects binding — run \`cirrus dev\` to auto-reconcile wrangler.jsonc, or add { "name": "...", "class_name": "${entry.class_name}" }`,
+        );
+    }
+
+    if (!sqliteClasses.has(entry.class_name)) {
+        errors.push(
+            nonSqliteClasses.has(entry.class_name)
+                ? `${label} class "${entry.class_name}" is registered via "new_classes" but containers require SQLite-backed DOs — move it to "new_sqlite_classes"`
+                : `${label} class "${entry.class_name}" is missing from migrations — add a migration entry with "new_sqlite_classes": ["${entry.class_name}"]`,
+        );
+    }
+
+    validateInstanceType(entry, `${label} ("${entry.class_name}")`, errors);
+
+    if (entry.max_instances === undefined) {
+        warnings.push(`${label} ("${entry.class_name}") declares no max_instances — set a cap so a traffic spike can't fan out unbounded container spend`);
+    }
+};
+
+/**
+ * Every `containers[]` entry must be a container-enabled Durable Object the
+ * worker actually wires up (see {@link validateContainerEntry}). Also nudges
+ * when observability is off — container logs are invisible without it.
+ */
+const validateContainers = (wrangler: WranglerConfig, errors: string[], warnings: string[]): void => {
+    if (wrangler.containers === undefined) {
+        return;
+    }
+
+    if (!Array.isArray(wrangler.containers)) {
+        errors.push("containers must be an array of { class_name, image, ... } entries");
+
+        return;
+    }
+
+    // `Array.isArray` widens the readonly element type to `any`; restore it so
+    // member access below stays type-safe (mirrors `validateTailConsumers`).
+    const entries = wrangler.containers as ReadonlyArray<WranglerContainerEntry | null | undefined>;
+
+    if (entries.length === 0) {
+        return;
+    }
+
+    const boundClasses = new Set((wrangler.durable_objects?.bindings ?? []).map((binding) => binding.class_name));
+    const migrations = wrangler.migrations ?? [];
+    const sqliteClasses = new Set(migrations.flatMap((migration) => [...(migration?.new_sqlite_classes ?? [])]));
+    const nonSqliteClasses = new Set(migrations.flatMap((migration) => [...(migration?.new_classes ?? [])]));
+
+    for (const [index, entry] of entries.entries()) {
+        validateContainerEntry(entry, `containers[${String(index)}]`, { boundClasses, errors, nonSqliteClasses, sqliteClasses, warnings });
+    }
+
+    if (wrangler.observability?.enabled !== true) {
+        warnings.push(
+            'containers are configured but observability is not enabled — container logs will not be captured (add { "observability": { "enabled": true } })',
+        );
     }
 };
 
@@ -180,6 +320,7 @@ const validateWranglerConfig = (wrangler: WranglerConfig | undefined, schema?: S
 
     validateVectorizeBindings(wrangler, schema?.vectorIndexNames ?? [], errors);
     validateTailConsumers(wrangler, errors);
+    validateContainers(wrangler, errors, warnings);
 
     return { errors, valid: errors.length === 0, warnings };
 };
@@ -243,6 +384,27 @@ const validateWranglerProject = (options: WranglerProjectValidationOptions): Wra
         report.warnings.push(`schema parse failed in ${schemaDirectory}/schema.ts: ${schemaError}`);
     }
 
+    // FS-aware: a local-path container image must point at an existing
+    // Dockerfile (wrangler resolves it relative to the config file). Registry
+    // references are left to wrangler — pure shape checks already ran above.
+    const configDirectory = dirname(wranglerPath);
+
+    for (const entry of wrangler.containers ?? []) {
+        const image = entry?.image;
+
+        if (typeof image !== "string" || !(image.startsWith("./") || image.startsWith("../") || image.startsWith("/") || image.includes("Dockerfile"))) {
+            continue;
+        }
+
+        if (!existsSync(image.startsWith("/") ? image : join(configDirectory, image))) {
+            report.errors.push(
+                `containers image "${image}" does not exist (resolved relative to ${wranglerPath}); create the Dockerfile or point image at a registry reference`,
+            );
+        }
+    }
+
+    report.valid = report.errors.length === 0;
+
     return {
         problems: report.errors,
         report,
@@ -250,5 +412,12 @@ const validateWranglerProject = (options: WranglerProjectValidationOptions): Wra
     };
 };
 
-export type { TailConsumer, WranglerConfig, WranglerProjectValidationOptions, WranglerProjectValidationResult, WranglerValidationReport };
+export type {
+    TailConsumer,
+    WranglerConfig,
+    WranglerContainerEntry,
+    WranglerProjectValidationOptions,
+    WranglerProjectValidationResult,
+    WranglerValidationReport,
+};
 export { REQUIRED_COMPATIBILITY_DATE, REQUIRED_FLAG, validateWrangler, validateWranglerConfig, validateWranglerProject, withTailConsumer };
