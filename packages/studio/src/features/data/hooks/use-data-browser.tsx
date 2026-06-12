@@ -34,6 +34,14 @@ const toOrderBy = (sorting: SortingState): undefined | { column: string; directi
  */
 const MAX_BULK_DELETE_BATCHES = 200;
 
+/**
+ * How many rows the FK hover preview fetches to find an exact primary-key match.
+ * The `search` arg is a substring match across all columns, so a handful of
+ * coincidental hits may precede the real row; this window is large enough to
+ * contain it while staying a single cheap read.
+ */
+const PREVIEW_CANDIDATES = 20;
+
 const LIST_TABLES = adminRef(ADMIN_FUNCTIONS.listTables);
 const READ_TABLE_PAGE = adminRef(ADMIN_FUNCTIONS.readTablePage);
 const WRITE_ROW = adminRef(ADMIN_FUNCTIONS.writeRow);
@@ -377,20 +385,22 @@ const useDataBrowser = ({
         [fetchPage, onSelectTable, shardKey],
     );
 
-    // One-shot read of the row a foreign-key cell points at, for the hover preview —
-    // searches the target table for the referenced id and returns the first match
-    // (or null) without disturbing the current view. Best-effort: a cross-tier
-    // (`.global()`) target or a failed read resolves to null and the card says so.
+    // One-shot read of the row a foreign-key cell points at, for the hover preview,
+    // without disturbing the current view. `search` is a substring match across all
+    // columns (not an exact PK lookup), so it can surface rows that merely *contain*
+    // the id in some other column — fetch a small candidate window and return the row
+    // whose primary key actually equals the id, or null when none does. Best-effort:
+    // a cross-tier (`.global()`) target or a failed read also resolves to null.
     const previewRef = useCallback(
         async (targetTable: string, id: string): Promise<Record<string, unknown> | null> => {
             try {
                 const result = (await client.query(
                     READ_TABLE_PAGE,
-                    { filters: [], limit: 1, offset: 0, search: id, table: targetTable },
+                    { filters: [], limit: PREVIEW_CANDIDATES, offset: 0, search: id, table: targetTable },
                     callOptions(shardKey),
                 )) as TablePage;
 
-                return result.rows[0] ?? null;
+                return result.rows.find((row) => rowId(row) === id) ?? null;
             } catch {
                 return null;
             }

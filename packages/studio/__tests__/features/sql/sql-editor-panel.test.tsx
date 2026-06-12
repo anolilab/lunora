@@ -422,4 +422,30 @@ describe("sqlEditorPanel", () => {
 
         expect(within(screen.getByTestId("sql-tab-strip")).getAllByTestId(/^sql-tab-select-/u)).toHaveLength(1);
     });
+
+    it("confirms a bulk close that would discard an unsaved tab", () => {
+        expect.assertions(3);
+
+        render(renderPanel(schemaMock()));
+
+        // Add a second tab and type an unlinked draft into it (unsaved work).
+        fireEvent.click(screen.getByTestId("sql-tab-add"));
+        fireEvent.change(screen.getByTestId("sql-input"), { target: { value: "SELECT unsaved" } });
+
+        const selects = within(screen.getByTestId("sql-tab-strip")).getAllByTestId(/^sql-tab-select-/u);
+        const firstId = (selects[0] as HTMLElement).dataset.testid?.replace("sql-tab-select-", "") ?? "";
+
+        // Right-click the first tab and "close others" — that would drop the dirty second tab,
+        // so it asks to confirm instead of closing.
+        fireEvent.contextMenu(screen.getByTestId(`sql-tab-${firstId}`));
+        fireEvent.click(screen.getByTestId("sql-tab-menu-close-others"));
+
+        expect(screen.getByTestId("sql-tab-menu-confirm")).toBeDefined();
+        expect(within(screen.getByTestId("sql-tab-strip")).getAllByTestId(/^sql-tab-select-/u)).toHaveLength(2);
+
+        // Discarding goes through with the close.
+        fireEvent.click(screen.getByTestId("sql-tab-menu-confirm-discard"));
+
+        expect(within(screen.getByTestId("sql-tab-strip")).getAllByTestId(/^sql-tab-select-/u)).toHaveLength(1);
+    });
 });

@@ -7,7 +7,7 @@ import { ShardInput } from "../../components/shard-input";
 import { Alert } from "../../components/ui/alert";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useT } from "../../i18n/i18n-context";
-import type { SqlConsoleResult, TableInfo, TablePage } from "../../lib/admin";
+import type { SqlConsoleResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { newId, usePersistedList } from "../../lib/browser-storage";
 import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/internal";
@@ -16,32 +16,22 @@ import { cn } from "../../lib/utils";
 import { CellValue } from "../data/data-grid";
 import { ExportMenu } from "../data/grid-features";
 import formatSql from "./format-sql";
-import type { SqlSchema } from "./sql-autocomplete";
 import { AutocompletePopover, useSqlAutocomplete } from "./sql-autocomplete-ui";
+import type { HistoryEntry, SavedQuery } from "./sql-query-sidebar";
+import { SqlQuerySidebar, TEMPLATES } from "./sql-query-sidebar";
+import { referencedTables, useSqlSchema } from "./sql-schema";
 import type { SqlTab } from "./sql-tabs";
-import { addTab, closeAllTabs, closeOtherTabs, closeTab, closeTabsToRight, makeTab, MAX_TABS, usePersistedTabs } from "./sql-tabs";
+import { addTab, closeAllTabs, closeOtherTabs, closeTab, closeTabsToRight, isDirty, makeTab, MAX_TABS, tabsClosedBy, usePersistedTabs } from "./sql-tabs";
+
+/** Which bulk close the tab context menu is offering / confirming. */
+type BulkClose = "all" | "others" | "right";
 
 interface SqlEditorPanelProps {
     /** Shard key the query runs against on first load. Defaults to the root shard. */
     readonly initialShardKey?: string;
 }
 
-/** One browser-persisted query in the editor's PRIVATE list. */
-interface SavedQuery {
-    readonly id: string;
-    readonly name: string;
-    readonly sql: string;
-}
-
-/** Canned reference queries that load into the editor as a new draft. */
-interface QueryTemplate {
-    readonly label: string;
-    readonly sql: string;
-}
-
 const RUN_SQL = adminRef(ADMIN_FUNCTIONS.runSql);
-const LIST_TABLES = adminRef(ADMIN_FUNCTIONS.listTables);
-const READ_TABLE_PAGE = adminRef(ADMIN_FUNCTIONS.readTablePage);
 const STORAGE_KEY = "cirrus-studio-sql-queries";
 const HISTORY_KEY = "cirrus-studio-sql-history";
 /** How many recent distinct queries the history keeps. */
@@ -64,92 +54,6 @@ interface TabOutput {
 
 /** A tab's output before it has run anything. */
 const DEFAULT_TAB_OUTPUT: TabOutput = { error: null, pane: "results", result: null };
-
-const TEMPLATES: ReadonlyArray<QueryTemplate> = [
-    { label: "List tables", sql: "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name;" },
-    { label: "Table row count", sql: "SELECT COUNT(*) AS rows FROM messages;" },
-    { label: "Recent rows", sql: "SELECT id, _creationTime, __doc__ FROM messages ORDER BY _creationTime DESC LIMIT 50;" },
-    { label: "Index list", sql: "SELECT name, tbl_name FROM sqlite_master WHERE type = 'index' ORDER BY tbl_name;" },
-];
-
-/** One run recorded in the browser-local query history. */
-interface HistoryEntry {
-    /** Epoch milliseconds the query was run. */
-    readonly at: number;
-    /** The executed SQL string. */
-    readonly sql: string;
-}
-
-interface QueryRowProps {
-    readonly active: boolean;
-    readonly onDelete: (id: string) => void;
-    readonly onSelect: (id: string) => void;
-    readonly query: SavedQuery;
-}
-
-/** One saved-query row in the PRIVATE list: select on click, delete on the trailing button. */
-const QueryRow = ({ active, onDelete, onSelect, query }: QueryRowProps): ReactElement => {
-    const t = useT();
-    const onClick = useCallback((): void => {
-        onSelect(query.id);
-    }, [onSelect, query.id]);
-    const onDeleteClick = useCallback(
-        (event: React.MouseEvent<HTMLButtonElement>): void => {
-            event.stopPropagation();
-            onDelete(query.id);
-        },
-        [onDelete, query.id],
-    );
-
-    return (
-        <li className="group/q flex items-center">
-            <button
-                aria-pressed={active}
-                className={cn(
-                    "flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-start text-[13px] outline-none transition-colors hover:bg-sidebar-accent focus-visible:bg-sidebar-accent",
-                    active ? "bg-sidebar-accent font-medium text-foreground" : "text-muted-foreground",
-                )}
-                data-testid={`sql-query-${query.id}`}
-                onClick={onClick}
-                type="button"
-            >
-                <svg
-                    aria-hidden="true"
-                    className="size-3.5 shrink-0 opacity-70"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={1.6}
-                    viewBox="0 0 24 24"
-                >
-                    <path d="M4 6h16M4 12h10M4 18h7" />
-                </svg>
-                <span className="truncate">{query.name}</span>
-            </button>
-            <button
-                aria-label={t("Delete query")}
-                className="me-1 hidden size-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-destructive/10 hover:text-destructive group-hover/q:flex"
-                onClick={onDeleteClick}
-                title={t("Delete query")}
-                type="button"
-            >
-                <svg
-                    aria-hidden="true"
-                    className="size-3.5"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={1.6}
-                    viewBox="0 0 24 24"
-                >
-                    <path d="M5 7h14M9 7V5h6v2m-1 0v12H10V7M7 7v13h10V7" />
-                </svg>
-            </button>
-        </li>
-    );
-};
 
 interface TabButtonProps {
     readonly active: boolean;
@@ -180,10 +84,8 @@ const TabButton = ({ active, canClose, onClose, onMenu, onRename, onSelect, tab 
         [onMenu, tab.id],
     );
 
-    // A tab holds unsaved work only when it's an unlinked scratch draft with
-    // text — a linked tab auto-saves to its query, and an empty tab loses
-    // nothing — so only those prompt before closing.
-    const dirty = tab.activeId === null && tab.sql.trim() !== "";
+    // Only an unlinked scratch draft with text holds unsaved work worth confirming.
+    const dirty = isDirty(tab);
 
     // Callback ref: focus + select the title the moment the inline editor mounts
     // (replaces `autoFocus`, and fires once on open rather than every render).
@@ -388,107 +290,6 @@ const SqlResultTable = ({ result }: { readonly result: SqlConsoleResult }): Reac
 };
 
 /**
- * Load the shard's table names (and, lazily, each table's columns) to feed the
- * editor's autocomplete. Tables come from one `listTables`; columns are probed
- * per table with a one-row `readTablePage` (the same RPC the schema viewer
- * uses) the first time the operator types a `tbl.` qualifier or otherwise needs
- * them — so an unexplored schema still completes table names without N probes
- * up front. All best-effort: a failed probe simply leaves that table's columns
- * absent. Re-loads when `shardKey` changes; a fast shard switch discards a stale
- * in-flight list via the cancel token.
- */
-const useSqlSchema = (shardKey: string): { probe: (table: string) => void; schema: SqlSchema } => {
-    const client = useCirrus();
-
-    const [tables, setTables] = useState<string[]>([]);
-    const [columns, setColumns] = useState<Record<string, string[]>>({});
-    // Tables a probe has already been kicked off for, so `probe` is idempotent
-    // without nesting the fetch inside a setState updater. Cleared on shard switch.
-    const probed = useRef<Set<string>>(new Set());
-
-    useEffect(() => {
-        const token = { cancelled: false };
-
-        const load = async (): Promise<void> => {
-            try {
-                const result = (await client.query(LIST_TABLES, {}, callOptions(shardKey))) as TableInfo[];
-
-                if (!token.cancelled) {
-                    setTables(result.map((table) => table.name));
-                    setColumns({});
-                    probed.current = new Set();
-                }
-            } catch {
-                if (!token.cancelled) {
-                    setTables([]);
-                    setColumns({});
-                    probed.current = new Set();
-                }
-            }
-        };
-
-        fireAndForget(load());
-
-        return () => {
-            token.cancelled = true;
-        };
-    }, [client, shardKey]);
-
-    // Fetch one table's columns once, on demand; a failure leaves it un-probed so
-    // a later call can retry. Keyed by table only — the effect above resets the
-    // cache on a shard switch, so a stale shard's columns can't bleed through.
-    const probe = useCallback(
-        (table: string): void => {
-            if (probed.current.has(table)) {
-                return;
-            }
-
-            probed.current.add(table);
-
-            const fetchColumns = async (): Promise<void> => {
-                try {
-                    const page = (await client.query(READ_TABLE_PAGE, { limit: 1, offset: 0, table }, callOptions(shardKey))) as TablePage;
-
-                    setColumns((previous) => {
-                        return { ...previous, [table]: page.columns };
-                    });
-                } catch {
-                    // Best-effort: drop the in-flight marker so a later probe can retry.
-                    probed.current.delete(table);
-                }
-            };
-
-            fireAndForget(fetchColumns());
-        },
-        [client, shardKey],
-    );
-
-    const schema = useMemo<SqlSchema>(() => {
-        return { columns, tables };
-    }, [columns, tables]);
-
-    return { probe, schema };
-};
-
-/** Table names referenced in `sql` after `FROM`/`JOIN`/`UPDATE`/`INTO`, or as a `tbl.` qualifier. */
-const TABLE_REF = /\b(?:from|join|update|into)\s+([a-z_][\w$]*)|\b([a-z_][\w$]*)\s*\./gi;
-
-/** Mentioned table names in a draft, so the schema hook can pre-probe their columns for column completion. */
-const referencedTables = (sql: string): string[] => {
-    const names = new Set<string>();
-
-    TABLE_REF.lastIndex = 0;
-    let match: null | RegExpExecArray = TABLE_REF.exec(sql);
-
-    while (match !== null) {
-        names.add((match[1] ?? match[2]) as string);
-        match = TABLE_REF.exec(sql);
-    }
-
-    return [...names];
-};
-
-/**
  * A full-height, Supabase-style SQL editor: a left query sidebar (search + new,
  * a browser-persisted PRIVATE list, and REFERENCE templates), a line-numbered
  * editor pane, and a Results / Explain pane with a Run control + shard selector.
@@ -519,6 +320,8 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     const [running, setRunning] = useState<boolean>(false);
     // The right-clicked tab's context menu: the target tab id + cursor position, or null when closed.
     const [tabMenu, setTabMenu] = useState<{ id: string; x: number; y: number } | null>(null);
+    // The bulk close awaiting a discard confirm (because it would drop unsaved tabs), or null.
+    const [pendingBulk, setPendingBulk] = useState<BulkClose | null>(null);
 
     const gutterRef = useRef<HTMLDivElement | null>(null);
     const editorRef = useRef<HTMLTextAreaElement | null>(null);
@@ -819,6 +622,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     const commitTabs = useCallback(
         (next: { activeId: string; tabs: SqlTab[] }): void => {
             setTabMenu(null);
+            setPendingBulk(null);
             setTabs(next.tabs);
             setActiveTabId(next.activeId);
 
@@ -836,47 +640,72 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         [commitTabs, tabs],
     );
 
-    const closeOthers = useCallback(
-        (id: string): void => {
-            commitTabs(closeOtherTabs(tabs, id));
-        },
-        [commitTabs, tabs],
-    );
-
-    const closeToRight = useCallback(
-        (id: string): void => {
-            commitTabs(closeTabsToRight(tabs, id, activeTabId));
+    // Apply a bulk close (the dirty-tab guard is handled by the caller).
+    const applyBulk = useCallback(
+        (op: BulkClose, id: string): void => {
+            if (op === "others") {
+                commitTabs(closeOtherTabs(tabs, id));
+            } else if (op === "right") {
+                commitTabs(closeTabsToRight(tabs, id, activeTabId));
+            } else {
+                commitTabs(closeAllTabs(makeTab));
+            }
         },
         [activeTabId, commitTabs, tabs],
     );
 
-    const closeAll = useCallback((): void => {
-        commitTabs(closeAllTabs(makeTab));
-    }, [commitTabs]);
+    // Run a bulk close, but route it through an inline discard confirm first when
+    // it would drop a tab with unsaved work (matching the single-close guard).
+    const requestBulk = useCallback(
+        (op: BulkClose): void => {
+            if (tabMenu === null) {
+                return;
+            }
+
+            if (tabsClosedBy(op, tabs, tabMenu.id).some((each) => isDirty(each))) {
+                setPendingBulk(op);
+            } else {
+                applyBulk(op, tabMenu.id);
+            }
+        },
+        [applyBulk, tabMenu, tabs],
+    );
 
     // Open the tab context menu at the cursor for the right-clicked tab.
     const openTabMenu = useCallback((id: string, event: React.MouseEvent): void => {
         event.preventDefault();
+        setPendingBulk(null);
         setTabMenu({ id, x: event.clientX, y: event.clientY });
     }, []);
 
     const closeTabMenu = useCallback((): void => {
         setTabMenu(null);
+        setPendingBulk(null);
     }, []);
     const onBackdropContextMenu = useCallback((event: React.MouseEvent): void => {
         event.preventDefault();
         setTabMenu(null);
+        setPendingBulk(null);
     }, []);
     const onCloseOthers = useCallback((): void => {
-        if (tabMenu !== null) {
-            closeOthers(tabMenu.id);
-        }
-    }, [closeOthers, tabMenu]);
+        requestBulk("others");
+    }, [requestBulk]);
     const onCloseToRight = useCallback((): void => {
-        if (tabMenu !== null) {
-            closeToRight(tabMenu.id);
+        requestBulk("right");
+    }, [requestBulk]);
+    const onCloseAll = useCallback((): void => {
+        requestBulk("all");
+    }, [requestBulk]);
+    const confirmBulk = useCallback((): void => {
+        if (tabMenu !== null && pendingBulk !== null) {
+            applyBulk(pendingBulk, tabMenu.id);
         }
-    }, [closeToRight, tabMenu]);
+
+        setPendingBulk(null);
+    }, [applyBulk, pendingBulk, tabMenu]);
+    const cancelBulk = useCallback((): void => {
+        setPendingBulk(null);
+    }, []);
     const tabMenuStyle = useMemo(() => (tabMenu === null ? undefined : { left: tabMenu.x, top: tabMenu.y }), [tabMenu]);
 
     const selectTab = useCallback(
@@ -907,12 +736,6 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         setActivePane("chart");
     }, [setActivePane]);
 
-    const filtered = useMemo<SavedQuery[]>(() => {
-        const needle = search.trim().toLowerCase();
-
-        return needle === "" ? queries : queries.filter((query) => query.name.toLowerCase().includes(needle));
-    }, [queries, search]);
-
     const lineCount = useMemo<number>(() => draft.split("\n").length, [draft]);
     const onSearchChange = useCallback((event: React.ChangeEvent<HTMLInputElement>): void => {
         setSearch(event.target.value);
@@ -923,131 +746,20 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
     return (
         <div className="flex h-full min-w-0" data-testid="cirrus-sql-editor">
-            {/* Query sidebar. */}
-            <aside className="flex h-full w-64 shrink-0 flex-col border-e border-border bg-sidebar">
-                <div className="flex shrink-0 items-center gap-2 border-b border-border p-2">
-                    <input
-                        className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-xs outline-none focus-visible:border-ring"
-                        data-testid="sql-search"
-                        onChange={onSearchChange}
-                        placeholder={t("Search queries…")}
-                        type="text"
-                        value={search}
-                    />
-                    <button
-                        aria-label={t("New query")}
-                        className="flex size-8 shrink-0 items-center justify-center rounded-md border border-border text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent"
-                        data-testid="sql-new"
-                        onClick={newQuery}
-                        title={t("New query")}
-                        type="button"
-                    >
-                        <svg
-                            aria-hidden="true"
-                            className="size-4"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={1.7}
-                            viewBox="0 0 24 24"
-                        >
-                            <path d="M12 5v14M5 12h14" />
-                        </svg>
-                    </button>
-                </div>
-
-                <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-2">
-                    <div>
-                        <p className="px-1 pb-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">{t("Private")}</p>
-                        {filtered.length === 0 ? (
-                            <p className="px-1 py-2 text-xs text-muted-foreground" data-testid="sql-private-empty">
-                                {t("No saved queries yet — they save to this browser as you type.")}
-                            </p>
-                        ) : (
-                            <ul className="flex flex-col gap-px" data-testid="sql-private" ref={privateListRef}>
-                                {filtered.map((query) => (
-                                    <QueryRow active={activeId === query.id} key={query.id} onDelete={deleteQuery} onSelect={selectQuery} query={query} />
-                                ))}
-                            </ul>
-                        )}
-                    </div>
-
-                    <div>
-                        <p className="px-1 pb-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">{t("Reference")}</p>
-                        <ul className="flex flex-col gap-px">
-                            {TEMPLATES.map((template) => (
-                                <li key={template.label}>
-                                    <button
-                                        className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-[13px] text-muted-foreground outline-none transition-colors hover:bg-sidebar-accent hover:text-foreground focus-visible:bg-sidebar-accent"
-                                        data-sql={template.sql}
-                                        onClick={loadTemplate}
-                                        type="button"
-                                    >
-                                        <svg
-                                            aria-hidden="true"
-                                            className="size-3.5 shrink-0 opacity-70"
-                                            fill="none"
-                                            stroke="currentColor"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                            strokeWidth={1.6}
-                                            viewBox="0 0 24 24"
-                                        >
-                                            <path d="M7 4h7l4 4v12H7zM14 4v4h4" />
-                                        </svg>
-                                        {template.label}
-                                    </button>
-                                </li>
-                            ))}
-                        </ul>
-                    </div>
-
-                    {history.length > 0 && (
-                        <div>
-                            <div className="flex items-center justify-between px-1 pb-1">
-                                <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">{t("History")}</p>
-                                <button
-                                    className="rounded px-1 text-[11px] text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:text-foreground"
-                                    data-testid="sql-history-clear"
-                                    onClick={clearHistory}
-                                    type="button"
-                                >
-                                    {t("Clear history")}
-                                </button>
-                            </div>
-                            <ul className="flex flex-col gap-px" data-testid="sql-history">
-                                {history.map((entry) => (
-                                    <li key={`${entry.at.toString()}:${entry.sql}`}>
-                                        <button
-                                            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-[13px] text-muted-foreground outline-none transition-colors hover:bg-sidebar-accent hover:text-foreground focus-visible:bg-sidebar-accent"
-                                            data-sql={entry.sql}
-                                            data-testid="sql-history-item"
-                                            onClick={loadFromHistory}
-                                            title={entry.sql}
-                                            type="button"
-                                        >
-                                            <svg
-                                                aria-hidden="true"
-                                                className="size-3.5 shrink-0 opacity-70"
-                                                fill="none"
-                                                stroke="currentColor"
-                                                strokeLinecap="round"
-                                                strokeLinejoin="round"
-                                                strokeWidth={1.6}
-                                                viewBox="0 0 24 24"
-                                            >
-                                                <path d="M12 8v4l3 2M12 21a9 9 0 1 1 0-18 9 9 0 0 1 0 18Z" />
-                                            </svg>
-                                            <span className="truncate font-mono">{entry.sql}</span>
-                                        </button>
-                                    </li>
-                                ))}
-                            </ul>
-                        </div>
-                    )}
-                </div>
-            </aside>
+            <SqlQuerySidebar
+                activeId={activeId}
+                history={history}
+                listRef={privateListRef}
+                onClearHistory={clearHistory}
+                onDelete={deleteQuery}
+                onLoadHistory={loadFromHistory}
+                onLoadTemplate={loadTemplate}
+                onNew={newQuery}
+                onSearchChange={onSearchChange}
+                onSelect={selectQuery}
+                queries={queries}
+                search={search}
+            />
 
             {/* Editor + results. */}
             <div className="flex min-w-0 flex-1 flex-col">
@@ -1105,35 +817,62 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                             role="menu"
                             style={tabMenuStyle}
                         >
-                            <button
-                                className="flex w-full items-center px-3 py-1.5 text-start text-xs outline-none hover:bg-accent focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-40"
-                                data-testid="sql-tab-menu-close-others"
-                                disabled={tabs.length <= 1}
-                                onClick={onCloseOthers}
-                                role="menuitem"
-                                type="button"
-                            >
-                                {t("Close other tabs")}
-                            </button>
-                            <button
-                                className="flex w-full items-center px-3 py-1.5 text-start text-xs outline-none hover:bg-accent focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-40"
-                                data-testid="sql-tab-menu-close-right"
-                                disabled={tabs.findIndex((each) => each.id === tabMenu.id) >= tabs.length - 1}
-                                onClick={onCloseToRight}
-                                role="menuitem"
-                                type="button"
-                            >
-                                {t("Close tabs to the right")}
-                            </button>
-                            <button
-                                className="flex w-full items-center px-3 py-1.5 text-start text-xs outline-none hover:bg-accent focus-visible:bg-accent"
-                                data-testid="sql-tab-menu-close-all"
-                                onClick={closeAll}
-                                role="menuitem"
-                                type="button"
-                            >
-                                {t("Close all tabs")}
-                            </button>
+                            {pendingBulk === null ? (
+                                <>
+                                    <button
+                                        className="flex w-full items-center px-3 py-1.5 text-start text-xs outline-none hover:bg-accent focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-40"
+                                        data-testid="sql-tab-menu-close-others"
+                                        disabled={tabs.length <= 1}
+                                        onClick={onCloseOthers}
+                                        role="menuitem"
+                                        type="button"
+                                    >
+                                        {t("Close other tabs")}
+                                    </button>
+                                    <button
+                                        className="flex w-full items-center px-3 py-1.5 text-start text-xs outline-none hover:bg-accent focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-40"
+                                        data-testid="sql-tab-menu-close-right"
+                                        disabled={tabs.findIndex((each) => each.id === tabMenu.id) >= tabs.length - 1}
+                                        onClick={onCloseToRight}
+                                        role="menuitem"
+                                        type="button"
+                                    >
+                                        {t("Close tabs to the right")}
+                                    </button>
+                                    <button
+                                        className="flex w-full items-center px-3 py-1.5 text-start text-xs outline-none hover:bg-accent focus-visible:bg-accent"
+                                        data-testid="sql-tab-menu-close-all"
+                                        onClick={onCloseAll}
+                                        role="menuitem"
+                                        type="button"
+                                    >
+                                        {t("Close all tabs")}
+                                    </button>
+                                </>
+                            ) : (
+                                // Discard confirm: the chosen bulk close would drop a tab with unsaved work.
+                                <div className="px-3 py-1.5" data-testid="sql-tab-menu-confirm">
+                                    <p className="pb-1.5 text-xs text-muted-foreground">{t("Discard unsaved tabs?")}</p>
+                                    <div className="flex items-center gap-1.5">
+                                        <button
+                                            className="rounded px-2 py-1 text-xs font-medium text-destructive outline-none hover:bg-destructive/10 focus-visible:bg-destructive/10"
+                                            data-testid="sql-tab-menu-confirm-discard"
+                                            onClick={confirmBulk}
+                                            type="button"
+                                        >
+                                            {t("Discard")}
+                                        </button>
+                                        <button
+                                            className="rounded px-2 py-1 text-xs text-muted-foreground outline-none hover:bg-accent focus-visible:bg-accent"
+                                            data-testid="sql-tab-menu-confirm-cancel"
+                                            onClick={cancelBulk}
+                                            type="button"
+                                        >
+                                            {t("Cancel")}
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     </>
                 )}

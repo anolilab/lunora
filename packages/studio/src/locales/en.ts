@@ -373,6 +373,7 @@ const MESSAGE_IDS = [
     "Close other tabs",
     "Close tabs to the right",
     "Close all tabs",
+    "Discard unsaved tabs?",
     "column",
     "keyword",
     // Data-grid features (export, columns, selection, cell expand).

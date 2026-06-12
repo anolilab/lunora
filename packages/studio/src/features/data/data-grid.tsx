@@ -1,25 +1,16 @@
-import type { Rect, Virtualizer } from "@tanstack/react-virtual";
-import { observeElementRect, useVirtualizer } from "@tanstack/react-virtual";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import type { CSSProperties, ReactElement, ReactNode } from "react";
 import { memo, useCallback, useMemo, useRef, useState } from "react";
 
 import { useT } from "../../i18n/i18n-context";
 import { formatCell } from "../../lib/internal";
 import { cn } from "../../lib/utils";
+import flooredRectObserver from "../../lib/virtual-rect";
 
 /** Estimated height of one sidebar table row, used to size the virtualized list. */
 const TABLE_ROW_HEIGHT = 34;
-
-/**
- * Rect observer that floors a zero-height viewport to a usable height so the
- * virtualizer mounts a bounded row set under jsdom (which reports every box as
- * 0×0). A no-op in a real browser, where the scroll container has its CSS height.
- * Same trick the logs panel uses for its virtualized table.
- */
-const observeListRect = (instance: Virtualizer<HTMLUListElement, Element>, callback: (rect: Rect) => void): (() => void) | undefined =>
-    observeElementRect(instance, (rect) => {
-        callback(rect.height > 0 ? rect : { height: 600, width: rect.width });
-    });
+/** Fallback viewport height (px) for the table-list virtualizer when layout reports 0 (jsdom). */
+const TABLE_LIST_VIEWPORT = 600;
 
 /**
  * One grid cell's value, rendered Outerbase/Supabase-style: a `null`/`undefined`
@@ -173,7 +164,8 @@ const TableListSidebar = ({ header, onReload, onSelect, prefix, reloadLabel, sel
         count: filtered.length,
         estimateSize: () => TABLE_ROW_HEIGHT,
         getScrollElement: () => scrollRef.current,
-        observeElementRect: observeListRect,
+        initialRect: { height: TABLE_LIST_VIEWPORT, width: 240 },
+        observeElementRect: (instance, callback) => flooredRectObserver(instance, callback, TABLE_LIST_VIEWPORT),
         overscan: 12,
     });
     const virtualRows = virtualizer.getVirtualItems();

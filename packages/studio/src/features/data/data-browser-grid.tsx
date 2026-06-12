@@ -10,6 +10,7 @@ import { useT } from "../../i18n/i18n-context";
 import type { TablePage } from "../../lib/admin";
 import { fireAndForget, formatCell } from "../../lib/internal";
 import { cn } from "../../lib/utils";
+import flooredRectObserver from "../../lib/virtual-rect";
 import { CellValue, GridContainer } from "./data-grid";
 import type { StagedEditsModel } from "./staged-edits";
 import { coerceCellValue } from "./staged-edits";
@@ -111,8 +112,12 @@ const rowId = (row: TableRow): null | string => {
  */
 const rowKey = (row: TableRow, index: number): string => rowId(row) ?? `row-${index.toString()}`;
 
-/** The hover preview's fetch state: the referenced row, `null` (no match / cross-tier), or in flight. */
-type PreviewState = "loading" | { row: Record<string, unknown> | null };
+/**
+ * The hover preview's fetch state: not yet opened, in flight, or resolved (the
+ * referenced row, or `null` for no-match / cross-tier). One value drives both the
+ * "have we fetched" decision (anything past `idle`) and what the card renders.
+ */
+type PreviewState = "idle" | "loading" | { row: Record<string, unknown> | null };
 
 /** Up to this many of the referenced row's fields show in the hover card before it truncates. */
 const PREVIEW_FIELD_LIMIT = 8;
@@ -122,7 +127,7 @@ const PREVIEW_FIELD_LIMIT = 8;
  * fields, fetched lazily on first hover and cached. Fixed-positioned at the cell
  * so the surrounding scroll containers can't clip it.
  */
-const RefPreviewCard = ({ anchor, state }: { anchor: { left: number; top: number }; state: PreviewState }): ReactElement => {
+const RefPreviewCard = ({ anchor, state }: { anchor: { left: number; top: number }; state: Exclude<PreviewState, "idle"> }): ReactElement => {
     const t = useT();
     const style = useMemo<CSSProperties>(() => {
         return { left: anchor.left, position: "fixed", top: anchor.top, zIndex: 50 };
@@ -183,9 +188,11 @@ const RefCell = memo(
         target: string;
     }): ReactElement => {
         const [anchor, setAnchor] = useState<{ left: number; top: number } | null>(null);
-        const [preview, setPreview] = useState<PreviewState | null>(null);
-        // Guards the lazy fetch so re-hovering reuses the cached preview.
-        const fetched = useRef<boolean>(false);
+        // `idle` doubles as "not yet fetched"; the first open kicks the lazy fetch
+        // and every later open reuses the cached result. This cell is keyed on
+        // `target:id` by its parent, so a reused instance for a different ref starts
+        // fresh at `idle` rather than showing a stale preview.
+        const [preview, setPreview] = useState<PreviewState>("idle");
 
         const onClick = useCallback((): void => {
             onNavigate(target, id);
@@ -197,14 +204,14 @@ const RefCell = memo(
 
                 setAnchor({ left: rect.left, top: rect.bottom + 4 });
 
-                if (fetched.current) {
+                // Already fetched (or fetching): just re-show the cached card.
+                if (preview !== "idle") {
                     return;
                 }
 
-                fetched.current = true;
                 setPreview("loading");
 
-                // Fetch the referenced row once; cache the result across re-hovers.
+                // Fetch the referenced row once; the result is cached across re-hovers.
                 const load = async (): Promise<void> => {
                     try {
                         setPreview({ row: await onPreview(target, id) });
@@ -215,7 +222,7 @@ const RefCell = memo(
 
                 fireAndForget(load());
             },
-            [id, onPreview, target],
+            [id, onPreview, preview, target],
         );
         const onCloseHover = useCallback((): void => {
             setAnchor(null);
@@ -235,7 +242,7 @@ const RefCell = memo(
                 >
                     {id} ↗
                 </button>
-                {anchor !== null && preview !== null && <RefPreviewCard anchor={anchor} state={preview} />}
+                {anchor !== null && preview !== "idle" && <RefPreviewCard anchor={anchor} state={preview} />}
             </>
         );
     },
@@ -379,7 +386,18 @@ const EditableCell = memo(({ cell, edit }: { cell: Cell<TableRow, unknown>; edit
     const target = edit.refs?.[column];
 
     if (target !== undefined && (typeof rawValue === "string" || typeof rawValue === "number") && String(rawValue) !== "") {
-        return <RefCell column={column} id={String(rawValue)} onNavigate={edit.onNavigateRef} onPreview={edit.onPreviewRef} target={target} />;
+        // Keyed on target:id so a reused cell instance (an idless row at the same
+        // index across pages) starts its preview state fresh rather than stale.
+        return (
+            <RefCell
+                column={column}
+                id={String(rawValue)}
+                key={`${target}:${String(rawValue)}`}
+                onNavigate={edit.onNavigateRef}
+                onPreview={edit.onPreviewRef}
+                target={target}
+            />
+        );
     }
 
     // An idless row can't be addressed for a patch, so its cells are read-only.
@@ -869,36 +887,15 @@ const useDataBrowserTable = (page: TablePage | null, sorting: SortingState, onSo
     // the DOM. This keeps the window deterministic and, crucially, works under
     // jsdom — which reports every `getBoundingClientRect` as 0×0, so the default
     // `observeElementRect` would size the viewport to 0 and render no rows.
-    // We still observe width changes (height is pinned) and seed the same rect
-    // on first paint via `initialRect`. overscan keeps a few off-screen rows.
+    // Seed the rect on first paint via `initialRect`; the shared observer floors a
+    // zero-height viewport (jsdom) to SCROLL_HEIGHT so rows still mount in tests.
+    // overscan keeps a few off-screen rows.
     const virtualizer = useVirtualizer<HTMLDivElement, HTMLTableRowElement>({
         count: tableRows.length,
         estimateSize: () => ROW_HEIGHT,
         getScrollElement: () => scrollRef.current,
         initialRect: { height: SCROLL_HEIGHT, width: 0 },
-        observeElementRect: (instance, callback) => {
-            const element = instance.scrollElement;
-
-            const report = (): void => {
-                // Real viewport height when the element is laid out; SCROLL_HEIGHT
-                // under jsdom (clientHeight 0) so tests still render rows.
-                callback({ height: (element?.clientHeight ?? 0) || SCROLL_HEIGHT, width: element?.clientWidth ?? 0 });
-            };
-
-            report();
-
-            if (element === null || typeof ResizeObserver === "undefined") {
-                return undefined;
-            }
-
-            const observer = new ResizeObserver(report);
-
-            observer.observe(element);
-
-            return () => {
-                observer.disconnect();
-            };
-        },
+        observeElementRect: (instance, callback) => flooredRectObserver(instance, callback, SCROLL_HEIGHT),
         overscan: 8,
     });
 

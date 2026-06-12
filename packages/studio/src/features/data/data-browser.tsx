@@ -265,7 +265,8 @@ export const DataBrowser = ({
     }, []);
 
     // Whether the table view is transposed (fields as rows, records as columns) —
-    // pure view state for reading wide tables. Reset implicitly per render of the grid.
+    // pure view state for reading wide tables; persists across table switches until
+    // the operator toggles it back.
     const [transposed, setTransposed] = useState<boolean>(false);
     const onToggleTranspose = useCallback((): void => {
         setTransposed((current) => !current);

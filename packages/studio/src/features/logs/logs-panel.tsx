@@ -1,6 +1,5 @@
 import { useCirrus } from "@cirrus/react";
-import type { Rect, Virtualizer } from "@tanstack/react-virtual";
-import { observeElementRect, useVirtualizer } from "@tanstack/react-virtual";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import type { ChangeEvent, CSSProperties, ReactElement } from "react";
 import { useCallback, useMemo, useRef, useState } from "react";
 
@@ -17,6 +16,7 @@ import { CLOUDFLARE_OBSERVABILITY_URL } from "../../lib/cf-links";
 import { adminRef, callOptions, errorMessage } from "../../lib/internal";
 import { recordShard } from "../../lib/shard-history";
 import { cn } from "../../lib/utils";
+import flooredRectObserver from "../../lib/virtual-rect";
 import useLiveShardSeed from "../data/hooks/use-live-shard-seed";
 
 /** Fixed height of the scroll viewport; bounds how many rows can be live at once. */
@@ -35,19 +35,6 @@ const ROW_BASE_STYLE: CSSProperties = {
     top: 0,
     width: "100%",
 };
-
-/**
- * Viewport-rect observer that floors the measured height to {@link SCROLL_HEIGHT}
- * whenever layout reports a zero-height box. In a real browser the scroll
- * container always has its CSS height, so this is a no-op there; under jsdom
- * (which reports every `getBoundingClientRect()` as a 0x0 box) it gives the
- * virtualizer a real viewport to compute a visible range from, so a bounded,
- * deterministic set of rows mounts in tests instead of zero.
- */
-const observeViewportRect = (instance: Virtualizer<HTMLDivElement, Element>, callback: (rect: Rect) => void): (() => void) | undefined =>
-    observeElementRect(instance, (rect) => {
-        callback(rect.height > 0 ? rect : { height: SCROLL_HEIGHT, width: rect.width });
-    });
 
 type BadgeVariant = "default" | "destructive" | "outline" | "secondary";
 
@@ -520,7 +507,7 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
 
     // Row virtualization over the active list: only the rows intersecting the
     // 400px viewport (+ overscan) are mounted, so a full buffer never renders
-    // hundreds of <div>s. See the jsdom note on `observeViewportRect`.
+    // hundreds of <div>s. See the jsdom note on `flooredRectObserver`.
     const scrollRef = useRef<HTMLDivElement>(null);
 
     const virtualizer = useVirtualizer({
@@ -528,7 +515,7 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
         estimateSize: () => ROW_HEIGHT,
         getScrollElement: () => scrollRef.current,
         initialRect: { height: SCROLL_HEIGHT, width: 800 },
-        observeElementRect: observeViewportRect,
+        observeElementRect: (instance, callback) => flooredRectObserver(instance, callback, SCROLL_HEIGHT),
         overscan: 8,
     });
 

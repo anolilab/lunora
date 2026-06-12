@@ -1,20 +1,14 @@
 # Logs
-logs
+# Anchored to the repo-root log-output dir + `*.log` files, NOT the bare token
+# `logs` — that matched any path component named `logs` and hid source folders
+# (`packages/cli/src/commands/logs/`, `packages/studio/src/features/logs/`),
+# which then needed a growing list of `!`-negations to claw back.
+/logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
-
-# …but the CLI's `logs` command is source, not log output — the bare `logs`
-# rule above otherwise hides packages/cli/src/commands/logs/ and broke the build.
-!/packages/cli/src/commands/logs/
-!/packages/cli/src/commands/logs/index.ts
-
-# …same for the studio's `logs` feature folder (the Logs/Audit/Schedule/Realtime/Mail
-# domain) and its tests — source, not log output, hidden by the bare `logs` rule.
-!/packages/studio/src/features/logs/
-!/packages/studio/__tests__/features/logs/
 
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json

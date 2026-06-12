@@ -96,6 +96,13 @@ const usePersistedTabs = (
     return { activeId, setActiveId, setTabs, tabs };
 };
 
+/**
+ * Whether closing `tab` would lose unsaved work: an unlinked scratch draft with
+ * text. A linked tab auto-saves to its query and an empty tab loses nothing, so
+ * neither needs a discard confirm. Shared by the single- and bulk-close guards.
+ */
+const isDirty = (tab: SqlTab): boolean => tab.activeId === null && tab.sql.trim() !== "";
+
 /** Append `tab` to `tabs`, capped at {@link MAX_TABS} (drops the oldest when full). */
 const addTab = (tabs: ReadonlyArray<SqlTab>, tab: SqlTab): SqlTab[] => [...tabs, tab].slice(-MAX_TABS);
 
@@ -153,5 +160,20 @@ const closeAllTabs = (makeEmpty: () => SqlTab): { activeId: string; tabs: SqlTab
     return { activeId: fresh.id, tabs: [fresh] };
 };
 
-export { addTab, closeAllTabs, closeOtherTabs, closeTab, closeTabsToRight, makeTab, MAX_TABS, usePersistedTabs };
+/** The tabs a bulk close would remove: every other tab, the tabs to the right of `id`, or all of them. */
+const tabsClosedBy = (op: "all" | "others" | "right", tabs: ReadonlyArray<SqlTab>, id: string): SqlTab[] => {
+    if (op === "others") {
+        return tabs.filter((tab) => tab.id !== id);
+    }
+
+    if (op === "right") {
+        const index = tabs.findIndex((tab) => tab.id === id);
+
+        return index === -1 ? [] : tabs.slice(index + 1);
+    }
+
+    return [...tabs];
+};
+
+export { addTab, closeAllTabs, closeOtherTabs, closeTab, closeTabsToRight, isDirty, makeTab, MAX_TABS, tabsClosedBy, usePersistedTabs };
 export type { SqlTab };
