@@ -1,15 +1,20 @@
 import { useConnectionStatus } from "@cirrus/react";
-import type { CSSProperties, ReactElement } from "react";
-import { useMemo } from "react";
+import type { ReactElement } from "react";
 
 import { useT } from "./i18n-context";
+import { cn } from "./lib/utils";
 
-/** Dot colour per connection status; the label is localised in the component. */
-const STATUS_COLORS = {
-    connected: "#3ecf8e",
-    connecting: "#f5c451",
-    idle: "#8b949e",
-    offline: "#f25c5c",
+/**
+ * Dot colour per connection status. Tailwind palette classes (not raw hex or
+ * theme tokens) so the dot reads correctly in both light and dark mode while
+ * still mapping each status to a distinct, conventional hue; the label below
+ * carries the same information for non-colour cues.
+ */
+const STATUS_DOT = {
+    connected: "bg-emerald-500",
+    connecting: "bg-amber-500",
+    idle: "bg-zinc-400 dark:bg-zinc-500",
+    offline: "bg-red-500",
 } as const;
 
 /**
@@ -21,7 +26,6 @@ const STATUS_COLORS = {
 const ConnectionBadge = (): ReactElement => {
     const t = useT();
     const status = useConnectionStatus();
-    const color = STATUS_COLORS[status];
 
     // Only the active status is translated — no throwaway map of the other three.
     let text: string;
@@ -55,10 +59,6 @@ const ConnectionBadge = (): ReactElement => {
         }
     }
 
-    const dotStyle = useMemo<CSSProperties>(() => {
-        return { backgroundColor: color };
-    }, [color]);
-
     return (
         <span
             aria-live="polite"
@@ -67,7 +67,7 @@ const ConnectionBadge = (): ReactElement => {
             data-testid="dash-connection"
             role="status"
         >
-            <span aria-hidden="true" className="size-2 rounded-full" style={dotStyle} />
+            <span aria-hidden="true" className={cn("size-2 rounded-full", STATUS_DOT[status])} />
             {text}
         </span>
     );
