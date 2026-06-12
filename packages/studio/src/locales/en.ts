@@ -326,6 +326,12 @@ const MESSAGE_IDS = [
     "Clear history",
     "No numeric column to chart.",
     "Click Run to execute your query.",
+    // SQL editor — autocomplete + multiple editor tabs.
+    "Untitled",
+    "New tab",
+    "Close tab",
+    "column",
+    "keyword",
     // Data-grid features (export, columns, selection, cell expand).
     "Columns",
     "CSV",

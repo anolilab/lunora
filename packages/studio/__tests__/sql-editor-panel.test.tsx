@@ -1,5 +1,5 @@
 import { CirrusProvider } from "@cirrus/react";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -14,6 +14,25 @@ const renderPanel = (mock: MockClientHooks): ReactElement => (
         <SqlEditorPanel />
     </CirrusProvider>
 );
+
+/** A mock that serves an empty SQL result plus a small schema for autocomplete. */
+const schemaMock = (): MockClientHooks =>
+    createMockClient({
+        query: (reference): unknown => {
+            if (reference === ADMIN_FUNCTIONS.listTables) {
+                return [
+                    { name: "messages", rowCount: 0 },
+                    { name: "users", rowCount: 0 },
+                ];
+            }
+
+            if (reference === ADMIN_FUNCTIONS.readTablePage) {
+                return { columns: ["id", "author", "body"], rows: [], total: 0 };
+            }
+
+            return { columns: [], rowCount: 0, rows: [], truncated: false };
+        },
+    });
 
 describe("sqlEditorPanel", () => {
     afterEach(() => {
@@ -197,5 +216,115 @@ describe("sqlEditorPanel", () => {
 
         expect(within(chart).getAllByTestId("sql-chart-bar")).toHaveLength(2);
         expect(chart.textContent).toContain("ada");
+    });
+
+    const typeInEditor = (value: string): void => {
+        const input = screen.getByTestId<HTMLTextAreaElement>("sql-input");
+
+        input.focus();
+        fireEvent.change(input, { target: { value } });
+        input.setSelectionRange(value.length, value.length);
+        fireEvent.select(input);
+    };
+
+    /** Resolve once the panel's `listTables` schema load has fired. */
+    const waitForSchema = async (mock: MockClientHooks): Promise<void> => {
+        await waitFor(() => {
+            if (!mock.query.mock.calls.some((call) => call[0]?.__cirrusRef === ADMIN_FUNCTIONS.listTables)) {
+                throw new Error("schema not loaded yet");
+            }
+        });
+    };
+
+    it("suggests a schema table name as the user types after FROM", async () => {
+        expect.assertions(1);
+
+        const mock = schemaMock();
+
+        render(renderPanel(mock));
+
+        // Wait for the table list to load before the prefix can resolve to a table.
+        await waitForSchema(mock);
+
+        typeInEditor("SELECT * FROM mess");
+
+        const popover = await screen.findByTestId("sql-autocomplete");
+
+        expect(within(popover).getAllByTestId("sql-autocomplete-item")[0]?.textContent).toContain("messages");
+    });
+
+    it("completes a column behind a `tbl.` qualifier into the editor", async () => {
+        expect.assertions(1);
+
+        const mock = schemaMock();
+
+        render(renderPanel(mock));
+
+        await waitForSchema(mock);
+
+        // Typing a table reference pre-probes its columns; a `tbl.` qualifier then
+        // offers them, and Enter accepts the highlighted one into the editor.
+        typeInEditor("SELECT messages.au");
+
+        await screen.findByTestId("sql-autocomplete");
+
+        const input = screen.getByTestId<HTMLTextAreaElement>("sql-input");
+
+        fireEvent.keyDown(input, { key: "Enter" });
+
+        await waitFor(() => {
+            if (input.value !== "SELECT messages.author") {
+                throw new Error(`not yet: ${input.value}`);
+            }
+        });
+
+        expect(input.value).toBe("SELECT messages.author");
+    });
+
+    it("opens a new editor tab and switches between tabs", () => {
+        expect.assertions(3);
+
+        render(renderPanel(schemaMock()));
+
+        // One tab to start.
+        expect(within(screen.getByTestId("sql-tab-strip")).getAllByTestId(/^sql-tab-select-/u)).toHaveLength(1);
+
+        fireEvent.click(screen.getByTestId("sql-tab-add"));
+
+        const tabs = within(screen.getByTestId("sql-tab-strip")).getAllByTestId(/^sql-tab-select-/u);
+
+        expect(tabs).toHaveLength(2);
+
+        // Each tab carries its own draft: type into the new (active) tab, switch
+        // back to the first, and the editor shows the first tab's text again.
+        const first = within(screen.getByTestId("sql-tab-strip")).getAllByTestId(/^sql-tab-select-/u)[0] as HTMLElement;
+
+        fireEvent.change(screen.getByTestId("sql-input"), { target: { value: "SELECT 2" } });
+        fireEvent.click(first);
+
+        expect(screen.getByTestId<HTMLTextAreaElement>("sql-input").value).toContain("sqlite_master");
+    });
+
+    it("closes a tab and persists open tabs across a remount", () => {
+        expect.assertions(2);
+
+        const { unmount } = render(renderPanel(schemaMock()));
+
+        fireEvent.click(screen.getByTestId("sql-tab-add"));
+        fireEvent.change(screen.getByTestId("sql-input"), { target: { value: "SELECT persisted" } });
+
+        // Two tabs now; close the first, leaving the typed one.
+        const firstSelect = within(screen.getByTestId("sql-tab-strip")).getAllByTestId(/^sql-tab-select-/u)[0] as HTMLElement;
+        const firstId = firstSelect.dataset.testid?.replace("sql-tab-select-", "") ?? "";
+
+        fireEvent.click(screen.getByTestId(`sql-tab-close-${firstId}`));
+
+        expect(within(screen.getByTestId("sql-tab-strip")).getAllByTestId(/^sql-tab-select-/u)).toHaveLength(1);
+
+        // Remount: the persisted tab (and its draft) is restored from storage.
+        unmount();
+        render(renderPanel(schemaMock()));
+
+        expect(screen.getByTestId<HTMLTextAreaElement>("sql-input").value).toBe("SELECT persisted");
     });
 });

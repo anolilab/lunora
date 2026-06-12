@@ -1,8 +1,8 @@
 import { useCirrus } from "@cirrus/react";
 import type { CSSProperties, ReactElement } from "react";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
-import type { SqlConsoleResult } from "./admin";
+import type { SqlConsoleResult, TableInfo, TablePage } from "./admin";
 import { ADMIN_FUNCTIONS } from "./admin";
 import { newId, usePersistedList } from "./browser-storage";
 import { Alert } from "./components/ui/alert";
@@ -16,6 +16,10 @@ import { cn } from "./lib/utils";
 import SqlResultChart from "./result-chart";
 import { recordShard } from "./shard-history";
 import { ShardInput } from "./shard-input";
+import type { SqlSchema } from "./sql-autocomplete";
+import { AutocompletePopover, useSqlAutocomplete } from "./sql-autocomplete-ui";
+import type { SqlTab } from "./sql-tabs";
+import { addTab, closeTab, makeTab, MAX_TABS, usePersistedTabs } from "./sql-tabs";
 
 interface SqlEditorPanelProps {
     /** Shard key the query runs against on first load. Defaults to the root shard. */
@@ -36,6 +40,8 @@ interface QueryTemplate {
 }
 
 const RUN_SQL = adminRef(ADMIN_FUNCTIONS.runSql);
+const LIST_TABLES = adminRef(ADMIN_FUNCTIONS.listTables);
+const READ_TABLE_PAGE = adminRef(ADMIN_FUNCTIONS.readTablePage);
 const STORAGE_KEY = "cirrus-studio-sql-queries";
 const HISTORY_KEY = "cirrus-studio-sql-history";
 /** How many recent distinct queries the history keeps. */
@@ -131,6 +137,75 @@ const QueryRow = ({ active, onDelete, onSelect, query }: QueryRowProps): ReactEl
     );
 };
 
+interface TabButtonProps {
+    readonly active: boolean;
+    readonly canClose: boolean;
+    readonly onClose: (id: string) => void;
+    readonly onSelect: (id: string) => void;
+    readonly tab: SqlTab;
+}
+
+/** One editor tab in the strip: a label that selects it plus a close affordance (hidden for the sole tab). */
+const TabButton = ({ active, canClose, onClose, onSelect, tab }: TabButtonProps): ReactElement => {
+    const t = useT();
+    const onClick = useCallback((): void => {
+        onSelect(tab.id);
+    }, [onSelect, tab.id]);
+    const onCloseClick = useCallback(
+        (event: React.MouseEvent<HTMLButtonElement>): void => {
+            event.stopPropagation();
+            onClose(tab.id);
+        },
+        [onClose, tab.id],
+    );
+
+    // Use the linked saved query's name when present, else the first line of the draft.
+    const label = tab.sql.trim() === "" ? t("Untitled") : (tab.sql.split("\n")[0] ?? tab.sql).slice(0, 24);
+
+    return (
+        <div
+            className={cn(
+                "group/tab flex shrink-0 items-center gap-1 border-e border-border ps-3 pe-1.5 text-xs",
+                active ? "bg-background text-foreground" : "bg-muted/40 text-muted-foreground hover:text-foreground",
+            )}
+            data-testid={`sql-tab-${tab.id}`}
+        >
+            <button
+                aria-pressed={active}
+                className="max-w-40 truncate py-1.5 outline-none"
+                data-testid={`sql-tab-select-${tab.id}`}
+                onClick={onClick}
+                type="button"
+            >
+                {label}
+            </button>
+            {canClose && (
+                <button
+                    aria-label={t("Close tab")}
+                    className="flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                    data-testid={`sql-tab-close-${tab.id}`}
+                    onClick={onCloseClick}
+                    title={t("Close tab")}
+                    type="button"
+                >
+                    <svg
+                        aria-hidden="true"
+                        className="size-3"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        viewBox="0 0 24 24"
+                    >
+                        <path d="M6 6l12 12M18 6 6 18" />
+                    </svg>
+                </button>
+            )}
+        </div>
+    );
+};
+
 /** The results table for a successful query — sticky header, monospace cells, NULL-aware. */
 const SqlResultTable = ({ result }: { readonly result: SqlConsoleResult }): ReactElement => {
     if (result.columns.length === 0) {
@@ -163,6 +238,107 @@ const SqlResultTable = ({ result }: { readonly result: SqlConsoleResult }): Reac
 };
 
 /**
+ * Load the shard's table names (and, lazily, each table's columns) to feed the
+ * editor's autocomplete. Tables come from one `listTables`; columns are probed
+ * per table with a one-row `readTablePage` (the same RPC the schema viewer
+ * uses) the first time the operator types a `tbl.` qualifier or otherwise needs
+ * them — so an unexplored schema still completes table names without N probes
+ * up front. All best-effort: a failed probe simply leaves that table's columns
+ * absent. Re-loads when `shardKey` changes; a fast shard switch discards a stale
+ * in-flight list via the cancel token.
+ */
+const useSqlSchema = (shardKey: string): { probe: (table: string) => void; schema: SqlSchema } => {
+    const client = useCirrus();
+
+    const [tables, setTables] = useState<string[]>([]);
+    const [columns, setColumns] = useState<Record<string, string[]>>({});
+    // Tables a probe has already been kicked off for, so `probe` is idempotent
+    // without nesting the fetch inside a setState updater. Cleared on shard switch.
+    const probed = useRef<Set<string>>(new Set());
+
+    useEffect(() => {
+        const token = { cancelled: false };
+
+        const load = async (): Promise<void> => {
+            try {
+                const result = (await client.query(LIST_TABLES, {}, callOptions(shardKey))) as TableInfo[];
+
+                if (!token.cancelled) {
+                    setTables(result.map((table) => table.name));
+                    setColumns({});
+                    probed.current = new Set();
+                }
+            } catch {
+                if (!token.cancelled) {
+                    setTables([]);
+                    setColumns({});
+                    probed.current = new Set();
+                }
+            }
+        };
+
+        fireAndForget(load());
+
+        return () => {
+            token.cancelled = true;
+        };
+    }, [client, shardKey]);
+
+    // Fetch one table's columns once, on demand; a failure leaves it un-probed so
+    // a later call can retry. Keyed by table only — the effect above resets the
+    // cache on a shard switch, so a stale shard's columns can't bleed through.
+    const probe = useCallback(
+        (table: string): void => {
+            if (probed.current.has(table)) {
+                return;
+            }
+
+            probed.current.add(table);
+
+            const fetchColumns = async (): Promise<void> => {
+                try {
+                    const page = (await client.query(READ_TABLE_PAGE, { limit: 1, offset: 0, table }, callOptions(shardKey))) as TablePage;
+
+                    setColumns((previous) => {
+                        return { ...previous, [table]: page.columns };
+                    });
+                } catch {
+                    // Best-effort: drop the in-flight marker so a later probe can retry.
+                    probed.current.delete(table);
+                }
+            };
+
+            fireAndForget(fetchColumns());
+        },
+        [client, shardKey],
+    );
+
+    const schema = useMemo<SqlSchema>(() => {
+        return { columns, tables };
+    }, [columns, tables]);
+
+    return { probe, schema };
+};
+
+/** Table names referenced in `sql` after `FROM`/`JOIN`/`UPDATE`/`INTO`, or as a `tbl.` qualifier. */
+const TABLE_REF = /\b(?:from|join|update|into)\s+([a-z_][\w$]*)|\b([a-z_][\w$]*)\s*\./gi;
+
+/** Mentioned table names in a draft, so the schema hook can pre-probe their columns for column completion. */
+const referencedTables = (sql: string): string[] => {
+    const names = new Set<string>();
+
+    TABLE_REF.lastIndex = 0;
+    let match: null | RegExpExecArray = TABLE_REF.exec(sql);
+
+    while (match !== null) {
+        names.add((match[1] ?? match[2]) as string);
+        match = TABLE_REF.exec(sql);
+    }
+
+    return [...names];
+};
+
+/**
  * A full-height, Supabase-style SQL editor: a left query sidebar (search + new,
  * a browser-persisted PRIVATE list, and REFERENCE templates), a line-numbered
  * editor pane, and a Results / Explain pane with a Run control + shard selector.
@@ -176,17 +352,104 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
     const [queries, setQueries] = usePersistedList<SavedQuery>(STORAGE_KEY);
     const [history, setHistory] = usePersistedList<HistoryEntry>(HISTORY_KEY);
-    const [activeId, setActiveId] = useState<null | string>(null);
-    const [draft, setDraft] = useState<string>(TEMPLATES[0]?.sql ?? "");
     const [search, setSearch] = useState<string>("");
 
+    // Multiple editor tabs: each persisted tab owns its draft + the saved-query
+    // it mirrors; the result/error/pane are kept per tab in ephemeral maps so a
+    // reload restores the open tabs (and their text) but re-runs for results.
+    const seedTab = useCallback((): SqlTab => makeTab(TEMPLATES[0]?.sql ?? ""), []);
+    const { activeId: activeTabId, setActiveId: setActiveTabId, setTabs, tabs } = usePersistedTabs(seedTab);
+
+    const [results, setResults] = useState<Record<string, null | SqlConsoleResult>>({});
+    const [errors, setErrors] = useState<Record<string, null | string>>({});
+    const [panes, setPanes] = useState<Record<string, ResultTab>>({});
+
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
-    const [tab, setTab] = useState<ResultTab>("results");
-    const [result, setResult] = useState<null | SqlConsoleResult>(null);
-    const [error, setError] = useState<null | string>(null);
     const [running, setRunning] = useState<boolean>(false);
 
     const gutterRef = useRef<HTMLDivElement | null>(null);
+    const editorRef = useRef<HTMLTextAreaElement | null>(null);
+    const listboxId = useId();
+
+    const { probe, schema } = useSqlSchema(shardKey);
+
+    // The active tab is the source of truth for the editor's draft + saved-query
+    // link; `result`/`error`/`tab` read out of the per-tab ephemeral maps.
+    const activeTab = useMemo<SqlTab>(() => tabs.find((each) => each.id === activeTabId) ?? tabs[0] ?? makeTab(), [activeTabId, tabs]);
+    const draft = activeTab.sql;
+    const { activeId } = activeTab;
+    const result = results[activeTab.id] ?? null;
+    const error = errors[activeTab.id] ?? null;
+    const tab = panes[activeTab.id] ?? "results";
+
+    // Patch the active tab's persisted fields (draft text and/or saved-query link).
+    const patchActiveTab = useCallback(
+        (patch: Partial<Pick<SqlTab, "activeId" | "sql">>): void => {
+            setTabs((current) => current.map((each) => (each.id === activeTab.id ? { ...each, ...patch } : each)));
+        },
+        [activeTab.id, setTabs],
+    );
+
+    // Replace the active tab's ephemeral result/error/pane in one shot.
+    const setActiveOutput = useCallback(
+        (output: { error: null | string; pane?: ResultTab; result: null | SqlConsoleResult }): void => {
+            setResults((current) => {
+                return { ...current, [activeTab.id]: output.result };
+            });
+            setErrors((current) => {
+                return { ...current, [activeTab.id]: output.error };
+            });
+
+            if (output.pane !== undefined) {
+                setPanes((current) => {
+                    return { ...current, [activeTab.id]: output.pane as ResultTab };
+                });
+            }
+        },
+        [activeTab.id],
+    );
+
+    // Set the active tab's draft and keep the linked saved query in sync (auto-save).
+    const setDraft = useCallback(
+        (value: string): void => {
+            patchActiveTab({ sql: value });
+
+            if (activeId !== null) {
+                setQueries((current) => current.map((query) => (query.id === activeId ? { ...query, sql: value } : query)));
+            }
+        },
+        [activeId, patchActiveTab, setQueries],
+    );
+
+    const autocomplete = useSqlAutocomplete(schema, editorRef, setDraft);
+    const {
+        close: closeAutocomplete,
+        commit: commitAutocomplete,
+        move: moveAutocomplete,
+        refresh: refreshAutocomplete,
+        state: autocompleteState,
+    } = autocomplete;
+
+    // Pick the suggestion at `index` from the mouse path (mirror the keyboard commit).
+    const onPickSuggestion = useCallback(
+        (index: number): void => {
+            moveAutocomplete(index - (autocompleteState?.active ?? 0));
+            commitAutocomplete();
+        },
+        [autocompleteState?.active, commitAutocomplete, moveAutocomplete],
+    );
+
+    // Re-derive completions once a probe resolves new columns: a `tbl.` qualifier
+    // typed before its columns loaded would otherwise show an empty popover until
+    // the next keystroke. Only re-runs while the editor is focused, against its
+    // live caret, so it never pops a menu the operator didn't ask for.
+    useEffect(() => {
+        const node = editorRef.current;
+
+        if (node !== null && node === document.activeElement) {
+            refreshAutocomplete(node.value, node.selectionStart);
+        }
+    }, [refreshAutocomplete, schema]);
 
     // Record a successfully-run query at the head of the history, de-duping an
     // identical consecutive run and any earlier copy, capped to HISTORY_LIMIT.
@@ -217,49 +480,95 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
             try {
                 const next = (await client.query(RUN_SQL, { sql }, callOptions(shardKey))) as SqlConsoleResult;
 
-                setResult(next);
-                setError(null);
-                setTab(mode);
+                setActiveOutput({ error: null, pane: mode, result: next });
                 recordShard(shardKey);
                 recordHistory(sql);
             } catch (error_: unknown) {
-                setResult(null);
-                setError(errorMessage(error_));
-                setTab(mode);
+                setActiveOutput({ error: errorMessage(error_), pane: mode, result: null });
             } finally {
                 setRunning(false);
             }
         },
-        [client, draft, recordHistory, shardKey],
+        [client, draft, recordHistory, setActiveOutput, shardKey],
     );
 
     const onRun = useCallback((): void => {
         fireAndForget(run("results"));
     }, [run]);
 
-    // Edit the draft and keep the active saved query in sync (auto-save).
+    // Edit the draft (auto-saving the linked query) and re-derive completions
+    // from the new caret position, pre-probing any table the draft now names.
     const onDraftChange = useCallback(
         (event: React.ChangeEvent<HTMLTextAreaElement>): void => {
-            const { value } = event.target;
+            const { selectionStart, value } = event.target;
 
             setDraft(value);
 
-            if (activeId !== null) {
-                setQueries((current) => current.map((query) => (query.id === activeId ? { ...query, sql: value } : query)));
+            for (const table of referencedTables(value)) {
+                probe(table);
             }
+
+            refreshAutocomplete(value, selectionStart);
         },
-        [activeId, setQueries],
+        [probe, refreshAutocomplete, setDraft],
+    );
+
+    // Re-derive completions when the caret moves without an edit (arrow keys, click).
+    const onEditorSelect = useCallback(
+        (event: React.SyntheticEvent<HTMLTextAreaElement>): void => {
+            const node = event.currentTarget;
+
+            refreshAutocomplete(node.value, node.selectionStart);
+        },
+        [refreshAutocomplete],
     );
 
     const onEditorKeyDown = useCallback(
         (event: React.KeyboardEvent<HTMLTextAreaElement>): void => {
+            // Autocomplete navigation takes the keys while the popover is open.
+            if (autocompleteState !== null) {
+                if (event.key === "ArrowDown") {
+                    event.preventDefault();
+                    moveAutocomplete(1);
+
+                    return;
+                }
+
+                if (event.key === "ArrowUp") {
+                    event.preventDefault();
+                    moveAutocomplete(-1);
+
+                    return;
+                }
+
+                if (event.key === "Escape") {
+                    event.preventDefault();
+                    closeAutocomplete();
+
+                    return;
+                }
+
+                if ((event.key === "Enter" || event.key === "Tab") && !event.metaKey && !event.ctrlKey && commitAutocomplete()) {
+                    event.preventDefault();
+
+                    return;
+                }
+            }
+
             if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
                 event.preventDefault();
                 fireAndForget(run(tab));
             }
         },
-        [run, tab],
+        [autocompleteState, closeAutocomplete, commitAutocomplete, moveAutocomplete, run, tab],
     );
+
+    const onEditorBlur = useCallback((): void => {
+        // Defer so a mousedown-pick on a suggestion still resolves before close.
+        requestAnimationFrame(() => {
+            closeAutocomplete();
+        });
+    }, [closeAutocomplete]);
 
     // Keep the line-number gutter aligned with the textarea's scroll.
     const onEditorScroll = useCallback((event: React.UIEvent<HTMLTextAreaElement>): void => {
@@ -268,59 +577,57 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         }
     }, []);
 
+    // Load `sql` into the active tab as a fresh draft, link it to `savedId` (or
+    // unlink with `null`), and clear that tab's stale result/error.
+    const loadIntoActiveTab = useCallback(
+        (sql: string, savedId: null | string): void => {
+            setTabs((current) => current.map((each) => (each.id === activeTab.id ? { ...each, activeId: savedId, sql } : each)));
+            setActiveOutput({ error: null, result: null });
+        },
+        [activeTab.id, setActiveOutput, setTabs],
+    );
+
     const newQuery = useCallback((): void => {
         const query: SavedQuery = { id: newId("q"), name: t("Untitled query"), sql: "" };
 
         setQueries((current) => [query, ...current]);
-        setActiveId(query.id);
-        setDraft("");
-        setResult(null);
-        setError(null);
-    }, [setQueries, t]);
+        loadIntoActiveTab("", query.id);
+    }, [loadIntoActiveTab, setQueries, t]);
 
     const selectQuery = useCallback(
         (id: string): void => {
             const found = queries.find((query) => query.id === id);
 
             if (found !== undefined) {
-                setActiveId(id);
-                setDraft(found.sql);
-                setResult(null);
-                setError(null);
+                loadIntoActiveTab(found.sql, id);
             }
         },
-        [queries],
+        [loadIntoActiveTab, queries],
     );
 
     const deleteQuery = useCallback(
         (id: string): void => {
             setQueries((current) => current.filter((query) => query.id !== id));
-
-            if (activeId === id) {
-                setActiveId(null);
-            }
+            // Unlink any tab that was editing the deleted query.
+            setTabs((current) => current.map((each) => (each.activeId === id ? { ...each, activeId: null } : each)));
         },
-        [activeId, setQueries],
+        [setQueries, setTabs],
     );
 
-    const loadTemplate = useCallback((event: React.MouseEvent<HTMLButtonElement>): void => {
-        const sql = event.currentTarget.dataset.sql ?? "";
-
-        setActiveId(null);
-        setDraft(sql);
-        setResult(null);
-        setError(null);
-    }, []);
+    const loadTemplate = useCallback(
+        (event: React.MouseEvent<HTMLButtonElement>): void => {
+            loadIntoActiveTab(event.currentTarget.dataset.sql ?? "", null);
+        },
+        [loadIntoActiveTab],
+    );
 
     // Load a past run back into the editor as a fresh draft (not a saved query).
-    const loadFromHistory = useCallback((event: React.MouseEvent<HTMLButtonElement>): void => {
-        const sql = event.currentTarget.dataset.sql ?? "";
-
-        setActiveId(null);
-        setDraft(sql);
-        setResult(null);
-        setError(null);
-    }, []);
+    const loadFromHistory = useCallback(
+        (event: React.MouseEvent<HTMLButtonElement>): void => {
+            loadIntoActiveTab(event.currentTarget.dataset.sql ?? "", null);
+        },
+        [loadIntoActiveTab],
+    );
 
     const clearHistory = useCallback((): void => {
         setHistory([]);
@@ -328,26 +635,61 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
     // Pretty-print the current draft in place (auto-saving the active query too).
     const formatDraft = useCallback((): void => {
-        const next = formatSql(draft);
+        setDraft(formatSql(draft));
+    }, [draft, setDraft]);
 
-        setDraft(next);
-
-        if (activeId !== null) {
-            setQueries((current) => current.map((query) => (query.id === activeId ? { ...query, sql: next } : query)));
+    // Add a new empty tab and switch to it (no-op once MAX_TABS are open).
+    const addEditorTab = useCallback((): void => {
+        if (tabs.length >= MAX_TABS) {
+            return;
         }
-    }, [activeId, draft, setQueries]);
+
+        const fresh = makeTab();
+
+        setTabs((current) => addTab(current, fresh));
+        setActiveTabId(fresh.id);
+    }, [setActiveTabId, setTabs, tabs.length]);
+
+    const closeEditorTab = useCallback(
+        (id: string): void => {
+            const { activeId: nextActive, tabs: nextTabs } = closeTab(tabs, id, makeTab);
+
+            setTabs(nextTabs);
+            setActiveTabId(nextActive);
+            // Drop the closed tab's ephemeral output so it can't leak to a reused id.
+            setResults((current) => {
+                return { ...current, [id]: null };
+            });
+            setErrors((current) => {
+                return { ...current, [id]: null };
+            });
+        },
+        [setActiveTabId, setTabs, tabs],
+    );
+
+    const selectTab = useCallback(
+        (id: string): void => {
+            closeAutocomplete();
+            setActiveTabId(id);
+        },
+        [closeAutocomplete, setActiveTabId],
+    );
 
     const showResults = useCallback((): void => {
-        setTab("results");
-    }, []);
+        setPanes((current) => {
+            return { ...current, [activeTab.id]: "results" };
+        });
+    }, [activeTab.id]);
 
     const showExplain = useCallback((): void => {
         fireAndForget(run("explain"));
     }, [run]);
 
     const showChart = useCallback((): void => {
-        setTab("chart");
-    }, []);
+        setPanes((current) => {
+            return { ...current, [activeTab.id]: "chart" };
+        });
+    }, [activeTab.id]);
 
     const filtered = useMemo<SavedQuery[]>(() => {
         const needle = search.trim().toLowerCase();
@@ -493,6 +835,42 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
             {/* Editor + results. */}
             <div className="flex min-w-0 flex-1 flex-col">
+                {/* Editor tab strip. */}
+                <div className="flex shrink-0 items-stretch overflow-x-auto border-b border-border bg-muted/30" data-testid="sql-tab-strip" role="tablist">
+                    {tabs.map((each) => (
+                        <TabButton
+                            active={each.id === activeTab.id}
+                            canClose={tabs.length > 1}
+                            key={each.id}
+                            onClose={closeEditorTab}
+                            onSelect={selectTab}
+                            tab={each}
+                        />
+                    ))}
+                    <button
+                        aria-label={t("New tab")}
+                        className="flex size-8 shrink-0 items-center justify-center text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-40"
+                        data-testid="sql-tab-add"
+                        disabled={tabs.length >= MAX_TABS}
+                        onClick={addEditorTab}
+                        title={t("New tab")}
+                        type="button"
+                    >
+                        <svg
+                            aria-hidden="true"
+                            className="size-4"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={1.7}
+                            viewBox="0 0 24 24"
+                        >
+                            <path d="M12 5v14M5 12h14" />
+                        </svg>
+                    </button>
+                </div>
+
                 {/* Line-numbered editor pane. */}
                 <div className="flex min-h-0 flex-1">
                     <div
@@ -505,17 +883,28 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                             <div key={index}>{index + 1}</div>
                         ))}
                     </div>
-                    <textarea
-                        aria-label={t("SQL query")}
-                        className="min-w-0 flex-1 resize-none bg-background p-3 font-mono text-xs leading-5 outline-none"
-                        data-testid="sql-input"
-                        onChange={onDraftChange}
-                        onKeyDown={onEditorKeyDown}
-                        onScroll={onEditorScroll}
-                        placeholder="SELECT * FROM …"
-                        spellCheck={false}
-                        value={draft}
-                    />
+                    <div className="relative min-w-0 flex-1">
+                        <textarea
+                            aria-activedescendant={autocompleteState === null ? undefined : `${listboxId}-opt-${autocompleteState.active.toString()}`}
+                            aria-autocomplete="list"
+                            aria-controls={autocompleteState === null ? undefined : listboxId}
+                            aria-expanded={autocompleteState !== null}
+                            aria-label={t("SQL query")}
+                            className="size-full resize-none bg-background p-3 font-mono text-xs leading-5 outline-none"
+                            data-testid="sql-input"
+                            onBlur={onEditorBlur}
+                            onChange={onDraftChange}
+                            onKeyDown={onEditorKeyDown}
+                            onScroll={onEditorScroll}
+                            onSelect={onEditorSelect}
+                            placeholder="SELECT * FROM …"
+                            ref={editorRef}
+                            role="combobox"
+                            spellCheck={false}
+                            value={draft}
+                        />
+                        <AutocompletePopover listboxId={listboxId} onPick={onPickSuggestion} state={autocompleteState} />
+                    </div>
                 </div>
 
                 {/* Results pane. */}
