@@ -365,6 +365,8 @@ const MESSAGE_IDS = [
     "Untitled",
     "New tab",
     "Close tab",
+    "Tab title",
+    "Double-click to rename",
     "column",
     "keyword",
     // Data-grid features (export, columns, selection, cell expand).

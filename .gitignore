@@ -11,6 +11,11 @@ lerna-debug.log*
 !/packages/cli/src/commands/logs/
 !/packages/cli/src/commands/logs/index.ts
 
+# …same for the studio's `logs` feature folder (the Logs/Audit/Schedule/Realtime/Mail
+# domain) and its tests — source, not log output, hidden by the bare `logs` rule.
+!/packages/studio/src/features/logs/
+!/packages/studio/__tests__/features/logs/
+
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 

@@ -1,8 +1,8 @@
 import type { Root } from "react-dom/client";
 import { createRoot } from "react-dom/client";
 
-import type { StudioAppProps } from "./app";
-import { StudioApp } from "./app";
+import type { StudioAppProps } from "./app/app";
+import { StudioApp } from "./app/app";
 
 export interface MountStudioOptions extends StudioAppProps {
     /**

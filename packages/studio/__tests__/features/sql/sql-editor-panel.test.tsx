@@ -1,0 +1,367 @@
+import { CirrusProvider } from "@cirrus/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { afterEach, describe, expect, it } from "vitest";
+
+import { SqlEditorPanel } from "../../../src/features/sql/sql-editor-panel";
+import type { SqlConsoleResult } from "../../../src/lib/admin";
+import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
+import type { MockClientHooks } from "../../mock-client";
+import { createMockClient } from "../../mock-client";
+
+const renderPanel = (mock: MockClientHooks): ReactElement => (
+    <CirrusProvider client={mock.asClient}>
+        <SqlEditorPanel />
+    </CirrusProvider>
+);
+
+/** A mock that serves an empty SQL result plus a small schema for autocomplete. */
+const schemaMock = (): MockClientHooks =>
+    createMockClient({
+        query: (reference): unknown => {
+            if (reference === ADMIN_FUNCTIONS.listTables) {
+                return [
+                    { name: "messages", rowCount: 0 },
+                    { name: "users", rowCount: 0 },
+                ];
+            }
+
+            if (reference === ADMIN_FUNCTIONS.readTablePage) {
+                return { columns: ["id", "author", "body"], rows: [], total: 0 };
+            }
+
+            return { columns: [], rowCount: 0, rows: [], truncated: false };
+        },
+    });
+
+describe("sqlEditorPanel", () => {
+    afterEach(() => {
+        localStorage.clear();
+    });
+
+    it("runs a query and renders the result rows + count", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.runSql) {
+                    return { columns: ["name"], rowCount: 2, rows: [{ name: "messages" }, { name: "users" }], truncated: false };
+                }
+
+                throw new Error(`unexpected ${reference}`);
+            },
+        });
+
+        render(renderPanel(mock));
+
+        fireEvent.click(screen.getByTestId("sql-run"));
+
+        const rows = await screen.findByTestId("sql-rows");
+
+        expect(rows.textContent).toContain("messages");
+        expect(screen.getByTestId("sql-count").textContent).toContain("2 rows");
+    });
+
+    it("surfaces a server rejection (e.g. a write) inline", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            query: () => {
+                throw new Error("the SQL editor is read-only — only SELECT / WITH / EXPLAIN queries are allowed");
+            },
+        });
+
+        render(renderPanel(mock));
+
+        fireEvent.click(screen.getByTestId("sql-run"));
+
+        const error = await screen.findByTestId("sql-error");
+
+        expect(error.textContent).toContain("read-only");
+    });
+
+    it("creates a saved query in the PRIVATE list from New query", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({
+            query: () => {
+                return { columns: [], rowCount: 0, rows: [], truncated: false };
+            },
+        });
+
+        render(renderPanel(mock));
+
+        // Empty to start, then New query adds an entry to the PRIVATE list.
+        expect(screen.getByTestId("sql-private-empty")).toBeDefined();
+
+        fireEvent.click(screen.getByTestId("sql-new"));
+
+        const list = await screen.findByTestId("sql-private");
+
+        expect(list.textContent).toContain("Untitled query");
+    });
+
+    const oneRowResult = (): SqlConsoleResult => {
+        return { columns: ["name"], rowCount: 1, rows: [{ name: "messages" }], truncated: false };
+    };
+    const editorValue = (): string => screen.getByTestId<HTMLTextAreaElement>("sql-input").value;
+
+    it("records a successfully-run query in the history and loads it back", async () => {
+        expect.assertions(3);
+
+        const mock = createMockClient({ query: oneRowResult });
+
+        render(renderPanel(mock));
+
+        // The editor starts on the first template; run it.
+        fireEvent.click(screen.getByTestId("sql-run"));
+
+        const historyList = await screen.findByTestId("sql-history");
+        const items = within(historyList).getAllByTestId("sql-history-item");
+
+        expect(items).toHaveLength(1);
+
+        // Type a new draft, then load the past run back via its history entry.
+        fireEvent.change(screen.getByTestId("sql-input"), { target: { value: "SELECT 1" } });
+
+        expect(editorValue()).toBe("SELECT 1");
+
+        fireEvent.click(items[0] as HTMLElement);
+
+        expect(editorValue()).toContain("sqlite_master");
+    });
+
+    it("does not double-record identical consecutive runs", async () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({ query: oneRowResult });
+
+        render(renderPanel(mock));
+
+        // Run the same (unchanged) draft twice.
+        fireEvent.click(screen.getByTestId("sql-run"));
+        await screen.findByTestId("sql-history");
+        fireEvent.click(screen.getByTestId("sql-run"));
+        await screen.findByTestId("sql-rows");
+
+        expect(within(screen.getByTestId("sql-history")).getAllByTestId("sql-history-item")).toHaveLength(1);
+    });
+
+    it("clears the history", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({ query: oneRowResult });
+
+        render(renderPanel(mock));
+
+        fireEvent.click(screen.getByTestId("sql-run"));
+        await screen.findByTestId("sql-history");
+
+        fireEvent.click(screen.getByTestId("sql-history-clear"));
+
+        expect(screen.queryByTestId("sql-history")).toBeNull();
+        expect(localStorage.getItem("cirrus-studio-sql-history")).toBe("[]");
+    });
+
+    it("formats the current draft in place", () => {
+        expect.assertions(1);
+
+        const mock = createMockClient({
+            query: (): SqlConsoleResult => {
+                return { columns: [], rowCount: 0, rows: [], truncated: false };
+            },
+        });
+
+        render(renderPanel(mock));
+
+        fireEvent.change(screen.getByTestId("sql-input"), { target: { value: "select a from t where b = 1" } });
+        fireEvent.click(screen.getByTestId("sql-format"));
+
+        expect(editorValue()).toBe("SELECT a\nFROM t\nWHERE b = 1");
+    });
+
+    it("charts a numeric result and exposes an export menu", async () => {
+        expect.assertions(3);
+
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.runSql) {
+                    return {
+                        columns: ["author", "count"],
+                        rowCount: 2,
+                        rows: [
+                            { author: "ada", count: 5 },
+                            { author: "grace", count: 3 },
+                        ],
+                        truncated: false,
+                    };
+                }
+
+                throw new Error(`unexpected ${reference}`);
+            },
+        });
+
+        render(renderPanel(mock));
+
+        fireEvent.click(screen.getByTestId("sql-run"));
+        await screen.findByTestId("sql-rows");
+
+        // A result with a numeric column surfaces the Export menu.
+        expect(screen.getByTestId("grid-export")).toBeDefined();
+
+        // The Chart tab plots one bar per row (numeric `count` against `author`).
+        fireEvent.click(screen.getByTestId("sql-tab-chart"));
+
+        const chart = await screen.findByTestId("sql-chart");
+
+        expect(within(chart).getAllByTestId("sql-chart-bar")).toHaveLength(2);
+        expect(chart.textContent).toContain("ada");
+    });
+
+    const typeInEditor = (value: string): void => {
+        const input = screen.getByTestId<HTMLTextAreaElement>("sql-input");
+
+        input.focus();
+        fireEvent.change(input, { target: { value } });
+        input.setSelectionRange(value.length, value.length);
+        fireEvent.select(input);
+    };
+
+    /** Resolve once the panel's `listTables` schema load has fired. */
+    const waitForSchema = async (mock: MockClientHooks): Promise<void> => {
+        await waitFor(() => {
+            if (!mock.query.mock.calls.some((call) => call[0]?.__cirrusRef === ADMIN_FUNCTIONS.listTables)) {
+                throw new Error("schema not loaded yet");
+            }
+        });
+    };
+
+    it("suggests a schema table name as the user types after FROM", async () => {
+        expect.assertions(1);
+
+        const mock = schemaMock();
+
+        render(renderPanel(mock));
+
+        // Wait for the table list to load before the prefix can resolve to a table.
+        await waitForSchema(mock);
+
+        typeInEditor("SELECT * FROM mess");
+
+        const popover = await screen.findByTestId("sql-autocomplete");
+
+        expect(within(popover).getAllByTestId("sql-autocomplete-item")[0]?.textContent).toContain("messages");
+    });
+
+    it("completes a column behind a `tbl.` qualifier into the editor", async () => {
+        expect.assertions(1);
+
+        const mock = schemaMock();
+
+        render(renderPanel(mock));
+
+        await waitForSchema(mock);
+
+        // Typing a table reference pre-probes its columns; a `tbl.` qualifier then
+        // offers them, and Enter accepts the highlighted one into the editor.
+        typeInEditor("SELECT messages.au");
+
+        await screen.findByTestId("sql-autocomplete");
+
+        const input = screen.getByTestId<HTMLTextAreaElement>("sql-input");
+
+        fireEvent.keyDown(input, { key: "Enter" });
+
+        await waitFor(() => {
+            if (input.value !== "SELECT messages.author") {
+                throw new Error(`not yet: ${input.value}`);
+            }
+        });
+
+        expect(input.value).toBe("SELECT messages.author");
+    });
+
+    it("opens a new editor tab and switches between tabs", () => {
+        expect.assertions(3);
+
+        render(renderPanel(schemaMock()));
+
+        // One tab to start.
+        expect(within(screen.getByTestId("sql-tab-strip")).getAllByTestId(/^sql-tab-select-/u)).toHaveLength(1);
+
+        fireEvent.click(screen.getByTestId("sql-tab-add"));
+
+        const tabs = within(screen.getByTestId("sql-tab-strip")).getAllByTestId(/^sql-tab-select-/u);
+
+        expect(tabs).toHaveLength(2);
+
+        // Each tab carries its own draft: type into the new (active) tab, switch
+        // back to the first, and the editor shows the first tab's text again.
+        const first = within(screen.getByTestId("sql-tab-strip")).getAllByTestId(/^sql-tab-select-/u)[0] as HTMLElement;
+
+        fireEvent.change(screen.getByTestId("sql-input"), { target: { value: "SELECT 2" } });
+        fireEvent.click(first);
+
+        expect(screen.getByTestId<HTMLTextAreaElement>("sql-input").value).toContain("sqlite_master");
+    });
+
+    it("closes a tab and persists open tabs across a remount", () => {
+        expect.assertions(2);
+
+        const { unmount } = render(renderPanel(schemaMock()));
+
+        fireEvent.click(screen.getByTestId("sql-tab-add"));
+        fireEvent.change(screen.getByTestId("sql-input"), { target: { value: "SELECT persisted" } });
+
+        // Two tabs now; close the first, leaving the typed one.
+        const firstSelect = within(screen.getByTestId("sql-tab-strip")).getAllByTestId(/^sql-tab-select-/u)[0] as HTMLElement;
+        const firstId = firstSelect.dataset.testid?.replace("sql-tab-select-", "") ?? "";
+
+        fireEvent.click(screen.getByTestId(`sql-tab-close-${firstId}`));
+
+        expect(within(screen.getByTestId("sql-tab-strip")).getAllByTestId(/^sql-tab-select-/u)).toHaveLength(1);
+
+        // Remount: the persisted tab (and its draft) is restored from storage.
+        unmount();
+        render(renderPanel(schemaMock()));
+
+        expect(screen.getByTestId<HTMLTextAreaElement>("sql-input").value).toBe("SELECT persisted");
+    });
+
+    it("renames a tab in place on double-click and persists the title", () => {
+        expect.assertions(3);
+
+        const { unmount } = render(renderPanel(schemaMock()));
+
+        const select = within(screen.getByTestId("sql-tab-strip")).getAllByTestId(/^sql-tab-select-/u)[0] as HTMLElement;
+        const id = select.dataset.testid?.replace("sql-tab-select-", "") ?? "";
+
+        // Double-click swaps the label for an input; type a title and commit with Enter.
+        fireEvent.doubleClick(select);
+
+        const input = screen.getByTestId<HTMLInputElement>(`sql-tab-rename-${id}`);
+
+        fireEvent.change(input, { target: { value: "My report" } });
+        fireEvent.keyDown(input, { key: "Enter" });
+
+        expect(screen.getByTestId(`sql-tab-select-${id}`).textContent).toBe("My report");
+
+        // The custom title survives a remount (it's persisted on the tab).
+        unmount();
+        render(renderPanel(schemaMock()));
+
+        const restored = within(screen.getByTestId("sql-tab-strip")).getAllByTestId(/^sql-tab-select-/u)[0] as HTMLElement;
+
+        expect(restored.textContent).toBe("My report");
+
+        // Clearing the title reverts the tab to its draft-derived label.
+        fireEvent.doubleClick(restored);
+        const reedit = screen.getByTestId<HTMLInputElement>(restored.dataset.testid?.replace("select", "rename") ?? "");
+
+        fireEvent.change(reedit, { target: { value: "" } });
+        fireEvent.keyDown(reedit, { key: "Enter" });
+
+        // Back to the draft-derived label (the first line of the seed query, truncated).
+        expect(screen.getByTestId(restored.dataset.testid ?? "").textContent).toContain("SELECT name FROM");
+    });
+});
