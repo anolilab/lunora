@@ -14,6 +14,14 @@ export type {
     WriteHook,
 } from "./context";
 export { createContextVectors, createVectorSyncHook } from "./context";
+export { default as createVectorAdminIntrospector } from "./create-admin-introspector";
+export type {
+    VectorAdminIndexSummary,
+    VectorAdminIntrospector,
+    VectorAdminIntrospectorOptions,
+    VectorAdminQueryMatch,
+    VectorIndexRegistryEntry,
+} from "./create-admin-introspector";
 export { default as createVectors } from "./create-vectors";
 export type {
     CirrusVectors,

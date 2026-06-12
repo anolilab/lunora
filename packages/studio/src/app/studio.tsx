@@ -45,6 +45,7 @@ import { SchemaViewer } from "../features/schema/schema-viewer";
 import { SettingsPanel } from "../features/settings/settings-panel";
 import { SqlEditorPanel } from "../features/sql/sql-editor-panel";
 import { FileBrowser } from "../features/storage/file-browser";
+import { VectorBrowser } from "../features/vectors/vector-browser";
 import { useT } from "../i18n/i18n-context";
 import { StudioI18nProvider } from "../i18n/i18n-provider";
 import { fireAndForget } from "../lib/internal";
@@ -81,7 +82,8 @@ type StudioTab =
     | "security"
     | "settings"
     | "sql"
-    | "users";
+    | "users"
+    | "vectors";
 
 interface StudioProps {
     /**
@@ -214,6 +216,7 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
     users: (
         <path d="M16 20v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2M9.5 10a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm11.5 10v-2a4 4 0 0 0-3-3.85M16 3.13A4 4 0 0 1 16 11" />
     ),
+    vectors: <path d="M4 7l8-4 8 4-8 4-8-4Zm0 5 8 4 8-4M4 17l8 4 8-4" />,
 };
 
 /** One icon-rail domain and the sub-pages its secondary nav lists. */
@@ -229,7 +232,7 @@ const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
     { key: "home", tabs: ["home"] },
     { key: "tableEditor", tabs: ["data"] },
     { key: "sql", tabs: ["sql", "functions", "api"] },
-    { key: "database", tabs: ["schema", "migrations", "export", "pitr"] },
+    { key: "database", tabs: ["schema", "migrations", "vectors", "export", "pitr"] },
     { key: "auth", tabs: ["users", "organizations", "authSessions", "authConfig"] },
     { key: "storage", tabs: ["files"] },
     { key: "reports", tabs: ["dashboards", "metrics", "health"] },
@@ -281,6 +284,7 @@ const TABS = [
     "api",
     "schema",
     "migrations",
+    "vectors",
     "export",
     "pitr",
     "users",
@@ -363,6 +367,7 @@ const StudioLayout = (): ReactElement => {
             settings: t("Settings"),
             sql: t("SQL editor"),
             users: t("Users"),
+            vectors: t("Vectors"),
         };
     }, [t]);
 
@@ -411,6 +416,7 @@ const StudioLayout = (): ReactElement => {
             settings: t("Read-only deployment config — vars, secrets, and bindings."),
             sql: t("Run read-only SQL against a shard."),
             users: t("Manage auth users — roles, bans, sessions, and identity."),
+            vectors: t("Browse Vectorize indexes and run similarity searches."),
         };
     }, [t]);
 
@@ -732,6 +738,7 @@ const buildRouter = ({
         settings: <SettingsPanel initialShardKey={initialShardKey} />,
         sql: <SqlEditorPanel initialShardKey={initialShardKey} />,
         users: <UsersPanel />,
+        vectors: <VectorBrowser />,
     };
 
     // `/` renders the Home overview directly (no async redirect, so the first

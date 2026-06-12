@@ -37,6 +37,9 @@ export type {
     ShardingInfo,
     StorageListFn,
     StorageObject,
+    VectorIndexSummary,
+    VectorIntrospector,
+    VectorQueryMatch,
     WorkerOptions,
 } from "./create-worker";
 export { composeWorker, createWorker, defineRpcEnvelope, withFrameworkWorker } from "./create-worker";

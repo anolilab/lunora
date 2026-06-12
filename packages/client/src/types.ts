@@ -395,6 +395,32 @@ export interface CronJobInfo {
     shardKey?: string;
 }
 
+/**
+ * One Vectorize index as `GET /_cirrus/admin/vector/indexes` returns it: the
+ * static schema shape (table, source `field`, `dimensions`, `metric`, mirrored
+ * `metadata` fields) merged with live `describe()` stats (`vectorsCount`,
+ * `processedUpToMutation`) when the binding is reachable. The live fields are
+ * absent for a never-bound index. Vectorize can't enumerate indexes at runtime,
+ * so the list is sourced from the generated `CIRRUS_VECTOR_INDEXES` registry.
+ */
+export interface VectorIndexSummary {
+    dimensions?: number;
+    field?: string;
+    metadata?: ReadonlyArray<string>;
+    metric?: "cosine" | "dot-product" | "euclidean";
+    name: string;
+    processedUpToMutation?: string;
+    table: string;
+    vectorsCount?: number;
+}
+
+/** One nearest-neighbour hit from `POST /_cirrus/admin/vector/query`. */
+export interface VectorQueryMatch {
+    id: string;
+    metadata?: Record<string, unknown>;
+    score: number;
+}
+
 /** A `.global()` (D1-backed) table plus its row count, from `/_cirrus/admin/global/tables`. */
 export interface GlobalTableInfo {
     name: string;

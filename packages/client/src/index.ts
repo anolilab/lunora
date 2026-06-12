@@ -52,4 +52,6 @@ export type {
     StorageObject,
     Unsubscribe,
     User,
+    VectorIndexSummary,
+    VectorQueryMatch,
 } from "./types";

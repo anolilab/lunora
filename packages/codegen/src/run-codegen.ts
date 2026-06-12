@@ -15,7 +15,7 @@ import discoverMigrations from "./discover-migrations";
 import discoverQueries from "./discover-queries";
 import discoverRlsProcedures, { discoverRlsMetadata } from "./discover-rls-procedures";
 import discoverSchema from "./discover-schema";
-import { emitApi, emitCrons, emitDataModel, emitDrizzleSchema, emitFunctions, emitServer, emitShard, emitWranglerCronTriggers } from "./emit";
+import { emitApi, emitCrons, emitDataModel, emitDrizzleSchema, emitFunctions, emitServer, emitShard, emitVectors, emitWranglerCronTriggers } from "./emit";
 import { buildOpenApiDocument, emitOpenApiModule } from "./openapi";
 import { buildOpenRpcDocument, emitOpenRpcModule } from "./openrpc";
 import type { SchemaSnapshot } from "./schema-drift";
@@ -123,6 +123,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const functionsContent = emitFunctions(functions, migrations);
     const shardContent = emitShard(schema, advisories, rlsMetadata, hasAi);
     const cronsContent = emitCrons(crons);
+    const vectorsContent = emitVectors(schema.vectorIndexes);
     const drizzleFiles = emitDrizzleSchema(schema);
 
     // Which API spec(s) the run emits. Defaults to `"openapi"` so existing
@@ -171,6 +172,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         writeIfChanged(join(outputDirectory, "functions.ts"), functionsContent);
         writeIfChanged(join(outputDirectory, "shard.ts"), shardContent);
         writeIfChanged(join(outputDirectory, "crons.ts"), cronsContent);
+        writeIfChanged(join(outputDirectory, "vectors.ts"), vectorsContent);
         writeIfChanged(join(outputDirectory, "drizzle.global.ts"), drizzleFiles.global);
         writeIfChanged(join(outputDirectory, "drizzle.shard.ts"), drizzleFiles.shard);
 
@@ -213,6 +215,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
             openRpcModule: openRpcModuleContent,
             server: serverContent,
             shard: shardContent,
+            vectors: vectorsContent,
         },
         outputDirectory,
         schemaSnapshot,
@@ -310,6 +313,8 @@ export interface CodegenResult {
         openRpcModule: string;
         server: string;
         shard: string;
+        /** Static vector-index registry (`_generated/vectors.ts`) — `CIRRUS_VECTOR_INDEXES`. Empty array body when the schema declares none. */
+        vectors: string;
     };
     outputDirectory: string;
 

@@ -40,6 +40,8 @@ import type {
     StorageObject,
     Unsubscribe,
     User,
+    VectorIndexSummary,
+    VectorQueryMatch,
 } from "./types";
 
 const RPC_PATH = "/_cirrus/rpc";
@@ -77,6 +79,8 @@ const OPENAPI_PATH = "/_cirrus/admin/openapi";
 const OPENRPC_PATH = "/_cirrus/admin/openrpc";
 const GLOBAL_TABLES_PATH = "/_cirrus/admin/global/tables";
 const GLOBAL_TABLE_PATH = "/_cirrus/admin/global/table";
+const VECTOR_INDEXES_PATH = "/_cirrus/admin/vector/indexes";
+const VECTOR_QUERY_PATH = "/_cirrus/admin/vector/query";
 const AUTH_USERS_PATH = "/_cirrus/admin/auth/users";
 const AUTH_SESSIONS_PATH = "/_cirrus/admin/auth/sessions";
 const AUTH_CREATE_USER_PATH = "/_cirrus/admin/auth/users/create";
@@ -1079,6 +1083,44 @@ class CirrusClient {
         }
 
         return (await this.adminFetch(`${GLOBAL_TABLE_PATH}?${params.toString()}`, "GET")) as GlobalTablePage;
+    }
+
+    // --- Vector indexes admin -----------------------------------------------
+
+    /**
+     * List the schema's Vectorize indexes with their declared shape (table,
+     * field, dimensions, metric, metadata) and live stats (vector count,
+     * processing watermark) when the binding is reachable. Hits the admin-gated
+     * `GET /_cirrus/admin/vector/indexes` endpoint — the worker must be built
+     * with a `vectorIntrospector` and `adminToken`. Powers the studio's vector
+     * browser. Vectorize can't enumerate indexes at runtime, so this list comes
+     * from the generated `CIRRUS_VECTOR_INDEXES` registry.
+     */
+    public async listVectorIndexes(): Promise<VectorIndexSummary[]> {
+        if (this.closed) {
+            throw new Error("CirrusClient is closed");
+        }
+
+        const body = (await this.adminFetch(VECTOR_INDEXES_PATH, "GET")) as { indexes?: VectorIndexSummary[] };
+
+        return body.indexes ?? [];
+    }
+
+    /**
+     * Run a nearest-neighbour similarity query against one vector index: the
+     * worker embeds `text` via the index's embedder and returns the top matches.
+     * Hits the admin-gated `POST /_cirrus/admin/vector/query` endpoint. Throws
+     * `VECTOR_QUERY_UNSUPPORTED` when the worker's introspector has no embedder
+     * wired (the index lists read-only).
+     */
+    public async queryVectorIndex(options: { name: string; text: string; topK?: number }): Promise<VectorQueryMatch[]> {
+        if (this.closed) {
+            throw new Error("CirrusClient is closed");
+        }
+
+        const body = (await this.adminFetch(VECTOR_QUERY_PATH, "POST", options)) as { matches?: VectorQueryMatch[] };
+
+        return body.matches ?? [];
     }
 
     // --- Auth admin ---------------------------------------------------------

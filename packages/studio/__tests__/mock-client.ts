@@ -11,6 +11,8 @@ import type {
     ScheduleRecord,
     ShardTrafficResult,
     StorageListPage,
+    VectorIndexSummary,
+    VectorQueryMatch,
 } from "@cirrus/client";
 import { vi } from "vitest";
 
@@ -46,8 +48,10 @@ interface MockClientHooks {
     listGlobalTables: ReturnType<typeof vi.fn>;
     listScheduledJobs: ReturnType<typeof vi.fn>;
     listStorageObjects: ReturnType<typeof vi.fn>;
+    listVectorIndexes: ReturnType<typeof vi.fn>;
     mutation: ReturnType<typeof vi.fn>;
     query: ReturnType<typeof vi.fn>;
+    queryVectorIndex: ReturnType<typeof vi.fn>;
     readGlobalTablePage: ReturnType<typeof vi.fn>;
     removeAuthOrgMember: ReturnType<typeof vi.fn>;
     removeAuthUser: ReturnType<typeof vi.fn>;
@@ -95,8 +99,10 @@ interface MockClientImpls {
     listGlobalTables?: () => GlobalTableInfo[];
     listScheduledJobs?: () => ScheduleRecord[];
     listStorageObjects?: (options: { cursor?: string; limit?: number; prefix?: string }) => StorageListPage;
+    listVectorIndexes?: () => VectorIndexSummary[];
     mutation?: Impl;
     query?: Impl;
+    queryVectorIndex?: (options: { name: string; text: string; topK?: number }) => VectorQueryMatch[];
     readGlobalTablePage?: (options: { limit?: number; offset?: number; table: string }) => GlobalTablePage;
     shardTraffic?: (table: string) => ShardTrafficResult;
     signedStorageUrl?: (key: string) => string;
@@ -132,6 +138,10 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         async (table: string) => impls.shardTraffic?.(table) ?? { failed: 0, ok: 0, shards: [] },
     );
     const listGlobalTables = vi.fn<() => Promise<GlobalTableInfo[]>>(async () => impls.listGlobalTables?.() ?? []);
+    const listVectorIndexes = vi.fn<() => Promise<VectorIndexSummary[]>>(async () => impls.listVectorIndexes?.() ?? []);
+    const queryVectorIndex = vi.fn<(options: { name: string; text: string; topK?: number }) => Promise<VectorQueryMatch[]>>(
+        async (options: { name: string; text: string; topK?: number }) => impls.queryVectorIndex?.(options) ?? [],
+    );
     const readGlobalTablePage = vi.fn<(options: { limit?: number; offset?: number; table: string }) => Promise<GlobalTablePage>>(
         async (options: { limit?: number; offset?: number; table: string }) => impls.readGlobalTablePage?.(options) ?? { columns: [], rows: [], total: 0 },
     );
@@ -277,8 +287,10 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         listGlobalTables,
         listScheduledJobs,
         listStorageObjects,
+        listVectorIndexes,
         mutation,
         query,
+        queryVectorIndex,
         readGlobalTablePage,
         shardTraffic,
         signedStorageUrl,
@@ -305,8 +317,10 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         listGlobalTables,
         listScheduledJobs,
         listStorageObjects,
+        listVectorIndexes,
         mutation,
         query,
+        queryVectorIndex,
         readGlobalTablePage,
         shardTraffic,
         signedStorageUrl,

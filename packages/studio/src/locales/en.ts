@@ -671,6 +671,21 @@ const MESSAGE_IDS = [
     "Per-function call counts, error rates, and latency land here after your first request.",
     "Function and request logs for this shard show up here as your app handles traffic.",
     "No tables in this shard.",
+    // Vector index browser.
+    "Browse Vectorize indexes and run similarity searches.",
+    "dimensions",
+    "field",
+    "Indexes declared with .vectorize() or defineVectorIndex() appear here.",
+    "metadata",
+    "metric",
+    "No matches.",
+    "No vector indexes.",
+    "score",
+    "Search",
+    "Search by similarity…",
+    "Searching…",
+    "vectors",
+    "Vectors",
 ] as const;
 
 /** A known studio message id — one of the entries in {@link MESSAGE_IDS}. */

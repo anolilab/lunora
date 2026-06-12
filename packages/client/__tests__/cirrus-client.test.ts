@@ -1443,6 +1443,61 @@ describe("cirrusClient", () => {
         });
     });
 
+    describe("cirrusClient — vector indexes admin", () => {
+        it("listVectorIndexes GETs the admin endpoint and unwraps the list", async () => {
+            expect.assertions(3);
+
+            const indexes = [{ dimensions: 1024, field: "body", metric: "cosine", name: "by_body", table: "docs", vectorsCount: 42 }];
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ indexes }));
+
+            const client = new CirrusClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            await expect(client.listVectorIndexes()).resolves.toEqual(indexes);
+
+            const [requestUrl, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+
+            expect(requestUrl).toBe("https://app.example/_cirrus/admin/vector/indexes");
+            expect(init.method).toBe("GET");
+        });
+
+        it("listVectorIndexes defaults to an empty array when indexes are absent", async () => {
+            expect.assertions(1);
+
+            const client = new CirrusClient({
+                fetch: async () => jsonResponse({}),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            await expect(client.listVectorIndexes()).resolves.toEqual([]);
+        });
+
+        it("queryVectorIndex POSTs name/text/topK and unwraps the matches", async () => {
+            expect.assertions(4);
+
+            const matches = [{ id: "row-1", metadata: { title: "hi" }, score: 0.9 }];
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ matches }));
+
+            const client = new CirrusClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            await expect(client.queryVectorIndex({ name: "by_body", text: "hello", topK: 5 })).resolves.toEqual(matches);
+
+            const [requestUrl, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+
+            expect(requestUrl).toBe("https://app.example/_cirrus/admin/vector/query");
+            expect(init.method).toBe("POST");
+            expect(JSON.parse(init.body as string)).toEqual({ name: "by_body", text: "hello", topK: 5 });
+        });
+    });
+
     describe("cirrusClient — auth admin", () => {
         it("listAuthUsers GETs the users endpoint with paging", async () => {
             expect.assertions(4);

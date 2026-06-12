@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { emitApi, emitDataModel, emitDrizzleSchema, emitFunctions, emitServer, emitShard, runCodegen } from "../src/index";
+import { emitApi, emitDataModel, emitDrizzleSchema, emitFunctions, emitServer, emitShard, emitVectors, runCodegen } from "../src/index";
 import type { FunctionIR, SchemaIR } from "../src/ir";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -558,6 +558,36 @@ export const summarize = action({ args: { text: v.string() }, handler: async (ct
             const output = emitApi([makeFunction({ returnType: "{ ok: boolean }" })]);
 
             expect(output).not.toContain("./dataModel.js");
+        });
+    });
+
+    describe("emitVectors", () => {
+        it("emits a sorted CIRRUS_VECTOR_INDEXES registry from the schema's vector indexes", () => {
+            expect.assertions(4);
+
+            const output = emitVectors([
+                { dimensions: 1024, field: "body", metadata: ["title"], metric: "cosine", name: "by_body", table: "docs" },
+                { dimensions: 768, metric: "euclidean", name: "abstracts", table: "papers" },
+            ]);
+
+            // eslint-disable-next-line no-secrets/no-secrets -- generated type annotation, not a secret
+            expect(output).toContain("export const CIRRUS_VECTOR_INDEXES: ReadonlyArray<CirrusVectorIndex> = [");
+            // Sorted by name: `abstracts` precedes `by_body`.
+            expect(output.indexOf('name: "abstracts"')).toBeLessThan(output.indexOf('name: "by_body"'));
+            // Shape A entry carries field + metadata; the metric/dimensions ride along.
+            expect(output).toContain('{ name: "by_body", table: "docs", field: "body", dimensions: 1024, metric: "cosine", metadata: ["title"] },');
+            // Shape B entry (no source field) omits the `field` key entirely.
+            expect(output).toContain('{ name: "abstracts", table: "papers", dimensions: 768, metric: "euclidean" },');
+        });
+
+        it("emits an empty registry when the schema declares no vector indexes", () => {
+            expect.assertions(2);
+
+            const output = emitVectors([]);
+
+            // eslint-disable-next-line no-secrets/no-secrets -- generated type annotation, not a secret
+            expect(output).toContain("export const CIRRUS_VECTOR_INDEXES: ReadonlyArray<CirrusVectorIndex> = [];");
+            expect(output).toContain("export interface CirrusVectorIndex");
         });
     });
 

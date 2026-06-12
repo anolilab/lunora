@@ -238,6 +238,46 @@ interface GlobalIntrospector {
     readTablePage: (options: { limit?: number; offset?: number; table: string }) => Promise<GlobalTablePage>;
 }
 
+/**
+ * One vector index as the studio's vector browser lists it: the static schema
+ * metadata (name/table/field/dimensions/metric/metadata) merged with the live
+ * Vectorize `describe()` stats (`vectorsCount`, processing watermark) when the
+ * binding is reachable. The live fields are optional so a never-bound index
+ * still lists with its declared shape.
+ */
+interface VectorIndexSummary {
+    dimensions?: number;
+    field?: string;
+    metadata?: ReadonlyArray<string>;
+    metric?: "cosine" | "dot-product" | "euclidean";
+    name: string;
+    /** Most recent mutation Vectorize has finished indexing, from `describe()`. */
+    processedUpToMutation?: string;
+    table: string;
+    /** Live vector count from `describe()`; absent when the binding is unreachable. */
+    vectorsCount?: number;
+}
+
+/** One nearest-neighbour hit from a vector-index similarity query. */
+interface VectorQueryMatch {
+    id: string;
+    metadata?: Record<string, unknown>;
+    score: number;
+}
+
+/**
+ * Introspect Vectorize indexes for the studio's vector browser. Built in the
+ * worker entry from the generated `CIRRUS_VECTOR_INDEXES` registry (Vectorize
+ * cannot enumerate indexes at runtime) paired with the env bindings + the
+ * schema's per-index embedders. `queryIndex` is optional: an index with no
+ * embedder (a `select`-derived Shape B index, or a deployment that withholds the
+ * embedder) lists but cannot be similarity-queried from the studio.
+ */
+interface VectorIntrospector {
+    listIndexes: () => Promise<VectorIndexSummary[]>;
+    queryIndex?: (options: { name: string; text: string; topK?: number }) => Promise<{ matches: VectorQueryMatch[] }>;
+}
+
 // The auth-admin contract (`AuthAdmin`, the wire-shape rows, capabilities) and
 // its `/_cirrus/admin/auth/*` routes live in `./auth-admin-routes`, keeping the
 // whole user-management plane out of this file. Types are imported at the top
@@ -684,6 +724,16 @@ interface WorkerOptions {
      * endpoint. When omitted, the sync feed covers only shard-local tables.
      */
     syncGlobals?: GlobalCdcSyncFunction;
+
+    /**
+     * Read-only introspector for Vectorize indexes, backing the studio's vector
+     * browser via `GET /_cirrus/admin/vector/indexes` and
+     * `POST /_cirrus/admin/vector/query`. Build it from the generated
+     * `CIRRUS_VECTOR_INDEXES` registry plus the env Vectorize bindings (and the
+     * schema's embedders, to enable similarity queries). Omit it and those
+     * endpoints respond `VECTORS_NOT_CONFIGURED`.
+     */
+    vectorIntrospector?: VectorIntrospector;
 }
 
 interface RpcContext {
@@ -839,6 +889,8 @@ const OPENAPI_PATH = "/_cirrus/admin/openapi";
 const OPENRPC_PATH = "/_cirrus/admin/openrpc";
 const GLOBAL_TABLES_PATH = "/_cirrus/admin/global/tables";
 const GLOBAL_TABLE_PATH = "/_cirrus/admin/global/table";
+const VECTOR_INDEXES_PATH = "/_cirrus/admin/vector/indexes";
+const VECTOR_QUERY_PATH = "/_cirrus/admin/vector/query";
 // `/_cirrus/admin/auth/*` paths + handlers live in `./auth-admin-routes`.
 
 /**
@@ -3043,6 +3095,53 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         return Response.json(page, { headers: { "content-type": "application/json" }, status: 200 });
     };
 
+    const handleVectorIndexes = async (request: Request): Promise<Response> => {
+        if (request.method !== "GET") {
+            throw new CirrusError("Vector-indexes endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        const introspector = requireAdminOption(request, options.vectorIntrospector, {
+            code: "VECTORS_NOT_CONFIGURED",
+            message: "vector endpoints require a `vectorIntrospector` on the worker",
+        });
+
+        return Response.json({ indexes: await introspector.listIndexes() }, { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
+    const handleVectorQuery = async (request: Request): Promise<Response> => {
+        if (request.method !== "POST") {
+            throw new CirrusError("Vector-query endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        const introspector = requireAdminOption(request, options.vectorIntrospector, {
+            code: "VECTORS_NOT_CONFIGURED",
+            message: "vector endpoints require a `vectorIntrospector` on the worker",
+        });
+
+        if (introspector.queryIndex === undefined) {
+            throw new CirrusError("vector index querying is not enabled on this worker", { code: "VECTOR_QUERY_UNSUPPORTED", status: 400 });
+        }
+
+        const body = await readJsonBodyWithLimit(request);
+        const candidate = body as { name?: unknown; text?: unknown; topK?: unknown };
+
+        if (typeof candidate.name !== "string" || candidate.name === "") {
+            throw new CirrusError("Vector-query request requires a `name` string", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        if (typeof candidate.text !== "string" || candidate.text === "") {
+            throw new CirrusError("Vector-query request requires a `text` string", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        if (candidate.topK !== undefined && (typeof candidate.topK !== "number" || !Number.isInteger(candidate.topK) || candidate.topK < 1)) {
+            throw new CirrusError("Vector-query `topK` must be a positive integer", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const result = await introspector.queryIndex({ name: candidate.name, text: candidate.text, topK: candidate.topK });
+
+        return Response.json(result, { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
     const buildHttpActionContext = async (request: Request, env: unknown): Promise<HttpActionContext> => {
         const { claims, headers, userId } = await resolveForwardContext(request, env, options.resolveIdentity);
 
@@ -3735,6 +3834,8 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         [OPENRPC_PATH]: (request) => handleOpenRpc(request),
         [GLOBAL_TABLES_PATH]: (request) => handleGlobalTables(request),
         [GLOBAL_TABLE_PATH]: (request) => handleGlobalTablePage(request),
+        [VECTOR_INDEXES_PATH]: (request) => handleVectorIndexes(request),
+        [VECTOR_QUERY_PATH]: (request) => handleVectorQuery(request),
         // `/_cirrus/admin/auth/*` — the whole user-management plane, one route per
         // `AuthAdmin` op, dispatched by the descriptor table in `./auth-admin-routes`.
         ...buildAuthAdminRoutes({
@@ -3977,6 +4078,9 @@ export type {
     StorageObject,
     StorageSignedUrlFunction as StorageSignedUrlFn,
     StorageUploadFunction as StorageUploadFn,
+    VectorIndexSummary,
+    VectorIntrospector,
+    VectorQueryMatch,
     WorkerOptions,
 };
 
