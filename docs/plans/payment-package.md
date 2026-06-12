@@ -59,6 +59,32 @@ a `NormalizedEvent` (`type`, `amount`, `currency`, `provider`, ids, metadata). F
   Not embeddable in Workers, but its **entitlement model** (`check(feature)`, `track(usage)`) is the blueprint for a
   later `@cirrus/payment` entitlements tier.
 
+### 2d. Medusa payment module — _the interface shape to borrow_ (MIT, do not depend)
+
+[medusajs/medusa](https://github.com/medusajs/medusa) is a full commerce platform; `@medusajs/payment` is tied to
+their DI container + MikroORM + Postgres and is **not Workers-compatible**, so we do not depend on it. But its
+`AbstractPaymentProvider` is the most mature provider abstraction available and several pieces directly upgrade this
+plan:
+
+1. **Two-phase `authorize` → `capture` lifecycle.** Required methods: `initiatePayment` → `authorizePayment` →
+   `capturePayment` → `refundPayment`, plus `cancelPayment` (authorized-but-not-captured), `deletePayment`,
+   `getPaymentStatus`, `retrievePayment`, `updatePayment`. The correct one-time-payment state machine — missing from
+   the P0 draft — adopted **alongside** the subscription-sync model.
+2. **Webhook returns an _action_, not a provider event.**
+   `getWebhookActionAndData(payload) → { action: "authorized" | "captured" | "failed" | "not_supported", data: { session_id, amount } }`.
+   The adapter decides which **core state transition** a webhook implies, instead of leaking each provider's event
+   taxonomy into core. We reshape `NormalizedEvent` to this "action + minimal data" model.
+3. **`static identifier` + `static validateOptions(options)`.** Each provider declares a stable id (Medusa formats ids
+   as `pp_{identifier}_{id}`) and a static config validator that fails fast on misconfig — maps onto our adapter
+   registry and `@cirrus/config` validation.
+4. **Strict provider-vs-data-model separation** (validates §7.1): the provider is a **stateless API translator**; the
+   module owns all state (PaymentCollection → PaymentSession → Payment → Capture / Refund). **Captures and refunds are
+   append-only records** linked to a payment (multiple partial refunds), not booleans — so we add `payment_sessions`,
+   `captures`, and `refunds` tables.
+
+> What to avoid: no cart/region/order concepts; Medusa is one-time-payment-centric (weak subscriptions), so we
+> **merge** its lifecycle with the Convex/Stripe subscription-sync model rather than choosing one.
+
 ## 3. Recommendation
 
 Build `@cirrus/payment` as a **native Cirrus add-on** (like `@cirrus/auth` / `@cirrus/mail`), structured as:
@@ -66,7 +92,7 @@ Build `@cirrus/payment` as a **native Cirrus add-on** (like `@cirrus/auth` / `@c
 1. A **provider-adapter interface** — one adapter per provider, each wrapping the provider's official SDK.
 2. A **normalized event + webhook ingress** wired into `@cirrus/runtime`, with retries via `@cirrus/scheduler`.
 3. A **durable sync store** (`PaymentDO` on SQLite; `@cirrus/d1` for `.global()` reads) holding customers,
-   subscriptions, checkouts, payments, invoices, and (optional) entitlements.
+   subscriptions, checkouts, payment_sessions, payments, captures, refunds, invoices, and (optional) entitlements.
 4. **Reactive reads** as `@cirrus/server` queries/subscriptions, and **`ctx.payments`** wired onto `ActionCtx` by
    `@cirrus/codegen` (the same pattern `@cirrus/ai` uses for `ctx.ai`).
 5. **`referenceId`** linkage to `@cirrus/auth` (user/org/workspace), allowing multiple subscriptions per reference.
@@ -98,7 +124,8 @@ packages/payment/
 │   ├── adapter.ts          # PaymentAdapter interface + registry
 │   ├── webhook.ts          # verify → normalize → dispatch → sync (registerPaymentRoutes)
 │   ├── store.ts            # sync-store interface (DO-backed / D1-backed)
-│   ├── schema.ts           # defineSchema tables: customers, subscriptions, checkouts, payments, invoices
+│   ├── schema.ts           # defineSchema tables: customers, subscriptions, checkouts,
+│   │                       #   payment_sessions, payments, captures, refunds, invoices
 │   └── providers/
 │       ├── stripe.ts       # wraps `stripe`
 │       ├── polar.ts        # wraps `@polar-sh/sdk`            (phase 2)
@@ -116,23 +143,38 @@ packages/payment/
 
 ```ts
 export interface PaymentAdapter {
-  readonly provider: "stripe" | "polar" | "lemonsqueezy" | "paddle";
+  readonly identifier: "stripe" | "polar" | "lemonsqueezy" | "paddle";   // Medusa-style stable id
   readonly capabilities: { merchantOfRecord: boolean; usageMetering: boolean; portal: boolean };
-  createCheckout(input: CheckoutInput): Promise<CheckoutResult>;        // hosted/embedded URL
+  validateOptions(options: unknown): void | never;                       // fail fast on misconfig
+
+  // one-time-payment lifecycle (Medusa-style: initiate → authorize → capture → refund)
+  initiatePayment(input: InitiateInput): Promise<PaymentSession>;        // create intent/session
+  authorizePayment(input: AuthorizeInput): Promise<PaymentSession>;
+  capturePayment(input: CaptureInput): Promise<Capture>;
+  refundPayment(input: RefundInput): Promise<Refund>;                    // supports partial/multiple
+  cancelPayment(id: string): Promise<PaymentSession>;                    // authorized, not captured
+  getPaymentStatus(id: string): Promise<PaymentStatus>;
+
+  // subscriptions + hosted UX (Convex/Stripe-style sync model)
+  createCheckout(input: CheckoutInput): Promise<CheckoutResult>;         // hosted/embedded URL
   createPortalSession(input: PortalInput): Promise<{ url: string }>;
   getOrCreateCustomer(ref: CustomerRef): Promise<Customer>;
   cancelSubscription(id: string, opts?: CancelOpts): Promise<Subscription>;
   resumeSubscription(id: string): Promise<Subscription>;
   updateSubscription(id: string, patch: SubscriptionPatch): Promise<Subscription>;
-  verifyWebhook(req: Request, secret: string): Promise<unknown>;        // provider raw event
-  normalizeEvent(raw: unknown): NormalizedEvent;                        // → unified shape
+
+  // webhook ingress → core state transition (Medusa getWebhookActionAndData shape)
+  verifyWebhook(req: Request, secret: string): Promise<unknown>;         // provider raw event
+  getWebhookAction(raw: unknown): WebhookAction;                         // action + minimal data
 }
 
-export type NormalizedEvent =
-  | { type: "checkout.completed"; referenceId: string; /* … */ }
-  | { type: "subscription.created" | "subscription.updated" | "subscription.canceled"; /* … */ }
-  | { type: "payment.succeeded" | "payment.failed"; /* … */ }
-  | { type: "invoice.paid" | "invoice.payment_failed"; /* … */ };
+export type WebhookAction = {
+  action:
+    | "authorized" | "captured" | "failed" | "refunded"
+    | "subscription.active" | "subscription.updated" | "subscription.canceled"
+    | "not_supported";
+  data: { referenceId?: string; sessionId?: string; subscriptionId?: string; amount?: bigint; eventId: string };
+};
 ```
 
 ### Webhook flow
@@ -140,8 +182,8 @@ export type NormalizedEvent =
 ```
 provider POST ─▶ @cirrus/runtime route (registerPaymentRoutes)
               ─▶ adapter.verifyWebhook(req, secret)
-              ─▶ adapter.normalizeEvent(raw) → NormalizedEvent
-              ─▶ store.apply(event)  (idempotent upsert into PaymentDO/D1, keyed by event id)
+              ─▶ adapter.getWebhookAction(raw) → WebhookAction (action + minimal data)
+              ─▶ store.apply(action)  (idempotent upsert into PaymentDO/D1, keyed by eventId)
               ─▶ enqueue side-effects via @cirrus/scheduler (emails, fulfillment) with retry
               ─▶ reactive queries/subscriptions update clients live
 ```
@@ -202,3 +244,7 @@ provider POST ─▶ @cirrus/runtime route (registerPaymentRoutes)
 - Entitlements/auth: [Better Auth Stripe plugin](https://better-auth.com/docs/plugins/stripe) ·
   [Better Auth Autumn plugin](https://better-auth.com/docs/plugins/autumn) ·
   [useautumn/autumn](https://github.com/useautumn/autumn) · [Autumn docs](https://docs.useautumn.com/welcome)
+- Medusa payment module: [medusajs/medusa](https://github.com/medusajs/medusa) ·
+  [Payment Module Provider](https://docs.medusajs.com/resources/commerce-modules/payment/payment-provider) ·
+  [getWebhookActionAndData](https://docs.medusajs.com/resources/references/payment/getWebhookActionAndData) ·
+  [Payment webhook events](https://docs.medusajs.com/resources/commerce-modules/payment/webhook-events)
