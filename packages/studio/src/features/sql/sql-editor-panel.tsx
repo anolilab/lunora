@@ -171,6 +171,12 @@ const derivedTabLabel = (sql: string, untitled: string): string => (sql.trim() =
 const TabButton = ({ active, canClose, onClose, onRename, onSelect, tab }: TabButtonProps): ReactElement => {
     const t = useT();
     const [editing, setEditing] = useState<boolean>(false);
+    const [confirmingClose, setConfirmingClose] = useState<boolean>(false);
+
+    // A tab holds unsaved work only when it's an unlinked scratch draft with
+    // text — a linked tab auto-saves to its query, and an empty tab loses
+    // nothing — so only those prompt before closing.
+    const dirty = tab.activeId === null && tab.sql.trim() !== "";
 
     // Callback ref: focus + select the title the moment the inline editor mounts
     // (replaces `autoFocus`, and fires once on open rather than every render).
@@ -185,10 +191,28 @@ const TabButton = ({ active, canClose, onClose, onRename, onSelect, tab }: TabBu
     const onCloseClick = useCallback(
         (event: React.MouseEvent<HTMLButtonElement>): void => {
             event.stopPropagation();
+
+            // Guard an unsaved draft behind the inline confirm; close the rest outright.
+            if (dirty) {
+                setConfirmingClose(true);
+            } else {
+                onClose(tab.id);
+            }
+        },
+        [dirty, onClose, tab.id],
+    );
+    const confirmClose = useCallback(
+        (event: React.MouseEvent<HTMLButtonElement>): void => {
+            event.stopPropagation();
+            setConfirmingClose(false);
             onClose(tab.id);
         },
         [onClose, tab.id],
     );
+    const cancelClose = useCallback((event: React.MouseEvent<HTMLButtonElement>): void => {
+        event.stopPropagation();
+        setConfirmingClose(false);
+    }, []);
 
     const startEditing = useCallback((): void => {
         setEditing(true);
@@ -250,29 +274,58 @@ const TabButton = ({ active, canClose, onClose, onRename, onSelect, tab }: TabBu
                     {label}
                 </button>
             )}
-            {canClose && (
-                <button
-                    aria-label={t("Close tab")}
-                    className="flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
-                    data-testid={`sql-tab-close-${tab.id}`}
-                    onClick={onCloseClick}
-                    title={t("Close tab")}
-                    type="button"
-                >
-                    <svg
-                        aria-hidden="true"
-                        className="size-3"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={2}
-                        viewBox="0 0 24 24"
+            {canClose &&
+                (confirmingClose ? (
+                    <span className="flex shrink-0 items-center gap-1" data-testid={`sql-tab-close-prompt-${tab.id}`} role="group">
+                        <span className="text-[11px] text-muted-foreground">{t("Discard?")}</span>
+                        <button
+                            aria-label={t("Discard changes")}
+                            className="flex size-5 items-center justify-center rounded text-destructive hover:bg-destructive/10"
+                            data-testid={`sql-tab-close-confirm-${tab.id}`}
+                            onClick={confirmClose}
+                            title={t("Discard changes")}
+                            type="button"
+                        >
+                            <svg aria-hidden="true" className="size-3" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.4} viewBox="0 0 24 24">
+                                <path d="M5 13l4 4L19 7" />
+                            </svg>
+                        </button>
+                        <button
+                            aria-label={t("Keep editing")}
+                            className="flex size-5 items-center justify-center rounded text-muted-foreground hover:bg-accent"
+                            data-testid={`sql-tab-close-cancel-${tab.id}`}
+                            onClick={cancelClose}
+                            title={t("Keep editing")}
+                            type="button"
+                        >
+                            <svg aria-hidden="true" className="size-3" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.4} viewBox="0 0 24 24">
+                                <path d="M6 6l12 12M18 6 6 18" />
+                            </svg>
+                        </button>
+                    </span>
+                ) : (
+                    <button
+                        aria-label={t("Close tab")}
+                        className="flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                        data-testid={`sql-tab-close-${tab.id}`}
+                        onClick={onCloseClick}
+                        title={t("Close tab")}
+                        type="button"
                     >
-                        <path d="M6 6l12 12M18 6 6 18" />
-                    </svg>
-                </button>
-            )}
+                        <svg
+                            aria-hidden="true"
+                            className="size-3"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            viewBox="0 0 24 24"
+                        >
+                            <path d="M6 6l12 12M18 6 6 18" />
+                        </svg>
+                    </button>
+                ))}
         </div>
     );
 };

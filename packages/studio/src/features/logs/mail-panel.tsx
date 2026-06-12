@@ -2,17 +2,17 @@ import { useCirrus } from "@cirrus/react";
 import type { ChangeEvent, MouseEvent, ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import type { CapturedMail, CapturedMailResult, SendTestMailResult } from "../../lib/admin";
-import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Input } from "../../components/ui/input";
 import { ScrollArea } from "../../components/ui/scroll-area";
 import { Separator } from "../../components/ui/separator";
-import { useT } from "../../i18n/i18n-context";
-import { adminRef, callOptions, copyToClipboard, errorMessage, fireAndForget, formatTimestamp } from "../../lib/internal";
 import { useAutoRefresh } from "../../hooks/use-auto-refresh";
+import { useT } from "../../i18n/i18n-context";
+import type { CapturedMail, CapturedMailResult, SendTestMailResult } from "../../lib/admin";
+import { ADMIN_FUNCTIONS } from "../../lib/admin";
+import { adminRef, callOptions, copyToClipboard, errorMessage, fireAndForget, formatTimestamp } from "../../lib/internal";
 
 interface MailPanelProps {
     /** Newest-N to load (default 100). */

@@ -3,12 +3,12 @@ import { useCirrus } from "@cirrus/react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { ConfirmButton } from "../../components/confirm-button";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
-import { ConfirmButton } from "../../components/confirm-button";
+import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import { useT } from "../../i18n/i18n-context";
 import { errorMessage, fireAndForget, formatTimestamp } from "../../lib/internal";
-import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 
 interface ScheduledJobsProps {
     /**

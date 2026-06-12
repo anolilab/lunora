@@ -313,11 +313,13 @@ describe("sqlEditorPanel", () => {
         fireEvent.click(screen.getByTestId("sql-tab-add"));
         fireEvent.change(screen.getByTestId("sql-input"), { target: { value: "SELECT persisted" } });
 
-        // Two tabs now; close the first, leaving the typed one.
+        // Two tabs now; close the first, leaving the typed one. The seed tab holds
+        // unsaved template SQL, so confirm the discard prompt to actually close it.
         const firstSelect = within(screen.getByTestId("sql-tab-strip")).getAllByTestId(/^sql-tab-select-/u)[0] as HTMLElement;
         const firstId = firstSelect.dataset.testid?.replace("sql-tab-select-", "") ?? "";
 
         fireEvent.click(screen.getByTestId(`sql-tab-close-${firstId}`));
+        fireEvent.click(screen.getByTestId(`sql-tab-close-confirm-${firstId}`));
 
         expect(within(screen.getByTestId("sql-tab-strip")).getAllByTestId(/^sql-tab-select-/u)).toHaveLength(1);
 
@@ -363,5 +365,35 @@ describe("sqlEditorPanel", () => {
 
         // Back to the draft-derived label (the first line of the seed query, truncated).
         expect(screen.getByTestId(restored.dataset.testid ?? "").textContent).toContain("SELECT name FROM");
+    });
+
+    it("confirms before closing a tab with unsaved changes, and cancel keeps it", () => {
+        expect.assertions(4);
+
+        render(renderPanel(schemaMock()));
+
+        // Add a second (empty) tab and type an unlinked draft into it — unsaved work.
+        fireEvent.click(screen.getByTestId("sql-tab-add"));
+        fireEvent.change(screen.getByTestId("sql-input"), { target: { value: "SELECT unsaved" } });
+
+        const selects = within(screen.getByTestId("sql-tab-strip")).getAllByTestId(/^sql-tab-select-/u);
+        const secondId = (selects[1] as HTMLElement).dataset.testid?.replace("sql-tab-select-", "") ?? "";
+
+        // Clicking close on the dirty tab does NOT close it — it shows a discard prompt.
+        fireEvent.click(screen.getByTestId(`sql-tab-close-${secondId}`));
+
+        expect(screen.getByTestId(`sql-tab-close-prompt-${secondId}`)).toBeDefined();
+        expect(within(screen.getByTestId("sql-tab-strip")).getAllByTestId(/^sql-tab-select-/u)).toHaveLength(2);
+
+        // Cancel keeps the tab and restores the close button.
+        fireEvent.click(screen.getByTestId(`sql-tab-close-cancel-${secondId}`));
+
+        expect(within(screen.getByTestId("sql-tab-strip")).getAllByTestId(/^sql-tab-select-/u)).toHaveLength(2);
+
+        // Re-open the prompt and confirm — now it closes.
+        fireEvent.click(screen.getByTestId(`sql-tab-close-${secondId}`));
+        fireEvent.click(screen.getByTestId(`sql-tab-close-confirm-${secondId}`));
+
+        expect(within(screen.getByTestId("sql-tab-strip")).getAllByTestId(/^sql-tab-select-/u)).toHaveLength(1);
     });
 });
