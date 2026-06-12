@@ -323,11 +323,13 @@ describe("ctx-db relations", () => {
             await expect(writer.findMany("local", { with: { remote: true } })).rejects.toThrow(/requires a globalDb writer/u);
         });
 
-        it("rejects the reverse direction: a global parent cannot load a shard-local child", async () => {
-            expect.assertions(1);
+        it("delegates the reverse direction (global parent → shard-local child) to the injected fetcher", async () => {
+            expect.assertions(2);
 
-            // `globals` (global, D1) declares a relation back to `local` (shard-local).
-            // Resolving it would need a fan-out across every DO, so the loader refuses.
+            // `globals` (global, D1) declares a relation to `local` (shard-local).
+            // The loader no longer pre-rejects this direction — routing is the
+            // injected fetcher's job (in production the D1 ctx-db's cross-shard
+            // reader, or a clear throw when that capability is unwired).
             const reverseSchema: SchemaLike = {
                 tables: {
                     globals: {
@@ -340,20 +342,26 @@ describe("ctx-db relations", () => {
                 },
             };
 
-            const reject = async (): Promise<never> => {
-                throw new Error("fetcher should never be called for a rejected cross-backend direction");
-            };
+            const fetchedTables: string[] = [];
+            const parents = [{ _id: "g1", ownerId: "l1" }];
 
-            await expect(
-                resolveWith({
-                    counter: async () => 0,
-                    fetcher: reject,
-                    parents: [{ _id: "g1", ownerId: "l1" }],
-                    schema: reverseSchema,
-                    tableName: "globals",
-                    with: { owner: true },
-                }),
-            ).rejects.toThrow(/a global table cannot load the shard-local relation 'local'/u);
+            await resolveWith({
+                counter: async () => 0,
+                fetcher: async (table) => {
+                    fetchedTables.push(table);
+
+                    return { continueCursor: null, isDone: true, page: [{ _id: "l1", name: "Local One" }] };
+                },
+                parents,
+                schema: reverseSchema,
+                tableName: "globals",
+                with: { owner: true },
+            });
+
+            // The loader delegated to the fetcher for the shard-local child …
+            expect(fetchedTables).toEqual(["local"]);
+            // … and attached the loaded child onto the global parent.
+            expect(parents[0]).toMatchObject({ owner: { _id: "l1", name: "Local One" } });
         });
     });
 

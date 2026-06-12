@@ -103,6 +103,25 @@ interface D1ContextDatabaseOptions {
      */
     cdc?: boolean;
     clock?: () => number;
+
+    /**
+     * Cross-shard counter for **reverse cross-backend relations** — mirrors
+     * {@link D1ContextDatabaseOptions.crossShardReader} for `_count`.
+     */
+    crossShardCounter?: DatabaseWriterLike["count"];
+
+    /**
+     * Optional cross-shard reader for **reverse cross-backend relations**: a
+     * `.global()` (D1) parent loading a shard-local (`.shardBy()`/root) child.
+     * Such a child's rows are partitioned across every shard DO, so the local D1
+     * writer can't resolve it. When provided, the relation loader routes the
+     * child's read through this (the host wires it to the Query Coordinator's
+     * RLS-correct `fanOut`, with identity forwarded so each shard applies its own
+     * RLS). Absent it, loading such a relation throws a clear "not supported"
+     * error (legacy behaviour). The forward direction (shard-local parent →
+     * global child) and same-backend relations never touch this.
+     */
+    crossShardReader?: DatabaseWriterLike["findMany"];
     exec: D1Exec;
     idGenerator?: () => string;
 
@@ -1153,7 +1172,7 @@ const trimD1CdcChanges = async (exec: D1Exec, throughSeq: number): Promise<void>
 };
 
 const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWriterLike => {
-    const { exec, schema } = options;
+    const { crossShardCounter, crossShardReader, exec, schema } = options;
     const clock = options.clock ?? (() => Date.now());
     const generateId = options.idGenerator ?? (() => crypto.randomUUID());
     const cdcEnabled = options.cdc ?? false;
@@ -1952,6 +1971,24 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
         });
     };
 
+    /**
+     * Is `childTable` an explicitly shard-local relation target (`.shardBy()` or
+     * root)? Such children live across every shard DO, so a `.global()` parent
+     * can only load them via the injected cross-shard reader. `global`/undefined
+     * children stay on the local D1 writer (same-backend / forward direction).
+     */
+    const isShardLocalTarget = (childTable: string): boolean => {
+        const kind = schema.tables[childTable]?.shardMode?.kind;
+
+        return kind === "shardBy" || kind === "root";
+    };
+
+    const crossBackendUnsupported = (childTable: string): never => {
+        throw new Error(
+            `cross-backend relation: a global table cannot load the shard-local relation '${childTable}' (it spans every shard) — wire a cross-shard reader to support it`,
+        );
+    };
+
     const writer: DatabaseWriterLike = {
         // eslint-disable-next-line sonarjs/cognitive-complexity -- routes count/sum/avg/min/max through the indexed companion vs scan fallback; the branching reads clearer inline than split across per-op helpers
         async aggregate(tableName, aggOptions: AggregateOptions): Promise<AggregateResult> {
@@ -2208,9 +2245,30 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             const rows = await exec.all(querySql, params);
             const documents = decodeRows(definition, rows);
 
+            // Relation reads/counts routed by the child's backend: a shard-local
+            // child of this global parent fans out via the injected cross-shard
+            // reader (or throws when unwired); global/same-backend children stay
+            // on the local D1 writer. Defined here so referencing `writer` is at
+            // call time (the routed fetcher and `writer.findMany` are mutually
+            // recursive for nested `with`).
+            const relationFetcher: DatabaseWriterLike["findMany"] = (childTable, childArgs) => {
+                if (!isShardLocalTarget(childTable)) {
+                    return writer.findMany(childTable, childArgs);
+                }
+
+                return crossShardReader ? crossShardReader(childTable, childArgs) : crossBackendUnsupported(childTable);
+            };
+            const relationCounter: DatabaseWriterLike["count"] = (childTable, where) => {
+                if (!isShardLocalTarget(childTable)) {
+                    return writer.count(childTable, where);
+                }
+
+                return crossShardCounter ? crossShardCounter(childTable, where) : crossBackendUnsupported(childTable);
+            };
+
             if (limit === undefined) {
                 if (args.with) {
-                    await resolveWith({ counter: writer.count, fetcher: writer.findMany, parents: documents, schema, tableName, with: args.with });
+                    await resolveWith({ counter: relationCounter, fetcher: relationFetcher, parents: documents, schema, tableName, with: args.with });
                 }
 
                 // eslint-disable-next-line unicorn/no-null -- findMany's public return uses `continueCursor: string | null`; an unpaged result has no cursor.
@@ -2222,7 +2280,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             const last = page.at(-1);
 
             if (args.with) {
-                await resolveWith({ counter: writer.count, fetcher: writer.findMany, parents: page, schema, tableName, with: args.with });
+                await resolveWith({ counter: relationCounter, fetcher: relationFetcher, parents: page, schema, tableName, with: args.with });
             }
 
             return {
