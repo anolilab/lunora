@@ -299,6 +299,65 @@ describe("fileBrowser", () => {
         expect(screen.getByTestId("storage-orphan-orphan.png").textContent).toContain("Orphan");
     });
 
+    it("detects dangling references: a record field pointing at an object the bucket no longer has", async () => {
+        expect.assertions(2);
+
+        const PAGE: StorageListPage = { objects: [{ etag: "k1", key: "live.png", size: 10 }] };
+        const mock = createMockClient({
+            listStorageObjects: (): StorageListPage => PAGE,
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.storageReferences) {
+                    return { references: { "live.png": [] }, storageColumns: { users: ["avatar"] } };
+                }
+
+                if (reference === ADMIN_FUNCTIONS.storageOrphans) {
+                    return { references: [{ column: "avatar", id: "u9", key: "gone.png", table: "users" }], scanned: 1, truncated: false };
+                }
+
+                return undefined;
+            },
+        });
+
+        render(renderBrowser(mock));
+
+        await screen.findByTestId("fb-table");
+
+        // The orphan-check section is shown (the schema declares a v.storage() column).
+        fireEvent.click(await screen.findByTestId("fb-orphans-check"));
+
+        const dangling = await screen.findByTestId("fb-dangling-users-u9-avatar");
+
+        expect(dangling.textContent).toContain("users·u9");
+        expect(dangling.textContent).toContain("gone.png");
+    });
+
+    it("shows the empty state when the orphan check finds no dangling references", async () => {
+        expect.assertions(1);
+
+        const PAGE: StorageListPage = { objects: [{ etag: "k1", key: "live.png", size: 10 }] };
+        const mock = createMockClient({
+            listStorageObjects: (): StorageListPage => PAGE,
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.storageReferences) {
+                    return { references: { "live.png": [{ column: "avatar", id: "u1", table: "users" }] }, storageColumns: { users: ["avatar"] } };
+                }
+
+                if (reference === ADMIN_FUNCTIONS.storageOrphans) {
+                    return { references: [], scanned: 1, truncated: false };
+                }
+
+                return undefined;
+            },
+        });
+
+        render(renderBrowser(mock));
+
+        await screen.findByTestId("fb-table");
+        fireEvent.click(await screen.findByTestId("fb-orphans-check"));
+
+        await expect(screen.findByTestId("fb-orphans-empty")).resolves.toBeDefined();
+    });
+
     describe("mutations", () => {
         beforeEach(() => {
             Object.defineProperty(globalThis.navigator, "clipboard", {

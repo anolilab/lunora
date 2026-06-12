@@ -599,6 +599,20 @@ const MESSAGE_IDS = [
     "{count} records",
     "References shard",
     "Which shard's records are checked for references to these files. Empty = root shard.",
+    // File browser — orphaned-objects / dangling-reference section (the inverse join).
+    "Orphaned objects",
+    "Find records whose file reference points at an object the bucket no longer has.",
+    "Check for orphans",
+    "Checking…",
+    "No dangling references.",
+    "Every record's file reference points at an object that exists in the bucket.",
+    "Missing object",
+    "→",
+    "Showing the first {count} dangling references — the scan was truncated.",
+    // Phase-7 polish — empty-state descriptions + missed i18n strings.
+    "Per-function call counts, error rates, and latency land here after your first request.",
+    "Function and request logs for this shard show up here as your app handles traffic.",
+    "No tables in this shard.",
 ] as const;
 
 /** A known studio message id — one of the entries in {@link MESSAGE_IDS}. */

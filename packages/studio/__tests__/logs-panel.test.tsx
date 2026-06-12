@@ -222,7 +222,7 @@ describe("logsPanel — errors view", () => {
 
         const empty = await screen.findByTestId("lg-empty");
 
-        expect(empty.textContent).toBe("No logs.");
+        expect(empty.textContent).toContain("No logs.");
     });
 
     it("surfaces an error", async () => {
@@ -272,7 +272,7 @@ describe("logsPanel — errors view", () => {
 
         const empty = await screen.findByTestId("lg-empty");
 
-        expect(empty.textContent).toBe("No logs.");
+        expect(empty.textContent).toContain("No logs.");
     });
 
     it("filters entries by level", async () => {

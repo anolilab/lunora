@@ -7,6 +7,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import type { LogEntry, LogLevel, LogsResult, RequestLogEntry, RequestLogQuery, RequestLogResult, RequestOutcome } from "./admin";
 import { ADMIN_FUNCTIONS } from "./admin";
 import { Badge } from "./components/ui/badge";
+import { EmptyState } from "./components/ui/empty-state";
 import { Input } from "./components/ui/input";
 import { useT } from "./i18n-context";
 import { adminRef, callOptions, errorMessage } from "./internal";
@@ -719,9 +720,24 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
             )}
 
             {readout === "empty" && (
-                <p className="text-sm text-muted-foreground" data-testid="lg-empty">
-                    {t("No logs.")}
-                </p>
+                <EmptyState
+                    description={t("Function and request logs for this shard show up here as your app handles traffic.")}
+                    icon={
+                        <svg
+                            aria-hidden="true"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={1.6}
+                            viewBox="0 0 24 24"
+                        >
+                            <path d="M4 5h16M4 12h16M4 19h10" />
+                        </svg>
+                    }
+                    testId="lg-empty"
+                    title={t("No logs.")}
+                />
             )}
 
             {readout === "summary" && (

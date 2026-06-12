@@ -116,7 +116,7 @@ describe("functionStatsPanel", () => {
 
         const empty = await screen.findByTestId("fs-empty");
 
-        expect(empty.textContent).toBe("No functions have run on this shard yet.");
+        expect(empty.textContent).toContain("No functions have run on this shard yet.");
     });
 
     it("surfaces an admin error", async () => {

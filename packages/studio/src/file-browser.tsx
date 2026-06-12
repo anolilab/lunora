@@ -7,6 +7,7 @@ import FileBrowserList from "./file-browser-list";
 import { FileBrowserControls, FileBrowserToolbar } from "./file-browser-toolbar";
 import FileGallery from "./file-gallery";
 import type { FileItemHandlers } from "./file-item";
+import { OrphanedObjectsSection } from "./file-orphans";
 import { SelectionBar } from "./grid-features";
 import type { TFunction } from "./i18n-context";
 import { useT } from "./i18n-context";
@@ -161,6 +162,16 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
                         {t("Which shard's records are checked for references to these files. Empty = root shard.")}
                     </span>
                 </div>
+            )}
+
+            {vm.hasStorageColumns && (
+                <OrphanedObjectsSection
+                    busy={vm.danglingBusy}
+                    onCheck={vm.checkOrphans}
+                    references={vm.danglingReferences}
+                    t={t}
+                    truncated={vm.danglingTruncated}
+                />
             )}
 
             {vm.selected.size > 0 && <SelectionBar count={vm.selected.size} editable onClear={vm.clearSelection} onDelete={vm.bulkDelete} />}

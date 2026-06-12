@@ -2,7 +2,7 @@ import type { StorageObject } from "@cirrus/client";
 import { useCirrus } from "@cirrus/react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import type { StorageReference, StorageReferenceResult } from "./admin";
+import type { DanglingReference, DanglingReferenceResult, StorageReference, StorageReferenceResult } from "./admin";
 import { ADMIN_FUNCTIONS } from "./admin";
 import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal";
 import { DEFAULT_SHARE_LIFETIME, deriveEntries, sortFiles } from "./storage-entries";
@@ -11,6 +11,19 @@ import type { KeySelection } from "./use-key-selection";
 import { useKeySelection } from "./use-key-selection";
 
 const STORAGE_REFERENCES = adminRef(ADMIN_FUNCTIONS.storageReferences);
+const STORAGE_ORPHANS = adminRef(ADMIN_FUNCTIONS.storageOrphans);
+
+/**
+ * Hard cap on the number of bucket object keys the orphan check enumerates in one
+ * pass. The dangling-reference scan needs the bucket's LIVE keys to decide which
+ * record references point at a missing object, but a huge bucket can't be walked
+ * unboundedly from the browser. Past this many keys the check stops paging; the
+ * server still bounds its own scan and the studio surfaces the result as partial.
+ */
+const ORPHAN_LIVE_KEY_CAP = 10_000;
+
+/** Objects requested per page while enumerating the bucket for the orphan check. */
+const ORPHAN_LIST_PAGE_SIZE = 1000;
 
 /** How the file list is laid out. */
 type FileView = "grid" | "list";
@@ -27,8 +40,16 @@ interface FileBrowserModel {
     readonly allSelected: boolean;
     readonly bulkDelete: () => void;
     readonly busy: boolean;
+    /** Enumerate the bucket and resolve the dangling references (records pointing at missing objects) on `referenceShard`. */
+    readonly checkOrphans: () => void;
     readonly clearSelection: () => void;
     readonly copiedKey: string | undefined;
+    /** `true` while the orphan check is enumerating the bucket / resolving dangling references. */
+    readonly danglingBusy: boolean;
+    /** Record `v.storage()` fields whose value points at an object the bucket no longer has; `undefined` until the check is run. */
+    readonly danglingReferences: ReadonlyArray<DanglingReference> | undefined;
+    /** `true` when the orphan check's scan was clipped by a bound — the dangling list is partial. */
+    readonly danglingTruncated: boolean;
     /** The draft prefix bound to the input — applied to the listing only on List/navigate. */
     readonly draftPrefix: string;
     readonly enterFolder: (name: string) => void;
@@ -153,6 +174,12 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
     const [referenceShard, setReferenceShard] = useState<string>("");
     const [references, setReferences] = useState<Record<string, StorageReference[]>>({});
     const [hasStorageColumns, setHasStorageColumns] = useState<boolean>(false);
+    // The inverse join (dangling references): record `v.storage()` fields pointing
+    // at an object the bucket no longer has. `undefined` until the operator runs
+    // the explicit check (it walks the whole bucket, so it isn't run on every load).
+    const [danglingReferences, setDanglingReferences] = useState<DanglingReference[] | undefined>(undefined);
+    const [danglingBusy, setDanglingBusy] = useState<boolean>(false);
+    const [danglingTruncated, setDanglingTruncated] = useState<boolean>(false);
 
     const list = useCallback(
         async (searchPrefix: string, cursor: string | undefined, append: boolean): Promise<void> => {
@@ -452,12 +479,64 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
         [client, list, prefix],
     );
 
+    // The orphan check spans the whole bucket against `referenceShard`'s records,
+    // so a prior result goes stale the moment that shard changes — drop it so the
+    // operator re-runs the check rather than reading a result for the old shard.
+    useEffect(() => {
+        setDanglingReferences(undefined);
+        setDanglingTruncated(false);
+    }, [referenceShard]);
+
+    // Enumerate the bucket's live keys (bounded by ORPHAN_LIVE_KEY_CAP), then ask
+    // the shard which record `v.storage()` fields point at a key NOT in that set —
+    // a dangling reference. Best-effort: a worker that predates the feature (or a
+    // closed admin gate) throws, surfaced as the error banner with an empty result.
+    const checkOrphans = useCallback((): void => {
+        setError(undefined);
+        setDanglingBusy(true);
+
+        fireAndForget(
+            (async (): Promise<void> => {
+                try {
+                    const liveKeys: string[] = [];
+                    let cursor: string | undefined;
+
+                    do {
+                        // eslint-disable-next-line no-await-in-loop -- bucket enumeration is inherently sequential (each page's cursor drives the next)
+                        const page = await client.listStorageObjects({ cursor, limit: ORPHAN_LIST_PAGE_SIZE });
+
+                        for (const object of page.objects) {
+                            liveKeys.push(object.key);
+                        }
+
+                        cursor = liveKeys.length >= ORPHAN_LIVE_KEY_CAP ? undefined : page.cursor;
+                    } while (cursor !== undefined);
+
+                    const result = (await client.query(STORAGE_ORPHANS, { liveKeys }, callOptions(referenceShard))) as Partial<DanglingReferenceResult>;
+
+                    setDanglingReferences(result.references ?? []);
+                    setDanglingTruncated(result.truncated === true || liveKeys.length >= ORPHAN_LIVE_KEY_CAP);
+                } catch (error_) {
+                    setDanglingReferences([]);
+                    setDanglingTruncated(false);
+                    setError(errorMessage(error_));
+                } finally {
+                    setDanglingBusy(false);
+                }
+            })(),
+        );
+    }, [client, referenceShard]);
+
     return {
         allSelected,
         bulkDelete,
         busy,
+        checkOrphans,
         clearSelection,
         copiedKey,
+        danglingBusy,
+        danglingReferences,
+        danglingTruncated,
         draftPrefix,
         enterFolder,
         error,
