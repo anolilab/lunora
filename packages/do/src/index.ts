@@ -148,6 +148,7 @@ export type {
 export { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
 export type { CacheEntry, ReactiveCacheOptions } from "./reactive-cache";
 export { ReactiveCache, reactiveCacheKey, stableStringify } from "./reactive-cache";
+export { serveRelationFanout } from "./relation-fanout";
 export type { ApplyOnDeleteOptions, NestedWith, OnDeleteActionLike, RelationDefinitionLike, ResolveWithOptions, WithInput } from "./relations";
 export { applyOnDelete, resolveWith, runRowValidators } from "./relations";
 export type { LogEventInput } from "./request-log";

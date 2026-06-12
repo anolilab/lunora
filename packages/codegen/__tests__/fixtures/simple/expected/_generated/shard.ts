@@ -2,7 +2,7 @@
 // Run `cirrus codegen` to regenerate.
 
 import type { AdvisoryFinding, DatabaseWriterLike, DataMigrationLike, LogSink, MigrationRunResult, RunShardApplyCdcArgs, RunShardMigrationArgs, RlsPoliciesResult, RunShardRankBeforeArgs, RunShardRankPageArgs, RunShardWriteArgs, RunShardWriteResult, SchedulerLike, SchemaLike, ShardDOState, ShardRankPageResult, SqlExec, SystemReaderStorageLike } from "@cirrus/do";
-import { applyCdcChanges, createShardCtxDb, runDataMigration, runShardMigrations, ShardDO as ShardDOBase } from "@cirrus/do";
+import { applyCdcChanges, createShardCtxDb, runDataMigration, runShardMigrations, serveRelationFanout, ShardDO as ShardDOBase } from "@cirrus/do";
 import { bindOrm, bindTableFacade } from "@cirrus/server";
 
 import schema from "../schema.js";
@@ -229,34 +229,11 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
         }
 
         protected override async runRelationFanoutRead(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
-            const table = typeof args["table"] === "string" ? args["table"] : "";
-            const definition = (schema as unknown as SchemaLike).tables[table];
-
-            if (!definition) {
-                throw Object.assign(new Error(`__cirrus_relation__: unknown table "${table}"`), { code: "UNKNOWN_TABLE", name: "CirrusError", status: 404 });
-            }
-
-            // Only shard-local tables live in this DO's SQLite; a `.global()`
-            // table lives in D1 and must never be fanned out across shards.
-            if (definition.shardMode?.kind === "global") {
-                throw Object.assign(new Error(`__cirrus_relation__: table "${table}" is global, not shard-local`), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
-            }
-
             this.ensureMigrated();
 
             const { db } = this.buildCtx({ functionPath }) as { db: DatabaseWriterLike };
-            const where = (args["where"] ?? undefined) as Record<string, unknown> | undefined;
 
-            if (functionPath === "__cirrus_relation__:count") {
-                return db.count(table, where);
-            }
-
-            // `orderBy` / `where` / `with` arrive JSON-serialized through the
-            // fan-out envelope (their compile-time types are erased), so cast the
-            // reconstructed args to the writer's argument type.
-            const result = await db.findMany(table, { orderBy: args["orderBy"], where, with: args["with"] } as Parameters<DatabaseWriterLike["findMany"]>[1]);
-
-            return result.page;
+            return serveRelationFanout(schema as unknown as SchemaLike, db, functionPath, args);
         }
 
         protected override async executeSubscription(functionPath: string, args: Record<string, unknown>): Promise<{ result: unknown; tables: Set<string> } | null> {

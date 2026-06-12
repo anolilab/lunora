@@ -644,14 +644,14 @@ describe("run-codegen", () => {
             expect(output).toContain('facade["messages"] = bindTableFacade(db, "messages");');
             expect(output).toContain('facade["users"] = bindTableFacade(db, "users");');
 
-            // Reverse cross-backend relations: the `__cirrus_relation__:read`/`:count`
-            // fan-out override is emitted only when a `.global()` table exists (a
-            // reverse relation needs a global parent), reading the shard-local child
-            // through the schema-aware ctx-db and returning a BARE value for the
-            // coordinator's concat/sum merge.
+            // Reverse cross-backend relations: the `runRelationFanoutRead` override
+            // is emitted only when a `.global()` table exists (a reverse relation
+            // needs a global parent). It builds the schema-aware ctx-db and delegates
+            // to the canonical `@cirrus/do` `serveRelationFanout` helper (a one-line
+            // body — the guards + read/count dispatch live in that helper, not here).
             expect(output).toContain("protected override async runRelationFanoutRead(functionPath: string, args: Record<string, unknown>): Promise<unknown>");
-            expect(output).toContain('if (functionPath === "__cirrus_relation__:count") {');
-            expect(output).toContain("return result.page;");
+            expect(output).toContain("serveRelationFanout, ShardDO as ShardDOBase } from \"@cirrus/do\";");
+            expect(output).toContain("return serveRelationFanout(schema as unknown as SchemaLike, db, functionPath, args);");
         });
 
         it("omits the D1 facade plumbing when no table is `.global()`", () => {

@@ -1033,6 +1033,37 @@ const buildTableIndexes = (schema: SchemaIR): Record<string, EmittedTableIndex[]
     return byTable;
 };
 
+/**
+ * Reverse cross-backend relations: a `.global()` (D1) parent loading a
+ * shard-local child whose rows span every shard. The Query Coordinator fans
+ * `__cirrus_relation__:read`/`:count` out to each shard; the emitted override
+ * builds the schema-aware ctx-db and delegates to the canonical `@cirrus/do`
+ * `serveRelationFanout` helper (which owns the guards + read/count dispatch and
+ * returns a BARE value for the `concat`/`sum` merge). Both the `@cirrus/do`
+ * import fragment and the override are emitted only when the project has
+ * `.global()` tables — a reverse relation needs a global parent; otherwise the
+ * base hook's throw is unreachable. Extracted out of `emitShard` so its two
+ * branches don't count against that (already large) function's complexity.
+ */
+const emitRelationFanout = (hasGlobalTables: boolean): { importFragment: string; override: string } => {
+    if (!hasGlobalTables) {
+        return { importFragment: "", override: "" };
+    }
+
+    return {
+        importFragment: "serveRelationFanout, ",
+        override: `
+        protected override async runRelationFanoutRead(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
+            this.ensureMigrated();
+
+            const { db } = this.buildCtx({ functionPath }) as { db: DatabaseWriterLike };
+
+            return serveRelationFanout(schema as unknown as SchemaLike, db, functionPath, args);
+        }
+`,
+    };
+};
+
 const emitShard = (schema: SchemaIR, advisories: ReadonlyArray<Finding> = [], rlsMetadata?: RlsMetadataIR): string => {
     // Drift guard + the data we emit: the advisor's `Finding`s must stay
     // assignable to the DO's `AdvisoryFinding` (the generated `CIRRUS_ADVISORIES`
@@ -1078,9 +1109,13 @@ const emitShard = (schema: SchemaIR, advisories: ReadonlyArray<Finding> = [], rl
         ...(hasVectors ? ["WriteHook"] : []),
     ];
 
+    // Reverse cross-backend relation override + its `@cirrus/do` import fragment
+    // (both empty unless the project has `.global()` tables). See `emitRelationFanout`.
+    const relationFanout = emitRelationFanout(hasGlobalTables);
+
     const importLines = [
         `import type { ${doTypeImports.join(", ")} } from "@cirrus/do";`,
-        `import { applyCdcChanges, createShardCtxDb, runDataMigration, runShardMigrations, ShardDO as ShardDOBase } from "@cirrus/do";`,
+        `import { applyCdcChanges, createShardCtxDb, runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "@cirrus/do";`,
     ];
 
     // The per-table facade binding lives in `@cirrus/server` so codegen and the
@@ -1256,48 +1291,6 @@ const vectorsStub: VectorSearchLike = {
         ? `            const globalDb: DatabaseWriterLike = config.d1?.(env, { identity, userId }) ?? globalDbStub;\n`
         : "";
 
-    // Reverse cross-backend relations: a \`.global()\` (D1) parent loading a
-    // shard-local child whose rows span every shard. The Query Coordinator
-    // fans \`__cirrus_relation__:read\`/\`:count\` out to each shard; this override
-    // serves them from the schema-aware ctx-db under the forwarded identity and
-    // returns a BARE value (row array / number) for the \`concat\`/\`sum\` merge.
-    // Only emitted when the project has \`.global()\` tables (a reverse relation
-    // needs a global parent); otherwise the base hook's throw is unreachable.
-    const relationFanoutOverride = hasGlobalTables
-        ? `
-        protected override async runRelationFanoutRead(functionPath: string, args: Record<string, unknown>): Promise<unknown> {
-            const table = typeof args["table"] === "string" ? args["table"] : "";
-            const definition = (schema as unknown as SchemaLike).tables[table];
-
-            if (!definition) {
-                throw Object.assign(new Error(\`__cirrus_relation__: unknown table "\${table}"\`), { code: "UNKNOWN_TABLE", name: "CirrusError", status: 404 });
-            }
-
-            // Only shard-local tables live in this DO's SQLite; a \`.global()\`
-            // table lives in D1 and must never be fanned out across shards.
-            if (definition.shardMode?.kind === "global") {
-                throw Object.assign(new Error(\`__cirrus_relation__: table "\${table}" is global, not shard-local\`), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
-            }
-
-            this.ensureMigrated();
-
-            const { db } = this.buildCtx({ functionPath }) as { db: DatabaseWriterLike };
-            const where = (args["where"] ?? undefined) as Record<string, unknown> | undefined;
-
-            if (functionPath === "__cirrus_relation__:count") {
-                return db.count(table, where);
-            }
-
-            // \`orderBy\` / \`where\` / \`with\` arrive JSON-serialized through the
-            // fan-out envelope (their compile-time types are erased), so cast the
-            // reconstructed args to the writer's argument type.
-            const result = await db.findMany(table, { orderBy: args["orderBy"], where, with: args["with"] } as Parameters<DatabaseWriterLike["findMany"]>[1]);
-
-            return result.page;
-        }
-`
-        : "";
-
     const facadeBlock = hasTables
         ? `\n            const facade = db as unknown as Record<string, ReturnType<typeof bindTableFacade>>;
 ${schema.tables
@@ -1445,7 +1438,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
 
             return registered.handler(this.buildCtx({ functionPath }), args);
         }
-${relationFanoutOverride}
+${relationFanout.override}
         protected override async executeSubscription(functionPath: string, args: Record<string, unknown>): Promise<{ result: unknown; tables: Set<string> } | null> {
             const registered = CIRRUS_FUNCTIONS[functionPath];
 
