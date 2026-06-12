@@ -14,6 +14,7 @@ import { SchemaGraph } from "./schema-graph";
 import { recordShard } from "./shard-history";
 import { ShardInput } from "./shard-input";
 import { StorageTierBadge, StorageTierHint } from "./storage-tier";
+import useDebounced from "./use-debounced";
 
 interface SchemaViewerProps {
     /** Shard key the viewer targets. Defaults to the root shard. */
@@ -129,10 +130,15 @@ export const SchemaViewer = ({ initialShardKey, initialTable }: SchemaViewerProp
         }
     }, [client]);
 
+    // Re-read on the debounced shard key so switching shards re-loads the schema
+    // once the value settles (no Refresh button). Schema is static between
+    // codegen/migrations, so there's no live channel or poll — just this re-load.
+    const debouncedShard = useDebounced(shardKey.trim(), 400);
+
     useEffect(() => {
-        fireAndForget(refresh(initialShardKey ?? ""));
+        fireAndForget(refresh(debouncedShard));
         fireAndForget(refreshGlobal());
-    }, [refresh, refreshGlobal, initialShardKey]);
+    }, [refresh, refreshGlobal, debouncedShard]);
 
     const toggle = useCallback(
         async (table: string): Promise<void> => {
@@ -145,8 +151,9 @@ export const SchemaViewer = ({ initialShardKey, initialTable }: SchemaViewerProp
             setExpanded(table);
 
             // Key the column cache by shard + table so editing the shard input
-            // without clicking Refresh and then expanding a table can't return a
-            // previous shard's columns; the probe below uses the same shardKey.
+            // (before the debounced re-load settles) and then expanding a table
+            // can't return a previous shard's columns; the probe below uses the
+            // same shardKey.
             const cacheKey = `${shardKey}:${table}`;
 
             if (columns[cacheKey] !== undefined) {
@@ -205,11 +212,6 @@ export const SchemaViewer = ({ initialShardKey, initialTable }: SchemaViewerProp
         [client, globalColumns, globalExpanded],
     );
 
-    const refreshCurrent = useCallback((): void => {
-        fireAndForget(refresh(shardKey));
-        fireAndForget(refreshGlobal());
-    }, [refresh, refreshGlobal, shardKey]);
-
     // Auto-expand the deep-linked table (Insights "add the index" jump) once the
     // shard's tables have loaded and the target actually exists. `appliedTable`
     // guards against re-firing every render — we expand a given `initialTable`
@@ -257,7 +259,7 @@ export const SchemaViewer = ({ initialShardKey, initialTable }: SchemaViewerProp
     // When the graph opens (or the shard's tables change) probe the relationships
     // once per shard. List view never probes, so the graph cost is opt-in. This is
     // a genuine lazy data-load, not a click handler: it must also re-run when the
-    // shard's `tables` change (after Refresh) or `shardKey` switches, so it stays
+    // shard's `tables` change (after a re-seed) or `shardKey` switches, so it stays
     // an effect keyed on those values rather than firing from the toggle's onClick.
     useEffect(() => {
         // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- lazy data-load gated on view + shard, not an event handler
@@ -287,9 +289,6 @@ export const SchemaViewer = ({ initialShardKey, initialTable }: SchemaViewerProp
         <div data-testid="cirrus-schema">
             <div>
                 <ShardInput onChange={setShardKey} testId="sc-shard-input" value={shardKey} />
-                <button data-testid="sc-refresh" onClick={refreshCurrent} type="button">
-                    Refresh
-                </button>
             </div>
 
             <div aria-label={t("Schema view")} className="my-3 flex gap-1.5" data-testid="sc-view-toggle" role="group">

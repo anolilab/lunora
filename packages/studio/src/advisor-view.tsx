@@ -1,7 +1,6 @@
 import type { ReactElement, ReactNode } from "react";
 import { useCallback, useMemo, useState } from "react";
 
-import { Button } from "./components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
 import type { TFunction } from "./i18n-context";
 import { useT } from "./i18n-context";
@@ -26,14 +25,16 @@ interface AdvisorRow {
 interface AdvisorViewProps {
     /** Error message from the load, if any. */
     readonly error?: null | string;
-    /** Disables refresh while a load is in flight. */
-    readonly loading?: boolean;
-    readonly onRefresh: () => void;
     /** Findings to display; `null` before the first load completes. */
     readonly rows: AdvisorRow[] | null;
     /** Scopes the `data-testid`s (`{testId}-tab-error`, …). */
     readonly testId: string;
-    /** Extra toolbar controls rendered left of Refresh (e.g. a shard selector). */
+
+    /**
+     * Extra toolbar controls (e.g. a shard selector). Advisor data is static at
+     * runtime — it only changes on codegen/deploy, surfaced when the panel
+     * reloads — so there is no Refresh button; panels load once on mount.
+     */
     readonly toolbar?: ReactNode;
 }
 
@@ -105,7 +106,7 @@ const emptyTitle = (t: TFunction, level: AdvisorLevel): string =>
  * findings, with a centered per-tab empty state. The Security and Performance
  * advisors both render through this so they stay visually identical.
  */
-export const AdvisorView = ({ error = null, loading = false, onRefresh, rows, testId, toolbar }: AdvisorViewProps): ReactElement => {
+export const AdvisorView = ({ error = null, rows, testId, toolbar }: AdvisorViewProps): ReactElement => {
     const t = useT();
     const [active, setActive] = useState<AdvisorLevel>("error");
 
@@ -149,13 +150,8 @@ export const AdvisorView = ({ error = null, loading = false, onRefresh, rows, te
                 ))}
             </div>
 
-            {/* Toolbar. */}
-            <div className="flex flex-wrap items-center gap-2">
-                {toolbar}
-                <Button className="ms-auto" data-testid={`${testId}-refresh`} disabled={loading} onClick={onRefresh} size="sm" type="button" variant="outline">
-                    {t("Refresh")}
-                </Button>
-            </div>
+            {/* Toolbar (rendered only when a panel supplies controls, e.g. a shard selector). */}
+            {toolbar !== undefined && <div className="flex flex-wrap items-center gap-2">{toolbar}</div>}
 
             {error !== null && (
                 <p className="text-sm text-destructive" data-testid={`${testId}-error`} role="alert">
@@ -201,4 +197,4 @@ export const AdvisorView = ({ error = null, loading = false, onRefresh, rows, te
 };
 
 export { advisoryRow };
-export type { AdvisoryLike, AdvisorLevel, AdvisorRow };
+export type { AdvisorLevel, AdvisorRow, AdvisoryLike };

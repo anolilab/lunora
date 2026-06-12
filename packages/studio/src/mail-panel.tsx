@@ -85,9 +85,10 @@ const recipientText = (value: string | string[] | undefined): string => {
  * `__cirrus_admin__:getCapturedMail` RPC over the {@link useCirrus} client;
  * gated by the server's `CIRRUS_ADMIN_TOKEN`.
  *
- * A point-in-time read (the inbox is a single root-shard table): it fetches on
- * mount and on a manual refresh. The HTML body is rendered in a fully sandboxed
- * iframe (no script execution) so captured markup can't run in the studio.
+ * The inbox is a single root-shard table with no write-flush to subscribe to, so
+ * it polls on a fixed interval (paused while the tab is hidden) — new captured
+ * mail appears without a manual refresh. The HTML body is rendered in a fully
+ * sandboxed iframe (no script execution) so captured markup can't run in the studio.
  */
 const MailPanel = ({ limit = 100 }: MailPanelProps): ReactElement => {
     const client = useCirrus();
@@ -139,12 +140,12 @@ const MailPanel = ({ limit = 100 }: MailPanelProps): ReactElement => {
         fireAndForget(refresh());
     }, [refresh]);
 
-    const onRefresh = useCallback((): void => {
+    const reload = useCallback((): void => {
         fireAndForget(refresh());
     }, [refresh]);
 
     // Poll for newly-captured mail so the inbox stays live without a manual refresh.
-    useAutoRefresh(onRefresh, true);
+    useAutoRefresh(reload, true);
 
     const onClear = useCallback((): void => {
         fireAndForget(clearInbox());
@@ -225,9 +226,6 @@ const MailPanel = ({ limit = 100 }: MailPanelProps): ReactElement => {
     return (
         <div className="flex flex-col gap-4" data-testid="mail-panel">
             <div className="flex flex-wrap items-center gap-2">
-                <Button data-testid="mail-refresh" onClick={onRefresh} size="sm" type="button" variant="outline">
-                    {t("Refresh")}
-                </Button>
                 <Button data-testid="mail-send-test" onClick={onSendTest} size="sm" type="button" variant="outline">
                     {t("Send test")}
                 </Button>

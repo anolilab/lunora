@@ -6,19 +6,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AuthMetrics, FunctionCallStat, LogEntry, LogsResult, MetricsSnapshot, MigrationStatusRow } from "./admin";
 import { ADMIN_FUNCTIONS } from "./admin";
 import { Badge } from "./components/ui/badge";
-import { Button } from "./components/ui/button";
 import ConnectionBadge from "./connection-badge";
 import type { TFunction } from "./i18n-context";
 import { useT } from "./i18n-context";
 import { adminRef, callOptions, errorMessage, fireAndForget, formatTimestamp } from "./internal";
-import { LiveToggle } from "./live-toggle";
+import { LiveError } from "./live-status";
 import { shardsToAggregate } from "./metrics-aggregate";
 import { loadRecentShards } from "./shard-history";
 import type { ShardSloResult, SloTotals } from "./slo-aggregate";
 import { dedupeMigrations, mergeFunctionStats, sumShardMetrics } from "./slo-aggregate";
 import { Sparkline } from "./sparkline";
 import useLiveAdmin from "./use-live-admin";
-import { useLiveToggle } from "./use-live-toggle";
 
 interface HealthPanelProps {
     /** Shard key the metric/log reads target on first load. Defaults to the root shard. */
@@ -33,6 +31,9 @@ const MIGRATION_STATUS = adminRef(ADMIN_FUNCTIONS.migrationStatus);
 
 /** Most recent error-level rows to show in the digest. */
 const RECENT_ERROR_LIMIT = 5;
+
+/** Minimum gap between live-driven cross-shard fan-outs, so a write burst can't hammer the worker. */
+const MIN_FANOUT_INTERVAL_MS = 2000;
 
 /** Functions shown in the "by error rate" list, worst first. */
 const TOP_FUNCTION_LIMIT = 5;
@@ -233,8 +234,9 @@ const loadSloData = async (client: ReturnType<typeof useCirrus>, rootShard: stri
  *
  * Every read is independent and best-effort (via `Promise.allSettled`): a
  * missing `CIRRUS_ADMIN_TOKEN`, an unconfigured scheduler, or a cold instance
- * degrades that one tile to `—` without blanking the rest. This is a snapshot,
- * not a live feed — press Refresh to re-pull.
+ * degrades that one tile to `—` without blanking the rest. The overview is always
+ * live: a root-shard `getMetrics` subscription drives a full cross-shard re-pull
+ * on every write-flush (coalesced so a burst yields at most one in-flight pull).
  */
 export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement => {
     const client = useCirrus();
@@ -248,8 +250,9 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
     const [auth, setAuth] = useState<AuthMetrics | null>(null);
     const [scheduler, setScheduler] = useState<SchedulerStatus | null>(null);
     const [migrations, setMigrations] = useState<MigrationStatusRow[]>([]);
-    const [loading, setLoading] = useState<boolean>(false);
-    const { live, liveError, setLiveError, toggle } = useLiveToggle();
+    // Always-on live channel; this only holds a rejection message (e.g. missing
+    // admin token) so the overview can say why it stopped updating.
+    const [liveError, setLiveError] = useState<string | undefined>(undefined);
 
     // Recently-visited shard keys the studio remembers — read once on mount.
     const [recentShards] = useState<string[]>(loadRecentShards);
@@ -275,7 +278,6 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
         }
 
         inFlightRef.current = true;
-        setLoading(true);
 
         // Per-shard signals (metrics, function stats, migrations) sum across the
         // best-effort "shards we know about" set — DOs aren't enumerable, so it's
@@ -299,29 +301,59 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
         setScheduler(result.scheduler);
 
         inFlightRef.current = false;
-        setLoading(false);
     }, [client, recentShards, rootShard]);
 
     useEffect(() => {
         fireAndForget(refresh());
     }, [refresh]);
 
-    const onRefresh = useCallback((): void => {
-        fireAndForget(refresh());
+    // Cadence cap for the live fan-out: a cross-shard re-pull is expensive, so a
+    // burst of write-flush pushes runs at most one fan-out per interval (leading +
+    // one trailing), on top of the `inFlightRef` concurrency guard.
+    const lastFanOutRef = useRef(0);
+    const trailingTimerRef = useRef<null | ReturnType<typeof setTimeout>>(null);
+
+    const scheduleFanOut = useCallback((): void => {
+        const elapsed = Date.now() - lastFanOutRef.current;
+
+        // Leading edge: enough time has passed, run immediately.
+        if (elapsed >= MIN_FANOUT_INTERVAL_MS) {
+            lastFanOutRef.current = Date.now();
+            fireAndForget(refresh());
+
+            return;
+        }
+
+        // Within the cooldown: coalesce the rest of the burst into one trailing run
+        // at the interval edge (only if one isn't already scheduled).
+        trailingTimerRef.current ??= setTimeout(() => {
+            trailingTimerRef.current = null;
+            lastFanOutRef.current = Date.now();
+            fireAndForget(refresh());
+        }, MIN_FANOUT_INTERVAL_MS - elapsed);
     }, [refresh]);
 
-    // Live channel: while toggled on, a root-shard `getMetrics` push (every
-    // write-flush) drives a full cross-shard re-pull. Bounded by `inFlightRef`,
-    // so a burst of pushes coalesces into at most one in-flight refresh.
+    useEffect(
+        () => () => {
+            if (trailingTimerRef.current !== null) {
+                clearTimeout(trailingTimerRef.current);
+            }
+        },
+        [],
+    );
+
+    // Live channel: always on. A root-shard `getMetrics` push (every write-flush)
+    // drives a cross-shard re-pull, rate-limited by `scheduleFanOut` and the
+    // `inFlightRef` concurrency guard.
     useLiveAdmin(
         ADMIN_FUNCTIONS.getMetrics,
         {},
         rootShard,
         () => {
             setLiveError(undefined);
-            fireAndForget(refresh());
+            scheduleFanOut();
         },
-        live,
+        true,
         setLiveError,
     );
 
@@ -359,10 +391,7 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
         <div className="flex flex-col gap-4" data-testid="cirrus-health">
             <div className="flex flex-wrap items-center gap-3">
                 <ConnectionBadge />
-                <LiveToggle live={live} liveError={liveError} onToggle={toggle} prefix="hl" />
-                <Button data-testid="hl-refresh" disabled={loading} onClick={onRefresh} size="xs" type="button" variant="outline">
-                    {t("Refresh")}
-                </Button>
+                <LiveError message={liveError} prefix="hl" />
             </div>
 
             <section className="rounded-md border border-border p-3" data-testid="hl-slo">

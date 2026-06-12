@@ -1,5 +1,5 @@
 import { CirrusProvider } from "@cirrus/react";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import type { MigrationStatusRow } from "../src/admin";
@@ -81,19 +81,23 @@ describe("migrationsPanel", () => {
         expect(runCall?.[1]).toMatchObject({ dryRun: false, id: "0002_rename" });
     });
 
-    it("toggling Live subscribes to migrationStatus and folds in pushed progress", async () => {
-        expect.assertions(2);
+    it("subscribes to migrationStatus on mount and folds in pushed progress", async () => {
+        expect.assertions(1);
 
         const mock = createClient();
 
         render(renderPanel(mock));
 
         await screen.findByTestId("mg-table");
-        fireEvent.click(screen.getByTestId("mg-live"));
 
-        const ref = mock.subscribe.mock.calls.at(-1)?.[0] as { __cirrusRef: string } | undefined;
+        // No Live toggle: the subscription opens once the mount seed commits a shard.
+        await waitFor(() => {
+            const ref = mock.subscribe.mock.calls.at(-1)?.[0] as { __cirrusRef: string } | undefined;
 
-        expect(ref?.__cirrusRef).toBe(ADMIN_FUNCTIONS.migrationStatus);
+            if (ref?.__cirrusRef !== ADMIN_FUNCTIONS.migrationStatus) {
+                throw new Error("not subscribed yet");
+            }
+        });
 
         act(() => {
             mock.emit(ADMIN_FUNCTIONS.migrationStatus, {

@@ -10,14 +10,14 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { useT } from "./i18n-context";
 import { adminRef, callOptions, errorMessage, fireAndForget, formatBytes } from "./internal";
 import { CLOUDFLARE_DURABLE_OBJECTS_URL } from "./lib/cf-links";
-import { LiveToggle } from "./live-toggle";
+import { LiveError } from "./live-status";
 import type { ShardMetricsResult } from "./metrics-aggregate";
 import { aggregateMetrics, shardsToAggregate } from "./metrics-aggregate";
 import { loadRecentShards, recordShard } from "./shard-history";
 import { ShardInput } from "./shard-input";
 import { SPARK_HEIGHT, SPARK_WIDTH, sparklinePoints } from "./sparkline";
 import useLiveAdmin from "./use-live-admin";
-import { useLiveToggle } from "./use-live-toggle";
+import useLiveShardSeed from "./use-live-shard-seed";
 
 interface MetricsPanelProps {
     /** Shard key the panel reports on. Defaults to the root shard. */
@@ -78,30 +78,28 @@ const StatCard = ({ label, testId, value, valueSize = "lg" }: { label: string; t
  * Counters are per-DO-instance and reset on hibernation/restart — this is a
  * "since this instance woke" readout, not a durable time series.
  *
- * An opt-in **Live** toggle opens a `getMetrics` WebSocket subscription that
- * re-pushes on every server write-flush, accumulating a client-side, in-memory
- * series of requests-per-sample (the delta of `requests` between consecutive
- * samples), rendered as an inline-SVG sparkline. The series is capped at
- * {@link MAX_HISTORY} points and is lost on remount.
+ * The panel is always live: a `getMetrics` WebSocket subscription opens once the
+ * first one-shot seed commits a shard and re-pushes on every server write-flush,
+ * accumulating a client-side, in-memory series of requests-per-sample (the delta
+ * of `requests` between consecutive samples), rendered as an inline-SVG
+ * sparkline. The series is capped at {@link MAX_HISTORY} points and is lost on
+ * remount.
  */
 export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactElement => {
     const client = useCirrus();
     const t = useT();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
-    // The shard a successful one-shot last targeted. The live channel keys on
-    // this committed value (not the live `shardKey` input) so editing the shard
-    // box without refreshing doesn't resubscribe to a half-typed shard on every
-    // keystroke — mirroring DataBrowser's `loaded.shard`.
-    const [committedShard, setCommittedShard] = useState<null | string>(null);
     const [metrics, setMetrics] = useState<ShardMetrics | null>(null);
     const [error, setError] = useState<null | string>(null);
-    const { live, liveError, setLiveError, toggle } = useLiveToggle();
+    // The live channel is always on once a shard is committed; this only holds a
+    // rejection message (e.g. missing admin token) so the panel can say why it
+    // stopped updating. The one-shot seed remains the source of truth.
+    const [liveError, setLiveError] = useState<string | undefined>(undefined);
     const [history, setHistory] = useState<ReadonlyArray<number>>([]);
 
-    // Avoid setState after unmount and overlapping in-flight one-shot loads.
+    // Avoid setState after unmount.
     const mountedRef = useRef(true);
-    const inFlightRef = useRef(false);
     // Latest cumulative `requests` count, used to derive the per-sample delta,
     // plus the shard it belongs to so a shard switch resets the series instead
     // of diffing against the previous shard's counters.
@@ -150,19 +148,12 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
 
     const refresh = useCallback(
         async (shard: string): Promise<void> => {
-            if (inFlightRef.current) {
-                return;
-            }
-
-            inFlightRef.current = true;
-
             try {
                 const next = (await client.query(GET_METRICS, {}, callOptions(shard))) as ShardMetrics;
 
                 recordShard(shard);
 
                 if (mountedRef.current) {
-                    setCommittedShard(shard);
                     applySample(next);
                 }
             } catch (error_) {
@@ -170,18 +161,20 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
                     setMetrics(null);
                     setError(errorMessage(error_));
                 }
-            } finally {
-                inFlightRef.current = false;
+
+                // Rethrow so the shard-seed hook doesn't commit a shard that failed.
+                throw error_;
             }
         },
         [client, applySample],
     );
 
-    useEffect(() => {
-        fireAndForget(refresh(initialShardKey ?? ""));
-    }, [refresh, initialShardKey]);
+    // Debounced shard seed + commit-on-success; the live channel keys on the
+    // committed shard (replaces the old Refresh button).
+    const committedShard = useLiveShardSeed(shardKey, refresh);
 
-    // Live channel: while toggled on, each server push folds in like a refresh.
+    // Live channel: always on once the seed commits a shard; each server push
+    // folds in like a refresh.
     useLiveAdmin(
         ADMIN_FUNCTIONS.getMetrics,
         {},
@@ -191,7 +184,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
                 applySample(next as ShardMetrics);
             }
         },
-        live && committedShard !== null,
+        committedShard !== undefined,
         (message) => {
             if (mountedRef.current) {
                 setLiveError(message);
@@ -240,10 +233,6 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
     // don't recompute Math.max/min over the history on every render.
     const sparkline = useMemo(() => sparklinePoints(history), [history]);
 
-    const refreshCurrent = useCallback((): void => {
-        fireAndForget(refresh(shardKey));
-    }, [refresh, shardKey]);
-
     const runAggregate = useCallback((): void => {
         fireAndForget(aggregateAll());
     }, [aggregateAll]);
@@ -256,10 +245,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
         <div className="flex flex-col gap-4" data-testid="cirrus-metrics">
             <div className="flex flex-wrap items-center gap-2">
                 <ShardInput onChange={setShardKey} testId="mt-shard-input" value={shardKey} />
-                <Button data-testid="mt-refresh" onClick={refreshCurrent} size="sm" type="button" variant="outline">
-                    {t("Refresh")}
-                </Button>
-                <LiveToggle live={live} liveError={liveError} onToggle={toggle} prefix="mt" />
+                <LiveError message={liveError} prefix="mt" />
                 <Button data-testid="mt-aggregate" disabled={aggregating} onClick={runAggregate} size="sm" type="button" variant="secondary">
                     {aggregating ? t("Aggregating…") : t("All shards")}
                 </Button>

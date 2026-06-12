@@ -194,7 +194,7 @@ describe("usersPanel", () => {
         expect(error.textContent).toBe("AUTH_NOT_CONFIGURED");
     });
 
-    it("toggling Auto re-lists users on an interval", async () => {
+    it("polls to re-list users on an interval (always on, no toggle)", async () => {
         expect.assertions(1);
 
         vi.useFakeTimers();
@@ -208,8 +208,7 @@ describe("usersPanel", () => {
 
             const callsAfterMount = mock.listAuthUsers.mock.calls.length;
 
-            fireEvent.click(screen.getByTestId("us-auto"));
-
+            // No Auto toggle: polling is always on, so a tick re-lists on its own.
             await vi.advanceTimersByTimeAsync(10_000);
 
             expect(mock.listAuthUsers.mock.calls.length).toBeGreaterThan(callsAfterMount);

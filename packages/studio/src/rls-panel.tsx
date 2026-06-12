@@ -5,7 +5,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { RlsOperation, RlsPoliciesResult, RlsPolicyMetadata, RlsRoleMetadata } from "./admin";
 import { ADMIN_FUNCTIONS } from "./admin";
 import { Badge } from "./components/ui/badge";
-import { Button } from "./components/ui/button";
 import { EmptyState } from "./components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
 import type { TFunction } from "./i18n-context";
@@ -67,11 +66,8 @@ const RlsPanel = (): ReactElement => {
 
     const [data, setData] = useState<RlsPoliciesResult | null>(null);
     const [error, setError] = useState<null | string>(null);
-    const [loading, setLoading] = useState<boolean>(false);
 
     const refresh = useCallback(async (): Promise<void> => {
-        setLoading(true);
-
         try {
             // Deployment-wide metadata (root shard), so no shard selector is needed.
             const result = (await client.query(RLS_POLICIES, {}, callOptions(""))) as RlsPoliciesResult;
@@ -85,16 +81,10 @@ const RlsPanel = (): ReactElement => {
             setError(null);
         } catch (error_: unknown) {
             setError(errorMessage(error_));
-        } finally {
-            setLoading(false);
         }
     }, [client]);
 
     useEffect(() => {
-        fireAndForget(refresh());
-    }, [refresh]);
-
-    const onRefresh = useCallback((): void => {
         fireAndForget(refresh());
     }, [refresh]);
 
@@ -103,12 +93,6 @@ const RlsPanel = (): ReactElement => {
 
     return (
         <div className="flex flex-col gap-6" data-testid="cirrus-rls-panel">
-            <div className="flex items-center justify-end">
-                <Button data-testid="rls-refresh" disabled={loading} onClick={onRefresh} size="sm" type="button" variant="outline">
-                    {t("Refresh")}
-                </Button>
-            </div>
-
             {error !== null && (
                 <p className="text-sm text-destructive" data-testid="rls-error" role="alert">
                     {error}

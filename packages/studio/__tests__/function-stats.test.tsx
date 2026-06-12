@@ -1,5 +1,5 @@
 import { CirrusProvider } from "@cirrus/react";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import type { FunctionStatsResult } from "../src/admin";
@@ -139,8 +139,8 @@ describe("functionStatsPanel", () => {
         expect(error.textContent).toBe("ADMIN_FORBIDDEN");
     });
 
-    it("toggling Live opens a getFunctionStats subscription", async () => {
-        expect.assertions(2);
+    it("opens a getFunctionStats subscription on mount (always live)", async () => {
+        expect.assertions(1);
 
         const mock = createClient();
 
@@ -148,9 +148,14 @@ describe("functionStatsPanel", () => {
 
         await screen.findByTestId("fs-table");
 
-        expect(mock.subscribe).not.toHaveBeenCalled();
+        // No Live toggle: the subscription opens once the mount seed commits a shard.
+        await waitFor(() => {
+            const ref = mock.subscribe.mock.calls.at(-1)?.[0] as { __cirrusRef: string } | undefined;
 
-        fireEvent.click(screen.getByTestId("fs-live"));
+            if (ref?.__cirrusRef !== ADMIN_FUNCTIONS.getFunctionStats) {
+                throw new Error("not subscribed yet");
+            }
+        });
 
         const ref = mock.subscribe.mock.calls.at(-1)?.[0] as { __cirrusRef: string } | undefined;
 

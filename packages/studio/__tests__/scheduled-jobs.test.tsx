@@ -109,8 +109,8 @@ describe("scheduledJobs", () => {
         expect(mock.cancelScheduledJob).toHaveBeenCalledWith("a");
     });
 
-    it("toggling Auto polls the loader on an interval and stops when turned off", async () => {
-        expect.assertions(2);
+    it("polls a custom loader on an interval (always on, no toggle)", async () => {
+        expect.assertions(1);
 
         vi.useFakeTimers();
 
@@ -124,39 +124,33 @@ describe("scheduledJobs", () => {
 
             const callsAfterMount = loadJobs.mock.calls.length;
 
-            fireEvent.click(screen.getByTestId("sj-auto"));
-
+            // No Auto toggle: a custom loader (no WS) polls on its own.
             // Two 5s intervals → two more loads.
             await vi.advanceTimersByTimeAsync(10_000);
 
             expect(loadJobs).toHaveBeenCalledTimes(callsAfterMount + 2);
-
-            fireEvent.click(screen.getByTestId("sj-auto"));
-            const callsAtPause = loadJobs.mock.calls.length;
-
-            await vi.advanceTimersByTimeAsync(15_000);
-
-            expect(loadJobs).toHaveBeenCalledTimes(callsAtPause);
         } finally {
             vi.useRealTimers();
         }
     });
 
-    it("live subscribes to the scheduler WS and renders pushed job lists when client-sourced", async () => {
-        expect.assertions(3);
+    it("subscribes to the scheduler WS on mount and renders pushed job lists when client-sourced", async () => {
+        expect.assertions(2);
 
-        // No custom loadJobs → the panel sources from the client, so Live uses
-        // the WebSocket push (not polling).
+        // No custom loadJobs → the panel sources from the client, so it uses the
+        // WebSocket push (not polling), always on.
         const mock = createMockClient({ listScheduledJobs: () => [] });
 
         render(withProvider(mock, <ScheduledJobs />));
 
         await screen.findByTestId("sj-empty");
 
-        // The toggle reads "Live" (push) in client-sourced mode.
-        expect(screen.getByTestId("sj-auto").textContent).toContain("Live");
-
-        fireEvent.click(screen.getByTestId("sj-auto"));
+        // No toggle: the WS subscription opens on mount in client-sourced mode.
+        await waitFor(() => {
+            if (mock.subscribeScheduledJobs.mock.calls.length === 0) {
+                throw new Error("not subscribed yet");
+            }
+        });
 
         expect(mock.subscribeScheduledJobs).toHaveBeenCalledTimes(1);
 
@@ -168,20 +162,7 @@ describe("scheduledJobs", () => {
         expect(screen.getByTestId("sj-row-pushed")).toBeDefined();
     });
 
-    it("live falls back to polling labels when a custom loadJobs is supplied", async () => {
-        expect.assertions(1);
-
-        const mock = createMockClient();
-
-        render(withProvider(mock, <ScheduledJobs loadJobs={loadRecords} />));
-
-        await screen.findByTestId("sj-table");
-
-        // Host owns the transport → no WS push, the toggle reads "Auto".
-        expect(screen.getByTestId("sj-auto").textContent).toContain("Auto");
-    });
-
-    it("under Live, cancelling does not fire a redundant HTTP refetch (the WS pushes the update)", async () => {
+    it("cancelling does not fire a redundant HTTP refetch when client-sourced (the WS pushes the update)", async () => {
         expect.assertions(2);
 
         const mock = createMockClient({ listScheduledJobs: () => RECORDS });
@@ -189,7 +170,6 @@ describe("scheduledJobs", () => {
         render(withProvider(mock, <ScheduledJobs />));
 
         await screen.findByTestId("sj-table");
-        fireEvent.click(screen.getByTestId("sj-auto")); // Live on (client-sourced → WS push)
 
         const listCallsBefore = mock.listScheduledJobs.mock.calls.length;
 

@@ -5,7 +5,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { SettingEntry, SettingsResult } from "./admin";
 import { ADMIN_FUNCTIONS } from "./admin";
 import { Badge } from "./components/ui/badge";
-import { Button } from "./components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
 import { useT } from "./i18n-context";
 import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal";
@@ -34,7 +33,8 @@ const KIND_VARIANT: Record<SettingEntry["kind"], "destructive" | "outline" | "se
  * Strictly view-only: secret values are masked server-side and never returned
  * raw, and there is no editing here. The infrastructure plane lives in
  * Cloudflare/wrangler — a deep-link to the Cloudflare dashboard is provided so
- * you can edit there. This is a snapshot; press Refresh to re-pull.
+ * you can edit there. Deployment config is static at runtime (it only changes on
+ * redeploy), so this loads once on mount — there is no live channel or poll.
  */
 export const SettingsPanel = ({ initialShardKey }: SettingsPanelProps): ReactElement => {
     const client = useCirrus();
@@ -61,10 +61,6 @@ export const SettingsPanel = ({ initialShardKey }: SettingsPanelProps): ReactEle
     }, [client, initialShardKey]);
 
     useEffect(() => {
-        fireAndForget(refresh());
-    }, [refresh]);
-
-    const onRefresh = useCallback((): void => {
         fireAndForget(refresh());
     }, [refresh]);
 
@@ -101,9 +97,6 @@ export const SettingsPanel = ({ initialShardKey }: SettingsPanelProps): ReactEle
     return (
         <div className="flex flex-col gap-4" data-testid="cirrus-settings">
             <div className="flex flex-wrap items-center gap-3">
-                <Button data-testid="set-refresh" disabled={loading} onClick={onRefresh} size="sm" type="button" variant="outline">
-                    {t("Refresh")}
-                </Button>
                 <a
                     className="text-sm text-primary underline-offset-4 hover:underline"
                     data-testid="set-cf-link"

@@ -6,6 +6,7 @@ import type { StorageReference, StorageReferenceResult } from "./admin";
 import { ADMIN_FUNCTIONS } from "./admin";
 import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal";
 import { DEFAULT_SHARE_LIFETIME, deriveEntries, sortFiles } from "./storage-entries";
+import { useAutoRefresh } from "./use-auto-refresh";
 import type { KeySelection } from "./use-key-selection";
 import { useKeySelection } from "./use-key-selection";
 
@@ -179,6 +180,17 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
     useEffect(() => {
         fireAndForget(list(initialPrefix ?? "", undefined, false));
     }, [list, initialPrefix]);
+
+    // R2 is HTTP-only (no subscription channel), so poll the current prefix's
+    // first page to surface new uploads / deletions (including from other clients)
+    // without a manual reload — but only while the operator hasn't paged past the
+    // first page, so a background tick never collapses an expanded listing.
+    // `useAutoRefresh` pauses while the tab is hidden.
+    const onFirstPage = (objects?.length ?? 0) <= pageSize;
+
+    useAutoRefresh(() => {
+        fireAndForget(list(prefix, undefined, false));
+    }, onFirstPage);
 
     // Split the loaded keys into the immediate folders + files at this prefix.
     const { files, folders } = useMemo(() => deriveEntries(objects ?? [], prefix), [objects, prefix]);

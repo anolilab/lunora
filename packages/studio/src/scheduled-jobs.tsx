@@ -3,8 +3,6 @@ import { useCirrus } from "@cirrus/react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { Badge } from "./components/ui/badge";
-import { Button } from "./components/ui/button";
 import { EmptyState } from "./components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
 import { ConfirmButton } from "./confirm-button";
@@ -49,8 +47,6 @@ export const ScheduledJobs = ({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
 
     const [jobs, setJobs] = useState<ScheduleRecord[] | null>(null);
     const [error, setError] = useState<null | string>(null);
-    const [busy, setBusy] = useState<boolean>(false);
-    const [auto, setAuto] = useState<boolean>(false);
 
     const load = useMemo(() => loadJobs ?? (() => client.listScheduledJobs()), [client, loadJobs]);
 
@@ -67,7 +63,6 @@ export const ScheduledJobs = ({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
 
     const refresh = useCallback(async (): Promise<void> => {
         setError(null);
-        setBusy(true);
 
         try {
             const records = await load();
@@ -77,8 +72,6 @@ export const ScheduledJobs = ({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
         } catch (error_) {
             setJobs(null);
             setError(errorMessage(error_));
-        } finally {
-            setBusy(false);
         }
     }, [load]);
 
@@ -86,15 +79,15 @@ export const ScheduledJobs = ({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
         fireAndForget(refresh());
     }, [refresh]);
 
-    // Live updates. When the panel sources jobs from the client (no custom
-    // `loadJobs`), it subscribes to the SchedulerDO's WebSocket — the server
-    // pushes the full list on every schedule/cancel/alarm-fire, so jobs appear
-    // and vanish the instant they change. With a custom `loadJobs` the host owns
-    // the transport, so we fall back to interval polling.
+    // Live updates, always on. When the panel sources jobs from the client (no
+    // custom `loadJobs`), it subscribes to the SchedulerDO's WebSocket — the
+    // server pushes the full list on every schedule/cancel/alarm-fire, so jobs
+    // appear and vanish the instant they change. With a custom `loadJobs` the host
+    // owns the transport, so we fall back to interval polling.
     const livePush = loadJobs === undefined;
 
     useEffect(() => {
-        if (!auto || !livePush) {
+        if (!livePush) {
             return undefined;
         }
 
@@ -102,12 +95,12 @@ export const ScheduledJobs = ({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
             setError(null);
             setJobs(records.toSorted((a, b) => a.scheduledFor - b.scheduledFor));
         });
-    }, [auto, livePush, client]);
+    }, [livePush, client]);
 
     // Polling fallback for the custom-loader case (no WS to subscribe to).
     useAutoRefresh(() => {
         fireAndForget(refresh());
-    }, auto && !livePush);
+    }, !livePush);
 
     const cancel = useCallback(
         async (id: string): Promise<void> => {
@@ -120,42 +113,20 @@ export const ScheduledJobs = ({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
             try {
                 await cancelImpl(id);
 
-                // When a live WS subscription is active, the server pushes the
+                // When the live WS subscription is active, the server pushes the
                 // updated list on cancel — so skip the redundant HTTP refetch.
-                if (!(auto && livePush)) {
+                if (!livePush) {
                     await refresh();
                 }
             } catch (error_) {
                 setError(errorMessage(error_));
             }
         },
-        [auto, cancelImpl, livePush, refresh],
+        [cancelImpl, livePush, refresh],
     );
-
-    const runRefresh = useCallback((): void => {
-        fireAndForget(refresh());
-    }, [refresh]);
-
-    const toggleAuto = useCallback((): void => {
-        setAuto((on) => !on);
-    }, []);
-
-    const autoLabel = t("{mode}: {state}", {
-        mode: livePush ? t("Live") : t("Auto"),
-        state: auto ? t("on") : t("off"),
-    });
 
     return (
         <div className="flex flex-col gap-3" data-testid="cirrus-scheduled-jobs">
-            <div className="flex flex-wrap items-center gap-2">
-                <Button data-testid="sj-refresh" disabled={busy} onClick={runRefresh} size="sm" type="button" variant="outline">
-                    {t("Refresh")}
-                </Button>
-                <Button aria-pressed={auto} data-testid="sj-auto" onClick={toggleAuto} size="sm" type="button" variant="ghost">
-                    <Badge variant={auto ? "default" : "outline"}>{autoLabel}</Badge>
-                </Button>
-            </div>
-
             {error !== null && (
                 <p className="text-sm text-destructive" data-testid="sj-error" role="alert">
                     {error}

@@ -8,6 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { useT } from "./i18n-context";
 import { errorMessage, fireAndForget, formatCell, formatTimestamp } from "./internal";
 import { useAuthCapabilities } from "./use-auth-capabilities";
+import { useAutoRefresh } from "./use-auto-refresh";
 
 type Row = Record<string, unknown>;
 
@@ -128,7 +129,8 @@ export const OrganizationsPanel = (): ReactElement => {
                 }
             })(),
         );
-    }, [capabilities.organization, client]);
+        // `version` is included so a poll tick (or a mutation) re-lists orgs too.
+    }, [capabilities.organization, client, version]);
 
     useEffect(() => {
         // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- data-load effect: refetch members + invitations whenever the selected org (or the `version` refetch token) changes; selection can change programmatically and the async fetch must follow the committed `selected` state
@@ -152,6 +154,14 @@ export const OrganizationsPanel = (): ReactElement => {
             })(),
         );
     }, [client, selected, version]);
+
+    // The org/auth store is HTTP-only (no subscription channel), so poll while the
+    // plugin is enabled — bumping `version` re-lists orgs and the selected org's
+    // members/invitations — to stay current without a reload button (paused while
+    // the tab is hidden).
+    useAutoRefresh(() => {
+        setVersion((value) => value + 1);
+    }, capabilities.organization);
 
     // Select an org and clear the previous one's rows up front (in the handler, not
     // an effect) so a switch never briefly shows the prior org's members.

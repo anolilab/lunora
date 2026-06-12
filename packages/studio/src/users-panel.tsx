@@ -37,7 +37,6 @@ export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
 
     const [users, setUsers] = useState<AuthUser[] | null>(null);
     const [usersError, setUsersError] = useState<null | string>(null);
-    const [auto, setAuto] = useState<boolean>(false);
 
     const [search, setSearch] = useState<string>("");
     const [roleFilter, setRoleFilter] = useState<string>("");
@@ -68,23 +67,21 @@ export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
         }
     }, [client, debouncedSearch, pageSize, roleFilter]);
 
+    // Post-mutation refetch callback for the detail drawer / create dialog.
     const reloadUsers = useCallback((): void => {
         fireAndForget(fetchUsers());
     }, [fetchUsers]);
-
-    const toggleAuto = useCallback((): void => {
-        setAuto((on) => !on);
-    }, []);
 
     useEffect(() => {
         fireAndForget(fetchUsers());
     }, [fetchUsers]);
 
     // The auth store is HTTP-only (no subscription channel), so polling is the
-    // honest "live" — re-list to catch new sign-ups / bans without a reload.
+    // honest "live" — always re-list to catch new sign-ups / bans without a
+    // reload button (paused while the tab is hidden).
     useAutoRefresh(() => {
         fireAndForget(fetchUsers());
-    }, auto);
+    }, true);
 
     // Derive the inspected user from the latest list so the drawer reflects
     // mutations after a refetch; a deleted user simply drops the drawer.
@@ -125,12 +122,6 @@ export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
                     type="button"
                 >
                     {t("New user")}
-                </Button>
-                <Button data-testid="us-refresh" onClick={reloadUsers} size="sm" type="button" variant="outline">
-                    {t("Reload users")}
-                </Button>
-                <Button aria-pressed={auto} data-testid="us-auto" onClick={toggleAuto} size="sm" type="button" variant={auto ? "default" : "outline"}>
-                    {auto ? t("Auto: on") : t("Auto: off")}
                 </Button>
             </div>
 

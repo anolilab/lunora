@@ -2,22 +2,21 @@ import { useCirrus } from "@cirrus/react";
 import type { Rect, Virtualizer } from "@tanstack/react-virtual";
 import { observeElementRect, useVirtualizer } from "@tanstack/react-virtual";
 import type { ChangeEvent, CSSProperties, ReactElement } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 import type { LogEntry, LogLevel, LogsResult, RequestLogEntry, RequestLogQuery, RequestLogResult, RequestOutcome } from "./admin";
 import { ADMIN_FUNCTIONS } from "./admin";
 import { Badge } from "./components/ui/badge";
-import { Button } from "./components/ui/button";
 import { Input } from "./components/ui/input";
 import { useT } from "./i18n-context";
-import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal";
+import { adminRef, callOptions, errorMessage } from "./internal";
 import { CLOUDFLARE_OBSERVABILITY_URL } from "./lib/cf-links";
 import { cn } from "./lib/utils";
-import { LiveToggle } from "./live-toggle";
+import { LiveError } from "./live-status";
 import { recordShard } from "./shard-history";
 import { ShardInput } from "./shard-input";
 import useLiveAdmin from "./use-live-admin";
-import { useLiveToggle } from "./use-live-toggle";
+import useLiveShardSeed from "./use-live-shard-seed";
 
 /** Fixed height of the scroll viewport; bounds how many rows can be live at once. */
 const SCROLL_HEIGHT = 400;
@@ -383,11 +382,6 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
 
     const [view, setView] = useState<LogsView>("requests");
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
-    // The shard a successful one-shot last targeted. The live channel keys on
-    // this committed value (not the live `shardKey` input) so editing the shard
-    // box without refreshing doesn't resubscribe to a half-typed shard on every
-    // keystroke — mirroring DataBrowser's `loaded.shard`.
-    const [committedShard, setCommittedShard] = useState<null | string>(null);
     const [entries, setEntries] = useState<LogEntry[]>([]);
     const [requests, setRequests] = useState<RequestLogEntry[]>([]);
     const [error, setError] = useState<null | string>(null);
@@ -405,7 +399,9 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
     const [userIdFilter, setUserIdFilter] = useState<string>("");
     const [tableFilter, setTableFilter] = useState<string>("");
     const [outcomeFilter, setOutcomeFilter] = useState<string>("all");
-    const { live, liveError, setLiveError, toggle } = useLiveToggle();
+    // Always-on live channel; this only holds a rejection message (e.g. missing
+    // admin token) so the panel can say why it stopped updating.
+    const [liveError, setLiveError] = useState<string | undefined>(undefined);
 
     // Typed as a plain record too, so it satisfies the `query`/`useLiveAdmin`
     // args surface (`Record<string, unknown>`) without a per-call-site cast.
@@ -423,36 +419,33 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
                     const result = (await client.query(GET_REQUEST_LOG, requestQuery, callOptions(shard))) as RequestLogResult;
 
                     recordShard(shard);
-                    setCommittedShard(shard);
                     setRequests(result.entries);
                 } else {
                     const result = (await client.query(GET_LOGS, {}, callOptions(shard))) as LogsResult;
 
                     recordShard(shard);
-                    setCommittedShard(shard);
                     setEntries(result.entries);
                 }
             } catch (error_) {
                 setEntries([]);
                 setRequests([]);
                 setError(errorMessage(error_));
+
+                // Rethrow so the shard-seed hook doesn't commit a shard that failed.
+                throw error_;
             }
         },
         [client, view, requestQuery],
     );
 
-    // Reload whenever the view or the server-side request filters change, so the
-    // Requests view re-queries the durable log rather than filtering client-side.
-    useEffect(() => {
-        fireAndForget(refresh(committedShard ?? initialShardKey ?? ""));
-        // committedShard is intentionally excluded: refresh sets it, so including
-        // it would loop. The shard a reload targets is the last committed one.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [refresh, initialShardKey]);
+    // Debounced shard seed + commit-on-success; also re-seeds when the view or the
+    // server-side request filters change (so the Requests view re-queries the
+    // durable log rather than filtering client-side). Replaces the old Refresh button.
+    const committedShard = useLiveShardSeed(shardKey, refresh, [view, requestQuery]);
 
-    // Live channel: while toggled on, each server push replaces the active view's
-    // buffer so new entries appear without a manual refresh. The Requests channel
-    // carries the same correlation filters as the one-shot read.
+    // Live channel: always on for the active view; each server push replaces that
+    // view's buffer so new entries appear without a manual refresh. The Requests
+    // channel carries the same correlation filters as the one-shot read.
     useLiveAdmin(
         ADMIN_FUNCTIONS.getRequestLog,
         requestQuery,
@@ -462,7 +455,7 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
             setLiveError(undefined);
             setRequests((result as RequestLogResult).entries);
         },
-        live && view === "requests" && committedShard !== null,
+        view === "requests" && committedShard !== undefined,
         setLiveError,
     );
 
@@ -475,7 +468,7 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
             setLiveError(undefined);
             setEntries((result as LogsResult).entries);
         },
-        live && view === "errors" && committedShard !== null,
+        view === "errors" && committedShard !== undefined,
         setLiveError,
     );
 
@@ -531,10 +524,6 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
     const gridStyle = useMemo<CSSProperties>(() => {
         return { height: totalSize, position: "relative", width: "100%" };
     }, [totalSize]);
-
-    const refreshCurrent = useCallback((): void => {
-        fireAndForget(refresh(shardKey));
-    }, [refresh, shardKey]);
 
     const onSearchChange = useCallback((event: ChangeEvent<HTMLInputElement>): void => {
         setSearch(event.target.value);
@@ -621,10 +610,7 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
                     </button>
                 </div>
                 <ShardInput onChange={setShardKey} testId="lg-shard-input" value={shardKey} />
-                <Button data-testid="lg-refresh" onClick={refreshCurrent} size="sm" type="button" variant="outline">
-                    {t("Refresh")}
-                </Button>
-                <LiveToggle live={live} liveError={liveError} onToggle={toggle} prefix="lg" />
+                <LiveError message={liveError} prefix="lg" />
                 <a
                     className="text-sm text-primary underline-offset-4 hover:underline"
                     data-testid="lg-cf-link"

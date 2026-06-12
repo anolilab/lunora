@@ -88,7 +88,7 @@ describe("auditPanel", () => {
         expect(rows[0]?.textContent).toContain("writeRow");
     });
 
-    it("forwards the shard key on refresh", async () => {
+    it("re-seeds on a debounced shard-key change", async () => {
         expect.assertions(1);
 
         const mock = createClient();
@@ -97,12 +97,14 @@ describe("auditPanel", () => {
 
         await screen.findByTestId("au-table");
 
+        // No Refresh button: typing a shard re-loads once the value settles.
         fireEvent.change(screen.getByTestId("au-shard-input"), { target: { value: "room-9" } });
-        fireEvent.click(screen.getByTestId("au-refresh"));
 
         await waitFor(() => {
-            if (mock.query.mock.calls.length <= 1) {
-                throw new Error("not refreshed yet");
+            const last = mock.query.mock.calls.at(-1) as [unknown, unknown, { shardKey?: string }] | undefined;
+
+            if (last?.[2]?.shardKey !== "room-9") {
+                throw new Error("not re-seeded yet");
             }
         });
 
@@ -127,8 +129,8 @@ describe("auditPanel", () => {
         expect(error.textContent).toBe("ADMIN_FORBIDDEN");
     });
 
-    it("toggling Live opens a getAuditLog subscription and renders pushed entries", async () => {
-        expect.assertions(3);
+    it("opens a getAuditLog subscription on mount and renders pushed entries", async () => {
+        expect.assertions(1);
 
         const mock = createClient([]);
 
@@ -136,13 +138,14 @@ describe("auditPanel", () => {
 
         await screen.findByTestId("au-empty");
 
-        expect(mock.subscribe).not.toHaveBeenCalled();
+        // No Live toggle: the subscription opens once the mount seed commits a shard.
+        await waitFor(() => {
+            const ref = mock.subscribe.mock.calls.at(-1)?.[0] as { __cirrusRef: string } | undefined;
 
-        fireEvent.click(screen.getByTestId("au-live"));
-
-        const ref = mock.subscribe.mock.calls.at(-1)?.[0] as { __cirrusRef: string } | undefined;
-
-        expect(ref?.__cirrusRef).toBe(ADMIN_FUNCTIONS.getAuditLog);
+            if (ref?.__cirrusRef !== ADMIN_FUNCTIONS.getAuditLog) {
+                throw new Error("not subscribed yet");
+            }
+        });
 
         act(() => {
             mock.emit(ADMIN_FUNCTIONS.getAuditLog, {

@@ -134,7 +134,7 @@ describe("logsPanel — requests view (default)", () => {
         expect(merged[1]).toEqual({ functionPathPrefix: "messages:", outcome: "error" });
     });
 
-    it("forwards the shard key on refresh", async () => {
+    it("re-seeds on a debounced shard-key change", async () => {
         expect.assertions(1);
 
         const mock = createClient();
@@ -143,14 +143,14 @@ describe("logsPanel — requests view (default)", () => {
 
         await screen.findByTestId("lg-table");
 
+        // No Refresh button: typing a shard re-loads once the value settles.
         fireEvent.change(screen.getByTestId("lg-shard-input"), { target: { value: "room-9" } });
-        fireEvent.click(screen.getByTestId("lg-refresh"));
 
         await waitFor(() => {
             const last = mock.query.mock.calls.at(-1) as [unknown, unknown, { shardKey?: string }] | undefined;
 
             if (last?.[2]?.shardKey !== "room-9") {
-                throw new Error("not refreshed yet");
+                throw new Error("not re-seeded yet");
             }
         });
 
@@ -169,19 +169,23 @@ describe("logsPanel — requests view (default)", () => {
         expect(link.getAttribute("href")).toContain("observability");
     });
 
-    it("toggling Live subscribes to getRequestLog and renders pushed entries", async () => {
-        expect.assertions(2);
+    it("subscribes to getRequestLog on mount and renders pushed entries", async () => {
+        expect.assertions(1);
 
         const mock = createClient([], []);
 
         render(renderPanel(mock));
 
         await screen.findByTestId("lg-empty");
-        fireEvent.click(screen.getByTestId("lg-live"));
 
-        const ref = mock.subscribe.mock.calls.at(-1)?.[0] as { __cirrusRef: string } | undefined;
+        // No Live toggle: the Requests view subscribes once the mount seed commits a shard.
+        await waitFor(() => {
+            const ref = mock.subscribe.mock.calls.at(-1)?.[0] as { __cirrusRef: string } | undefined;
 
-        expect(ref?.__cirrusRef).toBe(ADMIN_FUNCTIONS.getRequestLog);
+            if (ref?.__cirrusRef !== ADMIN_FUNCTIONS.getRequestLog) {
+                throw new Error("not subscribed yet");
+            }
+        });
 
         act(() => {
             mock.emit(ADMIN_FUNCTIONS.getRequestLog, { entries: REQUESTS });
@@ -336,8 +340,8 @@ describe("logsPanel — errors view", () => {
         expect(rows.every((row) => WINDOWED_ENTRY.test(row.textContent ?? ""))).toBe(true);
     });
 
-    it("toggling Live subscribes to getLogs and renders pushed entries", async () => {
-        expect.assertions(2);
+    it("subscribes to getLogs in the Errors view and renders pushed entries", async () => {
+        expect.assertions(1);
 
         const mock = createClient([], []);
 
@@ -345,11 +349,15 @@ describe("logsPanel — errors view", () => {
 
         await screen.findByTestId("lg-empty");
         switchToErrors();
-        fireEvent.click(screen.getByTestId("lg-live"));
 
-        const ref = mock.subscribe.mock.calls.at(-1)?.[0] as { __cirrusRef: string } | undefined;
+        // No Live toggle: switching to the Errors view subscribes to getLogs.
+        await waitFor(() => {
+            const ref = mock.subscribe.mock.calls.at(-1)?.[0] as { __cirrusRef: string } | undefined;
 
-        expect(ref?.__cirrusRef).toBe(ADMIN_FUNCTIONS.getLogs);
+            if (ref?.__cirrusRef !== ADMIN_FUNCTIONS.getLogs) {
+                throw new Error("not subscribed yet");
+            }
+        });
 
         act(() => {
             mock.emit(ADMIN_FUNCTIONS.getLogs, {

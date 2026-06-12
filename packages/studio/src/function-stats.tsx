@@ -8,13 +8,13 @@ import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
 import { useT } from "./i18n-context";
-import { adminRef, callOptions, errorMessage, fireAndForget, formatTimestamp } from "./internal";
+import { adminRef, callOptions, errorMessage, formatTimestamp } from "./internal";
 import { cn } from "./lib/utils";
-import { LiveToggle } from "./live-toggle";
+import { LiveError } from "./live-status";
 import { ShardInput } from "./shard-input";
 import type { FunctionDescriptor, FunctionKind } from "./types";
 import useLiveAdmin from "./use-live-admin";
-import { useLiveToggle } from "./use-live-toggle";
+import useLiveShardSeed from "./use-live-shard-seed";
 
 interface FunctionStatsPanelProps {
     /** Descriptors from codegen, used to annotate each row with the function's `kind`. */
@@ -71,25 +71,23 @@ const SORTERS: Record<SortKey, (a: FunctionCallStat, b: FunctionCallStat) => num
  * {@link useCirrus} client; gated by the server's `CIRRUS_ADMIN_TOKEN`.
  *
  * Counters are per-DO-instance and reset on hibernation/restart — this is a
- * "since this instance woke" readout, mirroring the metrics panel. An opt-in
- * **Live** toggle opens a subscription that re-pushes on every server
- * write-flush so the table updates as mutations land.
+ * "since this instance woke" readout, mirroring the metrics panel. The panel is
+ * always live: a subscription opens once the first seed commits a shard and
+ * re-pushes on every server write-flush so the table updates as mutations land.
  */
 export const FunctionStatsPanel = ({ functions, initialShardKey }: FunctionStatsPanelProps): ReactElement => {
     const client = useCirrus();
     const t = useT();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
-    // The shard the live channel keys on — the last one a one-shot committed, so
-    // editing the box without refreshing doesn't resubscribe per keystroke.
-    const [committedShard, setCommittedShard] = useState<null | string>(null);
     const [stats, setStats] = useState<FunctionCallStat[] | null>(null);
     const [error, setError] = useState<null | string>(null);
     const [sortKey, setSortKey] = useState<SortKey>("recent");
-    const { live, liveError, setLiveError, toggle } = useLiveToggle();
+    // Always-on live channel; this only holds a rejection message (e.g. missing
+    // admin token) so the table can say why it stopped updating.
+    const [liveError, setLiveError] = useState<string | undefined>(undefined);
 
     const mountedRef = useRef(true);
-    const inFlightRef = useRef(false);
 
     useEffect(() => {
         mountedRef.current = true;
@@ -117,17 +115,10 @@ export const FunctionStatsPanel = ({ functions, initialShardKey }: FunctionStats
 
     const refresh = useCallback(
         async (shard: string): Promise<void> => {
-            if (inFlightRef.current) {
-                return;
-            }
-
-            inFlightRef.current = true;
-
             try {
                 const next = (await client.query(GET_FUNCTION_STATS, {}, callOptions(shard))) as FunctionStatsResult;
 
                 if (mountedRef.current) {
-                    setCommittedShard(shard);
                     applyResult(next);
                 }
             } catch (error_) {
@@ -135,16 +126,17 @@ export const FunctionStatsPanel = ({ functions, initialShardKey }: FunctionStats
                     setStats(null);
                     setError(errorMessage(error_));
                 }
-            } finally {
-                inFlightRef.current = false;
+
+                // Rethrow so the shard-seed hook doesn't commit a shard that failed.
+                throw error_;
             }
         },
         [client, applyResult],
     );
 
-    useEffect(() => {
-        fireAndForget(refresh(initialShardKey ?? ""));
-    }, [refresh, initialShardKey]);
+    // Debounced shard seed + commit-on-success; the live channel keys on the
+    // committed shard (replaces the old Refresh button).
+    const committedShard = useLiveShardSeed(shardKey, refresh);
 
     useLiveAdmin(
         ADMIN_FUNCTIONS.getFunctionStats,
@@ -155,17 +147,13 @@ export const FunctionStatsPanel = ({ functions, initialShardKey }: FunctionStats
                 applyResult(next as FunctionStatsResult);
             }
         },
-        live && committedShard !== null,
+        committedShard !== undefined,
         (message) => {
             if (mountedRef.current) {
                 setLiveError(message);
             }
         },
     );
-
-    const refreshCurrent = useCallback((): void => {
-        fireAndForget(refresh(shardKey));
-    }, [refresh, shardKey]);
 
     const selectSort = useCallback((event: MouseEvent<HTMLButtonElement>): void => {
         setSortKey(event.currentTarget.dataset.sort as SortKey);
@@ -185,10 +173,7 @@ export const FunctionStatsPanel = ({ functions, initialShardKey }: FunctionStats
         <div className="flex flex-col gap-4" data-testid="cirrus-function-stats">
             <div className="flex flex-wrap items-center gap-2">
                 <ShardInput onChange={setShardKey} testId="fs-shard-input" value={shardKey} />
-                <Button data-testid="fs-refresh" onClick={refreshCurrent} size="sm" type="button" variant="outline">
-                    {t("Refresh")}
-                </Button>
-                <LiveToggle live={live} liveError={liveError} onToggle={toggle} prefix="fs" />
+                <LiveError message={liveError} prefix="fs" />
                 <div className="ml-auto flex items-center gap-1" role="group">
                     {sortButtons.map((option) => (
                         <Button

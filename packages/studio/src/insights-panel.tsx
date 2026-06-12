@@ -17,7 +17,7 @@ import type {
 } from "./admin";
 import { ADMIN_FUNCTIONS } from "./admin";
 import type { AdvisorRow } from "./advisor-view";
-import { advisoryRow, AdvisorView } from "./advisor-view";
+import { AdvisorView, advisoryRow } from "./advisor-view";
 import { Button } from "./components/ui/button";
 import type { Insight } from "./derive-insights";
 import { deriveInsights } from "./derive-insights";
@@ -32,6 +32,7 @@ import { ShardInput } from "./shard-input";
 interface InsightsPanelProps {
     /** Shard key the snapshots target on first load. Defaults to the root shard. */
     readonly initialShardKey?: string;
+
     /**
      * Fan the cross-shard traffic feed out for `table`, returning each shard's
      * `{ shardKey, requests }` total — the input the `hot_shard` advisor lint
@@ -148,7 +149,6 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
     // the worker predates the shard-traffic endpoint, so hot_shard stays quiet.
     const [shardTraffic, setShardTraffic] = useState<AdvisorShardTraffic[] | null>(null);
     const [error, setError] = useState<null | string>(null);
-    const [loading, setLoading] = useState<boolean>(false);
 
     // Default the shard-traffic fan-out to the client's admin RPC; an injected
     // override lets tests drive a skewed distribution without a worker.
@@ -159,8 +159,6 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
 
     const refresh = useCallback(
         async (shard: string): Promise<void> => {
-            setLoading(true);
-
             const [snapshot, stats, advisorySnapshot] = await Promise.allSettled([
                 client.query(GET_METRICS, {}, callOptions(shard)) as Promise<MetricsSnapshot>,
                 client.query(GET_FUNCTION_STATS, {}, callOptions(shard)) as Promise<FunctionStatsResult>,
@@ -243,8 +241,6 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
                 // shard-traffic endpoint unavailable — leave hot_shard dormant.
                 setShardTraffic(null);
             }
-
-            setLoading(false);
         },
         [client, fanShardTraffic],
     );
@@ -270,10 +266,6 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
         return () => {
             document.removeEventListener("visibilitychange", onVisible);
         };
-    }, [refresh, shardKey]);
-
-    const onRefresh = useCallback((): void => {
-        fireAndForget(refresh(shardKey));
     }, [refresh, shardKey]);
 
     // Deep-link the "add the index" jump: open the Schema tab with the scanned
@@ -306,7 +298,8 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
     // fires on a genuine cross-shard skew; hot-scan findings for tables the
     // missing-index insight already owns are suppressed so a hot table renders once.
     const runtimeRows = useMemo<AdvisorRow[]>(
-        () => deriveRuntimeAdvisories({ declaredIndexes: declaredIndexes ?? [], functions, indexHits, shardTraffic, suppressHotScanTables: missingIndexTables }),
+        () =>
+            deriveRuntimeAdvisories({ declaredIndexes: declaredIndexes ?? [], functions, indexHits, shardTraffic, suppressHotScanTables: missingIndexTables }),
         [declaredIndexes, functions, indexHits, missingIndexTables, shardTraffic],
     );
 
@@ -332,7 +325,7 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
 
     const toolbar = <ShardInput onChange={setShardKey} testId="in-shard-input" value={shardKey} />;
 
-    return <AdvisorView error={error} loading={loading} onRefresh={onRefresh} rows={rows} testId="cirrus-insights" toolbar={toolbar} />;
+    return <AdvisorView error={error} rows={rows} testId="cirrus-insights" toolbar={toolbar} />;
 };
 
 export type { InsightsPanelProps };

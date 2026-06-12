@@ -64,7 +64,7 @@ describe("metricsPanel", () => {
         expect(cache.textContent).toBe("no cache configured");
     });
 
-    it("forwards the shard key on refresh", async () => {
+    it("re-seeds on a debounced shard-key change", async () => {
         expect.assertions(1);
 
         const mock = createClient();
@@ -73,12 +73,14 @@ describe("metricsPanel", () => {
 
         await screen.findByTestId("mt-stats");
 
+        // No Refresh button: typing a shard re-loads once the value settles.
         fireEvent.change(screen.getByTestId("mt-shard-input"), { target: { value: "room-9" } });
-        fireEvent.click(screen.getByTestId("mt-refresh"));
 
         await waitFor(() => {
-            if (mock.query.mock.calls.length <= 1) {
-                throw new Error("not refreshed yet");
+            const last = mock.query.mock.calls.at(-1) as [unknown, unknown, { shardKey?: string }] | undefined;
+
+            if (last?.[2]?.shardKey !== "room-9") {
+                throw new Error("not re-seeded yet");
             }
         });
 
@@ -114,8 +116,8 @@ describe("metricsPanel", () => {
         expect(screen.queryByTestId("mt-sparkline")).toBeNull();
     });
 
-    it("toggling Live opens a getMetrics subscription", async () => {
-        expect.assertions(2);
+    it("opens a getMetrics subscription on mount (always live)", async () => {
+        expect.assertions(1);
 
         const mock = createClient();
 
@@ -123,9 +125,14 @@ describe("metricsPanel", () => {
 
         await screen.findByTestId("mt-stats");
 
-        expect(mock.subscribe).not.toHaveBeenCalled();
+        // No Live toggle: the subscription opens once the mount seed commits a shard.
+        await waitFor(() => {
+            const ref = mock.subscribe.mock.calls.at(-1)?.[0] as { __cirrusRef: string } | undefined;
 
-        fireEvent.click(screen.getByTestId("mt-live"));
+            if (ref?.__cirrusRef !== ADMIN_FUNCTIONS.getMetrics) {
+                throw new Error("not subscribed yet");
+            }
+        });
 
         const ref = mock.subscribe.mock.calls.at(-1)?.[0] as { __cirrusRef: string } | undefined;
 
@@ -140,7 +147,11 @@ describe("metricsPanel", () => {
         render(renderPanel(mock));
 
         await screen.findByTestId("mt-stats");
-        fireEvent.click(screen.getByTestId("mt-live"));
+        await waitFor(() => {
+            if (mock.subscribe.mock.calls.length === 0) {
+                throw new Error("not subscribed yet");
+            }
+        });
 
         // Mount seeded `requests: 10`; two climbing pushes → two deltas → spark.
         act(() => {
@@ -160,7 +171,11 @@ describe("metricsPanel", () => {
         render(renderPanel(mock));
 
         await screen.findByTestId("mt-stats");
-        fireEvent.click(screen.getByTestId("mt-live"));
+        await waitFor(() => {
+            if (mock.subscribe.mock.calls.length === 0) {
+                throw new Error("not subscribed yet");
+            }
+        });
 
         expect(screen.queryByTestId("mt-live-error")).toBeNull();
 
@@ -179,7 +194,11 @@ describe("metricsPanel", () => {
         render(renderPanel(mock));
 
         await screen.findByTestId("mt-stats");
-        fireEvent.click(screen.getByTestId("mt-live"));
+        await waitFor(() => {
+            if (mock.subscribe.mock.calls.length === 0) {
+                throw new Error("not subscribed yet");
+            }
+        });
 
         act(() => {
             mock.emitError(ADMIN_FUNCTIONS.getMetrics, "admin subscription requires admin authorization");
@@ -195,7 +214,7 @@ describe("metricsPanel", () => {
         expect(screen.queryByTestId("mt-live-error")).toBeNull();
     });
 
-    it("live pushes update the snapshot and stop once Live is turned off", async () => {
+    it("live pushes update the snapshot without any interaction", async () => {
         expect.assertions(2);
 
         const mock = createClient();
@@ -203,19 +222,17 @@ describe("metricsPanel", () => {
         render(renderPanel(mock));
 
         await screen.findByTestId("mt-stats");
-        fireEvent.click(screen.getByTestId("mt-live"));
-
-        act(() => {
-            mock.emit(ADMIN_FUNCTIONS.getMetrics, { ...METRICS, requests: 42 });
+        await waitFor(() => {
+            if (mock.subscribe.mock.calls.length === 0) {
+                throw new Error("not subscribed yet");
+            }
         });
 
-        expect(screen.getByTestId("mt-requests").textContent).toBe("42");
+        expect(screen.getByTestId("mt-requests").textContent).toBe("10");
 
-        // Turning Live off unsubscribes, so later pushes are ignored.
-        fireEvent.click(screen.getByTestId("mt-live"));
-
+        // No toggle: a server push lands and updates the panel on its own.
         act(() => {
-            mock.emit(ADMIN_FUNCTIONS.getMetrics, { ...METRICS, requests: 99 });
+            mock.emit(ADMIN_FUNCTIONS.getMetrics, { ...METRICS, requests: 42 });
         });
 
         expect(screen.getByTestId("mt-requests").textContent).toBe("42");

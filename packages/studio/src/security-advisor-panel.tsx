@@ -54,11 +54,8 @@ const SecurityAdvisorPanel = (): ReactElement => {
 
     const [findings, setFindings] = useState<SecurityFinding[] | null>(null);
     const [error, setError] = useState<null | string>(null);
-    const [loading, setLoading] = useState<boolean>(false);
 
     const refresh = useCallback(async (): Promise<void> => {
-        setLoading(true);
-
         try {
             const result = (await client.query(GET_SECURITY_AUDIT, {}, callOptions(""))) as SecurityAuditResult;
 
@@ -68,16 +65,10 @@ const SecurityAdvisorPanel = (): ReactElement => {
             setError(null);
         } catch (error_: unknown) {
             setError(errorMessage(error_));
-        } finally {
-            setLoading(false);
         }
     }, [client]);
 
     useEffect(() => {
-        fireAndForget(refresh());
-    }, [refresh]);
-
-    const onRefresh = useCallback((): void => {
         fireAndForget(refresh());
     }, [refresh]);
 
@@ -97,7 +88,7 @@ const SecurityAdvisorPanel = (): ReactElement => {
         [findings, t],
     );
 
-    return <AdvisorView error={error} loading={loading} onRefresh={onRefresh} rows={rows} testId="cirrus-security-advisor" />;
+    return <AdvisorView error={error} rows={rows} testId="cirrus-security-advisor" />;
 };
 
 export default SecurityAdvisorPanel;

@@ -29,6 +29,7 @@ before starting, honor its STOP conditions, and update your row when done.
 | 010  | Spike: advisor lint for RLS-uncovered table access           | P3       | M      | —          | MERGED → alpha `c6752e5e`                                                                              |
 | 011  | Mail catcher: capture dev email + studio inbox + PW helper    | P2       | L      | —          | IMPLEMENTED (working tree; tests green) — E2E spec gated                                               |
 | 012  | Ask about auth/email at init; `cirrus add` to set up later    | P2       | M      | —          | IMPLEMENTED (working tree; tests green)                                                                |
+| 013  | Make the studio a fully live dashboard (no toggles/buttons)   | P1       | L      | —          | IMPLEMENTED (working tree; 401 studio tests green)                                                     |
 
 > Plans 011–012 generated interactively on 2026-06-12 against commit `92f719ab`
 > (studio mail-catcher + interactive auth/email setup). Default email provider is

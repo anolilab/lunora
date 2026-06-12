@@ -5,12 +5,13 @@ import { useCallback, useEffect, useState } from "react";
 import type { SubscriptionConnection, SubscriptionInfo, SubscriptionsResult } from "./admin";
 import { ADMIN_FUNCTIONS } from "./admin";
 import { Badge } from "./components/ui/badge";
-import { Button } from "./components/ui/button";
 import { EmptyState } from "./components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
 import { useT } from "./i18n-context";
 import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal";
 import { ShardInput } from "./shard-input";
+import { useAutoRefresh } from "./use-auto-refresh";
+import useDebounced from "./use-debounced";
 
 interface SubscriptionsPanelProps {
     /** Shard key the panel reports on. Defaults to the root shard. */
@@ -77,9 +78,11 @@ const DASH = <span className="text-muted-foreground">—</span>;
  * client; gated by the server's `CIRRUS_ADMIN_TOKEN`.
  *
  * This is a point-in-time read (sockets and their subscriptions are derived live
- * from the DO, nothing durable): it fetches on mount, on a shard-key change, and
- * on a manual refresh. Connection `id`s are the socket's index within a single
- * read — a label, not a stable identifier across reads.
+ * from the DO, nothing durable). A connect/disconnect isn't a write-flush, so
+ * there's no event to subscribe to — the panel instead polls on a fixed interval
+ * (pausing while the tab is hidden) so sockets appear/disappear without a manual
+ * refresh. Connection `id`s are the socket's index within a single read — a
+ * label, not a stable identifier across reads.
  */
 const SubscriptionsPanel = ({ initialShardKey }: SubscriptionsPanelProps): ReactElement => {
     const client = useCirrus();
@@ -105,14 +108,19 @@ const SubscriptionsPanel = ({ initialShardKey }: SubscriptionsPanelProps): React
         [client],
     );
 
-    // Fetch on mount and whenever the host changes the initial shard key.
-    useEffect(() => {
-        fireAndForget(refresh(initialShardKey ?? ""));
-    }, [refresh, initialShardKey]);
+    // Re-read on the debounced shard key so typing a shard applies once it settles
+    // (no Refresh button) without querying a half-typed value.
+    const debouncedShard = useDebounced(shardKey.trim(), 400);
 
-    const refreshCurrent = useCallback((): void => {
-        fireAndForget(refresh(shardKey));
-    }, [refresh, shardKey]);
+    useEffect(() => {
+        fireAndForget(refresh(debouncedShard));
+    }, [refresh, debouncedShard]);
+
+    // No write-flush fires on socket connect/disconnect, so poll the committed
+    // shard to keep the snapshot current without a manual refresh.
+    useAutoRefresh(() => {
+        fireAndForget(refresh(debouncedShard));
+    }, true);
 
     const rows = result === null ? [] : toRows(result.connections);
 
@@ -120,9 +128,6 @@ const SubscriptionsPanel = ({ initialShardKey }: SubscriptionsPanelProps): React
         <div className="flex flex-col gap-4" data-testid="subs-panel">
             <div className="flex flex-wrap items-center gap-2">
                 <ShardInput onChange={setShardKey} testId="subs-shard-input" value={shardKey} />
-                <Button data-testid="subs-refresh" onClick={refreshCurrent} size="sm" type="button" variant="outline">
-                    {t("Refresh")}
-                </Button>
                 {result !== null && (
                     <div className="ml-auto flex items-center gap-2 text-sm text-muted-foreground" data-testid="subs-count">
                         <Badge variant="secondary">{t("{count} connections", { count: result.totalConnections })}</Badge>

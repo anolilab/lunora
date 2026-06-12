@@ -9,6 +9,7 @@ import { CellValue, GridContainer, GridPagination, TableListSidebar } from "./da
 import { useT } from "./i18n-context";
 import { errorMessage, fireAndForget } from "./internal";
 import { CLOUDFLARE_D1_URL } from "./lib/cf-links";
+import { useAutoRefresh } from "./use-auto-refresh";
 
 interface GlobalDataBrowserProps {
     /**
@@ -111,6 +112,18 @@ export const GlobalDataBrowser = ({
     useEffect(() => {
         fireAndForget(fetchTables());
     }, [fetchTables]);
+
+    // D1 is HTTP-only (no subscription channel), so poll to keep the table list
+    // and the current page current without a manual reload — `useAutoRefresh`
+    // pauses while the tab is hidden. The tick closure is held in a ref, so it
+    // always sees the latest selection/offset.
+    useAutoRefresh(() => {
+        fireAndForget(fetchTables());
+
+        if (selectedTable !== null) {
+            fireAndForget(fetchPage(selectedTable, offset));
+        }
+    }, true);
 
     // The table last applied to the selection (cross-tier jump, deep link, or
     // back/forward). Lets the URL-reconcile effect skip values this component itself

@@ -11,6 +11,7 @@ import { Label } from "./components/ui/label";
 import { ConfirmButton } from "./confirm-button";
 import { useT } from "./i18n-context";
 import { adminRef, callOptions, errorMessage, fireAndForget } from "./internal";
+import { useAutoRefresh } from "./use-auto-refresh";
 
 interface PitrPanelProps {
     /** Shard key the PITR ops target. Defaults to the root shard. */
@@ -66,9 +67,22 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
         fireAndForget(refresh());
     }, [refresh]);
 
-    const onRefresh = useCallback((): void => {
-        fireAndForget(refresh());
-    }, [refresh]);
+    // The current bookmark advances on every shard write; poll it so it doesn't go
+    // stale (there's no Refresh button). Lightweight — only updates the displayed
+    // bookmark, never toggles `busy` or clobbers an in-flight preview/restore.
+    useAutoRefresh(() => {
+        fireAndForget(
+            (async (): Promise<void> => {
+                try {
+                    const result = (await client.query(GET_BOOKMARK, {}, callOptions(shardKey))) as PitrBookmarkResult;
+
+                    setCurrent(result.current);
+                } catch {
+                    // Leave the last-known bookmark on a transient read failure.
+                }
+            })(),
+        );
+    }, true);
 
     const onTimeChange = useCallback((event: ChangeEvent<HTMLInputElement>): void => {
         setTime(event.target.value);
@@ -156,9 +170,6 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
     return (
         <div className="flex flex-col gap-4" data-testid="cirrus-pitr">
             <div className="flex flex-wrap items-center gap-3">
-                <Button data-testid="pitr-refresh" disabled={busy} onClick={onRefresh} size="sm" type="button" variant="outline">
-                    {t("Refresh")}
-                </Button>
                 <span className="text-xs text-muted-foreground">
                     {t("Shard")}: <span className="font-mono">{shardKey === "" ? t("root") : shardKey}</span>
                 </span>

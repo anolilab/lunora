@@ -2,21 +2,20 @@ import { useCirrus } from "@cirrus/react";
 import type { Rect, Virtualizer } from "@tanstack/react-virtual";
 import { observeElementRect, useVirtualizer } from "@tanstack/react-virtual";
 import type { ChangeEvent, CSSProperties, ReactElement } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 
 import type { AuditEntry, AuditLogResult } from "./admin";
 import { ADMIN_FUNCTIONS } from "./admin";
 import { Badge } from "./components/ui/badge";
-import { Button } from "./components/ui/button";
 import { EmptyState } from "./components/ui/empty-state";
 import { Input } from "./components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./components/ui/table";
 import { useT } from "./i18n-context";
-import { adminRef, callOptions, errorMessage, fireAndForget, formatTimestamp } from "./internal";
-import { LiveToggle } from "./live-toggle";
+import { adminRef, callOptions, errorMessage, formatTimestamp } from "./internal";
+import { LiveError } from "./live-status";
 import { ShardInput } from "./shard-input";
 import useLiveAdmin from "./use-live-admin";
-import { useLiveToggle } from "./use-live-toggle";
+import useLiveShardSeed from "./use-live-shard-seed";
 
 interface AuditPanelProps {
     /** Shard key the panel reports on. Defaults to the root shard. */
@@ -66,23 +65,22 @@ const observeViewportRect = (instance: Virtualizer<HTMLDivElement, Element>, cal
  * the server's `CIRRUS_ADMIN_TOKEN`.
  *
  * Unlike the logs panel (an in-memory ring that resets on hibernation), the
- * audit log is durable and bounded only by a retention cap. An opt-in **Live**
- * toggle opens a subscription that re-pushes on every server write-flush so new
- * entries appear without a manual refresh. The op filter is client-side over the
- * already-fetched buffer — it never triggers a refetch.
+ * audit log is durable and bounded only by a retention cap. The panel is always
+ * live: a subscription opens once the first seed commits a shard and re-pushes on
+ * every server write-flush so new entries appear without a manual refresh. The op
+ * filter is client-side over the already-fetched buffer — it never triggers a refetch.
  */
 const AuditPanel = ({ initialShardKey }: AuditPanelProps): ReactElement => {
     const client = useCirrus();
     const t = useT();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
-    // The shard the live channel keys on — the last one a one-shot committed, so
-    // editing the box without refreshing doesn't resubscribe per keystroke.
-    const [committedShard, setCommittedShard] = useState<null | string>(null);
     const [entries, setEntries] = useState<AuditEntry[]>([]);
     const [error, setError] = useState<null | string>(null);
     const [search, setSearch] = useState<string>("");
-    const { live, liveError, setLiveError, toggle } = useLiveToggle();
+    // Always-on live channel; this only holds a rejection message (e.g. missing
+    // admin token) so the panel can say why it stopped updating.
+    const [liveError, setLiveError] = useState<string | undefined>(undefined);
 
     const refresh = useCallback(
         async (shard: string): Promise<void> => {
@@ -91,22 +89,24 @@ const AuditPanel = ({ initialShardKey }: AuditPanelProps): ReactElement => {
             try {
                 const result = (await client.query(GET_AUDIT_LOG, {}, callOptions(shard))) as AuditLogResult;
 
-                setCommittedShard(shard);
                 setEntries(result.entries);
             } catch (error_) {
                 setEntries([]);
                 setError(errorMessage(error_));
+
+                // Rethrow so the shard-seed hook doesn't commit a shard that failed.
+                throw error_;
             }
         },
         [client],
     );
 
-    useEffect(() => {
-        fireAndForget(refresh(initialShardKey ?? ""));
-    }, [refresh, initialShardKey]);
+    // Debounced shard seed + commit-on-success; the live channel keys on the
+    // committed shard (replaces the old Refresh button).
+    const committedShard = useLiveShardSeed(shardKey, refresh);
 
-    // Live channel: while toggled on, each server push replaces the buffer so
-    // new entries appear without a manual refresh.
+    // Live channel: always on once the seed commits a shard; each server push
+    // replaces the buffer so new entries appear without a manual refresh.
     useLiveAdmin(
         ADMIN_FUNCTIONS.getAuditLog,
         {},
@@ -116,7 +116,7 @@ const AuditPanel = ({ initialShardKey }: AuditPanelProps): ReactElement => {
             setLiveError(undefined);
             setEntries((result as AuditLogResult).entries);
         },
-        live && committedShard !== null,
+        committedShard !== undefined,
         setLiveError,
     );
 
@@ -164,10 +164,6 @@ const AuditPanel = ({ initialShardKey }: AuditPanelProps): ReactElement => {
         return { height: paddingBottom };
     }, [paddingBottom]);
 
-    const refreshCurrent = useCallback((): void => {
-        fireAndForget(refresh(shardKey));
-    }, [refresh, shardKey]);
-
     const onSearchChange = useCallback((event: ChangeEvent<HTMLInputElement>): void => {
         setSearch(event.target.value);
     }, []);
@@ -176,10 +172,7 @@ const AuditPanel = ({ initialShardKey }: AuditPanelProps): ReactElement => {
         <div className="flex flex-col gap-4" data-testid="cirrus-audit">
             <div className="flex flex-wrap items-center gap-2">
                 <ShardInput onChange={setShardKey} testId="au-shard-input" value={shardKey} />
-                <Button data-testid="au-refresh" onClick={refreshCurrent} size="sm" type="button" variant="outline">
-                    {t("Refresh")}
-                </Button>
-                <LiveToggle live={live} liveError={liveError} onToggle={toggle} prefix="au" />
+                <LiveError message={liveError} prefix="au" />
                 <Input
                     aria-label={t("Filter audit log")}
                     className="h-8 w-48"

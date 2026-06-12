@@ -1,6 +1,6 @@
 import { useCirrus } from "@cirrus/react";
 import type { ChangeEvent, ReactElement } from "react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 
 import type { MigrationDirection, MigrationRunResult, MigrationStatusRow } from "./admin";
 import { ADMIN_FUNCTIONS } from "./admin";
@@ -13,11 +13,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { ConfirmButton } from "./confirm-button";
 import { useT } from "./i18n-context";
 import { adminRef, callOptions, errorMessage, fireAndForget, formatTimestamp } from "./internal";
-import { LiveToggle } from "./live-toggle";
+import { LiveError } from "./live-status";
 import { recordShard } from "./shard-history";
 import { ShardInput } from "./shard-input";
 import useLiveAdmin from "./use-live-admin";
-import { useLiveToggle } from "./use-live-toggle";
+import useLiveShardSeed from "./use-live-shard-seed";
 
 interface MigrationsPanelProps {
     /** Shard key the panel targets. Defaults to the root shard. */
@@ -42,14 +42,11 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
     const t = useT();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
-    // The shard a successful one-shot last targeted. The live channel keys on
-    // this committed value (not the live `shardKey` input) so editing the shard
-    // box without refreshing doesn't resubscribe to a half-typed shard on every
-    // keystroke — mirroring DataBrowser's `loaded.shard`.
-    const [committedShard, setCommittedShard] = useState<null | string>(null);
     const [rows, setRows] = useState<MigrationStatusRow[] | null>(null);
     const [statusError, setStatusError] = useState<null | string>(null);
-    const { live, liveError, setLiveError, toggle } = useLiveToggle();
+    // Always-on live channel; this only holds a rejection message (e.g. missing
+    // admin token) so the panel can say why it stopped updating.
+    const [liveError, setLiveError] = useState<string | undefined>(undefined);
 
     const [migrationId, setMigrationId] = useState<string>("");
     const [direction, setDirection] = useState<MigrationDirection>("up");
@@ -66,22 +63,25 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
                 const result = (await client.query(MIGRATION_STATUS, {}, callOptions(shard))) as { migrations: MigrationStatusRow[] };
 
                 recordShard(shard);
-                setCommittedShard(shard);
                 setRows(result.migrations);
             } catch (error) {
                 setRows(null);
                 setStatusError(errorMessage(error));
+
+                // Rethrow so the shard-seed hook doesn't commit a shard that failed.
+                throw error;
             }
         },
         [client],
     );
 
-    useEffect(() => {
-        fireAndForget(refresh(initialShardKey ?? ""));
-    }, [refresh, initialShardKey]);
+    // Debounced shard seed + commit-on-success; the live channel keys on the
+    // committed shard (replaces the old Refresh button).
+    const committedShard = useLiveShardSeed(shardKey, refresh);
 
-    // Live channel: while toggled on, each server push refreshes the run-state
-    // table so an in-progress migration's processed/changed counts update live.
+    // Live channel: always on once the seed commits a shard; each server push
+    // refreshes the run-state table so an in-progress migration's
+    // processed/changed counts update live.
     useLiveAdmin(
         ADMIN_FUNCTIONS.migrationStatus,
         {},
@@ -91,7 +91,7 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
             setLiveError(undefined);
             setRows((result as { migrations: MigrationStatusRow[] }).migrations);
         },
-        live && committedShard !== null,
+        committedShard !== undefined,
         setLiveError,
     );
 
@@ -112,7 +112,9 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
             const result = (await client.query(RUN_MIGRATION, { direction, dryRun, id }, callOptions(shardKey))) as MigrationRunResult;
 
             setRunResult(result);
-            await refresh(shardKey);
+            // A post-run status reload failure shows via `statusError`; don't let it
+            // mask the (successful) run result by falling into the catch below.
+            await refresh(shardKey).catch(() => {});
         } catch (error) {
             setRunResult(null);
             setRunError(errorMessage(error));
@@ -120,10 +122,6 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
             setRunning(false);
         }
     }, [client, direction, dryRun, migrationId, refresh, shardKey, t]);
-
-    const refreshCurrent = useCallback((): void => {
-        fireAndForget(refresh(shardKey));
-    }, [refresh, shardKey]);
 
     const runMigration = useCallback((): void => {
         fireAndForget(run());
@@ -145,10 +143,7 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
         <div className="flex flex-col gap-3" data-testid="cirrus-migrations">
             <div className="flex flex-wrap items-center gap-2">
                 <ShardInput onChange={setShardKey} testId="mg-shard-input" value={shardKey} />
-                <Button data-testid="mg-refresh" onClick={refreshCurrent} size="sm" type="button" variant="outline">
-                    {t("Refresh")}
-                </Button>
-                <LiveToggle live={live} liveError={liveError} onToggle={toggle} prefix="mg" />
+                <LiveError message={liveError} prefix="mg" />
             </div>
 
             {statusError !== null && (
