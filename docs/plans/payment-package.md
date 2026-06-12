@@ -117,6 +117,7 @@ packages/payment/
 ```ts
 export interface PaymentAdapter {
   readonly provider: "stripe" | "polar" | "lemonsqueezy" | "paddle";
+  readonly capabilities: { merchantOfRecord: boolean; usageMetering: boolean; portal: boolean };
   createCheckout(input: CheckoutInput): Promise<CheckoutResult>;        // hosted/embedded URL
   createPortalSession(input: PortalInput): Promise<{ url: string }>;
   getOrCreateCustomer(ref: CustomerRef): Promise<Customer>;
@@ -166,16 +167,28 @@ provider POST ─▶ @cirrus/runtime route (registerPaymentRoutes)
 - **Phase 3 — Lemon Squeezy + Paddle adapters**; provider-migration story (dual-register).
 - **Phase 4 — entitlements tier** (`check`/`track` à la Autumn): features, credits, usage metering, seat counts.
 
-## 7. Open questions
+## 7. Resolved decisions (best-practice defaults)
 
-1. **Sync store substrate:** dedicated `PaymentDO` (single, like default topology) vs. shard-by-`referenceId` vs. D1
-   for global reads? Lean: single `PaymentDO` by default, D1 mirror for `.global()` reads.
-2. **Entitlements ownership:** ship our own `check/track` (Phase 4) or offer an Autumn integration adapter instead?
-3. **Auth coupling:** hard dependency on `@cirrus/auth` for `referenceId`, or keep it a generic string so payment is
-   usable without auth?
-4. **MoR vs. PSP:** document which providers are Merchant-of-Record (Polar/LS/Paddle) vs. PSP (Stripe) so tax/invoice
-   expectations are clear per adapter.
-5. **Catalog:** add provider SDK versions to a pnpm catalog (e.g. `catalog:payment`) or keep them package-local?
+1. **Sync-store substrate → single `PaymentDO` default + optional D1 read-mirror; shard opt-in.**
+   Payment state is read-heavy, low-write, and needs strong consistency (one customer record per reference,
+   idempotent webhook application keyed by event id) — a match for Cirrus's default single-DO topology with OCC.
+   Mirror into D1 only when the app opts into `.global()` low-latency reads. `.shardBy(referenceId)` remains
+   available but is **off by default**; payment volume rarely justifies it and a single DO keeps idempotency and
+   uniqueness invariants trivial.
+2. **Entitlements → thin native derive-from-subscription layer (Phase 4), Autumn adapter _seam_, no bundled Autumn.**
+   Deriving `plan`/`features` from already-synced subscription state is cheap and stays in-Worker; a Postgres+Docker
+   service does not belong in the Workers runtime. Full usage-metering/credits is deferred behind an **optional**
+   adapter seam so teams that want Autumn can plug it in.
+3. **Auth coupling → `referenceId` is a generic `string`; `@cirrus/auth` integration is optional.**
+   Dependency inversion: core `@cirrus/payment` must work without auth and takes an opaque `referenceId`. A separate
+   optional helper (auth as a **peer** dep) defaults it to the current session's user/org. No hard `@cirrus/auth` dep.
+4. **MoR vs. PSP → encoded in the adapter, not just docs.** Each adapter exposes a `capabilities` /
+   `merchantOfRecord` flag (Stripe = PSP; Polar / Lemon Squeezy / Paddle = Merchant-of-Record). The docs table spells
+   out who owns tax/invoicing per provider so the difference is type-visible, not tribal knowledge.
+5. **Provider SDK versions → package-local optional `peerDependencies`, not a pnpm catalog.**
+   Catalogs are for versions shared across packages; only `@cirrus/payment` uses `stripe` / `@polar-sh/sdk` / etc.
+   Keep them package-local and optional so a Worker bundles only the adapter it uses. Promote to `catalog:payment`
+   later only if a second package needs them.
 
 ## 8. Sources
 
