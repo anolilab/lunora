@@ -218,6 +218,63 @@ pages, WfP isolation + gotcha notes). These go into the Phase 1 spike checklist 
   early; a GDPR prerequisite for European customers later (Supabase's regionality
   is a real selling point we can partially match).
 
+### 2.5 Scaling architecture: cells, not one account
+
+How the platform scales with users without hitting account limits or risking a
+platform-wide block. Four principles, in priority order:
+
+1. **Keep tenant state inside the script, not in account-level resources.** This is
+   Cirrus's structural advantage: primary state is DO SQLite, and DO namespaces are
+   unlimited under WfP — a tenant's baseline footprint is _one script_, full stop.
+   Account-level resources (D1, R2, queues) are provisioned **lazily and only when
+   binding inference says the project actually uses that capability** (`.global()`
+   tables → D1; storage import → R2). Most projects then consume zero scarce
+   resources. KV is never provisioned per tenant (1,000-namespace cap) — one shared
+   namespace per cell, key-prefixed.
+2. **Cell architecture: shard the fleet across multiple Cloudflare accounts.** Every
+   per-account ceiling (1,200 API req/5 min, 50k D1 default, KV cap, WfP billing
+   blast radius) becomes per-cell capacity. A **cell** = one CF account + its
+   dispatch namespaces + shared KV/queues; the control plane assigns each org to a
+   cell at creation (org→cell in the control-plane D1) and addresses everything as
+   `{cell, namespace, script}`. Start with one cell, but bake the cell ID into every
+   identifier from day one — retrofitting multi-account onto a single-account design
+   is the expensive mistake. Cells also bound blast radius: an account-level
+   suspension or limit incident hits one cell, not the platform. This is the
+   **sanctioned** path — Cloudflare's own Tenant docs recommend creating separate
+   accounts per customer segment "to avoid getting rate limited."
+3. **All Cloudflare API traffic goes through a per-cell scheduler.** A DO-based
+   token-bucket (≤1,200/5 min per cell) that queues provisioning + deploy calls with
+   backoff and priority (interactive deploy > preview > cleanup). Deploys are
+   artifact-first: bundle to R2 once, then the scheduler performs the upload calls —
+   a CI stampede degrades to queued-but-ordered, never to dropped API calls.
+4. **A graduation ladder instead of one-size tenancy.**
+   free/hobby → shared cells; growth → dedicated namespace, then **dedicated cell**
+   (their own CF account operated by our control plane — also unlocks true
+   per-tenant Enterprise features); whales/regulated → **managed-BYO**: the same
+   control plane drives the customer's _own_ CF account via a scoped API token
+   (PartyKit's cloud-prem, kept managed). At fleet scale, a Cloudflare **partner
+   agreement + Tenant API** lets the control plane create accounts programmatically
+   under our umbrella, making "cell per big customer" fully automatic.
+
+**Not getting blocked** is mostly about staying inside sanctioned products and
+keeping tenant abuse from looking like platform abuse: WfP untrusted mode + per-plan
+`limits` on every dispatch + outbound-Worker egress policy contain each tenant;
+signup throttling and payment-gated resource tiers slow farm abuse; the 8-tag
+lifecycle (`org/project/env/plan`) gives a one-call kill switch + bulk delete for a
+bad tenant; CF for SaaS handles customer domains (never proxy hacks). And establish
+the relationship early — D1's "millions of databases by request", WfP itself, and
+the Tenant API all assume you _talk to Cloudflare_; an Enterprise/partner agreement
+with a named contact is the real insurance against surprise enforcement.
+
+| Ceiling (verified §2.4)   | Strategy                                                     |
+| ------------------------- | ------------------------------------------------------------ |
+| 1,200 API req/5 min/acct  | per-cell scheduler + artifact-first deploys + more cells     |
+| KV 1,000 namespaces/acct  | never per-tenant; shared per-cell namespace, key prefixes    |
+| D1 50k databases/acct     | lazy provisioning + raisable to millions + per-cell anyway   |
+| 1,000 scripts incl. (WfP) | cost not cap ($0.02/script); TTL cleanup of previews/dev     |
+| Queues 10k/acct           | platform-owned queues + consumers, tenant-enveloped messages |
+| Per-DO throughput         | already Cirrus's domain: `.shardBy()` fans tenants' load out |
+
 ---
 
 ## 3. What we already have vs build (repo-grounded)
