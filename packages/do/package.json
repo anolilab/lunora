@@ -35,7 +35,6 @@
         "drizzle-orm": "catalog:drizzle"
     },
     "devDependencies": {
-        "@cirrus/mail": "workspace:*",
         "@cirrus/vectors": "workspace:*",
         "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
