@@ -126,14 +126,14 @@ scripts.update`, `d1.database.create`, `r2.buckets.create`, `customHostnames`).
   `@cirrus/config` becomes the dashboard's guided setup.
 - **Tokens:** today's single static `CIRRUS_ADMIN_TOKEN` becomes platform-issued,
   role-scoped (admin / viewer / ci), per-deployment, rotatable, audited.
-- **Public platform API (design for it, ship later).** Supabase's growth lesson:
-    > 60% of their new projects are now provisioned by third-party AI builders
-    > (Lovable/v0-style) through their Management API + OAuth apps (PKCE, scoped tokens),
-    > including the Vercel-Marketplace billed-through-partner model; Convex exposes the
-    > same surface (OAuth apps + embeddable dashboard). The internal deploy API above
-    > should be designed with token scopes/PATs so it can later be published as
-    > `api.cirrus.dev/v1` + OAuth apps without a rewrite — that is the channel through
-    > which app-builder platforms would put Cirrus backends under _their_ users' apps.
+- **Public platform API (design for it, ship later).** Supabase's growth lesson: over
+  60% of their new projects are now provisioned by third-party AI builders
+  (Lovable/v0-style) through their Management API + OAuth apps (PKCE, scoped tokens),
+  including the Vercel-Marketplace billed-through-partner model; Convex exposes the
+  same surface (OAuth apps + embeddable dashboard). The internal deploy API above
+  should be designed with token scopes/PATs so it can later be published as
+  `api.cirrus.dev/v1` + OAuth apps without a rewrite — that is the channel through
+  which app-builder platforms would put Cirrus backends under _their_ users' apps.
 
 ### 2.3 Cloud dev DX (the actual point of all this)
 
@@ -166,6 +166,40 @@ Three rungs, shipped in this order:
    **fork-production-data** option feasible; (b) their branch compute bills outside
    spend caps — preview usage must respect plan caps, no surprise bills.
 
+### 2.4 Known WfP constraints to engineer around
+
+Found while checking the substrate against what Cirrus actually ships; these go into
+the Phase 1 spike checklist (§5):
+
+- **Cron Triggers do not fire for namespaced user Workers** — `triggers.crons` is
+  **silently dropped** on dispatch-namespace uploads (the schedules API only exists for
+  account-level scripts; [workers-sdk#13840](https://github.com/cloudflare/workers-sdk/issues/13840)).
+  Impact: `@cirrus/scheduler`'s cron entry point (`cronJobs()` → `scheduled()` handler).
+  Mitigation is cheap because the heavy lifting already lives in `SchedulerDO` on **DO
+  alarms, which work fine in namespaced Workers** (`runAfter`/`runAt` unaffected): the
+  platform runs one account-level cron ticker Worker that fans tick events out through
+  the dispatcher to each tenant's `scheduled()` path (tenants' cron specs are known to
+  the control plane from codegen output).
+- **Queue consumers (verify)** — namespaced Workers can hold producer bindings, but a
+  queue _consumer_ is configured on an account-level Worker; assume tenant Workers
+  cannot be consumers until proven otherwise. Impact: `@cirrus/mail`'s queue-backed
+  sends and the scheduler's queue-workpool variant. Mitigation mirrors crons: a
+  platform-owned consumer Worker that dispatches batches back into the tenant Worker,
+  or fall back to the DO-alarm workpool on the managed tier.
+- **Per-tenant resource provisioning hits account limits unevenly** — D1
+  databases (~50k/account) and R2 buckets are fine at scale; **KV namespaces are
+  capped (~1000/account)**, so if any Cirrus capability binds KV per tenant it must
+  multiplex one shared namespace via key prefixes instead. DO classes ship inside each
+  tenant script, so they don't consume account-level namespaces.
+- **Email sending binding (verify)** — `@cirrus/mail`'s default transport (Cloudflare
+  Email Workers `send_email` binding) has unknown support inside dispatch namespaces;
+  Resend (HTTP) works regardless and is the safe managed-tier default.
+- **EU data residency** — Durable Objects support **jurisdiction restrictions**
+  (`jurisdiction: "eu"`) at ID-creation time and D1 supports location hints; expose a
+  per-project region/jurisdiction toggle early — it is cheap now and a GDPR
+  prerequisite for European customers later (Supabase's regionality is a real
+  selling point we can partially match).
+
 ---
 
 ## 3. What we already have vs build (repo-grounded)
@@ -197,6 +231,11 @@ Three rungs, shipped in this order:
 - **Observability** — function metrics, correlated request log, health/insights panels
   are the differentiated "app-observation" features no generic PaaS has
   (`STUDIO-VS-CLOUDFLARE.md`'s "beat" column is the managed tier's selling point).
+  The platform side composes cleanly: enabling Workers Logs / a Tail Worker / Logpush
+  on the dispatcher covers **every user Worker in the namespace automatically**, and
+  Workers Analytics Engine aggregates per tenant by script tag — so hosted-tier log
+  search and usage metering ride Cloudflare primitives, not custom pipelines (and the
+  `analyticsEngineSink` from `CLOUDFLARE-REUSE-AUDIT.md` is already shipped).
 
 **Build new** (all wrapper/integration — no new runtime features required):
 
@@ -229,6 +268,12 @@ Three rungs, shipped in this order:
   when `CLOUDFLARE_API_TOKEN`/wrangler auth is configured. BYO stays first-class and
   free forever — it is also the credible exit hatch that makes the managed tier easy
   to adopt.
+- **Make the exit hatch a feature: `cirrus eject`.** The pieces already exist —
+  `exportShard`/`importShard` admin RPCs + the studio Export/Import panel for data,
+  and the BYO deploy path for code. One command that exports all shards + D1 + R2,
+  scaffolds the `wrangler.jsonc` the project would have had on BYO, and imports into
+  the user's own CF account turns "no lock-in" from a promise into a demo (Supabase
+  earns portability trust via `pg_dump`; ours can be first-party and complete).
 - **Monetization levers** (Convex's, adapted): seats, usage overages (requests/CPU-ms
   map directly onto WfP's $0.30/M + $0.02/M cost basis), preview deployments +
   retention, log-stream integrations, custom domains, team size.
@@ -253,11 +298,16 @@ Ordered so every phase ships standalone DX value even if we stop there.
   proxy session into `@cirrus/vite` (`remote: true` per binding / `CIRRUS_REMOTE=1`).
   Closes the long-standing PLAN5-Phase-5 gap for BYO users and is a hard prerequisite
   for the cloud-dev story. _Independent; start immediately._
-- **Phase 1 — Control-plane MVP + managed deploy.** Dispatch namespaces, dispatcher
-  Worker, provisioning module, deploy API + NDJSON progress, `cirrus login/link/deploy`,
-  `{project}.cirrus.app`, per-deployment secrets + scoped tokens. Exit criterion:
-  `cirrus init && cirrus deploy` → live URL in under a minute with zero Cloudflare
-  account, zero wrangler config, zero D1 placeholder editing.
+- **Phase 1 — Control-plane MVP + managed deploy.** Starts with a **constraint
+  spike** that proves the substrate on a real Cirrus app before any control-plane
+  code: hibernated-WS subscriptions through `env.DISPATCHER.get()`, the cron
+  fan-out workaround, queue-consumer behavior, the mail `send_email` binding, and an
+  untrusted-mode audit (`request.cf`, cache isolation) — §2.4 + risks 2–4. Then:
+  dispatch namespaces, dispatcher Worker, provisioning module, deploy API + NDJSON
+  progress, `cirrus login/link/deploy`, `{project}.cirrus.app`, per-deployment
+  secrets + scoped tokens. Exit criterion: `cirrus init && cirrus deploy` → live URL
+  in under a minute with zero Cloudflare account, zero wrangler config, zero D1
+  placeholder editing.
 - **Phase 2 — Preview + cloud dev deployments.** Deploy-key types, branch-named TTL'd
   previews with `--cmd` + URL injection (Vercel/Netlify/GH Actions recipes), GitHub
   app (PR comments/check runs, `cirrus/`-only filter, auto-delete on merge/close),
@@ -268,7 +318,11 @@ Ordered so every phase ships standalone DX value even if we stop there.
   proxy with ACL/audit/rate limits; team invites; guided secret setup.
 - **Phase 4 — Domains, billing, ops.** Custom hostnames (CF for SaaS), usage metering →
   Stripe, rollback UI, log-stream egress (reuse `@cirrus/runtime` sinks: Axiom/Datadog/
-  webhook), alerting.
+  webhook), alerting (deploy status, error spikes, quota warnings), **managed
+  backups/PITR as a paid feature** (the self-managing PITR loop + D1 Time Travel
+  already exist; the platform adds scheduling, retention tiers, and off-account R2
+  snapshot copies), abuse controls (per-tenant rate limits at the dispatcher, egress
+  policy via the outbound Worker, signup throttling).
 
 ---
 
@@ -301,7 +355,9 @@ Cloudflare: [WfP docs](https://developers.cloudflare.com/cloudflare-for-platform
 [remote bindings GA](https://developers.cloudflare.com/changelog/2025-09-16-remote-bindings-ga/) ·
 [remote-bindings architecture](https://blog.cloudflare.com/connecting-to-production-the-architecture-of-remote-bindings/) ·
 [DO facets / Dynamic Workers](https://blog.cloudflare.com/durable-object-facets-dynamic-workers/) ·
-[CF for SaaS plans](https://developers.cloudflare.com/cloudflare-for-platforms/cloudflare-for-saas/plans/).
+[CF for SaaS plans](https://developers.cloudflare.com/cloudflare-for-platforms/cloudflare-for-saas/plans/) ·
+[WfP observability](https://developers.cloudflare.com/cloudflare-for-platforms/workers-for-platforms/configuration/observability/) ·
+[crons dropped in dispatch namespaces (workers-sdk#13840)](https://github.com/cloudflare/workers-sdk/issues/13840).
 Repos: [workers-for-platforms-example](https://github.com/cloudflare/workers-for-platforms-example) ·
 [vibesdk](https://github.com/cloudflare/vibesdk) · [cloudflare-typescript](https://github.com/cloudflare/cloudflare-typescript) ·
 [workers-sdk](https://github.com/cloudflare/workers-sdk) · [partykit/partykit](https://github.com/partykit/partykit) ·
