@@ -6,65 +6,60 @@
  * file-based discovery) so codegen picks them up — they surface in the generated
  * `api` as `mail/sendEmail` and `mail/queueEmail`, i.e. `api.mail.sendEmail`.
  *
- *   - **sendEmail** (action) — render + deliver an email *now* via the default
- *     Resend transport. Awaits the provider and returns the message `id`. Use it
- *     for low-volume, latency-tolerant sends (a verification link, a receipt).
+ *   - **sendEmail** (action) — render + deliver an email *now*. Awaits the
+ *     transport and returns the message `id`. Use it for low-volume,
+ *     latency-tolerant sends (a verification link, a receipt).
  *   - **queueEmail** (action) — hand the send off to a Cloudflare Queue and
- *     return immediately, so the request isn't blocked on the provider. Requires
- *     a Queue binding wired into `createMailer({ queue })` (see the README) —
- *     left throwing-by-default until you wire one up.
+ *     return immediately, so the request isn't blocked. Requires a Queue binding
+ *     wired into `createMailer({ queue })` (see the README).
  *
- * Both are **actions** (not mutations/queries) because sending email is a
- * non-transactional side effect that talks to the network: actions are the only
- * function kind allowed to do arbitrary I/O like `fetch` to Resend.
+ * **Provider.** The default transport is **Cloudflare Email Workers** — it sends
+ * a raw RFC 822 message through your Worker's `send_email` binding. Cloudflare's
+ * binding is single-recipient and only delivers to **verified Email Routing
+ * destination addresses**, so set up Email Routing (verify a destination, add
+ * the `send_email` binding to `wrangler.jsonc`) before relying on it in prod. To
+ * use a hosted provider instead, set `RESEND_API_KEY` (Resend) or pass a custom
+ * `transport` to `createMailer` — see `@cirrus/mail`.
  *
- * The heavy lifting lives in `@cirrus/mail`:
- *   - `createMailer({ apiKey, from, queue? })` builds a Resend-backed mailer.
- *   - `mailer.send(opts)` validates addresses (length + CR/LF + comma /
- *     header-injection checks), optionally renders a React template, and calls
- *     the provider.
- * This file is just the idiomatic Cirrus glue that exposes those as `api.mail.*`.
+ * **Dev mail catcher.** In local dev there's nothing to deliver to, so the
+ * transport selection (`createMailerFromEnv`) swaps in `@cirrus/mail`'s capture
+ * transport: every send is intercepted and persisted to the studio's Mail inbox
+ * instead of going out — including `@cirrus/auth`'s verification /
+ * forgot-password mail. Capture is on in a dev environment (`cirrus dev` sets
+ * `WORKER_ENV=development`) or when `CIRRUS_MAIL_CAPTURE` is set; production
+ * always delivers (and fails loudly if `SEND_EMAIL` is missing rather than
+ * silently capturing).
  *
- * Config comes from env vars/secrets (scaffolded into `.dev.vars` on add; set the
- * secret with `wrangler secret put RESEND_API_KEY`). Bindings, vars, and secrets
- * are read from `cloudflare:workers`' `env` — the one canonical source every
- * Cirrus registry item uses.
+ * Config is read from `cloudflare:workers`' `env` — the one canonical source
+ * every Cirrus registry item uses for bindings, vars, and secrets.
  */
-import { env } from "cloudflare:workers";
-
-import { createMailer } from "@cirrus/mail";
+import { createMailerFromEnv } from "@cirrus/mail";
 import type { Mailer, SendOptions } from "@cirrus/mail";
 import { action, v } from "@cirrus/server";
+import { env } from "cloudflare:workers";
 
 /**
- * Read a required string env var/secret or throw a clear, actionable error.
- * Keeps the failure mode "you forgot to set RESEND_API_KEY" rather than an
- * opaque provider error. (`env` values are typed `unknown`, so we narrow here.)
+ * The Cloudflare Email Workers send callback: serialize the RFC 822 message
+ * through the `SEND_EMAIL` binding. Kept here (not in `@cirrus/mail`) because it
+ * needs the `cloudflare:email` runtime module. Ignored in dev (capture instead).
  */
-const requireEnv = (name: string): string => {
-    const value = env[name];
+const cloudflareSend = async (from: string, to: string, raw: string): Promise<void> => {
+    const { EmailMessage } = await import("cloudflare:email");
+    const binding = env["SEND_EMAIL"] as { send: (message: InstanceType<typeof EmailMessage>) => Promise<void> };
 
-    if (typeof value !== "string" || value === "") {
-        throw new Error(`@cirrus/mail registry item: missing env var \`${name}\` — set it in .dev.vars (and \`wrangler secret put ${name}\` for secrets).`);
-    }
-
-    return value;
+    await binding.send(new EmailMessage(from, to, raw));
 };
 
 /**
- * Build a mailer from env on each invocation. Cheap to construct (no network in
- * the constructor — the Resend provider is initialized lazily on first `send`),
- * and per-call construction keeps it stateless across hibernation/eviction.
+ * Build a mailer from env on each invocation: capture into the studio inbox in
+ * dev, deliver via the `SEND_EMAIL` binding (or `RESEND_API_KEY`) in production.
+ * The capture-vs-deliver decision + the inbox wiring live in `@cirrus/mail`'s
+ * `createMailerFromEnv`, so the same logic backs `@cirrus/auth`'s email too.
  *
- * Pass a `queue` binding here once you've added one (see the README) to enable
+ * Pass a `queue` binding to `createMailer` (edit `@cirrus/mail` usage) to enable
  * {@link queueEmail}.
  */
-const mailer = (): Mailer =>
-    createMailer({
-        apiKey: requireEnv("RESEND_API_KEY"),
-        from: requireEnv("MAIL_FROM"),
-        // queue: <your Queue binding>, // enable queueEmail — see README
-    });
+const mailer = (): Mailer => createMailerFromEnv(env, { cloudflareSend });
 
 /**
  * Validator for the email payload. Mirrors `@cirrus/mail`'s `SendOptions` minus
@@ -113,10 +108,10 @@ const toSendOptions = (args: {
 });
 
 /**
- * Render (if needed) and deliver an email synchronously via Resend. Returns the
- * provider message `id` on success; throws a generic `@cirrus/mail: send failed`
- * if the provider rejects (the raw provider error is logged server-side only, to
- * avoid leaking provider internals to callers).
+ * Render (if needed) and deliver an email synchronously. Returns the message
+ * `id` on success; throws a generic `@cirrus/mail: send failed` if the transport
+ * rejects (the raw provider error is logged server-side only). In dev the send
+ * is captured into the studio Mail inbox instead of delivered.
  */
 export const sendEmail = action({
     args: emailArgs,
