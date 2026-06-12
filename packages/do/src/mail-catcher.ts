@@ -39,7 +39,7 @@ const MAIL_RETENTION = 500;
  * row's size so one pathological email (a giant inlined-image HTML body) can't
  * bloat the DO's SQLite store. A dev preview doesn't need the full megabytes.
  */
-const MAX_BODY_CHARS = 256 * 1024;
+const MAX_BODY_CHARS: number = 256 * 1024;
 
 /** Truncate an oversized body with a visible marker; pass small/absent bodies through. */
 const capBody = (value: string | undefined): string | undefined =>
