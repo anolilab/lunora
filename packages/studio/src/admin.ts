@@ -7,7 +7,16 @@
  * here deliberately: the studio ships browser React components and must not
  * pull the Durable Object runtime into the bundle, so the only thing it shares
  * with the server is these plain strings and structural types.
+ *
+ * The one exception is `CapturedMail`: its canonical owner is `@cirrus/mail`
+ * (not `@cirrus/do`), and the studio→mail dependency direction is allowed, so we
+ * import + re-export that type below instead of hand-mirroring it.
  */
+
+// Canonical captured-mail wire type, owned by `@cirrus/mail`. Type-only: erased
+// at build time, so no mail *runtime* enters the studio's browser bundle.
+import type { CapturedMail } from "@cirrus/mail";
+
 export const ADMIN_FUNCTION_PREFIX = "__cirrus_admin__:";
 
 /**
@@ -117,25 +126,19 @@ export interface BulkDeleteResult {
 }
 
 /**
- * One captured outbound email as served by `__cirrus_admin__:getCapturedMail`,
- * mirroring `@cirrus/do`'s `CapturedMailRow`. Persisted by `@cirrus/mail`'s dev
- * capture transport into the root-shard mailbox and rendered by the studio Mail
- * inbox. `html`/`text` are the rendered bodies; `to`/`cc`/`bcc` are the original
- * recipient lists; `capturedAt` is epoch-ms.
+ * One captured outbound email as served by `__cirrus_admin__:getCapturedMail`.
+ * Persisted by `@cirrus/mail`'s dev capture transport into the root-shard
+ * mailbox and rendered by the studio Mail inbox. `html`/`text` are the rendered
+ * bodies; `to`/`cc`/`bcc` are the original recipient lists; `capturedAt` is
+ * epoch-ms.
+ *
+ * Re-exported verbatim from `@cirrus/mail`, the canonical owner of the
+ * captured-mail wire type (also imported at the top of this file for local use
+ * in {@link CapturedMailResult}). This is NOT one of the hand-mirrored
+ * `@cirrus/do` shapes below — it shares the real source of truth, so a field
+ * added in `@cirrus/mail` flows here automatically.
  */
-export interface CapturedMail {
-    bcc?: string[];
-    capturedAt: number;
-    cc?: string[];
-    from?: string;
-    headers?: Record<string, string>;
-    html?: string;
-    id: string;
-    replyTo?: string;
-    subject: string;
-    text?: string;
-    to: string | string[];
-}
+export type { CapturedMail } from "@cirrus/mail";
 
 /** Result of `__cirrus_admin__:getCapturedMail` — the dev mail-catcher inbox, newest first. */
 export interface CapturedMailResult {

@@ -17,6 +17,19 @@ const isCaptureTransport = (transport: MailTransport): boolean =>
  * the rendered, validated {@link SendPayload} with an `id` and a capture
  * timestamp assigned by the sink (the root-shard mailbox), so the studio inbox
  * can list and open it.
+ *
+ * **Canonical captured-mail wire type — single source of truth.** Every other
+ * representation of a captured message mirrors this shape; consumers import it
+ * directly wherever the package dependency direction allows.
+ *
+ * `@cirrus/studio`'s `CapturedMail` re-exports this (type-only dep on
+ * `@cirrus/mail`). `@cirrus/do`'s `CapturedMailRow` / `RecordMailInput` are
+ * documented mirrors — the DO runtime stays free of any `@cirrus/mail` *runtime*
+ * dep — guarded by a compile-time structural assertion against this type, so a
+ * field added here that isn't mirrored fails the `@cirrus/do` build.
+ *
+ * Add or change a captured-mail field here first; the guards will point at the
+ * mirrors that need the matching change.
  */
 interface CapturedMail extends SendPayload {
     /** Epoch-ms the message was captured. */

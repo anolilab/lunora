@@ -755,6 +755,14 @@ const parseRecordAuthEventArgs = (args: Record<string, unknown>): { outcome: "fa
  * from `@cirrus/mail`). `subject` must be a string and `to` a string or string
  * array; the optional address/body/header fields are shape-checked. Anything
  * else throws a 400 `CirrusError`, matching the other admin write parsers.
+ *
+ * This is the trust-boundary re-check for the admin RPC edge — it stays even
+ * though the wire type is now centralized. Its return type `RecordMailInput` is
+ * a compile-time mirror of `@cirrus/mail`'s canonical `SendPayload` (guarded in
+ * `mail-catcher.ts`). Adding a captured-mail field is therefore a two-place
+ * change: the canonical `SendPayload`/`CapturedMail` in `@cirrus/mail`, and the
+ * field-by-field validation here (the mirror types update themselves, and their
+ * drift guards point you back here). Keep the shapes in lockstep.
  */
 const parseRecordMailArgs = (args: Record<string, unknown>): RecordMailInput => {
     const bad = (message: string): never => {
