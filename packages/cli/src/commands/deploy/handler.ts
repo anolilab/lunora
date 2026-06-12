@@ -314,6 +314,13 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
     // no NEW `defineMigration` was added since the committed baseline. Mirrors the
     // D1-placeholder guard's early-abort + actionable message. Skipped on
     // `--skip-codegen` (no fresh snapshot to gate on).
+    //
+    // The baseline re-bless is DEFERRED: `gate.rebless` is invoked only after a
+    // successful `wrangler deploy` (below), so a deploy that fails after this
+    // point never advances the committed baseline past a breaking change that
+    // never shipped — which would silently defeat the gate on the retry.
+    let reblessSchemaBaseline: (() => void) | undefined;
+
     if (codegen !== undefined) {
         const gate = runSchemaDriftGate({
             allowDrift: options.allowSchemaDrift === true,
@@ -331,6 +338,8 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
                 validation: { problems: [], wranglerPath: undefined },
             };
         }
+
+        reblessSchemaBaseline = gate.rebless;
     }
 
     await provisionBindings(cwd, options.logger);
@@ -399,8 +408,18 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
     if (options.migrate) {
         const migrateCode = await runPostDeployMigrations(options, cwd);
 
+        // Only advance the committed baseline when the whole operation — deploy
+        // AND its migrations — succeeded; a failed migration leaves the gate
+        // measuring against the pre-deploy baseline on the retry.
+        if (migrateCode === 0) {
+            reblessSchemaBaseline?.();
+        }
+
         return { code: migrateCode, descriptor, validation };
     }
+
+    // Deploy succeeded — now it is safe to advance the committed schema baseline.
+    reblessSchemaBaseline?.();
 
     return {
         code: result.code,

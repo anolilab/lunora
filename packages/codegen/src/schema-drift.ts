@@ -178,27 +178,58 @@ const buildSchemaSnapshot = (schema: SchemaIR, migrationIds: ReadonlyArray<strin
 /** Serialize a snapshot to the exact bytes written to `cirrus/.cirrus-schema.json` (trailing newline). */
 const serializeSchemaSnapshot = (snapshot: SchemaSnapshot): string => `${JSON.stringify(snapshot, undefined, 2)}\n`;
 
-/** Parse a committed snapshot file, or `undefined` when the content is absent/unparseable/wrong-version. */
+/**
+ * Thrown by {@link parseSchemaSnapshot} when the baseline file exists but is
+ * malformed (bad JSON / wrong version / invalid table shape). Lets the CLI gate
+ * treat a corrupt baseline as a hard error rather than silently degrading to a
+ * "first capture" that would mask drift and then overwrite the bad file.
+ */
+class SchemaSnapshotParseError extends Error {
+    public override readonly name = "SchemaSnapshotParseError";
+}
+
+/** True when `value` is a non-null object (the shape every snapshot sub-record must have). */
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null;
+
+/** Structurally validate one parsed table entry, so a `version:1` file with garbage tables is rejected (not diffed). */
+const isValidTableSnapshot = (value: unknown): value is TableSnapshot =>
+    isRecord(value) && isRecord(value.fields) && isRecord(value.indexes) && isRecord(value.relations) && typeof value.shardMode === "string";
+
+/**
+ * Parse a committed snapshot file. Returns `undefined` ONLY when the content is
+ * absent/empty; throws {@link SchemaSnapshotParseError} when content is present
+ * but malformed (bad JSON, wrong version, or structurally-invalid tables) so the
+ * caller can distinguish "no baseline yet" (a legitimate first capture) from "a
+ * corrupt baseline" (which must not be silently treated as a first capture).
+ */
 const parseSchemaSnapshot = (content: string | undefined): SchemaSnapshot | undefined => {
     if (content === undefined || content.trim() === "") {
         return undefined;
     }
 
+    let parsed: unknown;
+
     try {
-        const parsed = JSON.parse(content) as Record<string, unknown>;
-
-        if (parsed.version !== SCHEMA_SNAPSHOT_VERSION || typeof parsed.tables !== "object" || parsed.tables === null) {
-            return undefined;
-        }
-
-        return {
-            migrationIds: Array.isArray(parsed.migrationIds) ? (parsed.migrationIds as ReadonlyArray<string>) : [],
-            tables: parsed.tables as Record<string, TableSnapshot>,
-            version: SCHEMA_SNAPSHOT_VERSION,
-        };
-    } catch {
-        return undefined;
+        parsed = JSON.parse(content);
+    } catch (error: unknown) {
+        throw new SchemaSnapshotParseError(`baseline is not valid JSON: ${error instanceof Error ? error.message : String(error)}`);
     }
+
+    if (!isRecord(parsed) || parsed.version !== SCHEMA_SNAPSHOT_VERSION || !isRecord(parsed.tables)) {
+        throw new SchemaSnapshotParseError(`baseline is malformed or written by an incompatible version (expected version ${String(SCHEMA_SNAPSHOT_VERSION)})`);
+    }
+
+    for (const [name, table] of Object.entries(parsed.tables)) {
+        if (!isValidTableSnapshot(table)) {
+            throw new SchemaSnapshotParseError(`baseline table "${name}" has an invalid structure`);
+        }
+    }
+
+    return {
+        migrationIds: Array.isArray(parsed.migrationIds) ? (parsed.migrationIds as ReadonlyArray<string>) : [],
+        tables: parsed.tables as Record<string, TableSnapshot>,
+        version: SCHEMA_SNAPSHOT_VERSION,
+    };
 };
 
 /** Whether two index snapshots are structurally identical (ordered fields + unique flag). */
@@ -375,10 +406,6 @@ interface SchemaDriftDecision {
     reason: string;
 }
 
-/** True when at least one declared migration id is absent from the baseline. */
-const hasNewMigration = (baseline: SchemaSnapshot | undefined, current: SchemaSnapshot): boolean =>
-    current.migrationIds.some((id) => !(baseline?.migrationIds ?? []).includes(id));
-
 /**
  * Decide whether breaking schema drift should block a deploy.
  *
@@ -407,7 +434,7 @@ const evaluateSchemaDrift = (options: { allowDrift?: boolean; baseline: SchemaSn
 
     const breakingSummary = breaking.map((change) => `  - ${change.summary}`).join("\n");
 
-    if (hasNewMigration(baseline, current)) {
+    if (newMigrationIds.length > 0) {
         return {
             blocked: false,
             changes: drift.changes,
@@ -428,4 +455,4 @@ const evaluateSchemaDrift = (options: { allowDrift?: boolean; baseline: SchemaSn
 };
 
 export type { DriftChange, FieldSnapshot, IndexSnapshot, RelationSnapshot, SchemaDrift, SchemaDriftDecision, SchemaSnapshot, TableSnapshot };
-export { buildSchemaSnapshot, diffSchemaSnapshots, evaluateSchemaDrift, parseSchemaSnapshot, SCHEMA_SNAPSHOT_VERSION, serializeSchemaSnapshot };
+export { buildSchemaSnapshot, diffSchemaSnapshots, evaluateSchemaDrift, parseSchemaSnapshot, SCHEMA_SNAPSHOT_VERSION, SchemaSnapshotParseError, serializeSchemaSnapshot };

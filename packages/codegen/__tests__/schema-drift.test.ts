@@ -7,6 +7,7 @@ import {
     evaluateSchemaDrift,
     parseSchemaSnapshot,
     SCHEMA_SNAPSHOT_VERSION,
+    SchemaSnapshotParseError,
     serializeSchemaSnapshot,
 } from "../src/schema-drift";
 
@@ -70,7 +71,7 @@ describe("schema-drift", () => {
     });
 
     describe("serialize / parse round-trip", () => {
-        it("round-trips a snapshot and rejects wrong-version / garbage", () => {
+        it("round-trips a snapshot and treats only absent/empty content as undefined", () => {
             expect.assertions(4);
 
             const snapshot = buildSchemaSnapshot(schema([table("users", { name: stringField })]), ["m1"]);
@@ -78,8 +79,22 @@ describe("schema-drift", () => {
 
             expect(serialized.endsWith("\n")).toBe(true);
             expect(parseSchemaSnapshot(serialized)).toStrictEqual(snapshot);
-            expect(parseSchemaSnapshot("not json")).toBeUndefined();
-            expect(parseSchemaSnapshot(JSON.stringify({ tables: {}, version: 999 }))).toBeUndefined();
+            // Absent / empty / whitespace ⇒ no baseline yet (a legitimate first capture).
+            expect(parseSchemaSnapshot(undefined)).toBeUndefined();
+            expect(parseSchemaSnapshot("   \n  ")).toBeUndefined();
+        });
+
+        it("THROWS SchemaSnapshotParseError on present-but-malformed content (so corruption is not a silent first capture)", () => {
+            expect.assertions(3);
+
+            // Invalid JSON.
+            expect(() => parseSchemaSnapshot("not json")).toThrow(SchemaSnapshotParseError);
+            // Right JSON, wrong version.
+            expect(() => parseSchemaSnapshot(JSON.stringify({ tables: {}, version: 999 }))).toThrow(SchemaSnapshotParseError);
+            // Right version, structurally-invalid table entry (fields not an object).
+            expect(() => parseSchemaSnapshot(JSON.stringify({ tables: { users: { fields: "nope" } }, version: SCHEMA_SNAPSHOT_VERSION }))).toThrow(
+                SchemaSnapshotParseError,
+            );
         });
     });
 

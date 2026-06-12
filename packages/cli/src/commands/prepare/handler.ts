@@ -123,12 +123,17 @@ const runPrepareCommand = async (options: PrepareCommandOptions): Promise<Prepar
             options.logger.error(`  - ${problem}`);
         }
 
+        // Validation failed — do NOT advance the committed schema baseline, so a
+        // later deploy still re-checks this drift against the pre-prepare shape.
         return {
             code: 1,
             error: "wrangler validation failed",
             validation,
         };
     }
+
+    // Prepare fully succeeded — safe to advance the committed schema baseline.
+    gate.rebless?.();
 
     options.logger.success("project is ready to deploy");
 

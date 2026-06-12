@@ -28,7 +28,7 @@ import { buildSchemaSnapshot, serializeSchemaSnapshot } from "./schema-drift";
  * gitignored `_generated/`) so it is committed alongside `schema.ts`. Leading
  * dot keeps it tucked away next to the schema it describes.
  */
-const SCHEMA_SNAPSHOT_FILENAME = ".cirrus-schema.json";
+export const SCHEMA_SNAPSHOT_FILENAME = ".cirrus-schema.json";
 
 const writeIfChanged = (filePath: string, content: string): void => {
     // Avoid spurious writes (and downstream HMR reloads) when the rendered
@@ -340,5 +340,3 @@ export interface CodegenResult {
     /** Absolute path of the committed baseline file (`cirrus/.cirrus-schema.json`). */
     schemaSnapshotPath: string;
 }
-
-export { SCHEMA_SNAPSHOT_FILENAME };

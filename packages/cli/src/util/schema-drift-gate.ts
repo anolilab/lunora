@@ -8,28 +8,60 @@
  * (`evaluateSchemaDrift`); this module is the thin I/O + logging shell the
  * deploy / verify / prepare commands call, mirroring the D1-placeholder guard.
  *
- * On a passing (non-blocked) run that DID drift, the baseline is re-blessed with
- * the current snapshot so the next run measures against the just-shipped shape.
- * A clean run (no drift) leaves the file untouched.
+ * The baseline is NOT re-blessed inline: a drifting-but-allowed run returns a
+ * `rebless` thunk the caller invokes only AFTER the operation succeeds (e.g.
+ * after `wrangler deploy` exits 0). Re-blessing before the deploy can still fail
+ * would advance the committed baseline past a breaking change that never
+ * shipped, silently defeating the gate on the retry — so the write is deferred
+ * to the command's success path.
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
-import type { CodegenResult, SchemaDriftDecision } from "@cirrus/codegen";
-import { evaluateSchemaDrift, parseSchemaSnapshot, serializeSchemaSnapshot } from "@cirrus/codegen";
+import type { CodegenResult, SchemaDriftDecision, SchemaSnapshot } from "@cirrus/codegen";
+import { evaluateSchemaDrift, parseSchemaSnapshot, SchemaSnapshotParseError, serializeSchemaSnapshot } from "@cirrus/codegen";
 
 import type { Logger } from "./logger";
 
-/** Read + parse the committed baseline, or `undefined` when absent/unreadable/wrong-version. */
-const readBaseline = (snapshotPath: string): ReturnType<typeof parseSchemaSnapshot> => {
+/**
+ * The committed baseline, classified so the gate can treat "no baseline yet" (a
+ * legitimate first capture — never blocks) differently from "present but
+ * corrupt" (must block rather than silently degrade to a first capture and
+ * overwrite the bad file). `parseSchemaSnapshot` throws on malformed content and
+ * returns `undefined` only for an empty file.
+ */
+type BaselineRead = { snapshot: SchemaSnapshot; status: "ok" } | { status: "absent" } | { status: "corrupt" };
+
+const readBaseline = (snapshotPath: string): BaselineRead => {
     if (!existsSync(snapshotPath)) {
-        return undefined;
+        return { status: "absent" };
+    }
+
+    let content: string;
+
+    try {
+        content = readFileSync(snapshotPath, "utf8");
+    } catch {
+        return { status: "corrupt" };
     }
 
     try {
-        return parseSchemaSnapshot(readFileSync(snapshotPath, "utf8"));
-    } catch {
-        return undefined;
+        const snapshot = parseSchemaSnapshot(content);
+
+        // An empty/whitespace file parses to `undefined` — treat it as corrupt
+        // (a committed baseline should never be blank), not a first capture.
+        return snapshot === undefined ? { status: "corrupt" } : { snapshot, status: "ok" };
+    } catch (error: unknown) {
+        if (error instanceof SchemaSnapshotParseError) {
+            return { status: "corrupt" };
+        }
+
+        throw error;
     }
+};
+
+/** Write the current snapshot to the committed baseline path. */
+const writeBaseline = (snapshotPath: string, snapshot: SchemaSnapshot): void => {
+    writeFileSync(snapshotPath, serializeSchemaSnapshot(snapshot), "utf8");
 };
 
 /** The structured outcome a command embeds in its `--format json` result + uses for exit code. */
@@ -40,6 +72,13 @@ interface SchemaDriftGateResult {
     changes: SchemaDriftDecision["changes"];
     /** The actionable explanation, empty string when there was no drift. */
     reason: string;
+
+    /**
+     * Present when the run drifted but is allowed to proceed: invoke it AFTER the
+     * operation succeeds to advance the committed baseline to the current shape.
+     * Undefined when there is nothing to re-bless (no drift, blocked, or read-only).
+     */
+    rebless?: () => void;
 }
 
 /**
@@ -49,6 +88,9 @@ interface SchemaDriftGateResult {
  * never block), `updateBaseline` (re-bless the baseline even on a blocked
  * outcome, deliberately accepting the new shape), and `readOnly` (evaluate +
  * report but never write — used by `cirrus verify`).
+ *
+ * The returned `rebless` thunk (when present) is the ONLY baseline write — the
+ * caller invokes it on success so a failed deploy never advances the baseline.
  */
 const runSchemaDriftGate = (options: {
     allowDrift: boolean;
@@ -58,36 +100,61 @@ const runSchemaDriftGate = (options: {
     updateBaseline?: boolean;
 }): SchemaDriftGateResult => {
     const { allowDrift, codegen, logger, readOnly = false, updateBaseline = false } = options;
-    const baseline = readBaseline(codegen.schemaSnapshotPath);
+    const snapshotPath = codegen.schemaSnapshotPath;
+    const baseline = readBaseline(snapshotPath);
+    const rebless = (): void => writeBaseline(snapshotPath, codegen.schemaSnapshot);
 
-    const decision = evaluateSchemaDrift({ allowDrift, baseline, current: codegen.schemaSnapshot });
+    // A present-but-corrupt baseline can't be diffed. Block (so drift isn't
+    // silently skipped and the bad file isn't auto-overwritten) unless the
+    // developer explicitly opts into regenerating it from the current schema.
+    if (baseline.status === "corrupt") {
+        const reason =
+            `schema-drift gate: the committed baseline ${snapshotPath} is unreadable or malformed, so schema drift cannot be checked. ` +
+            `Fix it (e.g. resolve a merge conflict in cirrus/.cirrus-schema.json), or pass --update-schema-baseline to regenerate it from the current schema.`;
+
+        if (updateBaseline && !readOnly) {
+            logger.warn(`schema baseline was unreadable; regenerating from the current schema on success (--update-schema-baseline): ${snapshotPath}`);
+
+            return { blocked: false, changes: [], reason, rebless };
+        }
+
+        // Read-only callers (verify) own the reporting — staying silent here
+        // avoids the message being logged twice.
+        if (!readOnly) {
+            logger.error(reason);
+        }
+
+        return { blocked: true, changes: [], reason };
+    }
+
+    const decision = evaluateSchemaDrift({ allowDrift, baseline: baseline.status === "ok" ? baseline.snapshot : undefined, current: codegen.schemaSnapshot });
 
     if (decision.blocked) {
-        // Mirror the D1-placeholder guard: log the full actionable message, then
-        // return a structured result the caller turns into exit code 1.
-        logger.error(decision.reason);
+        // Read-only callers (verify) surface the reason through their own
+        // error channel — don't log it here too (avoids a duplicate).
+        if (!readOnly) {
+            logger.error(decision.reason);
+        }
 
         // An explicit `--update-schema-baseline` overrides the block by accepting
-        // the new shape into the baseline (the developer asserts they handled it).
+        // the new shape — but the write still defers to the success path.
         if (updateBaseline && !readOnly) {
-            writeFileSync(codegen.schemaSnapshotPath, serializeSchemaSnapshot(codegen.schemaSnapshot), "utf8");
-            logger.warn(`schema baseline re-blessed despite breaking drift (--update-schema-baseline): ${codegen.schemaSnapshotPath}`);
+            logger.warn(`schema baseline will be re-blessed despite breaking drift on success (--update-schema-baseline): ${snapshotPath}`);
 
-            return { blocked: false, changes: decision.changes, reason: decision.reason };
+            return { blocked: false, changes: decision.changes, reason: decision.reason, rebless };
         }
 
         return { blocked: true, changes: decision.changes, reason: decision.reason };
     }
 
-    // Non-blocked: surface any (safe / migration-accompanied / overridden) drift,
-    // then re-bless the baseline so the next run compares against this shape.
+    // Non-blocked drift (safe / migration-accompanied / overridden): surface it
+    // and hand back a deferred re-bless so the baseline advances only on success.
     if (decision.changes.length > 0) {
-        logger.info(decision.reason);
-
         if (!readOnly) {
-            writeFileSync(codegen.schemaSnapshotPath, serializeSchemaSnapshot(codegen.schemaSnapshot), "utf8");
-            logger.success(`schema baseline updated: ${codegen.schemaSnapshotPath}`);
+            logger.info(decision.reason);
         }
+
+        return { blocked: false, changes: decision.changes, reason: decision.reason, rebless: readOnly ? undefined : rebless };
     }
 
     return { blocked: false, changes: decision.changes, reason: decision.reason };

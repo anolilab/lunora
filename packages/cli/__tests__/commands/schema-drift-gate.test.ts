@@ -163,6 +163,70 @@ describe("schema-drift gate", () => {
 
             expect(followUp.code).toBe(0);
         });
+
+        it("does NOT advance the baseline when the deploy itself fails — the gate stays effective on retry", async () => {
+            expect.assertions(3);
+
+            // First deploy blesses the baseline at the original shape.
+            await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+            const baselineBefore = readFileSync(join(workdir, SNAPSHOT_FILE), "utf8");
+
+            introduceBreakingDrift();
+
+            // Override the gate so it WOULD re-bless — but make `wrangler deploy` fail.
+            const failed = await runDeployCommand({
+                allowSchemaDrift: true,
+                cwd: workdir,
+                logger: silentLogger().logger,
+                spawner: createRecordingSpawner(1).spawner,
+            });
+
+            expect(failed.code).toBe(1);
+            // The failed deploy must NOT have moved the committed baseline.
+            expect(readFileSync(join(workdir, SNAPSHOT_FILE), "utf8")).toBe(baselineBefore);
+
+            // A retry WITHOUT the override still sees the drift and blocks — proof
+            // the baseline wasn't silently advanced past the unshipped change.
+            const retry = await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+
+            expect(retry.schemaDrift?.blocked).toBe(true);
+        });
+    });
+
+    describe("corrupt baseline", () => {
+        it("blocks deploy when the committed baseline is unreadable (does not silently treat it as a first capture)", async () => {
+            expect.assertions(3);
+
+            await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+            writeFileSync(join(workdir, SNAPSHOT_FILE), "{ not valid json", "utf8");
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { errors, logger } = silentLogger();
+            const result = await runDeployCommand({ cwd: workdir, logger, spawner });
+
+            expect(result.code).toBe(1);
+            // The gate aborts before wrangler is spawned.
+            expect(calls).toHaveLength(0);
+            expect(errors.some((line) => line.includes("unreadable or malformed"))).toBe(true);
+        });
+
+        it("regenerates a corrupt baseline with --update-schema-baseline and deploys", async () => {
+            expect.assertions(2);
+
+            await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+            writeFileSync(join(workdir, SNAPSHOT_FILE), "{ not valid json", "utf8");
+
+            const result = await runDeployCommand({
+                cwd: workdir,
+                logger: silentLogger().logger,
+                spawner: createRecordingSpawner().spawner,
+                updateSchemaBaseline: true,
+            });
+
+            expect(result.code).toBe(0);
+            // The baseline is valid JSON again after a successful deploy re-blessed it.
+            expect(() => JSON.parse(readFileSync(join(workdir, SNAPSHOT_FILE), "utf8"))).not.toThrow();
+        });
     });
 
     describe("cirrus prepare / verify", () => {

@@ -54,6 +54,7 @@ export {
     evaluateSchemaDrift,
     parseSchemaSnapshot,
     SCHEMA_SNAPSHOT_VERSION,
+    SchemaSnapshotParseError,
     serializeSchemaSnapshot,
 } from "./schema-drift";
 export { CIRRUS_ERROR_CODES, validatorIrToJsonSchema } from "./schema-ir";
