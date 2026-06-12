@@ -13,6 +13,8 @@ files are identical regardless of how they were produced.
 ```bash
 # Project
 cirrus init [name] [-t <template>]      # scaffold a new project (default template: vite)
+            [-i | --yes]                 #   offer (or skip) adding auth + email
+cirrus add <auth|email>                 # add a feature to the current project
 cirrus view [--remote]                  # open the Cirrus studio in your browser
 cirrus docs [section]                   # open the docs site in your browser
 cirrus info [--json]                    # print versions, wrangler summary, schema overview
@@ -66,6 +68,26 @@ Additional flags:
 - `--source <ref>` — override the remote template source (e.g. `gh:owner/repo/sub#ref`)
 - `--allow-unsafe-source` — permit `--source` values outside `gh:/github:/https://`
 - `--here` — add Cirrus to an existing project: detect the framework, patch the config, scaffold `cirrus/`, print per-framework wiring steps
+- `-i` / `--interactive` — after scaffolding, offer to add authentication and transactional email. Defaults on when stdin is a TTY; never prompts in CI.
+- `-y` / `--yes` — skip the auth/email offer and scaffold only.
+
+### `cirrus add`
+
+Adds a feature to the **current** Cirrus project (you must be inside one — a `cirrus/` directory and a `wrangler.jsonc`). A thin front door over `cirrus registry add`: it maps a feature to its registry item(s), applies them, and prints the next steps.
+
+```bash
+cirrus add auth                 # authentication (asks which provider)
+cirrus add auth --provider clerk   # Clerk, without prompting (also: auth0, auth)
+cirrus add auth --yes           # default provider (email & password), no prompt
+cirrus add email                # transactional email (Cloudflare Email Workers + dev mail catcher)
+```
+
+| Feature | Installs | Notes |
+| ------- | -------- | ----- |
+| `auth`  | the `auth` registry item (or `auth-clerk` / `auth-auth0`) | Adds `@cirrus/auth` + a D1 `DB` binding; verification / reset mail is captured into the studio **Mail** tab in dev |
+| `email` | the `mail` registry item | Cloudflare Email Workers transport (`SEND_EMAIL` binding) + the dev mail catcher |
+
+Flags: `--provider <auth\|clerk\|auth0>`, `--yes`, `--from <dir>` (local registry root), `--source <ref>`, `--allow-unsafe-source`.
 
 ### `cirrus dev`
 

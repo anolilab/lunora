@@ -41,6 +41,7 @@ worker entry — no custom entrypoint, no `ShardDO` export.
 ### Worker 2 — Cirrus realtime (`wrangler.cirrus.jsonc`)
 
 A standalone Cirrus worker (`cirrus/server.ts`) that owns:
+
 - `/_cirrus/*` — RPC and WebSocket realtime traffic
 - `ShardDO` — the Durable Object for state + subscriptions
 
@@ -50,6 +51,7 @@ This worker is identical in shape to the `standalone` template.
 
 Set `NUXT_PUBLIC_CIRRUS_URL` to the Cirrus worker's URL (e.g.
 `https://{{name}}-cirrus.workers.dev`). This configures:
+
 - `runtimeConfig.public.cirrusUrl` — used by `server/api/messages.get.ts` to
   reach `/_cirrus/rpc` during SSR.
 - `plugins/cirrus.client.ts` — the browser `CirrusClient` connects its WebSocket
@@ -62,7 +64,7 @@ Set `NUXT_PUBLIC_CIRRUS_URL` to the Cirrus worker's URL (e.g.
 - **`wrangler.cirrus.jsonc`** — Cirrus worker config with the `SHARD` DO binding
   and migration. Deploy with `wrangler deploy --config wrangler.cirrus.jsonc`.
 - **`wrangler.jsonc`** — Nuxt SSR worker config. Deploy with `nuxt build &&
-  wrangler deploy` (or `pnpm deploy`).
+wrangler deploy` (or `pnpm deploy`).
 - **`nuxt.config.ts`** — uses `cloudflare_module` preset (standard; no custom
   entrypoint).
 
