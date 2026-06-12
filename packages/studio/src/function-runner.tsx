@@ -3,16 +3,27 @@ import { useCirrus } from "@cirrus/react";
 import type { ChangeEvent, ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { ADMIN_FUNCTIONS } from "./admin";
 import { Badge } from "./components/ui/badge";
 import { Button } from "./components/ui/button";
+import { Input } from "./components/ui/input";
 import { Label } from "./components/ui/label";
 import { Textarea } from "./components/ui/textarea";
 import { argumentsTemplate, formatSignature } from "./function-signature";
 import { useT } from "./i18n-context";
-import { errorMessage, fireAndForget, formatTimestamp } from "./internal";
+import { adminRef, errorMessage, fireAndForget, formatTimestamp } from "./internal";
 import { recordShard } from "./shard-history";
 import { ShardInput } from "./shard-input";
 import type { FunctionDescriptor, FunctionKind, RunStatus } from "./types";
+
+/**
+ * The admin RPC that executes a target function under a forged identity. Routed
+ * through `client.query` like every other admin RPC (the DO intercepts it by
+ * `functionPath` regardless of method) and gated server-side by the admin
+ * bearer; the studio only surfaces it behind the {@link FunctionRunnerProps.runAsIdentity}
+ * dev gate.
+ */
+const RUN_AS = adminRef(ADMIN_FUNCTIONS.runAs);
 
 /** A single recorded invocation, kept purely in component state. */
 interface RunHistoryEntry {
@@ -40,6 +51,17 @@ interface FunctionRunnerProps {
      * `functions` registry. Supply the list to override discovery.
      */
     readonly functions?: FunctionDescriptor[];
+
+    /**
+     * Expose the "Run as identity" control — execute the selected function AS a
+     * chosen authenticated user so an operator can test auth + RLS behavior.
+     * Security-sensitive: the run is forwarded over the admin-gated
+     * `__cirrus_admin__:runAs` RPC, which forges the per-request identity. The
+     * host sets this only on a trusted loopback-dev gate (the `Studio` component's
+     * `runAsIdentity` prop); off by default, the runner always runs with the
+     * caller's own (admin) identity.
+     */
+    readonly runAsIdentity?: boolean;
 }
 
 const formatResult = (value: unknown): string => {
@@ -60,7 +82,7 @@ const formatResult = (value: unknown): string => {
  * skip discovery (a query/mutation/action's `kind` is compile-time-only, so it
  * must be named).
  */
-export const FunctionRunner = ({ functions: functionsProp }: FunctionRunnerProps = {}): ReactElement => {
+export const FunctionRunner = ({ functions: functionsProp, runAsIdentity = false }: FunctionRunnerProps = {}): ReactElement => {
     const t = useT();
     const client = useCirrus();
 
@@ -76,6 +98,9 @@ export const FunctionRunner = ({ functions: functionsProp }: FunctionRunnerProps
     const [selectedPath, setSelectedPath] = useState<string>("");
     const [argsText, setArgsText] = useState<string>("{}");
     const [shardKey, setShardKey] = useState<string>("");
+    // The userId to run as; empty means "run with my own (admin) identity". Only
+    // meaningful when `runAsIdentity` is enabled.
+    const [runAsUserId, setRunAsUserId] = useState<string>("");
     const [status, setStatus] = useState<RunStatus>("idle");
     const [result, setResult] = useState<unknown>(undefined);
     const [error, setError] = useState<null | string>(null);
@@ -136,6 +161,13 @@ export const FunctionRunner = ({ functions: functionsProp }: FunctionRunnerProps
         const reference: FunctionReference = { __cirrusRef: selected.path };
         const options = shardKey.trim() === "" ? {} : { shardKey: shardKey.trim() };
 
+        // "Run as identity": when the dev gate is on AND a userId is set, route
+        // the call through the admin-gated `runAs` RPC, which forges the
+        // per-request identity server-side so the function (and any RLS it uses)
+        // observes that user. Empty userId (or the gate off) keeps the normal
+        // path, running with the caller's own admin identity.
+        const forgedUserId = runAsIdentity ? runAsUserId.trim() : "";
+
         // Snapshot the inputs so a re-run from history replays exactly what ran.
         const record = (runStatus: "error" | "success"): void => {
             setRuns((previous) => {
@@ -159,20 +191,27 @@ export const FunctionRunner = ({ functions: functionsProp }: FunctionRunnerProps
         try {
             let value: unknown;
 
-            switch (selected.kind) {
-                case "action": {
-                    value = await client.action(reference, parsedArgs, options);
+            if (forgedUserId === "") {
+                switch (selected.kind) {
+                    case "action": {
+                        value = await client.action(reference, parsedArgs, options);
 
-                    break;
-                }
-                case "mutation": {
-                    value = await client.mutation(reference, parsedArgs, options);
+                        break;
+                    }
+                    case "mutation": {
+                        value = await client.mutation(reference, parsedArgs, options);
 
-                    break;
+                        break;
+                    }
+                    default: {
+                        value = await client.query(reference, parsedArgs, options);
+                    }
                 }
-                default: {
-                    value = await client.query(reference, parsedArgs, options);
-                }
+            } else {
+                // The admin `runAs` RPC dispatches the target function on the DO
+                // under the forged identity, regardless of its kind, and returns
+                // its result. Routed through `client.query` like every admin RPC.
+                value = await client.query(RUN_AS, { args: parsedArgs as Record<string, unknown>, functionPath: selected.path, userId: forgedUserId }, options);
             }
 
             recordShard(shardKey);
@@ -185,7 +224,7 @@ export const FunctionRunner = ({ functions: functionsProp }: FunctionRunnerProps
             setStatus("error");
             record("error");
         }
-    }, [argsText, client, selected, shardKey, t]);
+    }, [argsText, client, runAsIdentity, runAsUserId, selected, shardKey, t]);
 
     // Reload a recorded run's path + inputs into the form so it can be re-run.
     const loadRun = useCallback((entry: RunHistoryEntry): void => {
@@ -200,6 +239,10 @@ export const FunctionRunner = ({ functions: functionsProp }: FunctionRunnerProps
 
     const onArgsChange = useCallback((event: ChangeEvent<HTMLTextAreaElement>): void => {
         setArgsText(event.target.value);
+    }, []);
+
+    const onRunAsChange = useCallback((event: ChangeEvent<HTMLInputElement>): void => {
+        setRunAsUserId(event.target.value);
     }, []);
 
     const runOnce = useCallback((): void => {
@@ -266,11 +309,34 @@ export const FunctionRunner = ({ functions: functionsProp }: FunctionRunnerProps
 
                 <ShardInput onChange={setShardKey} testId="shard-input" value={shardKey} />
 
+                {runAsIdentity && (
+                    <div className="flex flex-col gap-1.5" data-testid="run-as-field">
+                        <Label htmlFor="run-as-input">{t("Run as identity (userId)")}</Label>
+                        <Input
+                            aria-label={t("Run as identity (userId)")}
+                            className="font-mono text-xs"
+                            data-testid="run-as-input"
+                            id="run-as-input"
+                            onChange={onRunAsChange}
+                            placeholder={t("Leave empty to run as admin")}
+                            value={runAsUserId}
+                        />
+                        <p className="text-[11px] text-muted-foreground">
+                            {t("Dev only: runs the function as this user so you can test auth and RLS. Forged over the admin gate.")}
+                        </p>
+                    </div>
+                )}
+
                 <div className="flex flex-wrap items-center gap-2">
                     <Button data-testid="run-button" disabled={status === "running" || selected === undefined} onClick={runOnce} type="button">
                         {t("Run")}
                     </Button>
                     {selected !== undefined && <Badge variant="outline">{selected.kind}</Badge>}
+                    {runAsIdentity && runAsUserId.trim() !== "" && (
+                        <Badge data-testid="run-as-badge" variant="secondary">
+                            {t("as {userId}", { userId: runAsUserId.trim() })}
+                        </Badge>
+                    )}
                 </div>
             </div>
 

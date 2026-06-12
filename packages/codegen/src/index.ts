@@ -7,7 +7,7 @@ export { default as discoverHttpRoutes } from "./discover-http-routes";
 export { default as discoverInserts } from "./discover-inserts";
 export { default as discoverMigrations } from "./discover-migrations";
 export { default as discoverQueries } from "./discover-queries";
-export { default as discoverRlsProcedures } from "./discover-rls-procedures";
+export { discoverRlsMetadata, default as discoverRlsProcedures } from "./discover-rls-procedures";
 export { default as discoverSchema } from "./discover-schema";
 export { emitApi, emitCrons, emitDataModel, emitDrizzleSchema, emitFunctions, emitServer, emitShard, emitWranglerCronTriggers, GENERATED_HEADER } from "./emit";
 export type {
@@ -20,7 +20,10 @@ export type {
     MigrationIR,
     ProjectIR,
     QueryReadIR,
+    RlsMetadataIR,
+    RlsPolicyIR,
     RlsProcedureIR,
+    RlsRoleIR,
     SchemaIR,
     TableIR,
     ValidatorIR,

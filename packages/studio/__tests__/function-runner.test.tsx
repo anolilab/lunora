@@ -334,3 +334,87 @@ describe("functionRunner", () => {
         expect(screen.getByTestId("fn-history-status-0").textContent).toBe("✓");
     });
 });
+
+const ADMIN_RUN_AS = "__cirrus_admin__:runAs";
+
+describe("functionRunner run-as identity", () => {
+    it("hides the run-as control by default (off / not dev-gated)", () => {
+        expect.assertions(1);
+
+        render(renderRunner(createMockClient()));
+
+        // The dev gate is off, so no identity control is rendered.
+        expect(screen.queryByTestId("run-as-field")).toBeNull();
+    });
+
+    it("shows the run-as control only when the dev gate is enabled", () => {
+        expect.assertions(1);
+
+        render(
+            <CirrusProvider client={createMockClient().asClient}>
+                <FunctionRunner functions={functions} runAsIdentity />
+            </CirrusProvider>,
+        );
+
+        // `getByTestId` throws when the element is absent, so reaching the
+        // assertion already proves the control rendered.
+        expect(screen.getByTestId("run-as-input").getAttribute("placeholder")).toBe("Leave empty to run as admin");
+    });
+
+    it("runs with the caller's own identity when the userId is left empty", async () => {
+        expect.assertions(2);
+
+        const mock = createMockClient({
+            query: () => {
+                return { ok: true };
+            },
+        });
+
+        render(
+            <CirrusProvider client={mock.asClient}>
+                <FunctionRunner functions={functions} runAsIdentity />
+            </CirrusProvider>,
+        );
+
+        // Gate on, but no userId entered → the normal query path runs, never runAs.
+        fireEvent.click(screen.getByTestId("run-button"));
+
+        await screen.findByTestId("result");
+
+        const [reference] = mock.query.mock.calls[0] as [{ __cirrusRef: string }];
+
+        expect(reference.__cirrusRef).toBe("messages:list");
+        expect(mock.query.mock.calls.every(([ref]) => (ref as { __cirrusRef: string }).__cirrusRef !== ADMIN_RUN_AS)).toBe(true);
+    });
+
+    it("forwards the chosen identity through the runAs admin RPC", async () => {
+        expect.assertions(4);
+
+        const mock = createMockClient({
+            query: () => {
+                return { ran: "as-user" };
+            },
+        });
+
+        render(
+            <CirrusProvider client={mock.asClient}>
+                <FunctionRunner functions={functions} runAsIdentity />
+            </CirrusProvider>,
+        );
+
+        fireEvent.change(screen.getByTestId("args-input"), { target: { value: '{ "limit": 5 }' } });
+        fireEvent.change(screen.getByTestId("run-as-input"), { target: { value: "user_42" } });
+        fireEvent.click(screen.getByTestId("run-button"));
+
+        await screen.findByTestId("result");
+
+        const [reference, args] = mock.query.mock.calls[0] as [{ __cirrusRef: string }, { args: unknown; functionPath: string; userId: string }];
+
+        // The call is routed through the admin runAs RPC, carrying the target
+        // function path, its args, and the forged userId.
+        expect(reference.__cirrusRef).toBe(ADMIN_RUN_AS);
+        expect(args.functionPath).toBe("messages:list");
+        expect(args.userId).toBe("user_42");
+        expect(args.args).toEqual({ limit: 5 });
+    });
+});

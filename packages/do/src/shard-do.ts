@@ -30,6 +30,7 @@ import type {
     FunctionCallStat,
     FunctionStatsResult,
     OrderByClause,
+    RlsPoliciesResult,
     SubscriptionsResult,
     TableIndexInfo,
 } from "./introspect";
@@ -745,6 +746,64 @@ const parseRecordAuthEventArgs = (args: Record<string, unknown>): { outcome: "fa
     }
 
     return { outcome };
+};
+
+/**
+ * Arguments accepted by the `__cirrus_admin__:runAs` admin RPC — the studio's
+ * "Run as identity" tool. `functionPath` + `args` name the target function to
+ * dispatch; `userId` (and the optional `identity` claims envelope) are the
+ * forged identity it runs under. Admin-gated by `handleAdminRpc`; intended for
+ * loopback-dev only (the studio UI exposes it only on a dev gate).
+ */
+interface RunAsArgs {
+    args: Record<string, unknown>;
+    functionPath: string;
+    identity?: Record<string, unknown>;
+    userId: string;
+}
+
+/**
+ * Validate the `__cirrus_admin__:runAs` payload. `functionPath` and `userId`
+ * must be non-empty strings; `args` defaults to `{}` and `identity` (if present)
+ * must be a plain object of claims. The target `functionPath` must NOT itself be
+ * a reserved admin path — forging an identity to re-enter the admin plane is
+ * never allowed. Anything malformed throws a 400 `CirrusError`, matching the
+ * other admin parsers.
+ */
+const parseRunAsArgs = (args: Record<string, unknown>): RunAsArgs => {
+    const functionPath = typeof args["functionPath"] === "string" ? args["functionPath"] : "";
+    const userId = typeof args["userId"] === "string" ? args["userId"] : "";
+
+    if (functionPath.trim() === "") {
+        throw Object.assign(new Error("runAs: `functionPath` is required"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+    }
+
+    if (functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
+        throw Object.assign(new Error("runAs: cannot target a reserved admin function"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+    }
+
+    if (userId.trim() === "") {
+        throw Object.assign(new Error("runAs: `userId` is required"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+    }
+
+    const rawArgs = args["args"];
+
+    if (rawArgs !== undefined && (typeof rawArgs !== "object" || rawArgs === null || Array.isArray(rawArgs))) {
+        throw Object.assign(new Error("runAs: `args` must be an object"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+    }
+
+    const rawIdentity = args["identity"];
+
+    if (rawIdentity !== undefined && (typeof rawIdentity !== "object" || rawIdentity === null || Array.isArray(rawIdentity))) {
+        throw Object.assign(new Error("runAs: `identity` must be an object"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+    }
+
+    return {
+        args: rawArgs === undefined ? {} : (rawArgs as Record<string, unknown>),
+        functionPath,
+        userId,
+        ...(rawIdentity === undefined ? {} : { identity: rawIdentity as Record<string, unknown> }),
+    };
 };
 
 /**
@@ -1895,6 +1954,21 @@ abstract class ShardDO {
     }
 
     /**
+     * Row-level-security metadata for this deployment, surfaced via
+     * `__cirrus_admin__:rlsPolicies` to the studio's read-only RLS inspector:
+     * which `definePolicy`s guard which `(table, on)` and which `defineRole`s
+     * are registered. Statically discovered by `@cirrus/codegen` at codegen
+     * time (the only place every `.use(rls(...))` chain is visible) and emitted
+     * into the generated subclass, which overrides this. The base class can't
+     * see the user's `cirrus/` sources, so it reports none. Never includes the
+     * `when` predicate — that's an opaque closure whose logic stays in code.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this with the generated RLS policy + role metadata
+    protected rlsMetadata(): RlsPoliciesResult {
+        return { policies: [], roles: [] };
+    }
+
+    /**
      * Runtime advisories derived from observed signal — currently `unused_index`:
      * a declared index a query has never exercised since this instance woke. To
      * keep noise down it only inspects tables that have used *some* index (so a
@@ -2888,6 +2962,10 @@ abstract class ShardDO {
                 return this.handleRecordAuthEvent(args);
             }
 
+            if (functionPath === ADMIN_FUNCTIONS.runAs) {
+                return this.handleRunAs(args);
+            }
+
             const pitr = await this.handlePitrAdminOp(functionPath, args);
 
             if (pitr) {
@@ -2919,6 +2997,60 @@ abstract class ShardDO {
         }
 
         return jsonResponse({ result: { recorded: true } }, 200);
+    }
+
+    /**
+     * Serve the `__cirrus_admin__:runAs` admin RPC — the studio's "Run as
+     * identity" tool. Dispatches the target `functionPath` through the normal
+     * `handleRpc` path while the per-request identity is forged to the supplied
+     * `userId`/`identity`, so the function (and any RLS middleware it uses)
+     * observes that user instead of the admin caller.
+     *
+     * SECURITY. This op is reachable only after `handleAdminRpc`'s
+     * `isAdminAuthorized` bearer check (the `CIRRUS_ADMIN_TOKEN` gate), so an
+     * unauthenticated caller can never forge an identity. The inbound
+     * `x-cirrus-userid`/`x-cirrus-identity` headers the runtime sets are
+     * overwritten here for the duration of the dispatch and restored after, so
+     * the forge can't leak into a later request. The target path is validated to
+     * be a non-admin function, so it can't be used to re-enter the admin plane.
+     * The studio only surfaces this tool behind a loopback-dev gate.
+     */
+    private async handleRunAs(args: Record<string, unknown>): Promise<Response> {
+        const parsed = parseRunAsArgs(args);
+
+        const result = await this.withForgedIdentity(parsed.userId, parsed.identity, () => this.handleRpc(parsed.functionPath, parsed.args));
+
+        // The forged dispatch may have written through the writer (a mutation run
+        // as the user); flush touched tables so live subscribers re-run, matching
+        // the normal `/rpc` dispatch path.
+        await this.flushChangedTables();
+
+        this.recordAudit("runAs", { detail: { functionPath: parsed.functionPath, runAsUserId: parsed.userId } });
+
+        return jsonResponse({ result }, 200);
+    }
+
+    /**
+     * Run `run()` with the per-request identity forced to (`userId`, `identity`),
+     * then restore the prior values. The mirror image of
+     * {@link withAnonymousIdentity}: the generated `buildCtx` reads identity via
+     * `getCurrentUserId`/`getCurrentIdentity`, so pinning the fields around the
+     * call makes the dispatched function observe the forged user without
+     * threading it through the generated signature.
+     */
+    private async withForgedIdentity<R>(userId: string, identity: Record<string, unknown> | undefined, run: () => Promise<R> | R): Promise<R> {
+        const previousUserId = this.currentRequestUserId;
+        const previousIdentity = this.currentRequestIdentity;
+
+        this.currentRequestUserId = userId;
+        this.currentRequestIdentity = identity;
+
+        try {
+            return await run();
+        } finally {
+            this.currentRequestUserId = previousUserId;
+            this.currentRequestIdentity = previousIdentity;
+        }
     }
 
     /**
@@ -3229,6 +3361,13 @@ abstract class ShardDO {
             // runtime ones derived from observed signal (`unused_index`).
             // Deployment-wide, so it carries the wildcard like the other reads.
             return { advisories: [...this.advisories(), ...this.runtimeAdvisories()] };
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.rlsPolicies) {
+            // Read-only RLS metadata (codegen-emitted, via `rlsMetadata()`): the
+            // policies + roles the studio's inspector lists. Schema-wide, so it
+            // carries the wildcard like the other static-introspection reads.
+            return this.rlsMetadata();
         }
 
         return undefined;

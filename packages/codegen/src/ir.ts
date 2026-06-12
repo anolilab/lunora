@@ -266,6 +266,54 @@ export interface RlsProcedureIR {
 }
 
 /**
+ * One statically-readable policy entry from an `rls([...])` array literal,
+ * surfaced to the studio's read-only RLS inspector via the generated
+ * `rlsPolicies()` hook. Captures the policy's `table` + `on` operation and the
+ * procedure it guards — never the `when` predicate, which is an opaque JS
+ * closure (its logic stays in code, not the UI). Produced by
+ * `discoverRlsProcedures` alongside the lint IR.
+ */
+export interface RlsPolicyIR {
+    /** Source file (relative to `cirrus/`, without extension) the policy is declared in. */
+    file: string;
+    /** Operation the policy gates: `read` covers get/query/findMany, the rest are writes. */
+    on: "delete" | "insert" | "read" | "update";
+    /** Export name of the procedure whose `.use(rls(...))` chain declared this policy. */
+    procedure: string;
+    /** Logical table the policy applies to. Empty when not a string literal. */
+    table: string;
+}
+
+/**
+ * One statically-readable role entry from an `rls(policies, { roles: [...] })`
+ * call, surfaced to the studio's RLS inspector. Captures the role's `name`,
+ * optional `description`, and the names of the permissions it grants (string
+ * literals or `definePermission("name")` calls). Produced by
+ * `discoverRlsProcedures`.
+ */
+export interface RlsRoleIR {
+    /** Optional human-readable description from `defineRole(name, { description })`. */
+    description?: string;
+    /** Role label attached to the request identity (e.g. `"admin"`). */
+    name: string;
+    /** Permission names this role grants, deduped and in declared order. */
+    permissions: string[];
+}
+
+/**
+ * Schema-wide RLS metadata the codegen emits into the generated ShardDO so the
+ * studio's read-only inspector can list, per table, which policies guard it and
+ * what roles are defined. Aggregated across every `.use(rls(...))` chain in the
+ * project — purely descriptive, never the predicate logic.
+ */
+export interface RlsMetadataIR {
+    /** Every statically-discovered policy `(table, on, procedure)` entry. */
+    policies: RlsPolicyIR[];
+    /** Every statically-discovered role, deduped by name (first declaration wins). */
+    roles: RlsRoleIR[];
+}
+
+/**
  * A typed REST route declared with the `httpRoute.&lt;verb>("/path")…` builder in
  * `@cirrus/server` and mounted on `httpRouter()`. Captured statically from the
  * builder chain so the OpenAPI emitter can render a real `paths` entry: the verb

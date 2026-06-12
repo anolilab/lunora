@@ -37,6 +37,7 @@ import { MetricsPanel } from "./metrics-panel";
 import { MigrationsPanel } from "./migrations";
 import { OrganizationsPanel } from "./organizations-panel";
 import { PitrPanel } from "./pitr-panel";
+import RlsPanel from "./rls-panel";
 import type { ScheduledJobsProps } from "./scheduled-jobs";
 import { ScheduledJobs } from "./scheduled-jobs";
 import { SchemaViewer } from "./schema-viewer";
@@ -66,6 +67,7 @@ type StudioTab =
     | "organizations"
     | "pitr"
     | "realtime"
+    | "rls"
     | "schedule"
     | "schema"
     | "security"
@@ -123,6 +125,16 @@ interface StudioProps {
     readonly openRpcSpec?: unknown;
 
     /**
+     * Allow the function runner to execute a function AS a chosen authenticated
+     * identity (the "Run as identity" tool), so an operator can test auth + RLS
+     * behavior. Security-sensitive: it forges identity on an admin-gated RPC, so
+     * the host MUST set this only on a trusted loopback-dev gate (the same gate
+     * as `dataEditable`) — never in a production/static deploy. Off by default;
+     * see {@link FunctionRunner}.
+     */
+    readonly runAsIdentity?: boolean;
+
+    /**
      * Override how the schedule tab cancels a job. Defaults to the client's
      * scheduler admin endpoint; see {@link ScheduledJobs}.
      */
@@ -170,6 +182,7 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
     organizations: <path d="M3 21V8l6-4 6 4v13M9 21v-5h2v5M15 11h6v10M18 14v.01M18 17v.01M6 9v.01M6 12v.01M6 15v.01" />,
     pitr: <path d="M12 21a9 9 0 1 0-9-9M12 7.5V12l3 2M3 12l-2-2m2 2 2-2" />,
     realtime: <path d="M5 12a7 7 0 0 1 14 0M8 12a4 4 0 0 1 8 0M12 12v8m0-8a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" />,
+    rls: <path d="M12 3 5 6v5c0 4.5 3 7.8 7 9 4-1.2 7-4.5 7-9V6l-7-3ZM8.5 10h7M8.5 13h7" />,
     schedule: <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm0-13.5V12l4 2" />,
     schema: <path d="M4 5h16v14H4V5Zm0 5h16M10 10v9M4 14.5h16" />,
     sql: <path d="M4 5h16v14H4V5Zm3 4 3 3-3 3m6 0h4" />,
@@ -199,7 +212,7 @@ const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
     { key: "auth", tabs: ["users", "organizations"] },
     { key: "storage", tabs: ["files"] },
     { key: "reports", tabs: ["dashboards", "metrics", "health"] },
-    { key: "advisors", tabs: ["security", "insights"] },
+    { key: "advisors", tabs: ["security", "rls", "insights"] },
     { key: "logs", tabs: ["logs", "audit", "schedule", "realtime"] },
     { key: "settings", tabs: ["settings"] },
 ];
@@ -256,6 +269,7 @@ const TABS = [
     "metrics",
     "health",
     "security",
+    "rls",
     "insights",
     "logs",
     "realtime",
@@ -313,6 +327,7 @@ const StudioLayout = (): ReactElement => {
             organizations: t("Organizations"),
             pitr: t("Time Travel"),
             realtime: t("Realtime"),
+            rls: t("RLS Policies"),
             schedule: t("Scheduled"),
             schema: t("Schema"),
             security: t("Security"),
@@ -356,6 +371,7 @@ const StudioLayout = (): ReactElement => {
             organizations: t("Browse and manage organizations, members, and invitations."),
             pitr: t("Restore a shard to a point in the last 30 days."),
             realtime: t("Active WebSocket subscriptions on this shard."),
+            rls: t("Inspect row-level-security policies and roles, per table."),
             schedule: t("Inspect and cancel scheduled jobs."),
             schema: t("Inspect each table and its columns."),
             security: t("Review admin gates, credentials, and log redaction."),
@@ -643,6 +659,7 @@ const buildRouter = ({
     initialShardKey,
     openApiSpec,
     openRpcSpec,
+    runAsIdentity = false,
     scheduledCancel,
     scheduledLoad,
 }: StudioShellProps) => {
@@ -658,7 +675,7 @@ const buildRouter = ({
         functions: (
             <div className="flex flex-col gap-8">
                 <FunctionStatsPanel functions={functions} initialShardKey={initialShardKey} />
-                <FunctionRunner functions={functions} />
+                <FunctionRunner functions={functions} runAsIdentity={runAsIdentity} />
             </div>
         ),
         health: <HealthPanel initialShardKey={initialShardKey} />,
@@ -670,6 +687,7 @@ const buildRouter = ({
         organizations: <OrganizationsPanel />,
         pitr: <PitrPanel initialShardKey={initialShardKey} />,
         realtime: <SubscriptionsPanel initialShardKey={initialShardKey} />,
+        rls: <RlsPanel />,
         schedule: <ScheduledJobs cancelJob={scheduledCancel} loadJobs={scheduledLoad} />,
         schema: <SchemaRoutePanel initialShardKey={initialShardKey} />,
         security: <SecurityAdvisorPanel />,
@@ -727,6 +745,7 @@ const StudioShell = ({
     initialShardKey,
     openApiSpec,
     openRpcSpec,
+    runAsIdentity,
     scheduledCancel,
     scheduledLoad,
 }: StudioShellProps): ReactElement => {
@@ -734,8 +753,8 @@ const StudioShell = ({
     // individual props, not the unstable `props` identity), so navigation state
     // survives unrelated re-renders.
     const router = useMemo(
-        () => buildRouter({ basePath, dataEditable, functions, initialShardKey, openApiSpec, openRpcSpec, scheduledCancel, scheduledLoad }),
-        [basePath, dataEditable, functions, initialShardKey, openApiSpec, openRpcSpec, scheduledCancel, scheduledLoad],
+        () => buildRouter({ basePath, dataEditable, functions, initialShardKey, openApiSpec, openRpcSpec, runAsIdentity, scheduledCancel, scheduledLoad }),
+        [basePath, dataEditable, functions, initialShardKey, openApiSpec, openRpcSpec, runAsIdentity, scheduledCancel, scheduledLoad],
     );
 
     return <RouterProvider router={router} />;
@@ -760,6 +779,7 @@ export const Studio = ({
     locale,
     openApiSpec,
     openRpcSpec,
+    runAsIdentity,
     scheduledCancel,
     scheduledLoad,
 }: StudioProps): ReactElement => {
@@ -771,6 +791,7 @@ export const Studio = ({
             initialShardKey={initialShardKey}
             openApiSpec={openApiSpec}
             openRpcSpec={openRpcSpec}
+            runAsIdentity={runAsIdentity}
             scheduledCancel={scheduledCancel}
             scheduledLoad={scheduledLoad}
         />

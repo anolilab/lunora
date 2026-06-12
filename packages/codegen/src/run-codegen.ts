@@ -12,7 +12,7 @@ import discoverHttpRoutes from "./discover-http-routes";
 import discoverInserts from "./discover-inserts";
 import discoverMigrations from "./discover-migrations";
 import discoverQueries from "./discover-queries";
-import discoverRlsProcedures from "./discover-rls-procedures";
+import discoverRlsProcedures, { discoverRlsMetadata } from "./discover-rls-procedures";
 import discoverSchema from "./discover-schema";
 import { emitApi, emitCrons, emitDataModel, emitDrizzleSchema, emitFunctions, emitServer, emitShard, emitWranglerCronTriggers } from "./emit";
 import { buildOpenApiDocument, emitOpenApiModule } from "./openapi";
@@ -96,11 +96,16 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   discoverRlsProcedures(project, cirrusDirectory),
               );
 
+    // Read-only RLS metadata (policies + roles) the studio's RLS inspector lists,
+    // emitted into the generated ShardDO's `rlsMetadata()` override. Statically
+    // discovered from every `.use(rls(...))` chain — never the `when` predicate.
+    const rlsMetadata = discoverRlsMetadata(project, cirrusDirectory);
+
     const dataModelContent = emitDataModel(schema);
     const apiContent = emitApi(functions);
     const serverContent = emitServer();
     const functionsContent = emitFunctions(functions, migrations);
-    const shardContent = emitShard(schema, advisories);
+    const shardContent = emitShard(schema, advisories, rlsMetadata);
     const cronsContent = emitCrons(crons);
     const drizzleFiles = emitDrizzleSchema(schema);
 

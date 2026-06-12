@@ -40,6 +40,8 @@ const ADMIN_FUNCTIONS = {
     rankPage: "__cirrus_admin__:rankPage",
     readTablePage: "__cirrus_admin__:readTablePage",
     recordAuthEvent: "__cirrus_admin__:recordAuthEvent",
+    rlsPolicies: "__cirrus_admin__:rlsPolicies",
+    runAs: "__cirrus_admin__:runAs",
     runMigration: "__cirrus_admin__:runMigration",
     runSql: "__cirrus_admin__:runSql",
     storageReferences: "__cirrus_admin__:storageReferences",
@@ -227,6 +229,45 @@ interface AdvisoryFinding {
 /** Payload of a `__cirrus_admin__:getAdvisories` call: the static schema advisories for this deployment. */
 interface AdvisoriesResult {
     advisories: AdvisoryFinding[];
+}
+
+/**
+ * One row-level-security policy entry, surfaced by `__cirrus_admin__:rlsPolicies`
+ * to the studio's read-only RLS inspector. Mirrors `@cirrus/codegen`'s
+ * `RlsPolicyIR`: the policy's `table` + `on` operation and the procedure whose
+ * `.use(rls(...))` chain declared it. Never the `when` predicate — that's an
+ * opaque closure whose logic lives in code, so only its existence is reported.
+ * The codegen subclass overrides the `rlsMetadata()` hook with these.
+ */
+interface RlsPolicyMetadata {
+    /** Source file (relative to `cirrus/`, without extension) the policy is declared in. */
+    file: string;
+    /** Operation gated: `read` covers get/query/findMany; the rest are writes. */
+    on: "delete" | "insert" | "read" | "update";
+    /** Export name of the procedure whose builder chain declared the policy. */
+    procedure: string;
+    /** Logical table the policy applies to. */
+    table: string;
+}
+
+/**
+ * One RLS role declaration, surfaced by `__cirrus_admin__:rlsPolicies`. Mirrors
+ * `@cirrus/codegen`'s `RlsRoleIR`: the role `name`, optional `description`, and
+ * the permission names it grants.
+ */
+interface RlsRoleMetadata {
+    /** Optional human-readable description from `defineRole(name, { description })`. */
+    description?: string;
+    /** Role label attached to the request identity (e.g. `"admin"`). */
+    name: string;
+    /** Permission names this role grants. */
+    permissions: string[];
+}
+
+/** Payload of a `__cirrus_admin__:rlsPolicies` call: the schema's policy + role metadata for the RLS inspector. */
+interface RlsPoliciesResult {
+    policies: RlsPolicyMetadata[];
+    roles: RlsRoleMetadata[];
 }
 
 /** Payload of a `__cirrus_admin__:getFunctionStats` call. */
@@ -861,6 +902,9 @@ export type {
     FunctionStatsResult,
     OrderByClause,
     ReadTablePageOptions,
+    RlsPoliciesResult,
+    RlsPolicyMetadata,
+    RlsRoleMetadata,
     SelectMatchingIdsOptions,
     SettingEntry,
     SettingKind,

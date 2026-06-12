@@ -38,6 +38,8 @@ export const ADMIN_FUNCTIONS = {
     migrationStatus: "__cirrus_admin__:migrationStatus",
     pitrRestore: "__cirrus_admin__:pitrRestore",
     readTablePage: "__cirrus_admin__:readTablePage",
+    rlsPolicies: "__cirrus_admin__:rlsPolicies",
+    runAs: "__cirrus_admin__:runAs",
     runMigration: "__cirrus_admin__:runMigration",
     runSql: "__cirrus_admin__:runSql",
     storageReferences: "__cirrus_admin__:storageReferences",
@@ -287,6 +289,43 @@ export interface AdvisoryFinding {
 /** Payload of a `__cirrus_admin__:getAdvisories` call, mirroring `@cirrus/do`'s `AdvisoriesResult`. */
 export interface AdvisoriesResult {
     advisories: AdvisoryFinding[];
+}
+
+/** The operation an RLS policy gates, mirroring `@cirrus/do`'s `RlsPolicyMetadata["on"]`. `read` covers get/query/findMany. */
+export type RlsOperation = "delete" | "insert" | "read" | "update";
+
+/**
+ * One row-level-security policy entry, mirroring `@cirrus/do`'s
+ * `RlsPolicyMetadata`. Read-only metadata for the RLS inspector: the policy's
+ * `table` + `on` operation and the procedure whose `.use(rls(...))` chain
+ * declared it. Never the `when` predicate — that's an opaque closure whose logic
+ * lives in code, so the inspector reports only that a policy exists.
+ */
+export interface RlsPolicyMetadata {
+    /** Source file (relative to `cirrus/`, without extension) the policy is declared in. */
+    file: string;
+    /** Operation gated by the policy. */
+    on: RlsOperation;
+    /** Export name of the procedure whose builder chain declared the policy. */
+    procedure: string;
+    /** Logical table the policy applies to. */
+    table: string;
+}
+
+/** One RLS role declaration, mirroring `@cirrus/do`'s `RlsRoleMetadata`. */
+export interface RlsRoleMetadata {
+    /** Optional human-readable description from `defineRole(name, { description })`. */
+    description?: string;
+    /** Role label attached to the request identity (e.g. `"admin"`). */
+    name: string;
+    /** Permission names this role grants. */
+    permissions: string[];
+}
+
+/** Payload of a `__cirrus_admin__:rlsPolicies` call, mirroring `@cirrus/do`'s `RlsPoliciesResult`. */
+export interface RlsPoliciesResult {
+    policies: RlsPolicyMetadata[];
+    roles: RlsRoleMetadata[];
 }
 
 /** Severity of a buffered log entry, mirroring `@cirrus/do`'s `LogLevel`. */
