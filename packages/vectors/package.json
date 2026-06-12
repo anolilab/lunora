@@ -1,10 +1,34 @@
 {
     "name": "@cirrus/vectors",
     "version": "0.0.0",
-    "description": "Cloudflare Vectorize adapter",
+    "description": "Cloudflare Vectorize adapter for Cirrus: typed vector indexes and similarity search",
     "license": "FSL-1.1-Apache-2.0",
+    "homepage": "https://cirrus.dev",
+    "bugs": {
+        "url": "https://github.com/anolilab/cirrus/issues"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/anolilab/cirrus.git",
+        "directory": "packages/vectors"
+    },
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
+    },
+    "keywords": [
+        "cirrus",
+        "cloudflare",
+        "workers",
+        "durable-objects",
+        "vectorize",
+        "vector-search",
+        "embeddings",
+        "similarity-search"
+    ],
     "files": [
         "dist",
+        "__assets__",
         "README.md",
         "LICENSE.md"
     ],

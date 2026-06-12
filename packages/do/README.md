@@ -1,88 +1,124 @@
-# @cirrus/do
+<!-- START_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
-Durable Object base classes for the Cirrus framework. Provides `ShardDO`
-(SQLite-backed shard with the WebSocket Hibernation API and a subscription
-registry) and `SessionDO` (auth session pinning). Subclass these from a Worker
-that uses `@cirrus/runtime`.
+<a href="https://www.anolilab.com/open-source" align="center">
+
+  <img src="__assets__/package-og.svg" alt="do" />
+
+</a>
+
+<h3 align="center">Cirrus Durable Objects: ShardDO (SQLite, OCC, hibernated WebSocket subscriptions) and SessionDO</h3>
+
+<!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
+
+<br />
+
+<div align="center">
+
+[![typescript-image][typescript-badge]][typescript-url]
+[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![npm version][npm-version-badge]][npm-version]
+[![npm downloads][npm-downloads-badge]][npm-downloads]
+[![PRs Welcome][prs-welcome-badge]][prs-welcome]
+
+</div>
+
+---
+
+<div align="center">
+    <p>
+        <sup>
+            Daniel Bannert's open source work is supported by the community on <a href="https://github.com/sponsors/prisis">GitHub Sponsors</a>
+        </sup>
+    </p>
+</div>
+
+---
+
+The Durable Object base classes for Cirrus. `ShardDO` is a SQLite-backed shard with optimistic concurrency, the WebSocket Hibernation API, and a live subscription registry; `SessionDO` pins auth sessions. Subclass these from a Worker that uses [`@cirrus/runtime`](https://www.npmjs.com/package/@cirrus/runtime). It also ships the `createShardCtxDb` adapter and `runShardMigrations` helper that generated functions build on.
+
+Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
+
+## Install
+
+```sh
+npm install @cirrus/do
+```
+
+```sh
+yarn add @cirrus/do
+```
+
+```sh
+pnpm add @cirrus/do
+```
+
+## Usage
 
 ```ts
 import { createShardCtxDb, runShardMigrations, ShardDO } from "@cirrus/do";
-import schema from "../cirrus/schema.js";
+import schema from "../cirrus/schema";
 
 export class MyShard extends ShardDO {
     private migrated = false;
 
-    public override async handleRpc(functionPath, args) {
+    public override async handleRpc(functionPath: string, args: unknown) {
         if (!this.migrated) {
             runShardMigrations(this.sql, schema);
             this.migrated = true;
         }
 
-        const ctx = {
-            auth: { userId: this.getCurrentUserId(), getIdentity: async () => this.getCurrentIdentity() },
-            db: createShardCtxDb({
-                broadcast: (delta) => this.broadcastDelta(delta),
-                schema,
-                sql: this.sql,
-            }),
-        };
+        const db = createShardCtxDb({
+            broadcast: (delta) => this.broadcastDelta(delta),
+            schema,
+            sql: this.sql,
+        });
 
-        // dispatch into your generated function registry...
+        // dispatch functionPath + args into your generated function registry...
     }
 }
 ```
 
-## Identity forwarding
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/api/do)**.
 
-`@cirrus/runtime` sets two request headers when a `resolveIdentity` callback is
-configured: `x-cirrus-userid` (the raw user id) and, optionally,
-`x-cirrus-identity` (a JSON envelope with any extra claims the resolver
-returned). `ShardDO.fetch` reads both headers, parses the envelope, and exposes
-them to subclasses as `getCurrentUserId()` / `getCurrentIdentity()`. Both
-methods return `undefined` once the request finishes, so subclasses can't leak
-identity into background work that outlives the request.
+## Related
 
-## WebSocket upgrade gating
+- [`@cirrus/runtime`](https://www.npmjs.com/package/@cirrus/runtime) — the Worker entry that routes RPC and WebSocket traffic into these Durable Objects.
+- [`@cirrus/d1`](https://www.npmjs.com/package/@cirrus/d1) — backs `.global()` tables, which `ShardDO` skips.
+- [`@cirrus/server`](https://www.npmjs.com/package/@cirrus/server) — defines the schema `runShardMigrations` and `createShardCtxDb` consume.
 
-`ShardDO.fetch` enforces a two-stage check on `Upgrade: websocket` requests:
+## Supported Node.js Versions
 
-- `CIRRUS_ALLOWED_ORIGINS` — comma-separated allowlist matched against the
-  `Origin` header. When unset, all origins pass; set it in production.
-- `CIRRUS_WS_BEARER` — required bearer token. The DO accepts the token via the
-  `Authorization: Bearer <token>` header or, as a fallback for browsers that
-  can't set headers on the upgrade, the `?token=<token>` query parameter. The
-  query-parameter form is convenient but leaks the token into proxy logs and
-  the URL bar — prefer the header form when the client can produce it.
+Libraries in this ecosystem make the best effort to track [Node.js' release schedule](https://github.com/nodejs/release#release-schedule).
+Here's [a post on why we think this is important](https://medium.com/the-node-js-collection/maintainers-should-consider-following-node-js-release-schedule-ab08ed4de71a).
 
-Both comparisons use constant-time string equality.
+## Contributing
 
-## Database adapter
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
-`createShardCtxDb` returns the Convex-style `DatabaseWriterLike` surface
-(`db.insert`, `db.get`, `db.patch`, `db.replace`, `db.delete`, `db.query()`)
-that generated functions reach for. It stores documents as a single JSON blob
-per row (`__doc__ TEXT`) and uses `json_extract(__doc__, '$.field')` for
-secondary indexes — `runShardMigrations` emits matching expression indexes
-from the schema's `defineTable(...).index(...)` declarations. Tables flagged
-with `.global()` are skipped: those live in D1 via `@cirrus/d1`.
+> **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
-## Logging
+## Credits
 
-`ShardDO` keeps a small in-memory `LogBuffer` — a bounded ring of recent log
-lines that powers the studio's live log panel and the `getLogs` admin op. It
-is a per-instance "recent activity" readout: it resets on hibernation/restart
-and is **not** a durable log store or a shipping transport.
+- [Daniel Bannert](https://github.com/prisis)
+- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
 
-For real, retained logs use the platform — Cirrus does not reimplement it:
+## Made with ❤️ at Anolilab
 
-- **Workers Logs** — retained, queryable logs in the Cloudflare dashboard.
-- **Logpush** — stream logs to R2, a SIEM, or a third-party log service.
-- **Tail Workers** — capture logs/events programmatically from another Worker.
+This is an open source project and will always remain free to use. If you think it's cool, please star it 🌟. [Anolilab](https://www.anolilab.com/open-source) is a Development and AI Studio. Contact us at [hello@anolilab.com](mailto:hello@anolilab.com) if you need any help with these technologies or just want to say hi!
 
-## Testing
+## License
 
-Unit tests stub the `DurableObjectState` shape and pattern-match the small SQL
-surface emitted by the ctx-db adapter, so the package can be exercised without
-a workerd runtime. The opt-in workerd suite under `__tests__/workerd/` runs
-the same RPC paths inside `@cloudflare/vitest-pool-workers` for the cases
-where SQLite semantics actually matter.
+The Cirrus do package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+
+<!-- badges -->
+
+[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/do?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@cirrus/do
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/do?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@cirrus/do
+[prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
+[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
+[typescript-url]: https://www.typescriptlang.org/

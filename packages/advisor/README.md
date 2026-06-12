@@ -1,41 +1,112 @@
-# @cirrus/advisor
+<!-- START_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
-Schema & query lints (splinter-style advisors) for Cirrus. Each lint is a pure
-rule over a normalized `LintContext`; `runAdvisor()` runs a set and flattens
-their findings for surfacing (CLI, vite, the studio Advisors table).
+<a href="https://www.anolilab.com/open-source" align="center">
 
-The rules run against Cirrus's **declared** schema and **discovered query
-reads** — so a problem is caught at codegen time, before it ships. This is the
-edge a static advisor has over a live-DB-only one like Supabase's `splinter`,
-whose taxonomy these lints are modeled on (the rules are reimplemented for
-SQLite/Durable Objects, not vendored).
+  <img src="__assets__/package-og.svg" alt="advisor" />
 
-## Static lints
+</a>
 
-| Name                                | Category    | Flags                                                                                                        |
-| ----------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------ |
-| `unindexed_foreign_key`             | performance | A `one`-relation FK column with no covering index (leftmost-prefix rule).                                    |
-| `duplicate_index`                   | performance | A secondary index made redundant by another whose columns it is a leading prefix of. Skips `unique` indexes. |
-| `empty_index`                       | schema      | A secondary index declared with no columns.                                                                  |
-| `index_references_unknown_field`    | schema      | An index (any kind) on a column the table doesn't declare.                                                   |
-| `relation_references_unknown_table` | schema      | A relation whose target table doesn't exist.                                                                 |
-| `relation_references_unknown_field` | schema      | A relation FK/`references` column that doesn't exist.                                                        |
-| `filter_without_index`              | performance | A `ctx.db.query(...).filter(...)` with no `.withIndex()`/`.withSearchIndex()` — a full table scan.           |
+<h3 align="center">Schema & query lints (splinter-style advisors) for Cirrus, feeding the Studio Advisors view</h3>
 
-The correctness (`*_unknown_*`, `empty_index`) lints earn their place because
-the index/relation column and table arguments are typed `string`, **not**
-`keyof Shape` — so the TypeScript compiler does not catch those typos; the
-advisor does.
+<!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
-## Feeders
+<br />
 
-Lints consume a feeder-agnostic `AdvisorSchema` (plus `AdvisorQueryRead[]` for
-`filter_without_index`). Two feeders produce it:
+<div align="center">
 
-- `fromServerSchema(schema)` — adapts the runtime `@cirrus/server` schema (used
-  by the studio backend / a live shard, and by tests).
-- `@cirrus/codegen` — builds the same shape from its AST IR and supplies the
-  query reads it discovers from function bodies; it runs the static lints during
-  codegen and returns them on `CodegenResult.advisories`.
+[![typescript-image][typescript-badge]][typescript-url]
+[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![npm version][npm-version-badge]][npm-version]
+[![npm downloads][npm-downloads-badge]][npm-downloads]
+[![PRs Welcome][prs-welcome-badge]][prs-welcome]
 
-Part of the [Cirrus](https://github.com/anolilab/cirrus) framework.
+</div>
+
+---
+
+<div align="center">
+    <p>
+        <sup>
+            Daniel Bannert's open source work is supported by the community on <a href="https://github.com/sponsors/prisis">GitHub Sponsors</a>
+        </sup>
+    </p>
+</div>
+
+---
+
+Schema & query lints (splinter-style advisors) for Cirrus. Each lint is a pure rule over a normalized `LintContext`; `runAdvisor()` runs a set and flattens their findings for the CLI, the Vite plugin, and the Studio Advisors view. The rules run against Cirrus's declared schema and discovered query reads, so problems are caught at codegen time before they ship.
+
+Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
+
+## Install
+
+```sh
+npm install @cirrus/advisor
+```
+
+```sh
+yarn add @cirrus/advisor
+```
+
+```sh
+pnpm add @cirrus/advisor
+```
+
+## Usage
+
+```ts
+import { fromServerSchema, runAdvisor } from "@cirrus/advisor";
+
+import schema from "./cirrus/schema";
+
+const findings = runAdvisor({ schema: fromServerSchema(schema) }, { source: "static" });
+
+for (const finding of findings) {
+    console.log(`[${finding.level}] ${finding.name}: ${finding.message}`);
+}
+```
+
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/addons/studio)**.
+
+## Related
+
+- [`@cirrus/server`](https://www.npmjs.com/package/@cirrus/server) — the `defineSchema` / `defineTable` schema these lints analyze.
+- [`@cirrus/codegen`](https://www.npmjs.com/package/@cirrus/codegen) — runs the static lints at codegen time and returns them on `CodegenResult.advisories`.
+- [`@cirrus/studio`](https://www.npmjs.com/package/@cirrus/studio) — renders the findings in the Advisors view.
+
+## Supported Node.js Versions
+
+Libraries in this ecosystem make the best effort to track [Node.js' release schedule](https://github.com/nodejs/release#release-schedule).
+Here's [a post on why we think this is important](https://medium.com/the-node-js-collection/maintainers-should-consider-following-node-js-release-schedule-ab08ed4de71a).
+
+## Contributing
+
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
+
+> **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
+
+## Credits
+
+- [Daniel Bannert](https://github.com/prisis)
+- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
+
+## Made with ❤️ at Anolilab
+
+This is an open source project and will always remain free to use. If you think it's cool, please star it 🌟. [Anolilab](https://www.anolilab.com/open-source) is a Development and AI Studio. Contact us at [hello@anolilab.com](mailto:hello@anolilab.com) if you need any help with these technologies or just want to say hi!
+
+## License
+
+The Cirrus advisor package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+
+<!-- badges -->
+
+[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/advisor?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@cirrus/advisor
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/advisor?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@cirrus/advisor
+[prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
+[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
+[typescript-url]: https://www.typescriptlang.org/

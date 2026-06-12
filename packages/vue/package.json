@@ -1,8 +1,31 @@
 {
     "name": "@cirrus/vue",
     "version": "0.0.0",
-    "description": "Vue adapter for Cirrus — live composables, optimistic mutations, reactive loaders",
+    "description": "Vue adapter for Cirrus — live composables, optimistic mutations, and reactive loaders",
     "license": "FSL-1.1-Apache-2.0",
+    "homepage": "https://cirrus.dev",
+    "bugs": {
+        "url": "https://github.com/anolilab/cirrus/issues"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/anolilab/cirrus.git",
+        "directory": "packages/vue"
+    },
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
+    },
+    "keywords": [
+        "cirrus",
+        "cloudflare",
+        "workers",
+        "durable-objects",
+        "vue",
+        "composables",
+        "realtime",
+        "optimistic-updates"
+    ],
     "type": "module",
     "sideEffects": false,
     "main": "./dist/index.mjs",
@@ -26,7 +49,8 @@
     "files": [
         "dist",
         "README.md",
-        "LICENSE.md"
+        "LICENSE.md",
+        "__assets__"
     ],
     "scripts": {
         "build": "pnpm exec packem build --development",

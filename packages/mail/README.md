@@ -1,10 +1,63 @@
-# @cirrus/mail
+<!-- START_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
-Transactional email for the Cirrus framework. Built on [`@visulima/email`](https://github.com/visulima/visulima) — Resend is the bundled provider, but the underlying library supports failover/round-robin across SES, Postmark, SendGrid, Mailgun, etc. by swapping the transport in `createMailer({ transport })`.
+<a href="https://www.anolilab.com/open-source" align="center">
+
+  <img src="__assets__/package-og.svg" alt="mail" />
+
+</a>
+
+<h3 align="center">Email for Cirrus: Resend adapter, TSX templates, and queue-backed sends</h3>
+
+<!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
+
+<br />
+
+<div align="center">
+
+[![typescript-image][typescript-badge]][typescript-url]
+[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![npm version][npm-version-badge]][npm-version]
+[![npm downloads][npm-downloads-badge]][npm-downloads]
+[![PRs Welcome][prs-welcome-badge]][prs-welcome]
+
+</div>
+
+---
+
+<div align="center">
+    <p>
+        <sup>
+            Daniel Bannert's open source work is supported by the community on <a href="https://github.com/sponsors/prisis">GitHub Sponsors</a>
+        </sup>
+    </p>
+</div>
+
+---
+
+Transactional email for Cirrus. Render TSX templates, send through Cloudflare Email Workers or the Resend adapter, and offload delivery to a Cloudflare Queue so requests return immediately.
+
+Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
+
+## Install
+
+```sh
+npm install @cirrus/mail
+```
+
+```sh
+yarn add @cirrus/mail
+```
+
+```sh
+pnpm add @cirrus/mail
+```
+
+## Usage
 
 ```ts
 import { createMailer } from "@cirrus/mail";
-import { WelcomeEmail } from "./emails/Welcome.js";
+
+import { WelcomeEmail } from "./emails/Welcome";
 
 const mailer = createMailer({
     apiKey: env.RESEND_API_KEY,
@@ -18,9 +71,47 @@ await mailer.send({
 });
 ```
 
-## Queueing
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/addons/mail)**.
 
-`mailer.queue(opts)` enqueues a send onto a Cloudflare Queues binding so the
-HTTP request can return immediately. Configure `bindings.queue` with the queue
-binding name; the consumer Worker calls `mailer.send(payload)` from the queue
-batch.
+## Related
+
+- [`@cirrus/server`](https://www.npmjs.com/package/@cirrus/server) — call the mailer from actions.
+- [`@cirrus/scheduler`](https://www.npmjs.com/package/@cirrus/scheduler) — queue-backed dispatch for deferred sends.
+- [`@cirrus/auth`](https://www.npmjs.com/package/@cirrus/auth) — send verification and password-reset emails.
+
+## Supported Node.js Versions
+
+Libraries in this ecosystem make the best effort to track [Node.js' release schedule](https://github.com/nodejs/release#release-schedule).
+Here's [a post on why we think this is important](https://medium.com/the-node-js-collection/maintainers-should-consider-following-node-js-release-schedule-ab08ed4de71a).
+
+## Contributing
+
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
+
+> **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
+
+## Credits
+
+- [Daniel Bannert](https://github.com/prisis)
+- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
+
+## Made with ❤️ at Anolilab
+
+This is an open source project and will always remain free to use. If you think it's cool, please star it 🌟. [Anolilab](https://www.anolilab.com/open-source) is a Development and AI Studio. Contact us at [hello@anolilab.com](mailto:hello@anolilab.com) if you need any help with these technologies or just want to say hi!
+
+## License
+
+The Cirrus mail package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+
+<!-- badges -->
+
+[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/mail?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@cirrus/mail
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/mail?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@cirrus/mail
+[prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
+[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
+[typescript-url]: https://www.typescriptlang.org/

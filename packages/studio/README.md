@@ -1,125 +1,56 @@
-# @cirrus/studio
+<!-- START_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
-Embeddable React components for inspecting and operating a Cirrus backend.
+<a href="https://www.anolilab.com/open-source" align="center">
 
-The package is a component library — compose the panels yourself behind a
-`<CirrusProvider>`, mount the ready-made `<Studio>` shell, or use the
-batteries-included `<StudioApp>` / `mountStudio` entry.
+  <img src="__assets__/package-og.svg" alt="studio" />
 
-## Running the studio
+</a>
 
-Three ways, smallest setup first:
+<h3 align="center">The Cirrus Studio: a local admin UI for your schema, data, logs, and advisors</h3>
 
-1. **`cirrus dev` (zero config).** The `@cirrus/vite` plugin serves the
-   studio at **`/__cirrus`** during dev and prints the URL on startup. Add
-   `@cirrus/studio` to your project's deps and it just works; opt out with
-   `cirrus({ studio: false })`.
-2. **Standalone app.** `apps/studio` (`@cirrus/studio-app`) is a deployable
-   Vite SPA that points at any worker via `VITE_CIRRUS_URL` — for hosting the
-   studio separately from dev.
-3. **Embed.** Mount `<StudioApp baseUrl="…" />` (self-contained: builds the
-   client, manages the admin token) or compose individual panels under your own
-   `<CirrusProvider>`.
+<!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
-```ts
-// mount the whole app into a <div id="root">
-import { mountStudio } from "@cirrus/studio/mount";
+<br />
 
-mountStudio({ baseUrl: "https://my-app.workers.dev" });
+<div align="center">
+
+[![typescript-image][typescript-badge]][typescript-url]
+[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![npm version][npm-version-badge]][npm-version]
+[![npm downloads][npm-downloads-badge]][npm-downloads]
+[![PRs Welcome][prs-welcome-badge]][prs-welcome]
+
+</div>
+
+---
+
+<div align="center">
+    <p>
+        <sup>
+            Daniel Bannert's open source work is supported by the community on <a href="https://github.com/sponsors/prisis">GitHub Sponsors</a>
+        </sup>
+    </p>
+</div>
+
+---
+
+The Cirrus Studio: a local admin UI for your schema, data, logs, and advisors. It is an embeddable React component library — compose the panels yourself behind a `<CirrusProvider>`, mount the ready-made `<Studio>` shell, or use the batteries-included `<StudioApp>` / `mountStudio` entry. In `cirrus dev`, `@cirrus/vite` serves it at `/__cirrus` with zero config.
+
+Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
+
+## Install
+
+```sh
+npm install @cirrus/studio
 ```
 
-## Components
+```sh
+yarn add @cirrus/studio
+```
 
-- `Studio` — a tabbed shell that composes every panel below behind one
-  provider. Tabs whose data source isn't configured are omitted.
-- `DataBrowser` — list a shard's tables and page through their rows, with a
-  table/JSON view toggle, refresh, and a whole-table search box (a debounced
-  server-side substring filter across every column, paginated over the matched
-  set — not just the loaded page). Column sorting stays page-local. The blob
-  storage is expanded so each `__doc__` field shows as its own column, and
-  foreign-key columns (`v.id("target")`) render as links that jump to the
-  referenced row in the target table.
-- `GlobalDataBrowser` — the same, for `.global()` (D1-backed) tables.
-- `SchemaViewer` — every table with its row count, expandable to its columns.
-- `FunctionRunner` — pick a registered function, edit its JSON args, and invoke
-  it (query / mutation / action), showing the result or error. Auto-discovers the
-  function list from the worker; pass an explicit `FunctionDescriptor[]` to skip
-  discovery.
-- `MetricsPanel` — per-shard health: request/error counts, uptime, DB size, and
-  reactive-cache hit rate. An **All shards** button rolls these up across the
-  shards the studio knows about (root + current + recently-visited — Durable
-  Objects aren't enumerable, so it's a best-effort union, not every shard) with
-  totals plus a per-shard breakdown.
-- `MigrationsPanel` — inspect data-migration run-state and kick off a migration
-  by id (direction, dry-run).
-- `ExportImportPanel` — snapshot a shard to NDJSON and restore NDJSON back.
-- `FileBrowser` — page through objects in the storage (R2) bucket by prefix.
-- `ScheduledJobs` — view and cancel functions queued via `runAfter` / `runAt`.
-- `UsersPanel` — browse auth users and drill into a user's sessions (read-only).
-
-## Admin gate
-
-Every panel except `FunctionRunner` and `ScheduledJobs` reaches the backend via
-reserved `__cirrus_admin__:*` RPCs that `ShardDO` intercepts. Those are
-**disabled unless the server sets `CIRRUS_ADMIN_TOKEN`**, and the client must
-present a matching `Authorization: Bearer` token. Configure the client's auth
-token at the host — these components issue no credentials of their own.
-
-## Live updates
-
-The **Metrics**, **Logs**, **Data browser**, and **Migrations** panels each
-expose a **Live** toggle. When on, the panel opens a `__cirrus_admin__:*`
-WebSocket subscription that re-pushes whenever the shard changes — the data
-browser is scoped to the loaded table (and also re-pushes its table list, so a
-migration that creates a table shows up without a manual reload), the others
-refresh on any write-flush (e.g. a long migration's processed/changed counts
-climb mid-run). With Live off, the panels stay one-shot (load + manual
-**Refresh**).
-
-The HTTP-backed panels read through admin endpoints over D1, the SessionDO, the
-SchedulerDO and R2 — backends with no subscription channel — so they can't use
-the WebSocket push above. **Scheduled jobs** now supports **true server push**: its **Live** toggle opens
-a WebSocket to the SchedulerDO, which broadcasts the full job list on every
-schedule / cancel / alarm-fire — so jobs appear and vanish the instant they
-change. (With a custom `loadJobs` the host owns the transport, so the toggle
-falls back to interval polling.) **Users** still polls on an **Auto** toggle
-(`useAutoRefresh`, paused while the tab is hidden), since the auth store has no
-subscription channel.
-
-A **connection badge** in the header reflects the client's aggregate live-socket
-health (idle / connecting / connected / offline) via `useConnectionStatus`, so
-"Live: on" with a dropped socket is distinguishable from a genuinely idle panel.
-The shell also wraps each tab in an error boundary (one panel throwing won't
-blank the others) and persists the admin token in `sessionStorage` (cleared via
-the header's **Clear** button) so a reload doesn't force a re-paste.
-
-Destructive actions — deleting a row, running a non-dry-run migration,
-cancelling a scheduled job, and importing rows — require a second confirming
-click (an inline `Confirm` / `Cancel` step, not a blocking dialog) via the
-exported `<ConfirmButton>`.
-
-Every shard-scoped panel's shard-key field is a shared `<ShardInput>` backed by
-a recently-used-shards autocomplete (`sessionStorage`). Durable Objects aren't
-externally enumerable, so the studio can't list shards server-side; instead it
-remembers the shards you actually open and offers them as a `<datalist>` — the
-practical substitute for a shard picker.
-
-`StudioApp` ships a scoped stylesheet (`<StudioStyles>`, every rule under
-`.cirrus-studio-root`) with a light/dark theme via `prefers-color-scheme` and
-a responsive header/table layout — so it never leaks styles into a host page. If
-you compose panels by hand, render `<StudioStyles>` under a
-`.cirrus-studio-root` wrapper (both are exported) to opt in, or bring your own
-CSS.
-
-Live updates ride the **same `CIRRUS_ADMIN_TOKEN`** as the HTTP admin RPCs. A
-browser `WebSocket` can't send an `Authorization` header, so the studio sends
-the admin token as the client's [`wsToken`](../client/README.md), which the
-server matches on the upgrade to authorize the admin socket. The standalone
-`StudioApp` wires this for you; if you compose panels under your own
-provider, construct the client with `wsToken: env.CIRRUS_ADMIN_TOKEN`. Because
-the token lands in the WS URL (and thus server logs), prefer a short-lived
-rotating token in production. Without it, the subscription is rejected and the
-panel shows a "Live unavailable" notice while the one-shot view keeps working.
+```sh
+pnpm add @cirrus/studio
+```
 
 ## Usage
 
@@ -137,166 +68,47 @@ const functions = [
 </CirrusProvider>;
 ```
 
-Or mount a single panel:
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/addons/studio)**.
 
-```tsx
-import { DataBrowser, FunctionRunner } from "@cirrus/studio";
+## Related
 
-<CirrusProvider client={client}>
-    <DataBrowser initialShardKey="room-42" />
-    <FunctionRunner functions={functions} />
-</CirrusProvider>;
-```
+- [`@cirrus/react`](https://www.npmjs.com/package/@cirrus/react) — the `<CirrusProvider>` and hooks the panels render under.
+- [`@cirrus/vite`](https://www.npmjs.com/package/@cirrus/vite) — serves the studio at `/__cirrus` during `cirrus dev`.
+- [`@cirrus/advisor`](https://www.npmjs.com/package/@cirrus/advisor) — supplies the findings the Advisors view renders.
 
-### Scheduled jobs
+## Supported Node.js Versions
 
-The scheduler is a distinct Durable Object from the shards, so it isn't reachable
-over the per-shard admin-RPC path. Instead, the worker exposes admin-gated
-`/_cirrus/admin/scheduled` endpoints, and the client's `listScheduledJobs()` /
-`cancelScheduledJob(id)` methods call them — so `ScheduledJobs` (and the
-`Studio` schedule tab) work out of the box under `<CirrusProvider>` with no
-extra wiring.
+Libraries in this ecosystem make the best effort to track [Node.js' release schedule](https://github.com/nodejs/release#release-schedule).
+Here's [a post on why we think this is important](https://medium.com/the-node-js-collection/maintainers-should-consider-following-node-js-release-schedule-ab08ed4de71a).
 
-Two things must be configured server-side for the endpoints to answer:
+## Contributing
 
-```ts
-// worker entry
-createWorker({
-    shardDO: env.SHARD,
-    schedulerDO: env.SCHEDULER, // same namespace you pass to createScheduler
-    adminToken: env.CIRRUS_ADMIN_TOKEN, // gates every admin endpoint
-});
-```
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
-To source jobs from somewhere else (or render a read-only list), override the
-loader/canceller:
+> **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
-```tsx
-<ScheduledJobs
-    loadJobs={async () => myRecords} // omit cancelJob for a read-only view
-/>
-```
+## Credits
 
-### File browser
+- [Daniel Bannert](https://github.com/prisis)
+- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
 
-`FileBrowser` lists R2 objects through the client's `listStorageObjects()`, which
-hits the admin-gated `GET /_cirrus/admin/storage` endpoint. Pass a `storageList`
-function to the worker (the structural shape matches `createStorage(...).list`):
+## Made with ❤️ at Anolilab
 
-```ts
-import { createStorage } from "@cirrus/storage";
+This is an open source project and will always remain free to use. If you think it's cool, please star it 🌟. [Anolilab](https://www.anolilab.com/open-source) is a Development and AI Studio. Contact us at [hello@anolilab.com](mailto:hello@anolilab.com) if you need any help with these technologies or just want to say hi!
 
-createWorker({
-    shardDO: env.SHARD,
-    adminToken: env.CIRRUS_ADMIN_TOKEN,
-    storageList: createStorage({ bucket: env.FILES }).list,
-});
-```
+## License
 
-### Function discovery
+The Cirrus studio package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
 
-`FunctionRunner` auto-discovers the function list via the client's
-`listFunctions()`, which hits the admin-gated `GET /_cirrus/admin/functions`
-endpoint. Pass the generated `CIRRUS_FUNCTIONS` registry to the worker (internal
-functions are filtered out server-side):
+<!-- badges -->
 
-```ts
-import { CIRRUS_FUNCTIONS } from "./cirrus/_generated/functions.js";
-
-createWorker({
-    shardDO: env.SHARD,
-    adminToken: env.CIRRUS_ADMIN_TOKEN,
-    functions: CIRRUS_FUNCTIONS,
-});
-```
-
-To skip discovery (or expose a curated subset), pass the list directly:
-
-```tsx
-<FunctionRunner functions={[{ kind: "query", path: "messages:list" }]} />
-```
-
-### API reference
-
-The **API reference** tab renders the generated OpenAPI document the worker
-serves at the admin-gated `GET /_cirrus/admin/openapi`. A Worker can't read the
-`_generated/openapi.json` file at runtime, so `@cirrus/codegen` also emits an
-importable `openapi.ts` module (the same document, regenerated on every
-`cirrus/` change). Import it and pass it as `openApiSpec` so the reference stays
-live without any hand-wiring:
-
-```ts
-import { openApiSpec } from "./cirrus/_generated/openapi.js";
-
-createWorker({
-    shardDO: env.SHARD,
-    adminToken: env.CIRRUS_ADMIN_TOKEN,
-    openApiSpec,
-});
-```
-
-Projects that opt into OpenRPC (`cirrus codegen --api-spec openrpc` / `both`)
-get a parallel `openrpc.ts` module; wire it through `openRpcSpec` the same way.
-
-### Global (D1) tables
-
-`GlobalDataBrowser` reads `.global()` tables — which live in D1, not the shard
-DOs — via the client's `listGlobalTables()` / `readGlobalTablePage()`, hitting
-the admin-gated `/_cirrus/admin/global/*` endpoints. Build a `globalIntrospector`
-from `@cirrus/d1` over your D1 binding and your schema:
-
-```ts
-import { listGlobalTables, readGlobalTablePage } from "@cirrus/d1";
-import schema from "./cirrus/schema.js";
-
-const exec = {
-    all: (sql, params) =>
-        env.DB.prepare(sql)
-            .bind(...params)
-            .all()
-            .then((r) => r.results),
-    run: (sql, params) =>
-        env.DB.prepare(sql)
-            .bind(...params)
-            .run()
-            .then(() => undefined),
-};
-
-createWorker({
-    shardDO: env.SHARD,
-    adminToken: env.CIRRUS_ADMIN_TOKEN,
-    globalIntrospector: {
-        listTables: () => listGlobalTables(exec, schema),
-        readTablePage: (opts) => readGlobalTablePage(exec, schema, opts),
-    },
-});
-```
-
-### Users, organizations & sessions
-
-The **Users** dashboard and **Organizations** section drive the admin-gated
-`/_cirrus/admin/auth/*` endpoints (browse + create/ban/role/revoke/impersonate/
-delete, plus linked accounts, 2FA, passkeys, and organizations). Wire them with
-`@cirrus/auth`'s `createAuthAdmin(auth)` — a single line that replaces the old
-hand-rolled SQL introspector:
-
-```ts
-import { createAuthAdmin } from "@cirrus/auth";
-
-createWorker({
-    shardDO: env.SHARD,
-    adminToken: env.CIRRUS_ADMIN_TOKEN,
-    // Backed by better-auth's adapter; every call is gated by CIRRUS_ADMIN_TOKEN.
-    // Password hashes and session/OAuth tokens are never returned.
-    authAdmin: createAuthAdmin(auth),
-});
-```
-
-The dashboard is **capability-driven**: it calls `GET /_cirrus/admin/auth/capabilities`
-(derived from the better-auth plugins you enabled) and renders only the surfaces
-that apply — so the Organizations section, 2FA, and passkey panels appear only
-when the `organization()`, `twoFactor()`, and passkey plugins are configured.
-Pass `createAuthAdmin(auth, { features: { … } })` to force a surface off.
-
-> The former read-only `authIntrospector` option still works as a fallback
-> (browse-only), but is deprecated in favour of `authAdmin`.
+[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/studio?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@cirrus/studio
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/studio?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@cirrus/studio
+[prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
+[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
+[typescript-url]: https://www.typescriptlang.org/

@@ -2,8 +2,33 @@
     "name": "@cirrus/mail",
     "version": "0.0.0",
     "license": "FSL-1.1-Apache-2.0",
+    "description": "Email for Cirrus: Resend adapter, TSX templates, and queue-backed sends",
+    "homepage": "https://cirrus.dev",
+    "bugs": {
+        "url": "https://github.com/anolilab/cirrus/issues"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/anolilab/cirrus.git",
+        "directory": "packages/mail"
+    },
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
+    },
+    "keywords": [
+        "cirrus",
+        "cloudflare",
+        "workers",
+        "durable-objects",
+        "email",
+        "mail",
+        "resend",
+        "react-email"
+    ],
     "files": [
         "dist",
+        "__assets__",
         "README.md",
         "LICENSE.md"
     ],

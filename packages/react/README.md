@@ -1,21 +1,63 @@
-# @cirrus/react
+<!-- START_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
-React 18 / 19 hooks for the Cirrus framework. Wraps a [`@cirrus/client`](../client) instance with Suspense-friendly hooks that subscribe via `useSyncExternalStore`, so concurrent rendering, transitions, and selective hydration all behave correctly.
+<a href="https://www.anolilab.com/open-source" align="center">
+
+  <img src="__assets__/package-og.svg" alt="react" />
+
+</a>
+
+<h3 align="center">React hooks for Cirrus: useQuery, useMutation, useSubscription, and useAuth</h3>
+
+<!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
+
+<br />
+
+<div align="center">
+
+[![typescript-image][typescript-badge]][typescript-url]
+[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![npm version][npm-version-badge]][npm-version]
+[![npm downloads][npm-downloads-badge]][npm-downloads]
+[![PRs Welcome][prs-welcome-badge]][prs-welcome]
+
+</div>
+
+---
+
+<div align="center">
+    <p>
+        <sup>
+            Daniel Bannert's open source work is supported by the community on <a href="https://github.com/sponsors/prisis">GitHub Sponsors</a>
+        </sup>
+    </p>
+</div>
+
+---
+
+React hooks for Cirrus — `useQuery`, `useMutation`, `useSubscription`, `useAuth`, and more — that wrap a `@cirrus/client` instance behind a `CirrusProvider`. The hooks are client-only; server-side data loading lives in the socket-free `@cirrus/react/server` entry.
+
+Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
 ## Install
 
-```bash
-pnpm add @cirrus/react @cirrus/client react react-dom
+```sh
+npm install @cirrus/react
 ```
 
-Workspace dependency: [`@cirrus/client`](../client). Peer deps: `react` and `react-dom` (`^18 || ^19`).
+```sh
+yarn add @cirrus/react
+```
+
+```sh
+pnpm add @cirrus/react
+```
 
 ## Usage
 
 ```tsx
 import { CirrusClient } from "@cirrus/client";
-import { CirrusProvider, useQuery, useMutation } from "@cirrus/react";
-import { api } from "./cirrus/_generated/api.js";
+import { CirrusProvider, useMutation, useQuery } from "@cirrus/react";
+import { api } from "./cirrus/_generated/api";
 
 const client = new CirrusClient({ url: "https://app.acme.test" });
 
@@ -48,92 +90,47 @@ function MessageList({ room }: { room: string }) {
 }
 ```
 
-## Hooks
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/api/react)**.
 
-### `useQuery(fn, args, options?)`
+## Related
 
-Subscribes to a server query. Returns `ReturnOf<F> | undefined` — `undefined` until the first response lands. Components calling `useQuery` with identical `(fn, args, shardKey)` share a single underlying network call via the shared cache.
+- [`@cirrus/client`](https://www.npmjs.com/package/@cirrus/client) — the browser SDK these hooks wrap.
+- [`@cirrus/query-core`](https://www.npmjs.com/package/@cirrus/query-core) — shared live-query state machine.
+- [`@cirrus/ssr`](https://www.npmjs.com/package/@cirrus/ssr) — server-side preloading used by `@cirrus/react/server`.
 
-Pass `"skip"` as `args` to short-circuit the query entirely (no network, no cache entry).
+## Supported Node.js Versions
 
-```ts
-const data = useQuery(api.foo.bar, condition ? { id } : "skip");
-```
+Libraries in this ecosystem make the best effort to track [Node.js' release schedule](https://github.com/nodejs/release#release-schedule).
+Here's [a post on why we think this is important](https://medium.com/the-node-js-collection/maintainers-should-consider-following-node-js-release-schedule-ab08ed4de71a).
 
-### `useMutation(fn)`
+## Contributing
 
-Returns `{ mutate, pending }`:
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
-- `mutate(args, options?)` returns a `Promise<ReturnOf<F>>` and supports the same `{ optimistic, shardKey }` options as `client.mutation`.
-- `pending` is `true` while at least one in-flight call is outstanding.
+> **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
-> The hook intentionally exposes `{ mutate, pending }` rather than the earlier `[mutate, { isLoading }]` prototype shape — destructure at the call site so the React linter tracks `mutate` and `pending` independently.
+## Credits
 
-### `useSubscription(fn, args, options?)`
+- [Daniel Bannert](https://github.com/prisis)
+- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
 
-Pure WebSocket subscription. Unlike `useQuery` this hook does **not** issue an initial HTTP fetch — it only delivers values that the server pushes. Returns `{ data, error }`. Pass `"skip"` for `args` to disable the hook.
+## Made with ❤️ at Anolilab
 
-### `useAuth()`
-
-Returns `{ user, token, setToken }`. `setToken(jwt | null)` proxies to `client.setAuthToken` so subsequent RPC calls carry the `Authorization` header. `user` is reserved for the upcoming auth phase and currently always `null`.
-
-### `useCirrus()`
-
-Reads the current `CirrusClient` from the nearest `<CirrusProvider>`. Throws if used outside a provider. Useful for escape-hatch operations like `client.close()` or one-shot `client.action(...)` calls.
-
-## Provider
-
-```tsx
-<CirrusProvider client={client}>{children}</CirrusProvider>
-```
-
-Stable identity — the underlying context value is just the `CirrusClient` you pass in, so re-renders don't tear down subscriptions.
-
-## Server Components (`@cirrus/react/server`)
-
-The hooks are client-only (each module declares `"use client"`) — use them inside your own Client Components. Server-side data loading lives in the separate, socket-free `@cirrus/react/server` entry — safe to call from a React Server Component:
-
-```tsx
-// Server Component
-import { createServerClient, prefetchQuery, dehydrate, HydrationBoundary } from "@cirrus/react/server";
-import { QueryClient } from "@tanstack/react-query";
-
-const client = createServerClient({ url: process.env.CIRRUS_URL!, token });
-const queryClient = new QueryClient();
-await prefetchQuery(queryClient, client, api.posts.list, {});
-
-return (
-    <HydrationBoundary state={dehydrate(queryClient)}>
-        <PostList /> {/* client component: useQuery(api.posts.list, {}) reads the hydrated value */}
-    </HydrationBoundary>
-);
-```
-
-- `createServerClient({ url, token?, fetch? })` — request-scoped, HTTP-only client. Build one per request.
-- `prefetchQuery(queryClient, client, fn, args, opts?)` — seeds the TanStack cache under the same key `useQuery` reads.
-- `preloadQuery(client, fn, args, opts?)` — returns a serializable `Preloaded` token for `usePreloadedQuery`.
-- `dehydrate`, `HydrationBoundary` — re-exported from `@tanstack/react-query`.
-
-See the [React reference](../../apps/docs/content/docs/api/react.mdx#server-components-nextjs-app-router) for the full Next.js walkthrough.
-
-## API
-
-| Export                      | Description                                                         |
-| --------------------------- | ------------------------------------------------------------------- |
-| `<CirrusProvider />`        | Context provider. Required at the root of any tree that uses hooks. |
-| `useCirrus()`               | Read the active `CirrusClient`.                                     |
-| `useQuery(fn, args)`        | Subscribe to a query. `"skip"` short-circuits.                      |
-| `useMutation(fn)`           | Returns `{ mutate, pending }`.                                      |
-| `useSubscription(fn, args)` | Returns `{ data, error }`. WS only.                                 |
-| `useAuth()`                 | Returns `{ user, token, setToken }`.                                |
-
-Types: `CirrusProviderProps`, `MutationHook`, `UseQueryOptions`, `UseMutationCallOptions`, `UseSubscriptionResult`, `UseAuthResult`, `User`, `CirrusClient`, `FunctionReference`, `ArgsOf`, `ReturnOf`.
-
-## Docs
-
-- Repo root: [README.md](../../README.md)
-- React reference: [apps/docs/content/docs/api/react.mdx](../../apps/docs/content/docs/api/react.mdx)
+This is an open source project and will always remain free to use. If you think it's cool, please star it 🌟. [Anolilab](https://www.anolilab.com/open-source) is a Development and AI Studio. Contact us at [hello@anolilab.com](mailto:hello@anolilab.com) if you need any help with these technologies or just want to say hi!
 
 ## License
 
-MIT — see [LICENSE.md](../../LICENSE.md)
+The Cirrus react package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+
+<!-- badges -->
+
+[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/react?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@cirrus/react
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/react?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@cirrus/react
+[prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
+[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
+[typescript-url]: https://www.typescriptlang.org/

@@ -1,73 +1,111 @@
-# @cirrus/config
+<!-- START_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
-Shared configuration helpers for the Cirrus framework.
+<a href="https://www.anolilab.com/open-source" align="center">
 
-> **Internal package.** This is consumed by [`@cirrus/cli`](../cli) and [`@cirrus/vite`](../vite) so they share a single `wrangler.jsonc` validator and stay in lock-step. It is published for transparency, but the surface is **not** intended for direct consumer use — depend on the CLI or the Vite plugin instead and let them call into this package for you.
+  <img src="__assets__/package-og.svg" alt="config" />
+
+</a>
+
+<h3 align="center">Internal shared CLI + Vite config layer for Cirrus: wrangler.jsonc validation, binding inference, and .dev.vars scaffolding</h3>
+
+<!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
+
+<br />
+
+<div align="center">
+
+[![typescript-image][typescript-badge]][typescript-url]
+[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![npm version][npm-version-badge]][npm-version]
+[![npm downloads][npm-downloads-badge]][npm-downloads]
+[![PRs Welcome][prs-welcome-badge]][prs-welcome]
+
+</div>
+
+---
+
+<div align="center">
+    <p>
+        <sup>
+            Daniel Bannert's open source work is supported by the community on <a href="https://github.com/sponsors/prisis">GitHub Sponsors</a>
+        </sup>
+    </p>
+</div>
+
+---
+
+The internal shared CLI + Vite config layer for Cirrus: `wrangler.jsonc` validation, binding inference and reconciliation, and `.dev.vars` scaffolding. **This package is internal** — it is consumed by [`@cirrus/cli`](https://www.npmjs.com/package/@cirrus/cli) and [`@cirrus/vite`](https://www.npmjs.com/package/@cirrus/vite) so they stay in lock-step. It is published for transparency; depend on the CLI or the Vite plugin and let them call into it rather than using it directly.
+
+Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
 ## Install
 
-```bash
+```sh
+npm install @cirrus/config
+```
+
+```sh
+yarn add @cirrus/config
+```
+
+```sh
 pnpm add @cirrus/config
 ```
 
-Workspace dependency: [`@cirrus/codegen`](../codegen) (used to discover schema info for validation).
-
 ## Usage
-
-### Pure validator
-
-`validateWrangler` (alias of `validateWranglerConfig`) takes a parsed `wrangler.jsonc` object and an optional `SchemaInfo` flag, and returns a structured report. It performs no I/O.
 
 ```ts
 import { validateWrangler } from "@cirrus/config";
 
 const wrangler = JSON.parse(readFileSync("wrangler.jsonc", "utf8"));
-
-const { valid, errors, warnings } = validateWrangler(wrangler, { hasGlobalTable: true });
+const { valid, errors } = validateWrangler(wrangler, { hasGlobalTable: true });
 
 if (!valid) {
     for (const error of errors) console.error(error);
 }
 ```
 
-### File-system aware
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/deployment)**.
 
-`validateWranglerProject` locates `wrangler.jsonc`/`wrangler.json` under `projectRoot`, parses it with `jsonc-parser` (trailing commas allowed), discovers the cirrus schema, and runs `validateWranglerConfig`. Returns the legacy `{ problems, wranglerPath, report }` shape kept for backward compatibility with the CLI.
+## Related
 
-```ts
-import { validateWranglerProject } from "@cirrus/config";
+- [`@cirrus/cli`](https://www.npmjs.com/package/@cirrus/cli) — the CLI that drives this layer; use it instead of depending here directly.
+- [`@cirrus/vite`](https://www.npmjs.com/package/@cirrus/vite) — the Vite plugin that shares the same validator.
+- [`@cirrus/codegen`](https://www.npmjs.com/package/@cirrus/codegen) — discovers schema info used during validation.
 
-const { problems, wranglerPath, report } = validateWranglerProject({ projectRoot: process.cwd() });
-```
+## Supported Node.js Versions
 
-## What gets checked
+Libraries in this ecosystem make the best effort to track [Node.js' release schedule](https://github.com/nodejs/release#release-schedule).
+Here's [a post on why we think this is important](https://medium.com/the-node-js-collection/maintainers-should-consider-following-node-js-release-schedule-ab08ed4de71a).
 
-Both entry points enforce the bindings that a Cirrus Worker needs at runtime:
+## Contributing
 
-- `durable_objects.bindings` must include `{ name: "SHARD", class_name: "ShardDO" }`
-- `compatibility_date` must be `>= "2026-04-07"`
-- `compatibility_flags` must include `"web_socket_auto_reply_to_close"` only when `compatibility_date < "2026-04-07"`; on/after that date the flag is workerd's default and should be omitted (workerd warns if it's set redundantly)
-- If the schema declares any `.global()` table, `d1_databases` must include a binding named `"DB"`
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
-These constants are exported as `REQUIRED_FLAG` and `REQUIRED_COMPATIBILITY_DATE` for tests and tooling.
+> **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
-## API
+## Credits
 
-| Export                                | Description                                                                                       |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------- |
-| `validateWrangler(config, schema?)`   | Pure validator. Alias of `validateWranglerConfig`. Returns `{ valid, errors, warnings }`.         |
-| `validateWranglerConfig(config, ...)` | Same as `validateWrangler`. Canonical name.                                                       |
-| `validateWranglerProject(options)`    | Reads + parses `wrangler.jsonc` from disk, runs the validator, returns the legacy problems shape. |
-| `REQUIRED_FLAG`                       | `"web_socket_auto_reply_to_close"`                                                                |
-| `REQUIRED_COMPATIBILITY_DATE`         | `"2026-04-07"`                                                                                    |
+- [Daniel Bannert](https://github.com/prisis)
+- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
 
-Types: `WranglerConfig`, `SchemaInfo`, `WranglerValidationReport`, `WranglerProjectValidationOptions`, `WranglerProjectValidationResult`.
+## Made with ❤️ at Anolilab
 
-## Docs
-
-- Repo root: [README.md](../../README.md)
-- Deployment guide: [apps/docs/content/docs/deployment.mdx](../../apps/docs/content/docs/deployment.mdx)
+This is an open source project and will always remain free to use. If you think it's cool, please star it 🌟. [Anolilab](https://www.anolilab.com/open-source) is a Development and AI Studio. Contact us at [hello@anolilab.com](mailto:hello@anolilab.com) if you need any help with these technologies or just want to say hi!
 
 ## License
 
-MIT — see [LICENSE.md](../../LICENSE.md)
+The Cirrus config package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+
+<!-- badges -->
+
+[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/config?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@cirrus/config
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/config?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@cirrus/config
+[prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
+[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
+[typescript-url]: https://www.typescriptlang.org/

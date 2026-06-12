@@ -1,31 +1,60 @@
-# @cirrus/mcp
+<!-- START_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
-A [Model Context Protocol](https://modelcontextprotocol.io) server that exposes
-a deployed Cirrus app to AI agents. It registers tools for introspecting a
-deployment and invoking its functions, each backed by `@cirrus/client` over
-HTTP RPC.
+<a href="https://www.anolilab.com/open-source" align="center">
 
-Part of the [Cirrus](https://github.com/anolilab/cirrus) framework.
+  <img src="__assets__/package-og.svg" alt="mcp" />
 
-## Tools
+</a>
 
-| Tool                    | Description                                                       |
-| ----------------------- | ----------------------------------------------------------------- |
-| `cirrus_list_functions` | List public functions (queries, mutations, actions) and kinds.    |
-| `cirrus_list_tables`    | List `.global()` tables and their column shapes.                  |
-| `cirrus_run_query`      | Run a query and return its result (read-only).                    |
-| `cirrus_run_mutation`   | Run a mutation and return its result (writes data).               |
-| `cirrus_run_action`     | Run an action and return its result (may call external services). |
+<h3 align="center">Model Context Protocol server exposing a Cirrus deployment to AI agents</h3>
 
-The `run_*` tools accept `{ functionPath, args?, shardKey? }`.
+<!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
-## Usage (stdio)
+<br />
 
-MCP clients spawn the `cirrus-mcp` binary and talk to it over stdio.
-Configuration comes from the environment:
+<div align="center">
 
-- `CIRRUS_URL` (required) — base URL of the deployed Worker.
-- `CIRRUS_ADMIN_TOKEN` (optional) — bearer token sent on every RPC.
+[![typescript-image][typescript-badge]][typescript-url]
+[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![npm version][npm-version-badge]][npm-version]
+[![npm downloads][npm-downloads-badge]][npm-downloads]
+[![PRs Welcome][prs-welcome-badge]][prs-welcome]
+
+</div>
+
+---
+
+<div align="center">
+    <p>
+        <sup>
+            Daniel Bannert's open source work is supported by the community on <a href="https://github.com/sponsors/prisis">GitHub Sponsors</a>
+        </sup>
+    </p>
+</div>
+
+---
+
+A [Model Context Protocol](https://modelcontextprotocol.io) server that exposes a deployed Cirrus app to AI agents. It registers tools for introspecting a deployment (`cirrus_list_functions`, `cirrus_list_tables`) and invoking its functions (`cirrus_run_query`, `cirrus_run_mutation`, `cirrus_run_action`), each backed by `@cirrus/client` over HTTP RPC.
+
+Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
+
+## Install
+
+```sh
+npm install @cirrus/mcp
+```
+
+```sh
+yarn add @cirrus/mcp
+```
+
+```sh
+pnpm add @cirrus/mcp
+```
+
+## Usage
+
+MCP clients spawn the `cirrus-mcp` binary over stdio. Configuration comes from `CIRRUS_URL` (required) and `CIRRUS_ADMIN_TOKEN` (optional bearer token):
 
 ```jsonc
 {
@@ -41,24 +70,7 @@ Configuration comes from the environment:
 }
 ```
 
-## Usage (programmatic)
-
-```ts
-import { createCirrusMcpServer } from "@cirrus/mcp";
-
-const server = createCirrusMcpServer({ url: "https://app.example.workers.dev", token });
-await server.connect(myTransport);
-```
-
-`connectStdio(options)` is a convenience wrapper that connects a
-`StdioServerTransport` for you. Pass a pre-built `client` instead of `url` to
-reuse an existing `CirrusClient`.
-
-## API reference
-
-### `createCirrusMcpServer(options)`
-
-Builds a transport-agnostic MCP [`Server`](https://github.com/modelcontextprotocol/typescript-sdk) whose tools talk to a Cirrus deployment, and returns it. You call `.connect(transport)` yourself (or use `connectStdio` below). No WebSocket is opened — the tools dispatch over HTTP RPC — so the server is safe to run as a short-lived process. The MCP `initialize` handshake advertises the server as `cirrus` at the package's real version.
+Or build a transport-agnostic server programmatically:
 
 ```ts
 import { createCirrusMcpServer } from "@cirrus/mcp";
@@ -67,35 +79,47 @@ const server = createCirrusMcpServer({ url: "https://app.example.workers.dev", t
 await server.connect(myTransport);
 ```
 
-`CirrusMcpServerOptions`:
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs)**.
 
-| Field    | Type           | Description                                                                                          |
-| -------- | -------------- | ---------------------------------------------------------------------------------------------------- |
-| `url`    | `string`       | Base URL of the deployed Cirrus Worker. **Required unless `client` is given.**                       |
-| `token`  | `string`       | Bearer token sent on every RPC (typically the admin token). Optional.                                |
-| `fetch`  | `typeof fetch` | `fetch` implementation; defaults to the ambient global. Optional.                                    |
-| `client` | `CirrusClient` | Pre-built client (e.g. for test injection). When given, `url`/`token`/`fetch` are ignored. Optional. |
+## Related
 
-Throws if neither `client` nor `url` is provided.
+- [`@cirrus/client`](https://www.npmjs.com/package/@cirrus/client) — the HTTP RPC client backing every tool.
+- [`@cirrus/cli`](https://www.npmjs.com/package/@cirrus/cli) — deploy the app the server introspects and invokes.
+- [`@cirrus/server`](https://www.npmjs.com/package/@cirrus/server) — defines the queries, mutations, and actions the tools call.
 
-### `connectStdio(options)`
+## Supported Node.js Versions
 
-`(options: CirrusMcpServerOptions) => Promise<Server>`. Builds the server with `createCirrusMcpServer` and connects it over a `StdioServerTransport` — the transport MCP clients use when they spawn the `cirrus-mcp` binary. Resolves once the transport is connected; the process then stays alive serving requests.
+Libraries in this ecosystem make the best effort to track [Node.js' release schedule](https://github.com/nodejs/release#release-schedule).
+Here's [a post on why we think this is important](https://medium.com/the-node-js-collection/maintainers-should-consider-following-node-js-release-schedule-ab08ed4de71a).
 
-```ts
-import { connectStdio } from "@cirrus/mcp";
+## Contributing
 
-await connectStdio({ url: process.env.CIRRUS_URL!, token: process.env.CIRRUS_ADMIN_TOKEN });
-```
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
-### `TOOL_DEFINITIONS`
+> **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
-`ReadonlyArray<ToolDefinition>` — the five tool definitions the server registers (the table above), each `{ name, description, inputSchema }` with a JSON-Schema `inputSchema`. Exported so you can introspect or re-advertise the tool surface without standing up a server.
+## Credits
 
-### `callTool(client, name, input)`
+- [Daniel Bannert](https://github.com/prisis)
+- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
 
-`(client: CirrusClient, name: string, input: Record<string, unknown>) => Promise<ToolResult>`. The raw dispatcher the server's `CallTool` handler delegates to — maps a tool name onto the matching `CirrusClient` method (`listFunctions`, `listGlobalTables`, `query`, `mutation`, `action`). Exported so the behaviour is unit-testable against a mock client without driving a transport. Unknown tool names and thrown errors are returned as `{ isError: true }` results (per the MCP convention) rather than rejecting; the run-tools read `{ functionPath, args?, shardKey? }` from `input`.
+## Made with ❤️ at Anolilab
 
-### Types
+This is an open source project and will always remain free to use. If you think it's cool, please star it 🌟. [Anolilab](https://www.anolilab.com/open-source) is a Development and AI Studio. Contact us at [hello@anolilab.com](mailto:hello@anolilab.com) if you need any help with these technologies or just want to say hi!
 
-`CirrusMcpServerOptions`, `ToolDefinition` (`{ name, description, inputSchema }`), `ToolInputSchema` (a JSON-Schema `object`), `ToolResult` (`{ content: { type: "text"; text: string }[]; isError?: boolean }`).
+## License
+
+The Cirrus mcp package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+
+<!-- badges -->
+
+[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/mcp?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@cirrus/mcp
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/mcp?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@cirrus/mcp
+[prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
+[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
+[typescript-url]: https://www.typescriptlang.org/

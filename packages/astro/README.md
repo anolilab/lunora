@@ -1,40 +1,61 @@
-# @cirrus/astro
+<!-- START_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
-The **Astro** integration for [Cirrus](https://github.com/anolilab/cirrus) — the
-realtime backend for any meta-framework. PLAN4 **class-B** (own-CF-adapter,
-hook-injection) composition.
+<a href="https://www.anolilab.com/open-source" align="center">
 
-Astro is multi-framework at the UI layer, so `@cirrus/astro` is **not** a new
-reactive runtime. Reactivity comes from whichever island adapter you hydrate
-with — [`@cirrus/react`](../react), [`@cirrus/solid`](../solid),
-[`@cirrus/svelte`](../svelte), or [`@cirrus/vue`](../vue). This package owns the
-two **server-side** seams Astro needs:
+  <img src="__assets__/package-og.svg" alt="astro" />
 
-1. **Single-worker composition** — mount Cirrus realtime _inside_ the Worker
-   `@astrojs/cloudflare` emits (`withCirrus`).
-2. **Reactive-loader server helpers** — preload Cirrus data in `.astro`
-   frontmatter / server endpoints, then hydrate an island into a live
-   subscription (`@cirrus/astro/server`).
+</a>
+
+<h3 align="center">Astro integration for Cirrus — single-worker composition plus reactive-loader server helpers</h3>
+
+<!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
+
+<br />
+
+<div align="center">
+
+[![typescript-image][typescript-badge]][typescript-url]
+[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![npm version][npm-version-badge]][npm-version]
+[![npm downloads][npm-downloads-badge]][npm-downloads]
+[![PRs Welcome][prs-welcome-badge]][prs-welcome]
+
+</div>
+
+---
+
+<div align="center">
+    <p>
+        <sup>
+            Daniel Bannert's open source work is supported by the community on <a href="https://github.com/sponsors/prisis">GitHub Sponsors</a>
+        </sup>
+    </p>
+</div>
+
+---
+
+The Astro integration for Cirrus. Astro is multi-framework at the UI layer, so this is not a new reactive runtime — reactivity comes from whichever island adapter you hydrate with. Instead it owns two server-side seams: `withCirrus` for single-worker composition inside Astro's `@astrojs/cloudflare` worker, and the reactive-loader server helpers in `@cirrus/astro/server` for preloading queries in `.astro` frontmatter.
+
+Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
 ## Install
 
-```bash
+```sh
+npm install @cirrus/astro
+```
+
+```sh
+yarn add @cirrus/astro
+```
+
+```sh
 pnpm add @cirrus/astro
 ```
 
-`astro` is an optional peer dependency — the host Astro app already provides it.
-
-## The composition story (class-B)
-
-Unlike class-A frameworks (TanStack Start, SolidStart) where Cirrus owns the
-worker entry, Astro owns its **own** Cloudflare adapter and builds its own server
-worker. So Cirrus is **injected into** Astro's worker rather than fighting its
-build.
-
-### 1. Add the integration
+## Usage
 
 ```ts
-// astro.config.mjs
+// astro.config.mjs — add the integration.
 import cloudflare from "@astrojs/cloudflare";
 import { defineConfig } from "astro/config";
 import { cirrus } from "@cirrus/astro";
@@ -44,80 +65,58 @@ export default defineConfig({
     adapter: cloudflare(),
     integrations: [cirrus()],
 });
-```
 
-### 2. Wrap the adapter's worker entry with `withCirrus`
-
-`@astrojs/cloudflare` emits a server worker whose default export is the SSR
-handler. Wrap it at that boundary so Cirrus realtime mounts under `/_cirrus/*`
-and **everything else** falls through to Astro:
-
-```ts
-// src/worker.ts
+// src/worker.ts — wrap the adapter's worker so Cirrus mounts under /_cirrus/*.
 import astroWorker from "../dist/_worker.js/index.js";
 import { withCirrus } from "@cirrus/astro";
 
 export default {
-    fetch(request: Request, env: Env, ctx: ExecutionContext) {
-        return withCirrus(astroWorker, {
-            shardDO: env.SHARD, // the ShardDO namespace binding
-            // auth, routes, resolveIdentity, observability … all optional
-        }).fetch(request, env, ctx);
-    },
+    fetch: (request: Request, env: Env, ctx: ExecutionContext) => withCirrus(astroWorker, { shardDO: env.SHARD }).fetch(request, env, ctx),
 };
 ```
 
-The two dispatch flows share one worker but never collide:
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/frameworks/bring-your-framework)**.
 
-- `/_cirrus/rpc`, `/_cirrus/ws`, `/_cirrus/admin/*` → **Cirrus realtime**
-- everything else → **Astro SSR**
+## Related
 
-An Astro render that throws is contained at the composition seam and surfaced as
-a plain 500 — it can never take down the realtime plane.
+- [`@cirrus/ssr`](https://www.npmjs.com/package/@cirrus/ssr) — the server preload contract re-exported by `@cirrus/astro/server`.
+- [`@cirrus/runtime`](https://www.npmjs.com/package/@cirrus/runtime) — the Worker runtime `withCirrus` composes with.
+- [`@cirrus/react`](https://www.npmjs.com/package/@cirrus/react) — an island adapter for hydrating preloaded queries live.
+- [`@cirrus/solid`](https://www.npmjs.com/package/@cirrus/solid) — another island adapter for live hydration.
 
-## Reactive loaders (`@cirrus/astro/server`)
+## Supported Node.js Versions
 
-`@cirrus/astro/server` re-exports the framework-neutral
-[`@cirrus/ssr`](../ssr) contract. Use it in `.astro` frontmatter (which runs
-server-side during SSR) to preload a query, then hand the `Preloaded` token to an
-island adapter's `hydratePreloaded`:
+Libraries in this ecosystem make the best effort to track [Node.js' release schedule](https://github.com/nodejs/release#release-schedule).
+Here's [a post on why we think this is important](https://medium.com/the-node-js-collection/maintainers-should-consider-following-node-js-release-schedule-ab08ed4de71a).
 
-```astro
----
-// src/pages/index.astro
-import { createServerClient, preloadQuery } from "@cirrus/astro/server";
-import { api } from "../../cirrus/_generated/api";
-import Messages from "../components/Messages"; // a React/Solid island
+## Contributing
 
-const client = createServerClient({
-    url: Astro.url.origin, // same-origin: /_cirrus/rpc loops back into this worker
-    fetch: (input, init) => {
-        const headers = new Headers(init?.headers);
-        const cookie = Astro.request.headers.get("cookie");
-        if (cookie) headers.set("cookie", cookie); // forward the session
-        return fetch(input, { ...init, headers });
-    },
-});
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
-const preloaded = await preloadQuery(client, api.messages.list, { channelId: "channel:demo" });
----
+> **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
-<Messages client:load preloaded={preloaded} />
-```
+## Credits
 
-On the client, the island's adapter (`@cirrus/react`'s / `@cirrus/solid`'s
-`hydratePreloaded`) seeds from the SSR snapshot **synchronously** (no loading
-flash, no refetch), then opens the WebSocket subscription so it re-renders on
-every server write. Your loaders are live.
+- [Daniel Bannert](https://github.com/prisis)
+- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
 
-## API
+## Made with ❤️ at Anolilab
 
-| Export                                                                            | Entry                  | Purpose                                                                       |
-| --------------------------------------------------------------------------------- | ---------------------- | ----------------------------------------------------------------------------- |
-| `cirrus(options?)`                                                                | `@cirrus/astro`        | The `AstroIntegration` added to `astro.config`'s `integrations`.              |
-| `withCirrus(astroWorker, cirrusOptions)`                                          | `@cirrus/astro`        | Wrap the `@astrojs/cloudflare` worker so Cirrus realtime mounts inside it.    |
-| `createServerClient` / `preloadQuery` / `getServerSession` / `serializePreloaded` | `@cirrus/astro/server` | The framework-neutral `@cirrus/ssr` server contract for `.astro` frontmatter. |
+This is an open source project and will always remain free to use. If you think it's cool, please star it 🌟. [Anolilab](https://www.anolilab.com/open-source) is a Development and AI Studio. Contact us at [hello@anolilab.com](mailto:hello@anolilab.com) if you need any help with these technologies or just want to say hi!
 
 ## License
 
-FSL-1.1-Apache-2.0
+The Cirrus astro package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+
+<!-- badges -->
+
+[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/astro?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@cirrus/astro
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/astro?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@cirrus/astro
+[prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
+[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
+[typescript-url]: https://www.typescriptlang.org/

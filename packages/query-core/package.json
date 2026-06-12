@@ -2,10 +2,35 @@
     "name": "@cirrus/query-core",
     "version": "0.0.0",
     "license": "FSL-1.1-Apache-2.0",
+    "description": "Framework-neutral live-query state machine shared by every Cirrus UI adapter (React, Vue, Svelte, Solid)",
+    "homepage": "https://cirrus.dev",
+    "bugs": {
+        "url": "https://github.com/anolilab/cirrus/issues"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/anolilab/cirrus.git",
+        "directory": "packages/query-core"
+    },
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
+    },
+    "keywords": [
+        "cirrus",
+        "cloudflare",
+        "workers",
+        "durable-objects",
+        "live-query",
+        "subscription",
+        "state-machine",
+        "realtime"
+    ],
     "files": [
         "dist",
         "README.md",
-        "LICENSE.md"
+        "LICENSE.md",
+        "__assets__"
     ],
     "type": "module",
     "sideEffects": false,

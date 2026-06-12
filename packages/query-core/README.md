@@ -1,35 +1,55 @@
-# @cirrus/query-core
+<!-- START_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
-The framework-neutral live-query state machine shared by every Cirrus UI adapter (React, Vue, Svelte, Solid). It owns the seam between a `CirrusClient` subscription and a framework's reactivity primitive — the subscribe → snapshot → error/reset → cleanup lifecycle — so the skip-handling, value/error fan-out, attach-throw normalisation, and cancellation-guarded teardown live in exactly one place instead of being hand-rolled (with drift) in four adapters.
+<a href="https://www.anolilab.com/open-source" align="center">
 
-Nothing here imports a UI framework. Each adapter supplies thin **sinks** that write into its own `ref` / store / signal / cache, and decides _when_ to run the machine (a React effect, a Vue `watch`, a Svelte store start callback, a Solid `createEffect(on(...))`).
+  <img src="__assets__/package-og.svg" alt="query-core" />
+
+</a>
+
+<h3 align="center">Framework-neutral live-query state machine shared by every Cirrus UI adapter (React, Vue, Svelte, Solid)</h3>
+
+<!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
+
+<br />
+
+<div align="center">
+
+[![typescript-image][typescript-badge]][typescript-url]
+[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![npm version][npm-version-badge]][npm-version]
+[![npm downloads][npm-downloads-badge]][npm-downloads]
+[![PRs Welcome][prs-welcome-badge]][prs-welcome]
+
+</div>
+
+---
+
+<div align="center">
+    <p>
+        <sup>
+            Daniel Bannert's open source work is supported by the community on <a href="https://github.com/sponsors/prisis">GitHub Sponsors</a>
+        </sup>
+    </p>
+</div>
+
+---
+
+The framework-neutral live-query state machine shared by every Cirrus UI adapter (React, Vue, Svelte, Solid). It owns the seam between a `CirrusClient` subscription and a framework's reactivity primitive — the subscribe → snapshot → error/reset → cleanup lifecycle, skip-handling, value/error fan-out, and cancellation-guarded teardown — so each adapter only supplies thin sinks that write into its own ref, store, signal, or cache.
+
+Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
 ## Install
 
-```bash
-pnpm add @cirrus/query-core
+```sh
+npm install @cirrus/query-core
 ```
 
-(Internal — consumed by `@cirrus/react`, `@cirrus/vue`, `@cirrus/svelte`, `@cirrus/solid`.)
+```sh
+yarn add @cirrus/query-core
+```
 
-## API
-
-- `createQuerySubscription(client, fn, args, sinks, options?)` → `Unsubscribe` — open one `client.subscribe` registration for already-resolved `args` and drive the supplied sinks. Returns the teardown.
-    - `args === "skip"` → calls `sinks.onReset?.()` and returns a no-op teardown; no subscribe is issued.
-    - server pushes → `sinks.onData(value)`; a server-rejected subscription → `sinks.onError(error)` when present.
-    - if `client.subscribe` throws, the error is normalised and delivered to `sinks.onError` when present, else **rethrown** (so adapters without an error channel behave exactly as before).
-    - the returned teardown is idempotent and cancellation-guarded.
-- `SKIP` — the `"skip"` sentinel.
-- `toSubscriptionError(error)` — normalise an unknown thrown value into the client's `SubscriptionError` shape.
-
-### Sinks
-
-```ts
-interface QuerySubscriptionSinks<T> {
-    onData: (value: T) => void;
-    onError?: (error: SubscriptionError) => void;
-    onReset?: () => void;
-}
+```sh
+pnpm add @cirrus/query-core
 ```
 
 ## Usage
@@ -53,3 +73,48 @@ const unsubscribe = createQuerySubscription(
 // On teardown / re-run:
 unsubscribe();
 ```
+
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs)**.
+
+## Related
+
+- [`@cirrus/client`](https://www.npmjs.com/package/@cirrus/client) — the browser SDK whose subscriptions this state machine drives.
+- [`@cirrus/react`](https://www.npmjs.com/package/@cirrus/react) — the React adapter built on top of query-core.
+- [`@cirrus/ssr`](https://www.npmjs.com/package/@cirrus/ssr) — server-side preloading contract for the same adapters.
+
+## Supported Node.js Versions
+
+Libraries in this ecosystem make the best effort to track [Node.js' release schedule](https://github.com/nodejs/release#release-schedule).
+Here's [a post on why we think this is important](https://medium.com/the-node-js-collection/maintainers-should-consider-following-node-js-release-schedule-ab08ed4de71a).
+
+## Contributing
+
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
+
+> **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
+
+## Credits
+
+- [Daniel Bannert](https://github.com/prisis)
+- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
+
+## Made with ❤️ at Anolilab
+
+This is an open source project and will always remain free to use. If you think it's cool, please star it 🌟. [Anolilab](https://www.anolilab.com/open-source) is a Development and AI Studio. Contact us at [hello@anolilab.com](mailto:hello@anolilab.com) if you need any help with these technologies or just want to say hi!
+
+## License
+
+The Cirrus query-core package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+
+<!-- badges -->
+
+[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/query-core?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@cirrus/query-core
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/query-core?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@cirrus/query-core
+[prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
+[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
+[typescript-url]: https://www.typescriptlang.org/
