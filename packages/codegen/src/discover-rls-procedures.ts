@@ -72,27 +72,23 @@ const extractPolicyTables = (rlsCall: CallExpression): string[] => {
 };
 
 /**
- * Walk a builder chain leftward from `receiver` (the expression to the left of
- * the terminal `.query(...)` / `.mutation(...)` call) and return `true` when any
- * `.use(rls(...))` step is found, together with the statically-readable table
- * names from the `rls(policies)` argument.
+ * Walk a builder chain leftward from `receiver` (the expression to the left of the
+ * terminal `.query(...)` / `.mutation(...)` call) and collect every `rls(...)`
+ * `CallExpression` it carries through a `.use(rls(...))` step. The single source of
+ * truth for the chain shape; the lint ({@link rlsFromBuilderChain}) and the studio
+ * inspector metadata ({@link rlsMetadataFromChain}) each layer their own extraction
+ * over the same walk, so the chain-recognition invariant lives in one place.
  *
  * Structure recognised (leftward) — in `c.use(rls([...])).query(handler)` the
  * `c.use(rls([...]))` portion is the receiver and `.query(handler)` is terminal.
- *
- * The chain is a nested `CallExpression` tree; each step is:
- * a `CallExpression` whose callee is a `PropertyAccessExpression`, where the
- * property name is the builder method (`.use`, `.input`, `.output`, …) and the
- * argument is the middleware / validator / etc.
- *
- * We recognise a `.use(rls(...))` step when the property name is `"use"` and
- * the first argument is a `CallExpression` whose callee is an `Identifier` (or
- * `PropertyAccessExpression` with name) `"rls"`.
+ * The chain is a nested `CallExpression` tree; each step is a `CallExpression` whose
+ * callee is a `PropertyAccessExpression` (the builder method `.use`/`.input`/… and
+ * its argument). A `.use(rls(...))` step is the property name `"use"` with a first
+ * argument that is an `rls(...)` call (callee an identifier/property named `"rls"`).
  */
-const rlsFromBuilderChain = (receiver: TsNode): { rlsTables: string[]; usesRls: boolean } => {
+const rlsCallsInChain = (receiver: TsNode): CallExpression[] => {
+    const calls: CallExpression[] = [];
     let node: TsNode = receiver;
-    let usesRls = false;
-    const rlsTables: string[] = [];
 
     while (Node.isCallExpression(node)) {
         const chainCallee = node.getExpression();
@@ -105,17 +101,24 @@ const rlsFromBuilderChain = (receiver: TsNode): { rlsTables: string[]; usesRls: 
             const argument = node.getArguments()[0];
 
             if (argument && isRlsCall(argument)) {
-                usesRls = true;
-
-                // Extract table names from the rls(policies) argument array.
-                rlsTables.push(...extractPolicyTables(argument as CallExpression));
+                calls.push(argument as CallExpression);
             }
         }
 
         node = chainCallee.getExpression();
     }
 
-    return { rlsTables, usesRls };
+    return calls;
+};
+
+/**
+ * Lint view of a builder chain: whether it carries any `.use(rls(...))` and the
+ * statically-readable table names from those `rls(policies)` arguments.
+ */
+const rlsFromBuilderChain = (receiver: TsNode): { rlsTables: string[]; usesRls: boolean } => {
+    const calls = rlsCallsInChain(receiver);
+
+    return { rlsTables: calls.flatMap((call) => extractPolicyTables(call)), usesRls: calls.length > 0 };
 };
 
 // ---------------------------------------------------------------------------
@@ -268,7 +271,6 @@ const discoverRlsProcedures = (project: Project, cirrusDirectory: string): RlsPr
 
     return procedures;
 };
-
 
 /** The operations `definePolicy({ on })` accepts; anything else is ignored as malformed. */
 const POLICY_OPERATIONS = new Set<RlsPolicyIR["on"]>(["delete", "insert", "read", "update"]);
@@ -442,36 +444,18 @@ const extractRoles = (rlsCall: CallExpression): RlsRoleIR[] => {
 };
 
 /**
- * Find every `.use(rls(...))` call in a builder chain and return both the policy
- * entries and the role declarations it carries. Mirrors {@link rlsFromBuilderChain}
- * but yields the richer metadata the studio inspector reads rather than the lint's
- * table-name set.
+ * Inspector view of a builder chain: the policy entries and role declarations its
+ * `.use(rls(...))` calls carry. Shares {@link rlsCallsInChain} with the lint's
+ * {@link rlsFromBuilderChain} but yields the richer metadata the studio reads rather
+ * than the lint's table-name set.
  */
 const rlsMetadataFromChain = (receiver: TsNode, file: string, procedure: string): { policies: RlsPolicyIR[]; roles: RlsRoleIR[] } => {
-    let node: TsNode = receiver;
-    const policies: RlsPolicyIR[] = [];
-    const roles: RlsRoleIR[] = [];
+    const calls = rlsCallsInChain(receiver);
 
-    while (Node.isCallExpression(node)) {
-        const chainCallee = node.getExpression();
-
-        if (!Node.isPropertyAccessExpression(chainCallee)) {
-            break;
-        }
-
-        if (chainCallee.getName() === "use") {
-            const argument = node.getArguments()[0];
-
-            if (argument && isRlsCall(argument)) {
-                policies.push(...extractPolicies(argument as CallExpression, file, procedure));
-                roles.push(...extractRoles(argument as CallExpression));
-            }
-        }
-
-        node = chainCallee.getExpression();
-    }
-
-    return { policies, roles };
+    return {
+        policies: calls.flatMap((call) => extractPolicies(call, file, procedure)),
+        roles: calls.flatMap((call) => extractRoles(call)),
+    };
 };
 
 /** The exported variable declarations in `sourceFile` whose initializer is a procedure builder chain with a receiver. */

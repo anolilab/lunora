@@ -123,6 +123,7 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
         adminToken: resolveAdminToken(options.cwd),
         basePath: "/",
         dataEditable: isLoopback,
+        runAsIdentity: isLoopback,
         scriptSrc: "/studio.js",
         styleHref: "/styles.css",
     });

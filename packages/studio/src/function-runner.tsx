@@ -208,9 +208,13 @@ export const FunctionRunner = ({ functions: functionsProp, runAsIdentity = false
                     }
                 }
             } else {
-                // The admin `runAs` RPC dispatches the target function on the DO
-                // under the forged identity, regardless of its kind, and returns
-                // its result. Routed through `client.query` like every admin RPC.
+                // The admin `runAs` RPC dispatches the target on the DO under the
+                // forged identity and returns its result — kind-agnostic by design:
+                // it routes every kind (query/mutation/action) through the DO's
+                // `handleRpc`, so a forged *action* runs inline rather than via the
+                // `client.action` path (no separate waitUntil/scheduling). That's the
+                // intended trade-off for this dev-only auth/RLS probe. Sent over
+                // `client.query` like every admin RPC.
                 value = await client.query(RUN_AS, { args: parsedArgs as Record<string, unknown>, functionPath: selected.path, userId: forgedUserId }, options);
             }
 

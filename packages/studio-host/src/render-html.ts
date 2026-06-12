@@ -31,6 +31,11 @@ const renderStudioHtml = (config: StudioHtmlConfig): string => {
         settings.push("window.__CIRRUS_DATA_EDITABLE__=true;");
     }
 
+    if (config.runAsIdentity === true) {
+        // eslint-disable-next-line no-secrets/no-secrets -- a static JS assignment string, not a credential
+        settings.push("window.__CIRRUS_RUN_AS_IDENTITY__=true;");
+    }
+
     return `<!doctype html>
 <html lang="en">
     <head>

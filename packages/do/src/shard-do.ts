@@ -2615,18 +2615,7 @@ abstract class ShardDO {
      * rather than threading it through the generated signature.
      */
     private async withAnonymousIdentity<R>(run: () => Promise<R> | R): Promise<R> {
-        const previousUserId = this.currentRequestUserId;
-        const previousIdentity = this.currentRequestIdentity;
-
-        this.currentRequestUserId = undefined;
-        this.currentRequestIdentity = undefined;
-
-        try {
-            return await run();
-        } finally {
-            this.currentRequestUserId = previousUserId;
-            this.currentRequestIdentity = previousIdentity;
-        }
+        return this.withRequestIdentity(undefined, undefined, run);
     }
 
     /**
@@ -3130,7 +3119,7 @@ abstract class ShardDO {
     private async handleRunAs(args: Record<string, unknown>): Promise<Response> {
         const parsed = parseRunAsArgs(args);
 
-        const result = await this.withForgedIdentity(parsed.userId, parsed.identity, () => this.handleRpc(parsed.functionPath, parsed.args));
+        const result = await this.withRequestIdentity(parsed.userId, parsed.identity, () => this.handleRpc(parsed.functionPath, parsed.args));
 
         // The forged dispatch may have written through the writer (a mutation run
         // as the user); flush touched tables so live subscribers re-run, matching
@@ -3143,14 +3132,19 @@ abstract class ShardDO {
     }
 
     /**
-     * Run `run()` with the per-request identity forced to (`userId`, `identity`),
-     * then restore the prior values. The mirror image of
-     * {@link withAnonymousIdentity}: the generated `buildCtx` reads identity via
-     * `getCurrentUserId`/`getCurrentIdentity`, so pinning the fields around the
-     * call makes the dispatched function observe the forged user without
-     * threading it through the generated signature.
+     * Run `run()` with the per-request identity pinned to (`userId`, `identity`),
+     * then restore the prior values in a `finally` (even if `run()` throws), so the
+     * forced identity can never leak into a later dispatch on this DO instance. The
+     * generated `buildCtx` reads identity via `getCurrentUserId`/`getCurrentIdentity`,
+     * so pinning the fields around the call makes the dispatched function observe the
+     * chosen identity without threading it through the generated signature.
+     *
+     * This is the single save/restore primitive for the two callers:
+     * {@link withAnonymousIdentity} (pins both to `undefined` — anonymous subscription
+     * seeds) and {@link handleRunAs} (pins a forged user — the dev "Run as identity"
+     * tool). The security-load-bearing invariant lives here, in one place.
      */
-    private async withForgedIdentity<R>(userId: string, identity: Record<string, unknown> | undefined, run: () => Promise<R> | R): Promise<R> {
+    private async withRequestIdentity<R>(userId: string | undefined, identity: Record<string, unknown> | undefined, run: () => Promise<R> | R): Promise<R> {
         const previousUserId = this.currentRequestUserId;
         const previousIdentity = this.currentRequestIdentity;
 

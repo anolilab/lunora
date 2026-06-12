@@ -30,9 +30,10 @@ const entry = [
     "mountStudio({",
     '  basePath: typeof g.__CIRRUS_BASE_PATH__ === "string" ? g.__CIRRUS_BASE_PATH__ : "/",',
     '  adminToken: typeof g.__CIRRUS_ADMIN_TOKEN__ === "string" && g.__CIRRUS_ADMIN_TOKEN__ !== "" ? g.__CIRRUS_ADMIN_TOKEN__ : undefined,',
-    // Editing is opt-in: the loopback dev hosts inject `__CIRRUS_DATA_EDITABLE__`,
-    // so a plain static deploy stays read-only unless the embedder turns it on.
-    "  studio: { dataEditable: g.__CIRRUS_DATA_EDITABLE__ === true },",
+    // Editing and the run-as tool are opt-in: the loopback dev hosts inject
+    // `__CIRRUS_DATA_EDITABLE__` / `__CIRRUS_RUN_AS_IDENTITY__`, so a plain static
+    // deploy stays read-only and can't forge an identity unless the embedder opts in.
+    "  studio: { dataEditable: g.__CIRRUS_DATA_EDITABLE__ === true, runAsIdentity: g.__CIRRUS_RUN_AS_IDENTITY__ === true },",
     "});",
 ].join("\n");
 

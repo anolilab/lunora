@@ -51,6 +51,20 @@ const GUTTER_STYLE: CSSProperties = { minWidth: "2.75rem", paddingInline: "0.5re
 /** Which results sub-pane is shown. */
 type ResultTab = "chart" | "explain" | "results";
 
+/**
+ * One editor tab's ephemeral output — the last run's result/error plus which result
+ * pane is shown. Kept as a single per-tab record (not three parallel maps) so a
+ * write touches one entry and closing a tab is one `delete`.
+ */
+interface TabOutput {
+    readonly error: null | string;
+    readonly pane: ResultTab;
+    readonly result: null | SqlConsoleResult;
+}
+
+/** A tab's output before it has run anything. */
+const DEFAULT_TAB_OUTPUT: TabOutput = { error: null, pane: "results", result: null };
+
 const TEMPLATES: ReadonlyArray<QueryTemplate> = [
     { label: "List tables", sql: "SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name;" },
     { label: "Table row count", sql: "SELECT COUNT(*) AS rows FROM messages;" },
@@ -360,9 +374,10 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     const seedTab = useCallback((): SqlTab => makeTab(TEMPLATES[0]?.sql ?? ""), []);
     const { activeId: activeTabId, setActiveId: setActiveTabId, setTabs, tabs } = usePersistedTabs(seedTab);
 
-    const [results, setResults] = useState<Record<string, null | SqlConsoleResult>>({});
-    const [errors, setErrors] = useState<Record<string, null | string>>({});
-    const [panes, setPanes] = useState<Record<string, ResultTab>>({});
+    // One ephemeral output record per tab id (result + error + result-pane). Not
+    // persisted, so a reload restores the open tabs and their text but re-runs for
+    // results. Closing a tab deletes its entry — no stale keys accumulate.
+    const [outputs, setOutputs] = useState<Record<string, TabOutput>>({});
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
     const [running, setRunning] = useState<boolean>(false);
@@ -378,9 +393,9 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     const activeTab = useMemo<SqlTab>(() => tabs.find((each) => each.id === activeTabId) ?? tabs[0] ?? makeTab(), [activeTabId, tabs]);
     const draft = activeTab.sql;
     const { activeId } = activeTab;
-    const result = results[activeTab.id] ?? null;
-    const error = errors[activeTab.id] ?? null;
-    const tab = panes[activeTab.id] ?? "results";
+    const output = outputs[activeTab.id] ?? DEFAULT_TAB_OUTPUT;
+    const { error, result } = output;
+    const tab = output.pane;
 
     // Patch the active tab's persisted fields (draft text and/or saved-query link).
     const patchActiveTab = useCallback(
@@ -390,21 +405,27 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         [activeTab.id, setTabs],
     );
 
-    // Replace the active tab's ephemeral result/error/pane in one shot.
+    // Replace the active tab's ephemeral result/error/pane in one shot. An omitted
+    // `pane` keeps whatever pane was showing (defaulting to "results").
     const setActiveOutput = useCallback(
-        (output: { error: null | string; pane?: ResultTab; result: null | SqlConsoleResult }): void => {
-            setResults((current) => {
-                return { ...current, [activeTab.id]: output.result };
-            });
-            setErrors((current) => {
-                return { ...current, [activeTab.id]: output.error };
-            });
+        (next: { error: null | string; pane?: ResultTab; result: null | SqlConsoleResult }): void => {
+            setOutputs((current) => {
+                const previous = current[activeTab.id] ?? DEFAULT_TAB_OUTPUT;
 
-            if (output.pane !== undefined) {
-                setPanes((current) => {
-                    return { ...current, [activeTab.id]: output.pane as ResultTab };
-                });
-            }
+                return { ...current, [activeTab.id]: { error: next.error, pane: next.pane ?? previous.pane, result: next.result } };
+            });
+        },
+        [activeTab.id],
+    );
+
+    // Switch the active tab's result pane (Results/Chart) without touching its rows.
+    const setActivePane = useCallback(
+        (pane: ResultTab): void => {
+            setOutputs((current) => {
+                const previous = current[activeTab.id] ?? DEFAULT_TAB_OUTPUT;
+
+                return { ...current, [activeTab.id]: { ...previous, pane } };
+            });
         },
         [activeTab.id],
     );
@@ -656,13 +677,11 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
             setTabs(nextTabs);
             setActiveTabId(nextActive);
-            // Drop the closed tab's ephemeral output so it can't leak to a reused id.
-            setResults((current) => {
-                return { ...current, [id]: null };
-            });
-            setErrors((current) => {
-                return { ...current, [id]: null };
-            });
+            // Prune ephemeral output down to the still-open tabs — drops the closed
+            // tab (and any evicted one) so dead keys can't accumulate over a session.
+            const openIds = new Set(nextTabs.map((each) => each.id));
+
+            setOutputs((current) => Object.fromEntries(Object.entries(current).filter(([key]) => openIds.has(key))));
         },
         [setActiveTabId, setTabs, tabs],
     );
@@ -676,20 +695,16 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
     );
 
     const showResults = useCallback((): void => {
-        setPanes((current) => {
-            return { ...current, [activeTab.id]: "results" };
-        });
-    }, [activeTab.id]);
+        setActivePane("results");
+    }, [setActivePane]);
 
     const showExplain = useCallback((): void => {
         fireAndForget(run("explain"));
     }, [run]);
 
     const showChart = useCallback((): void => {
-        setPanes((current) => {
-            return { ...current, [activeTab.id]: "chart" };
-        });
-    }, [activeTab.id]);
+        setActivePane("chart");
+    }, [setActivePane]);
 
     const filtered = useMemo<SavedQuery[]>(() => {
         const needle = search.trim().toLowerCase();

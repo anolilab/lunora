@@ -12,6 +12,15 @@ export interface StudioHtmlConfig {
      * developer can edit; a static deploy leaves it off (read-only) by default.
      */
     readonly dataEditable?: boolean;
+
+    /**
+     * Enable the function runner's "Run as identity" tool (execute a function as a
+     * chosen user to test auth/RLS). Injected as `window.__CIRRUS_RUN_AS_IDENTITY__`.
+     * Like {@link StudioHtmlConfig.dataEditable}, only the loopback-only dev hosts set
+     * this — forging an identity is a developer-only affordance; a static deploy
+     * leaves it off so the control never renders.
+     */
+    readonly runAsIdentity?: boolean;
     /** URL the studio bundle is served from (absolute, host-relative). */
     readonly scriptSrc: string;
     /** URL the compiled stylesheet is served from (absolute, host-relative). */

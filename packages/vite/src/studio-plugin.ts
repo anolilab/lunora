@@ -139,8 +139,9 @@ const createStudioHandler = (
             adminToken: resolveAdminToken(server.config.root ?? process.cwd()),
             basePath: STUDIO_PATH,
             // Loopback-only dev route (it 403s on a non-loopback bind), so the
-            // developer owns the data — let them edit rows by default.
+            // developer owns the data — let them edit rows and run-as a user by default.
             dataEditable: true,
+            runAsIdentity: true,
             scriptSrc: STUDIO_SCRIPT_PATH,
             styleHref: STUDIO_STYLE_PATH,
         });

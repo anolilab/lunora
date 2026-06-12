@@ -26,6 +26,17 @@ describe("renderStudioHtml", () => {
         expect(readonly).not.toContain("__CIRRUS_DATA_EDITABLE__");
     });
 
+    it("injects the run-as flag only when runAsIdentity is set", () => {
+        expect.assertions(2);
+
+        const runAs = renderStudioHtml({ basePath: "/", runAsIdentity: true, scriptSrc: "/studio.js", styleHref: "/styles.css" });
+        const off = renderStudioHtml({ basePath: "/", scriptSrc: "/studio.js", styleHref: "/styles.css" });
+
+        // eslint-disable-next-line no-secrets/no-secrets -- a static JS assignment string, not a credential
+        expect(runAs).toContain("window.__CIRRUS_RUN_AS_IDENTITY__=true;");
+        expect(off).not.toContain("__CIRRUS_RUN_AS_IDENTITY__");
+    });
+
     it("injects the admin token when provided, escaping `<` for safe inline embedding", () => {
         expect.assertions(2);
 
