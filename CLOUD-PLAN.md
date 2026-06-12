@@ -58,7 +58,7 @@ Why now:
 | **PartyKit** ([partykit/partykit](https://github.com/partykit/partykit))                                | The deploy UX + the **managed-vs-BYO split**: build locally (esbuild facade injecting DO class exports — exactly our `ShardDO`/`SessionDO` shape), push the bundle to the platform API, get `{name}.{user}.partykit.dev`; setting `CLOUDFLARE_API_TOKEN` flips the same CLI to the customer's own account ("cloud-prem").                                                                                                              |
 | **cloudflare/vibesdk** ([repo](https://github.com/cloudflare/vibesdk))                                  | The most complete open end-to-end reference of a control plane on WfP: dispatch namespace deploys, D1+Drizzle control-plane DB, R2/KV, wildcard subdomain routing. Study before writing ours.                                                                                                                                                                                                                                          |
 | **workers-for-platforms-example** ([repo](https://github.com/cloudflare/workers-for-platforms-example)) | Minimal dispatcher skeleton (hostname → tenant → `env.DISPATCHER.get(script, …, { limits, outbound })`).                                                                                                                                                                                                                                                                                                                               |
-| **Alchemy** ([sam-goodwin/alchemy](https://github.com/sam-goodwin/alchemy))                             | TS-native, embeddable IaC for CF resources (no wrangler dependency, runs inside a CLI) — candidate provisioning engine or design model for ours.                                                                                                                                                                                                                                                                                       |
+| **Alchemy** ([sam-goodwin/alchemy](https://github.com/sam-goodwin/alchemy))                             | TS-native, embeddable IaC for CF resources (no wrangler dependency, runs inside a CLI) — verdict (§2.2): scoped to **cell bring-up IaC only**, not the per-tenant deploy path.                                                                                                                                                                                                                                                         |
 | **Supabase**                                                                                            | The open-core cut line at fleet scale (every per-project service OSS; everything fleet-shaped — provisioning, branching, billing — proprietary); **one Studio codebase serving cloud + self-host behind an `IS_PLATFORM` flag**; Branching 2.0 preview-environment DX (per-Git-branch, Git-optional, PR comments/check runs); the Management API + OAuth-apps growth engine (>60% of new projects provisioned by AI builders via API). |
 
 ---
@@ -120,7 +120,19 @@ A boring Cirrus-shaped service (we should dogfood: build it _on Cirrus_):
 - **Provisioning:** `cloudflare-typescript` (`workersForPlatforms.dispatch.namespaces.
 scripts.update`, `d1.database.create`, `r2.buckets.create`, `customHostnames`).
   Bundling stays client-side in our existing Vite pipeline (PartyKit model) — the
-  platform never builds user code in v1.
+  platform never builds user code in v1. **Deliberately not an IaC engine** (decided
+  2026-06-12): the per-tenant deploy is a short, fixed call sequence whose source of
+  truth is the control-plane DB and whose hard parts (per-cell rate-limit scheduler
+  §2.5, retries, NDJSON progress, rollback artifacts) no IaC tool provides; layering
+  Alchemy's desired-state/diff/state-store semantics over our own deployment rows
+  would create a second source of truth at fleet cardinality. Alchemy is also
+  pre-1.0 (v0.9x, 268 releases, a v2 rewrite on Effect underway) and lacks a
+  confirmed dispatch-namespace resource — wrong risk profile for the revenue path.
+  **Where IaC does fit: cell bring-up** (§2.5) — dispatch namespaces, dispatcher
+  Worker, control-plane D1/R2/queues, per-cell secrets are classic low-cardinality
+  desired-state infra, versioned in-repo; Alchemy (TS-native, Apache-2.0, pinned) is
+  the candidate there, with Terraform/Pulumi the boring fallback (Supabase runs its
+  fleet bring-up on Pulumi).
 - **Secrets:** per-deployment env vars/secrets stored in the control plane, applied via
   the WfP script-secrets API; the `.dev.vars` grammar + placeholder/secret detection in
   `@cirrus/config` becomes the dashboard's guided setup.
