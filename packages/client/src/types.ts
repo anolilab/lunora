@@ -386,40 +386,12 @@ export interface FunctionDescriptor {
  * `args` / `shardKey`. Static for the deployment (Cloudflare exposes no runtime
  * cron introspection), so the studio renders these read-only.
  */
-export interface CronJobInfo {
-    args?: Record<string, unknown>;
-    /** The compiled cron expression, e.g. `"0 9 * * *"`. */
-    cron: string;
-    functionPath: string;
-    name: string;
-    shardKey?: string;
-}
-
-/**
- * One Vectorize index as `GET /_cirrus/admin/vector/indexes` returns it: the
- * static schema shape (table, source `field`, `dimensions`, `metric`, mirrored
- * `metadata` fields) merged with live `describe()` stats (`vectorsCount`,
- * `processedUpToMutation`) when the binding is reachable. The live fields are
- * absent for a never-bound index. Vectorize can't enumerate indexes at runtime,
- * so the list is sourced from the generated `CIRRUS_VECTOR_INDEXES` registry.
- */
-export interface VectorIndexSummary {
-    dimensions?: number;
-    field?: string;
-    metadata?: ReadonlyArray<string>;
-    metric?: "cosine" | "dot-product" | "euclidean";
-    name: string;
-    processedUpToMutation?: string;
-    table: string;
-    vectorsCount?: number;
-}
-
-/** One nearest-neighbour hit from `POST /_cirrus/admin/vector/query`. */
-export interface VectorQueryMatch {
-    id: string;
-    metadata?: Record<string, unknown>;
-    score: number;
-}
+// The admin wire-shape types `CronJobInfo` (cron-triggers tab), `VectorIndexSummary`
+// + `VectorQueryMatch` (vector browser) are owned by the runtime contract
+// (`@cirrus/runtime`, which defines the `/_cirrus/admin/*` endpoints) and
+// re-exported here for SDK consumers — a single source of truth, no hand-kept
+// copies to drift. Type-only re-export, so no worker code reaches the browser SDK.
+export type { CronJobInfo, VectorIndexSummary, VectorQueryMatch } from "@cirrus/runtime";
 
 /** A `.global()` (D1-backed) table plus its row count, from `/_cirrus/admin/global/tables`. */
 export interface GlobalTableInfo {

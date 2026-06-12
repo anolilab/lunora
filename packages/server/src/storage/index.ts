@@ -28,6 +28,16 @@
  * stay open. The `Permission` / `Role` capability layer is shared with RLS
  * (`definePermission` / `defineRole`), so `({ auth }) => auth.can(...)` works the
  * same in a storage rule.
+ *
+ * **Bucket scoping — a rule's `bucket` must match the accessor's `bucketName`.**
+ * A rule only governs operations on its own bucket. The bare `ctx.storage` is the
+ * `"default"` bucket (so `{ bucket: "default" }` guards it), UNLESS the worker
+ * built `createBucketStorage(..., { default: "media" })`, which renames the bare
+ * accessor to `"media"` — then a `{ bucket: "default" }` rule is inert. Likewise a
+ * single-bucket app (`createStorage`) tags every accessor `"default"`, so a
+ * `{ bucket: "other" }` rule never fires. Match the rule's `bucket` to the name
+ * the binding is addressed under (the generated `StorageBucketName` union lists
+ * them); a mismatched bucket name is a silent no-op, not an error.
  */
 export { defineStorageRule, defineStorageRules } from "./define";
 export { storageRules } from "./middleware";

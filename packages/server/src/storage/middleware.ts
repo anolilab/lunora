@@ -168,7 +168,12 @@ const storageRules = <Context extends StorageContextIn = StorageContextIn>(
 
                 if (typeof original === "function") {
                     wrapped[method] = (...args: unknown[]): unknown => {
-                        assertAllowed(op, args[0] as string, bucketName);
+                        // Every guarded method takes the object key as its first arg.
+                        // Coerce defensively so a malformed (keyless) call fails as a
+                        // clean `FORBIDDEN`/no-match rather than `undefined.startsWith`.
+                        const key = typeof args[0] === "string" ? args[0] : "";
+
+                        assertAllowed(op, key, bucketName);
 
                         return (original as (...callArgs: unknown[]) => unknown)(...args);
                     };
@@ -181,7 +186,7 @@ const storageRules = <Context extends StorageContextIn = StorageContextIn>(
                 wrapped.bucket = (name: string): WrappableStorage => wrapStorage(bucket(name));
             }
 
-            return wrapped as WrappableStorage;
+            return wrapped;
         };
 
         const storage = ctx.storage as undefined | WrappableStorage;

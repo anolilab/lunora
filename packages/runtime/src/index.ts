@@ -14,6 +14,7 @@ export type {
     CirrusWorker,
     CronHandler,
     CronJobDispatch,
+    CronJobInfo,
     ExecutionContextLike,
     FrameworkHostHandler,
     FrameworkWorkerOptions,

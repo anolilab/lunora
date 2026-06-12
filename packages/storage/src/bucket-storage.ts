@@ -53,6 +53,10 @@ const createBucketStorage = (buckets: Record<string, Storage>, options: { defaul
     const defaultTag = options.default ?? "default";
     const defaultBinding = buckets[defaultTag] ?? buckets[firstName];
 
+    // Belt-and-suspenders + type narrowing: `buckets[firstName]` is runtime-present
+    // (it's the first `Object.keys` entry, and the empty case already threw), but
+    // strict index access types it `Storage | undefined`, so this both narrows
+    // `defaultBinding` to `Storage` and guards the (unreachable) hole.
     if (defaultBinding === undefined) {
         throw new Error(`@cirrus/storage: default bucket "${defaultTag}" is not in the bucket map (have: ${names.join(", ")})`);
     }

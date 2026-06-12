@@ -222,13 +222,28 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
         };
     }, [client]);
 
+    // Per-bucket client facade: every storage op is scoped to the active `bucket`
+    // in ONE place, so a call site can't forget to pass it, and the callbacks
+    // below depend on `storageApi` (which re-identifies on bucket change) instead
+    // of re-listing `bucket` at each site — closing the stale-bucket dep-array
+    // footgun by construction.
+    const storageApi = useMemo(
+        () => {return {
+            list: (options: { cursor?: string; limit?: number; prefix?: string }) => client.listStorageObjects({ ...options, bucket }),
+            remove: (key: string) => client.deleteStorageObject(key, { bucket }),
+            signedUrl: (key: string, options?: { expiresInSeconds?: number }) => client.signedStorageUrl(key, { ...options, bucket }),
+            upload: (options: { body: ArrayBuffer | Blob; contentType?: string; key: string }) => client.uploadStorageObject({ ...options, bucket }),
+        }},
+        [bucket, client],
+    );
+
     const list = useCallback(
         async (searchPrefix: string, cursor: string | undefined, append: boolean): Promise<void> => {
             setError(undefined);
             setBusy(true);
 
             try {
-                const page = await client.listStorageObjects({ bucket, cursor, limit: pageSize, prefix: searchPrefix });
+                const page = await storageApi.list({ cursor, limit: pageSize, prefix: searchPrefix });
 
                 setObjects((previous) => (append && previous !== undefined ? [...previous, ...page.objects] : page.objects));
                 setNextCursor(page.cursor);
@@ -242,7 +257,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
                 setBusy(false);
             }
         },
-        [bucket, client, pageSize],
+        [pageSize, storageApi],
     );
 
     useEffect(() => {
@@ -364,7 +379,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
 
     // Resolve a viewable (signed) URL for a thumbnail at a FIXED ttl — decoupled
     // from `expiry` so the Copy-URL dropdown never re-fetches every thumbnail.
-    const resolveUrl = useCallback((key: string): Promise<string> => client.signedStorageUrl(key, { bucket, expiresInSeconds: THUMBNAIL_URL_TTL }), [bucket, client]);
+    const resolveUrl = useCallback((key: string): Promise<string> => storageApi.signedUrl(key, { expiresInSeconds: THUMBNAIL_URL_TTL }), [storageApi]);
 
     const showList = useCallback((): void => {
         setView("list");
@@ -400,7 +415,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
                 try {
                     for (const key of selected) {
                         // eslint-disable-next-line no-await-in-loop -- one delete per selected object; sequential so a failure pins the offending key
-                        await client.deleteStorageObject(key, { bucket });
+                        await storageApi.remove(key);
                     }
 
                     await list(prefix, undefined, false);
@@ -412,7 +427,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
                 }
             })(),
         );
-    }, [clearSelection, client, list, prefix, selected]);
+    }, [clearSelection, list, prefix, selected, storageApi]);
 
     const onCopy = useCallback(
         (key: string): void => {
@@ -421,7 +436,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
             fireAndForget(
                 (async (): Promise<void> => {
                     try {
-                        const url = await client.signedStorageUrl(key, { bucket, expiresInSeconds: expiry });
+                        const url = await storageApi.signedUrl(key, { expiresInSeconds: expiry });
 
                         await copyToClipboard(url);
                         setCopiedKey(key);
@@ -431,7 +446,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
                 })(),
             );
         },
-        [bucket, client, expiry],
+        [expiry, storageApi],
     );
 
     // Resolve a (signed) URL for the object and trigger a browser download. The
@@ -443,7 +458,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
             fireAndForget(
                 (async (): Promise<void> => {
                     try {
-                        const url = await client.signedStorageUrl(key, { bucket, expiresInSeconds: expiry });
+                        const url = await storageApi.signedUrl(key, { expiresInSeconds: expiry });
                         const filename = key.slice(key.lastIndexOf("/") + 1) || key;
 
                         triggerDownload(url, filename);
@@ -453,7 +468,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
                 })(),
             );
         },
-        [bucket, client, expiry],
+        [expiry, storageApi],
     );
 
     // Clear the "Copied" indicator a couple of seconds after a copy, so it reads as
@@ -480,7 +495,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
             fireAndForget(
                 (async (): Promise<void> => {
                     try {
-                        await client.deleteStorageObject(key, { bucket });
+                        await storageApi.remove(key);
                         await list(prefix, undefined, false);
                     } catch (error_) {
                         setError(errorMessage(error_));
@@ -490,7 +505,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
                 })(),
             );
         },
-        [bucket, client, list, prefix],
+        [list, prefix, storageApi],
     );
 
     const onFile = useCallback(
@@ -507,7 +522,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
                     try {
                         const body = await file.arrayBuffer();
 
-                        await client.uploadStorageObject({ body, bucket, contentType: file.type === "" ? undefined : file.type, key });
+                        await storageApi.upload({ body, contentType: file.type === "" ? undefined : file.type, key });
                         await list(prefix, undefined, false);
                     } catch (error_) {
                         setError(errorMessage(error_));
@@ -517,7 +532,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
                 })(),
             );
         },
-        [bucket, client, list, prefix],
+        [list, prefix, storageApi],
     );
 
     // The orphan check spans the whole bucket against `referenceShard`'s records,
@@ -544,7 +559,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
 
                     do {
                         // eslint-disable-next-line no-await-in-loop -- bucket enumeration is inherently sequential (each page's cursor drives the next)
-                        const page = await client.listStorageObjects({ bucket, cursor, limit: ORPHAN_LIST_PAGE_SIZE });
+                        const page = await storageApi.list({ cursor, limit: ORPHAN_LIST_PAGE_SIZE });
 
                         for (const object of page.objects) {
                             liveKeys.push(object.key);
@@ -566,7 +581,7 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
                 }
             })(),
         );
-    }, [bucket, client, referenceShard]);
+    }, [client, referenceShard, storageApi]);
 
     // Switch buckets: reset navigation to the initial prefix; the `list` callback's
     // identity changes (it closes over `bucket`), so the mount effect re-lists.
