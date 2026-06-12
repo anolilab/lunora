@@ -1,4 +1,5 @@
 import type { Infer, Validator } from "@cirrus/values";
+import { optionalInner } from "@cirrus/values";
 
 /**
  * Typed, lazily-validated env accessor — the Cirrus answer to void's
@@ -113,6 +114,28 @@ const redactSecrets = (message: string): string => {
     return out;
 };
 
+/**
+ * Redact secrets from a validator error message for a specific key. Applies the
+ * value-shape heuristics in {@link redactSecrets}, then — when the KEY itself is
+ * secret-named — scrubs the raw value from the message unconditionally.
+ *
+ * Why the extra pass: the validator's message embeds the received VALUE but not
+ * the KEY (e.g. `expected number, received string "p@ss w0rd!"`), so the
+ * key-aware branch of `redactSecrets` never fires on it. Without this, a secret
+ * that is short or contains punctuation — matching neither a known prefix nor
+ * the ≥24-char high-entropy run — would leak verbatim into the thrown message.
+ * Here the key is in scope, so a secret-named key masks its value directly.
+ */
+const redactValueForKey = (message: string, key: string, raw: unknown): string => {
+    const masked = redactSecrets(message);
+
+    if (typeof raw === "string" && raw !== "" && SECRET_KEY.test(key)) {
+        return masked.replaceAll(raw, REDACTED);
+    }
+
+    return masked;
+};
+
 /** One key's validation failure, secrets already redacted out of `message`. */
 interface EnvKeyFailure {
     /** The env key that failed. */
@@ -180,7 +203,10 @@ const unwrapKind = (validator: Validator): string => {
         return validator.kind;
     }
 
-    const inner = (validator as { _meta?: { inner?: Validator } })._meta?.inner;
+    // Read the wrapped child through `@cirrus/values`' own accessor rather than
+    // reaching into the validator's internal `_meta` here — that internal layout
+    // is owned by the values package.
+    const inner = optionalInner(validator);
 
     return inner ? unwrapKind(inner) : validator.kind;
 };
@@ -259,7 +285,7 @@ const validateKey = (
         return { ok: true, value: result.value };
     }
 
-    failures.push({ key, message: redactSecrets(result.error.message) });
+    failures.push({ key, message: redactValueForKey(result.error.message, key, raw) });
 
     return { ok: false };
 };

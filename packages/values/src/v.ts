@@ -825,6 +825,22 @@ const isOrWrapsFromValidator = (validator: Validator): boolean => {
 };
 
 /**
+ * The inner validator wrapped by `v.optional(inner)`, or `undefined` for any
+ * other validator. The nested child lives on the validator's internal `_meta`
+ * bag; this accessor keeps that knowledge inside `@cirrus/values` (the package
+ * that owns validator internals) so consumers don't reach into `_meta`
+ * themselves. Used by `@cirrus/server`'s `defineEnv` to coerce through a leading
+ * `v.optional(...)`.
+ */
+const optionalInner = (validator: Validator): Validator | undefined => {
+    if (validator.kind !== "optional") {
+        return undefined;
+    }
+
+    return (validator as { _meta?: { inner?: Validator } })._meta?.inner;
+};
+
+/**
  * Validator/codec namespace. Each factory returns a {@link Validator} with a
  * runtime `parse`/`safeParse` plus a phantom `__type` field for inference.
  */
@@ -886,4 +902,4 @@ export type {
     Validator,
     ValidatorKind,
 };
-export { isOrWrapsFromValidator, v };
+export { isOrWrapsFromValidator, optionalInner, v };

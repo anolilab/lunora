@@ -198,6 +198,23 @@ describe("defineEnv", () => {
 
             expect(error.message).not.toContain(fakeHighEntropy);
         });
+
+        it("redacts a short / special-character secret under a secret-named key (value-shape heuristics can't catch it)", () => {
+            expect.assertions(4);
+
+            // "p@ss w0rd!" is short and has a space + punctuation, so it matches no
+            // known prefix and isn't a >=24-char token — `redactSecrets` alone would
+            // leave it un-redacted. But DATABASE_PASSWORD is secret-named, so the
+            // validator-message value must still be scrubbed.
+            const weakSecret = ["p@ss", "w0rd!"].join(" ");
+            const config = defineEnv({ DATABASE_PASSWORD: v.number() });
+
+            const error = captureEnvError(() => config({ DATABASE_PASSWORD: weakSecret }).DATABASE_PASSWORD);
+
+            expect(error.message).not.toContain(weakSecret);
+            expect(error.message).toContain("DATABASE_PASSWORD");
+            expect(error.message).toContain("[redacted]");
+        });
     });
 });
 
