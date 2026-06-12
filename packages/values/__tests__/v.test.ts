@@ -2,7 +2,7 @@ import type { StandardSchemaV1 } from "@standard-schema/spec";
 import { describe, expect, it } from "vitest";
 
 import type { Id, Infer } from "../src/index";
-import { v, ValidationError } from "../src/index";
+import { isOrWrapsFromValidator, v, ValidationError } from "../src/index";
 
 type Assert<T extends true> = T;
 // The canonical type-equality idiom: the single-use `<T>()` params are
@@ -544,5 +544,183 @@ describe("standard schema (~standard)", () => {
         expect(v.string().check((s) => s.length > 0)["~standard"].vendor).toBe("cirrus");
         expect(v.string().nullable()["~standard"].vendor).toBe("cirrus");
         expect(v.string().default("x")["~standard"].vendor).toBe("cirrus");
+    });
+});
+
+describe(".nullable() runtime parsing", () => {
+    it("accepts null and round-trips it", () => {
+        expect.assertions(1);
+
+        // Exercises the `value === null ? null` branch of the nullable parser
+        // directly — not just structurally via toJsonSchema.
+        expect(v.string().nullable().parse(null)).toBeNull();
+    });
+
+    it("delegates a non-null value to the inner parser (accept + reject)", () => {
+        expect.assertions(2);
+
+        const validator = v.number().nullable();
+
+        // The `: parser(value, context)` branch — inner parser still runs.
+        expect(validator.parse(7)).toBe(7);
+        expect(() => validator.parse("7")).toThrow(ValidationError);
+    });
+});
+
+describe("v.optional() standalone parsing", () => {
+    it("returns undefined for undefined without consulting the inner parser", () => {
+        expect.assertions(1);
+
+        // A standalone optional (not behind an object's isOptional skip) hits the
+        // `value === undefined` short-circuit branch of the optional parser.
+        expect(v.optional(v.number()).parse(undefined)).toBeUndefined();
+    });
+
+    it("delegates a defined value to the inner parser (accept + reject)", () => {
+        expect.assertions(2);
+
+        const validator = v.optional(v.number());
+
+        expect(validator.parse(5)).toBe(5);
+        expect(() => validator.parse("nope")).toThrow(ValidationError);
+    });
+});
+
+describe("composite reject paths", () => {
+    it("v.array rejects a non-array at the top level", () => {
+        expect.hasAssertions();
+
+        const result = v.array(v.number()).safeParse("not an array");
+
+        assertOk(!result.ok, "expected parse to fail");
+
+        expect(result.error.expected).toBe("array");
+        expect(result.error.path).toEqual([]);
+    });
+
+    it("v.record rejects a non-object (array / null / primitive)", () => {
+        expect.assertions(3);
+
+        const schema = v.record(v.string(), v.number());
+
+        expect(() => schema.parse([])).toThrow(ValidationError);
+        expect(() => schema.parse(null)).toThrow(ValidationError);
+        expect(() => schema.parse(42)).toThrow(ValidationError);
+    });
+});
+
+describe("v.union() edge cases", () => {
+    it("throws at construction when given no members", () => {
+        expect.assertions(1);
+
+        // The `members.length === 0` guard.
+        expect(() => v.union()).toThrow("v.union requires at least one member");
+    });
+
+    it("a single-member union surfaces that member's own error verbatim", () => {
+        expect.hasAssertions();
+
+        // With exactly one member and a recorded ValidationError, the union
+        // rethrows the member's specific error rather than wrapping it in a
+        // "union of N member(s)" message.
+        const schema = v.union(v.number());
+        const result = schema.safeParse("not a number");
+
+        assertOk(!result.ok, "expected parse to fail");
+
+        // The inner number validator's message, not a union-miss message.
+        expect(result.error.expected).toBe("number");
+        expect(result.error.message).not.toMatch(/union of/u);
+    });
+
+    it("a single-member union accepts a valid value", () => {
+        expect.assertions(1);
+
+        expect(v.union(v.string()).parse("ok")).toBe("ok");
+    });
+});
+
+describe(".meta() without a description", () => {
+    it("merges only the schema fragment when no description is given", () => {
+        expect.assertions(1);
+
+        // The `options.description === undefined ? options.schema` branch.
+        const validator = v.string().meta({ schema: { format: "email" } });
+        const meta = (validator as unknown as { _meta: { constraints?: Record<string, unknown> } })._meta;
+
+        expect(meta.constraints).toStrictEqual({ format: "email" });
+    });
+});
+
+describe("safeParse non-ValidationError propagation", () => {
+    it("re-throws a non-ValidationError thrown inside the parser", () => {
+        expect.assertions(1);
+
+        // The catch block's `error instanceof ValidationError` false branch:
+        // a programmer error (TypeError) is not swallowed into { ok: false }.
+        const boom = v.number().check(() => {
+            throw new TypeError("kaboom");
+        });
+
+        expect(() => boom.safeParse(1)).toThrow(TypeError);
+    });
+});
+
+describe("isOrWrapsFromValidator", () => {
+    it("is true for a bare v.from(...)", () => {
+        expect.assertions(1);
+
+        expect(isOrWrapsFromValidator(v.from(v.number()))).toBe(true);
+    });
+
+    it("is false for an ordinary scalar validator", () => {
+        expect.assertions(2);
+
+        expect(isOrWrapsFromValidator(v.string())).toBe(false);
+        expect(isOrWrapsFromValidator(v.number())).toBe(false);
+    });
+
+    it("detects a v.from wrapped by v.optional (inner child)", () => {
+        expect.assertions(1);
+
+        expect(isOrWrapsFromValidator(v.optional(v.from(v.number())))).toBe(true);
+    });
+
+    it("detects a v.from wrapped by v.array (inner child)", () => {
+        expect.assertions(1);
+
+        expect(isOrWrapsFromValidator(v.array(v.from(v.string())))).toBe(true);
+    });
+
+    it("detects a v.from nested in a v.object shape", () => {
+        expect.assertions(2);
+
+        expect(isOrWrapsFromValidator(v.object({ id: v.from(v.string()), name: v.string() }))).toBe(true);
+        // A from-free object shape is not flagged.
+        expect(isOrWrapsFromValidator(v.object({ name: v.string() }))).toBe(false);
+    });
+
+    it("detects a v.from in a record value position", () => {
+        expect.assertions(2);
+
+        expect(isOrWrapsFromValidator(v.record(v.string(), v.from(v.number())))).toBe(true);
+        expect(isOrWrapsFromValidator(v.record(v.string(), v.number()))).toBe(false);
+    });
+
+    it("detects a v.from among union members", () => {
+        expect.assertions(2);
+
+        expect(isOrWrapsFromValidator(v.union(v.number(), v.from(v.string())))).toBe(true);
+        expect(isOrWrapsFromValidator(v.union(v.number(), v.string()))).toBe(false);
+    });
+
+    it("returns false when the validator carries no _meta bag", () => {
+        expect.assertions(1);
+
+        // The `if (!meta) return false` guard — a hand-rolled validator-shaped
+        // object with no _meta still answers cleanly.
+        const metaless = { kind: "string" } as unknown as Parameters<typeof isOrWrapsFromValidator>[0];
+
+        expect(isOrWrapsFromValidator(metaless)).toBe(false);
     });
 });

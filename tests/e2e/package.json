@@ -13,6 +13,7 @@
         "lint:types": "tsc --noEmit"
     },
     "devDependencies": {
+        "@cirrus/mail": "workspace:*",
         "@playwright/test": "catalog:e2e",
         "@types/node": "catalog:types",
         "cross-env": "catalog:dev",

@@ -17,6 +17,10 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
         },
+        "./testing": {
+            "types": "./dist/testing.d.ts",
+            "import": "./dist/testing.mjs"
+        },
         "./package.json": "./package.json"
     },
     "scripts": {

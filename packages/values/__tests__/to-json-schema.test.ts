@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
+import type { JsonSchema, SchemaNodeReader } from "../src/json-schema-core";
+import { jsonSchemaFromNode, objectSchemaFromNodes } from "../src/json-schema-core";
 import { argsToJsonSchema, toJsonSchema } from "../src/to-json-schema";
+import type { Validator, ValidatorKind } from "../src/v";
 import { v } from "../src/v";
 
 describe("toJsonSchema", () => {
@@ -209,5 +212,99 @@ describe("argsToJsonSchema", () => {
         expect.assertions(1);
 
         expect(argsToJsonSchema({})).toStrictEqual({ additionalProperties: false, properties: {}, required: [], type: "object" });
+    });
+});
+
+describe("literal const carrier", () => {
+    it("carries a bigint literal as its decimal string with type string", () => {
+        expect.assertions(1);
+
+        // The `typeof value === "bigint"` branch of validatorReader.literalSchema —
+        // JSON Schema `const` must be JSON-serializable, so a bigint is stringified.
+        expect(toJsonSchema(v.literal(9_007_199_254_740_993n))).toStrictEqual({ const: "9007199254740993", type: "string" });
+    });
+});
+
+describe("metaOf fallback", () => {
+    it("treats a validator with no _meta bag as an empty (anything) schema", () => {
+        expect.assertions(1);
+
+        // The `introspect(validator)._meta ?? {}` fallback: a hand-rolled
+        // validator-shaped node carrying only a `kind` and no `_meta`.
+        const metaless = { kind: "any" } as unknown as Validator;
+
+        expect(toJsonSchema(metaless)).toStrictEqual({});
+    });
+});
+
+describe("jsonSchemaFromNode over an IR-style reader", () => {
+    // A minimal reader that mimics the codegen IR side: composite children may be
+    // absent (`inner`/`valueChild` return undefined), exercising the branches the
+    // runtime validatorReader (which always populates _meta) can never reach.
+    const makeReader = (): SchemaNodeReader<{ kind: ValidatorKind }> => {
+        return {
+            constraints: () => undefined,
+            inner: () => undefined,
+            isNullable: () => false,
+            kind: (node) => node.kind,
+            literalSchema: () => {
+                return { const: undefined };
+            },
+            members: () => [],
+            shape: () => {
+                return {};
+            },
+            tableName: () => undefined,
+            valueChild: () => undefined,
+        };
+    };
+
+    it("maps an array node with an absent inner child to an empty-items schema", () => {
+        expect.assertions(1);
+
+        const node: { kind: ValidatorKind } = { kind: "array" };
+
+        expect(jsonSchemaFromNode(node, makeReader())).toStrictEqual({ items: {}, type: "array" });
+    });
+
+    it("maps an optional node with an absent inner child to an empty schema", () => {
+        expect.assertions(1);
+
+        const node: { kind: ValidatorKind } = { kind: "optional" };
+
+        expect(jsonSchemaFromNode(node, makeReader())).toStrictEqual({});
+    });
+
+    it("maps a record node with an absent value child to open additionalProperties", () => {
+        expect.assertions(1);
+
+        const node: { kind: ValidatorKind } = { kind: "record" };
+
+        expect(jsonSchemaFromNode(node, makeReader())).toStrictEqual({ additionalProperties: {}, type: "object" });
+    });
+
+    it("falls back to the empty schema for an unknown kind (default case)", () => {
+        expect.assertions(1);
+
+        // An out-of-band kind exercises the switch `default:` guard.
+        const reader = makeReader();
+        const node: { kind: ValidatorKind } = { kind: "totally-unknown" as ValidatorKind };
+
+        expect(jsonSchemaFromNode<{ kind: ValidatorKind }>(node, reader)).toStrictEqual({});
+    });
+
+    it("objectSchemaFromNodes lists every non-optional key as required", () => {
+        expect.assertions(1);
+
+        const reader: SchemaNodeReader<{ kind: ValidatorKind }> = makeReader();
+        const shape: Record<string, { kind: ValidatorKind }> = { flag: { kind: "boolean" }, maybe: { kind: "optional" } };
+        const schema: JsonSchema = objectSchemaFromNodes(shape, reader);
+
+        expect(schema).toStrictEqual({
+            additionalProperties: false,
+            properties: { flag: { type: "boolean" }, maybe: {} },
+            required: ["flag"],
+            type: "object",
+        });
     });
 });

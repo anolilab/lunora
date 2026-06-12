@@ -15,20 +15,108 @@ before starting, honor its STOP conditions, and update your row when done.
 
 ## Execution order & status
 
-| Plan | Title                                                        | Priority | Effort | Depends on | Status |
-| ---- | ------------------------------------------------------------ | -------- | ------ | ---------- | ------ |
-| 001  | Make the CLI reference docs match the actual CLI             | P1       | S–M    | —          | MERGED → alpha `4cb8e717` |
-| 002  | Guard the shared template scaffold files against drift       | P1       | S      | —          | MERGED → alpha `c60e2541` |
-| 003  | Scaffold + install + build smoke matrix over all 8 templates | P2       | L      | —          | MERGED → alpha `985e694e` (fix) + `2f6a466f` (matrix) |
-| 004  | Integration-test mutation → subscription refresh in ShardDO  | P2       | L      | —          | MERGED → alpha `b5b377ce` |
-| 005  | Write a real README for @cirrus/vectors                      | P3       | S      | —          | MERGED → alpha `73d4a21e` |
-| 006  | Isolate per-subscription errors in refreshSubscriptions      | P1       | M      | —          | TODO   |
-| 007  | Codegen errors get file:line + Vite overlay on fatal failure | P1       | M      | —          | TODO   |
-| 008  | Standard Schema args acceptance (`v.from`) — PLAN5 §6.1      | P2       | M      | —          | TODO   |
-| 009  | Papercut pack: 8 small confirmed fixes across 6 packages     | P2       | S×8    | 006 (same file: shard-do.ts) | TODO |
-| 010  | Spike: advisor lint for RLS-uncovered table access           | P3       | M      | —          | TODO   |
+| Plan | Title                                                        | Priority | Effort | Depends on | Status                                                                                                 |
+| ---- | ------------------------------------------------------------ | -------- | ------ | ---------- | ------------------------------------------------------------------------------------------------------ |
+| 001  | Make the CLI reference docs match the actual CLI             | P1       | S–M    | —          | MERGED → alpha `4cb8e717`                                                                              |
+| 002  | Guard the shared template scaffold files against drift       | P1       | S      | —          | MERGED → alpha `c60e2541`                                                                              |
+| 003  | Scaffold + install + build smoke matrix over all 8 templates | P2       | L      | —          | MERGED → alpha `985e694e` (fix) + `2f6a466f` (matrix)                                                  |
+| 004  | Integration-test mutation → subscription refresh in ShardDO  | P2       | L      | —          | MERGED → alpha `b5b377ce`                                                                              |
+| 005  | Write a real README for @cirrus/vectors                      | P3       | S      | —          | MERGED → alpha `73d4a21e`                                                                              |
+| 006  | Isolate per-subscription errors in refreshSubscriptions      | P1       | M      | —          | MERGED → alpha `30de3978`                                                                              |
+| 007  | Codegen errors get file:line + Vite overlay on fatal failure | P1       | M      | —          | MERGED → alpha `9e02a9cb`,`ca6ee513`,`49b44a8c`                                                        |
+| 008  | Standard Schema args acceptance (`v.from`) — PLAN5 §6.1      | P2       | M      | —          | MERGED → alpha `a782a41f`,`ab8f18d4`                                                                   |
+| 009  | Papercut pack: 8 small confirmed fixes across 6 packages     | P2       | S×8    | 006        | MERGED → alpha `02dcfd14`,`55c9012a`,`4edf6922`,`5270de89`,`abea93d4`,`6505c63b`,`7f4ecd42`,`46cac45b` |
+| 010  | Spike: advisor lint for RLS-uncovered table access           | P3       | M      | —          | MERGED → alpha `c6752e5e`                                                                              |
+| 011  | Mail catcher: capture dev email + studio inbox + PW helper    | P2       | L      | —          | IMPLEMENTED (working tree; tests green) — E2E spec gated                                               |
+| 012  | Ask about auth/email at init; `cirrus add` to set up later    | P2       | M      | —          | IMPLEMENTED (working tree; tests green)                                                                |
+
+> Plans 011–012 generated interactively on 2026-06-12 against commit `92f719ab`
+> (studio mail-catcher + interactive auth/email setup). Default email provider is
+> **Cloudflare Email Workers**; in dev a capture transport feeds a studio mail
+> inbox. 011 is being implemented now; 012 is a plan for a later executor.
 
 Status values: TODO | IN PROGRESS | DONE | MERGED | NEEDS REVISION | BLOCKED | REJECTED
+
+## Run-2 merge record (2026-06-11)
+
+All five plans were executed (isolated worktrees), reviewed (APPROVE ×5), then
+**cherry-picked onto `alpha`** at the user's instruction. `alpha` advanced
+`b4cb2636` → `7f4ecd42` (15 commits). Cherry-pick (not merge) was used because
+the executor branches forked off an older `alpha` (`03b349ed`) that concurrent
+tanstack work had rewritten; replaying the commits limited conflicts to the
+content actually touched. Nothing was pushed.
+
+Conflict resolutions applied during integration:
+
+- **006 test file** (add/add vs alpha's plan-004 copy) → took the branch's
+  rewritten file (verified a strict superset: case-4 rewrite + new cross-socket
+  case + 2 cosmetic lint tweaks); `shard-do.ts` try/catch auto-merged.
+- **008 `v.from` vs alpha's `v.storage`** (same maps in `v.ts`/`emit.ts`/
+  `ir.ts`/`parse-validator.ts`) → git auto-merged; verified both `from` and
+  `storage` kinds coexist.
+- **009 item 7** (the stale `cli.ts` commit `001f39a5`) → **skipped**; the fix
+  was re-applied to `packages/cli/src/commands/init/index.ts` (its real home on
+  alpha) as commit `7f4ecd42`, dropping react-router/solid-start/next → leaving
+  `(vite | standalone | astro | nuxt | sveltekit | tanstack-start)`.
+- 006 source, 007, 010, and 009 items 1–6 + 8 all cherry-picked clean.
+
+Post-merge verification on integrated `alpha` (`7f4ecd42`): all 12 touched
+packages `lint:types` clean; tests green — codegen 172, do 613, server 182,
+auth 98, config 82, values 70, advisor 41, react 74, storage 60, vite 95, db 11.
+The single CLI failure (`init.test.ts > tanstack-start template scaffolds…`) is
+**pre-existing on `alpha`** (confirmed on a clean `b4cb2636` checkout) — part of
+the in-progress tanstack re-arch, untouched by this merge. NOT run: full
+monorepo `pnpm run test` (whole unit suite) and the template build matrix.
+
+The five executor branches were deleted (redundant — commits now live on alpha
+under new SHAs); their worktrees were pruned.
+
+### Original execution review (pre-merge)
+
+Plans 006–010 were each executed by a separate sonnet executor in an isolated
+worktree, then reviewed (diff read, scope checked, tests audited). **All five
+APPROVE.**
+
+Branches (forked off `alpha` as it stood at execution time; see rebase note):
+
+- 006 `fix/do-subscription-refresh-isolation` — `938f88de`. try/catch contains a
+  throwing subscription to itself; memo untouched; case-4 test rewritten to the
+  new semantics + cross-socket case added. 2 files.
+- 007 `dx/codegen-diagnostics-overlay` — 3 commits. `CodegenDiagnosticError` +
+  `diagnosticAt` (file:line:col), 3 discover-schema throw sites converted, Vite
+  overlay wired via `OverlayCallbacks` (dev-only; build path unchanged). 6 files.
+- 008 `feat/values-standard-schema-args` — 2 commits. `v.from()` adapter
+  (no `any` — `InferStandardOutput<S>` conditional w/ `unknown` fallback),
+  args-only `defineTable` guard, codegen emits `unknown` for `from`. 9 files.
+- 009 `fix/papercut-pack-2026-06` — 8 commits, one per item; all 8 landed.
+- 010 `feat/advisor-rls-coverage-lint` — 1 commit. Spike verdict
+  FEASIBLE-AS-STATIC → implemented `rls_uncovered_table` static lint + codegen
+  feeder `discover-rls-procedures.ts`; conservative (under-reports, never false
+  positive); internal procedures exempt. 10 files, 8 tests.
+
+### ⚠️ Rebase required before merge (alpha was rewritten mid-run)
+
+Concurrent tanstack work rewrote `alpha` (now `b4cb2636`) during execution, so
+the merge-base of every branch is the older `03b349ed`. The branches are correct
+against their base; rebase/cherry-pick onto current `alpha` before merge. Two
+known conflicts:
+
+1. **006 test file** — `packages/do/__tests__/subscription-refresh.integration.test.ts`
+   exists on both current `alpha` (from plan 004 `b5b377ce`) and the 006 branch
+   (recreated at the older base). On rebase: keep alpha's file, then apply the
+   case-4 rewrite (drop `characterization:`, assert success + sibling-refresh +
+   broken-silent) and add the cross-socket case. The 006 source hunk
+   (`shard-do.ts` try/catch) applies cleanly.
+2. **009 item 7 is stale** — it edited the template-description string in
+   `packages/cli/src/cli.ts` (its location at the old base). On current `alpha`
+   that string lives in `packages/cli/src/commands/init/index.ts:21` and reads
+   `(vite | standalone | astro | nuxt | react-router | solid-start | sveltekit | tanstack-start | next)`.
+   Redo the fix there → `(vite | standalone | astro | nuxt | sveltekit | tanstack-start)`
+   (react-router + solid-start were dropped from the repo; `next` is guarded
+   unavailable). The other 7 items touch files unchanged on alpha and rebase clean.
+
+This mirrors run-1's integration (alpha rewritten mid-run → branches
+cherry-picked).
 
 ## Run-2 dependency notes
 
@@ -75,6 +163,7 @@ Plan 003 was re-integrated scope-clean: the genuine build-breaking prerequisites
 `clean-machine-smoke.sh`) are now an explicit, separate `fix(cli)` commit — not silent edits.
 
 Verified post-merge on integrated alpha (`2f6a466f`):
+
 - `@cirrus/vis-templates-tests` suite green (100 tests incl. the new drift test).
 - `pnpm run build:packages` — 27/27 projects built (CLI included → the logs/index.ts fix unblocked the build).
 - `pnpm run test:templates` (new smoke matrix) — exit 0: 3 PASS (standalone, tanstack-start, vite),
@@ -108,7 +197,7 @@ and need a rebase onto current `alpha` before merge (004/005 already forked at `
   own concurrent fixes; keep the smoke matrix. Findings it surfaced are valuable (below).
 - **004 APPROVE** — commit `ac926562`, 1 test file (448 lines). Case 1 (cross-socket memo
   skip) is the load-bearing assertion; case 4 is an honest characterization test that
-  documents the *current* abort-on-throw behavior of the per-socket refresh loop.
+  documents the _current_ abort-on-throw behavior of the per-socket refresh loop.
 - **005 APPROVE** — commit `0ff3f8fe`, 1 README. Ported both schema shapes; corrected
   DESIGN.md's stale `ctx.vectors.indexFor(...)` example to the real
   `ctx.vectors.query(indexName, input)` API (verified against `packages/server/src`).
@@ -117,7 +206,7 @@ and need a rebase onto current `alpha` before merge (004/005 already forked at `
 
 - **`cirrus init -t` only accepts 4 of 8 templates.** `isTemplate` in
   `packages/cli/src/commands/init/handler.ts` accepts `vite | standalone | next |
-  tanstack-start`; `cirrus init -t astro|nuxt|react-router|solid-start|sveltekit`
+tanstack-start`; `cirrus init -t astro|nuxt|react-router|solid-start|sveltekit`
   silently falls back to `vite`. Five template dirs ship but can't be scaffolded by the
   CLI. (Worth a follow-up plan: wire them in, or remove them.)
 - **`scripts/clean-machine-smoke.sh` is broken on alpha** — stale package dir names and a
@@ -150,7 +239,7 @@ and need a rebase onto current `alpha` before merge (004/005 already forked at `
   planned; revisit the split once it's DONE.
 - **`@cirrus/values` coverage** (1120 loc, 3 test files): MED-confidence
   thinness signal. Cheaper to run `pnpm --filter "@cirrus/values" run
-  test:coverage` and look at the branch report than to write a speculative
+test:coverage` and look at the branch report than to write a speculative
   plan. Do that first; plan only if real gaps show.
 - **`apps/studio` entry shell untested** (569 loc, 0 tests): modest value —
   `packages/studio` (where the 20k lines live) already has 49 test files.
@@ -186,7 +275,7 @@ and need a rebase onto current `alpha` before merge (004/005 already forked at `
   ~line 218; grammar + scaffolder in `@cirrus/config`). By design.
 - **delta-merge micro-optimizations** (`packages/client/src/delta-merge.ts` —
   O(n) validation pass, linear `insertionIndex`/`findIndex`): this is the
-  *legacy* delta fan-out path operating on page-sized arrays with one-row
+  _legacy_ delta fan-out path operating on page-sized arrays with one-row
   deltas; the primary path pushes full snapshots. Not worth the churn.
 - **`refreshSubscriptions` memo-miss re-runs** (`packages/do/src/shard-do.ts:3241`):
   conservative-by-design ("unknown deps → re-run to be safe"), bounded by

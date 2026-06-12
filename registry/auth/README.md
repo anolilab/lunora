@@ -12,9 +12,14 @@ cirrus registry add auth
 
 This:
 
-1. Adds `@cirrus/auth` and `@cirrus/server` to your `package.json` (run `pnpm install` afterwards).
+1. Adds `@cirrus/auth`, `@cirrus/mail`, and `@cirrus/server` to your `package.json` (run `pnpm install` afterwards).
 2. Copies `cirrus/auth/index.ts` — the auth instance (`buildAuth` / `getAuth`) and the `/api/auth/*` request handler (`mountAuth`) — into your project. It's **yours** to edit.
-3. Scaffolds `BETTER_AUTH_SECRET` and `BETTER_AUTH_URL` into your `.dev.vars`.
+3. Adds a D1 `DB` binding to your `wrangler.jsonc` (better-auth persists users/sessions there — run `wrangler d1 create <name>` and put the id in the binding).
+4. Scaffolds `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, and `MAIL_FROM` into your `.dev.vars`.
+
+## Verification & password-reset email
+
+The scaffold wires better-auth's `sendVerificationEmail` and `sendResetPassword` through [`@cirrus/mail`](../mail) (`createMailerFromEnv`). In dev these are **captured into the studio's Mail tab** — you can build and test the forgot-password flow with zero email setup. For real delivery in production, run [`cirrus add email`](../mail) (adds the `SEND_EMAIL` Cloudflare binding) or set `RESEND_API_KEY`. Until mail is configured (no `MAIL_FROM`), the link is logged to the console so dev flows still work. Edit the subjects/bodies — or swap to a React template via `@cirrus/mail`'s `renderEmail` — in `cirrus/auth/index.ts`.
 
 ## Configure env vars
 
@@ -22,6 +27,7 @@ This:
 | -------------------- | ------ | -------------------------------------------------------------------------- |
 | `BETTER_AUTH_SECRET` | yes    | Encryption secret, min 32 chars. Generate with `openssl rand -base64 32`.  |
 | `BETTER_AUTH_URL`    | no     | Public base URL, e.g. `http://localhost:8787` in dev, your domain in prod. |
+| `MAIL_FROM`          | no     | Sender for verification / reset mail. Captured in dev; needs a verified domain in prod. |
 
 In dev these live in `.dev.vars`. For production set the secret with Wrangler:
 

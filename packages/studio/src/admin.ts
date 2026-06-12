@@ -18,12 +18,14 @@ export const ADMIN_FUNCTION_PREFIX = "__cirrus_admin__:";
  * `CIRRUS_ADMIN_TOKEN`.
  */
 export const ADMIN_FUNCTIONS = {
+    clearCapturedMail: "__cirrus_admin__:clearCapturedMail",
     clearTable: "__cirrus_admin__:clearTable",
     deleteRows: "__cirrus_admin__:deleteRows",
     exportShard: "__cirrus_admin__:exportShard",
     getAdvisories: "__cirrus_admin__:getAdvisories",
     getAuditLog: "__cirrus_admin__:getAuditLog",
     getAuthMetrics: "__cirrus_admin__:getAuthMetrics",
+    getCapturedMail: "__cirrus_admin__:getCapturedMail",
     getFunctionStats: "__cirrus_admin__:getFunctionStats",
     listSubscriptions: "__cirrus_admin__:listSubscriptions",
     listTableIndexes: "__cirrus_admin__:listTableIndexes",
@@ -42,6 +44,7 @@ export const ADMIN_FUNCTIONS = {
     runAs: "__cirrus_admin__:runAs",
     runMigration: "__cirrus_admin__:runMigration",
     runSql: "__cirrus_admin__:runSql",
+    sendTestMail: "__cirrus_admin__:sendTestMail",
     storageReferences: "__cirrus_admin__:storageReferences",
     writeRow: "__cirrus_admin__:writeRow",
 } as const;
@@ -113,6 +116,42 @@ export interface ClearTableArgs {
 export interface BulkDeleteResult {
     deleted: number;
     hasMore: boolean;
+}
+
+/**
+ * One captured outbound email as served by `__cirrus_admin__:getCapturedMail`,
+ * mirroring `@cirrus/do`'s `CapturedMailRow`. Persisted by `@cirrus/mail`'s dev
+ * capture transport into the root-shard mailbox and rendered by the studio Mail
+ * inbox. `html`/`text` are the rendered bodies; `to`/`cc`/`bcc` are the original
+ * recipient lists; `capturedAt` is epoch-ms.
+ */
+export interface CapturedMail {
+    bcc?: string[];
+    capturedAt: number;
+    cc?: string[];
+    from?: string;
+    headers?: Record<string, string>;
+    html?: string;
+    id: string;
+    replyTo?: string;
+    subject: string;
+    text?: string;
+    to: string | string[];
+}
+
+/** Result of `__cirrus_admin__:getCapturedMail` — the dev mail-catcher inbox, newest first. */
+export interface CapturedMailResult {
+    entries: CapturedMail[];
+}
+
+/**
+ * Result of `__cirrus_admin__:sendTestMail` — the studio's "send a test message"
+ * button. The server renders a fixed sample email through the capture transport
+ * (nothing is delivered) and returns the new mailbox row's primary key, so the
+ * caller can refresh the inbox and surface it.
+ */
+export interface SendTestMailResult {
+    id: string;
 }
 
 /** Reactive-cache hit/miss/eviction stats, present when a cache is configured. */

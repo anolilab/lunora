@@ -2,7 +2,7 @@
     "$schema": "./schema/registry.schema.json",
     "items": [
         {
-            "description": "Cookie-session authentication for Cirrus — email/password sign-up/sign-in on top of @cirrus/auth (a thin wrapper over better-auth), with the auth instance and request handler wired into your project.",
+            "description": "Cookie-session authentication for Cirrus — email/password sign-up/sign-in on top of @cirrus/auth (a thin wrapper over better-auth), with the auth instance + request handler wired into your project and verification / forgot-password mail routed through @cirrus/mail (captured into the studio Mail tab in dev).",
             "name": "auth",
             "title": "Auth"
         },
@@ -17,6 +17,16 @@
             "title": "Auth — Clerk"
         },
         {
+            "description": "Passwordless magic-link sign-in for Cirrus auth. Wires better-auth's magicLink plugin on top of the base `auth` item and delivers the sign-in link through @cirrus/mail (captured into the studio Mail tab in dev).",
+            "name": "auth-magic-link",
+            "title": "Auth — Magic link"
+        },
+        {
+            "description": "Passwordless email one-time-password (OTP) sign-in and verification for Cirrus auth. Wires better-auth's emailOTP plugin on top of the base `auth` item and delivers the code through @cirrus/mail (captured into the studio Mail tab in dev).",
+            "name": "auth-otp",
+            "title": "Auth — Email OTP"
+        },
+        {
             "description": "Managed point-in-time recovery — a cron-driven `snapshot` internalAction exports a configured set of tables to timestamped NDJSON in a dedicated R2 bucket, and a cron-driven `prune` internalAction ages snapshots out by retention window. Pairs with `cirrus backup restore` (nearest snapshot + `--to` CDC replay).",
             "name": "backup",
             "title": "Backup"
@@ -27,7 +37,7 @@
             "title": "Crons"
         },
         {
-            "description": "Transactional email for Cirrus — a sendEmail action (plus a fire-and-forget queueEmail) built on @cirrus/mail's Resend transport, with CR/LF + header-injection-safe address handling.",
+            "description": "Transactional email for Cirrus — a sendEmail action (plus a fire-and-forget queueEmail) built on @cirrus/mail's Cloudflare Email Workers transport, with CR/LF + header-injection-safe address handling and a dev mail catcher that surfaces every send in the studio.",
             "name": "mail",
             "title": "Mail"
         },

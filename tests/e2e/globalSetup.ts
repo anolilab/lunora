@@ -33,6 +33,9 @@ CIRRUS_E2E="true"
 CIRRUS_WORKER_ORIGIN="http://localhost:5173"
 CIRRUS_ORIGIN_URL="http://localhost:5173"
 PUBLIC_STORAGE_BASE_URL="http://localhost:5173"
+CIRRUS_ADMIN_TOKEN="e2e-deterministic-admin-token"
+MAIL_FROM="Cirrus E2E <noreply@cirrus.test>"
+CIRRUS_MAIL_CAPTURE="1"
 `;
 
 interface SpawnedProcess {

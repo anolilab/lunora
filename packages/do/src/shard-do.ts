@@ -45,6 +45,8 @@ import {
     summarizeSubscriptions,
 } from "./introspect";
 import { LogBuffer } from "./log-buffer";
+import type { RecordMailInput } from "./mail-catcher";
+import { clearCapturedMail, MAIL_TABLE, readCapturedMail, recordCapturedMail } from "./mail-catcher";
 import { armRestore, readBookmark } from "./pitr";
 import type { ShardRankPageResult } from "./rank";
 import type { ReactiveCacheOptions } from "./reactive-cache";
@@ -803,6 +805,92 @@ const parseRunAsArgs = (args: Record<string, unknown>): RunAsArgs => {
         functionPath,
         userId,
         ...(rawIdentity === undefined ? {} : { identity: rawIdentity as Record<string, unknown> }),
+    };
+};
+
+/**
+ * Validate the `__cirrus_admin__:recordMail` payload — the dev mail catcher's
+ * capture of one outbound message (a rendered, already-validated `SendPayload`
+ * from `@cirrus/mail`). `subject` must be a string and `to` a string or string
+ * array; the optional address/body/header fields are shape-checked. Anything
+ * else throws a 400 `CirrusError`, matching the other admin write parsers.
+ */
+const parseRecordMailArgs = (args: Record<string, unknown>): RecordMailInput => {
+    const bad = (message: string): never => {
+        throw Object.assign(new Error(`recordMail: ${message}`), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+    };
+
+    const { bcc, cc, from, headers, html, replyTo, subject, text, to } = args;
+
+    if (typeof subject !== "string") {
+        bad("`subject` must be a string");
+    }
+
+    const toOk = typeof to === "string" || (Array.isArray(to) && to.every((entry) => typeof entry === "string"));
+
+    if (!toOk) {
+        bad("`to` must be a string or string[]");
+    }
+
+    const optionalStringList = (value: unknown, label: string): string[] | undefined => {
+        if (value === undefined) {
+            return undefined;
+        }
+
+        if (!Array.isArray(value) || !value.every((entry) => typeof entry === "string")) {
+            bad(`\`${label}\` must be a string[]`);
+        }
+
+        return value as string[];
+    };
+
+    const optionalString = (value: unknown, label: string): string | undefined => {
+        if (value !== undefined && typeof value !== "string") {
+            bad(`\`${label}\` must be a string`);
+        }
+
+        return value as string | undefined;
+    };
+
+    return {
+        bcc: optionalStringList(bcc, "bcc"),
+        cc: optionalStringList(cc, "cc"),
+        from: optionalString(from, "from"),
+        headers: headers !== undefined && typeof headers === "object" && headers !== null ? (headers as Record<string, string>) : undefined,
+        html: optionalString(html, "html"),
+        replyTo: optionalString(replyTo, "replyTo"),
+        subject: subject as string,
+        text: optionalString(text, "text"),
+        to: to as string | string[],
+    };
+};
+
+/** Default recipient for the studio "Send test" action when no `to` is supplied. */
+const TEST_MAIL_DEFAULT_TO = "test@cirrus.dev";
+
+/**
+ * Build the synthetic captured message the studio "Send test" button populates
+ * the dev inbox with. A short html+text body carrying a verify link so the
+ * catcher's link-extraction + preview have realistic content to render. `to`
+ * is validated (optional string, 400 on a bad shape) and defaults to
+ * {@link TEST_MAIL_DEFAULT_TO}.
+ */
+const buildTestMailInput = (args: Record<string, unknown>): RecordMailInput => {
+    const { to } = args;
+
+    if (to !== undefined && typeof to !== "string") {
+        throw Object.assign(new Error("sendTestMail: `to` must be a string"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+    }
+
+    const recipient = to ?? TEST_MAIL_DEFAULT_TO;
+    const link = "https://example.test/verify?token=demo";
+
+    return {
+        from: "Cirrus <noreply@cirrus.dev>",
+        html: `<p>This is a test email from the Cirrus dev mail catcher.</p><p><a href="${link}">Verify your email</a></p>`,
+        subject: "Cirrus test email",
+        text: `This is a test email from the Cirrus dev mail catcher.\n\nVerify your email: ${link}`,
+        to: recipient,
     };
 };
 
@@ -2958,24 +3046,48 @@ abstract class ShardDO {
                 return jsonResponse({ result }, 200);
             }
 
-            if (functionPath === ADMIN_FUNCTIONS.recordAuthEvent) {
-                return this.handleRecordAuthEvent(args);
-            }
-
             if (functionPath === ADMIN_FUNCTIONS.runAs) {
                 return this.handleRunAs(args);
             }
 
-            const pitr = await this.handlePitrAdminOp(functionPath, args);
+            const handled = await this.handleExtraAdminOp(functionPath, args);
 
-            if (pitr) {
-                return pitr;
+            if (handled) {
+                return handled;
             }
 
             return jsonResponse({ error: { code: "UNKNOWN_ADMIN_OP", message: `unknown admin op: ${functionPath}` } }, 404);
         } catch (error: unknown) {
             return this.errorToResponse(error);
         }
+    }
+
+    /**
+     * Dispatch the side-effecting / non-read admin ops that `handleAdminRpc`
+     * doesn't handle inline: the auth-event + mail-capture writes and the native
+     * PITR ops. Returns the op's `Response`, or `undefined` when `functionPath`
+     * isn't one of these (so the caller answers 404). Kept out of
+     * `handleAdminRpc` to hold that dispatcher under the complexity budget,
+     * mirroring `handlePitrAdminOp`.
+     */
+    private async handleExtraAdminOp(functionPath: string, args: Record<string, unknown>): Promise<Response | undefined> {
+        if (functionPath === ADMIN_FUNCTIONS.recordAuthEvent) {
+            return this.handleRecordAuthEvent(args);
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.recordMail) {
+            return this.handleRecordMail(args);
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.clearCapturedMail) {
+            return this.handleClearCapturedMail();
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.sendTestMail) {
+            return this.handleSendTestMail(args);
+        }
+
+        return this.handlePitrAdminOp(functionPath, args);
     }
 
     /**
@@ -3051,6 +3163,50 @@ abstract class ShardDO {
             this.currentRequestUserId = previousUserId;
             this.currentRequestIdentity = previousIdentity;
         }
+    }
+
+    /**
+     * Capture one outbound message into the dev mail catcher (`mail-catcher.ts`).
+     * `@cirrus/mail`'s capture transport POSTs each rendered, validated send here
+     * (fire-and-forget) so the studio's Mail inbox shows it. Admin-gated by
+     * `handleAdminRpc`'s caller, so only a request bearing `CIRRUS_ADMIN_TOKEN`
+     * can record — and the worker only ever calls this when the capture transport
+     * is wired (dev). Validates the payload (400 on a bad shape) and returns the
+     * generated id.
+     *
+     * Note: the gate is the admin token alone — the same trust boundary that
+     * already protects every other admin write (`writeRow`, `clearTable`,
+     * `deleteRows`, `runSql`). A token holder can already mutate the shard
+     * arbitrarily, so a token-gated mailbox insert adds no new privilege; the DO
+     * has no signal for "capture is active", so an inert-unless-capture guard
+     * isn't enforced here (an accepted relaxation of plan 011's STOP condition).
+     */
+    private handleRecordMail(args: Record<string, unknown>): Response {
+        const parsed = parseRecordMailArgs(args);
+        const result = recordCapturedMail(this.state.storage.sql as unknown as SqlExec, parsed, Date.now());
+
+        return jsonResponse({ result }, 200);
+    }
+
+    /** Empty the dev mail-catcher inbox (studio "clear inbox" action). Admin-gated by the caller. */
+    private handleClearCapturedMail(): Response {
+        const result = clearCapturedMail(this.state.storage.sql as unknown as SqlExec);
+
+        return jsonResponse({ result }, 200);
+    }
+
+    /**
+     * Populate the dev mail-catcher inbox with one synthetic message (studio
+     * "Send test" button) so the inbox can be exercised in one click. Builds the
+     * message via {@link buildTestMailInput} (validating the optional `to`) and
+     * records it through the same `recordCapturedMail` path as a real capture.
+     * Admin-gated by `handleAdminRpc`'s caller.
+     */
+    private handleSendTestMail(args: Record<string, unknown>): Response {
+        const input = buildTestMailInput(args);
+        const result = recordCapturedMail(this.state.storage.sql as unknown as SqlExec, input, Date.now());
+
+        return jsonResponse({ result }, 200);
     }
 
     /**
@@ -3267,8 +3423,10 @@ abstract class ShardDO {
             return this.readAdminRequestLog(sql, args);
         }
 
-        if (functionPath === ADMIN_FUNCTIONS.getAuthMetrics) {
-            return this.readAdminAuthMetrics(sql);
+        const durable = this.readAdminDurableSignal(functionPath, sql, args);
+
+        if (durable) {
+            return durable;
         }
 
         if (functionPath === ADMIN_FUNCTIONS.readTablePage) {
@@ -3442,6 +3600,26 @@ abstract class ShardDO {
      * subscription re-runs on every write-flush (the per-socket JSON memo still
      * suppresses byte-identical pushes).
      */
+
+    /**
+     * Resolve the durable app-signal reads that aren't bound to a user table —
+     * the auth-metrics rollup and the dev mail-catcher inbox. Returns the read's
+     * `{ result, tables }`, or `undefined` for any path it doesn't own (so
+     * `readAdminOp` falls through). Keeps `readAdminOp` under its complexity
+     * budget by holding these two in one branch.
+     */
+    private readAdminDurableSignal(functionPath: string, sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } | undefined {
+        if (functionPath === ADMIN_FUNCTIONS.getAuthMetrics) {
+            return this.readAdminAuthMetrics(sql);
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.getCapturedMail) {
+            return this.readAdminCapturedMail(sql, args);
+        }
+
+        return undefined;
+    }
+
     // eslint-disable-next-line class-methods-use-this -- kept an instance method for symmetry with the other `readAdmin*` resolvers
     private readAdminAuthMetrics(sql: SqlExec): { result: unknown; tables: Set<string> } {
         let result: AuthMetrics;
@@ -3453,6 +3631,27 @@ abstract class ShardDO {
         }
 
         return { result, tables: new Set([ADMIN_WILDCARD]) };
+    }
+
+    /**
+     * Resolve a `getCapturedMail` admin read — the dev mail catcher's inbox
+     * (`mail-catcher.ts`), newest-first. Best-effort: a SQL failure returns an
+     * empty inbox rather than throwing. Bound to the {@link MAIL_TABLE} so a live
+     * studio subscription re-runs when a new message is recorded (the per-socket
+     * JSON memo still suppresses byte-identical pushes).
+     */
+    // eslint-disable-next-line class-methods-use-this -- kept an instance method for symmetry with the other `readAdmin*` resolvers
+    private readAdminCapturedMail(sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } {
+        const limit = typeof args["limit"] === "number" ? args["limit"] : undefined;
+        let result: { entries: unknown[] };
+
+        try {
+            result = readCapturedMail(sql, { limit });
+        } catch {
+            result = { entries: [] };
+        }
+
+        return { result, tables: new Set([MAIL_TABLE]) };
     }
 
     /** Resolve a `readTablePage` admin read, parsing the loosely-typed args into the reader's options. */

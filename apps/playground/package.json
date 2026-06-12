@@ -21,6 +21,7 @@
         "@cirrus/d1": "workspace:*",
         "@cirrus/db": "workspace:*",
         "@cirrus/do": "workspace:*",
+        "@cirrus/mail": "workspace:*",
         "@cirrus/react": "workspace:*",
         "@cirrus/runtime": "workspace:*",
         "@cirrus/scheduler": "workspace:*",

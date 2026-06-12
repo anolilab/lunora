@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
+import { isInteractive, promptMultiSelect, promptSelect } from "@cirrus/config";
 import { walkSync } from "@visulima/fs";
 import { dirname, join, relative, resolve } from "@visulima/path";
 import { downloadTemplate } from "giget";
@@ -12,7 +13,11 @@ import type { DetectedFramework, FrameworkDetection } from "../../util/detect-fr
 import { detectFramework } from "../../util/detect-framework";
 import type { Logger } from "../../util/logger";
 import { patchViteConfig } from "../../util/patch-vite-config";
+import type { FeatureItem } from "../add/features";
+import { runAddCommand } from "../registry";
 import type { InitOptions } from "./index";
+import type { OfferDeps } from "./offer-extras";
+import { offerRegistryExtras } from "./offer-extras";
 
 type Template = "astro" | "next" | "nuxt" | "standalone" | "sveltekit" | "tanstack-start-react" | "tanstack-start-solid" | "vite";
 
@@ -41,8 +46,27 @@ interface InitCommandOptions {
      * are ignored in this mode.
      */
     inPlace?: boolean;
+
+    /**
+     * Force the post-scaffold "add auth / email?" offer on (the `--interactive`
+     * flag). When omitted, the offer runs only when stdin is a TTY. `--yes`
+     * suppresses it regardless. Has no effect once {@link prompt} is injected.
+     */
+    interactive?: boolean;
     logger: Logger;
     name?: string;
+
+    /**
+     * Inject the offer's prompts (tests). When set, the offer is treated as
+     * interactive regardless of TTY, and these drive the feature multi-select
+     * and the auth-provider sub-select.
+     */
+    prompt?: Pick<OfferDeps, "multiSelect" | "select">;
+
+    /** Local registry root for the offer's `runAddCommand` (offline / tests). Mirrors `from` but for registry items. */
+    registryFrom?: string;
+    /** Override the remote registry source base for the offer (default `gh:anolilab/cirrus/registry`). */
+    registrySource?: string;
 
     /**
      * Override the remote source giget downloads from. Default:
@@ -51,6 +75,9 @@ interface InitCommandOptions {
      */
     source?: string;
     templateType?: Template;
+
+    /** Suppress the offer entirely (the `--yes` flag): scaffold only, print the later-setup hint. */
+    yes?: boolean;
 }
 
 interface InitCommandResult {
@@ -509,13 +536,50 @@ const runInPlaceInit = (cwd: string, logger: Logger): InitCommandResult => {
     return { code: 0, files: [...viteResult.files, ...scaffolded], target: cwd };
 };
 
-const runInitCommand = async (options: InitCommandOptions): Promise<InitCommandResult> => {
-    const cwd = options.cwd ?? process.cwd();
+/**
+ * Whether the post-scaffold offer should prompt. `--yes` always suppresses it;
+ * otherwise it's on when prompts are injected (tests), the `--interactive` flag
+ * is set, or — by default — stdin is a TTY.
+ */
+const offerIsInteractive = (options: InitCommandOptions): boolean =>
+    options.yes !== true && (options.prompt !== undefined || (options.interactive ?? isInteractive()));
 
-    if (options.inPlace === true) {
-        return runInPlaceInit(cwd, options.logger);
-    }
+/**
+ * Build the offer's real dependencies (readline prompts + `runAddCommand`) and
+ * run the post-scaffold auth/email offer against `projectDir`. Interactive when
+ * `--interactive` is set, prompts are injected (tests), or stdin is a TTY —
+ * unless `--yes` suppresses it (then it prints the later-setup hint and applies
+ * nothing). Apply is best-effort: a failed registry add is logged by
+ * `runAddCommand` and never aborts the (already successful) scaffold.
+ */
+const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: string): Promise<void> => {
+    const interactive = offerIsInteractive(options);
 
+    const apply = async (names: ReadonlyArray<FeatureItem>): Promise<boolean> => {
+        const result = await runAddCommand({
+            allowUnsafeSource: options.allowUnsafeSource,
+            cwd: projectDirectory,
+            from: options.registryFrom,
+            logger: options.logger,
+            names: [...names],
+            source: options.registrySource,
+            yes: true,
+        });
+
+        return result.code === 0;
+    };
+
+    await offerRegistryExtras({
+        apply,
+        interactive,
+        logger: options.logger,
+        multiSelect: options.prompt?.multiSelect ?? ((message, choices, settings) => promptMultiSelect(message, choices, settings)),
+        select: options.prompt?.select ?? ((message, choices, settings): Promise<FeatureItem | undefined> => promptSelect(message, choices, settings)),
+    });
+};
+
+/** Scaffold a brand-new project directory (the non-`--here` path). */
+const scaffoldNewProject = async (options: InitCommandOptions, cwd: string): Promise<InitCommandResult> => {
     const name = options.name ?? "cirrus-app";
     const templateType: Template = options.templateType ?? "vite";
 
@@ -566,6 +630,22 @@ const runInitCommand = async (options: InitCommandOptions): Promise<InitCommandR
     return scaffoldFromRemote(options.source, templateType, target, name, options.logger);
 };
 
+/**
+ * `cirrus init` entry: scaffold (in-place or a new directory), then — on success
+ * — offer to add auth + email via the registry. The offer never affects the
+ * scaffold's exit code.
+ */
+const runInitCommand = async (options: InitCommandOptions): Promise<InitCommandResult> => {
+    const cwd = options.cwd ?? process.cwd();
+    const result = options.inPlace === true ? runInPlaceInit(cwd, options.logger) : await scaffoldNewProject(options, cwd);
+
+    if (result.code === 0 && result.target !== "") {
+        await maybeOfferExtras(options, result.target);
+    }
+
+    return result;
+};
+
 /** Narrow a raw `--template` value to a known {@link Template} (defaults to vite). */
 const isTemplate = (value: unknown): value is Template =>
     value === "astro" ||
@@ -587,10 +667,12 @@ const execute: CommandHandler<InitOptions> = defineHandler<InitOptions>(({ argum
         cwd,
         from: options.from,
         inPlace: options.here === true,
+        interactive: options.interactive === true ? true : undefined,
         logger,
         name: argument[0],
         source: options.source,
         templateType: template,
+        yes: options.yes === true,
     });
 });
 
