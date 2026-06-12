@@ -20,6 +20,8 @@ import { InsightsPanel } from "../features/advisors/insights-panel";
 import RlsPanel from "../features/advisors/rls-panel";
 import SecurityAdvisorPanel from "../features/advisors/security-advisor-panel";
 import ApiTab from "../features/api/api-tab";
+import { AuthConfigPanel } from "../features/auth/auth-config-panel";
+import { AuthSessionsPanel } from "../features/auth/auth-sessions-panel";
 import { OrganizationsPanel } from "../features/auth/organizations-panel";
 import { UsersPanel } from "../features/auth/users-panel";
 import { TableEditor } from "../features/data/table-editor";
@@ -30,6 +32,7 @@ import { FunctionRunner } from "../features/functions/function-runner";
 import { FunctionStatsPanel } from "../features/functions/function-stats";
 import { HomePanel } from "../features/home/home-panel";
 import { AuditPanel } from "../features/logs/audit-panel";
+import { LogDrainsPanel } from "../features/logs/log-drains-panel";
 import { LogsPanel } from "../features/logs/logs-panel";
 import { MailPanel } from "../features/logs/mail-panel";
 import type { ScheduledJobsProps } from "../features/logs/scheduled-jobs";
@@ -54,8 +57,11 @@ import { CommandPalette } from "./command-palette";
 type StudioTab =
     | "api"
     | "audit"
+    | "authConfig"
+    | "authSessions"
     | "dashboards"
     | "data"
+    | "drains"
     | "export"
     | "files"
     | "functions"
@@ -168,7 +174,12 @@ type NavGroupKey = "advisors" | "auth" | "database" | "home" | "logs" | "reports
 const TAB_ICONS: Record<StudioTab, ReactNode> = {
     api: <path d="m9 8-4 4 4 4m6-8 4 4-4 4M13 5l-2 14" />,
     audit: <path d="M7 4h7l4 4v11a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Zm6 0v5h5M9 13h6M9 16h6M9 10h2" />,
+    authConfig: (
+        <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm7.4-3a7.4 7.4 0 0 0-.1-1.2l2-1.6-2-3.4-2.4 1a7.3 7.3 0 0 0-2-1.2l-.4-2.6h-3.6l-.4 2.6a7.3 7.3 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.6a7.4 7.4 0 0 0 0 2.4l-2 1.6 2 3.4 2.4-1a7.3 7.3 0 0 0 2 1.2l.4 2.6h3.6l.4-2.6a7.3 7.3 0 0 0 2-1.2l2.4 1 2-3.4-2-1.6a7.4 7.4 0 0 0 .1-1.2Z" />
+    ),
+    authSessions: <path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Zm0-13.5V12l4 2" />,
     dashboards: <path d="M4 5h7v6H4V5Zm9 0h7v4h-7V5ZM4 14h7v5H4v-5Zm9-1h7v6h-7v-6Z" />,
+    drains: <path d="M5 5h14M7 5v6a5 5 0 0 0 10 0V5M10 16h4v3h-4zM12 19v2" />,
     data: (
         <path d="M5 6c0-1.4 3.1-2.5 7-2.5s7 1.1 7 2.5-3.1 2.5-7 2.5S5 7.4 5 6Zm0 0v12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5V6M5 12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5" />
     ),
@@ -212,11 +223,11 @@ const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
     { key: "tableEditor", tabs: ["data"] },
     { key: "sql", tabs: ["sql", "functions", "api"] },
     { key: "database", tabs: ["schema", "migrations", "export", "pitr"] },
-    { key: "auth", tabs: ["users", "organizations"] },
+    { key: "auth", tabs: ["users", "organizations", "authSessions", "authConfig"] },
     { key: "storage", tabs: ["files"] },
     { key: "reports", tabs: ["dashboards", "metrics", "health"] },
     { key: "advisors", tabs: ["security", "rls", "insights"] },
-    { key: "logs", tabs: ["logs", "audit", "schedule", "realtime", "mail"] },
+    { key: "logs", tabs: ["logs", "audit", "schedule", "realtime", "mail", "drains"] },
     { key: "settings", tabs: ["settings"] },
 ];
 
@@ -267,6 +278,8 @@ const TABS = [
     "pitr",
     "users",
     "organizations",
+    "authSessions",
+    "authConfig",
     "files",
     "dashboards",
     "metrics",
@@ -279,6 +292,7 @@ const TABS = [
     "mail",
     "audit",
     "schedule",
+    "drains",
     "settings",
 ] as const;
 
@@ -317,8 +331,11 @@ const StudioLayout = (): ReactElement => {
         return {
             api: t("API"),
             audit: t("Audit"),
+            authConfig: t("Configuration"),
+            authSessions: t("Sessions"),
             dashboards: t("Dashboards"),
             data: t("Data"),
+            drains: t("Log drains"),
             export: t("Export / Import"),
             files: t("Files"),
             functions: t("Functions"),
@@ -362,8 +379,11 @@ const StudioLayout = (): ReactElement => {
         return {
             api: t("Interactive OpenAPI reference and copy-paste snippets for your functions."),
             audit: t("A durable log of admin state-changing operations."),
+            authConfig: t("Enabled plugins and session config (read-only)."),
+            authSessions: t("Browse and revoke active sessions across all users."),
             dashboards: t("Chart widgets backed by saved read-only SQL queries."),
             data: t("Browse and edit rows across your shard and global tables."),
+            drains: t("Forward logs to Logpush, Tail Workers, or a webhook collector."),
             export: t("Export a shard to NDJSON, or import rows from it."),
             files: t("Browse objects in your R2 storage buckets."),
             functions: t("Run registered queries, mutations, and actions."),
@@ -674,8 +694,11 @@ const buildRouter = ({
     const panels: Record<StudioTab, ReactElement> = {
         api: <ApiTab functions={functions} initialShardKey={initialShardKey} openApiSpec={openApiSpec} openRpcSpec={openRpcSpec} />,
         audit: <AuditPanel initialShardKey={initialShardKey} />,
+        authConfig: <AuthConfigPanel />,
+        authSessions: <AuthSessionsPanel />,
         dashboards: <DashboardsPanel initialShardKey={initialShardKey} />,
         data: <TableEditor editable={dataEditable} initialShardKey={initialShardKey} />,
+        drains: <LogDrainsPanel />,
         export: <ExportImportPanel initialShardKey={initialShardKey} />,
         files: <FileBrowser />,
         functions: (
