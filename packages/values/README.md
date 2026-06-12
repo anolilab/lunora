@@ -1,142 +1,118 @@
-# @cirrus/values
+<!-- START_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
-The `v` validator namespace for the Cirrus framework. A small, Convex-inspired runtime + type system that doubles as a schema descriptor for codegen.
+<a href="https://www.anolilab.com/open-source" align="center">
 
-Every validator carries a runtime `parse` / `safeParse` plus a phantom `__type` field that `Infer<…>` reads to recover the TS type. Codegen ([`@cirrus/codegen`](../codegen)) inspects the `kind` tag to render `dataModel.ts` and the typed `api.ts`.
+  <img src="__assets__/package-og.svg" alt="values" />
+
+</a>
+
+<h3 align="center">Validators for Cirrus: the v.* validator suite with end-to-end return-type inference</h3>
+
+<!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
+
+<br />
+
+<div align="center">
+
+[![typescript-image][typescript-badge]][typescript-url]
+[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![npm version][npm-version-badge]][npm-version]
+[![npm downloads][npm-downloads-badge]][npm-downloads]
+[![PRs Welcome][prs-welcome-badge]][prs-welcome]
+
+</div>
+
+---
+
+<div align="center">
+    <p>
+        <sup>
+            Daniel Bannert's open source work is supported by the community on <a href="https://github.com/sponsors/prisis">GitHub Sponsors</a>
+        </sup>
+    </p>
+</div>
+
+---
+
+The `v` validator namespace for Cirrus — a small runtime validator suite that doubles as a schema descriptor. Every validator carries a runtime `parse` / `safeParse` plus a phantom type that `Infer<…>` reads to recover the TypeScript type end-to-end. It also speaks [Standard Schema](https://standardschema.dev) in both directions. Usually consumed transitively via [`@cirrus/server`](https://www.npmjs.com/package/@cirrus/server), which re-exports `v`.
+
+Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
 ## Install
 
-```bash
-pnpm add @cirrus/values
+```sh
+npm install @cirrus/values
 ```
 
-No workspace dependencies. Usually consumed transitively via [`@cirrus/server`](../server), which re-exports `v`.
+```sh
+yarn add @cirrus/values
+```
+
+```sh
+pnpm add @cirrus/values
+```
 
 ## Usage
 
 ```ts
-import { v, type Infer } from "@cirrus/values";
+import { type Infer, v } from "@cirrus/values";
 
 const Message = v.object({
     id: v.id("messages"),
-    room: v.string(),
     body: v.string(),
-    ts: v.number(),
     edited: v.optional(v.boolean()),
-    reactions: v.record(v.string(), v.number()),
-    status: v.union(v.literal("draft"), v.literal("sent"), v.literal("failed")),
-    attachments: v.array(v.string()),
+    status: v.union(v.literal("draft"), v.literal("sent")),
 });
 
 type Message = Infer<typeof Message>;
-// {
-//   id: Id<"messages">;
-//   room: string;
-//   body: string;
-//   ts: number;
-//   edited?: boolean;
-//   reactions: Record<string, number>;
-//   status: "draft" | "sent" | "failed";
-//   attachments: string[];
-// }
+// { id: Id<"messages">; body: string; edited?: boolean; status: "draft" | "sent" }
 
-// Throw on mismatch:
-const parsed = Message.parse(input);
+const parsed = Message.parse(input); // throws ValidationError on mismatch
 
-// Or branch on the result:
 const result = Message.safeParse(input);
 if (!result.ok) console.error(result.error.path, result.error.expected);
 ```
 
-## Validator catalogue
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/api/values)**.
 
-| Factory             | Parses                                                    | TS type                      |
-| ------------------- | --------------------------------------------------------- | ---------------------------- |
-| `v.string()`        | `typeof value === "string"`                               | `string`                     |
-| `v.number()`        | `typeof value === "number" && !isNaN`                     | `number`                     |
-| `v.boolean()`       | `typeof value === "boolean"`                              | `boolean`                    |
-| `v.bigint()`        | `typeof value === "bigint"`                               | `bigint`                     |
-| `v.null()`          | `value === null`                                          | `null`                       |
-| `v.bytes()`         | `value instanceof ArrayBuffer`                            | `ArrayBuffer`                |
-| `v.any()`           | anything                                                  | `unknown`                    |
-| `v.id("table")`     | string (branded by table name)                            | `Id<"table">`                |
-| `v.literal(value)`  | `===` against `value` (string/number/boolean/null/bigint) | the literal type             |
-| `v.array(inner)`    | array, recursively parses each item                       | `Array<Infer<inner>>`        |
-| `v.object({ … })`   | object, recursively parses each field                     | inferred object shape        |
-| `v.record(k, v)`    | object, parses each key + each value                      | `Record<Infer<k>, Infer<v>>` |
-| `v.union(a, b, …)`  | first member that `safeParse` accepts                     | `Infer<a> \| Infer<b> \| …`  |
-| `v.optional(inner)` | `value === undefined` short-circuits, else delegates      | `Infer<inner> \| undefined`  |
+## Related
 
-`v.object` follows the same convention as TS itself: keys whose validator includes `undefined` (i.e. wrapped in `v.optional`) are made optional via `?:` in the inferred type.
+- [`@cirrus/server`](https://www.npmjs.com/package/@cirrus/server) — re-exports `v` for single-import usage in your functions.
+- [`@cirrus/codegen`](https://www.npmjs.com/package/@cirrus/codegen) — reads validator metadata to emit the typed data model.
 
-## Branded ids
+## Supported Node.js Versions
 
-```ts
-import { v, type Id, type Infer } from "@cirrus/values";
+Libraries in this ecosystem make the best effort to track [Node.js' release schedule](https://github.com/nodejs/release#release-schedule).
+Here's [a post on why we think this is important](https://medium.com/the-node-js-collection/maintainers-should-consider-following-node-js-release-schedule-ab08ed4de71a).
 
-const validator = v.id("messages");
-type MessageId = Infer<typeof validator>; // Id<"messages">
+## Contributing
 
-declare const userId: Id<"users">;
-declare const messageId: Id<"messages">;
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
-const wrong: MessageId = userId; // Compile error — Id<"users"> ≠ Id<"messages">
-```
+> **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
-At runtime the branded type is just `string`; the brand exists only in the type system to prevent cross-table id mixups.
+## Credits
 
-## API
+- [Daniel Bannert](https://github.com/prisis)
+- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
 
-| Export            | Description                                                |
-| ----------------- | ---------------------------------------------------------- |
-| `v`               | Validator factory namespace (all entries above).           |
-| `Infer<V>`        | Type helper — extracts the TS type a validator describes.  |
-| `Id<TableName>`   | Branded string type for table ids.                         |
-| `ValidationError` | Thrown by `parse`. Carries `path`, `expected`, `received`. |
-| `describeValue`   | Stringify a runtime value for human-readable errors.       |
-| `formatPath`      | Format a `ValidationPath` (e.g. `messages[3].body`).       |
+## Made with ❤️ at Anolilab
 
-Types: `Validator<T>`, `ValidatorKind`, `ValidationPath`.
-
-## Standard Schema interop
-
-Every `v.*` validator exports the [Standard Schema v1](https://standardschema.dev) surface outbound — you can pass a Cirrus validator anywhere a library expects a Standard Schema object:
-
-```ts
-import { v } from "@cirrus/values";
-
-const schema = v.string(); // also a StandardSchemaV1<string>
-const result = schema["~standard"].validate("hello"); // { value: "hello" }
-```
-
-Inbound — you can use **any** Standard Schema v1 validator (zod, valibot, arktype, …) as an **args** field via `v.from()`:
-
-```ts
-import { z } from "zod"; // or valibot, arktype, …
-import { query } from "@cirrus/server";
-
-const emailSchema = z.string().email();
-
-export const subscribe = query({
-    args: { email: v.from(emailSchema) },
-    handler: async (_ctx, args) => {
-        // args.email is typed `unknown` (codegen can't recover zod's output type)
-        // the value was validated by zod before the handler runs
-    },
-});
-```
-
-Two constraints apply to `v.from()`:
-
-- **Args-only.** `v.from()` cannot be used as a table column in `defineTable` — columns need a concrete `v.*` type that maps to SQL. Attempting it throws at startup.
-- **Sync-only.** Standard Schema allows async `validate`; Cirrus args validation is synchronous. `v.from()` throws a `ValidationError` when the wrapped validator returns a `Promise`.
-
-## Docs
-
-- Repo root: [README.md](../../README.md)
-- Schema concepts: [apps/docs/content/docs/concepts/schema.mdx](../../apps/docs/content/docs/concepts/schema.mdx)
-- Server reference: [apps/docs/content/docs/api/server.mdx](../../apps/docs/content/docs/api/server.mdx)
+This is an open source project and will always remain free to use. If you think it's cool, please star it 🌟. [Anolilab](https://www.anolilab.com/open-source) is a Development and AI Studio. Contact us at [hello@anolilab.com](mailto:hello@anolilab.com) if you need any help with these technologies or just want to say hi!
 
 ## License
 
-MIT — see [LICENSE.md](../../LICENSE.md)
+The Cirrus values package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+
+<!-- badges -->
+
+[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/values?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@cirrus/values
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/values?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@cirrus/values
+[prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
+[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
+[typescript-url]: https://www.typescriptlang.org/

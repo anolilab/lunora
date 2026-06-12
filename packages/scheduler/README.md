@@ -1,6 +1,58 @@
-# @cirrus/scheduler
+<!-- START_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
-Delayed and scheduled function invocation for the Cirrus framework.
+<a href="https://www.anolilab.com/open-source" align="center">
+
+  <img src="__assets__/package-og.svg" alt="scheduler" />
+
+</a>
+
+<h3 align="center">Scheduling for Cirrus: runAfter / runAt and Cron Triggers via SchedulerDO</h3>
+
+<!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
+
+<br />
+
+<div align="center">
+
+[![typescript-image][typescript-badge]][typescript-url]
+[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![npm version][npm-version-badge]][npm-version]
+[![npm downloads][npm-downloads-badge]][npm-downloads]
+[![PRs Welcome][prs-welcome-badge]][prs-welcome]
+
+</div>
+
+---
+
+<div align="center">
+    <p>
+        <sup>
+            Daniel Bannert's open source work is supported by the community on <a href="https://github.com/sponsors/prisis">GitHub Sponsors</a>
+        </sup>
+    </p>
+</div>
+
+---
+
+Scheduling for Cirrus. Defer function invocations with `runAfter` / `runAt` backed by a `SchedulerDO` Durable Object alarm, and run repeating jobs via Cloudflare Cron Triggers.
+
+Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
+
+## Install
+
+```sh
+npm install @cirrus/scheduler
+```
+
+```sh
+yarn add @cirrus/scheduler
+```
+
+```sh
+pnpm add @cirrus/scheduler
+```
+
+## Usage
 
 ```ts
 import { createScheduler } from "@cirrus/scheduler";
@@ -14,59 +66,47 @@ await scheduler.runAfter(5 * 60_000, api.email.sendReminder, { userId: "u-1" });
 await scheduler.runAt(new Date("2026-06-01T12:00:00Z"), api.cleanup.run, { older: 30 });
 ```
 
-Backing: a `SchedulerDO` Durable Object that uses `state.storage.setAlarm()` to fire the next-earliest pending task. On alarm fire it dispatches the function via HTTP back to the Worker, which routes it to the right shard.
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/addons/scheduler)**.
 
-## Bounded concurrency: `createWorkpool` vs. Cloudflare Queues
+## Related
 
-`createWorkpool` is a bounded-concurrency action queue on the same `SchedulerDO`. Cloudflare **Queues** already cover concurrency-capped, retried, dead-lettered, delayed dispatch natively (`max_concurrency`, `max_retries`, `retry({ delaySeconds })`, `dead_letter_queue`) — if you just want to rate-limit fire-and-forget background work, use Queues.
+- [`@cirrus/do`](https://www.npmjs.com/package/@cirrus/do) — the Durable Objects the scheduler dispatches into.
+- [`@cirrus/server`](https://www.npmjs.com/package/@cirrus/server) — define the functions you schedule.
+- [`@cirrus/codegen`](https://www.npmjs.com/package/@cirrus/codegen) — keeps `triggers.crons` in sync from your `cronJobs()` definitions.
 
-The workpool exists for what a queue can't give you: a **hard** concurrency cap (the DO is the single serialization point, so there's no cross-consumer overshoot), per-job **cancellation**, and per-job **status** introspection, all keyed by a stable job id. Pick the workpool when you need those; pick Queues otherwise. Don't grow multi-step orchestration on either — that's Cloudflare **Workflows** (`step.do` / `step.sleep` / `step.waitForEvent`).
+## Supported Node.js Versions
 
-### Queues-backed workpool
+Libraries in this ecosystem make the best effort to track [Node.js' release schedule](https://github.com/nodejs/release#release-schedule).
+Here's [a post on why we think this is important](https://medium.com/the-node-js-collection/maintainers-should-consider-following-node-js-release-schedule-ab08ed4de71a).
 
-For the "just rate-limit my background jobs" case, `createQueueWorkpool` enqueues function dispatches onto a Cloudflare Queue; concurrency, retries, backoff, and dead-lettering are configured on the consumer in `wrangler.jsonc` (`max_concurrency` / `max_retries` / `retry_delay` / `dead_letter_queue`).
+## Contributing
 
-```ts
-// producer (anywhere in your Worker)
-import { createQueueWorkpool } from "@cirrus/scheduler";
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
-const pool = createQueueWorkpool({ queue: env.JOBS });
-await pool.enqueue(internal.stripe.sync, { invoiceId }); // optionally { delaySeconds, shardKey }
+> **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
-// consumer (your Worker's `queue()` handler)
-import { createQueueConsumer, httpDispatcher } from "@cirrus/scheduler";
+## Credits
 
-const consume = createQueueConsumer({
-    dispatch: httpDispatcher({ originUrl: "https://app.acme.test", adminToken: env.CIRRUS_ADMIN_TOKEN }),
-});
+- [Daniel Bannert](https://github.com/prisis)
+- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
 
-export default {
-    queue: (batch, env, ctx) => consume(batch),
-};
-```
+## Made with ❤️ at Anolilab
 
-`httpDispatcher` POSTs each job to the Worker's `/_cirrus/scheduler/dispatch` endpoint (the same path `SchedulerDO` uses) with the admin bearer; supply your own `dispatch` callback to route differently. Failed or malformed messages are `retry()`-ed so they ride Queues' retry + dead-letter machinery rather than being dropped. There is **no** hard cap, cancel, or status here — that's the `createWorkpool` trade-off above.
+This is an open source project and will always remain free to use. If you think it's cool, please star it 🌟. [Anolilab](https://www.anolilab.com/open-source) is a Development and AI Studio. Contact us at [hello@anolilab.com](mailto:hello@anolilab.com) if you need any help with these technologies or just want to say hi!
 
-Declare the queue binding and consumer in `wrangler.jsonc` — this is where concurrency/retry/DLQ live:
+## License
 
-```jsonc
-{
-    "queues": {
-        "producers": [{ "binding": "JOBS", "queue": "cirrus-jobs" }],
-        "consumers": [
-            {
-                "queue": "cirrus-jobs",
-                "max_concurrency": 5,
-                "max_retries": 3,
-                "dead_letter_queue": "cirrus-jobs-dlq",
-            },
-        ],
-    },
-}
-```
+The Cirrus scheduler package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
 
-## Repeated tasks (Cron Triggers)
+<!-- badges -->
 
-For repeated tasks use Cloudflare Cron Triggers — `createCronTrigger()` produces a snippet to paste into your `wrangler.jsonc`, and `@cirrus/codegen` keeps `triggers.crons` in sync from your `cronJobs()` definitions.
-
-> **Limit:** a Worker can have at most **3 Cron Triggers** (distinct cron expressions). Codegen deduplicates by expression — multiple jobs sharing one schedule count as a single trigger — and `cirrus codegen` warns if you exceed it. For finer-grained or higher-cardinality scheduling, use Durable Object alarms (via `runAfter`/`runAt` above), which have no such cap.
+[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/scheduler?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@cirrus/scheduler
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/scheduler?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@cirrus/scheduler
+[prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
+[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
+[typescript-url]: https://www.typescriptlang.org/

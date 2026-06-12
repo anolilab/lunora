@@ -1,102 +1,120 @@
-# @cirrus/client
+<!-- START_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
-Framework-agnostic browser/edge client for the Cirrus framework. Talks RPC over HTTP and real-time deltas over a single multiplexed WebSocket, with optimistic updates, an offline mutation queue, and decorrelated-jitter reconnect built in.
+<a href="https://www.anolilab.com/open-source" align="center">
+
+  <img src="__assets__/package-og.svg" alt="client" />
+
+</a>
+
+<h3 align="center">Cirrus browser SDK: WebSocket transport, optimistic updates, and an offline mutation queue</h3>
+
+<!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
+
+<br />
+
+<div align="center">
+
+[![typescript-image][typescript-badge]][typescript-url]
+[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![npm version][npm-version-badge]][npm-version]
+[![npm downloads][npm-downloads-badge]][npm-downloads]
+[![PRs Welcome][prs-welcome-badge]][prs-welcome]
+
+</div>
+
+---
+
+<div align="center">
+    <p>
+        <sup>
+            Daniel Bannert's open source work is supported by the community on <a href="https://github.com/sponsors/prisis">GitHub Sponsors</a>
+        </sup>
+    </p>
+</div>
+
+---
+
+The framework-agnostic browser/edge SDK for Cirrus. It runs RPC over HTTP and real-time deltas over a single multiplexed WebSocket, with optimistic updates, an offline mutation queue, and decorrelated-jitter reconnect built in. It is the lowest-level user-facing entry point that every framework adapter (React, Vue, Svelte, Solid) layers on top of.
+
+Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
 ## Install
 
-```bash
-pnpm add @cirrus/client
+```sh
+npm install @cirrus/client
 ```
 
-No workspace deps beyond its own internals — `@cirrus/client` is the lowest-level user-facing entry point. Framework adapters layer on top: see [`@cirrus/react`](../react).
+```sh
+yarn add @cirrus/client
+```
+
+```sh
+pnpm add @cirrus/client
+```
 
 ## Usage
 
 ```ts
 import { CirrusClient } from "@cirrus/client";
-import { api } from "./cirrus/_generated/api.js";
+import { api } from "./cirrus/_generated/api";
 
 const client = new CirrusClient({ url: "https://app.acme.test" });
 
-// One-shot query (HTTP, carries x-d1-bookmark for read-your-writes).
+// One-shot query (HTTP, carries the D1 bookmark for read-your-writes).
 const messages = await client.query(api.messages.list, { room: "general" });
 
-// Mutation with an optimistic update applied to any matching subscriber.
-await client.mutation(
-    api.messages.send,
-    { body: "hi" },
-    {
-        optimistic: (current = []) => [...current, { body: "hi", pending: true }],
-    },
-);
+// Mutation with an optimistic update applied to matching subscribers.
+await client.mutation(api.messages.send, { body: "hi" }, { optimistic: (current = []) => [...current, { body: "hi", pending: true }] });
 
 // Live subscription over WS — returns an unsubscribe function.
 const unsubscribe = client.subscribe(api.messages.list, { room: "general" }, (next) => {
     console.log("new value", next);
 });
 
-// Tear down on app exit.
 client.close();
 ```
 
-## Connection lifecycle
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/api/client)**.
 
-- A WebSocket is opened lazily on the first `subscribe()`. The same socket multiplexes every subscription.
-- On disconnect the client schedules a reconnect with **decorrelated jitter** (`[delay/2, delay]` from `createReconnect`), capped at `maxDelayMs` (default 30s). On successful reconnect every live subscription is re-sent and the offline queue is flushed.
-- Mutations issued while disconnected are queued (only after the first successful connect — before that, mutations travel directly over HTTP so the very first call doesn't deadlock).
-- `x-d1-bookmark` is captured from mutation responses and attached to subsequent queries for D1 read-your-writes consistency. Storage is pluggable via `BookmarkStorage`.
+## Related
 
-## API
+- [`@cirrus/react`](https://www.npmjs.com/package/@cirrus/react) — React hooks built on this client.
+- [`@cirrus/query-core`](https://www.npmjs.com/package/@cirrus/query-core) — shared live-query state machine for UI adapters.
+- [`@cirrus/ssr`](https://www.npmjs.com/package/@cirrus/ssr) — server-side preloading over this client's HTTP transport.
 
-| Export                                  | Description                                                                   |
-| --------------------------------------- | ----------------------------------------------------------------------------- |
-| `new CirrusClient(opts)`                | Construct a client. `opts.url` is required; the WS URL is derived from it.    |
-| `client.query(fn, args, opts?)`         | RPC. Attaches the saved D1 bookmark.                                          |
-| `client.mutation(fn, args, opts?)`      | RPC with optional `optimistic` + offline queueing. Captures the new bookmark. |
-| `client.action(fn, args, opts?)`        | RPC for actions (no bookmark, no optimism).                                   |
-| `client.subscribe(fn, args, cb, opts?)` | Open a live subscription. Returns an `unsubscribe` function.                  |
-| `client.setAuthToken(token)`            | Set the bearer token sent on every RPC.                                       |
-| `client.close()`                        | Tear down the socket and clear the offline queue.                             |
-| `createInMemoryBookmarkStorage()`       | Default `BookmarkStorage` implementation.                                     |
-| `createReconnect(opts?)`                | Standalone reconnect calculator with decorrelated jitter.                     |
-| `OfflineQueue`                          | Underlying mutation queue (exposed for tests/custom transports).              |
-| `SubscriptionRegistry`                  | Internal registry — exported for adapter authors.                             |
+## Supported Node.js Versions
 
-Types: `CirrusClientOptions`, `FunctionReference`, `ArgsOf`, `ReturnOf`, `RpcEnvelope`, `RpcResponseBody`, `ClientMessage`, `ServerMessage`, `Unsubscribe`, `User`, `BookmarkStorage`, `ReconnectOptions`, `OfflineQueueOptions`.
+Libraries in this ecosystem make the best effort to track [Node.js' release schedule](https://github.com/nodejs/release#release-schedule).
+Here's [a post on why we think this is important](https://medium.com/the-node-js-collection/maintainers-should-consider-following-node-js-release-schedule-ab08ed4de71a).
 
-## Constructor options
+## Contributing
 
-```ts
-new CirrusClient({
-    url: "https://app.acme.test",
-    wsUrl: "wss://app.acme.test/_cirrus/ws", // optional override
-    wsToken: env.CIRRUS_ADMIN_TOKEN, // optional — appended to the WS URL as ?token=
-    fetch: customFetch, // optional — defaults to globalThis.fetch
-    WebSocket: ws, // optional — defaults to globalThis.WebSocket
-    bookmarkStorage: createInMemoryBookmarkStorage(),
-    reconnect: { initialDelayMs: 250, maxDelayMs: 30_000, jitter: true },
-    offlineQueue: { maxSize: 100 },
-});
-```
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
-`wsToken` is appended to the WebSocket URL as `?token=…` — the only channel a
-browser `WebSocket` has, since its constructor can't set headers. The server
-matches it against `CIRRUS_WS_BEARER` (to clear the upgrade gate) and/or
-`CIRRUS_ADMIN_TOKEN` (to authorize reserved `__cirrus_admin__:*` subscriptions,
-which is how `@cirrus/studio` streams admin data). It ends up in server logs
-and history, so prefer a short-lived rotating token in production.
+> **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
-A `subscribe()` call may pass `onError` in its options to be notified when the
-server rejects that subscription (e.g. an admin subscription on a socket that
-didn't clear the admin gate); the registration is kept so a later reconnect with
-proper credentials can still succeed.
+## Credits
 
-## Docs
+- [Daniel Bannert](https://github.com/prisis)
+- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
 
-- Repo root: [README.md](../../README.md)
-- Client reference: [apps/docs/content/docs/api/client.mdx](../../apps/docs/content/docs/api/client.mdx)
-- Realtime concepts: [apps/docs/content/docs/concepts/realtime.mdx](../../apps/docs/content/docs/concepts/realtime.mdx)
+## Made with ❤️ at Anolilab
+
+This is an open source project and will always remain free to use. If you think it's cool, please star it 🌟. [Anolilab](https://www.anolilab.com/open-source) is a Development and AI Studio. Contact us at [hello@anolilab.com](mailto:hello@anolilab.com) if you need any help with these technologies or just want to say hi!
 
 ## License
 
-MIT — see [LICENSE.md](../../LICENSE.md)
+The Cirrus client package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+
+<!-- badges -->
+
+[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/client?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@cirrus/client
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/client?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@cirrus/client
+[prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
+[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
+[typescript-url]: https://www.typescriptlang.org/

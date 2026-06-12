@@ -2,10 +2,35 @@
     "name": "@cirrus/testing",
     "version": "0.0.0",
     "license": "FSL-1.1-Apache-2.0",
+    "description": "Testing toolkit for Cirrus: an in-memory harness for queries, mutations, and actions",
+    "homepage": "https://cirrus.dev",
+    "bugs": {
+        "url": "https://github.com/anolilab/cirrus/issues"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/anolilab/cirrus.git",
+        "directory": "packages/testing"
+    },
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
+    },
+    "keywords": [
+        "cirrus",
+        "cloudflare",
+        "workers",
+        "durable-objects",
+        "testing",
+        "e2e",
+        "mail",
+        "playwright"
+    ],
     "files": [
         "dist",
         "README.md",
-        "LICENSE.md"
+        "LICENSE.md",
+        "__assets__"
     ],
     "type": "module",
     "sideEffects": false,

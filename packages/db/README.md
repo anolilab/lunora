@@ -1,8 +1,58 @@
-# @cirrus/db
+<!-- START_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
-Optimistic, offline-first client data layer for the Cirrus framework, built on [TanStack DB](https://tanstack.com/db). `defineCollections` binds your Cirrus queries and mutations into live, indexed client collections (reads) and a durable, retried offline-transactions outbox (writes) — so a write renders instantly, survives reloads and offline windows, is superseded by the real server row on acknowledgement, and rolls back if the server rejects it.
+<a href="https://www.anolilab.com/open-source" align="center">
 
-Peer-depends on `@tanstack/db` and `@tanstack/offline-transactions`; React bindings (`@tanstack/react-db`) are supplied by the consuming app.
+  <img src="__assets__/package-og.svg" alt="db" />
+
+</a>
+
+<h3 align="center">TanStack DB binding: typed, live-synced collections and a durable offline outbox over the Cirrus client</h3>
+
+<!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
+
+<br />
+
+<div align="center">
+
+[![typescript-image][typescript-badge]][typescript-url]
+[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![npm version][npm-version-badge]][npm-version]
+[![npm downloads][npm-downloads-badge]][npm-downloads]
+[![PRs Welcome][prs-welcome-badge]][prs-welcome]
+
+</div>
+
+---
+
+<div align="center">
+    <p>
+        <sup>
+            Daniel Bannert's open source work is supported by the community on <a href="https://github.com/sponsors/prisis">GitHub Sponsors</a>
+        </sup>
+    </p>
+</div>
+
+---
+
+A [TanStack DB](https://tanstack.com/db) binding for the Cirrus client. `defineCollections` wires your Cirrus queries and mutations into live, indexed client collections (reads) and a durable, retried offline-transactions outbox (writes) — so a write renders instantly, survives reloads and offline windows, is superseded by the real server row on acknowledgement, and rolls back if the server rejects it. Peer-depends on `@tanstack/db` and `@tanstack/offline-transactions`.
+
+Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
+
+## Install
+
+```sh
+npm install @cirrus/db
+```
+
+```sh
+yarn add @cirrus/db
+```
+
+```sh
+pnpm add @cirrus/db
+```
+
+## Usage
 
 ```ts
 import { defineCollections } from "@cirrus/db";
@@ -32,48 +82,49 @@ export const createCollections = (client: CirrusClient) =>
 //   db.scope.* (re-point sharded collections), db.executor (the outbox)
 ```
 
-You don't have to write this by hand — `vis generate cirrus-collections` scaffolds it from your `schema.ts` + functions.
+> `vis generate cirrus-collections` scaffolds this from your `schema.ts` + functions.
 
-## API reference
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/addons/db)**.
 
-### `defineCollections(client, defs)`
+## Related
 
-`<D>(client: CirrusClient, defs: D) => CirrusDb<D>`. Wires each entry of `defs` into a live, auto-indexed TanStack DB collection synced from its `list` query, and — for entries with an `insert` binding — an optimistic write action backed by the offline-transactions outbox (durable, retried, client-id-keyed). Scoped (`scopeBy`) collections are re-pointable for sharded queries.
+- [`@cirrus/client`](https://www.npmjs.com/package/@cirrus/client) — the browser SDK this layer syncs over.
+- [`@cirrus/react`](https://www.npmjs.com/package/@cirrus/react) — React hooks for Cirrus queries and mutations.
+- [`@cirrus/server`](https://www.npmjs.com/package/@cirrus/server) — server primitives that define the queries and mutations you bind.
 
-Each value in `defs` is a `CollectionDef`:
+## Supported Node.js Versions
 
-| Field     | Type                          | Description                                                                                            |
-| --------- | ----------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `list`    | `FunctionReference`           | **Required.** The Cirrus query that lists the rows — the sync source.                                  |
-| `insert`  | `InsertBinding<TRow, TInput>` | Optional write binding. Present iff the collection is written through the outbox.                      |
-| `scopeBy` | `string`                      | Optional field that scopes the list (e.g. a shard key); makes the collection re-pointable via `scope`. |
-| `getKey`  | `(row) => string`             | Optional row-key extractor. Defaults to `row._id`.                                                     |
+Libraries in this ecosystem make the best effort to track [Node.js' release schedule](https://github.com/nodejs/release#release-schedule).
+Here's [a post on why we think this is important](https://medium.com/the-node-js-collection/maintainers-should-consider-following-node-js-release-schedule-ab08ed4de71a).
 
-An `InsertBinding` describes how a write flows through the outbox:
+## Contributing
 
-| Field        | Type                               | Description                                                                                  |
-| ------------ | ---------------------------------- | -------------------------------------------------------------------------------------------- |
-| `mutation`   | `FunctionReference`                | The Cirrus mutation that persists the row.                                                   |
-| `optimistic` | `(input, id) => TRow`              | Build the optimistic row to insert from the action input + the generated client id.          |
-| `toArgs`     | `(row) => Record<string, unknown>` | Build the mutation args from the persisted optimistic row (forward `_id` as the `clientId`). |
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
-A scoped collection starts empty and only subscribes once you call `db.scope.<name>(args)`; pass no args to detach.
+> **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
-### `CirrusDb<D>` (return value)
+## Credits
 
-| Member        | Type                                       | Description                                                                                                                                         |
-| ------------- | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `collections` | `{ [K]: Collection<RowOf<D[K]>, string> }` | The live, synced collections — feed these to `useLiveQuery`.                                                                                        |
-| `actions`     | `{ [K]: (input) => { id; transaction } }`  | Optimistic, durable, retried write actions — present for `insert` collections. Returns the generated client `id` and the TanStack DB `Transaction`. |
-| `scope`       | `{ [K]: (args?) => void }`                 | Re-point a `scopeBy` collection's subscription (omit `args` to detach) — present for scoped collections.                                            |
-| `executor`    | `OfflineExecutor`                          | The shared offline executor (the outbox).                                                                                                           |
+- [Daniel Bannert](https://github.com/prisis)
+- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
 
-The result is fully typed from `defs`: only `insert` entries expose an `actions` member, only `scopeBy` entries expose a `scope` member, and each collection's row type is inferred from its `list` query's return.
+## Made with ❤️ at Anolilab
 
-### Lower-level helpers
+This is an open source project and will always remain free to use. If you think it's cool, please star it 🌟. [Anolilab](https://www.anolilab.com/open-source) is a Development and AI Studio. Contact us at [hello@anolilab.com](mailto:hello@anolilab.com) if you need any help with these technologies or just want to say hi!
 
-Exported for testing and advanced composition: `toMap(rows, getKey)` (index a row list into a keyed map), `makeDiffEmit(synced, writer)` (diff a desired keyed snapshot into a collection's sync channel — only changed rows are written), `runOutboxMutation(mutate)` (run a mutation under the outbox retry policy: coded server errors become `NonRetriableError` and roll back, code-less network/infra failures are retried), and `createOptimisticOnlineDetector()` (an "always attempt" `OnlineDetector` that periodically nudges the executor to drain the outbox). Types: `CirrusDb`, `CollectionDef`, `InsertBinding`, `Row` (`Record<string, unknown> & { _id: string }`), `SyncWriter`.
+## License
 
-See the [@cirrus/db guide](https://github.com/anolilab/cirrus) for the full walkthrough.
+The Cirrus db package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
 
-Part of the [Cirrus](https://github.com/anolilab/cirrus) framework.
+<!-- badges -->
+
+[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/db?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@cirrus/db
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/db?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@cirrus/db
+[prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
+[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
+[typescript-url]: https://www.typescriptlang.org/

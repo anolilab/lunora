@@ -1,16 +1,56 @@
-# @cirrus/codegen
+<!-- START_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
-Code generator for the Cirrus framework. Parses a project's `cirrus/schema.ts` plus every function file under `cirrus/`, then emits `cirrus/_generated/{api,server,dataModel}.ts` so the rest of the app gets fully typed access to its own backend.
+<a href="https://www.anolilab.com/open-source" align="center">
 
-Most users never invoke this package directly — the `cirrus codegen` CLI command and the `@cirrus/vite` plugin both call it on your behalf. The direct API stays public for monorepo build scripts and custom generator pipelines.
+  <img src="__assets__/package-og.svg" alt="codegen" />
+
+</a>
+
+<h3 align="center">Code generator for Cirrus: emits _generated/{api,server,dataModel}.ts from your schema</h3>
+
+<!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
+
+<br />
+
+<div align="center">
+
+[![typescript-image][typescript-badge]][typescript-url]
+[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![npm version][npm-version-badge]][npm-version]
+[![npm downloads][npm-downloads-badge]][npm-downloads]
+[![PRs Welcome][prs-welcome-badge]][prs-welcome]
+
+</div>
+
+---
+
+<div align="center">
+    <p>
+        <sup>
+            Daniel Bannert's open source work is supported by the community on <a href="https://github.com/sponsors/prisis">GitHub Sponsors</a>
+        </sup>
+    </p>
+</div>
+
+---
+
+The Cirrus code generator. It parses your `cirrus/schema.ts` plus every function file under `cirrus/`, then emits `cirrus/_generated/{api,server,dataModel}.ts` so the rest of your app gets fully typed access to its own backend. Most apps never call it directly — the `cirrus codegen` CLI command and the `@cirrus/vite` plugin invoke it for you.
+
+Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
 ## Install
 
-```bash
-pnpm add -D @cirrus/codegen
+```sh
+npm install @cirrus/codegen
 ```
 
-Dependency: `ts-morph` (used to walk the TypeScript AST without a full type-checker round-trip).
+```sh
+yarn add @cirrus/codegen
+```
+
+```sh
+pnpm add @cirrus/codegen
+```
 
 ## Usage
 
@@ -19,69 +59,52 @@ import { runCodegen } from "@cirrus/codegen";
 
 const result = runCodegen({ projectRoot: process.cwd() });
 
-console.log(`wrote dataModel.ts, api.ts, server.ts -> ${result.outputDirectory}`);
+console.log(`wrote api.ts, server.ts, dataModel.ts -> ${result.outputDirectory}`);
 ```
 
-Or via the CLI (preferred for app code):
+The emitted `_generated/*` modules are consumed under NodeNext, so their imports carry `.js` extensions — for example `import { api } from "./_generated/api.js"`.
 
-```bash
-cirrus codegen
-```
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/concepts/schema)**.
 
-### Custom build scripts
+## Related
 
-The lower-level discovery and emit helpers are exported individually so monorepos can compose their own pipelines (e.g. emit into a custom directory, fan out to multiple apps, snapshot-diff in CI):
+- [`@cirrus/cli`](https://www.npmjs.com/package/@cirrus/cli) — the `cirrus codegen` command calls into this package.
+- [`@cirrus/vite`](https://www.npmjs.com/package/@cirrus/vite) — runs codegen on schema changes during dev.
+- [`@cirrus/values`](https://www.npmjs.com/package/@cirrus/values) — the `v.*` validators the parser understands.
 
-```ts
-import { discoverSchema, discoverFunctions, emitApi, emitDataModel, emitServer } from "@cirrus/codegen";
-import { Project } from "ts-morph";
+## Supported Node.js Versions
 
-const project = new Project({ tsConfigFilePath: "tsconfig.json" });
-const schema = discoverSchema(project, "cirrus/schema.ts");
-const functions = discoverFunctions(project, "cirrus");
+Libraries in this ecosystem make the best effort to track [Node.js' release schedule](https://github.com/nodejs/release#release-schedule).
+Here's [a post on why we think this is important](https://medium.com/the-node-js-collection/maintainers-should-consider-following-node-js-release-schedule-ab08ed4de71a).
 
-writeFileSync("dataModel.ts", emitDataModel(schema));
-writeFileSync("api.ts", emitApi(functions));
-writeFileSync("server.ts", emitServer());
-```
+## Contributing
 
-## Validator coverage
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
-The parser ([`parse-validator.ts`](./src/parse-validator.ts)) understands every kind the [`v` namespace](../values) exposes:
+> **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
-- Primitives: `v.string()`, `v.number()`, `v.boolean()`, `v.bigint()`, `v.null()`, `v.bytes()`, `v.any()`
-- `v.id("tableName")` — generates a branded `Id<"tableName">`
-- `v.literal("admin")` — captures the source text so the emitted TS type matches the literal exactly
-- `v.array(inner)`, `v.optional(inner)`, `v.union(a, b, c)`
-- `v.object({ ... })` — recursively walks the shape
-- `v.record(keyValidator, valueValidator)`
+## Credits
 
-Unknown validator kinds throw `Unsupported validator kind: <name>` at parse time. This is intentional — silently emitting `unknown` would mask codegen bugs. If you add a new validator kind in `@cirrus/values`, add a matching branch here.
+- [Daniel Bannert](https://github.com/prisis)
+- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
 
-## API
+## Made with ❤️ at Anolilab
 
-| Export                   | Description                                                                            |
-| ------------------------ | -------------------------------------------------------------------------------------- |
-| `runCodegen(options)`    | Top-level entry. Discovers + emits. Returns the output directory.                      |
-| `discoverSchema(...)`    | Parse `schema.ts` into a `SchemaIR`.                                                   |
-| `discoverFunctions(...)` | Walk a directory and parse every `query`/`mutation`/`action` call into a `FunctionIR`. |
-| `emitApi(functions)`     | Render the typed `api.ts`.                                                             |
-| `emitDataModel(schema)`  | Render the typed `dataModel.ts`.                                                       |
-| `emitServer()`           | Render the per-project `server.ts` re-export.                                          |
-| `GENERATED_HEADER`       | Header banner prepended to every emitted file.                                         |
-
-Types: `CodegenOptions`, `CodegenResult`, `SchemaIR`, `TableIR`, `IndexIR`, `FunctionIR`, `ValidatorIR`, `ProjectIR`.
-
-## Behavior notes
-
-- `writeIfChanged` avoids touching files whose contents haven't changed, so Vite/HMR won't reload on no-op runs.
-- When a `tsconfig.json` is found by walking up from the cirrus directory, it is loaded so cross-file type resolution and path aliases work. Otherwise an isolated `ts-morph` project is used.
-
-## Docs
-
-- Repo root: [README.md](../../README.md)
-- Schema concepts: [apps/docs/content/docs/concepts/schema.mdx](../../apps/docs/content/docs/concepts/schema.mdx)
+This is an open source project and will always remain free to use. If you think it's cool, please star it 🌟. [Anolilab](https://www.anolilab.com/open-source) is a Development and AI Studio. Contact us at [hello@anolilab.com](mailto:hello@anolilab.com) if you need any help with these technologies or just want to say hi!
 
 ## License
 
-MIT — see [LICENSE.md](../../LICENSE.md)
+The Cirrus codegen package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+
+<!-- badges -->
+
+[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/codegen?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@cirrus/codegen
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/codegen?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@cirrus/codegen
+[prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
+[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
+[typescript-url]: https://www.typescriptlang.org/

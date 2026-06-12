@@ -1,96 +1,110 @@
-# @cirrus/vite
+<!-- START_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
-Vite plugin for the Cirrus framework. Wraps [`@cloudflare/vite-plugin`](https://www.npmjs.com/package/@cloudflare/vite-plugin) and layers on the project-specific pieces that a Cirrus app needs: codegen-on-save, `wrangler.jsonc` validation, and runtime error overlays.
+<a href="https://www.anolilab.com/open-source" align="center">
 
-The plugin is async and returns a flat **array** of Vite plugins, so you spread it into `defineConfig`. We deliberately defer all the Worker/Durable Object binding plumbing to `@cloudflare/vite-plugin` — we don't reinvent it.
+  <img src="__assets__/package-og.svg" alt="vite" />
 
-Tested against TanStack Start and React Router v7. Anything else that builds on top of `@cloudflare/vite-plugin` should work too.
+</a>
+
+<h3 align="center">The Cirrus Vite plugin: codegen, type sync, wrangler validation, and an error overlay over @cloudflare/vite-plugin</h3>
+
+<!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
+
+<br />
+
+<div align="center">
+
+[![typescript-image][typescript-badge]][typescript-url]
+[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![npm version][npm-version-badge]][npm-version]
+[![npm downloads][npm-downloads-badge]][npm-downloads]
+[![PRs Welcome][prs-welcome-badge]][prs-welcome]
+
+</div>
+
+---
+
+<div align="center">
+    <p>
+        <sup>
+            Daniel Bannert's open source work is supported by the community on <a href="https://github.com/sponsors/prisis">GitHub Sponsors</a>
+        </sup>
+    </p>
+</div>
+
+---
+
+The Cirrus Vite plugin. It wraps [`@cloudflare/vite-plugin`](https://www.npmjs.com/package/@cloudflare/vite-plugin) and layers on the project-specific pieces a Cirrus app needs: codegen on save, type sync, `wrangler.jsonc` validation, and a runtime error overlay. `cirrus()` returns a flat array of Vite plugins you drop straight into `plugins`.
+
+Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
 ## Install
 
-```bash
-pnpm add -D @cirrus/vite vite
-pnpm add -D @visulima/vite-overlay   # optional — runtime error overlay
+```sh
+npm install @cirrus/vite
 ```
 
-Workspace dependencies: [`@cirrus/codegen`](../codegen), [`@cirrus/config`](../config). Peer deps: `vite` and (optional) `@visulima/vite-overlay`.
+```sh
+yarn add @cirrus/vite
+```
+
+```sh
+pnpm add @cirrus/vite
+```
 
 ## Usage
 
 ```ts
 // vite.config.ts
-import { defineConfig } from "vite";
 import { cirrus } from "@cirrus/vite";
+import { defineConfig } from "vite";
 
 export default defineConfig({
     plugins: [cirrus()],
 });
 ```
 
-`cirrus()` returns an array of Vite plugins; Vite flattens nested plugin arrays, so it goes straight into `plugins` with no spread.
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/api/vite)**.
 
-With options:
+## Related
 
-```ts
-export default defineConfig({
-    plugins: [
-        cirrus({
-            projectRoot: process.cwd(),
-            schemaDir: "cirrus",
-            generatedDir: "cirrus/_generated",
-            overlay: true,
-            validateWrangler: true,
-            cloudflare: {
-                /* forwarded to @cloudflare/vite-plugin */
-            },
-        }),
-    ],
-});
-```
+- [`@cirrus/cli`](https://www.npmjs.com/package/@cirrus/cli) — the CLI; `cirrus dev` builds on this plugin.
+- [`@cirrus/codegen`](https://www.npmjs.com/package/@cirrus/codegen) — the code generator run on schema changes.
+- [`@cirrus/config`](https://www.npmjs.com/package/@cirrus/config) — shared `wrangler.jsonc` validation and binding inference.
 
-## What it does
+## Supported Node.js Versions
 
-The `cirrus(options)` factory composes up to four plugins in order:
+Libraries in this ecosystem make the best effort to track [Node.js' release schedule](https://github.com/nodejs/release#release-schedule).
+Here's [a post on why we think this is important](https://medium.com/the-node-js-collection/maintainers-should-consider-following-node-js-release-schedule-ab08ed4de71a).
 
-1. **`cirrus:codegen`** — runs [`@cirrus/codegen`](../codegen) on `buildStart`. In dev mode, watches the schema directory and re-runs codegen on add/change/unlink, debounced 100ms. Test files (`*.test.ts`, `*.spec.ts`, anything under `__tests__/`) and files inside `_generated/` are filtered out. On a successful rerun the generated modules are invalidated in the module graph and the browser receives a `full-reload`.
+## Contributing
 
-2. **`cirrus:wrangler-validator`** — runs at `configResolved` and fails the dev server / build with helpful errors when `wrangler.jsonc` is missing the SHARD durable object, a recent-enough `compatibility_date` (`>= 2026-04-07`), the `web_socket_auto_reply_to_close` compatibility flag when `compatibility_date` predates 2026-04-07, or the `DB` D1 binding when any table is `.global()`. Disable with `validateWrangler: false` (not recommended).
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
-3. **`@visulima/vite-overlay`** — dynamically imported. If the package isn't installed the plugin is silently a no-op. Disable explicitly with `overlay: false`.
+> **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
-4. **`@cloudflare/vite-plugin`** — dynamically imported and forwarded the value of `options.cloudflare`. Pass `cloudflare: false` to skip (e.g. when something upstream already includes it). Loading failures emit a warning but don't break the build.
+## Credits
 
-## Options
+- [Daniel Bannert](https://github.com/prisis)
+- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
 
-| Option             | Default                    | Meaning                                                               |
-| ------------------ | -------------------------- | --------------------------------------------------------------------- |
-| `projectRoot`      | `process.cwd()`            | Resolves `schemaDir` and `wrangler.jsonc` against this.               |
-| `schemaDir`        | `"cirrus"`                 | Directory containing `schema.ts` and your function files.             |
-| `generatedDir`     | `"<schemaDir>/_generated"` | Where codegen writes `api.ts`, `server.ts`, `dataModel.ts`.           |
-| `overlay`          | `true`                     | Inject `@visulima/vite-overlay` when installed.                       |
-| `validateWrangler` | `true`                     | Enforce wrangler.jsonc against schema bindings.                       |
-| `cloudflare`       | `{}`                       | Options forwarded to `@cloudflare/vite-plugin`. Pass `false` to skip. |
+## Made with ❤️ at Anolilab
 
-## API
-
-| Export                              | Description                                                              |
-| ----------------------------------- | ------------------------------------------------------------------------ |
-| `cirrus(options?)`                  | Factory. Returns `Plugin[]` — drop it into `plugins` (Vite flattens it). |
-| `codegenPlugin(resolved)`           | The codegen-on-save plugin in isolation.                                 |
-| `studioPlugin()`                    | The `/__cirrus` studio dev-server plugin in isolation.                   |
-| `wranglerValidatorPlugin(resolved)` | The wrangler.jsonc validator plugin in isolation.                        |
-| `VERSION`                           | Plugin version string.                                                   |
-
-Types: `CirrusPluginOptions`, `ResolvedCirrusPluginOptions`, `CloudflarePluginOptions`, `OverlayPluginOptions`, `CirrusPlugins`.
-
-The error overlay is `@visulima/vite-overlay` used directly (no Cirrus wrapper) — toggle it with the `overlay` option.
-
-## Docs
-
-- Repo root: [README.md](../../README.md)
-- Vite reference: [apps/docs/content/docs/api/vite.mdx](../../apps/docs/content/docs/api/vite.mdx)
-- Getting started: [apps/docs/content/docs/getting-started.mdx](../../apps/docs/content/docs/getting-started.mdx)
+This is an open source project and will always remain free to use. If you think it's cool, please star it 🌟. [Anolilab](https://www.anolilab.com/open-source) is a Development and AI Studio. Contact us at [hello@anolilab.com](mailto:hello@anolilab.com) if you need any help with these technologies or just want to say hi!
 
 ## License
 
-MIT — see [LICENSE.md](../../LICENSE.md)
+The Cirrus vite package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+
+<!-- badges -->
+
+[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/vite?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@cirrus/vite
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/vite?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@cirrus/vite
+[prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
+[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
+[typescript-url]: https://www.typescriptlang.org/

@@ -1,8 +1,31 @@
 {
     "name": "@cirrus/advisor",
     "version": "0.0.0",
-    "description": "Schema & runtime lints (splinter-style advisors) for Cirrus",
+    "description": "Schema & query lints (splinter-style advisors) for Cirrus, feeding the Studio Advisors view",
     "license": "FSL-1.1-Apache-2.0",
+    "homepage": "https://cirrus.dev",
+    "bugs": {
+        "url": "https://github.com/anolilab/cirrus/issues"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/anolilab/cirrus.git",
+        "directory": "packages/advisor"
+    },
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
+    },
+    "keywords": [
+        "cirrus",
+        "cloudflare",
+        "workers",
+        "durable-objects",
+        "lint",
+        "advisor",
+        "schema",
+        "splinter"
+    ],
     "type": "module",
     "sideEffects": false,
     "main": "./dist/index.mjs",
@@ -18,7 +41,8 @@
     "files": [
         "dist",
         "README.md",
-        "LICENSE.md"
+        "LICENSE.md",
+        "__assets__"
     ],
     "scripts": {
         "build": "pnpm exec packem build --development",

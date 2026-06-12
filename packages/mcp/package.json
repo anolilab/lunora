@@ -3,11 +3,35 @@
     "version": "0.0.0",
     "description": "Model Context Protocol server exposing a Cirrus deployment to AI agents",
     "license": "FSL-1.1-Apache-2.0",
+    "homepage": "https://cirrus.dev",
+    "bugs": {
+        "url": "https://github.com/anolilab/cirrus/issues"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/anolilab/cirrus.git",
+        "directory": "packages/mcp"
+    },
+    "author": {
+        "name": "Daniel Bannert",
+        "email": "d.bannert@anolilab.de"
+    },
+    "keywords": [
+        "cirrus",
+        "cloudflare",
+        "workers",
+        "durable-objects",
+        "mcp",
+        "model-context-protocol",
+        "ai-agents",
+        "llm"
+    ],
     "bin": {
         "cirrus-mcp": "./dist/bin.mjs"
     },
     "files": [
         "dist",
+        "__assets__",
         "README.md",
         "LICENSE.md"
     ],

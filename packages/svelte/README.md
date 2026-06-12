@@ -1,110 +1,113 @@
-# @cirrus/svelte
+<!-- START_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
-Svelte adapter for Cirrus — live stores, optimistic mutations, and the reactive-loader handoff.
+<a href="https://www.anolilab.com/open-source" align="center">
 
-Part of the [Cirrus](https://github.com/anolilab/cirrus) framework.
+  <img src="__assets__/package-og.svg" alt="svelte" />
 
-Thin, idiomatic glue over the framework-neutral [`@cirrus/client`](../client) (zero React). It re-expresses the `@cirrus/react` contract in Svelte stores you read with the `$store` idiom:
+</a>
 
-| `@cirrus/svelte`                      | `@cirrus/react` equivalent       | What it does                                                           |
-| ------------------------------------- | -------------------------------- | ---------------------------------------------------------------------- |
-| `setCirrusClient` / `getCirrusClient` | `<CirrusProvider>` / `useCirrus` | Publish/read the `CirrusClient` over Svelte context.                   |
-| `query(fn, args)`                     | `useQuery`                       | A live `Readable` that opens a WS subscription and re-emits on deltas. |
-| `mutation(fn)`                        | `useMutation`                    | `{ mutate, pending }` — optimistic, ref-counted pending store.         |
-| `hydratePreloaded(preloaded)`         | `usePreloadedQuery`              | SSR seed → live store, no loading flash.                               |
+<h3 align="center">Svelte adapter for Cirrus — live stores, optimistic mutations, and reactive loaders</h3>
 
-The package is plain `.ts` over Svelte stores — **no `.svelte` component compiler is required** to build or test it, so it stays unit-testable under Vitest.
+<!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
+
+<br />
+
+<div align="center">
+
+[![typescript-image][typescript-badge]][typescript-url]
+[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![npm version][npm-version-badge]][npm-version]
+[![npm downloads][npm-downloads-badge]][npm-downloads]
+[![PRs Welcome][prs-welcome-badge]][prs-welcome]
+
+</div>
+
+---
+
+<div align="center">
+    <p>
+        <sup>
+            Daniel Bannert's open source work is supported by the community on <a href="https://github.com/sponsors/prisis">GitHub Sponsors</a>
+        </sup>
+    </p>
+</div>
+
+---
+
+The Svelte adapter for Cirrus. Thin, idiomatic glue over the framework-neutral `@cirrus/client`, re-expressed as Svelte stores you read with the `$store` idiom: live query stores, optimistic mutations, and a `hydratePreloaded` SSR handoff. Plain `.ts` over stores — no `.svelte` compiler is required to build or test it.
+
+Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
 ## Install
 
-```bash
-pnpm add @cirrus/svelte svelte
+```sh
+npm install @cirrus/svelte
 ```
 
-`svelte` (>= 5) is a peer dependency.
+```sh
+yarn add @cirrus/svelte
+```
+
+```sh
+pnpm add @cirrus/svelte
+```
 
 ## Usage
 
-### 1. Provide the client (once, at the root)
-
-```svelte
-<!-- src/routes/+layout.svelte -->
-<script lang="ts">
-    import { CirrusClient } from "@cirrus/client";
-    import { setCirrusClient } from "@cirrus/svelte";
-
-    setCirrusClient(new CirrusClient({ url: import.meta.env.VITE_CIRRUS_URL }));
-</script>
-
-<slot />
-```
-
-### 2. Live query store
-
-```svelte
-<script lang="ts">
-    import { query } from "@cirrus/svelte";
-    import { api } from "$lib/_generated/api";
-
-    // `$messages` updates on every server delta.
-    const messages = query(api.messages.list, { room: "general" });
-</script>
-
-{#each $messages ?? [] as message}
-    <p>{message.text}</p>
-{/each}
-```
-
-### 3. Optimistic mutation
-
-```svelte
-<script lang="ts">
-    import { mutation } from "@cirrus/svelte";
-    import { api } from "$lib/_generated/api";
-
-    const { mutate, pending } = mutation(api.messages.send);
-</script>
-
-<button disabled={$pending} on:click={() => mutate({ room: "general", text: "hi" })}>
-    Send
-</button>
-```
-
-### 4. Reactive loader (`hydratePreloaded`)
-
-The killer feature: a route loader preloads on the server (read-your-writes SSR), the HTML ships with the data, and on the client the **same** data hydrates into a live subscription with no loading flash.
-
 ```ts
-// src/routes/+page.ts
-import { createServerClient, preloadQuery } from "@cirrus/client";
+import { CirrusClient } from "@cirrus/client";
+import { setCirrusClient, query, mutation } from "@cirrus/svelte";
 import { api } from "$lib/_generated/api";
 
-export const load = async ({ fetch }) => {
-    const client = createServerClient({ url: import.meta.env.VITE_CIRRUS_URL, fetch });
-    const preloaded = await preloadQuery(client, api.messages.list, { room: "general" });
+// In +layout.svelte: provide the client once at the root.
+setCirrusClient(new CirrusClient({ url: import.meta.env.VITE_CIRRUS_URL }));
 
-    return { preloaded };
-};
+// In a component: `$messages` updates on every server delta.
+const messages = query(api.messages.list, { room: "general" });
+const { mutate, pending } = mutation(api.messages.send);
 ```
 
-```svelte
-<!-- src/routes/+page.svelte -->
-<script lang="ts">
-    import { hydratePreloaded } from "@cirrus/svelte";
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/frameworks/reactive-loaders)**.
 
-    export let data;
+## Related
 
-    // Seeded synchronously from data.preloaded.value (no flash), then live.
-    const messages = hydratePreloaded(data.preloaded);
-</script>
+- [`@cirrus/client`](https://www.npmjs.com/package/@cirrus/client) — the framework-neutral browser SDK this adapter wraps.
+- [`@cirrus/ssr`](https://www.npmjs.com/package/@cirrus/ssr) — the server preload contract behind `@cirrus/svelte/server`.
+- [`@cirrus/react`](https://www.npmjs.com/package/@cirrus/react) — the same contract for React.
 
-{#each $messages as message}
-    <p>{message.text}</p>
-{/each}
-```
+## Supported Node.js Versions
 
-> The server preload helpers (`createServerClient`, `preloadQuery`) live in `@cirrus/client` today. They move to `@cirrus/ssr` once that package lands in PLAN4 M1 — import them from there at that point; the adapter surface here is unchanged.
+Libraries in this ecosystem make the best effort to track [Node.js' release schedule](https://github.com/nodejs/release#release-schedule).
+Here's [a post on why we think this is important](https://medium.com/the-node-js-collection/maintainers-should-consider-following-node-js-release-schedule-ab08ed4de71a).
 
-## Status
+## Contributing
 
-This is the **adapter** (PLAN4 M3). Full single-worker SvelteKit composition — mounting Cirrus realtime under `/_cirrus/*` inside SvelteKit's own Cloudflare adapter via hook-injection (`withCirrus()`) — is **Class-B** work, wired in PLAN4 **M4**. See `templates/sveltekit` for the scaffold and the M4 TODO.
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
+
+> **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
+
+## Credits
+
+- [Daniel Bannert](https://github.com/prisis)
+- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
+
+## Made with ❤️ at Anolilab
+
+This is an open source project and will always remain free to use. If you think it's cool, please star it 🌟. [Anolilab](https://www.anolilab.com/open-source) is a Development and AI Studio. Contact us at [hello@anolilab.com](mailto:hello@anolilab.com) if you need any help with these technologies or just want to say hi!
+
+## License
+
+The Cirrus svelte package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+
+<!-- badges -->
+
+[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/svelte?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@cirrus/svelte
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/svelte?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@cirrus/svelte
+[prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
+[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
+[typescript-url]: https://www.typescriptlang.org/

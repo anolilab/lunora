@@ -1,9 +1,61 @@
-# @cirrus/storage
+<!-- START_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
-R2 file storage adapter for the Cirrus framework. Wraps a Cloudflare `R2Bucket` binding with a small typed API (`upload`, `download`, `delete`, `list`, multipart), a worker-signed-URL helper for gated `GET /storage/:key` endpoints, and native S3 presigned URLs for direct-to-R2 transfer.
+<a href="https://www.anolilab.com/open-source" align="center">
+
+  <img src="__assets__/package-og.svg" alt="storage" />
+
+</a>
+
+<h3 align="center">R2-backed storage for Cirrus: typed buckets and signed URLs</h3>
+
+<!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
+
+<br />
+
+<div align="center">
+
+[![typescript-image][typescript-badge]][typescript-url]
+[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![npm version][npm-version-badge]][npm-version]
+[![npm downloads][npm-downloads-badge]][npm-downloads]
+[![PRs Welcome][prs-welcome-badge]][prs-welcome]
+
+</div>
+
+---
+
+<div align="center">
+    <p>
+        <sup>
+            Daniel Bannert's open source work is supported by the community on <a href="https://github.com/sponsors/prisis">GitHub Sponsors</a>
+        </sup>
+    </p>
+</div>
+
+---
+
+R2-backed file storage for Cirrus. Wraps a Cloudflare `R2Bucket` binding with a small typed API (`upload`, `download`, `delete`, `list`, multipart), worker-signed URLs for app-gated access, and native S3 presigned URLs for direct-to-R2 transfer.
+
+Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
+
+## Install
+
+```sh
+npm install @cirrus/storage
+```
+
+```sh
+yarn add @cirrus/storage
+```
+
+```sh
+pnpm add @cirrus/storage
+```
+
+## Usage
 
 ```ts
-import { createStorage, verifySignedUrl } from "@cirrus/storage";
+import { createStorage } from "@cirrus/storage";
 
 const storage = createStorage({
     bucket: env.UPLOADS,
@@ -11,49 +63,52 @@ const storage = createStorage({
     signingSecret: env.STORAGE_SIGNING_SECRET,
 });
 
+await storage.upload("uploads/avatar.png", bytes, { contentType: "image/png" });
+
 const url = await storage.getSignedUrl("uploads/avatar.png", { expiresInSeconds: 600 });
 ```
 
-## Worker-signed URLs vs. native S3 presigned URLs
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/addons/storage)**.
 
-The signed URLs here resolve back through **your Worker** (`publicBaseUrl` → `GET /storage/:key`), not directly to R2. That's deliberate: a request for a worker-signed URL still passes your app's gates — auth/session checks, per-object policy, rate limits, audit logging — before the Worker validates the signature/expiry and streams the R2 body. **App-gating is the point.** The trade-off is that object bytes flow through the Worker rather than straight off R2.
+## Related
 
-R2 also supports **native S3 presigned URLs** (a self-contained credential the client uses to hit R2's S3 endpoint directly, bypassing the Worker). Prefer those for large downloads/uploads or when you don't need per-request app logic and want the bytes off the Worker's CPU/bandwidth budget. Pass R2 S3 credentials and call `getPresignedUrl`:
+- [`@cirrus/server`](https://www.npmjs.com/package/@cirrus/server) — call storage from queries, mutations, and actions.
+- [`@cirrus/runtime`](https://www.npmjs.com/package/@cirrus/runtime) — the Worker runtime that serves gated `GET /storage/:key` routes.
+- [`@cirrus/d1`](https://www.npmjs.com/package/@cirrus/d1) — store object metadata alongside your data.
 
-```ts
-const storage = createStorage({
-    bucket: env.UPLOADS,
-    s3: {
-        accountId: env.CF_ACCOUNT_ID,
-        accessKeyId: env.R2_ACCESS_KEY_ID,
-        secretAccessKey: env.R2_SECRET_ACCESS_KEY,
-        bucket: "uploads",
-    },
-});
+## Supported Node.js Versions
 
-// A direct-to-R2 download URL (SigV4, no Worker round-trip):
-const getUrl = await storage.getPresignedUrl("uploads/big.zip", { expiresInSeconds: 3600 });
+Libraries in this ecosystem make the best effort to track [Node.js' release schedule](https://github.com/nodejs/release#release-schedule).
+Here's [a post on why we think this is important](https://medium.com/the-node-js-collection/maintainers-should-consider-following-node-js-release-schedule-ab08ed4de71a).
 
-// A direct-to-R2 upload URL:
-const putUrl = await storage.getPresignedUrl("uploads/big.zip", { method: "PUT", expiresInSeconds: 600 });
-```
+## Contributing
 
-The `s3` credentials are an **R2 API token's** Access Key ID / Secret Access Key (not a Cloudflare API token). The signature is computed with WebCrypto — no AWS SDK dependency. Without `s3`, `getPresignedUrl` throws; the worker-signed path needs none of this.
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
-## Multipart upload (very large objects)
+> **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
-For objects too large for a single `PUT`, use native R2 multipart — upload uniform-size parts, then `complete` (or `abort`):
+## Credits
 
-```ts
-const upload = await storage.createMultipartUpload("uploads/video.mp4", { contentType: "video/mp4" });
+- [Daniel Bannert](https://github.com/prisis)
+- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
 
-const part1 = await upload.uploadPart(1, chunk1);
-const part2 = await upload.uploadPart(2, chunk2);
+## Made with ❤️ at Anolilab
 
-await upload.complete([part1, part2]);
-// Resume across requests with: storage.resumeMultipartUpload(key, upload.uploadId)
-```
+This is an open source project and will always remain free to use. If you think it's cool, please star it 🌟. [Anolilab](https://www.anolilab.com/open-source) is a Development and AI Studio. Contact us at [hello@anolilab.com](mailto:hello@anolilab.com) if you need any help with these technologies or just want to say hi!
 
-These wrap the R2 binding's multipart API directly; they throw if the bound bucket doesn't expose it.
+## License
 
-v0.1 shipped worker-signed URLs (HMAC-SHA256); native S3 presigned URLs and multipart upload are now available too (see above).
+The Cirrus storage package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+
+<!-- badges -->
+
+[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/storage?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@cirrus/storage
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/storage?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@cirrus/storage
+[prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
+[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
+[typescript-url]: https://www.typescriptlang.org/

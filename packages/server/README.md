@@ -1,118 +1,128 @@
-# @cirrus/server
+<!-- START_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
-Server-side primitives for the Cirrus framework. This is what you import inside `cirrus/schema.ts` and your function files. It defines the `defineSchema` / `defineTable` builders, the `query` / `mutation` / `action` wrappers, and the `QueryCtx` / `MutationCtx` / `ActionCtx` shapes that handlers receive. It also re-exports the [`v` validator suite](../values) for ergonomic single-import usage.
+<a href="https://www.anolilab.com/open-source" align="center">
+
+  <img src="__assets__/package-og.svg" alt="server" />
+
+</a>
+
+<h3 align="center">Server primitives for Cirrus: defineSchema, defineTable, query, mutation, and action</h3>
+
+<!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
+
+<br />
+
+<div align="center">
+
+[![typescript-image][typescript-badge]][typescript-url]
+[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![npm version][npm-version-badge]][npm-version]
+[![npm downloads][npm-downloads-badge]][npm-downloads]
+[![PRs Welcome][prs-welcome-badge]][prs-welcome]
+
+</div>
+
+---
+
+<div align="center">
+    <p>
+        <sup>
+            Daniel Bannert's open source work is supported by the community on <a href="https://github.com/sponsors/prisis">GitHub Sponsors</a>
+        </sup>
+    </p>
+</div>
+
+---
+
+The server-side primitives you import inside `cirrus/schema.ts` and your function files. It provides `defineSchema` / `defineTable`, the `query` / `mutation` / `action` wrappers, and the `QueryCtx` / `MutationCtx` / `ActionCtx` shapes your handlers receive. It also re-exports the [`v` validator suite](https://www.npmjs.com/package/@cirrus/values) so you only need one import.
+
+Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
 ## Install
 
-```bash
+```sh
+npm install @cirrus/server
+```
+
+```sh
+yarn add @cirrus/server
+```
+
+```sh
 pnpm add @cirrus/server
 ```
 
-Workspace dependency: [`@cirrus/values`](../values) (re-exported as `v`, `Id`, `Infer`, `Validator`, `ValidationError`).
-
 ## Usage
 
-### `cirrus/schema.ts`
-
 ```ts
-import { defineSchema, defineTable, v } from "@cirrus/server";
+import { defineSchema, defineTable, mutation, query, v } from "@cirrus/server";
 
+// cirrus/schema.ts
 export default defineSchema({
-    rooms: defineTable({
-        name: v.string(),
-        createdAt: v.number(),
-    }).index("by_name", ["name"]),
-
     messages: defineTable({
-        author: v.string(),
+        room: v.string(),
         body: v.string(),
         ts: v.number(),
-    })
-        .index("by_room_ts", ["room", "ts"])
-        .searchIndex("search_body", { field: "body", filterFields: ["room"] })
-        .shardBy("room"),
-
-    users: defineTable({ email: v.string() }).index("by_email", ["email"]).global(),
+    }).index("by_room_ts", ["room", "ts"]),
 });
-```
 
-Table modifiers:
-
-| Modifier                                       | Effect                                                          |
-| ---------------------------------------------- | --------------------------------------------------------------- |
-| `.index(name, fields, opts?)`                  | Secondary index. Pass `{ unique: true }` to enforce.            |
-| `.searchIndex(name, { field, filterFields? })` | Full-text search index over a field.                            |
-| `.shardBy(field)`                              | Route storage by field — one Durable Object per distinct value. |
-| `.global()`                                    | Mark the table as D1-backed and cross-shard.                    |
-
-### `cirrus/messages.ts`
-
-```ts
-import { query, mutation, action, v } from "@cirrus/server";
-
+// cirrus/messages.ts
 export const list = query({
     args: { room: v.string() },
-    handler: async (ctx, { room }) => {
-        return ctx.db
+    handler: (ctx, { room }) =>
+        ctx.db
             .query("messages")
             .withIndex("by_room_ts", (q) => q.eq("room", room))
-            .take(50);
-    },
+            .take(50),
 });
 
 export const send = mutation({
     args: { room: v.string(), body: v.string() },
-    handler: async (ctx, { room, body }) => {
-        const id = await ctx.db.insert("messages", { room, body, ts: Date.now(), author: ctx.auth.userId });
-        return id;
-    },
-});
-
-export const notify = action({
-    args: { email: v.string(), subject: v.string() },
-    handler: async (ctx, args) => {
-        await ctx.fetch("https://api.resend.com/emails", { method: "POST" /* … */ });
-        await ctx.runMutation(api.notifications.markSent, { to: args.email });
-    },
+    handler: (ctx, { room, body }) => ctx.db.insert("messages", { room, body, ts: Date.now() }),
 });
 ```
 
-## Contexts
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/api/server)**.
 
-| Context       | `db`             | `storage`         | `scheduler` | `auth` | `fetch` | `run*` |
-| ------------- | ---------------- | ----------------- | ----------- | ------ | ------- | ------ |
-| `QueryCtx`    | `DatabaseReader` | `ReadOnlyStorage` | —           | yes    | —       | —      |
-| `MutationCtx` | `DatabaseWriter` | `ReadOnlyStorage` | yes         | yes    | —       | —      |
-| `ActionCtx`   | `DatabaseWriter` | `Storage`         | yes         | yes    | yes     | yes    |
+## Related
 
-- **Queries** are pure reads — no inserts, no storage writes, no `fetch`.
-- **Mutations** can mutate the DB and schedule work, but cannot perform external HTTP or R2 writes. Storage stays read-only here (you can `download`/`getSignedUrl` but not `upload`/`delete`) — full storage lives on actions.
-- **Actions** are the escape hatch: full `Storage` surface, `globalThis.fetch`, and `runQuery`/`runMutation`/`runAction` to compose with other functions.
+- [`@cirrus/values`](https://www.npmjs.com/package/@cirrus/values) — the `v.*` validators re-exported here.
+- [`@cirrus/runtime`](https://www.npmjs.com/package/@cirrus/runtime) — the Worker runtime that executes your functions.
+- [`@cirrus/codegen`](https://www.npmjs.com/package/@cirrus/codegen) — emits the typed `api` and data model from your schema.
 
-Args are validated against the declared `args` validator at every call. On mismatch a `ValidationError` is thrown carrying the offending field's `path`.
+## Supported Node.js Versions
 
-## API
+Libraries in this ecosystem make the best effort to track [Node.js' release schedule](https://github.com/nodejs/release#release-schedule).
+Here's [a post on why we think this is important](https://medium.com/the-node-js-collection/maintainers-should-consider-following-node-js-release-schedule-ab08ed4de71a).
 
-| Export                        | Description                                                      |
-| ----------------------------- | ---------------------------------------------------------------- |
-| `defineSchema(tables)`        | Build the application schema.                                    |
-| `defineTable(shape)`          | Build a single table with fluent index/shard modifiers.          |
-| `query({ args, handler })`    | Register a query.                                                |
-| `mutation({ args, handler })` | Register a mutation.                                             |
-| `action({ args, handler })`   | Register an action.                                              |
-| `v`                           | Validator namespace (re-exported from `@cirrus/values`).         |
-| `ValidationError`             | Thrown on args mismatch (re-exported).                           |
-| `anyApi`                      | Proxy stand-in for the generated `api` object — useful in tests. |
+## Contributing
 
-Types: `TableBuilder`, `TableDefinition`, `Schema`, `IndexDefinition`, `SearchIndexDefinition`, `ShardMode`, `QueryCtx`, `MutationCtx`, `ActionCtx`, `DatabaseReader`, `DatabaseWriter`, `TableReader`, `IndexRangeBuilder`, `ReadOnlyStorage`, `Storage`, `Scheduler`, `AuthState`, `RegisteredQuery`, `RegisteredMutation`, `RegisteredAction`, `RegisteredFunction`, `FunctionKind`, `ArgsValidator`, `InferArgs`, `Id`, `Infer`, `Validator`, `ValidatorKind`, `AnyApi`.
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
-## Docs
+> **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
-- Repo root: [README.md](../../README.md)
-- Server reference: [apps/docs/content/docs/api/server.mdx](../../apps/docs/content/docs/api/server.mdx)
-- Queries & mutations: [apps/docs/content/docs/concepts/queries-mutations.mdx](../../apps/docs/content/docs/concepts/queries-mutations.mdx)
-- Sharding: [apps/docs/content/docs/concepts/sharding.mdx](../../apps/docs/content/docs/concepts/sharding.mdx)
+## Credits
+
+- [Daniel Bannert](https://github.com/prisis)
+- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
+
+## Made with ❤️ at Anolilab
+
+This is an open source project and will always remain free to use. If you think it's cool, please star it 🌟. [Anolilab](https://www.anolilab.com/open-source) is a Development and AI Studio. Contact us at [hello@anolilab.com](mailto:hello@anolilab.com) if you need any help with these technologies or just want to say hi!
 
 ## License
 
-MIT — see [LICENSE.md](../../LICENSE.md)
+The Cirrus server package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+
+<!-- badges -->
+
+[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/server?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@cirrus/server
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/server?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@cirrus/server
+[prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
+[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
+[typescript-url]: https://www.typescriptlang.org/

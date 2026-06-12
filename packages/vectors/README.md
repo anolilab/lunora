@@ -1,23 +1,61 @@
-# @cirrus/vectors
+<!-- START_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
-Cloudflare Vectorize adapter for the Cirrus framework. Integrates vector search into your Cirrus schema and runtime so you can declare vector indexes alongside your regular tables, keep them automatically in sync on every write, and query them from any function handler.
+<a href="https://www.anolilab.com/open-source" align="center">
 
-You bring your own embedder; `@cirrus/vectors` handles the Vectorize binding plumbing, batching, concurrency limits, and delete propagation.
+  <img src="__assets__/package-og.svg" alt="vectors" />
+
+</a>
+
+<h3 align="center">Cloudflare Vectorize adapter for Cirrus: typed vector indexes and similarity search</h3>
+
+<!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
+
+<br />
+
+<div align="center">
+
+[![typescript-image][typescript-badge]][typescript-url]
+[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![npm version][npm-version-badge]][npm-version]
+[![npm downloads][npm-downloads-badge]][npm-downloads]
+[![PRs Welcome][prs-welcome-badge]][prs-welcome]
+
+</div>
+
+---
+
+<div align="center">
+    <p>
+        <sup>
+            Daniel Bannert's open source work is supported by the community on <a href="https://github.com/sponsors/prisis">GitHub Sponsors</a>
+        </sup>
+    </p>
+</div>
+
+---
+
+A Cloudflare Vectorize adapter for Cirrus. Declare typed vector indexes alongside your regular tables, keep them automatically in sync on every write, and run similarity search from any function handler. You bring your own embedder; `@cirrus/vectors` handles the Vectorize binding plumbing, batching, concurrency limits, and delete propagation.
+
+Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
 ## Install
 
-```bash
+```sh
+npm install @cirrus/vectors
+```
+
+```sh
+yarn add @cirrus/vectors
+```
+
+```sh
 pnpm add @cirrus/vectors
 ```
 
-## Choosing your shape
-
-### Shape A — `.vectorize(field, opts)` on the table (primary)
-
-Declare the index inline on the table definition. Best for the common case: one natural-language field, one vector index.
+## Usage
 
 ```ts
-// cirrus/schema.ts
+// cirrus/schema.ts — declare a vector index inline on the table
 import { defineSchema, defineTable, v } from "@cirrus/server";
 import { embed } from "../app/embed"; // your own embedder
 
@@ -28,160 +66,63 @@ export default defineSchema({
         workspaceId: v.id("workspaces"),
     })
         .shardBy("workspaceId")
-        .vectorize("body", {
-            index: "docs-body",
-            dimensions: 1024,
-            metric: "cosine",
-            metadata: ["title", "workspaceId"],
-            embed,
-        }),
+        .vectorize("body", { index: "docs-body", dimensions: 1024, metric: "cosine", embed }),
 });
-```
 
-### Shape B — `defineVectorIndex(...)` second argument to `defineSchema` (escape hatch)
-
-Use when you need derived sources (e.g. `title + body`), multiple views of the same table, or computed metadata.
-
-```ts
-// cirrus/schema.ts
-import { defineSchema, defineTable, defineVectorIndex, v } from "@cirrus/server";
-import { embed } from "../app/embed";
-
-export default defineSchema(
-    {
-        docs: defineTable({
-            title: v.string(),
-            body: v.string(),
-            workspaceId: v.id("workspaces"),
-        }).shardBy("workspaceId"),
-    },
-    {
-        "docs-title-and-body": defineVectorIndex({
-            source: { table: "docs", select: (row) => `${row.title}\n\n${row.body}` },
-            metadata: (row) => ({ workspaceId: row.workspaceId }),
-            dimensions: 1024,
-            metric: "cosine",
-            embed,
-        }),
-    },
-);
-```
-
-Shape B lives in the optional second argument to `defineSchema` (not as a reserved key inside the table map) so per-table type inference stays intact and there is no reserved-name collision.
-
-## Quick start
-
-### Querying from a function handler
-
-`ctx.vectors` is available on every `QueryCtx`, `MutationCtx`, and `ActionCtx`. On a query it exposes `query` and `getByIds`; on mutations/actions it also exposes `upsert`, `upsertNow`, and `deleteByIds`.
-
-```ts
-// cirrus/searchDocs.ts
+// cirrus/searchDocs.ts — query from a handler via ctx.vectors
 import { query, v } from "@cirrus/server";
-import { embed } from "../app/embed";
 
 export const searchDocs = query({
     args: { q: v.string() },
     handler: async (ctx, { q }) => {
-        const matches = await ctx.vectors.query("docs-body", {
-            input: q,
-            embed,
-            topK: 10,
-        });
+        const { matches } = await ctx.vectors.query("docs-body", { input: q, embed, topK: 10 });
 
-        return matches.matches.map((m) => m.id);
+        return matches.map((m) => m.id);
     },
 });
 ```
 
-### `createVectors` — wire up the runtime adapter in the DO
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs)**.
 
-`createVectors` constructs the `CirrusVectors` adapter. You pass it a map of logical index name to Vectorize binding; the adapter validates, batches, and enforces Vectorize limits.
+## Related
 
-```ts
-import createVectors from "@cirrus/vectors";
+- [`@cirrus/server`](https://www.npmjs.com/package/@cirrus/server) — schema primitives that declare the indexes (`.vectorize`, `defineVectorIndex`).
+- [`@cirrus/do`](https://www.npmjs.com/package/@cirrus/do) — Durable Objects that run the write-sync hooks and function contexts.
+- [`@cirrus/vite`](https://www.npmjs.com/package/@cirrus/vite) — validates that every declared index has a matching `[[vectorize]]` binding.
 
-// Inside your Durable Object setup, env is the Worker env.
-const vectors = createVectors({
-    indexes: {
-        "docs-body": env.DOCS_BODY, // VectorizeIndex binding from wrangler
-        "docs-title-and-body": env.DOCS_TITLE_AND_BODY,
-    },
-});
-```
+## Supported Node.js Versions
 
-### `createContextVectors` — bridge `CirrusVectors` to the server `VectorSearch` contract
+Libraries in this ecosystem make the best effort to track [Node.js' release schedule](https://github.com/nodejs/release#release-schedule).
+Here's [a post on why we think this is important](https://medium.com/the-node-js-collection/maintainers-should-consider-following-node-js-release-schedule-ab08ed4de71a).
 
-`createContextVectors` wraps a `CirrusVectors` instance and returns a `VectorSearchLike` that is assignable to the server's `ctx.vectors` slot. Used internally by the generated DO to wire the adapter onto each function context.
+## Contributing
 
-```ts
-import createVectors, { createContextVectors } from "@cirrus/vectors";
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
-const cirrusVectors = createVectors({ indexes: { "docs-body": env.DOCS_BODY } });
-const contextVectors = createContextVectors(cirrusVectors);
-// Pass contextVectors when building query/mutation context objects.
-```
+> **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
-### `createVectorSyncHook` — keep Vectorize in sync with row writes
+## Credits
 
-`createVectorSyncHook` returns a `WriteHook` that auto-propagates inserts, updates, and deletes into the matching Vectorize index. The generated DO calls this on every committed write; you can also call it manually for custom mutation flows.
+- [Daniel Bannert](https://github.com/prisis)
+- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
 
-```ts
-import { createContextVectors, createVectorSyncHook } from "@cirrus/vectors";
-import schema from "../cirrus/schema";
+## Made with ❤️ at Anolilab
 
-const syncHook = createVectorSyncHook({
-    schema, // your compiled schema with embed closures
-    vectors: contextVectors,
-    namespace: tenantId, // shard / tenant key — REQUIRED for multi-tenant isolation
-});
+This is an open source project and will always remain free to use. If you think it's cool, please star it 🌟. [Anolilab](https://www.anolilab.com/open-source) is a Development and AI Studio. Contact us at [hello@anolilab.com](mailto:hello@anolilab.com) if you need any help with these technologies or just want to say hi!
 
-// Later, inside a write path:
-await syncHook({ op: "insert", table: "docs", id: newDoc._id, doc: newDoc });
-```
+## License
 
-> **Tenant isolation** — Vectorize indexes are account-global. Always pass `namespace` equal to the shard or tenant key so upserts are isolated. Apply the same namespace when querying. Omitting it in a multi-tenant app means one tenant's vectors are queryable by another.
+The Cirrus vectors package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
 
-## API
+<!-- badges -->
 
-### Value exports
-
-| Export                          | Description                                                                                                                                        |
-| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `createVectors(options)`        | Construct a `CirrusVectors` adapter from a map of Vectorize index bindings. Validates at construction time that at least one binding is provided.  |
-| `createContextVectors(cirrus)`  | Bridge a `CirrusVectors` instance to the server's `VectorSearch` contract for attachment to function contexts.                                     |
-| `createVectorSyncHook(options)` | Build a `WriteHook` that fans out upserts/deletes to every vector index sourced from the written table, covering both Shape A and Shape B indexes. |
-
-### `CirrusVectors` methods (returned by `createVectors`)
-
-| Method                          | Description                                                                                               |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `upsert(indexName, input)`      | Embed `input.input` and upsert a single vector. Returns `VectorizeUpsertMutation`.                        |
-| `upsertMany(indexName, inputs)` | Embed and upsert up to 1 000 vectors, with bounded concurrency on the embedder fan-out.                   |
-| `query(indexName, input)`       | Query by pre-computed `vector` or by `input` + `embed`. `topK` capped at 100. Returns `VectorizeMatches`. |
-| `getByIds(indexName, ids)`      | Fetch up to 1 000 stored vectors by id.                                                                   |
-| `deleteByIds(indexName, ids)`   | Delete up to 1 000 vectors by id. Returns `VectorizeDeleteMutation`.                                      |
-| `describe(indexName)`           | Return `VectorizeIndexDetails` for the index (dimensions, vector count).                                  |
-
-### Type exports
-
-`CirrusVectors`, `CirrusVectorsOptions`, `EmbedFunction`, `QueryInput`, `UpsertInput`, `VectorizeDeleteMutation`, `VectorizeIndexDetails`, `VectorizeIndexLike`, `VectorizeMatch`, `VectorizeMatches`, `VectorizeQueryOptions`, `VectorizeUpsertMutation`, `VectorizeVector`, `VectorMetric` — from `./types`.
-
-`SchemaLike`, `TableDefinitionLike`, `TableVectorIndexLike`, `VectorEmbedderLike`, `VectorIndexDefinitionLike`, `VectorMatchesLike`, `VectorMatchLike`, `VectorQueryInputLike`, `VectorRecordLike`, `VectorSearchLike`, `VectorUpsertInputLike`, `WriteEvent`, `WriteHook` — from `./context`.
-
-## Wrangler bindings
-
-Codegen discovers every vector index (Shape A and B) and emits a `VectorIndexName` union into `_generated/dataModel.ts`. The Vite plugin / wrangler validator then requires a matching `[[vectorize]]` binding (by `index_name`) in `wrangler.jsonc` for every declared index; a missing binding fails `dev` with a typed error.
-
-```jsonc
-// wrangler.jsonc
-[[vectorize]]
-binding = "DOCS_BODY"
-index_name = "docs-body"
-
-[[vectorize]]
-binding = "DOCS_TITLE_AND_BODY"
-index_name = "docs-title-and-body"
-```
-
-Part of the [Cirrus](https://github.com/anolilab/cirrus) framework.
+[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/vectors?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@cirrus/vectors
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/vectors?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@cirrus/vectors
+[prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
+[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
+[typescript-url]: https://www.typescriptlang.org/
