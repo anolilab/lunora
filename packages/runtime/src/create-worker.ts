@@ -6,7 +6,7 @@ import { describeArguments } from "./describe-args";
 import { CirrusError, isStructuralCirrusError, isStructuralConflictError, toErrorResponse } from "./errors";
 import type { ObservabilityEvent, ObservabilitySink } from "./observability";
 import { emitRpcEvent } from "./observability";
-import type { FanOutSpec, QueryCoordinator } from "./query-coordinator";
+import type { FanOutSpec, QueryCoordinator, RankPageFanOutRequest } from "./query-coordinator";
 import type { ResolvedShard, ShardNamespaceLike } from "./resolve-shard";
 import { resolveShard } from "./resolve-shard";
 
@@ -1196,15 +1196,6 @@ const parseRankRequest = async (request: Request): Promise<RankRequestBody> => {
     };
 };
 
-interface RankPageRequestBody {
-    cursor: null | string;
-    directions?: ReadonlyArray<"asc" | "desc">;
-    index: string;
-    partitionKey?: string;
-    table: string;
-    take?: number;
-}
-
 interface RankPageCandidate {
     cursor?: unknown;
     directions?: unknown;
@@ -1257,8 +1248,13 @@ const validateRankPageScalars = (candidate: RankPageCandidate): void => {
  * page size, an optional per-sort-key `directions` list (so the coordinator's
  * k-way merge breaks ties the same way each shard's `ORDER BY` does), and an
  * opaque `cursor` from the prior page's `continueCursor`.
+ *
+ * Validates once at the HTTP edge and produces the coordinator's
+ * {@link RankPageFanOutRequest} directly (minus `headers`, which the route
+ * injects at the call site from the forward context) — there's no separate
+ * in-process request type for the route→coordinator hand-off to drift against.
  */
-const parseRankPageRequest = async (request: Request): Promise<RankPageRequestBody> => {
+const parseRankPageRequest = async (request: Request): Promise<Omit<RankPageFanOutRequest, "headers">> => {
     let body: unknown;
 
     try {
@@ -2092,13 +2088,8 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
 
         const result = await options.queryCoordinator.orchestrateRankPage(options.shardDO, {
-            cursor: rankPage.cursor,
-            directions: rankPage.directions,
+            ...rankPage,
             headers: forwardedHeaders,
-            index: rankPage.index,
-            partitionKey: rankPage.partitionKey,
-            table: rankPage.table,
-            take: rankPage.take,
         });
 
         return Response.json(result, {
