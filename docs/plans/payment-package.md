@@ -7,7 +7,9 @@
 Add a first-class payments/billing add-on to Cirrus that:
 
 - Supports **multiple payment providers** (Stripe first, then Polar, Lemon Squeezy, Paddle).
-- Lets an app **switch providers via configuration**, not code rewrites.
+- Lets an app **switch providers via configuration**, not code rewrites. _Caveat:_ switching applies to **new**
+  checkouts/subscriptions only — a live subscription cannot be migrated between providers, so every row carries a
+  `provider` discriminator and existing subs stay on their origin provider (dual-register during migration).
 - Fits the Cirrus model: webhook ingestion on `@cirrus/runtime`, durable state in a DO,
   reactive reads via `@cirrus/server` queries/subscriptions, and end-to-end types via `@cirrus/codegen`.
 - Links subscriptions/customers to `@cirrus/auth` entities (user / org / workspace) via a `referenceId`.
@@ -91,8 +93,11 @@ Build `@cirrus/payment` as a **native Cirrus add-on** (like `@cirrus/auth` / `@c
 
 1. A **provider-adapter interface** — one adapter per provider, each wrapping the provider's official SDK.
 2. A **normalized event + webhook ingress** wired into `@cirrus/runtime`, with retries via `@cirrus/scheduler`.
-3. A **durable sync store** (`PaymentDO` on SQLite; `@cirrus/d1` for `.global()` reads) holding customers,
-   subscriptions, checkouts, payment_sessions, payments, captures, refunds, invoices, and (optional) entitlements.
+3. A **durable sync store** (`PaymentDO` on SQLite; `@cirrus/d1` for `.global()` reads) holding products/prices,
+   customers, subscriptions, checkouts, payment_sessions, payments, captures, refunds, invoices, an append-only
+   `events` (webhook) log for idempotency + audit, and (optional) entitlements. Money is `(minorUnits: bigint,
+   currency: ISO-4217)` everywhere, via a `v.money()` validator in `@cirrus/values` (bigint is not JSON-serializable
+   over RPC); zero-decimal currencies (e.g. JPY) handled explicitly.
 4. **Reactive reads** as `@cirrus/server` queries/subscriptions, and **`ctx.payments`** wired onto `ActionCtx` by
    `@cirrus/codegen` (the same pattern `@cirrus/ai` uses for `ctx.ai`).
 5. **`referenceId`** linkage to `@cirrus/auth` (user/org/workspace), allowing multiple subscriptions per reference.
@@ -115,7 +120,7 @@ packages/payment/
 ├── project.json            # { "name": "payment", "tags": ["type:package", "category:add-on"] }
 ├── tsconfig.json           # extends ../../tsconfig.base.json, moduleResolution: bundler
 ├── packem.config.ts        # standard esbuild transformer
-├── vitest.config.ts        # getVitestConfig({ test: { environment: "node" } })
+├── vitest.config.ts        # adapters → node env; PaymentDO/store → @cloudflare/vitest-pool-workers
 ├── eslint.config.js / prettier.config.js / .releaserc.json   # delegated/standard
 ├── src/
 │   ├── index.ts            # public API (named exports only)
@@ -124,8 +129,8 @@ packages/payment/
 │   ├── adapter.ts          # PaymentAdapter interface + registry
 │   ├── webhook.ts          # verify → normalize → dispatch → sync (registerPaymentRoutes)
 │   ├── store.ts            # sync-store interface (DO-backed / D1-backed)
-│   ├── schema.ts           # defineSchema tables: customers, subscriptions, checkouts,
-│   │                       #   payment_sessions, payments, captures, refunds, invoices
+│   ├── schema.ts           # defineSchema tables: products, prices, customers, subscriptions, checkouts,
+│   │                       #   payment_sessions, payments, captures, refunds, invoices, events (webhook log)
 │   └── providers/
 │       ├── stripe.ts       # wraps `stripe`
 │       ├── polar.ts        # wraps `@polar-sh/sdk`            (phase 2)
@@ -173,7 +178,11 @@ export type WebhookAction = {
     | "authorized" | "captured" | "failed" | "refunded"
     | "subscription.active" | "subscription.updated" | "subscription.canceled"
     | "not_supported";
-  data: { referenceId?: string; sessionId?: string; subscriptionId?: string; amount?: bigint; eventId: string };
+  data: {
+    referenceId?: string; sessionId?: string; subscriptionId?: string;
+    amount?: bigint; currency?: string;        // (minor units, ISO-4217) — always paired
+    eventId: string;                            // for inbound idempotency / events log
+  };
 };
 ```
 
@@ -181,12 +190,57 @@ export type WebhookAction = {
 
 ```
 provider POST ─▶ @cirrus/runtime route (registerPaymentRoutes)
-              ─▶ adapter.verifyWebhook(req, secret)
+              ─▶ read RAW body (await request.text()) BEFORE any JSON parse  ← signature needs raw bytes
+              ─▶ adapter.verifyWebhook(req, secret)  (signature + timestamp tolerance → reject replays)
               ─▶ adapter.getWebhookAction(raw) → WebhookAction (action + minimal data)
-              ─▶ store.apply(action)  (idempotent upsert into PaymentDO/D1, keyed by eventId)
+              ─▶ store.apply(action)  (idempotent: dedupe on eventId via events log; guarded FSM transition)
               ─▶ enqueue side-effects via @cirrus/scheduler (emails, fulfillment) with retry
               ─▶ reactive queries/subscriptions update clients live
 ```
+
+> **Endpoint registration (DX):** the webhook lives at `<siteUrl>/payment/webhook`; the provider dashboard (or a
+> `cirrus` setup command) subscribes the relevant event types to it. Document the exact event set per provider.
+
+### Payment state machine
+
+Payment/subscription lifecycle is modeled as an **explicit, typed FSM internal to `@cirrus/payment`** — a transition
+table + guard layered on `PaymentDO`'s OCC. Two distinct concerns, deliberately kept separate:
+
+- **Projection (most state).** The provider is the source of truth; our machine is a *projection* of it. The FSM's job
+  is **validation/normalization**: accept legal transitions, **drop illegal/stale/out-of-order ones** (a
+  `payment.failed` after `captured`, a stale `authorized` after `refunded`), reconciled via webhook + polling. We do
+  **not** build an authoritative saga that fights the provider's own state.
+- **Orchestration (flows we drive).** `authorize → capture`, dunning/retry, trial→active timeouts. DOs are an ideal
+  substrate (single-threaded, strongly consistent, **alarms** for timeouts). Heavy long-running multi-step flows lean
+  on `@cirrus/scheduler` / Cloudflare Workflows rather than a hand-rolled saga engine.
+
+```
+one-time:     initiated → authorized → captured → (partially_)refunded
+                       ↘ canceled    ↘ failed
+subscription: trialing → active → past_due → canceled
+                              ↘ paused → active
+```
+
+States are stored on the `payment_sessions` / `subscriptions` rows; every webhook `action` maps to a guarded
+transition. Illegal transitions are no-ops (logged), making duplicate/out-of-order webhooks safe by construction.
+The transition table lives behind a clean seam so it can later be extracted into a shared primitive (see §8).
+
+### Correctness, reliability & security must-haves
+
+Non-negotiables that the implementation (not just the plan) has to satisfy — surfaced in review:
+
+- **Outbound idempotency keys.** Every mutating provider call (`createCheckout`, `capturePayment`, `refundPayment`,
+  `cancelSubscription`) passes a stable `Idempotency-Key` derived from our own operation id, so a Worker retry never
+  double-charges. This is distinct from inbound webhook dedupe.
+- **Authorization on every mutation (IDOR).** A caller may only act on a `referenceId` it owns — the facade resolves
+  the caller's session/identity and rejects mismatches. Never trust a client-supplied `referenceId`, `subscriptionId`,
+  or `customerId` without an ownership check.
+- **Reconciliation sweep.** Webhooks are eventually-but-not-guaranteed; a scheduled `@cirrus/scheduler` job reconciles
+  drift via `getPaymentStatus` / list-since-cursor, so a permanently-missed webhook self-heals. (Added to phasing.)
+- **Raw-body signature verification + replay window.** Verify on the unparsed body with a timestamp tolerance.
+- **Money discipline.** `(minorUnits: bigint, currency)` pair end-to-end; `v.money()` validator; zero-decimal
+  currencies handled; never floats.
+- **No secrets/PII in logs.** FSM/webhook logging records ids and transitions only — never card data, tokens, or email.
 
 ## 5. Config & DX
 
@@ -202,9 +256,11 @@ provider POST ─▶ @cirrus/runtime route (registerPaymentRoutes)
 ## 6. Phasing
 
 - **Phase 0 — scaffold:** `vis generate cirrus-package` → `@cirrus/payment`; types, adapter interface, facade, schema,
-  DO-backed store, full Stripe adapter, webhook normalization, idempotent sync, unit tests. _Single-provider, working._
-- **Phase 1 — DX wiring:** codegen `ctx.payments` on `ActionCtx`; `@cirrus/config` binding inference; `.dev.vars`
-  scaffolding; example app.
+  DO-backed store, full Stripe adapter, raw-body webhook verification + idempotent sync, **outbound idempotency keys**,
+  **mutation ownership/authz guards**, FSM transition tests + webhook fixtures. _Single-provider, working._
+- **Phase 1 — DX wiring + reliability:** codegen `ctx.payments` on `ActionCtx`; `@cirrus/config` binding inference;
+  `.dev.vars` scaffolding; **scheduled reconciliation sweep**; observability (failed-payment / drift metrics);
+  example app.
 - **Phase 2 — Polar adapter** + React components + `.global()`/D1 read path.
 - **Phase 3 — Lemon Squeezy + Paddle adapters**; provider-migration story (dual-register).
 - **Phase 4 — entitlements tier** (`check`/`track` à la Autumn): features, credits, usage metering, seat counts.
@@ -231,8 +287,25 @@ provider POST ─▶ @cirrus/runtime route (registerPaymentRoutes)
    Catalogs are for versions shared across packages; only `@cirrus/payment` uses `stripe` / `@polar-sh/sdk` / etc.
    Keep them package-local and optional so a Worker bundles only the adapter it uses. Promote to `catalog:payment`
    later only if a second package needs them.
+6. **State machine → scoped typed FSM inside `@cirrus/payment`, not a framework primitive (yet).**
+   The lifecycle is a textbook FSM and an explicit guarded transition table is what makes duplicate/out-of-order
+   webhooks safe by construction. Build it **internal** to the package on `PaymentDO` (§4 _Payment state machine_); the
+   machine is a **projection** of provider state (validate/reject transitions), not an authoritative saga. A general
+   `@cirrus/machine` primitive is explicitly a **non-goal for now** (§8) — extract only when a second consumer appears.
 
-## 8. Sources
+## 8. Non-goals & future
+
+- **General `@cirrus/machine` primitive — deferred.** DOs are an excellent FSM substrate, but a framework-level state
+  machine is a large surface and would delay payments (YAGNI). The payment FSM is built behind a seam; extract a shared
+  primitive only if a second consumer emerges (`@cirrus/scheduler` workflows, `@cirrus/auth` multi-step/OAuth flows,
+  durable sagas).
+- **Out of scope (P0–P3):** carts / regions / orders / tax engines (Medusa-style commerce); marketplace split-payments
+  & payouts (Stripe Connect); chargeback/dispute automation; PCI card-data handling (we only ever use hosted/tokenized
+  flows — never touch raw PAN); invoicing/quote generation beyond mirroring provider invoices.
+- **Future tiers:** entitlements/usage metering (Phase 4); React UI kit; `vis generate cirrus-payment` scaffolding;
+  provider-migration tooling (dual-register reconciliation).
+
+## 9. Sources
 
 - npm unified SDKs: [@paylayer/core](https://www.npmjs.com/package/@paylayer/core) ·
   [paylayer-core (GitHub)](https://github.com/ajagatobby/paylayer-core) ·
