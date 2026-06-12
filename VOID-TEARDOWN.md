@@ -24,7 +24,11 @@ integrations) and esbuild bundles under `dist/**` (names/comments mostly preserv
 3. **In-place `init`** — AST-patches an existing `vite.config` to inject the plugin via MagicString. → _Cirrus shipped `cirrus init --here`._
 4. **`prepare` + managed deploy** — no-Vite codegen for CI + a one-command deploy plane. → _Cirrus shipped `cirrus prepare`; the managed plane is a business decision Cirrus skips._
 
-The one void capability Cirrus still lacks and would benefit from: **remote-binding dev** (§4.5).
+**Status (updated 2026-06-12):** all four pillars plus the remote-binding gap have since shipped.
+The one capability flagged below as missing — **remote-binding dev** (§4.5) — now ships as
+`CIRRUS_REMOTE`, built on wrangler 4's **native** per-binding remote mode (no proxy shims, a cleaner
+path than void's). The only remaining in-scope void capability Cirrus deliberately skips is
+**sandboxes/containers** (§6, niche). See §6 for the refreshed gap analysis.
 
 ---
 
@@ -259,8 +263,9 @@ else ms.appendLeft(arrayStart + 1, next === "\n" ? `\n${propIndent}  voidPlugin(
 - Typed fetch client = thin `ofetch` wrapper with `:param` interpolation; pure HTTP, no special wire format. `fetchStream` parses Workers-AI SSE.
 
 > **Cirrus is ahead here:** its reactive client (`useQuery`/`useMutation` + optimistic updates +
-> offline queue) is far more than void's typed `fetch`. **Worth stealing:** the Standard-Schema
-> `~standard.validate` pattern would let Cirrus function args accept zod/valibot/arktype uniformly.
+> offline queue) is far more than void's typed `fetch`. **Stolen ✅ (shipped):** the Standard-Schema
+> `~standard.validate` pattern now lets Cirrus function args accept zod/valibot/arktype uniformly via
+> the `v.from()` adapter (`packages/values/src/v.ts`, wired in `packages/server/src/functions.ts`).
 
 ### 4.2 Database runtime (`runtime/db.mjs`)
 
@@ -294,9 +299,18 @@ request time; PKCE via better-auth; `BETTER_AUTH_SECRET` (dev fallback on localh
 > connection/topic split is a clean isolation pattern; its unbounded SHA-256 topic keys are a neat
 > trick if Cirrus ever wants a non-query pub/sub channel.
 
-### 4.5 ⭐ Remote-binding dev — the gap Cirrus should close
+### 4.5 ⭐ Remote-binding dev — ✅ SHIPPED (was: the gap Cirrus should close)
 
-The one void capability Cirrus lacks. Two halves:
+> **Status (2026-06-12): shipped as `CIRRUS_REMOTE`.** Cirrus took a cleaner path than the proxy-shim
+> design sketched below: rather than HTTP proxy objects, it rides **wrangler 4's native per-binding
+> remote mode** (`"remote": true` injected into a materialized temp wrangler config). Covers D1/KV/R2
+> + Vectorize/Queues/Services/AI; precedence is `--remote` flag > `CIRRUS_REMOTE` env > `cirrus.json`;
+> temp configs are cleaned up on dev-server close. See `packages/config/src/remote-bindings.ts`
+> (`materializeRemoteWranglerConfig`, `resolveRemoteEnabled`), `packages/cli/src/commands/dev/handler.ts`,
+> and `packages/vite/src/remote-bindings-plugin.ts`. The void reverse-engineering below is kept as the
+> reference design that motivated the feature.
+
+The one void capability Cirrus lacked (at time of writing). Two halves:
 
 **Local** (`runtime/remote/index.mjs`): when `env.__VOID_REMOTE` is set, the worker entry calls
 `createRemoteEnv(env, bindingNames)` which **replaces real binding objects with HTTP proxy shims**:
@@ -343,14 +357,14 @@ for Platforms service binding, ~1–5ms vs REST ~50–200ms) → deployed /__voi
 env.DB`. Env vars: `__VOID_REMOTE`, `__VOID_PROXY_URL`, `__VOID_TOKEN`, `__VOID_PROJECT_ID`,
 `__VOID_PROXY_TOKEN`. Limitations: latency, no R2 multipart, no `db.dump()`.
 
-> **Cirrus replication sketch:** (A) when `CIRRUS_REMOTE=1`, the vite plugin/worker entry wraps
-> `env.DB`/KV/R2 in `ProxyD1Database`-style shims POSTing to a Cirrus proxy with the deploy token +
-> project id; (B) the deployed Cirrus worker mounts a `/__cirrus/*` binding-handler (auth via
-> `x-cirrus-internal`). The JSON protocol + Cloudflare-shaped responses mean Drizzle/D1 callers need
-> zero changes. **Caveat:** Cirrus's primary state is the _Durable Object_ (SQLite per shard), not
-> D1 — so a faithful remote-dev would also need to proxy _shard DO_ RPC, which is harder than D1/KV/
-> R2 (DO addressing + the reactive subscription path). A pragmatic first cut: proxy D1 (`.global()`
-> tables) + KV + R2 only, and run shards locally. Still a big debugging win.
+> **Cirrus replication — what actually shipped:** the original sketch proposed `ProxyD1Database`-style
+> HTTP shims + a `/__cirrus/*` binding-handler on the deployed worker. The shipped design is simpler:
+> `CIRRUS_REMOTE` (or `--remote`) flips wrangler 4's **native** `"remote": true` on each eligible
+> binding via a materialized temp wrangler config — no proxy objects, no binding-handler route, no
+> shared-secret to manage. The "run shards locally, proxy the rest" split the sketch landed on still
+> holds: D1 (`.global()` tables) + KV + R2 + Vectorize/Queues/Services/AI hit real remote resources,
+> while shard Durable Objects stay local. Implemented in `@cirrus/config` + the CLI `dev` command +
+> the Vite `remote-bindings-plugin`.
 
 ### 4.6 Queues / Sandboxes / AI / ISR / env / migrations
 
@@ -375,14 +389,17 @@ load/visible/idle/media.
 
 ## 5. Notable techniques worth stealing (ranked)
 
-1. **⭐ Remote-binding dev** (§4.5) — the one clear in-scope DX gap; pure-JSON proxy with CF-shaped responses. _Pragmatic first cut: D1/KV/R2 only._
-2. **Standard Schema (`~standard.validate`) for inputs** — make Cirrus function args accept zod/valibot/arktype uniformly with zero coupling.
+> Items 1, 2, 5, 6, and the env-validation slice of 8 have since **shipped** — kept here
+> (struck-through) so the ranking reads as a record of what was taken, not an open to-do list.
+
+1. ~~**⭐ Remote-binding dev** (§4.5) — the one clear in-scope DX gap; pure-JSON proxy with CF-shaped responses.~~ ✅ **Shipped** as `CIRRUS_REMOTE` — built on wrangler 4's native per-binding remote mode (no proxy shims), covering D1/KV/R2 + Vectorize/Queues/Services/AI.
+2. ~~**Standard Schema (`~standard.validate`) for inputs**~~ ✅ **Shipped** — Cirrus function args accept zod/valibot/arktype uniformly via `v.from()`.
 3. **3-tier inference with regex gate** — already mirrored; the "regex filter before AST" pattern keeps inference cheap. (Cirrus's export-driven mapping is the safer variant.)
 4. **`typeof import()` phantom-type codegen** — already partially adopted; the `__output`/`__validators` carrier pattern is the model for any future thinning.
-5. **Migration idempotency protocol** (`_attempts` + INSERT-conflict lock + reconcile) — directly applicable to `@cirrus/do`'s migration runner for safe rolling restarts.
-6. **Schema-drift gate via temp-copy + drizzle-kit snapshot diff** — a clean "fail before deploy" check (Cirrus's model differs — `defineMigration` not Drizzle SQL — so adapt, don't copy).
+5. ~~**Migration idempotency protocol** (`_attempts` + INSERT-conflict lock + reconcile)~~ ✅ **Shipped** (adapted) — `@cirrus/do`'s data-migration runner now claims a migration with an atomic conditional `UPDATE … WHERE status` (loser sees `changes()===0` and no-ops) + a 30s stale-claim reclaim, closing the read-decide-update race between overlapping per-shard runners. (`packages/do/src/data-migration.ts`.)
+6. ~~**Schema-drift gate via temp-copy + drizzle-kit snapshot diff** — a clean "fail before deploy" check~~ ✅ **Shipped** (adapted to Cirrus's model) — codegen emits a committed structural baseline `cirrus/.cirrus-schema.json`; `cirrus deploy`/`verify`/`prepare` diff the current schema against it, classify additive (pass) vs breaking (dropped/renamed/retyped field, optional→required, changed shardBy/index) and **fail with exit 1 on breaking drift unless a new migration id was added** (override `--allow-schema-drift`, re-bless `--update-schema-baseline`). `packages/codegen/src/schema-drift.ts` + `packages/cli/src/util/schema-drift-gate.ts`.
 7. **Single-pass BLAKE3+MD5 asset hashing** + Wrangler-compatible BLAKE3 for cross-dedup — relevant only if Cirrus ever builds its own deploy plane.
-8. **`filterLoadedEnv`** — strip shell-env pollution from worker vars by diffing against `process.env`.
+8. **`filterLoadedEnv`** — strip shell-env pollution from worker vars by diffing against `process.env`. _(Related but distinct capability ✅ shipped: void's `defineEnv` typed env validation + secret redaction now lands as `defineEnv()` in `@cirrus/server` — lazy per-key validation over `v.*` validators with string→number/boolean coercion, plus a `redactSecrets()` that masks secret-named/prefixed/high-entropy values in error messages. `packages/server/src/env.ts`.)
 9. **Collision-safe DO binding names via deterministic hash suffix** — neat for auto-provisioned DOs.
 10. **Live event streams' connection/topic DO split + SHA-256 topic keys** — a clean pub/sub topology if Cirrus wants non-query channels.
 
@@ -390,17 +407,26 @@ load/visible/idle/media.
 
 ## 6. Gap analysis vs Cirrus (what's done / missing / out of scope)
 
+> **Refreshed 2026-06-12.** Four of the five "remaining gaps" the original analysis listed have since
+> shipped; so have three smaller §5 hardening/technique items (schema-drift gate, migration-claim
+> hardening, typed env validation). They've all moved into the Done list. Only sandboxes/containers
+> remains.
+
 **Done (void DX parity shipped):** import-driven binding inference · wrangler auto-reconcile ·
 thinned `typeof`-style codegen · in-place `init --here` (MagicString) · `prepare` · `deploy`
-(+ `--migrate`, D1-placeholder guard).
+(+ `--migrate`, D1-placeholder guard) · **remote-binding dev** (`CIRRUS_REMOTE`, native wrangler-4
+per-binding remote — D1/KV/R2 + Vectorize/Queues/Services/AI) · **Standard Schema input validation**
+(`v.from()` — zod/valibot/arktype) · **client framework breadth** (`@cirrus/{react,vue,svelte,solid}`
+reactive query/mutation clients) · **Workers AI helper** (`@cirrus/ai` — `createAi`/`ctx.ai`,
+`generateText`/`streamText`/`embed`) · **schema-drift pre-deploy gate** (committed
+`cirrus/.cirrus-schema.json` baseline → additive-vs-breaking diff → blocks deploy/verify/prepare on
+unmigrated breaking drift) · **migration-runner concurrency hardening** (atomic claim + 30s
+stale-reclaim) · **typed env validation + secret redaction** (`defineEnv()` over `v.*` +
+`redactSecrets()`).
 
 **Genuine remaining gaps (in scope):**
 
-- **Remote-binding dev** (§4.5) — _highest DX leverage; build it._ D1/KV/R2 proxy first.
-- **Standard Schema input validation** — small, additive, schema-lib-agnostic args.
-- **Client framework breadth** — void has react/vue/svelte/solid; Cirrus has react only (Vue/Svelte reactive clients widen reach; Solid deferred).
-- **Workers AI helper** (`@cirrus/ai`) — small additive (Cirrus has Vectorize, not inference).
-- **Sandboxes/containers** — niche, low priority.
+- **Sandboxes/containers** — niche, low priority. The last unshipped in-scope void capability.
 
 **Out of scope by design (void's web-framework half — do NOT build):** Pages/SSR/SSG/ISR · islands
 · head/view-transitions/markdown · edge headers/redirects/rewrites/prerendering · PostgreSQL/
