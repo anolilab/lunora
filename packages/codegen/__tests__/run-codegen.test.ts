@@ -1,4 +1,4 @@
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,6 +37,33 @@ describe("run-codegen", () => {
             expect(result.generated.dataModel).toContain('_id: Id<"messages">');
             expect(result.generated.dataModel).toContain('channelId: Id<"channels">;');
             expect(result.generated.dataModel).toContain("text: string;");
+        });
+
+        it("does not wire @cirrus/ai for a project that doesn't use it", () => {
+            expect.assertions(2);
+
+            const result = runCodegen({ projectRoot: workdir });
+
+            expect(result.generated.shard).not.toContain("@cirrus/ai");
+            expect(result.generated.server).not.toContain("@cirrus/ai");
+        });
+
+        it("wires ctx.ai end-to-end when a function reads ctx.ai", () => {
+            expect.assertions(3);
+
+            writeFileSync(
+                join(workdir, "cirrus", "summarize.ts"),
+                `import { action, v } from "@cirrus/server";
+export const summarize = action({ args: { text: v.string() }, handler: async (ctx, { text }) => ctx.ai.model("@cf/meta/llama-3.1-8b-instruct") });
+`,
+                "utf8",
+            );
+
+            const result = runCodegen({ projectRoot: workdir });
+
+            expect(result.generated.shard).toContain('import { createAi } from "@cirrus/ai"');
+            expect(result.generated.shard).toContain("ai,");
+            expect(result.generated.server).toContain("readonly ai: CirrusAi;");
         });
 
         it("emits api.ts with grouped queries/mutations", () => {
@@ -595,6 +622,49 @@ describe("run-codegen", () => {
             expect(output).toContain("export const createShardDO");
         });
 
+        it("wires ctx.ai into the ShardDO when AI is used", () => {
+            expect.assertions(6);
+
+            const schema: SchemaIR = { tables: [], vectorIndexes: [] };
+
+            const output = emitShard(schema, [], undefined, true);
+
+            // Pull the AI helper + binding type, expose the override config field,
+            // and assemble ctx.ai (built from env.AI, with a throwing stub fallback).
+            expect(output).toContain('import { createAi } from "@cirrus/ai"');
+            expect(output).toContain("AiBindingLike");
+            expect(output).toContain("ai?: (env: Record<string, unknown>) => AiBindingLike;");
+            expect(output).toContain("const aiStub: CirrusAi");
+            expect(output).toContain("createAi({ binding: aiBinding as AiBindingLike })");
+            expect(output).toContain("ai,");
+        });
+
+        it("omits @cirrus/ai entirely when AI is not used", () => {
+            expect.assertions(3);
+
+            const schema: SchemaIR = { tables: [], vectorIndexes: [] };
+
+            const output = emitShard(schema, [], undefined, false);
+
+            expect(output).not.toContain("@cirrus/ai");
+            expect(output).not.toContain("createAi");
+            expect(output).not.toContain("aiStub");
+        });
+
+        it("adds a typed ctx.ai to the generated ActionCtx when AI is used (and not otherwise)", () => {
+            expect.assertions(4);
+
+            const withAi = emitServer(true);
+
+            expect(withAi).toContain('import type { CirrusAi } from "@cirrus/ai";');
+            expect(withAi).toContain("readonly ai: CirrusAi;");
+
+            const withoutAi = emitServer(false);
+
+            expect(withoutAi).not.toContain("@cirrus/ai");
+            expect(withoutAi).not.toContain("readonly ai:");
+        });
+
         it("binds every table facade through the shard ctx-db (which routes `.global()` ops to D1)", () => {
             expect.assertions(9);
 
@@ -627,7 +697,9 @@ describe("run-codegen", () => {
             const output = emitShard(schema);
 
             // The D1 config thunk + fallback stub appear only because a `.global()` table exists.
-            expect(output).toContain("d1?: (env: Record<string, unknown>, request?: { identity?: Record<string, unknown>; userId?: string }) => DatabaseWriterLike | undefined;");
+            expect(output).toContain(
+                "d1?: (env: Record<string, unknown>, request?: { identity?: Record<string, unknown>; userId?: string }) => DatabaseWriterLike | undefined;",
+            );
             expect(output).toContain("const globalDbStub: DatabaseWriterLike");
             expect(output).toContain("const globalDb: DatabaseWriterLike = config.d1?.(env, { identity, userId }) ?? globalDbStub;");
 
@@ -650,7 +722,7 @@ describe("run-codegen", () => {
             // to the canonical `@cirrus/do` `serveRelationFanout` helper (a one-line
             // body — the guards + read/count dispatch live in that helper, not here).
             expect(output).toContain("protected override async runRelationFanoutRead(functionPath: string, args: Record<string, unknown>): Promise<unknown>");
-            expect(output).toContain("serveRelationFanout, ShardDO as ShardDOBase } from \"@cirrus/do\";");
+            expect(output).toContain('serveRelationFanout, ShardDO as ShardDOBase } from "@cirrus/do";');
             expect(output).toContain("return serveRelationFanout(schema as unknown as SchemaLike, db, functionPath, args);");
         });
 

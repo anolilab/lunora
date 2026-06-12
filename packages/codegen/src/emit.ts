@@ -696,8 +696,16 @@ const renderCaller = (functions: ReadonlyArray<FunctionIR>): { implementation: s
  * `undefined` (TypeError: reading 'string'). The dispatch table that *does*
  * import every function module lives in `_generated/functions.ts` instead.
  */
-const emitServer = (): string => {
+const emitServer = (hasAi = false): string => {
     /* eslint-disable no-secrets/no-secrets -- the emitted typed-`v` signature (`ColumnValidator<IdOfTable<T>, ...>`) is dense generated TS spread across this template, not a credential */
+    // When the project uses Workers AI, the generated ActionCtx carries a typed
+    // `ai` helper (from `@cirrus/ai`). Inference is an external, non-deterministic
+    // call, so — like `ctx.fetch` — it lives on ActionCtx only, not on the
+    // query/mutation contexts. Gated so non-AI projects neither see the field nor
+    // import `@cirrus/ai`.
+    const aiTypeImport = hasAi ? `import type { CirrusAi } from "@cirrus/ai";\n` : "";
+    const aiActionField = hasAi ? `\n    readonly ai: CirrusAi;` : "";
+
     const server = `${GENERATED_HEADER}import {
     action as actionBase,
     internalAction as internalActionBase,
@@ -722,7 +730,7 @@ import type {
 } from "@cirrus/server";
 
 import type { DatabaseReaderFacade, DatabaseWriterFacade, Id as IdOfTable, OrmReader, OrmWriter, TableName } from "./dataModel.js";
-
+${aiTypeImport}
 export type { DataModel, Doc, Id, TableName } from "./dataModel.js";
 
 /**
@@ -743,7 +751,7 @@ export interface MutationCtx extends Omit<MutationCtxBase, "db"> {
 
 export interface ActionCtx extends Omit<ActionCtxBase, "db"> {
     readonly db: DatabaseWriter & DatabaseWriterFacade;
-    readonly orm: OrmWriter;
+    readonly orm: OrmWriter;${aiActionField}
 }
 
 /** \`query()\` bound to this project's typed {@link QueryCtx}. */
@@ -1064,7 +1072,59 @@ const emitRelationFanout = (hasGlobalTables: boolean): { importFragment: string;
     };
 };
 
-const emitShard = (schema: SchemaIR, advisories: ReadonlyArray<Finding> = [], rlsMetadata?: RlsMetadataIR): string => {
+/**
+ * The `ctx.ai` code fragments woven into the generated ShardDO, or empty strings
+ * when the project doesn't use Workers AI. Extracted from {@link emitShard} so
+ * its body stays flat (the gating lives here, not as inline ternaries).
+ */
+const emitAiFragments = (hasAi: boolean): { build: string; configField: string; contextField: string; stub: string } => {
+    if (!hasAi) {
+        return { build: "", configField: "", contextField: "", stub: "" };
+    }
+
+    // ctx.ai falls back to this when neither `env.AI` nor a `config.ai` thunk
+    // resolves a binding — every method throws a directed error rather than a
+    // bare "undefined is not a function".
+    const aiMissing = `throw new Error("ctx.ai: no AI binding found. Add an \\\`ai\\\` binding (env.AI) to wrangler.jsonc, or pass \\\`ai\\\` to createShardDO().");`;
+
+    return {
+        // Build ctx.ai from the resolved Workers AI binding (a `config.ai` thunk
+        // override, else `env.AI`). createAi is provider-agnostic — a model-id
+        // string resolves Workers AI, any AI SDK model object passes through — so
+        // a handler is never locked to Workers AI. Falls back to `aiStub`.
+        build: `
+            const aiBinding = config.ai?.(env) ?? (env as Record<string, unknown>).AI;
+            const ai: CirrusAi = aiBinding ? createAi({ binding: aiBinding as AiBindingLike }) : aiStub;
+`,
+        // Optional override for the Workers AI binding. When omitted, ctx.ai is
+        // built from `env.AI` (the conventional binding the config layer
+        // auto-reconciles); the thunk lets a caller point it elsewhere or inject
+        // a double in tests.
+        configField: `\n    ai?: (env: Record<string, unknown>) => AiBindingLike;`,
+        contextField: `\n                ai,`,
+        stub: `
+const aiStub: CirrusAi = {
+    embeddingModel: () => {
+        ${aiMissing}
+    },
+    model: () => {
+        ${aiMissing}
+    },
+    run: async () => {
+        ${aiMissing}
+    },
+    // workersai is a callable-with-properties; a bare throwing arrow isn't
+    // structurally assignable, so cast it. Never invoked (the stub throws first).
+    workersai: (() => {
+        ${aiMissing}
+    }) as unknown as CirrusAi["workersai"],
+};
+`,
+    };
+};
+
+const emitShard = (schema: SchemaIR, advisories: ReadonlyArray<Finding> = [], rlsMetadata?: RlsMetadataIR, hasAi = false): string => {
+    const { build: aiBuild, configField: aiConfigField, contextField: aiContextField, stub: aiStub } = emitAiFragments(hasAi);
     // Drift guard + the data we emit: the advisor's `Finding`s must stay
     // assignable to the DO's `AdvisoryFinding` (the generated `CIRRUS_ADVISORIES`
     // is typed against it). This assignment fails `tsc` if the two shapes drift —
@@ -1130,6 +1190,10 @@ const emitShard = (schema: SchemaIR, advisories: ReadonlyArray<Finding> = [], rl
             `import type { SchemaLike as VectorSchemaLike, VectorizeIndexLike, VectorSearchLike } from "@cirrus/vectors";`,
             `import { createContextVectors, createVectors, createVectorSyncHook } from "@cirrus/vectors";`,
         );
+    }
+
+    if (hasAi) {
+        importLines.push(`import type { AiBindingLike, CirrusAi } from "@cirrus/ai";`, `import { createAi } from "@cirrus/ai";`);
     }
 
     importLines.push(``, `import schema from "../schema.js";`, `import { CIRRUS_FUNCTIONS, CIRRUS_MIGRATIONS } from "./functions.js";`);
@@ -1337,7 +1401,7 @@ export interface ShardDOConfig {
     /** Optional telemetry sink. When supplied, each \`ctx.log.*\` call is forwarded to \`sink.onLog\`. Pass the SAME sink you give \`createWorker({ observability })\` (which drives \`onRpc\`) to route both RPC and log events. */
     observability?: (env: Record<string, unknown>) => LogSink | undefined;
     scheduler?: (env: Record<string, unknown>) => unknown;
-    storage?: (env: Record<string, unknown>) => unknown;${vectorsConfigField}${d1ConfigField}
+    storage?: (env: Record<string, unknown>) => unknown;${vectorsConfigField}${aiConfigField}${d1ConfigField}
 }
 
 const schedulerStub = {
@@ -1375,7 +1439,7 @@ const storageStub = {
         throw new Error("ctx.storage: no storage configured. Pass \`storage\` to createShardDO().");
     },
 };
-${globalDatabaseStub}${vectorsStub}${bindTableHelper}
+${globalDatabaseStub}${vectorsStub}${aiStub}${bindTableHelper}
 // Bound in-process \`ctx.run*\` composition depth so a self- or cyclically-
 // referencing call fails loudly with a clear error instead of overflowing the
 // stack. Tracked across the awaited handler chain (one DO invocation is
@@ -1713,7 +1777,7 @@ ${relationFanout.override}
             const env = (this.env ?? {}) as Record<string, unknown>;
             const userId = this.getCurrentUserId();
             const identity = this.getCurrentIdentity();
-${vectorsBuild}
+${vectorsBuild}${aiBuild}
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
             // Build the storage adapter once and share it between \`ctx.storage\`
             // and \`ctx.db.system._storage\` so both read the same R2 binding. The
@@ -1745,7 +1809,7 @@ ${facadeBlock}
                 fetch: globalThis.fetch.bind(globalThis),
                 log,${ormContextField}
                 scheduler,
-                storage,${vectorsContextField}
+                storage,${vectorsContextField}${aiContextField}
             };
 
             ctx.runAction = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("action", reference.__cirrusRef, fnArgs, ctx);

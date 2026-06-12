@@ -5,6 +5,7 @@ import type { Finding } from "@cirrus/advisor";
 import { Project } from "ts-morph";
 
 import { lintSchema } from "./advisor";
+import discoverAiUsage from "./discover-ai-usage";
 import discoverAuthApiCalls from "./discover-authapi-calls";
 import discoverCrons from "./discover-crons";
 import { discoverFunctions } from "./discover-functions";
@@ -101,11 +102,16 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // discovered from every `.use(rls(...))` chain — never the `when` predicate.
     const rlsMetadata = discoverRlsMetadata(project, cirrusDirectory);
 
+    // Whether any function uses Workers AI (imports `@cirrus/ai` or reads
+    // `ctx.ai`). Gates wiring `ctx.ai` into the generated ShardDO + the typed
+    // ActionCtx — so non-AI projects never import the AI SDK into their worker.
+    const hasAi = discoverAiUsage(project, cirrusDirectory);
+
     const dataModelContent = emitDataModel(schema);
     const apiContent = emitApi(functions);
-    const serverContent = emitServer();
+    const serverContent = emitServer(hasAi);
     const functionsContent = emitFunctions(functions, migrations);
-    const shardContent = emitShard(schema, advisories, rlsMetadata);
+    const shardContent = emitShard(schema, advisories, rlsMetadata, hasAi);
     const cronsContent = emitCrons(crons);
     const drizzleFiles = emitDrizzleSchema(schema);
 
