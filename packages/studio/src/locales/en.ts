@@ -383,6 +383,8 @@ const MESSAGE_IDS = [
     "Swap rows and columns",
     "Field",
     "Row {n}",
+    "Loading…",
+    "No matching row.",
     "CSV",
     "{count} selected",
     "Delete {count}",

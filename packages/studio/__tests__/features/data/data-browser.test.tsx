@@ -959,6 +959,28 @@ describe("dataBrowser — editable", () => {
         expect(screen.queryByTestId("db-ref-title")).toBeNull();
         expect(screen.getByTestId("db-ref-authorId")).toBeDefined();
     });
+
+    it("previews the referenced row on hover without navigating away", async () => {
+        expect.assertions(3);
+
+        const mock = createRelationalClient();
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-posts"));
+        await screen.findByTestId("db-rows");
+
+        // Hovering the FK cell lazily fetches and shows the referenced user's fields.
+        fireEvent.mouseEnter(screen.getByTestId("db-ref-authorId"));
+
+        const preview = await screen.findByTestId("db-ref-preview");
+
+        expect(within(preview).getByText("name")).toBeDefined();
+        await expect(within(preview).findByText("Ada")).resolves.toBeDefined();
+
+        // The current table is still `posts` — preview didn't navigate.
+        expect(screen.getByTestId("db-table-posts").getAttribute("aria-pressed")).toBe("true");
+    });
 });
 
 interface FilterArg {

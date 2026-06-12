@@ -233,6 +233,7 @@ export const DataBrowser = ({
         onRowEdit,
         page,
         pageError,
+        previewRef,
         pageSize,
         rangeEnd,
         rangeStart,
@@ -305,12 +306,13 @@ export const DataBrowser = ({
             editingCell,
             onExpandCell,
             onNavigateRef: handleNavigateRef,
+            onPreviewRef: previewRef,
             refs: page?.refs,
             stage,
             stagedValue,
             startEdit: startCellEdit,
         };
-    }, [cancelCellEdit, editable, editableColumn, editingCell, onExpandCell, handleNavigateRef, page?.refs, stage, stagedValue, startCellEdit]);
+    }, [cancelCellEdit, editable, editableColumn, editingCell, onExpandCell, handleNavigateRef, previewRef, page?.refs, stage, stagedValue, startCellEdit]);
 
     return (
         <div className="flex h-full min-w-0" data-testid="cirrus-data-browser">

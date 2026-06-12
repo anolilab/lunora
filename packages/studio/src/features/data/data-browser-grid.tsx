@@ -8,7 +8,7 @@ import { ConfirmButton } from "../../components/confirm-button";
 import { Checkbox } from "../../components/ui/checkbox";
 import { useT } from "../../i18n/i18n-context";
 import type { TablePage } from "../../lib/admin";
-import { formatCell } from "../../lib/internal";
+import { fireAndForget, formatCell } from "../../lib/internal";
 import { cn } from "../../lib/utils";
 import { CellValue, GridContainer } from "./data-grid";
 import type { StagedEditsModel } from "./staged-edits";
@@ -111,21 +111,132 @@ const rowId = (row: TableRow): null | string => {
  */
 const rowKey = (row: TableRow, index: number): string => rowId(row) ?? `row-${index.toString()}`;
 
+/** The hover preview's fetch state: the referenced row, `null` (no match / cross-tier), or in flight. */
+type PreviewState = "loading" | { row: Record<string, unknown> | null };
+
+/** Up to this many of the referenced row's fields show in the hover card before it truncates. */
+const PREVIEW_FIELD_LIMIT = 8;
+
 /**
- * Renders a foreign-key cell as a link to the target table. Extracted to module
- * scope so the column-def `cell` renderer stays a flat callback instead of
- * nesting another arrow for the click handler.
+ * The hover-preview card for a foreign-key cell: the referenced row's first few
+ * fields, fetched lazily on first hover and cached. Fixed-positioned at the cell
+ * so the surrounding scroll containers can't clip it.
+ */
+const RefPreviewCard = ({ anchor, state }: { anchor: { left: number; top: number }; state: PreviewState }): ReactElement => {
+    const t = useT();
+    const style = useMemo<CSSProperties>(() => {
+        return { left: anchor.left, position: "fixed", top: anchor.top, zIndex: 50 };
+    }, [anchor.left, anchor.top]);
+
+    let body: ReactElement;
+
+    if (state === "loading") {
+        body = <p className="px-3 py-2 text-xs text-muted-foreground">{t("Loading…")}</p>;
+    } else if (state.row === null) {
+        body = <p className="px-3 py-2 text-xs text-muted-foreground">{t("No matching row.")}</p>;
+    } else {
+        const entries = Object.entries(state.row).slice(0, PREVIEW_FIELD_LIMIT);
+
+        body = (
+            <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 px-3 py-2">
+                {entries.map(([key, value]) => (
+                    <div className="contents" key={key}>
+                        <dt className="truncate font-mono text-[11px] text-muted-foreground">{key}</dt>
+                        <dd className="truncate font-mono text-[11px] text-foreground" title={formatCell(value)}>
+                            {formatCell(value)}
+                        </dd>
+                    </div>
+                ))}
+            </dl>
+        );
+    }
+
+    return (
+        <div
+            className="pointer-events-none w-72 overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-md"
+            data-testid="db-ref-preview"
+            role="tooltip"
+            style={style}
+        >
+            {body}
+        </div>
+    );
+};
+
+/**
+ * Renders a foreign-key cell as a link to the target table, with a lazy hover
+ * preview of the referenced row. Clicking still navigates; hovering (or focusing)
+ * fetches the target row once and shows its fields in a fixed-positioned card.
  */
 const RefCell = memo(
-    ({ column, id, onNavigate, target }: { column: string; id: string; onNavigate: (target: string, id: string) => void; target: string }): ReactElement => {
+    ({
+        column,
+        id,
+        onNavigate,
+        onPreview,
+        target,
+    }: {
+        column: string;
+        id: string;
+        onNavigate: (target: string, id: string) => void;
+        onPreview: (target: string, id: string) => Promise<Record<string, unknown> | null>;
+        target: string;
+    }): ReactElement => {
+        const [anchor, setAnchor] = useState<{ left: number; top: number } | null>(null);
+        const [preview, setPreview] = useState<PreviewState | null>(null);
+        // Guards the lazy fetch so re-hovering reuses the cached preview.
+        const fetched = useRef<boolean>(false);
+
         const onClick = useCallback((): void => {
             onNavigate(target, id);
         }, [onNavigate, target, id]);
 
+        const onOpen = useCallback(
+            (event: React.FocusEvent<HTMLButtonElement> | React.MouseEvent<HTMLButtonElement>): void => {
+                const rect = event.currentTarget.getBoundingClientRect();
+
+                setAnchor({ left: rect.left, top: rect.bottom + 4 });
+
+                if (fetched.current) {
+                    return;
+                }
+
+                fetched.current = true;
+                setPreview("loading");
+
+                // Fetch the referenced row once; cache the result across re-hovers.
+                const load = async (): Promise<void> => {
+                    try {
+                        setPreview({ row: await onPreview(target, id) });
+                    } catch {
+                        setPreview({ row: null });
+                    }
+                };
+
+                fireAndForget(load());
+            },
+            [id, onPreview, target],
+        );
+        const onCloseHover = useCallback((): void => {
+            setAnchor(null);
+        }, []);
+
         return (
-            <button data-testid={`db-ref-${column}`} onClick={onClick} title={`Open ${target} ${id}`} type="button">
-                {id} ↗
-            </button>
+            <>
+                <button
+                    data-testid={`db-ref-${column}`}
+                    onBlur={onCloseHover}
+                    onClick={onClick}
+                    onFocus={onOpen}
+                    onMouseEnter={onOpen}
+                    onMouseLeave={onCloseHover}
+                    title={`Open ${target} ${id}`}
+                    type="button"
+                >
+                    {id} ↗
+                </button>
+                {anchor !== null && preview !== null && <RefPreviewCard anchor={anchor} state={preview} />}
+            </>
         );
     },
 );
@@ -156,6 +267,7 @@ interface GridEdit {
     editingCell: null | { column: string; rowId: string };
     onExpandCell: (column: string, value: unknown) => void;
     onNavigateRef: (target: string, id: string) => void;
+    onPreviewRef: (target: string, id: string) => Promise<Record<string, unknown> | null>;
     refs: Record<string, string> | undefined;
     stage: StagedEditsModel["stage"];
     stagedValue: StagedEditsModel["stagedValue"];
@@ -267,7 +379,7 @@ const EditableCell = memo(({ cell, edit }: { cell: Cell<TableRow, unknown>; edit
     const target = edit.refs?.[column];
 
     if (target !== undefined && (typeof rawValue === "string" || typeof rawValue === "number") && String(rawValue) !== "") {
-        return <RefCell column={column} id={String(rawValue)} onNavigate={edit.onNavigateRef} target={target} />;
+        return <RefCell column={column} id={String(rawValue)} onNavigate={edit.onNavigateRef} onPreview={edit.onPreviewRef} target={target} />;
     }
 
     // An idless row can't be addressed for a patch, so its cells are read-only.

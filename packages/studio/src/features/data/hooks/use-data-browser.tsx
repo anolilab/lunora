@@ -111,6 +111,7 @@ interface DataBrowserModel {
     page: TablePage | null;
     pageError: null | string;
     pageSize: number;
+    previewRef: (target: string, id: string) => Promise<Record<string, unknown> | null>;
     rangeEnd: number;
     rangeStart: number;
     saveEdit: () => void;
@@ -374,6 +375,27 @@ const useDataBrowser = ({
             onSelectTable?.(targetTable);
         },
         [fetchPage, onSelectTable, shardKey],
+    );
+
+    // One-shot read of the row a foreign-key cell points at, for the hover preview —
+    // searches the target table for the referenced id and returns the first match
+    // (or null) without disturbing the current view. Best-effort: a cross-tier
+    // (`.global()`) target or a failed read resolves to null and the card says so.
+    const previewRef = useCallback(
+        async (targetTable: string, id: string): Promise<Record<string, unknown> | null> => {
+            try {
+                const result = (await client.query(
+                    READ_TABLE_PAGE,
+                    { filters: [], limit: 1, offset: 0, search: id, table: targetTable },
+                    callOptions(shardKey),
+                )) as TablePage;
+
+                return result.rows[0] ?? null;
+            } catch {
+                return null;
+            }
+        },
+        [client, shardKey],
     );
 
     // Reconcile the URL's table into the selection. Fires on first load (deep link)
@@ -772,6 +794,7 @@ const useDataBrowser = ({
         onRowDelete,
         onRowEdit,
         page,
+        previewRef,
         pageError,
         pageSize,
         rangeEnd,
