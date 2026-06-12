@@ -396,4 +396,30 @@ describe("sqlEditorPanel", () => {
 
         expect(within(screen.getByTestId("sql-tab-strip")).getAllByTestId(/^sql-tab-select-/u)).toHaveLength(1);
     });
+
+    it("right-click opens a tab menu that closes the other tabs", () => {
+        expect.assertions(3);
+
+        render(renderPanel(schemaMock()));
+
+        // Open two more tabs (three total).
+        fireEvent.click(screen.getByTestId("sql-tab-add"));
+        fireEvent.click(screen.getByTestId("sql-tab-add"));
+
+        const selects = within(screen.getByTestId("sql-tab-strip")).getAllByTestId(/^sql-tab-select-/u);
+
+        expect(selects).toHaveLength(3);
+
+        // Right-click the first tab → context menu appears.
+        const firstId = (selects[0] as HTMLElement).dataset.testid?.replace("sql-tab-select-", "") ?? "";
+
+        fireEvent.contextMenu(screen.getByTestId(`sql-tab-${firstId}`));
+
+        expect(screen.getByTestId("sql-tab-menu")).toBeDefined();
+
+        // "Close other tabs" leaves only the right-clicked one.
+        fireEvent.click(screen.getByTestId("sql-tab-menu-close-others"));
+
+        expect(within(screen.getByTestId("sql-tab-strip")).getAllByTestId(/^sql-tab-select-/u)).toHaveLength(1);
+    });
 });

@@ -126,5 +126,32 @@ const closeTab = (tabs: ReadonlyArray<SqlTab>, id: string, makeEmpty: () => SqlT
     return { activeId: neighbour.id, tabs: remaining };
 };
 
-export { addTab, closeTab, makeTab, MAX_TABS, usePersistedTabs };
+/** Keep only the tab `id`, closing every other tab; that tab becomes active. */
+const closeOtherTabs = (tabs: ReadonlyArray<SqlTab>, id: string): { activeId: string; tabs: SqlTab[] } => {
+    const kept = tabs.filter((tab) => tab.id === id);
+
+    return kept.length === 0 ? { activeId: tabs[0]?.id ?? "", tabs: [...tabs] } : { activeId: id, tabs: kept };
+};
+
+/** Close every tab to the right of `id`; the active tab clamps to `id` when it was one of the closed ones. */
+const closeTabsToRight = (tabs: ReadonlyArray<SqlTab>, id: string, activeId: string): { activeId: string; tabs: SqlTab[] } => {
+    const index = tabs.findIndex((tab) => tab.id === id);
+
+    if (index === -1) {
+        return { activeId, tabs: [...tabs] };
+    }
+
+    const kept = tabs.slice(0, index + 1);
+
+    return { activeId: kept.some((tab) => tab.id === activeId) ? activeId : id, tabs: kept };
+};
+
+/** Close every tab, leaving one fresh empty draft (like closing the last remaining tab). */
+const closeAllTabs = (makeEmpty: () => SqlTab): { activeId: string; tabs: SqlTab[] } => {
+    const fresh = makeEmpty();
+
+    return { activeId: fresh.id, tabs: [fresh] };
+};
+
+export { addTab, closeAllTabs, closeOtherTabs, closeTab, closeTabsToRight, makeTab, MAX_TABS, usePersistedTabs };
 export type { SqlTab };

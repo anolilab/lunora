@@ -144,6 +144,55 @@ const qualifierTable = (value: string, start: number): string | undefined => {
 const matches = (candidate: string, needle: string): boolean => candidate.toLowerCase().startsWith(needle.toLowerCase());
 
 /**
+ * Collect up to `max` prefix-matching names, stopping as soon as the cap is hit.
+ * The final list is sliced to {@link MAX_SUGGESTIONS} anyway, so scanning a whole
+ * many-thousand-object schema per keystroke is wasted work — this bounds it.
+ */
+const takeMatches = (names: ReadonlyArray<string>, needle: string, max: number, make: (name: string) => Suggestion): Suggestion[] => {
+    const out: Suggestion[] = [];
+
+    for (const name of names) {
+        if (matches(name, needle)) {
+            out.push(make(name));
+
+            if (out.length >= max) {
+                break;
+            }
+        }
+    }
+
+    return out;
+};
+
+/**
+ * De-duped column matches across every probed table (first table wins as the
+ * detail hint), bounded to `max`. Bounded like {@link takeMatches}: the empty-needle
+ * case (a bare `SELECT `) would otherwise walk every column in the schema before
+ * the caller slices the result down to a handful.
+ */
+const takeColumnMatches = (schema: SqlSchema, needle: string, max: number): Suggestion[] => {
+    const seen = new Map<string, string>();
+
+    for (const [table, columns] of Object.entries(schema.columns)) {
+        for (const column of columns) {
+            if (matches(column, needle) && !seen.has(column)) {
+                seen.set(column, table);
+
+                if (seen.size >= max) {
+                    return [...seen].map(([column_, table_]) => {
+                        return { detail: table_, kind: "column" as const, label: column_ };
+                    });
+                }
+            }
+        }
+    }
+
+    return [...seen].map(([column, table]) => {
+        return { detail: table, kind: "column" as const, label: column };
+    });
+};
+
+/**
  * Rank completions for the token under `caret` against `schema`. Tables, the
  * probed columns, and the keyword vocabulary are each prefix-filtered by the
  * typed token, then ordered: a `tbl.` qualifier restricts to that table's
@@ -160,12 +209,9 @@ const suggestionsFor = (value: string, caret: number, schema: SqlSchema): Sugges
     if (qualifier !== undefined) {
         const owned = schema.columns[qualifier] ?? schema.columns[qualifier.toLowerCase()] ?? [];
 
-        return owned
-            .filter((column) => matches(column, span.text))
-            .slice(0, MAX_SUGGESTIONS)
-            .map((column) => {
-                return { detail: qualifier, kind: "column" as const, label: column };
-            });
+        return takeMatches(owned, span.text, MAX_SUGGESTIONS, (column) => {
+            return { detail: qualifier, kind: "column" as const, label: column };
+        });
     }
 
     // An empty, unqualified token only completes after a column-reading clause —
@@ -174,26 +220,12 @@ const suggestionsFor = (value: string, caret: number, schema: SqlSchema): Sugges
         return [];
     }
 
-    const tableHits: Suggestion[] = schema.tables
-        .filter((table) => matches(table, span.text))
-        .map((table) => {
-            return { kind: "table" as const, label: table };
-        });
-
-    // De-dupe columns that appear in several tables; keep the first table as the detail hint.
-    const seenColumns = new Map<string, string>();
-
-    for (const [table, columns] of Object.entries(schema.columns)) {
-        for (const column of columns) {
-            if (matches(column, span.text) && !seenColumns.has(column)) {
-                seenColumns.set(column, table);
-            }
-        }
-    }
-
-    const columnHits: Suggestion[] = [...seenColumns].map(([column, table]) => {
-        return { detail: table, kind: "column" as const, label: column };
+    // Each source is bounded to MAX_SUGGESTIONS — the final list never shows more,
+    // so collecting beyond the cap is wasted work on a large schema.
+    const tableHits = takeMatches(schema.tables, span.text, MAX_SUGGESTIONS, (table) => {
+        return { kind: "table" as const, label: table };
     });
+    const columnHits = takeColumnMatches(schema, span.text, MAX_SUGGESTIONS);
 
     const keywordHits: Suggestion[] = KEYWORDS.filter(
         (keyword) => span.text !== "" && matches(keyword, span.text) && keyword.toLowerCase() !== span.text.toLowerCase(),

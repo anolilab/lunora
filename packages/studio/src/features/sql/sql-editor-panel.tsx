@@ -19,7 +19,7 @@ import formatSql from "./format-sql";
 import type { SqlSchema } from "./sql-autocomplete";
 import { AutocompletePopover, useSqlAutocomplete } from "./sql-autocomplete-ui";
 import type { SqlTab } from "./sql-tabs";
-import { addTab, closeTab, makeTab, MAX_TABS, usePersistedTabs } from "./sql-tabs";
+import { addTab, closeAllTabs, closeOtherTabs, closeTab, closeTabsToRight, makeTab, MAX_TABS, usePersistedTabs } from "./sql-tabs";
 
 interface SqlEditorPanelProps {
     /** Shard key the query runs against on first load. Defaults to the root shard. */
@@ -155,6 +155,7 @@ interface TabButtonProps {
     readonly active: boolean;
     readonly canClose: boolean;
     readonly onClose: (id: string) => void;
+    readonly onMenu: (id: string, event: React.MouseEvent) => void;
     readonly onRename: (id: string, name: string) => void;
     readonly onSelect: (id: string) => void;
     readonly tab: SqlTab;
@@ -168,10 +169,16 @@ const derivedTabLabel = (sql: string, untitled: string): string => (sql.trim() =
  * it in place) plus a close affordance (hidden for the sole tab). The label is
  * the operator's custom `tab.name` when set, else a preview derived from the draft.
  */
-const TabButton = ({ active, canClose, onClose, onRename, onSelect, tab }: TabButtonProps): ReactElement => {
+const TabButton = ({ active, canClose, onClose, onMenu, onRename, onSelect, tab }: TabButtonProps): ReactElement => {
     const t = useT();
     const [editing, setEditing] = useState<boolean>(false);
     const [confirmingClose, setConfirmingClose] = useState<boolean>(false);
+    const onContextMenu = useCallback(
+        (event: React.MouseEvent): void => {
+            onMenu(tab.id, event);
+        },
+        [onMenu, tab.id],
+    );
 
     // A tab holds unsaved work only when it's an unlinked scratch draft with
     // text — a linked tab auto-saves to its query, and an empty tab loses
@@ -248,6 +255,7 @@ const TabButton = ({ active, canClose, onClose, onRename, onSelect, tab }: TabBu
                 active ? "bg-background text-foreground" : "bg-muted/40 text-muted-foreground hover:text-foreground",
             )}
             data-testid={`sql-tab-${tab.id}`}
+            onContextMenu={onContextMenu}
         >
             {editing ? (
                 <input
@@ -286,7 +294,16 @@ const TabButton = ({ active, canClose, onClose, onRename, onSelect, tab }: TabBu
                             title={t("Discard changes")}
                             type="button"
                         >
-                            <svg aria-hidden="true" className="size-3" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.4} viewBox="0 0 24 24">
+                            <svg
+                                aria-hidden="true"
+                                className="size-3"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2.4}
+                                viewBox="0 0 24 24"
+                            >
                                 <path d="M5 13l4 4L19 7" />
                             </svg>
                         </button>
@@ -298,7 +315,16 @@ const TabButton = ({ active, canClose, onClose, onRename, onSelect, tab }: TabBu
                             title={t("Keep editing")}
                             type="button"
                         >
-                            <svg aria-hidden="true" className="size-3" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.4} viewBox="0 0 24 24">
+                            <svg
+                                aria-hidden="true"
+                                className="size-3"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                strokeWidth={2.4}
+                                viewBox="0 0 24 24"
+                            >
                                 <path d="M6 6l12 12M18 6 6 18" />
                             </svg>
                         </button>
@@ -491,9 +517,12 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
     const [running, setRunning] = useState<boolean>(false);
+    // The right-clicked tab's context menu: the target tab id + cursor position, or null when closed.
+    const [tabMenu, setTabMenu] = useState<{ id: string; x: number; y: number } | null>(null);
 
     const gutterRef = useRef<HTMLDivElement | null>(null);
     const editorRef = useRef<HTMLTextAreaElement | null>(null);
+    const privateListRef = useRef<HTMLUListElement | null>(null);
     const listboxId = useId();
 
     const { probe, schema } = useSqlSchema(shardKey);
@@ -731,6 +760,9 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
 
             if (found !== undefined) {
                 loadIntoActiveTab(found.sql, id);
+                // Reveal the loaded query in the (possibly scrolled) Private list so the
+                // operator sees which one is now active.
+                privateListRef.current?.querySelector(`[data-testid="sql-query-${id}"]`)?.scrollIntoView({ block: "nearest" });
             }
         },
         [loadIntoActiveTab, queries],
@@ -781,20 +813,71 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         setActiveTabId(fresh.id);
     }, [setActiveTabId, setTabs, tabs.length]);
 
-    const closeEditorTab = useCallback(
-        (id: string): void => {
-            const { activeId: nextActive, tabs: nextTabs } = closeTab(tabs, id, makeTab);
+    // Commit a new tab set + active id, pruning ephemeral output down to the
+    // surviving tabs so dead keys can't accumulate over a session. Shared by the
+    // single close and the bulk close-others / close-to-right / close-all paths.
+    const commitTabs = useCallback(
+        (next: { activeId: string; tabs: SqlTab[] }): void => {
+            setTabMenu(null);
+            setTabs(next.tabs);
+            setActiveTabId(next.activeId);
 
-            setTabs(nextTabs);
-            setActiveTabId(nextActive);
-            // Prune ephemeral output down to the still-open tabs — drops the closed
-            // tab (and any evicted one) so dead keys can't accumulate over a session.
-            const openIds = new Set(nextTabs.map((each) => each.id));
+            const openIds = new Set(next.tabs.map((each) => each.id));
 
             setOutputs((current) => Object.fromEntries(Object.entries(current).filter(([key]) => openIds.has(key))));
         },
-        [setActiveTabId, setTabs, tabs],
+        [setActiveTabId, setTabs],
     );
+
+    const closeEditorTab = useCallback(
+        (id: string): void => {
+            commitTabs(closeTab(tabs, id, makeTab));
+        },
+        [commitTabs, tabs],
+    );
+
+    const closeOthers = useCallback(
+        (id: string): void => {
+            commitTabs(closeOtherTabs(tabs, id));
+        },
+        [commitTabs, tabs],
+    );
+
+    const closeToRight = useCallback(
+        (id: string): void => {
+            commitTabs(closeTabsToRight(tabs, id, activeTabId));
+        },
+        [activeTabId, commitTabs, tabs],
+    );
+
+    const closeAll = useCallback((): void => {
+        commitTabs(closeAllTabs(makeTab));
+    }, [commitTabs]);
+
+    // Open the tab context menu at the cursor for the right-clicked tab.
+    const openTabMenu = useCallback((id: string, event: React.MouseEvent): void => {
+        event.preventDefault();
+        setTabMenu({ id, x: event.clientX, y: event.clientY });
+    }, []);
+
+    const closeTabMenu = useCallback((): void => {
+        setTabMenu(null);
+    }, []);
+    const onBackdropContextMenu = useCallback((event: React.MouseEvent): void => {
+        event.preventDefault();
+        setTabMenu(null);
+    }, []);
+    const onCloseOthers = useCallback((): void => {
+        if (tabMenu !== null) {
+            closeOthers(tabMenu.id);
+        }
+    }, [closeOthers, tabMenu]);
+    const onCloseToRight = useCallback((): void => {
+        if (tabMenu !== null) {
+            closeToRight(tabMenu.id);
+        }
+    }, [closeToRight, tabMenu]);
+    const tabMenuStyle = useMemo(() => (tabMenu === null ? undefined : { left: tabMenu.x, top: tabMenu.y }), [tabMenu]);
 
     const selectTab = useCallback(
         (id: string): void => {
@@ -882,7 +965,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                                 {t("No saved queries yet — they save to this browser as you type.")}
                             </p>
                         ) : (
-                            <ul className="flex flex-col gap-px" data-testid="sql-private">
+                            <ul className="flex flex-col gap-px" data-testid="sql-private" ref={privateListRef}>
                                 {filtered.map((query) => (
                                     <QueryRow active={activeId === query.id} key={query.id} onDelete={deleteQuery} onSelect={selectQuery} query={query} />
                                 ))}
@@ -976,6 +1059,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                             canClose={tabs.length > 1}
                             key={each.id}
                             onClose={closeEditorTab}
+                            onMenu={openTabMenu}
                             onRename={renameTab}
                             onSelect={selectTab}
                             tab={each}
@@ -1004,6 +1088,55 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
                         </svg>
                     </button>
                 </div>
+
+                {/* Right-click tab context menu: bulk close operations. */}
+                {tabMenu !== null && (
+                    <>
+                        <div
+                            className="fixed inset-0 z-40"
+                            data-testid="sql-tab-menu-backdrop"
+                            onClick={closeTabMenu}
+                            onContextMenu={onBackdropContextMenu}
+                            role="presentation"
+                        />
+                        <div
+                            className="fixed z-50 min-w-44 rounded-md border border-border bg-popover py-1 text-popover-foreground shadow-md"
+                            data-testid="sql-tab-menu"
+                            role="menu"
+                            style={tabMenuStyle}
+                        >
+                            <button
+                                className="flex w-full items-center px-3 py-1.5 text-start text-xs outline-none hover:bg-accent focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-40"
+                                data-testid="sql-tab-menu-close-others"
+                                disabled={tabs.length <= 1}
+                                onClick={onCloseOthers}
+                                role="menuitem"
+                                type="button"
+                            >
+                                {t("Close other tabs")}
+                            </button>
+                            <button
+                                className="flex w-full items-center px-3 py-1.5 text-start text-xs outline-none hover:bg-accent focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-40"
+                                data-testid="sql-tab-menu-close-right"
+                                disabled={tabs.findIndex((each) => each.id === tabMenu.id) >= tabs.length - 1}
+                                onClick={onCloseToRight}
+                                role="menuitem"
+                                type="button"
+                            >
+                                {t("Close tabs to the right")}
+                            </button>
+                            <button
+                                className="flex w-full items-center px-3 py-1.5 text-start text-xs outline-none hover:bg-accent focus-visible:bg-accent"
+                                data-testid="sql-tab-menu-close-all"
+                                onClick={closeAll}
+                                role="menuitem"
+                                type="button"
+                            >
+                                {t("Close all tabs")}
+                            </button>
+                        </div>
+                    </>
+                )}
 
                 {/* Line-numbered editor pane. */}
                 <div className="flex min-h-0 flex-1">

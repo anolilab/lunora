@@ -68,6 +68,26 @@ describe("sqlAutocomplete", () => {
 
             expect(hits.some((hit) => hit.kind === "keyword" && hit.label === "SELECT")).toBe(false);
         });
+
+        it("stays bounded on a large schema — caps results without scanning every object", () => {
+            expect.assertions(2);
+
+            // A few thousand tables, each with a handful of columns: the empty-token
+            // case after SELECT used to walk every column before slicing.
+            const tables = Array.from({ length: 3000 }, (_, index) => `table_${index.toString()}`);
+            const columns: Record<string, string[]> = {};
+
+            for (const table of tables) {
+                columns[table] = ["alpha", "beta", "gamma", "delta"];
+            }
+
+            const big: SqlSchema = { columns, tables };
+            const hits = suggestionsFor("SELECT ", 7, big);
+
+            // Capped at MAX_SUGGESTIONS, and the empty-token column case still completes.
+            expect(hits.length).toBeLessThanOrEqual(8);
+            expect(hits.some((hit) => hit.kind === "column")).toBe(true);
+        });
     });
 
     describe("acceptSuggestion", () => {

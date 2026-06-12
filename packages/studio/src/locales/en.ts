@@ -370,6 +370,9 @@ const MESSAGE_IDS = [
     "Discard?",
     "Discard changes",
     "Keep editing",
+    "Close other tabs",
+    "Close tabs to the right",
+    "Close all tabs",
     "column",
     "keyword",
     // Data-grid features (export, columns, selection, cell expand).
