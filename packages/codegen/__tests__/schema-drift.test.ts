@@ -84,7 +84,7 @@ describe("schema-drift", () => {
             expect(parseSchemaSnapshot("   \n  ")).toBeUndefined();
         });
 
-        it("THROWS SchemaSnapshotParseError on present-but-malformed content (so corruption is not a silent first capture)", () => {
+        it("throws SchemaSnapshotParseError on present-but-malformed content (so corruption is not a silent first capture)", () => {
             expect.assertions(3);
 
             // Invalid JSON.
