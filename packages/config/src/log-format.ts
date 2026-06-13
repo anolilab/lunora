@@ -43,9 +43,15 @@ const ROOT_SHARD_NAME = "__root__";
 /** Raw shape of a parsed cirrus event line; fields are validated before use. */
 interface CirrusEvent {
     cacheHit?: unknown;
+    /** `type: "container"` — the container export name. */
+    container?: unknown;
     durationMs?: unknown;
     error?: unknown;
+    /** `type: "container"` — the lifecycle transition (`start`/`stop`/`error`). */
+    event?: unknown;
     function?: unknown;
+    /** `type: "container"` — the per-instance id (Durable Object id). */
+    instance?: unknown;
     level?: unknown;
     message?: unknown;
     outcome?: unknown;
@@ -145,6 +151,27 @@ const formatRequest = (event: CirrusEvent, functionPath: string): CirrusFormatte
 };
 
 /**
+ * Format a `type: "container"` lifecycle event: `container:&lt;name>#&lt;short-id> &lt;event> &lt;detail>`.
+ * The instance id is truncated to keep the line readable — it's a correlation
+ * hint, not a value to copy. Errors surface on the `error` channel.
+ */
+const formatContainer = (event: CirrusEvent): CirrusFormattedLine => {
+    const name = asString(event.container) || "<unknown>";
+    const instance = asString(event.instance);
+    const transition = asString(event.event) || "event";
+    const shortId = instance === "" || instance === "unknown" ? "" : `#${instance.slice(0, 8)}`;
+    const message = asString(event.message);
+
+    const parts = [`container:${name}${shortId}`, transition];
+
+    if (message !== "") {
+        parts.push(message);
+    }
+
+    return { kind: "log", level: event.event === "error" ? "error" : "info", text: parts.join("  ") };
+};
+
+/**
  * Parse a single worker-output line and, when it is a cirrus structured event,
  * return its severity plus display text. Returns `undefined` for anything else —
  * non-JSON lines, JSON that isn't a cirrus event, or an unrecognised event type
@@ -165,6 +192,10 @@ const formatCirrusEvent = (line: string): CirrusFormattedLine | undefined => {
 
     if (event.type === "request") {
         return formatRequest(event, functionPath);
+    }
+
+    if (event.type === "container") {
+        return formatContainer(event);
     }
 
     return undefined;

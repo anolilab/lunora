@@ -126,6 +126,36 @@ describe("formatCirrusEvent", () => {
         });
     });
 
+    describe("container lifecycle events", () => {
+        it("formats a start event with a truncated instance id", () => {
+            expect.assertions(2);
+
+            const line = formatCirrusEvent(event({ container: "transcoder", event: "start", instance: "do-instance-0001", type: "container" }));
+
+            expect(line?.level).toBe("info");
+            expect(line?.text).toBe("container:transcoder#do-insta  start");
+        });
+
+        it("surfaces an error event on the error channel with its message", () => {
+            expect.assertions(2);
+
+            const line = formatCirrusEvent(
+                event({ container: "transcoder", event: "error", instance: "do-instance-0001", message: "boom", type: "container" }),
+            );
+
+            expect(line?.level).toBe("error");
+            expect(line?.text).toBe("container:transcoder#do-insta  error  boom");
+        });
+
+        it("omits the instance suffix when the id is unknown", () => {
+            expect.assertions(1);
+
+            expect(formatCirrusEvent(event({ container: "transcoder", event: "stop", instance: "unknown", type: "container" }))?.text).toBe(
+                "container:transcoder  stop",
+            );
+        });
+    });
+
     it("returns undefined for a cirrus event of an unknown type", () => {
         expect.assertions(1);
 

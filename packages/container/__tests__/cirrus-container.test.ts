@@ -4,7 +4,7 @@
  * stub (see `vitest.config.ts`), and the Durable Object context is faked with
  * the surface the upstream `Container` constructor actually touches.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import CirrusContainer from "../src/do/index";
 import { defineContainer } from "../src/index";
@@ -72,5 +72,51 @@ describe(CirrusContainer, () => {
         const definition = defineContainer({ image: "./app", secrets: ["API_KEY"] });
 
         expect(() => new CirrusContainer(fakeDurableObjectContext() as never, {}, definition, "transcoder")).toThrow('declared secret "API_KEY" is not set');
+    });
+});
+
+describe("cirrusContainer lifecycle logging", () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    const build = (): InstanceType<typeof CirrusContainer> => {
+        const definition = defineContainer({ image: "./app" });
+
+        return new CirrusContainer(fakeDurableObjectContext() as never, {}, definition, "transcoder");
+    };
+
+    it("emits a cirrus container event on start", async () => {
+        expect.assertions(1);
+
+        const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+        await build().onStart();
+
+        expect(JSON.parse((spy.mock.calls.at(-1)![0] as string) ?? "{}")).toMatchObject({
+            container: "transcoder",
+            event: "start",
+            source: "cirrus",
+            type: "container",
+        });
+    });
+
+    it("emits on stop with the exit reason", async () => {
+        expect.assertions(1);
+
+        const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+        await build().onStop({ exitCode: 137, reason: "runtime_signal" });
+
+        expect(JSON.parse((spy.mock.calls.at(-1)![0] as string) ?? "{}")).toMatchObject({ event: "stop", message: "runtime_signal (exit 137)" });
+    });
+
+    it("emits an error event and re-throws (the base onError contract)", () => {
+        expect.assertions(2);
+
+        const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+        expect(() => build().onError(new Error("crashed"))).toThrow("crashed");
+        expect(JSON.parse((spy.mock.calls[0]![0] as string) ?? "{}")).toMatchObject({ event: "error", level: "error", message: "crashed" });
     });
 });
