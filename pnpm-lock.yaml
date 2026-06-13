@@ -875,6 +875,9 @@ importers:
       '@cirrus/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
+      '@cirrus/scheduler':
+        specifier: workspace:*
+        version: link:../../packages/scheduler
       '@cirrus/server':
         specifier: workspace:*
         version: link:../../packages/server
