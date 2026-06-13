@@ -1,8 +1,9 @@
 import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@cirrus/d1";
 import { createD1CtxDb, listGlobalTables, readGlobalTablePage } from "@cirrus/d1";
-import type { ExecutionContextLike, GlobalIntrospector, ShardNamespaceLike } from "@cirrus/runtime";
+import type { ExecutionContextLike, GlobalIntrospector, ScheduledControllerLike, ShardNamespaceLike } from "@cirrus/runtime";
 import { createWorker } from "@cirrus/runtime";
 
+import { CIRRUS_CRONS } from "../cirrus/_generated/crons.js";
 import { CIRRUS_FUNCTIONS } from "../cirrus/_generated/functions.js";
 import { openApiSpec } from "../cirrus/_generated/openapi.js";
 import { createShardDO } from "../cirrus/_generated/shard.js";
@@ -87,6 +88,10 @@ const deployRouter = createDeployRouter();
 const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
     createWorker({
         adminToken: env.CIRRUS_ADMIN_TOKEN,
+        // Code-first crons (cirrus/crons.ts): the cleanup-expired-previews job
+        // fires on the worker's `scheduled()` entry. The control plane is an
+        // account-level worker, so its cron triggers fire normally (§2.4).
+        cronJobs: CIRRUS_CRONS,
         d1: env.DB,
         functions: CIRRUS_FUNCTIONS,
         globalIntrospector: env.DB ? d1Introspector(env.DB as D1DatabaseLike) : undefined,
@@ -101,5 +106,10 @@ export default {
         worker ??= buildWorker(env);
 
         return worker.fetch(request, env, context);
+    },
+    async scheduled(controller: ScheduledControllerLike, env: Env, context: ExecutionContextLike): Promise<void> {
+        worker ??= buildWorker(env);
+
+        await worker.scheduled(controller, env, context);
     },
 };
