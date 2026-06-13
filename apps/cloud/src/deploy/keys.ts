@@ -27,8 +27,11 @@ export const randomSecret = (): string => {
     return toHex(bytes.buffer);
 };
 
+/** SHA-256 hex of an arbitrary string — the storage form for any bearer secret. */
+export const sha256Hex = async (input: string): Promise<string> => toHex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input)));
+
 /** SHA-256 hex of the full key string — what gets stored and compared. */
-export const hashDeployKey = async (key: string): Promise<string> => toHex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key)));
+export const hashDeployKey = (key: string): Promise<string> => sha256Hex(key);
 
 export const formatDeployKey = (parts: Omit<ParsedDeployKey, "secret"> & { secret: string }): string => {
     const scope = parts.projectId ? `${parts.organizationId}:${parts.projectId}` : parts.organizationId;
