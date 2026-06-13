@@ -1,13 +1,19 @@
 import { CirrusError } from "@cirrus/server";
 
+import { hashDeployKey } from "../src/deploy/keys";
 import type { Id } from "./_generated/dataModel.js";
 import type { QueryCtx as QueryContext } from "./_generated/server.js";
 
 /**
- * Organization authorization (CLOUD-PLAN.md §2.2 / §7 ACLs). Every org-scoped
- * function must prove the caller is a member of the org it addresses — otherwise
- * a signed-in user could read or mutate any org's projects, deployments, and
- * keys just by passing its id. `assertMember` is the single gate for that.
+ * Organization authorization (CLOUD-PLAN.md §2.2 / §7 ACLs). Org-scoped
+ * functions authorize one of two ways:
+ *
+ * - **User session** → {@link assertMember}: the caller must be a member of the
+ *   org (the dashboard path). Closes the IDOR hole where any signed-in user
+ *   could touch any org by passing its id.
+ * - **Deploy key** → {@link authorizeDeployKey}: the CI/deploy path has no user
+ *   session; a valid, unrevoked deploy key for the org (and project, if the key
+ *   is project-scoped) is the credential.
  */
 
 export type MemberRole = "admin" | "member" | "owner" | "viewer";
@@ -17,6 +23,13 @@ interface MemberRow {
     organizationId: Id<"organizations">;
     role: MemberRole;
     userId: string;
+}
+
+interface DeployKeyRow {
+    _id: Id<"deployKeys">;
+    organizationId: Id<"organizations">;
+    projectId?: Id<"projects">;
+    revokedAt?: number;
 }
 
 /**
@@ -48,4 +61,31 @@ export const assertMember = async (
     }
 
     return { role: member.role, userId };
+};
+
+/**
+ * Authorize a deploy-key-credentialed write to an organization. Matches the key
+ * by SHA-256 against the stored hash, rejecting it if missing, revoked, scoped
+ * to a different org, or (for a project-scoped key) used against another
+ * project. Returns the resolved deploy-key id on success.
+ */
+export const authorizeDeployKey = async (
+    context: QueryContext,
+    organizationId: Id<"organizations">,
+    key: string,
+    projectId?: Id<"projects">,
+): Promise<Id<"deployKeys">> => {
+    const hashedKey = await hashDeployKey(key);
+    const { page } = await context.db.deployKeys.findMany({ where: { hashedKey } });
+    const row = (page as unknown as DeployKeyRow[])[0];
+
+    if (!row || row.revokedAt !== undefined || row.organizationId !== organizationId) {
+        throw new CirrusError("FORBIDDEN", "invalid deploy key for this organization");
+    }
+
+    if (row.projectId !== undefined && projectId !== undefined && row.projectId !== projectId) {
+        throw new CirrusError("FORBIDDEN", "deploy key is not authorized for this project");
+    }
+
+    return row._id;
 };
