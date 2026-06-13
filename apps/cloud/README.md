@@ -17,25 +17,38 @@ Cloudflare Workers for Platforms; it is **not** a tenant worker.
 ```
 cirrus/
   schema.ts          control-plane data model (cells, organizations, members,
-                     projects, deployments, deployKeys, auditLog)
+                     projects, deployments, deployKeys, auditLog, invitations)
   authz.ts           assertMember (session) + authorizeDeployKey (CI) — the ACL gate
   cells.ts           list / register cells (CF accounts, §2.5)
   organizations.ts   create / list / getBySlug  (+ seeds owner member + audit)
   members.ts         list / add / remove (owner-admin gated)
+  invitations.ts     invite / list / revoke / accept (team invites, §3)
   projects.ts        create / listByOrg
-  deployments.ts     create (queued) / listByProject / updateStatus
+  deployments.ts     create / listByProject / updateStatus / cleanupExpiredPreviews
   deploy-keys.ts     issue / list / revoke / verify (SHA-256 hashed)
+  crons.ts           code-first crons (hourly preview cleanup)
 src/
-  server.ts          control-plane Worker entry (D1 global tables + deploy router)
+  server.ts          control-plane Worker entry (D1 global tables + deploy router + crons)
   provision.ts       @cirrus/provision seam — the ONLY coupling to Alchemy v2
   deploy/
     token-bucket.ts  per-cell API budget (CF 1,200/5min, §2.5)
     scheduler.ts     CellScheduler — paces provisioner work, priority + concurrency
     orchestrator.ts  runDeployment state machine (queued→provisioning→live/failed)
     keys.ts          deploy-key format / parse / hash helpers
+    preview.ts       preview script-name + TTL helpers (§2.3)
     handler.ts       POST /v1/deploy handler (auth → orchestrate → stream NDJSON)
-    router.ts        httpRouter mount wiring the handler to the control-plane mutations
+    client.ts        cirrus-deploy client (POST + consume NDJSON stream)
+    router.ts        httpRouter mount (/v1/deploy + /v1/github/webhook)
+  github/
+    webhook.ts       GitHub webhook: HMAC verify + PR→preview-intent parse (§2.3)
+  billing/
+    plans.ts         plans + quota entitlements on @cirrus/payment (§4)
 ```
+
+> **Moving to a private repo:** the control plane is the proprietary layer and is
+> meant to live in its own repo. It imports only published `@cirrus/*` entry points
+> (no monorepo-internal reaches), so extraction is mechanical — see
+> [`EXTRACT.md`](./EXTRACT.md).
 
 ### Topology (provisional — a real decision flagged in the plan)
 
