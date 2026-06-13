@@ -24,15 +24,12 @@ export const App = (): ReactElement => {
     return (
         <main style={{ fontFamily: "system-ui", margin: "0 auto", maxWidth: 480, padding: 24 }}>
             <h1>Cirrus Payment Demo</h1>
-
             <label style={{ display: "block", marginBottom: 8 }}>
                 Stripe price id
                 <input onChange={(event) => setPriceId(event.target.value)} style={{ display: "block", width: "100%" }} value={priceId} />
             </label>
-
             <CheckoutButton onCheckout={() => client.action(api.billing.checkout, { priceId })}>Subscribe</CheckoutButton>{" "}
             <CustomerPortalButton onPortal={() => client.action(api.billing.portal, {})}>Manage billing</CustomerPortalButton>
-
             <h2>Your subscriptions</h2>
             {subscriptions === undefined ? (
                 <p>Loading…</p>

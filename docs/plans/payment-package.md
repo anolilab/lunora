@@ -19,11 +19,11 @@ Add a first-class payments/billing add-on to Cirrus that:
 
 ### 2a. Generic "unified payment" SDKs on npm — _reference only, do not depend_
 
-| Package | Providers | Maturity | Verdict |
-| --- | --- | --- | --- |
-| `@paylayer/core` (PayLayer) | Stripe, Paddle, PayPal, Lemon Squeezy, Polar | ~1★, v0.1.x, Dec 2025, MIT | Cleanest API design; far too immature to depend on |
-| `@unify-payment/node` / `unify-payment` | Stripe, Lemon Squeezy | low★, early | Webhook-verify + thin wrapper only |
-| `unify-pay-flex`, UnipayConnect, `@ciscode/paymentkit` | Stripe, Razorpay, PayPal | hobby | Not production-grade |
+| Package                                                | Providers                                    | Maturity                   | Verdict                                            |
+| ------------------------------------------------------ | -------------------------------------------- | -------------------------- | -------------------------------------------------- |
+| `@paylayer/core` (PayLayer)                            | Stripe, Paddle, PayPal, Lemon Squeezy, Polar | ~1★, v0.1.x, Dec 2025, MIT | Cleanest API design; far too immature to depend on |
+| `@unify-payment/node` / `unify-payment`                | Stripe, Lemon Squeezy                        | low★, early                | Webhook-verify + thin wrapper only                 |
+| `unify-pay-flex`, UnipayConnect, `@ciscode/paymentkit` | Stripe, Razorpay, PayPal                     | hobby                      | Not production-grade                               |
 
 **Pattern worth stealing (PayLayer):** an **adapter-per-provider** behind a unified facade selected by an env var
 (`PAYLAYER_PROVIDER`), with a `webhook.process()` that does _verify → normalize event → dispatch handler_, producing
@@ -97,7 +97,7 @@ Build `@cirrus/payment` as a **native Cirrus add-on** (like `@cirrus/auth` / `@c
 3. A **durable sync store** (`PaymentDO` on SQLite; `@cirrus/d1` for `.global()` reads) holding products/prices,
    customers, subscriptions, checkouts, payment_sessions, payments, captures, refunds, invoices, an append-only
    `events` (webhook) log for idempotency + audit, and (optional) entitlements. Money is `(minorUnits: bigint,
-   currency: ISO-4217)` everywhere, via a `v.money()` validator in `@cirrus/values` (bigint is not JSON-serializable
+currency: ISO-4217)` everywhere, via a `v.money()` validator in `@cirrus/values` (bigint is not JSON-serializable
    over RPC); zero-decimal currencies (e.g. JPY) handled explicitly.
 4. **Reactive reads** as `@cirrus/server` queries/subscriptions, and **`ctx.payments`** wired onto `ActionCtx` by
    `@cirrus/codegen` (the same pattern `@cirrus/ai` uses for `ctx.ai`).
@@ -154,41 +154,41 @@ Provider SDKs (`stripe`, …) as **optional peerDependencies**.
 
 ```ts
 export interface PaymentAdapter {
-  readonly identifier: "stripe" | "polar";   // Medusa-style stable id
-  readonly capabilities: { merchantOfRecord: boolean; usageMetering: boolean; portal: boolean };
-  validateOptions(options: unknown): void | never;                       // fail fast on misconfig
+    readonly identifier: "stripe" | "polar"; // Medusa-style stable id
+    readonly capabilities: { merchantOfRecord: boolean; usageMetering: boolean; portal: boolean };
+    validateOptions(options: unknown): void | never; // fail fast on misconfig
 
-  // one-time-payment lifecycle (Medusa-style: initiate → authorize → capture → refund)
-  initiatePayment(input: InitiateInput): Promise<PaymentSession>;        // create intent/session
-  authorizePayment(input: AuthorizeInput): Promise<PaymentSession>;
-  capturePayment(input: CaptureInput): Promise<Capture>;
-  refundPayment(input: RefundInput): Promise<Refund>;                    // supports partial/multiple
-  cancelPayment(id: string): Promise<PaymentSession>;                    // authorized, not captured
-  getPaymentStatus(id: string): Promise<PaymentStatus>;
+    // one-time-payment lifecycle (Medusa-style: initiate → authorize → capture → refund)
+    initiatePayment(input: InitiateInput): Promise<PaymentSession>; // create intent/session
+    authorizePayment(input: AuthorizeInput): Promise<PaymentSession>;
+    capturePayment(input: CaptureInput): Promise<Capture>;
+    refundPayment(input: RefundInput): Promise<Refund>; // supports partial/multiple
+    cancelPayment(id: string): Promise<PaymentSession>; // authorized, not captured
+    getPaymentStatus(id: string): Promise<PaymentStatus>;
 
-  // subscriptions + hosted UX (Convex/Stripe-style sync model)
-  createCheckout(input: CheckoutInput): Promise<CheckoutResult>;         // hosted/embedded URL
-  createPortalSession(input: PortalInput): Promise<{ url: string }>;
-  getOrCreateCustomer(ref: CustomerRef): Promise<Customer>;
-  cancelSubscription(id: string, opts?: CancelOpts): Promise<Subscription>;
-  resumeSubscription(id: string): Promise<Subscription>;
-  updateSubscription(id: string, patch: SubscriptionPatch): Promise<Subscription>;
+    // subscriptions + hosted UX (Convex/Stripe-style sync model)
+    createCheckout(input: CheckoutInput): Promise<CheckoutResult>; // hosted/embedded URL
+    createPortalSession(input: PortalInput): Promise<{ url: string }>;
+    getOrCreateCustomer(ref: CustomerRef): Promise<Customer>;
+    cancelSubscription(id: string, opts?: CancelOpts): Promise<Subscription>;
+    resumeSubscription(id: string): Promise<Subscription>;
+    updateSubscription(id: string, patch: SubscriptionPatch): Promise<Subscription>;
 
-  // webhook ingress → core state transition (Medusa getWebhookActionAndData shape)
-  verifyWebhook(req: Request, secret: string): Promise<unknown>;         // provider raw event
-  getWebhookAction(raw: unknown): WebhookAction;                         // action + minimal data
+    // webhook ingress → core state transition (Medusa getWebhookActionAndData shape)
+    verifyWebhook(req: Request, secret: string): Promise<unknown>; // provider raw event
+    getWebhookAction(raw: unknown): WebhookAction; // action + minimal data
 }
 
 export type WebhookAction = {
-  action:
-    | "authorized" | "captured" | "failed" | "refunded"
-    | "subscription.active" | "subscription.updated" | "subscription.canceled"
-    | "not_supported";
-  data: {
-    referenceId?: string; sessionId?: string; subscriptionId?: string;
-    amount?: bigint; currency?: string;        // (minor units, ISO-4217) — always paired
-    eventId: string;                            // for inbound idempotency / events log
-  };
+    action: "authorized" | "captured" | "failed" | "refunded" | "subscription.active" | "subscription.updated" | "subscription.canceled" | "not_supported";
+    data: {
+        referenceId?: string;
+        sessionId?: string;
+        subscriptionId?: string;
+        amount?: bigint;
+        currency?: string; // (minor units, ISO-4217) — always paired
+        eventId: string; // for inbound idempotency / events log
+    };
 };
 ```
 
@@ -212,7 +212,7 @@ provider POST ─▶ @cirrus/runtime route (registerPaymentRoutes)
 Payment/subscription lifecycle is modeled as an **explicit, typed FSM internal to `@cirrus/payment`** — a transition
 table + guard layered on `PaymentDO`'s OCC. Two distinct concerns, deliberately kept separate:
 
-- **Projection (most state).** The provider is the source of truth; our machine is a *projection* of it. The FSM's job
+- **Projection (most state).** The provider is the source of truth; our machine is a _projection_ of it. The FSM's job
   is **validation/normalization**: accept legal transitions, **drop illegal/stale/out-of-order ones** (a
   `payment.failed` after `captured`, a stale `authorized` after `refunded`), reconciled via webhook + polling. We do
   **not** build an authoritative saga that fights the provider's own state.
@@ -288,8 +288,8 @@ Non-negotiables that the implementation (not just the plan) has to satisfy — s
   (headless, redirect-on-URL, decoupled from app function names — mirrors Convex's `CheckoutLink`/`CustomerPortalLink`).
   _Next:_ `.global()`/D1 read path.
 - **Phase 3 — provider-migration story:** ✅ _enabled by existing primitives_ — `createAdapterRegistry` (dual-register)
-  + the `provider` discriminator on every row + per-provider `reconcile`/webhook handling. New checkouts route to the
-  new provider while existing subscriptions stay on their origin; no bespoke routing code needed.
+    - the `provider` discriminator on every row + per-provider `reconcile`/webhook handling. New checkouts route to the
+      new provider while existing subscriptions stay on their origin; no bespoke routing code needed.
 - **Phase 4 — entitlements tier:** ✅ the native `check` — `resolveEntitlements(config, subscriptions)` /
   `entitlementsForReference(store, config, ref)` derive plan / features / limits from active subscriptions (most-
   generous limit wins). `track` (usage metering / credits) stays deferred behind the optional Autumn adapter seam.
@@ -342,13 +342,13 @@ We checked npm before hand-rolling each building block. Verdict: take the offici
 deps and reuse **dinero.js** for money; keep the rest hand-rolled (small, zero-extra-dep, better fit than the
 libraries).
 
-| Building block | npm option considered | Decision |
-| --- | --- | --- |
-| Provider APIs | `stripe`, `@polar-sh/sdk` (Convex parity) | **Reuse** (optional peer deps; client injected). |
-| Money arithmetic | [dinero.js v2 `bigint`](https://github.com/dinerojs/dinero.js) | **Reuse.** Backs `addMoney`/`subtractMoney`/`compareMoney` + `allocateMoney` (proration/seat splits). Public `Money` stays a JSON-safe `(minorUnits, currency)` pair; dinero is internal. |
-| Stripe webhook verify | `stripe` SDK `webhooks.constructEventAsync(…, webCrypto)` | **Hand-roll.** The SDK path needs `Stripe.createSubtleCryptoProvider()` (a static, not on the injected instance), which fights the structural-injection design. Our WebCrypto `verifyStripeSignature` (raw body + replay window) is leaner. |
-| State machine | [xstate](https://npmtrends.com/robot3-vs-state-machine-vs-xstate) (~17 kB), [robot3](https://blog.logrocket.com/comparing-state-machines-xstate-vs-robot/) (~1.2 kB) | **Hand-roll.** A projection FSM is two static transition tables + a guard; xstate is overkill on a Worker, robot3 still a dep for a lookup. robot3 is the pick *if* the general `@cirrus/machine` primitive (decision #6) ever lands. |
-| Unified multi-provider SDK | PayLayer, unify-payment, … | **Don't reuse** — all immature solo projects (§2a). Own the abstraction. |
+| Building block             | npm option considered                                                                                                                                                | Decision                                                                                                                                                                                                                                    |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Provider APIs              | `stripe`, `@polar-sh/sdk` (Convex parity)                                                                                                                            | **Reuse** (optional peer deps; client injected).                                                                                                                                                                                            |
+| Money arithmetic           | [dinero.js v2 `bigint`](https://github.com/dinerojs/dinero.js)                                                                                                       | **Reuse.** Backs `addMoney`/`subtractMoney`/`compareMoney` + `allocateMoney` (proration/seat splits). Public `Money` stays a JSON-safe `(minorUnits, currency)` pair; dinero is internal.                                                   |
+| Stripe webhook verify      | `stripe` SDK `webhooks.constructEventAsync(…, webCrypto)`                                                                                                            | **Hand-roll.** The SDK path needs `Stripe.createSubtleCryptoProvider()` (a static, not on the injected instance), which fights the structural-injection design. Our WebCrypto `verifyStripeSignature` (raw body + replay window) is leaner. |
+| State machine              | [xstate](https://npmtrends.com/robot3-vs-state-machine-vs-xstate) (~17 kB), [robot3](https://blog.logrocket.com/comparing-state-machines-xstate-vs-robot/) (~1.2 kB) | **Hand-roll.** A projection FSM is two static transition tables + a guard; xstate is overkill on a Worker, robot3 still a dep for a lookup. robot3 is the pick _if_ the general `@cirrus/machine` primitive (decision #6) ever lands.       |
+| Unified multi-provider SDK | PayLayer, unify-payment, …                                                                                                                                           | **Don't reuse** — all immature solo projects (§2a). Own the abstraction.                                                                                                                                                                    |
 
 ## 9. Sources
 
