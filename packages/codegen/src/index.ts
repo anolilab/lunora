@@ -10,7 +10,18 @@ export { default as discoverQueries } from "./discover-queries";
 export { discoverRlsMetadata, default as discoverRlsProcedures } from "./discover-rls-procedures";
 export { default as discoverSchema } from "./discover-schema";
 export { default as discoverStorageRulesMetadata } from "./discover-storage-rules";
-export { emitApi, emitCrons, emitDataModel, emitDrizzleSchema, emitFunctions, emitServer, emitShard, emitVectors, emitWranglerCronTriggers, GENERATED_HEADER } from "./emit";
+export {
+    emitApi,
+    emitCrons,
+    emitDataModel,
+    emitDrizzleSchema,
+    emitFunctions,
+    emitServer,
+    emitShard,
+    emitVectors,
+    emitWranglerCronTriggers,
+    GENERATED_HEADER,
+} from "./emit";
 export type {
     AuthApiCallIR,
     CronJobIR,
@@ -37,7 +48,7 @@ export { buildOpenApiDocument, emitOpenApi, emitOpenApiModule } from "./openapi"
 export type { OpenRpcEmitInput } from "./openrpc";
 export { buildOpenRpcDocument, emitOpenRpc, emitOpenRpcModule, OPENRPC_VERSION } from "./openrpc";
 export type { CodegenOptions, CodegenResult } from "./run-codegen";
-export { runCodegen, SCHEMA_SNAPSHOT_FILENAME } from "./run-codegen";
+export { createCodegenProject, refreshCodegenProject, runCodegen, SCHEMA_SNAPSHOT_FILENAME } from "./run-codegen";
 export type {
     DriftChange,
     FieldSnapshot,

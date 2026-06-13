@@ -5,7 +5,18 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { emitApi, emitDataModel, emitDrizzleSchema, emitFunctions, emitServer, emitShard, emitVectors, runCodegen } from "../src/index";
+import {
+    createCodegenProject,
+    emitApi,
+    emitDataModel,
+    emitDrizzleSchema,
+    emitFunctions,
+    emitServer,
+    emitShard,
+    emitVectors,
+    refreshCodegenProject,
+    runCodegen,
+} from "../src/index";
 import type { FunctionIR, SchemaIR } from "../src/ir";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -189,7 +200,7 @@ export const summarize = action({ args: { text: v.string() }, handler: async (ct
             expect(result.generated.server).toContain('export type StorageBucketName = "default"');
             // eslint-disable-next-line no-secrets/no-secrets -- generated TS type annotation, not a secret
             expect(result.generated.server).toContain("readonly storage: ReadOnlyStorage<StorageBucketName>;");
-             
+
             expect(result.generated.server).toContain("readonly storage: StorageBase<StorageBucketName>;");
         });
 
@@ -536,6 +547,98 @@ export const summarize = action({ args: { text: v.string() }, handler: async (ct
             } finally {
                 rmSync(empty, { force: true, recursive: true });
             }
+        });
+    });
+
+    describe("project reuse", () => {
+        const cirrusDirectory = (): string => join(workdir, "cirrus");
+
+        it("produces output identical to a fresh Project when the shared Project is reused unchanged", () => {
+            expect.assertions(7);
+
+            const reference = runCodegen({ lint: false, projectRoot: workdir });
+
+            // A second run over the same files through one shared, refreshed Project
+            // must emit byte-identical content — reuse must never drift from the
+            // fresh-Project baseline the first run captured.
+            const project = createCodegenProject(cirrusDirectory());
+
+            refreshCodegenProject(project, cirrusDirectory());
+
+            const reused = runCodegen({ lint: false, project, projectRoot: workdir });
+
+            expect(reused.generated.api).toBe(reference.generated.api);
+            expect(reused.generated.server).toBe(reference.generated.server);
+            expect(reused.generated.functions).toBe(reference.generated.functions);
+            expect(reused.generated.dataModel).toBe(reference.generated.dataModel);
+            expect(reused.generated.shard).toBe(reference.generated.shard);
+            expect(reused.generated.openApi).toBe(reference.generated.openApi);
+
+            // Re-running the SAME shared Project a third time (refreshed again, no
+            // disk change) stays stable too.
+            refreshCodegenProject(project, cirrusDirectory());
+
+            const reusedAgain = runCodegen({ lint: false, project, projectRoot: workdir });
+
+            expect(reusedAgain.generated.functions).toBe(reference.generated.functions);
+        });
+
+        it("reflects an edit to a function file on disk after refreshing the shared Project", () => {
+            expect.assertions(4);
+
+            const project = createCodegenProject(cirrusDirectory());
+
+            refreshCodegenProject(project, cirrusDirectory());
+
+            const before = runCodegen({ lint: false, project, projectRoot: workdir });
+
+            expect(before.generated.api).toContain("send:");
+            expect(before.generated.api).not.toContain("publish:");
+
+            // Rename the `send` mutation to `publish` on disk, then refresh the
+            // SHARED Project (what the plugin does) and re-run.
+            const messagesPath = join(cirrusDirectory(), "messages.ts");
+            const edited = readFileSync(messagesPath, "utf8").replace("export const send = mutation(", "export const publish = mutation(");
+
+            writeFileSync(messagesPath, edited, "utf8");
+            refreshCodegenProject(project, cirrusDirectory());
+
+            const after = runCodegen({ lint: false, project, projectRoot: workdir });
+
+            expect(after.generated.api).toContain("publish:");
+            expect(after.generated.api).not.toContain("send:");
+        });
+
+        it("reflects an added file and drops a deleted one after refreshing the shared Project", () => {
+            expect.assertions(4);
+
+            const project = createCodegenProject(cirrusDirectory());
+
+            refreshCodegenProject(project, cirrusDirectory());
+
+            const before = runCodegen({ lint: false, project, projectRoot: workdir });
+
+            expect(before.generated.api).toContain("messages:");
+            expect(before.generated.functions).not.toContain("notifications:ping");
+
+            // Add a brand-new function file and delete the existing one, then
+            // refresh the shared Project and re-run.
+            writeFileSync(
+                join(cirrusDirectory(), "notifications.ts"),
+                `import { query, v } from "@cirrus/server";
+export const ping = query({ args: { id: v.string() }, handler: async (_context, args) => ({ id: args.id }) });
+`,
+                "utf8",
+            );
+            rmSync(join(cirrusDirectory(), "messages.ts"), { force: true });
+            refreshCodegenProject(project, cirrusDirectory());
+
+            const after = runCodegen({ lint: false, project, projectRoot: workdir });
+
+            // The new function is discovered…
+            expect(after.generated.functions).toContain('"notifications:ping"');
+            // …and the deleted file's functions are gone (stale-deleted-file guard).
+            expect(after.generated.api).not.toContain("send:");
         });
     });
 

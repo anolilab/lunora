@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { dirname, extname, join, sep } from "node:path";
 
 import type { Finding } from "@cirrus/advisor";
 import { Project } from "ts-morph";
@@ -65,6 +65,104 @@ const findTsconfig = (startPath: string): string | undefined => {
 };
 
 /**
+ * Whether a `.ts` path under the cirrus directory is a test file the watcher
+ * (and therefore the reused Project) should ignore — mirrors the vite plugin's
+ * `onChange` filter so a reused Project never carries discovery-irrelevant test
+ * modules.
+ */
+const isTestSourceFile = (path: string): boolean => path.includes(`${sep}__tests__${sep}`) || path.endsWith(".test.ts") || path.endsWith(".spec.ts");
+
+/**
+ * Recursively collect every codegen-relevant `.ts` file under `cirrusDirectory`
+ * — i.e. every non-test `.ts` outside `_generated/` and `node_modules/`
+ * (`schema.ts` included). Mirrors the discovery file set so the reused Project
+ * tracks exactly the files a fresh one would add.
+ */
+const listProjectSourceFiles = (directory: string, accumulator: string[] = []): string[] => {
+    let entries: string[];
+
+    try {
+        entries = readdirSync(directory);
+    } catch {
+        return accumulator;
+    }
+
+    for (const entry of entries) {
+        const full = join(directory, entry);
+        const info = statSync(full);
+
+        if (info.isDirectory()) {
+            if (entry === "_generated" || entry === "node_modules") {
+                continue;
+            }
+
+            listProjectSourceFiles(full, accumulator);
+        } else if (info.isFile() && extname(entry) === ".ts" && !isTestSourceFile(full)) {
+            accumulator.push(full);
+        }
+    }
+
+    return accumulator;
+};
+
+/**
+ * Construct the ts-morph `Project` codegen discovers over. Prefers the user's
+ * `tsconfig.json` (when one is found walking up from `cirrusDirectory`) so
+ * cross-file type resolution and path aliases work; falls back to an isolated
+ * project otherwise. This is the exact construction {@link runCodegen} uses
+ * when no `project` is injected — exported so a long-lived caller (the Vite
+ * dev-loop) can build one once and reuse it across runs via
+ * {@link refreshCodegenProject} instead of re-parsing the user's whole TS
+ * program on every save.
+ */
+export const createCodegenProject = (cirrusDirectory: string): Project => {
+    const tsconfigPath = findTsconfig(cirrusDirectory);
+
+    return tsconfigPath
+        ? new Project({ skipAddingFilesFromTsConfig: false, tsConfigFilePath: tsconfigPath, useInMemoryFileSystem: false })
+        : new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+};
+
+/**
+ * Synchronise a reused {@link createCodegenProject} Project with the current
+ * on-disk state of `cirrusDirectory`, so the next {@link runCodegen} sees the
+ * same files a freshly-constructed Project would — without re-parsing the whole
+ * TS program. Adds any on-disk source file the Project doesn't yet have, and
+ * `refreshFromFileSystemSync()`es the ones it does (picking up edits); then
+ * removes Project source files under `cirrusDirectory` that no longer exist on
+ * disk (the classic stale-deleted-file cache bug).
+ *
+ * Files outside `cirrusDirectory` (e.g. those pulled in by the user's tsconfig)
+ * are left untouched — they back type resolution and rarely change in the
+ * dev-loop; a tsconfig change invalidates the whole cached Project upstream.
+ */
+export const refreshCodegenProject = (project: Project, cirrusDirectory: string): void => {
+    const onDisk = new Set(listProjectSourceFiles(cirrusDirectory));
+
+    for (const path of onDisk) {
+        const existing = project.getSourceFile(path);
+
+        if (existing === undefined) {
+            project.addSourceFileAtPath(path);
+        } else {
+            existing.refreshFromFileSystemSync();
+        }
+    }
+
+    // Drop source files under the cirrus directory that vanished from disk, so a
+    // deleted query/table never lingers in the reused Project's discovery set.
+    const cirrusPrefix = cirrusDirectory + sep;
+
+    for (const sourceFile of project.getSourceFiles()) {
+        const filePath = sourceFile.getFilePath();
+
+        if ((filePath === cirrusDirectory || filePath.startsWith(cirrusPrefix)) && !onDisk.has(filePath)) {
+            project.removeSourceFile(sourceFile);
+        }
+    }
+};
+
+/**
  * Top-level codegen entry. Parses `&lt;projectRoot>/cirrus/schema.ts` and every
  * function file under `&lt;projectRoot>/cirrus/`, then writes
  * `_generated/{api,server,dataModel}.ts` next to them.
@@ -77,12 +175,10 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         throw new Error(`schema.ts not found at ${schemaPath}`);
     }
 
-    // Prefer the user's tsconfig (when present) so cross-file type resolution
-    // and path aliases work. Fall back to an isolated project otherwise.
-    const tsconfigPath = findTsconfig(cirrusDirectory);
-    const project = tsconfigPath
-        ? new Project({ skipAddingFilesFromTsConfig: false, tsConfigFilePath: tsconfigPath, useInMemoryFileSystem: false })
-        : new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+    // Reuse an injected Project (the caller owns refreshing its source files
+    // from disk — see refreshCodegenProject) when provided; otherwise build one
+    // exactly as createCodegenProject would.
+    const project = options.project ?? createCodegenProject(cirrusDirectory);
 
     const schema = discoverSchema(project, schemaPath);
     const functions = discoverFunctions(project, cirrusDirectory);
@@ -265,6 +361,17 @@ export interface CodegenOptions {
      * {@link CodegenResult.advisories}.
      */
     lint?: boolean;
+
+    /**
+     * Reuse a previously-constructed ts-morph {@link Project} instead of building
+     * a fresh one each run. The caller owns refreshing its source files from disk
+     * (see {@link refreshCodegenProject}) — codegen does not re-read changed files
+     * off an injected Project. Built via {@link createCodegenProject} when absent.
+     * Used by the Vite dev-loop to avoid re-parsing the whole TS program on every
+     * save; omit it (CLI one-shot path) to get the default fresh-Project behaviour.
+     */
+    project?: Project;
+
     /** Project root containing the `cirrus/` directory. */
     projectRoot: string;
 

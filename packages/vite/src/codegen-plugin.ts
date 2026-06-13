@@ -1,14 +1,18 @@
 import { existsSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 
-import { CodegenDiagnosticError, runCodegen } from "@cirrus/codegen";
+import { CodegenDiagnosticError, createCodegenProject, refreshCodegenProject, runCodegen } from "@cirrus/codegen";
 import { inferCirrusBindings, reconcileWranglerBindings } from "@cirrus/config";
+import type { Project } from "ts-morph";
 import type { Plugin, ViteDevServer } from "vite";
 
 import { reconcileWranglerCrons } from "./cron-sync";
 import type { ResolvedCirrusPluginOptions } from "./types";
 
 const DEBOUNCE_MS = 100;
+
+/** Matches a project-variant tsconfig filename (`tsconfig.build.json`, …). */
+const TSCONFIG_VARIANT_RE = /[/\\]tsconfig\..+\.json$/u;
 
 /**
  * Infer the Cloudflare bindings the project's code implies and reconcile them
@@ -60,6 +64,7 @@ const runCodegenSafely = (
     options: Pick<ResolvedCirrusPluginOptions, "apiSpec" | "projectRoot" | "schemaDir">,
     logger: { error: (message: string) => void; info?: (message: string) => void; warn: (message: string) => void },
     overlay?: OverlayCallbacks,
+    project?: Project,
 ): string | undefined => {
     const schemaPath = join(options.projectRoot, options.schemaDir, "schema.ts");
 
@@ -70,7 +75,7 @@ const runCodegenSafely = (
     }
 
     try {
-        const result = runCodegen({ apiSpec: options.apiSpec, cirrusDirectory: options.schemaDir, projectRoot: options.projectRoot });
+        const result = runCodegen({ apiSpec: options.apiSpec, cirrusDirectory: options.schemaDir, project, projectRoot: options.projectRoot });
 
         // Reconcile code-first cron definitions into wrangler.jsonc so the user
         // never hand-edits `triggers.crons`. Best-effort: a wrangler problem
@@ -218,6 +223,13 @@ const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
             // after `close` no-ops instead of writing to a dead ws/module graph.
             let closed = false;
 
+            // The reused ts-morph Project. Built on first codegen run and refreshed
+            // from disk on each subsequent one, so the dev-loop never re-parses the
+            // user's whole TS program per save. Dropped (rebuilt next run) whenever
+            // a tsconfig changes, on ANY codegen error (so a corrupted cache can't
+            // wedge the loop), and on server close.
+            let cachedProject: Project | undefined;
+
             // Invalidate generated modules across every module graph so the dev
             // server picks up new types/values. Vite 6's environment API (used by
             // `@cloudflare/vite-plugin` for the worker/SSR environment) keeps
@@ -269,6 +281,17 @@ const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
                     return;
                 }
 
+                // A tsconfig change can move path aliases / compiler options out
+                // from under a reused Project, so drop the cache and rebuild it
+                // from scratch on the next run. Checked before the `.ts` gate so
+                // a `tsconfig*.json` save still invalidates (it never triggers
+                // codegen itself — there is nothing new to emit).
+                if (normalized.endsWith(`${sep}tsconfig.json`) || TSCONFIG_VARIANT_RE.test(normalized)) {
+                    cachedProject = undefined;
+
+                    return;
+                }
+
                 if (!normalized.endsWith(".ts")) {
                     return;
                 }
@@ -291,15 +314,32 @@ const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
                         return;
                     }
 
-                    const outputDirectory = runCodegenSafely(options, serverLogger, overlay);
-
-                    if (outputDirectory !== undefined) {
-                        absoluteGeneratedDirectory = outputDirectory;
-
-                        invalidateGenerated();
-
-                        server.ws.send({ type: "full-reload" });
+                    // Reuse the cached Project across runs: build it on first use,
+                    // otherwise sync it with the on-disk file set so discovery sees
+                    // the same files a fresh Project would — without re-parsing the
+                    // whole TS program.
+                    if (cachedProject === undefined) {
+                        cachedProject = createCodegenProject(absoluteSchemaDirectory);
+                    } else {
+                        refreshCodegenProject(cachedProject, absoluteSchemaDirectory);
                     }
+
+                    const outputDirectory = runCodegenSafely(options, serverLogger, overlay, cachedProject);
+
+                    if (outputDirectory === undefined) {
+                        // Codegen was skipped or threw — drop the (possibly partially
+                        // mutated) cache so the next run rebuilds from scratch rather
+                        // than risk emitting wrong code off a corrupted Project.
+                        cachedProject = undefined;
+
+                        return;
+                    }
+
+                    absoluteGeneratedDirectory = outputDirectory;
+
+                    invalidateGenerated();
+
+                    server.ws.send({ type: "full-reload" });
                 }, DEBOUNCE_MS);
             };
 
@@ -313,6 +353,10 @@ const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
             return () => {
                 server.httpServer?.once("close", () => {
                     closed = true;
+
+                    // Drop the reused Project so a restart rebuilds it fresh and the
+                    // parsed TS program isn't held past the server's life.
+                    cachedProject = undefined;
 
                     if (debounceTimer) {
                         clearTimeout(debounceTimer);
