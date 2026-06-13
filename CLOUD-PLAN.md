@@ -417,7 +417,8 @@ Ordered so every phase ships standalone DX value even if we stop there.
 > live Cloudflare account: the **Alchemy v2 provisioner body** (the `Provisioner` is a
 > rejecting stub today, so deploys terminate at `failed`), the **dispatcher Worker** +
 > `{project}.cirrus.app` routing, and any end-to-end "it actually deploys" validation.
-> Phases 3–4 are not started.
+> Phases 3–4 have their pure, no-CF slivers built (team invitations; plans + quota
+> entitlements on `@cirrus/payment`); the CF/UI/external-service halves remain.
 
 - **Phase 0 — Remote-binding dev (no cloud required). ✅ SHIPPED.** Implemented in the
   framework, not the cloud app: `@cirrus/config/remote-bindings.ts` tags eligible
@@ -451,15 +452,20 @@ Ordered so every phase ships standalone DX value even if we stop there.
   branches, and the per-developer cloud-dev push-on-save + log-tail loop (CLI + live).
   Stretch (differentiator): fork-production-data previews via DO storage snapshot +
   D1 Time Travel — needs a spike; neither Supabase nor Convex offers it.
-- **Phase 3 — Hosted studio.** Multi-tenant shell over `packages/studio`; admin-RPC
-  proxy with ACL/audit/rate limits; team invites; guided secret setup.
-- **Phase 4 — Domains, billing, ops.** Custom hostnames (CF for SaaS), usage metering →
-  Stripe, rollback UI, log-stream egress (reuse `@cirrus/runtime` sinks: Axiom/Datadog/
-  webhook), alerting (deploy status, error spikes, quota warnings), **managed
-  backups/PITR as a paid feature** (the self-managing PITR loop + D1 Time Travel
-  already exist; the platform adds scheduling, retention tiers, and off-account R2
-  snapshot copies), abuse controls (per-tenant rate limits at the dispatcher, egress
-  policy via the outbound Worker, signup throttling).
+- **Phase 3 — Hosted studio.** _Built:_ **team invitations** (`cirrus/invitations.ts` —
+  invite/list/revoke/accept, single-use SHA-256-hashed tokens, owner-admin gated,
+  accept-by-token adds the member). _Remaining:_ the multi-tenant studio UI shell over
+  `packages/studio`, the admin-RPC proxy (ACL/audit/rate limits in front of live tenant
+  workers), and guided secret setup (reuses `@cirrus/config`).
+- **Phase 4 — Domains, billing, ops.** _Built:_ **plans + quota entitlements**
+  (`src/billing/plans.ts` on `@cirrus/payment`'s entitlements model — free/pro/enterprise
+  with per-resource limits + feature flags; `effectiveLimit`/`withinQuota` with a
+  free-tier fallback). _Remaining:_ custom hostnames (CF for SaaS), usage metering →
+  payment provider via `@cirrus/payment` (Stripe/Polar adapters), enforcing quota in the
+  mutations once subscription state is wired, rollback UI, log-stream egress (reuse
+  `@cirrus/runtime` sinks), alerting, **managed backups/PITR** (the self-managing PITR
+  loop + D1 Time Travel already exist; the platform adds scheduling, retention, off-account
+  copies), abuse controls (per-tenant dispatcher limits, egress policy, signup throttling).
 
 ---
 
