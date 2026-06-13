@@ -71,6 +71,7 @@ describe("discover-containers", () => {
                 image: { buildContext: "./containers/transcoder", dockerfilePath: "./containers/transcoder/Dockerfile", kind: "dockerfile" },
                 instanceType: "standard-1",
                 maxInstances: 5,
+                sleepAfter: "5m",
             },
         ]);
     });
@@ -137,7 +138,7 @@ describe("discover-containers", () => {
     });
 
     it("allows non-literal runtime-only fields (env, sleepAfter)", () => {
-        expect.assertions(1);
+        expect.assertions(2);
 
         writeContainers(`
             import { defineContainer } from "@cirrus/container";
@@ -145,7 +146,36 @@ describe("discover-containers", () => {
             export const worker = defineContainer({ image: "./w", env: { LOG_LEVEL: level }, sleepAfter: 60 * 5 });
         `);
 
-        expect(discoverContainers(newProject(), workdir)).toHaveLength(1);
+        const [container] = discoverContainers(newProject(), workdir);
+
+        expect(container).toBeDefined();
+        // sleepAfter was a non-literal expression — lifted as undefined, not an error.
+        expect(container?.sleepAfter).toBeUndefined();
+    });
+
+    it("lifts a Railpack { build } image source", () => {
+        expect.assertions(1);
+
+        writeContainers(`
+            import { defineContainer } from "@cirrus/container";
+            export const worker = defineContainer({ image: { build: "./services/worker/" } });
+        `);
+
+        expect(discoverContainers(newProject(), workdir)[0]?.image).toStrictEqual({ buildDir: "./services/worker", kind: "build" });
+    });
+
+    it("lifts literal enableInternet and sleepAfter for the advisor", () => {
+        expect.assertions(2);
+
+        writeContainers(`
+            import { defineContainer } from "@cirrus/container";
+            export const worker = defineContainer({ image: "./w", enableInternet: false, sleepAfter: "30s" });
+        `);
+
+        const [container] = discoverContainers(newProject(), workdir);
+
+        expect(container?.enableInternet).toBe(false);
+        expect(container?.sleepAfter).toBe("30s");
     });
 });
 

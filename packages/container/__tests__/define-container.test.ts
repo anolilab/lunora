@@ -68,6 +68,18 @@ describe(defineContainer, () => {
         expect(() => defineContainer({ image: "./app", secrets: ["NOT-VALID"] })).toThrow("not a valid environment variable name");
     });
 
+    it("accepts a Railpack { build } image source", () => {
+        expect.assertions(1);
+
+        expect(defineContainer({ image: { build: "./services/worker" } }).isCirrusContainer).toBe(true);
+    });
+
+    it("rejects an empty { build } source", () => {
+        expect.assertions(1);
+
+        expect(() => defineContainer({ image: { build: "" } })).toThrow("`image.build` must be a non-empty");
+    });
+
     it("does not brand arbitrary objects", () => {
         expect.assertions(2);
 
@@ -133,6 +145,13 @@ describe(normalizeContainerImage, () => {
             kind: "registry",
             reference: "docker.io/acme/transcoder:1.4",
         });
+    });
+
+    it("normalizes a Railpack { build } source, trimming a trailing slash", () => {
+        expect.assertions(2);
+
+        expect(normalizeContainerImage({ build: "./services/worker" })).toStrictEqual({ buildDir: "./services/worker", kind: "build" });
+        expect(normalizeContainerImage({ build: "./services/worker/" })).toStrictEqual({ buildDir: "./services/worker", kind: "build" });
     });
 });
 

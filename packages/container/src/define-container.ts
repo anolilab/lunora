@@ -38,6 +38,12 @@ const dirname = (path: string): string => {
  */
 const normalizeContainerImage = (image: ContainerImageSource): NormalizedContainerImage => {
     if (typeof image !== "string") {
+        if ("build" in image) {
+            const buildDirectory = image.build.endsWith("/") ? image.build.slice(0, -1) : image.build;
+
+            return { buildDir: buildDirectory, kind: "build" };
+        }
+
         return { kind: "registry", reference: image.registry };
     }
 
@@ -83,9 +89,10 @@ const containerBindingName = (exportName: string): string => `CONTAINER_${export
  * });
  * ```
  */
-const defineContainer = (config: ContainerConfig): ContainerDefinition => {
-    if (typeof config.image === "string") {
-        if (config.image.length === 0) {
+/** Validate the `image` source — a local path, a registry ref, or a Railpack build dir. */
+const assertValidImage = (image: ContainerConfig["image"]): void => {
+    if (typeof image === "string") {
+        if (image.length === 0) {
             throw new TypeError("defineContainer: `image` must be a non-empty path or a { registry } reference");
         }
 
@@ -93,14 +100,30 @@ const defineContainer = (config: ContainerConfig): ContainerDefinition => {
         // expects, but it does in nearly every image reference ("repo:tag",
         // "…@sha256:…") — catch the common mistake of passing a reference as a
         // plain string before it reaches wrangler as a bogus Dockerfile path.
-        if (config.image.includes(":")) {
+        if (image.includes(":")) {
             throw new TypeError(
-                `defineContainer: \`image\` string "${config.image}" looks like a registry reference — pass it as { registry: "${config.image}" } instead. Plain strings are local Dockerfile paths.`,
+                `defineContainer: \`image\` string "${image}" looks like a registry reference — pass it as { registry: "${image}" } instead. Plain strings are local Dockerfile paths.`,
             );
         }
-    } else if (typeof config.image.registry !== "string" || config.image.registry.length === 0) {
+
+        return;
+    }
+
+    if ("build" in image) {
+        if (typeof image.build !== "string" || image.build.length === 0) {
+            throw new TypeError("defineContainer: `image.build` must be a non-empty source directory for Railpack to build");
+        }
+
+        return;
+    }
+
+    if (typeof image.registry !== "string" || image.registry.length === 0) {
         throw new TypeError("defineContainer: `image.registry` must be a non-empty fully-qualified image reference");
     }
+};
+
+const defineContainer = (config: ContainerConfig): ContainerDefinition => {
+    assertValidImage(config.image);
 
     if (config.defaultPort !== undefined && (!Number.isInteger(config.defaultPort) || config.defaultPort < 1 || config.defaultPort > 65_535)) {
         throw new TypeError(`defineContainer: \`defaultPort\` must be an integer in 1–65535 (got ${String(config.defaultPort)})`);

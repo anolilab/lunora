@@ -1,4 +1,5 @@
 import type { AdvisorAuthApiCall } from "./authapi-calls";
+import type { AdvisorContainer } from "./containers";
 import type { AdvisorIndexHit, AdvisorTableScan } from "./index-usage";
 import type { AdvisorInsertWrite } from "./inserts";
 import type { AdvisorQueryRead } from "./queries";
@@ -80,6 +81,13 @@ export interface LintContext {
      * for runtime callers, where the lint finds nothing.
      */
     authApiCalls?: ReadonlyArray<AdvisorAuthApiCall>;
+
+    /**
+     * Containers declared in `cirrus/containers.ts` — the `container_*` lint
+     * input. Supplied by the codegen feeder; absent for runtime callers, where
+     * the container lints find nothing.
+     */
+    containers?: ReadonlyArray<AdvisorContainer>;
 
     /**
      * Per-declared-index hit counts observed at runtime (the dead-index half of

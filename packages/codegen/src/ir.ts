@@ -193,16 +193,34 @@ export interface ContainerIR {
     bindingName: string;
     /** Generated DO class name, e.g. `TranscoderContainer`. */
     className: string;
+
+    /**
+     * Whether the container may open outbound internet connections, when the
+     * value was a static literal. `undefined` means the field was omitted (the
+     * platform default is `true`) or wasn't a literal. Lifted for the advisor.
+     */
+    enableInternet?: boolean;
     /** The `cirrus/containers.ts` export name, e.g. `transcoder`. */
     exportName: string;
-    /** Normalized image source (Dockerfile path + build context, or registry reference). */
-    image: { buildContext: string; dockerfilePath: string; kind: "dockerfile" } | { kind: "registry"; reference: string };
+
+    /**
+     * Normalized image source: a local Dockerfile (`dockerfile`), a pre-built
+     * registry reference (`registry`), or a Railpack source directory (`build`)
+     * that the deploy step builds and pushes before wrangler runs.
+     */
+    image: { buildContext: string; dockerfilePath: string; kind: "dockerfile" } | { buildDir: string; kind: "build" } | { kind: "registry"; reference: string };
     /** Static `instanceType`, when declared. */
     instanceType?: string | { diskMb?: number; memoryMib?: number; vcpu?: number };
     /** Static `maxInstances`, when declared. */
     maxInstances?: number;
     /** Static wrangler `containers[].name` override, when declared. */
     name?: string;
+
+    /**
+     * The static `sleepAfter` value, when it was a literal. `undefined` means
+     * omitted (platform default `"10m"`) or non-literal. Lifted for the advisor.
+     */
+    sleepAfter?: number | string;
 }
 
 /**

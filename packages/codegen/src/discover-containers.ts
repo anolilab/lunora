@@ -77,9 +77,44 @@ const imageFromExpression = (expression: Expression, exportName: string): Contai
 
             return normalizeContainerImage({ registry: stringProperty(initializer, exportName, "image.registry") });
         }
+
+        const build = expression.getProperty("build");
+
+        if (build && Node.isPropertyAssignment(build)) {
+            const initializer = build.getInitializerOrThrow();
+
+            return normalizeContainerImage({ build: stringProperty(initializer, exportName, "image.build") });
+        }
     }
 
-    throw diagnosticAt(expression, `container "${exportName}": \`image\` must be a static string path or { registry: "…" } literal`);
+    throw diagnosticAt(expression, `container "${exportName}": \`image\` must be a static string path, { registry: "…" }, or { build: "…" } literal`);
+};
+
+/** Read a boolean-literal property value, or `undefined` when it isn't a literal. */
+const booleanLiteral = (expression: Expression): boolean | undefined => {
+    if (Node.isTrueLiteral(expression)) {
+        return true;
+    }
+
+    if (Node.isFalseLiteral(expression)) {
+        return false;
+    }
+
+    return undefined;
+};
+
+/** Read a string-or-number literal, or `undefined` when it isn't one. Lifts `sleepAfter` for the advisor. */
+// eslint-disable-next-line sonarjs/function-return-type -- sleepAfter IS a string-or-number union, mirroring the platform field
+const stringOrNumberLiteral = (expression: Expression): number | string | undefined => {
+    if (Node.isStringLiteral(expression) || Node.isNoSubstitutionTemplateLiteral(expression)) {
+        return expression.getLiteralValue();
+    }
+
+    if (Node.isNumericLiteral(expression)) {
+        return expression.getLiteralValue();
+    }
+
+    return undefined;
 };
 
 /** Lift the `instanceType` property (named string or custom object literal). */
@@ -142,6 +177,13 @@ const containerFromCall = (call: CallExpression, exportName: string): ContainerI
         const initializer = property.getInitializerOrThrow();
 
         switch (key) {
+            case "enableInternet": {
+                // Lifted (when literal) for the advisor; the generated class
+                // still reads the live value off the imported definition.
+                ir.enableInternet = booleanLiteral(initializer);
+
+                break;
+            }
             case "image": {
                 ir.image = imageFromExpression(initializer, exportName);
                 sawImage = true;
@@ -163,9 +205,14 @@ const containerFromCall = (call: CallExpression, exportName: string): ContainerI
 
                 break;
             }
+            case "sleepAfter": {
+                ir.sleepAfter = stringOrNumberLiteral(initializer);
+
+                break;
+            }
             default: {
-                // Runtime-only fields (defaultPort, sleepAfter, env, secrets, …)
-                // are evaluated by the generated class at runtime, not by codegen.
+                // Other runtime-only fields (defaultPort, env, secrets, …) are
+                // evaluated by the generated class at runtime, not by codegen.
                 break;
             }
         }

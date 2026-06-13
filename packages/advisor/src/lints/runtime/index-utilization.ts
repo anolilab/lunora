@@ -5,7 +5,7 @@ import type { Lint } from "../../types";
  * A table must be full-scanned at least this many times (cumulatively over the
  * counter's recorded lifetime) before a missing-index advisory fires. A handful
  * of scans on a tiny table is harmless; the lint targets a table the app reads
- * *hot* with no index, which degrades linearly as the table grows. Deliberately
+ * hot* with no index, which degrades linearly as the table grows. Deliberately
  * above one so a single incidental scan stays quiet.
  */
 const HOT_SCAN_THRESHOLD = 25;

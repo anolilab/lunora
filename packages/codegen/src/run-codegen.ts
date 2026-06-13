@@ -176,6 +176,13 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // job: the result carries the findings and each caller surfaces them through
     // its own channel (the CLI logger, the vite overlay, the studio Advisors
     // table) rather than this library printing.
+    // Containers declared via `defineContainer` exports in `cirrus/containers.ts`.
+    // Gates `_generated/containers.ts` (the Container DO classes) + the typed
+    // `ctx.containers` on ActionCtx, feeds the config layer's wrangler
+    // reconciliation (containers[] + CONTAINER_* DO bindings + migrations), and
+    // the `container_*` advisor lints below.
+    const containers = discoverContainers(project, cirrusDirectory);
+
     const advisories =
         options.lint === false
             ? []
@@ -185,6 +192,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   discoverInserts(project, cirrusDirectory),
                   discoverAuthApiCalls(project, cirrusDirectory),
                   discoverRlsProcedures(project, cirrusDirectory),
+                  containers,
               );
 
     // Read-only RLS metadata (policies + roles) the studio's RLS inspector lists,
@@ -201,12 +209,6 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // `ctx.ai`). Gates wiring `ctx.ai` into the generated ShardDO + the typed
     // ActionCtx — so non-AI projects never import the AI SDK into their worker.
     const hasAi = discoverAiUsage(project, cirrusDirectory);
-
-    // Containers declared via `defineContainer` exports in `cirrus/containers.ts`.
-    // Gates `_generated/containers.ts` (the Container DO classes) + the typed
-    // `ctx.containers` on ActionCtx, and feeds the config layer's wrangler
-    // reconciliation (containers[] + CONTAINER_* DO bindings + migrations).
-    const containers = discoverContainers(project, cirrusDirectory);
 
     const dataModelContent = emitDataModel(schema);
     const apiContent = emitApi(functions);

@@ -35,12 +35,22 @@ interface RegistryImageSource {
 }
 
 /**
+ * A Dockerfile-less build via [Railpack](https://railpack.com): point at a
+ * source directory and `cirrus deploy` builds an OCI image with Railpack
+ * (needs a BuildKit instance) and pushes it to the Cloudflare Registry before
+ * wrangler runs. Opt-in — the Dockerfile path is the zero-extra-deps default.
+ */
+interface BuildImageSource {
+    build: string;
+}
+
+/**
  * Where the container image comes from. A `string` is a **local path** —
  * either a directory containing a `Dockerfile` (normalized to
  * `&lt;dir>/Dockerfile` with the directory as the build context) or a path to
  * the Dockerfile itself — while `{ registry }` is a pre-built image reference.
  */
-type ContainerImageSource = RegistryImageSource | string;
+type ContainerImageSource = BuildImageSource | RegistryImageSource | string;
 
 interface ContainerConfig {
     /**
@@ -118,12 +128,18 @@ type NormalizedContainerImage =
           kind: "dockerfile";
       }
     | {
+          /** Railpack source directory built + pushed at deploy time. */
+          buildDir: string;
+          kind: "build";
+      }
+    | {
           kind: "registry";
           /** Fully-qualified image reference (wrangler `image`). */
           reference: string;
       };
 
 export type {
+    BuildImageSource,
     ContainerConfig,
     ContainerDefinition,
     ContainerImageSource,

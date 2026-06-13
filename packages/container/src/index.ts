@@ -19,6 +19,7 @@ export {
     resolveContainerEnvVars,
 } from "./define-container";
 export type {
+    BuildImageSource,
     ContainerConfig,
     ContainerDefinition,
     ContainerImageSource,

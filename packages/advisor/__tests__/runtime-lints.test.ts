@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
 import type { AdvisorShardTraffic, LintContext } from "../src";
-import { ALL_LINTS, hotShard, indexUtilization, runAdvisor,RUNTIME_LINTS } from "../src";
+import { ALL_LINTS, hotShard, indexUtilization, runAdvisor, RUNTIME_LINTS } from "../src";
 
 /** A minimal context with an empty schema — runtime lints read only the observed-signal fields. */
-const baseContext = (overrides: Partial<LintContext> = {}): LintContext => {return { schema: { tables: [] }, ...overrides }};
+const baseContext = (overrides: Partial<LintContext> = {}): LintContext => {
+    return { schema: { tables: [] }, ...overrides };
+};
 
 const traffic = (entries: AdvisorShardTraffic[]): LintContext => baseContext({ shardTraffic: entries });
 
@@ -63,7 +65,12 @@ describe("hot_shard", () => {
     it("does not fire with only one active shard", () => {
         expect.assertions(1);
 
-        const findings = hotShard.run(traffic([{ requests: 5000, shardKey: "tenant-a" }, { requests: 0, shardKey: "tenant-b" }]));
+        const findings = hotShard.run(
+            traffic([
+                { requests: 5000, shardKey: "tenant-a" },
+                { requests: 0, shardKey: "tenant-b" },
+            ]),
+        );
 
         expect(findings).toHaveLength(0);
     });
