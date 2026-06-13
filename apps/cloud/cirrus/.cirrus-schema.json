@@ -1,0 +1,266 @@
+{
+    "migrationIds": [],
+    "tables": {
+        "auditLog": {
+            "fields": {
+                "action": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "actorUserId": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "createdAt": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "organizationId": {
+                    "kind": "id",
+                    "optional": false
+                },
+                "target": {
+                    "kind": "string",
+                    "optional": true
+                }
+            },
+            "indexes": {
+                "by_org": {
+                    "fields": ["organizationId"],
+                    "unique": false
+                }
+            },
+            "relations": {},
+            "shardMode": "global"
+        },
+        "cells": {
+            "fields": {
+                "cloudflareAccountId": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "createdAt": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "dispatchNamespacePrefix": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "jurisdiction": {
+                    "kind": "string",
+                    "optional": true
+                },
+                "name": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "status": {
+                    "kind": "any",
+                    "optional": false
+                }
+            },
+            "indexes": {
+                "by_name": {
+                    "fields": ["name"],
+                    "unique": true
+                }
+            },
+            "relations": {},
+            "shardMode": "global"
+        },
+        "deployKeys": {
+            "fields": {
+                "createdAt": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "hashedKey": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "lastUsedAt": {
+                    "kind": "number",
+                    "optional": true
+                },
+                "name": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "organizationId": {
+                    "kind": "id",
+                    "optional": false
+                },
+                "projectId": {
+                    "kind": "id",
+                    "optional": true
+                },
+                "revokedAt": {
+                    "kind": "number",
+                    "optional": true
+                },
+                "type": {
+                    "kind": "any",
+                    "optional": false
+                }
+            },
+            "indexes": {
+                "by_org": {
+                    "fields": ["organizationId"],
+                    "unique": false
+                },
+                "by_hash": {
+                    "fields": ["hashedKey"],
+                    "unique": true
+                }
+            },
+            "relations": {},
+            "shardMode": "global"
+        },
+        "deployments": {
+            "fields": {
+                "branch": {
+                    "kind": "string",
+                    "optional": true
+                },
+                "bundleHash": {
+                    "kind": "string",
+                    "optional": true
+                },
+                "createdAt": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "createdBy": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "kind": {
+                    "kind": "any",
+                    "optional": false
+                },
+                "organizationId": {
+                    "kind": "id",
+                    "optional": false
+                },
+                "projectId": {
+                    "kind": "id",
+                    "optional": false
+                },
+                "scriptName": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "status": {
+                    "kind": "any",
+                    "optional": false
+                },
+                "updatedAt": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "url": {
+                    "kind": "string",
+                    "optional": true
+                }
+            },
+            "indexes": {
+                "by_project": {
+                    "fields": ["projectId"],
+                    "unique": false
+                }
+            },
+            "relations": {},
+            "shardMode": "global"
+        },
+        "members": {
+            "fields": {
+                "createdAt": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "organizationId": {
+                    "kind": "id",
+                    "optional": false
+                },
+                "role": {
+                    "kind": "any",
+                    "optional": false
+                },
+                "userId": {
+                    "kind": "string",
+                    "optional": false
+                }
+            },
+            "indexes": {
+                "by_org_user": {
+                    "fields": ["organizationId", "userId"],
+                    "unique": false
+                }
+            },
+            "relations": {},
+            "shardMode": "global"
+        },
+        "organizations": {
+            "fields": {
+                "cellId": {
+                    "kind": "id",
+                    "optional": false
+                },
+                "createdAt": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "name": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "slug": {
+                    "kind": "string",
+                    "optional": false
+                }
+            },
+            "indexes": {
+                "by_slug": {
+                    "fields": ["slug"],
+                    "unique": true
+                }
+            },
+            "relations": {},
+            "shardMode": "global"
+        },
+        "projects": {
+            "fields": {
+                "createdAt": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "framework": {
+                    "kind": "string",
+                    "optional": true
+                },
+                "name": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "organizationId": {
+                    "kind": "id",
+                    "optional": false
+                },
+                "slug": {
+                    "kind": "string",
+                    "optional": false
+                }
+            },
+            "indexes": {
+                "by_org_slug": {
+                    "fields": ["organizationId", "slug"],
+                    "unique": true
+                }
+            },
+            "relations": {},
+            "shardMode": "global"
+        }
+    },
+    "version": 1
+}
