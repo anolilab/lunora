@@ -1,0 +1,16 @@
+{
+    "name": "cirrus-cloud",
+    "tags": ["type:app", "category:cloud"],
+    "targets": {
+        "lint:eslint": {
+            "cache": true,
+            "inputs": ["default", "{workspaceRoot}/eslint.config.js"],
+            "command": "eslint ."
+        },
+        "lint:eslint:fix": {
+            "cache": true,
+            "inputs": ["default", "{workspaceRoot}/eslint.config.js"],
+            "command": "eslint . --fix"
+        }
+    }
+}

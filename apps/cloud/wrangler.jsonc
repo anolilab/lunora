@@ -1,0 +1,21 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    // The Cirrus Cloud CONTROL-PLANE worker (the platform itself), not a tenant
+    // worker. See CLOUD-PLAN.md.
+    "name": "cirrus-cloud",
+    "main": "src/server.ts",
+    "compatibility_date": "2026-06-10",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "d1_databases": [
+        {
+            // Control-plane DB: cells + organizations (the `.global()` tables).
+            "binding": "DB",
+            "database_name": "cirrus-cloud",
+            "database_id": "<replace-with-d1-create-id>",
+        },
+    ],
+}

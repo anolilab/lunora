@@ -1,0 +1,3 @@
+# Bearer token gating the control plane's admin endpoints (studio + platform
+# tools). Generate with: openssl rand -hex 32
+CIRRUS_ADMIN_TOKEN=replace-with-openssl-rand-hex-32
