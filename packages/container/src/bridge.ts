@@ -103,6 +103,32 @@ const joinUrl = (baseUrl: string, path: string): string => {
     return `${base}${path}`;
 };
 
+/** The response shape a {@link FetchLike} resolves to. */
+type BridgeResponse = Awaited<ReturnType<FetchLike>>;
+
+/** Build the generic status error thrown when a request fails without a typed envelope. */
+const statusError = (functionPath: string, response: BridgeResponse): Error =>
+    new Error(
+        `createContainerBridge: request to "${functionPath}" failed (status ${String(response.status)}${response.statusText ? ` ${response.statusText}` : ""})`,
+    );
+
+/**
+ * Parse the response body as JSON, mapping a non-JSON body to a clear error:
+ * a status error when the response is not ok, otherwise a non-JSON-response
+ * error (so a non-JSON success body can never reach the result unwrap).
+ */
+const parseResponseBody = async (response: BridgeResponse, functionPath: string): Promise<unknown> => {
+    try {
+        return await response.json();
+    } catch {
+        if (!response.ok) {
+            throw statusError(functionPath, response);
+        }
+
+        throw new Error(`createContainerBridge: request to "${functionPath}" returned a non-JSON response (status ${String(response.status)})`);
+    }
+};
+
 /**
  * Build a container→Cirrus bridge bound to a Worker URL + token.
  *
@@ -136,18 +162,24 @@ const createContainerBridge = (options: ContainerBridgeOptions): ContainerBridge
             method: "POST",
         });
 
-        const body: unknown = await response.json();
+        const body = await parseResponseBody(response, functionPath);
 
         if (typeof body === "object" && body !== null && "error" in body) {
-            const { error } = body as { error: { code: string; message: string } };
+            const { error } = body;
 
-            throw new ContainerBridgeError(error.code, error.message);
+            if (typeof error === "object" && error !== null) {
+                const { code, message } = error as { code?: unknown; message?: unknown };
+
+                if (typeof code === "string" && typeof message === "string") {
+                    throw new ContainerBridgeError(code, message);
+                }
+            }
+
+            throw new Error(`createContainerBridge: request to "${functionPath}" returned a malformed error envelope (status ${String(response.status)})`);
         }
 
         if (!response.ok) {
-            throw new Error(
-                `createContainerBridge: request to "${functionPath}" failed (status ${String(response.status)}${response.statusText ? ` ${response.statusText}` : ""})`,
-            );
+            throw statusError(functionPath, response);
         }
 
         return (body as { result: Result }).result;

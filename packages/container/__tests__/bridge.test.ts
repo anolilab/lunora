@@ -19,6 +19,17 @@ const stubFetch = (
     return { calls, fetch };
 };
 
+/** A fetch stub whose `json()` rejects, simulating a non-JSON body. */
+const stubFetchInvalidJson = (init: { ok?: boolean; status?: number } = {}): FetchLike => {
+    const rejectJson = async (): Promise<never> => {
+        throw new SyntaxError("Unexpected token < in JSON");
+    };
+
+    return async () => {
+        return { json: rejectJson, ok: init.ok ?? true, status: init.status ?? 200 };
+    };
+};
+
 describe(createContainerBridge, () => {
     it("sends the RPC envelope to /_cirrus/rpc and unwraps result", async () => {
         expect.assertions(4);
@@ -75,6 +86,34 @@ describe(createContainerBridge, () => {
         const cirrus = createContainerBridge({ baseUrl: "https://app.example.com", fetch });
 
         await expect(cirrus.query("x:y")).rejects.toThrow("status 502");
+    });
+
+    it("throws a non-JSON error on a malformed success body", async () => {
+        expect.assertions(1);
+
+        const cirrus = createContainerBridge({ baseUrl: "https://app.example.com", fetch: stubFetchInvalidJson({ ok: true, status: 200 }) });
+
+        await expect(cirrus.query("x:y")).rejects.toThrow("non-JSON response");
+    });
+
+    it("throws a status error on a malformed non-ok body", async () => {
+        expect.assertions(1);
+
+        const cirrus = createContainerBridge({ baseUrl: "https://app.example.com", fetch: stubFetchInvalidJson({ ok: false, status: 502 }) });
+
+        await expect(cirrus.query("x:y")).rejects.toThrow("status 502");
+    });
+
+    it("throws a clear error (not ContainerBridgeError) on a malformed error envelope", async () => {
+        expect.assertions(2);
+
+        const { fetch } = stubFetch({ error: { code: 123 } }, { ok: false, status: 500 });
+        const cirrus = createContainerBridge({ baseUrl: "https://app.example.com", fetch });
+
+        const error = await cirrus.query("x:y").catch((error_: unknown) => error_);
+
+        expect(error).not.toBeInstanceOf(ContainerBridgeError);
+        expect((error as Error).message).toContain("malformed error envelope");
     });
 
     it("query/mutation/action are aliases of the same call", () => {
