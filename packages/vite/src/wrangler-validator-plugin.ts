@@ -1,7 +1,44 @@
-import { validateWranglerProject } from "@cirrus/config";
+import { spawnSync } from "node:child_process";
+
+import type { WranglerConfig } from "@cirrus/config";
+import { readWranglerJsonc, validateWranglerProject } from "@cirrus/config";
 import type { Plugin } from "vite";
 
 import type { ResolvedCirrusPluginOptions } from "./types";
+
+/** Mirrors the config-layer heuristic: a container image that is a local path. */
+const isLocalImagePath = (image: string): boolean => image.startsWith("./") || image.startsWith("../") || image.startsWith("/") || image.includes("Dockerfile");
+
+/**
+ * Warn (never throw) when the project declares Dockerfile-built containers but
+ * no Docker-compatible engine answers. The Cloudflare plugin builds and runs
+ * containers during `vite dev`, so without Docker the dev server would die
+ * later with an opaque engine error — surface the actionable hint up front.
+ * Containers may also be deliberately disabled (`dev.enable_containers`), so
+ * this must stay advisory.
+ */
+const probeDocker = (): boolean => {
+    try {
+        // eslint-disable-next-line sonarjs/no-os-command-from-path -- `docker` must resolve from PATH (Docker Desktop/Colima install locations vary); args are fixed and no shell is involved
+        return spawnSync("docker", ["info"], { stdio: "ignore" }).status === 0;
+    } catch {
+        return false;
+    }
+};
+
+const warnWhenDockerMissing = (wranglerPath: string, dockerAvailable: () => boolean = probeDocker): void => {
+    const { parsed } = readWranglerJsonc<WranglerConfig>(wranglerPath);
+    const needsDocker = (parsed?.containers ?? []).some((entry) => typeof entry?.image === "string" && isLocalImagePath(entry.image));
+
+    if (!needsDocker || dockerAvailable()) {
+        return;
+    }
+
+    // eslint-disable-next-line no-console
+    console.warn(
+        "[cirrus] wrangler.jsonc declares containers built from a local Dockerfile, but no Docker-compatible engine is running. Start Docker (or Colima) before `vite dev`, or the container instances will fail to start.",
+    );
+};
 
 const formatError = (wranglerPath: string, problems: ReadonlyArray<string>): Error => {
     const lines = [
@@ -51,9 +88,12 @@ const wranglerValidatorPlugin = (options: ResolvedCirrusPluginOptions): Plugin =
             if (result.problems.length > 0) {
                 throw formatError(result.wranglerPath, result.problems);
             }
+
+            warnWhenDockerMissing(result.wranglerPath);
         },
         name: "cirrus:wrangler-validator",
     };
 };
 
-export default wranglerValidatorPlugin;
+// `warnWhenDockerMissing` is exported for tests (the docker probe is injectable there).
+export { warnWhenDockerMissing, wranglerValidatorPlugin };
