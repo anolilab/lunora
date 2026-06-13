@@ -5,10 +5,12 @@ The managed-platform control plane from [`CLOUD-PLAN.md`](../../CLOUD-PLAN.md),
 app. This is the service that provisions and tracks tenant deployments on
 Cloudflare Workers for Platforms; it is **not** a tenant worker.
 
-> Status: **Phase 1 scaffold.** Schema + core mutations/queries + the
-> provisioning seam are in place; the deploy API, dispatcher, auth, billing,
-> and the Alchemy-backed provisioner body are still to come (see the roadmap and
-> "Forgotten must-haves" in `CLOUD-PLAN.md`).
+> Status: **Phase 1, in progress.** In place: the data model, CRUD functions,
+> org/deploy-key authorization, the deploy-orchestration core (token bucket +
+> per-cell scheduler + state machine), and the `POST /v1/deploy` streaming
+> endpoint. Still to come: the Alchemy-backed provisioner body (currently a
+> rejecting stub — deploys terminate at `failed`), the dispatcher, billing, and
+> the rest of the roadmap / "Forgotten must-haves" in `CLOUD-PLAN.md`.
 
 ## Layout
 
