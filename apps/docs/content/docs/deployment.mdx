@@ -70,6 +70,25 @@ Or push everything from `.dev.vars` at once with `cirrus env push --yes`.
 Cirrus never logs secret values; the `wrangler-validator` plugin warns if a
 binding marked `secret: true` in your schema is missing from your secret list.
 
+## Containers
+
+If your app declares [containers](/docs/addons/containers), `wrangler deploy`
+also builds each Dockerfile-backed image with your local Docker engine and
+pushes it to Cloudflare's registry. `cirrus deploy` runs a Docker preflight
+first and stops with an actionable message when an engine isn't available, so
+the failure is one line rather than a wrangler stack trace. Images must target
+**`linux/amd64`**.
+
+To split image build/push from the Worker deploy (e.g. across CI jobs), use the
+`cirrus containers` wrappers:
+
+```bash
+cirrus containers build ./containers/transcoder --tag transcoder:v1 --push
+cirrus containers images list
+```
+
+Container egress is billed separately from Workers — see [Limits](/docs/limits).
+
 ## Deploy
 
 ```bash
@@ -80,7 +99,8 @@ This runs:
 
 1. `cirrus codegen` (no-op if up-to-date)
 2. D1 migration runner against the bound database
-3. `wrangler deploy` against the resolved Worker
+3. a Docker preflight when Dockerfile-backed containers are declared
+4. `wrangler deploy` against the resolved Worker (building/pushing container images)
 
 CI should run `cirrus codegen --check` first so a stale `_generated/` is a
 build failure, not a deploy that silently uses old types.

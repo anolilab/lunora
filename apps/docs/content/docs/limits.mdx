@@ -44,6 +44,23 @@ or `.global()`.
 | Subrequests     | **50** (Free) / **1000** (Paid) | Fan-out reads are a Paid-plan optimisation          |
 | Env var size    | **5 KB** total                  | Use D1 or KV for config above that                  |
 
+## Containers
+
+Requires the **Workers Paid** plan. Images must be `linux/amd64`.
+
+| Limit                | Value                                   | Implication                                             |
+| -------------------- | --------------------------------------- | ------------------------------------------------------- |
+| Instance types       | `lite` → `standard-4`                   | Or custom up to **4 vCPU / 12 GiB / 20 GB disk**        |
+| Disk                 | **ephemeral**                           | Persist to R2 (`@cirrus/storage`), not local disk       |
+| Concurrent / account | **1 500 vCPU / 6 TiB mem / 30 TB disk** | Raisable via support                                    |
+| Registry storage     | **50 GB / account**                     | Prune old images with `cirrus containers images delete` |
+| Autoscaling          | **none yet**                            | Fixed pools; `.any()` picks uniformly                   |
+
+Billing is **active-CPU** based: instances scale to zero on `sleepAfter` and
+cost nothing idle. **Egress is billed** (~$0.025/GB NA+EU, more elsewhere) —
+unlike R2, which is free. See the
+[Containers pricing docs](https://developers.cloudflare.com/containers/pricing/).
+
 ## When Cirrus warns you
 
 The runtime emits warnings (and the dev overlay shows a banner) when:

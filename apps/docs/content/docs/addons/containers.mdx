@@ -1,0 +1,217 @@
+---
+title: "@cirrus/container"
+description: Deploy Docker containers alongside your Cirrus app, called from actions over ctx.containers.
+---
+
+`@cirrus/container` runs [Cloudflare Containers](https://developers.cloudflare.com/containers/)
+as part of a Cirrus app: declare a container with `defineContainer`, and codegen
+emits the container-enabled Durable Object class while `cirrus dev` / `cirrus deploy`
+reconcile the `wrangler.jsonc` wiring. `wrangler deploy` builds the image with
+your local Docker engine and pushes it to Cloudflare's registry — there is no
+separate container platform to sign up for.
+
+Reach for a container when a job doesn't fit the Workers runtime: an existing
+binary (ffmpeg, headless Chrome, a Python ML model), a long-running process, or
+anything that needs a full filesystem.
+
+```sh
+pnpm add @cirrus/container
+```
+
+> Containers require the **Workers Paid** plan. Images must target
+> **`linux/amd64`** — on Apple Silicon, build with `--platform linux/amd64`
+> (the scaffolded Dockerfile does this for you). See [Limits](/docs/limits).
+
+## Declare a container
+
+Containers live in `cirrus/containers.ts`. Scaffold one — definition plus a
+starter Dockerfile under `containers/<name>/` — with:
+
+```sh
+pnpm vis generate cirrus-container --name=transcoder
+```
+
+```ts
+// cirrus/containers.ts
+import { defineContainer } from "@cirrus/container";
+
+export const transcoder = defineContainer({
+    image: "./containers/transcoder", // directory with a Dockerfile, or { registry: "docker.io/acme/transcoder:1.4" }
+    defaultPort: 8080,
+    instanceType: "standard-1", // lite | basic | standard-1..4 | { vcpu, memoryMib, diskMb }
+    maxInstances: 5, // cap concurrent running instances (and the .any() pool)
+    sleepAfter: "5m", // idle timeout — instances scale to zero
+    secrets: ["TRANSCODER_API_KEY"], // Worker secrets forwarded into the container env
+});
+```
+
+`image` is either a **local path** (a directory containing a `Dockerfile`, or a
+path to the Dockerfile itself) that `wrangler deploy` builds and pushes, or a
+**pre-built registry reference** (`{ registry }`) from the Cloudflare Registry,
+Docker Hub, or Amazon ECR.
+
+Re-export the generated classes from your worker entry — wrangler requires every
+container's class to be exported by the deployed Worker:
+
+```ts
+// src/server/index.ts
+export * from "../../cirrus/_generated/containers";
+```
+
+`cirrus dev` reminds you if this is missing, and reconciles the rest of
+`wrangler.jsonc` automatically: the `containers[]` entry, the `CONTAINER_*`
+Durable Object binding, the SQLite migration, and `observability.enabled` (so
+container logs are captured).
+
+## Call a container from an action
+
+Container calls are external I/O, so — like `ctx.fetch` and `ctx.ai` —
+`ctx.containers` lives on **actions**, never queries or mutations. Codegen types
+one handle per declared container.
+
+```ts
+import { action, v } from "@cirrus/server";
+
+export const transcode = action({
+    args: { videoId: v.id("videos") },
+    handler: async (ctx, { videoId }) => {
+        // One instance per entity — same id always routes to the same container.
+        const response = await ctx.containers.transcoder.get(videoId).fetch("/transcode", {
+            method: "POST",
+            body: JSON.stringify({ videoId }),
+        });
+
+        return response.json();
+    },
+});
+```
+
+### Routing: `.get(name)` vs `.any()`
+
+- **`.get(name)`** — one container instance per name. Use it for stateful,
+  per-entity work: a sandbox per user, a room per game, a worker per job id. The
+  same name always reaches the same instance.
+- **`.any(count?)`** — a random instance from a fixed pool (defaults to
+  `maxInstances`, else 3). Use it for stateless, interchangeable work where any
+  instance can serve the request.
+
+```ts
+// Stateless pool — load-balanced across instances.
+const probe = await ctx.containers.transcoder.any().fetch("/healthz");
+```
+
+`fetch` accepts a path string (resolved against the container) or a full
+`Request`, and proxies WebSocket upgrades — a real-time stream to a container
+works the same as any other `fetch`.
+
+> Cloudflare has no built-in autoscaling yet: pools are a fixed size and
+> `.any()` picks uniformly, ignoring location. For batch work, drive instances
+> from a [scheduler](/docs/addons/scheduler) cron or `runAfter`.
+
+## Configuration
+
+| Field            | Purpose                                                                                      |
+| ---------------- | -------------------------------------------------------------------------------------------- |
+| `image`          | Local Dockerfile path/directory, or `{ registry }` for a pre-built image. **Required.**      |
+| `defaultPort`    | Port the container listens on; `fetch` targets it. Must be `EXPOSE`d for local dev.          |
+| `instanceType`   | `lite` \| `basic` \| `standard-1..4`, or a custom `{ vcpu, memoryMib, diskMb }`.             |
+| `maxInstances`   | Cap on concurrently running instances (and the default `.any()` pool size).                  |
+| `sleepAfter`     | Idle timeout before an instance sleeps, e.g. `"5m"`, `"30s"`, or seconds. Default `"10m"`.   |
+| `env`            | Static environment variables baked into the container.                                       |
+| `secrets`        | Names of Worker secrets forwarded into the container env at start.                           |
+| `enableInternet` | Whether the container may open outbound connections. Default `true` — note egress is billed. |
+
+### Secrets and environment
+
+`env` holds static values; `secrets` names Worker secrets — managed exactly like
+every other Cirrus secret. List them in `.dev.vars` for local dev and
+`wrangler secret put` for production (see [Deployment](/docs/deployment#secrets)).
+A declared secret that isn't set fails fast at container start with a directed
+error, rather than launching the container without it.
+
+```ts
+export const worker = defineContainer({
+    image: "./containers/worker",
+    env: { LOG_LEVEL: "info" },
+    secrets: ["STRIPE_API_KEY"], // resolved from env.STRIPE_API_KEY at start
+});
+```
+
+## Dockerfile
+
+The scaffolded Dockerfile encodes the platform's requirements:
+
+```dockerfile
+# linux/amd64 is required — keep it explicit so Apple Silicon builds don't
+# produce an arm64 image that fails at deploy.
+FROM --platform=linux/amd64 node:22-slim
+
+WORKDIR /app
+COPY . .
+
+# Local dev needs the listening port EXPOSEd (production exposes all ports).
+EXPOSE 8080
+
+# Exec form (not shell form) so SIGTERM reaches the process — Cloudflare sends
+# SIGTERM on rollouts and gives 15 minutes before SIGKILL.
+ENTRYPOINT ["node", "server.mjs"]
+```
+
+Disk is **ephemeral** — every (re)start gives a fresh filesystem. For
+persistence, write to [`@cirrus/storage`](/docs/addons/storage) (R2).
+
+## Local development
+
+`cirrus dev` (and `vite dev`) build and run containers locally through the
+Cloudflare Vite plugin, so a Docker-compatible engine (Docker Desktop, Colima)
+must be running — Cirrus warns up front if it isn't. A few things differ from
+production:
+
+- **Container code is not hot-reloaded.** Edit the Worker and it reloads; press
+  `r` to rebuild the container.
+- **Ports must be `EXPOSE`d** in the Dockerfile (production exposes all ports).
+- **`vite dev` can't pull from the Cloudflare Registry** — use a local
+  Dockerfile, `FROM`-ing a registry image if you need one.
+
+## Testing
+
+`ctx.containers` has a Docker-free test double, so action tests stay fast and
+deterministic — `createContainerTestContext` maps each container to a `fetch`
+handler that plays the container:
+
+```ts
+import { createContainerTestContext } from "@cirrus/container";
+
+const containers = createContainerTestContext({
+    transcoder: async (request, { name }) => new Response(JSON.stringify({ ok: true, name })),
+});
+
+// Inject `containers` as ctx.containers when exercising the action.
+```
+
+Run the real container behind `cirrus dev` for integration tests; keep those in
+a Docker-enabled CI job, separate from the default unit-test matrix.
+
+## CLI
+
+Manage images and instances with `cirrus containers` — thin wrappers over
+`wrangler containers` with a Docker preflight on the build/push paths:
+
+```bash
+cirrus containers build ./containers/transcoder --tag transcoder:v1 --push
+cirrus containers push transcoder:v1
+cirrus containers images list
+cirrus containers images delete transcoder:v1
+```
+
+Splitting build/push from `cirrus deploy` lets CI build the image in one job and
+deploy in another. `cirrus deploy` itself runs a Docker preflight and stops with
+an actionable message when a Dockerfile-built container is declared but no engine
+is available.
+
+## See also
+
+- [Deployment](/docs/deployment)
+- [Limits](/docs/limits)
+- [@cirrus/scheduler](/docs/addons/scheduler)
+- [@cirrus/storage](/docs/addons/storage)
