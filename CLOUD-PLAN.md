@@ -476,10 +476,89 @@ Ordered so every phase ships standalone DX value even if we stop there.
    (DO migrations, tags, custom limits, secrets); (d) orphan teardown of per-tenant
    D1/R2 on `destroy`. A hard "no" with no upstream path is the signal to escalate the
    engine decision, not to silently dual-track v1.
+8. **⭐ Fleet-wide runtime versioning — decide the tenant-worker shape NOW.** The Cirrus
+   runtime (`@cirrus/runtime`, `@cirrus/do`) is bundled _into_ each tenant's Worker, so
+   a security patch to the runtime today means **rebuild + redeploy every tenant** —
+   the one thing Convex never faces (they run the backend centrally). This is the most
+   consequential forgotten decision because it dictates whether the tenant Worker is
+   **fat** (embeds the runtime; patch = fleet-wide re-deploy pipeline, re-bundling
+   100k+ tenants, re-running the WfP upload + the §2.5 scheduler, with migration-replay
+   risk) or **thin** (tenant Worker holds only user functions + schema and calls a
+   platform-owned, centrally-patchable runtime Worker via a service binding / dynamic
+   dispatch — one deploy patches everyone, but adds a hop and must be proven possible
+   from a namespaced user Worker). Spike both in Phase 1; the answer changes the bundle
+   format, the deploy API, and `@cirrus/vite`'s emit. A pragmatic middle path is
+   tenant-pinned runtime + an automated forced-upgrade pipeline with maintenance
+   windows, but pick deliberately — retrofitting fat→thin after launch is a rewrite.
 
 ---
 
-## 7. Source index
+## 7. Forgotten must-haves (gap pass, 2026-06-13)
+
+Things the plan above assumed away that a paid multi-tenant platform genuinely needs.
+None are optional for launch; most are cheap to design now and expensive to retrofit.
+
+**Architecture / data**
+
+- **Control-plane DB is now the crown jewel — treat it as such.** It holds orgs,
+  projects, deployments, tenant secrets, _and_ Alchemy convergence state. Lose it and
+  the whole fleet is unmanageable. Needs: dedicated backups + PITR, a tested restore
+  runbook, and ideally a read replica per region. It is strictly more critical than any
+  single tenant's data and currently has no durability story in the plan.
+- **Disaster recovery across cells.** A cell = one Cloudflare account; if an account is
+  suspended/limited, every tenant in it is down and their DO/D1/R2 data sits inside that
+  account. Name the DR posture: cross-account backup of tenant D1 (Time Travel export to
+  a platform-owned R2 in a _different_ cell) + a documented re-provision path. Cell
+  suspension is low-probability, high-blast-radius — exactly what an Enterprise/partner
+  agreement (§2.5) is insurance against.
+- **Secrets at rest + platform credential custody.** Tenant secrets and, far more
+  sensitively, each cell's **Cloudflare API token** (compromise = every tenant in the
+  cell) must be envelope-encrypted, access-audited, and rotatable. Note: Cloudflare
+  Secrets Store is beta with a ~100-secret/account cap — **not** the per-tenant store;
+  use WfP per-script secret bindings for delivery + envelope encryption in the
+  control-plane DB for storage.
+- **Frontend hosting scope — an open product decision.** Does managed Cirrus host the
+  app's static frontend too (WfP static assets, one domain, the PLAN4 one-Worker
+  composition) or backend-only (frontend on Pages/Vercel, Cirrus on a subdomain)? This
+  shapes custom-domain routing, the deploy API, and positioning — decide before Phase 1.
+
+**Trust / legal / billing (launch-blocking for a _paid_ service)**
+
+- **Acceptable Use Policy + abuse/bill-shock controls.** Untrusted tenant code _will_
+  attract cryptominers and abuse; CPU/subrequest limits (§2.4) cap a single invocation
+  but not aggregate spend. Need per-tenant spend caps + anomaly detection on the
+  Analytics-Engine usage stream, plus an AUP that gives legal grounds to suspend (the
+  tag-based kill switch in §2.5 is the mechanism; the AUP is the authority).
+- **Billing reality:** metering accuracy when the dispatch→user→outbound chain bills as
+  one request (attribute per tenant by script tag), payment-failure → dunning → grace →
+  pause → delete flow, and a **Merchant-of-Record** (Paddle/LemonSqueezy) vs Stripe +
+  Stripe Tax decision — a global dev tool otherwise inherits worldwide sales-tax/VAT
+  compliance. Pick the MoR question early; it's hard to unwind.
+- **Data-processing posture:** you become a GDPR _processor_ — DPA, sub-processor list
+  (Cloudflare, Stripe/MoR, email), privacy policy, and a **SOC 2** roadmap (Enterprise
+  buyers gate on it). Plus the EU-residency toggle already scoped in §2.4.
+- **Account lifecycle / right-to-erasure.** Signup→verify is noted; the missing half is
+  **offboarding**: delete-account must purge tenant data across DO + D1 + R2 (and the
+  cross-cell backups), with a retention window and a self-serve data export — both a
+  GDPR obligation and the trust counterpart to `cirrus eject` (§4).
+
+**Platform operations**
+
+- **Platform self-observability, status page, on-call.** The studio observes _tenant_
+  apps; nothing yet observes the _platform_ (control-plane error rates, per-cell deploy
+  queue depth, dispatcher latency, provisioning failures). Need platform SLOs, alerting,
+  an external status page, and an incident runbook.
+- **Canary the dispatcher.** The per-cell dispatcher is the single hottest, highest-
+  blast-radius component. Unlike namespaced user Workers (no gradual deploys, §2.4) the
+  dispatcher is an **account-level** Worker, so standard gradual deployments/versions
+  _do_ apply — use them; a bad dispatcher push otherwise takes down a whole cell.
+- **Platform CI/CD + staging cell.** A non-prod cell to test control-plane, dispatcher,
+  and runtime changes end-to-end (incl. the Alchemy-v2 beta bumps) before they touch
+  paying tenants.
+
+---
+
+## 8. Source index
 
 Cloudflare: [WfP docs](https://developers.cloudflare.com/cloudflare-for-platforms/workers-for-platforms/) ·
 [WfP pricing](https://developers.cloudflare.com/cloudflare-for-platforms/workers-for-platforms/reference/pricing/) ·
