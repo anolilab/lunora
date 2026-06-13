@@ -1,0 +1,72 @@
+---
+name: cirrus
+description: Routes general Cirrus requests to the right project skill. Use when the user
+    asks which Cirrus skill to use, or gives an underspecified task for a Cirrus
+    app (a type-safe, real-time backend on Cloudflare Workers + Durable Objects
+    with a Vite-first DX).
+---
+
+# Cirrus
+
+Use this as the routing skill for Cirrus work in this repo.
+
+Cirrus exposes a Convex-style functional API (`defineSchema`, `query`,
+`mutation`, `action`) on top of Cloudflare Workers and Durable Objects. State
+lives in a per-app `ShardDO` (SQLite, OCC, hibernated WebSocket subscriptions)
+by default; `.shardBy(key)` partitions it across many DOs and `.global()`
+replicates a table to D1 for low-latency cross-region reads. A Vite plugin
+drives codegen and end-to-end type sync.
+
+If a more specific Cirrus skill clearly matches the request, use that instead.
+
+## Start Here
+
+Before writing or changing any `cirrus/` code, make sure the generated types are
+current — they are the contract the client and server share.
+
+```bash
+cirrus codegen
+```
+
+This regenerates `cirrus/_generated/` (`api.ts`, `server.ts`, `dataModel.ts`,
+`shard.ts`, `openapi.ts`, …) from `cirrus/schema.ts` and your function files. The
+output typechecks your schema and functions, so it doubles as the agent's main
+feedback loop after each edit. Commit `cirrus/_generated/` — it is part of the
+source tree, not a build artifact to gitignore.
+
+If a project-level `AGENTS.md` / `CLAUDE.md` exists, read it first — it overrides
+these defaults.
+
+## Route to the Right Skill
+
+After codegen is green, use the most specific Cirrus skill for the task:
+
+- New project, or adding Cirrus to an existing app: `cirrus-quickstart`
+- Authentication setup (email/password, OAuth, magic link, OTP):
+  `cirrus-setup-auth`
+- Building a reusable capability — a registry item or an `@cirrus/*` package:
+  `cirrus-create-package`
+- Planning or running a schema/data migration: `cirrus-migration-helper`
+- Investigating performance, scan, or write-conflict issues:
+  `cirrus-performance-audit`
+
+If one of those clearly matches the user's goal, switch to it instead of staying
+in this skill.
+
+## Core Mental Model
+
+- **Functions** live in `cirrus/*.ts` and are one of `query` (reactive read),
+  `mutation` (transactional write), or `action` (side effects / `fetch` / no
+  direct db). `internalQuery` / `internalMutation` / `internalAction` are the
+  non-public variants.
+- **Schema** lives in `cirrus/schema.ts` via `defineSchema` + `defineTable`,
+  with validators from `v.*` (re-exported by `@cirrus/server`).
+- **Reads go through indexes.** Prefer `ctx.db.query("t").withIndex(...)` over
+  `.filter(...)`; declare the index with `.index("by_x", ["x"])`.
+- **Clients** subscribe over WebSocket. `useQuery`/`useMutation` (React, Vue,
+  Solid, Svelte) re-render the moment a mutation changes the queried rows.
+
+## When Not to Use
+
+- The user has already named a more specific Cirrus workflow.
+- Another Cirrus skill obviously fits the request better.
