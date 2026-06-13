@@ -132,6 +132,7 @@ packages/payment/
 │   ├── store.ts            # PaymentStore interface + in-memory impl
 │   ├── database-store.ts   # createDatabasePaymentStore(ctx.db) — rides the app ShardDO
 │   ├── context.ts          # paymentsFromContext(ctx) — what codegen wires ctx.payments to
+│   ├── reconcile.ts        # reconcile() — scheduled drift re-sync from provider truth
 │   ├── schema.ts           # defineSchema tables: products, prices, customers, subscriptions, checkouts,
 │   │                       #   payment_sessions, payments, captures, refunds, invoices, events (webhook log)
 │   ├── json.ts             # defensive accessors for untyped webhook payloads (shared)
@@ -264,8 +265,10 @@ Non-negotiables that the implementation (not just the plan) has to satisfy — s
 - **Phase 1 — DX wiring + reliability:** ✅ `createDatabasePaymentStore(ctx.db)` (rides the app ShardDO);
   ✅ `paymentsFromContext(ctx, { adapter })` + ✅ codegen-wired `ctx.payments` on `ActionCtx` (gated on
   `@cirrus/payment` import / `ctx.payments` read, mirroring `ctx.ai`; built after `db` so the store rides the
-  request). _Next:_ `@cirrus/config` binding inference; `.dev.vars` scaffolding; **scheduled reconciliation sweep**;
-  observability (failed-payment / drift metrics); example app.
+  request); ✅ **`reconcile()` sweep** (authoritative re-sync of drifted sessions/subscriptions via provider
+  `getPaymentStatus`/`getSubscriptionStatus`; caller passes ids from a `@cirrus/scheduler` job); ✅ `@cirrus/config`
+  detects `@cirrus/payment` and hints the provider secrets (`STRIPE_*` / `POLAR_*`) through its binding-reconcile
+  pipeline (no DO binding — payments ride `ctx.db`). _Next:_ observability (failed-payment / drift metrics); example app.
 - **Phase 2 — Polar adapter:** ✅ `createPolarAdapter` (injected client, Merchant-of-Record, Standard Webhooks
   verification via `verifyStandardWebhook`); `parseWebhook` now takes the request headers so each provider reads its
   own scheme. _Next:_ React components + `.global()`/D1 read path.
