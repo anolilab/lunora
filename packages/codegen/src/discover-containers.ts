@@ -90,6 +90,53 @@ const imageFromExpression = (expression: Expression, exportName: string): Contai
     throw diagnosticAt(expression, `container "${exportName}": \`image\` must be a static string path, { registry: "…" }, or { build: "…" } literal`);
 };
 
+/** Lift an object literal of string-literal values (e.g. `buildArgs`), skipping non-literal entries. */
+const stringRecordLiteral = (expression: Expression): Record<string, string> | undefined => {
+    if (!Node.isObjectLiteralExpression(expression)) {
+        return undefined;
+    }
+
+    const record: Record<string, string> = {};
+
+    for (const property of expression.getProperties()) {
+        if (!Node.isPropertyAssignment(property)) {
+            continue;
+        }
+
+        const value = property.getInitializerOrThrow();
+
+        if (Node.isStringLiteral(value) || Node.isNoSubstitutionTemplateLiteral(value)) {
+            record[property.getName()] = value.getLiteralValue();
+        }
+    }
+
+    return Object.keys(record).length > 0 ? record : undefined;
+};
+
+/** Lift the `rollout` object's numeric-literal fields. */
+const rolloutLiteral = (expression: Expression): ContainerIR["rollout"] => {
+    if (!Node.isObjectLiteralExpression(expression)) {
+        return undefined;
+    }
+
+    const rollout: { gracePeriodSeconds?: number; stepPercentage?: number } = {};
+
+    for (const property of expression.getProperties()) {
+        if (!Node.isPropertyAssignment(property)) {
+            continue;
+        }
+
+        const key = property.getName();
+        const value = property.getInitializerOrThrow();
+
+        if (Node.isNumericLiteral(value) && (key === "gracePeriodSeconds" || key === "stepPercentage")) {
+            rollout[key] = value.getLiteralValue();
+        }
+    }
+
+    return rollout.gracePeriodSeconds === undefined && rollout.stepPercentage === undefined ? undefined : rollout;
+};
+
 /** Read a boolean-literal property value, or `undefined` when it isn't a literal. */
 const booleanLiteral = (expression: Expression): boolean | undefined => {
     if (Node.isTrueLiteral(expression)) {
@@ -177,6 +224,11 @@ const containerFromCall = (call: CallExpression, exportName: string): ContainerI
         const initializer = property.getInitializerOrThrow();
 
         switch (key) {
+            case "buildArgs": {
+                ir.buildArgs = stringRecordLiteral(initializer);
+
+                break;
+            }
             case "enableInternet": {
                 // Lifted (when literal) for the advisor; the generated class
                 // still reads the live value off the imported definition.
@@ -202,6 +254,11 @@ const containerFromCall = (call: CallExpression, exportName: string): ContainerI
             }
             case "name": {
                 ir.name = stringProperty(initializer, exportName, "name");
+
+                break;
+            }
+            case "rollout": {
+                ir.rollout = rolloutLiteral(initializer);
 
                 break;
             }

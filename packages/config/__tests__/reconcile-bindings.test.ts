@@ -335,6 +335,24 @@ describe("reconcileWranglerBindings", () => {
             ]);
         });
 
+        it("writes image_vars and rollout fields with wrangler names", () => {
+            expect.assertions(3);
+
+            const richContainer = {
+                ...TRANSCODER,
+                buildArgs: { NODE_ENV: "production" },
+                rollout: { gracePeriodSeconds: 300, stepPercentage: 25 },
+            };
+
+            reconcileWranglerBindings(root, baseInferred({ containers: [richContainer] }));
+
+            const entry = readConfig().containers[0];
+
+            expect(entry.image_vars).toEqual({ NODE_ENV: "production" });
+            expect(entry.rollout_step_percentage).toBe(25);
+            expect(entry.rollout_active_grace_period).toBe(300);
+        });
+
         it("writes a custom instance type with wrangler field names", () => {
             expect.assertions(1);
 

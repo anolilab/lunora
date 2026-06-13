@@ -25,6 +25,14 @@ interface CustomContainerInstanceType {
 
 type ContainerInstanceType = CustomContainerInstanceType | NamedContainerInstanceType;
 
+/** Rolling-deploy tuning for a container. */
+interface ContainerRollout {
+    /** Seconds an active instance runs before it's eligible for update (wrangler `rollout_active_grace_period`). */
+    gracePeriodSeconds?: number;
+    /** Percentage of instances updated per rollout step, 1–100 (wrangler `rollout_step_percentage`). */
+    stepPercentage?: number;
+}
+
 /**
  * A pre-built image pulled from a registry — the Cloudflare Registry, Docker
  * Hub, or Amazon ECR (the registries `wrangler deploy` supports). The
@@ -53,6 +61,14 @@ interface BuildImageSource {
 type ContainerImageSource = BuildImageSource | RegistryImageSource | string;
 
 interface ContainerConfig {
+    /**
+     * Build-time variables for a Dockerfile/Railpack image — wrangler's
+     * `image_vars` (equivalent to `docker build --build-arg`). For *runtime*
+     * values use {@link ContainerConfig.env} / {@link ContainerConfig.secrets}.
+     * Ignored for a pre-built `{ registry }` image.
+     */
+    buildArgs?: Readonly<Record<string, string>>;
+
     /**
      * The port the container listens on. Worker → container requests target
      * this port. Locally the Dockerfile must also `EXPOSE` it.
@@ -93,6 +109,14 @@ interface ContainerConfig {
      * wrangler's own default (worker name + class name + environment).
      */
     name?: string;
+
+    /**
+     * Rolling-deploy tuning. `stepPercentage` is the share of instances updated
+     * per rollout step (wrangler `rollout_step_percentage`); `gracePeriodSeconds`
+     * is how long an active instance is left running before it's eligible for
+     * update (wrangler `rollout_active_grace_period`).
+     */
+    rollout?: ContainerRollout;
 
     /**
      * Names of Worker secrets (from `wrangler secret` / `.dev.vars`) forwarded
@@ -144,6 +168,7 @@ export type {
     ContainerDefinition,
     ContainerImageSource,
     ContainerInstanceType,
+    ContainerRollout,
     CustomContainerInstanceType,
     NamedContainerInstanceType,
     NormalizedContainerImage,

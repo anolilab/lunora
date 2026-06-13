@@ -191,6 +191,8 @@ export interface CronJobIR {
 export interface ContainerIR {
     /** Durable Object binding name, e.g. `CONTAINER_TRANSCODER`. */
     bindingName: string;
+    /** Static Dockerfile build args (wrangler `image_vars`), when declared as literals. */
+    buildArgs?: Record<string, string>;
     /** Generated DO class name, e.g. `TranscoderContainer`. */
     className: string;
 
@@ -215,6 +217,8 @@ export interface ContainerIR {
     maxInstances?: number;
     /** Static wrangler `containers[].name` override, when declared. */
     name?: string;
+    /** Static rolling-deploy tuning, when declared as literals. */
+    rollout?: { gracePeriodSeconds?: number; stepPercentage?: number };
 
     /**
      * The static `sleepAfter` value, when it was a literal. `undefined` means

@@ -258,6 +258,11 @@ const containerEntryFor = (container: InferredContainer): Record<string, unknown
         entry.image_build_context = container.image.buildContext;
     }
 
+    // Build args (image_vars) only make sense for an image cirrus builds.
+    if (container.buildArgs !== undefined && container.image.kind !== "registry") {
+        entry.image_vars = container.buildArgs;
+    }
+
     if (container.instanceType !== undefined) {
         entry.instance_type = wranglerInstanceType(container.instanceType);
     }
@@ -268,6 +273,14 @@ const containerEntryFor = (container: InferredContainer): Record<string, unknown
 
     if (container.name !== undefined) {
         entry.name = container.name;
+    }
+
+    if (container.rollout?.stepPercentage !== undefined) {
+        entry.rollout_step_percentage = container.rollout.stepPercentage;
+    }
+
+    if (container.rollout?.gracePeriodSeconds !== undefined) {
+        entry.rollout_active_grace_period = container.rollout.gracePeriodSeconds;
     }
 
     return entry;

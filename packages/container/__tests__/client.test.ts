@@ -93,9 +93,11 @@ describe("ctx.containers.<name>.get() lifecycle controls", () => {
     /** A namespace whose stub records lifecycle calls + their args. */
     const lifecycleNamespace = (): { calls: { arg: unknown; method: string }[]; namespace: ContainerNamespaceLike } => {
         const calls: { arg: unknown; method: string }[] = [];
-        const recordVoid = (method: string) => async (arg?: unknown): Promise<void> => {
-            calls.push({ arg, method });
-        };
+        const recordVoid =
+            (method: string) =>
+            async (arg?: unknown): Promise<void> => {
+                calls.push({ arg, method });
+            };
 
         return {
             calls,

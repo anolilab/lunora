@@ -75,6 +75,22 @@ describe(defineContainer, () => {
         expect(defineContainer({ image: { build: "./services/worker" } }).isCirrusContainer).toBe(true);
     });
 
+    it("accepts buildArgs and rollout config", () => {
+        expect.assertions(2);
+
+        const definition = defineContainer({ buildArgs: { NODE_ENV: "production" }, image: "./app", rollout: { gracePeriodSeconds: 300, stepPercentage: 25 } });
+
+        expect(definition.buildArgs).toStrictEqual({ NODE_ENV: "production" });
+        expect(definition.rollout).toStrictEqual({ gracePeriodSeconds: 300, stepPercentage: 25 });
+    });
+
+    it("rejects an out-of-range rollout stepPercentage", () => {
+        expect.assertions(2);
+
+        expect(() => defineContainer({ image: "./app", rollout: { stepPercentage: 0 } })).toThrow("rollout.stepPercentage");
+        expect(() => defineContainer({ image: "./app", rollout: { stepPercentage: 101 } })).toThrow("rollout.stepPercentage");
+    });
+
     it("rejects an empty { build } source", () => {
         expect.assertions(1);
 

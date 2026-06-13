@@ -138,6 +138,12 @@ const defineContainer = (config: ContainerConfig): ContainerDefinition => {
         throw new TypeError(`defineContainer: \`defaultPort\` must be an integer in 1–65535 (got ${String(config.defaultPort)})`);
     }
 
+    const stepPercentage = config.rollout?.stepPercentage;
+
+    if (stepPercentage !== undefined && (!Number.isInteger(stepPercentage) || stepPercentage < 1 || stepPercentage > 100)) {
+        throw new TypeError(`defineContainer: \`rollout.stepPercentage\` must be an integer in 1–100 (got ${String(stepPercentage)})`);
+    }
+
     if (config.maxInstances !== undefined && (!Number.isInteger(config.maxInstances) || config.maxInstances < 1)) {
         throw new TypeError(`defineContainer: \`maxInstances\` must be a positive integer (got ${String(config.maxInstances)})`);
     }
