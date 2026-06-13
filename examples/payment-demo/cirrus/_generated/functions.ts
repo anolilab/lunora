@@ -29,10 +29,12 @@ export interface RegisteredCirrusFunction {
  * emits (`api[namespace][fn].__cirrusRef === "namespace:fn"`).
  */
 export const CIRRUS_FUNCTIONS: Record<string, RegisteredCirrusFunction> = {
+    "billing:apiCallsRemaining": cirrus_billing_0.apiCallsRemaining as unknown as RegisteredCirrusFunction,
     "billing:checkout": cirrus_billing_0.checkout as unknown as RegisteredCirrusFunction,
     "billing:mySubscriptions": cirrus_billing_0.mySubscriptions as unknown as RegisteredCirrusFunction,
     "billing:portal": cirrus_billing_0.portal as unknown as RegisteredCirrusFunction,
     "billing:processWebhook": cirrus_billing_0.processWebhook as unknown as RegisteredCirrusFunction,
+    "billing:recordApiCall": cirrus_billing_0.recordApiCall as unknown as RegisteredCirrusFunction,
 };
 
 /**
@@ -69,10 +71,12 @@ export type CallerCtx = ActionCtx | MutationCtx | QueryCtx;
  */
 export interface Caller {
     billing: {
+        apiCallsRemaining: (args?: {}) => Promise<{ allowed: boolean; balance?: number; }>;
         checkout: (args: { priceId: string }) => Promise<{ url: string; }>;
         mySubscriptions: (args?: {}) => Promise<{ providerSubscriptionId: string; referenceId: string; state: string }[]>;
         portal: (args?: {}) => Promise<{ url: string; }>;
         processWebhook: (args: { body: string; signature: string }) => Promise<{ applied: boolean; status: number; }>;
+        recordApiCall: (args?: {}) => Promise<{ recorded: boolean; }>;
     };
 }
 
@@ -93,10 +97,12 @@ const callRegistered = async <R>(context: CallerCtx, functionPath: string, args:
 /** Build a {@link Caller} bound to `context` (typically a handler's `ctx`). */
 export const createCaller = (context: CallerCtx): Caller => ({
     billing: {
+        apiCallsRemaining: (args) => callRegistered(context, "billing:apiCallsRemaining", args),
         checkout: (args) => callRegistered(context, "billing:checkout", args),
         mySubscriptions: (args) => callRegistered(context, "billing:mySubscriptions", args),
         portal: (args) => callRegistered(context, "billing:portal", args),
         processWebhook: (args) => callRegistered(context, "billing:processWebhook", args),
+        recordApiCall: (args) => callRegistered(context, "billing:recordApiCall", args),
     },
 });
 

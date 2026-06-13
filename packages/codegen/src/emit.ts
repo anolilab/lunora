@@ -1303,7 +1303,13 @@ const emitPaymentFragments = (
         contextField: `\n                payments,`,
         stub: `
 const paymentStub: CirrusPayment = {
+    attach: () => {
+        ${missing}
+    },
     cancelSubscription: () => {
+        ${missing}
+    },
+    check: () => {
         ${missing}
     },
     createCheckout: () => {
@@ -1316,6 +1322,9 @@ const paymentStub: CirrusPayment = {
         ${missing}
     },
     listSubscriptions: () => {
+        ${missing}
+    },
+    track: () => {
         ${missing}
     },
 } as unknown as CirrusPayment;

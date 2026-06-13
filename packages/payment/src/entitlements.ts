@@ -36,6 +36,23 @@ export interface Entitlements {
     readonly plans: ReadonlyArray<string>;
 }
 
+/**
+ * Start of the window `check` sums metered usage over: the most recent billing-period start among
+ * a reference's active subscriptions. `0` (count all-time) when no active subscription reports one
+ * — limits still bind, they just never reset until the provider sends a period.
+ */
+export const usagePeriodStart = (subscriptions: ReadonlyArray<Subscription>): number => {
+    let start = 0;
+
+    for (const subscription of subscriptions) {
+        if (ACTIVE_STATES.has(subscription.state) && subscription.currentPeriodStart !== undefined) {
+            start = Math.max(start, subscription.currentPeriodStart);
+        }
+    }
+
+    return start;
+};
+
 /** Derive {@link Entitlements} from a reference's subscriptions. Pure — the basis of `check`. */
 export const resolveEntitlements = (config: EntitlementsConfig, subscriptions: ReadonlyArray<Subscription>): Entitlements => {
     const activePriceIds = new Set(subscriptions.filter((subscription) => ACTIVE_STATES.has(subscription.state)).map((subscription) => subscription.priceId));

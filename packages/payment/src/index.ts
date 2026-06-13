@@ -7,7 +7,7 @@ export { createPayment } from "./create-payment";
 export type { PaymentDatabase, PaymentRow } from "./database-store";
 export { createDatabasePaymentStore } from "./database-store";
 export type { Entitlements, EntitlementsConfig, PlanDefinition } from "./entitlements";
-export { entitlementsForReference, resolveEntitlements } from "./entitlements";
+export { entitlementsForReference, resolveEntitlements, usagePeriodStart } from "./entitlements";
 export type { PaymentErrorCode } from "./errors";
 export { CirrusPaymentError } from "./errors";
 export { default as idempotencyKey } from "./idempotency";
@@ -47,10 +47,13 @@ export { MemoryPaymentStore } from "./store";
 export { default as applyWebhookAction } from "./sync";
 export type {
     ApplyResult,
+    AttachInput,
     CancelSubscriptionOptions,
     CaptureInput,
+    CheckInput,
     CheckoutInput,
     CheckoutResult,
+    CheckResult,
     CurrencyCode,
     Customer,
     CustomerRef,
@@ -61,9 +64,13 @@ export type {
     ProviderCapabilities,
     ProviderId,
     RefundInput,
+    ReportUsageInput,
     Subscription,
     SubscriptionPatch,
     SubscriptionState,
+    TrackInput,
+    TrackResult,
+    UsageEvent,
     WebhookAction,
     WebhookActionType,
 } from "./types";

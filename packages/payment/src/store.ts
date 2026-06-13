@@ -5,7 +5,7 @@
  * here backs tests and local dev; a Durable-Object-backed implementation (SQLite + OCC) drops in
  * behind the same interface for production without touching call sites.
  */
-import type { Customer, PaymentSession, ProviderId, Subscription } from "./types";
+import type { Customer, PaymentSession, ProviderId, Subscription, UsageEvent } from "./types";
 
 const customerKey = (provider: ProviderId, referenceId: string): string => `${provider}:${referenceId}`;
 
@@ -22,6 +22,16 @@ export interface PaymentStore {
      * and `false` for a duplicate — the inbound-idempotency primitive.
      */
     markEventProcessed: (provider: ProviderId, eventId: string) => Promise<boolean>;
+    /** Flag a recorded usage event as forwarded to the provider's metering API. */
+    markUsageReported: (provider: ProviderId, idempotencyKey: string) => Promise<void>;
+
+    /**
+     * Append a usage event. Resolves `true` when newly recorded and `false` when its
+     * `idempotencyKey` was already seen — the exactly-once primitive behind `track`.
+     */
+    recordUsage: (event: UsageEvent) => Promise<boolean>;
+    /** Sum recorded usage `quantity` for a `(referenceId, featureId)` pair since `since` (epoch ms). */
+    sumUsage: (referenceId: string, featureId: string, since: number) => Promise<number>;
     upsertCustomer: (customer: Customer) => Promise<void>;
     upsertPaymentSession: (session: PaymentSession) => Promise<void>;
     upsertSubscription: (subscription: Subscription) => Promise<void>;
@@ -36,6 +46,8 @@ export class MemoryPaymentStore implements PaymentStore {
     private readonly sessions = new Map<string, PaymentSession>();
 
     private readonly subscriptions = new Map<string, Subscription>();
+
+    private readonly usageEvents = new Map<string, UsageEvent>();
 
     public getCustomerByReference(provider: ProviderId, referenceId: string): Promise<Customer | undefined> {
         return Promise.resolve(this.customers.get(customerKey(provider, referenceId)));
@@ -63,6 +75,41 @@ export class MemoryPaymentStore implements PaymentStore {
         this.processedEvents.add(key);
 
         return Promise.resolve(true);
+    }
+
+    public markUsageReported(provider: ProviderId, idempotencyKey: string): Promise<void> {
+        const key = recordKey(provider, idempotencyKey);
+        const existing = this.usageEvents.get(key);
+
+        if (existing) {
+            this.usageEvents.set(key, { ...existing, reportedToProvider: true });
+        }
+
+        return Promise.resolve();
+    }
+
+    public recordUsage(event: UsageEvent): Promise<boolean> {
+        const key = recordKey(event.provider, event.idempotencyKey);
+
+        if (this.usageEvents.has(key)) {
+            return Promise.resolve(false);
+        }
+
+        this.usageEvents.set(key, event);
+
+        return Promise.resolve(true);
+    }
+
+    public sumUsage(referenceId: string, featureId: string, since: number): Promise<number> {
+        let total = 0;
+
+        for (const event of this.usageEvents.values()) {
+            if (event.referenceId === referenceId && event.featureId === featureId && event.createdAt >= since) {
+                total += event.quantity;
+            }
+        }
+
+        return Promise.resolve(total);
     }
 
     public upsertCustomer(customer: Customer): Promise<void> {

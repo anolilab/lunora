@@ -49,6 +49,7 @@ export default defineSchema({
         cancelAtPeriodEnd: v.boolean(),
         createdAt: v.number(),
         currentPeriodEnd: v.optional(v.number()),
+        currentPeriodStart: v.optional(v.number()),
         priceId: v.string(),
         provider: v.string(),
         providerSubscriptionId: v.string(),
@@ -59,4 +60,17 @@ export default defineSchema({
     })
         .index("by_provider_subscription", ["provider", "providerSubscriptionId"], { unique: true })
         .index("by_reference", ["referenceId"]),
+
+    // Metered-usage ledger backing `ctx.payments.track` / `check`.
+    usageEvents: defineTable({
+        createdAt: v.number(),
+        featureId: v.string(),
+        idempotencyKey: v.string(),
+        provider: v.string(),
+        quantity: v.number(),
+        referenceId: v.string(),
+        reportedToProvider: v.boolean(),
+    })
+        .index("by_idempotency", ["provider", "idempotencyKey"], { unique: true })
+        .index("by_reference_feature", ["referenceId", "featureId"]),
 });

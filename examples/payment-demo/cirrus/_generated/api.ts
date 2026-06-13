@@ -6,9 +6,11 @@ import type { FunctionReference } from "@cirrus/client";
 
 export interface ApiTypes {
     billing: {
+        apiCallsRemaining: FunctionReference<"action", {}, { allowed: boolean; balance?: number; }>;
         checkout: FunctionReference<"action", { priceId: string }, { url: string; }>;
         mySubscriptions: FunctionReference<"query", {}, { providerSubscriptionId: string; referenceId: string; state: string }[]>;
         portal: FunctionReference<"action", {}, { url: string; }>;
+        recordApiCall: FunctionReference<"action", {}, { recorded: boolean; }>;
     };
 }
 

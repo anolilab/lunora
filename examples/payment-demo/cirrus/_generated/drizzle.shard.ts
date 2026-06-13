@@ -51,6 +51,7 @@ export const subscriptions = sqliteTable("subscriptions", {
     cancelAtPeriodEnd: integer("cancelAtPeriodEnd", { mode: "boolean" }).notNull(),
     createdAt: real("createdAt").notNull(),
     currentPeriodEnd: real("currentPeriodEnd"),
+    currentPeriodStart: real("currentPeriodStart"),
     priceId: text("priceId").notNull(),
     provider: text("provider").notNull(),
     providerSubscriptionId: text("providerSubscriptionId").notNull(),
@@ -61,4 +62,19 @@ export const subscriptions = sqliteTable("subscriptions", {
 }, (t) => ({
     by_reference: index("by_reference").on(t.referenceId),
     by_provider_subscription: uniqueIndex("by_provider_subscription").on(t.provider, t.providerSubscriptionId),
+}));
+
+export const usageEvents = sqliteTable("usageEvents", {
+    _id: text("_id").primaryKey(),
+    _creationTime: integer("_creationTime").notNull(),
+    createdAt: real("createdAt").notNull(),
+    featureId: text("featureId").notNull(),
+    idempotencyKey: text("idempotencyKey").notNull(),
+    provider: text("provider").notNull(),
+    quantity: real("quantity").notNull(),
+    referenceId: text("referenceId").notNull(),
+    reportedToProvider: integer("reportedToProvider", { mode: "boolean" }).notNull(),
+}, (t) => ({
+    by_reference_feature: index("by_reference_feature").on(t.referenceId, t.featureId),
+    by_idempotency: uniqueIndex("by_idempotency").on(t.provider, t.idempotencyKey),
 }));

@@ -65,6 +65,62 @@ export const openApiSpec: Record<string, unknown> = {
     },
     "openapi": "3.1.0",
     "paths": {
+        "/_cirrus/rpc#billing:apiCallsRemaining": {
+            "post": {
+                "description": "Invoke the `action` `billing:apiCallsRemaining` over the Cirrus RPC envelope (POST /_cirrus/rpc).",
+                "operationId": "billing:apiCallsRemaining",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "additionalProperties": false,
+                                "properties": {
+                                    "args": {
+                                        "additionalProperties": false,
+                                        "properties": {},
+                                        "required": [],
+                                        "type": "object"
+                                    },
+                                    "functionPath": {
+                                        "const": "billing:apiCallsRemaining",
+                                        "type": "string"
+                                    },
+                                    "shardKey": {
+                                        "description": "Optional shard key; omitted routes to the default shard.",
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "functionPath"
+                                ],
+                                "type": "object"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                }
+                            }
+                        },
+                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                    },
+                    "default": {
+                        "$ref": "#/components/responses/CirrusError"
+                    }
+                },
+                "summary": "action: billing:apiCallsRemaining",
+                "tags": [
+                    "billing"
+                ],
+                "x-cirrus-function-kind": "action"
+            }
+        },
         "/_cirrus/rpc#billing:checkout": {
             "post": {
                 "description": "Invoke the `action` `billing:checkout` over the Cirrus RPC envelope (POST /_cirrus/rpc).",
@@ -233,6 +289,62 @@ export const openApiSpec: Record<string, unknown> = {
                     }
                 },
                 "summary": "action: billing:portal",
+                "tags": [
+                    "billing"
+                ],
+                "x-cirrus-function-kind": "action"
+            }
+        },
+        "/_cirrus/rpc#billing:recordApiCall": {
+            "post": {
+                "description": "Invoke the `action` `billing:recordApiCall` over the Cirrus RPC envelope (POST /_cirrus/rpc).",
+                "operationId": "billing:recordApiCall",
+                "requestBody": {
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "additionalProperties": false,
+                                "properties": {
+                                    "args": {
+                                        "additionalProperties": false,
+                                        "properties": {},
+                                        "required": [],
+                                        "type": "object"
+                                    },
+                                    "functionPath": {
+                                        "const": "billing:recordApiCall",
+                                        "type": "string"
+                                    },
+                                    "shardKey": {
+                                        "description": "Optional shard key; omitted routes to the default shard.",
+                                        "type": "string"
+                                    }
+                                },
+                                "required": [
+                                    "functionPath"
+                                ],
+                                "type": "object"
+                            }
+                        }
+                    },
+                    "required": true
+                },
+                "responses": {
+                    "200": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                                }
+                            }
+                        },
+                        "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+                    },
+                    "default": {
+                        "$ref": "#/components/responses/CirrusError"
+                    }
+                },
+                "summary": "action: billing:recordApiCall",
                 "tags": [
                     "billing"
                 ],

@@ -9,7 +9,7 @@
  */
 import { money } from "./money";
 import type { PaymentStore } from "./store";
-import type { Customer, PaymentSession, PaymentState, ProviderId, Subscription, SubscriptionState } from "./types";
+import type { Customer, PaymentSession, PaymentState, ProviderId, Subscription, SubscriptionState, UsageEvent } from "./types";
 
 /** A stored row, carrying Cirrus's document id. */
 interface PaymentRow extends Record<string, unknown> {
@@ -100,6 +100,7 @@ const subscriptionToRow = (subscription: Subscription): Record<string, unknown> 
         cancelAtPeriodEnd: subscription.cancelAtPeriodEnd,
         createdAt: subscription.createdAt,
         currentPeriodEnd: subscription.currentPeriodEnd,
+        currentPeriodStart: subscription.currentPeriodStart,
         priceId: subscription.priceId,
         provider: subscription.provider,
         providerSubscriptionId: subscription.id,
@@ -115,6 +116,7 @@ const rowToSubscription = (row: PaymentRow): Subscription => {
         cancelAtPeriodEnd: readBoolean(row, "cancelAtPeriodEnd"),
         createdAt: readNumber(row, "createdAt"),
         currentPeriodEnd: readOptionalNumber(row, "currentPeriodEnd"),
+        currentPeriodStart: readOptionalNumber(row, "currentPeriodStart"),
         id: readString(row, "providerSubscriptionId"),
         priceId: readString(row, "priceId"),
         provider: readString(row, "provider") as ProviderId,
@@ -122,6 +124,18 @@ const rowToSubscription = (row: PaymentRow): Subscription => {
         referenceId: readString(row, "referenceId"),
         state: readString(row, "state") as SubscriptionState,
         updatedAt: readNumber(row, "updatedAt"),
+    };
+};
+
+const usageEventToRow = (event: UsageEvent): Record<string, unknown> => {
+    return {
+        createdAt: event.createdAt,
+        featureId: event.featureId,
+        idempotencyKey: event.idempotencyKey,
+        provider: event.provider,
+        quantity: event.quantity,
+        referenceId: event.referenceId,
+        reportedToProvider: event.reportedToProvider,
     };
 };
 
@@ -175,6 +189,41 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
             await database.insert("events", { processedAt: Date.now(), provider, providerEventId: eventId, type: "" });
 
             return true;
+        },
+
+        markUsageReported: async (provider, idempotencyKey) => {
+            const existing = await database.findFirst("usageEvents", { idempotencyKey, provider });
+
+            if (existing) {
+                await database.patch(existing._id, { reportedToProvider: true });
+            }
+        },
+
+        recordUsage: async (event) => {
+            const existing = await database.findFirst("usageEvents", { idempotencyKey: event.idempotencyKey, provider: event.provider });
+
+            if (existing) {
+                return false;
+            }
+
+            // The unique `by_idempotency` index is the real race guard in the DO: a concurrent
+            // insert of the same key fails its OCC commit, so at most one caller wins.
+            await database.insert("usageEvents", usageEventToRow(event));
+
+            return true;
+        },
+
+        sumUsage: async (referenceId, featureId, since) => {
+            const rows = await database.findMany("usageEvents", { featureId, referenceId });
+            let total = 0;
+
+            for (const row of rows) {
+                if (readNumber(row, "createdAt") >= since) {
+                    total += readNumber(row, "quantity");
+                }
+            }
+
+            return total;
         },
 
         upsertCustomer: async (customer) => upsert("customers", { provider: customer.provider, providerCustomerId: customer.id }, customerToRow(customer)),

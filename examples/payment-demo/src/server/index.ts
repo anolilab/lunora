@@ -32,6 +32,13 @@ export const ShardDO = createShardDO({
                 webhookSecret: environment.STRIPE_WEBHOOK_SECRET,
             }),
             authorize: () => true,
+            // Plan → features/limits map powering `ctx.payments.check`. The `pro`
+            // plan grants a metered cap of 1000 `api_calls`, decremented by `track`.
+            entitlements: {
+                plans: {
+                    pro: { features: ["export"], limits: { api_calls: 1000 }, priceIds: ["price_123"] },
+                },
+            },
             // Telemetry hook: failed payments, past-due subscriptions, reconciliation
             // drift, and general webhook applies — route to logs/metrics/alerts.
             observability: (event) => {

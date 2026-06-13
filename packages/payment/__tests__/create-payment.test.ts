@@ -157,3 +157,120 @@ describe("createPayment", () => {
         expect(response.status).toBe(400);
     });
 });
+
+describe("createPayment — attach / check / track", () => {
+    const entitlements = { plans: { pro: { features: ["export"], limits: { api_calls: 100 }, priceIds: ["price_1"] } } };
+
+    const activeSubscription = (referenceId: string): Subscription => {
+        return { ...subscription(referenceId, "active"), currentPeriodStart: 1000 };
+    };
+
+    it("attach defaults mode to subscription", async () => {
+        const payment = createPayment({ adapter: fakeAdapter(), store: new MemoryPaymentStore() });
+
+        const result = await payment.attach({ cancelUrl: "https://x/cancel", priceId: "price_1", referenceId: "user_1", successUrl: "https://x/ok" });
+
+        expect(result.url).toBe("https://pay.test/checkout:stripe:user_1:price_1:subscription");
+    });
+
+    it("attach honors an explicit one-time payment mode", async () => {
+        const payment = createPayment({ adapter: fakeAdapter(), store: new MemoryPaymentStore() });
+
+        const result = await payment.attach({
+            cancelUrl: "https://x/cancel",
+            mode: "payment",
+            priceId: "price_1",
+            referenceId: "user_1",
+            successUrl: "https://x/ok",
+        });
+
+        expect(result.url).toBe("https://pay.test/checkout:stripe:user_1:price_1:payment");
+    });
+
+    it("check throws when entitlements are not configured", async () => {
+        const payment = createPayment({ adapter: fakeAdapter(), store: new MemoryPaymentStore() });
+
+        await expect(payment.check({ featureId: "export", referenceId: "user_1" })).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+    });
+
+    it("check grants an unlimited boolean feature from an active plan", async () => {
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(activeSubscription("user_1"));
+
+        const payment = createPayment({ adapter: fakeAdapter(), entitlements, store });
+
+        await expect(payment.check({ featureId: "export", referenceId: "user_1" })).resolves.toEqual({ allowed: true, unlimited: true });
+    });
+
+    it("check denies a feature no active plan grants", async () => {
+        const payment = createPayment({ adapter: fakeAdapter(), entitlements, store: new MemoryPaymentStore() });
+
+        await expect(payment.check({ featureId: "export", referenceId: "user_1" })).resolves.toEqual({ allowed: false, unlimited: false });
+    });
+
+    it("check subtracts tracked usage from a metered limit", async () => {
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(activeSubscription("user_1"));
+
+        const payment = createPayment({ adapter: fakeAdapter(), entitlements, store });
+
+        await payment.track({ featureId: "api_calls", idempotencyKey: "u1", quantity: 30, referenceId: "user_1" });
+
+        await expect(payment.check({ featureId: "api_calls", quantity: 10, referenceId: "user_1" })).resolves.toEqual({
+            allowed: true,
+            balance: 70,
+            limit: 100,
+            unlimited: false,
+            used: 30,
+        });
+        await expect(payment.check({ featureId: "api_calls", quantity: 71, referenceId: "user_1" })).resolves.toMatchObject({ allowed: false, balance: 70 });
+    });
+
+    it("track records usage exactly once per idempotency key", async () => {
+        const store = new MemoryPaymentStore();
+        const payment = createPayment({ adapter: fakeAdapter({ reportUsage: async () => undefined }), store });
+
+        await expect(payment.track({ featureId: "api_calls", idempotencyKey: "u1", quantity: 5, referenceId: "user_1" })).resolves.toEqual({
+            recorded: true,
+            reportedToProvider: true,
+        });
+        await expect(payment.track({ featureId: "api_calls", idempotencyKey: "u1", quantity: 5, referenceId: "user_1" })).resolves.toEqual({
+            recorded: false,
+            reportedToProvider: false,
+        });
+        await expect(store.sumUsage("user_1", "api_calls", 0)).resolves.toBe(5);
+    });
+
+    it("track records locally even when the provider report fails, and observes it", async () => {
+        const store = new MemoryPaymentStore();
+        const events: string[] = [];
+        const payment = createPayment({
+            adapter: fakeAdapter({
+                reportUsage: async () => {
+                    throw new Error("provider down");
+                },
+            }),
+            observability: (event) => events.push(event.type),
+            store,
+        });
+
+        await expect(payment.track({ featureId: "api_calls", idempotencyKey: "u1", quantity: 5, referenceId: "user_1" })).resolves.toEqual({
+            recorded: true,
+            reportedToProvider: false,
+        });
+        expect(events).toContain("usage.report_failed");
+        await expect(store.sumUsage("user_1", "api_calls", 0)).resolves.toBe(5);
+    });
+
+    it("track skips provider reporting when the adapter has no reportUsage", async () => {
+        const store = new MemoryPaymentStore();
+        const payment = createPayment({ adapter: fakeAdapter({ reportUsage: undefined }), store });
+
+        await expect(payment.track({ featureId: "api_calls", idempotencyKey: "u1", quantity: 5, referenceId: "user_1" })).resolves.toEqual({
+            recorded: true,
+            reportedToProvider: false,
+        });
+    });
+});

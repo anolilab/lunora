@@ -32,6 +32,30 @@ interface SubscriptionRow {
     state: string;
 }
 
+/**
+ * Record one metered `api_calls` usage event for the demo reference. `track`
+ * writes the durable ledger (exactly-once by idempotency key) and, since Stripe
+ * advertises usage metering, forwards a meter event — best-effort.
+ */
+export const recordApiCall = action({
+    args: {},
+    handler: async (ctx): Promise<{ recorded: boolean }> => {
+        const result = await ctx.payments.track({ featureId: "api_calls", referenceId: DEMO_REFERENCE });
+
+        return { recorded: result.recorded };
+    },
+});
+
+/** Is the demo reference still under its metered `api_calls` allowance this period? */
+export const apiCallsRemaining = action({
+    args: {},
+    handler: async (ctx): Promise<{ allowed: boolean; balance?: number }> => {
+        const result = await ctx.payments.check({ featureId: "api_calls", referenceId: DEMO_REFERENCE });
+
+        return { allowed: result.allowed, balance: result.balance };
+    },
+});
+
 /** Open the Stripe billing portal for the demo reference (customer derived from the store). */
 export const portal = action({
     args: {},

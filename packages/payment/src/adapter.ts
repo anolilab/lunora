@@ -11,6 +11,7 @@ import type {
     ProviderCapabilities,
     ProviderId,
     RefundInput,
+    ReportUsageInput,
     Subscription,
     SubscriptionPatch,
     WebhookAction,
@@ -51,6 +52,13 @@ export interface PaymentAdapter {
     /** Verify the signature over the raw body, then normalize the event. Throws on invalid signature. */
     parseWebhook: (input: WebhookInput) => Promise<WebhookAction>;
     refundPayment: (input: RefundInput) => Promise<PaymentSession>;
+
+    /**
+     * Forward metered usage to the provider's billing API. Optional — present only on providers
+     * whose `capabilities.usageMetering` is `true` and that expose an ingestion endpoint. When
+     * absent, `track` still records usage durably and `check` enforces limits locally.
+     */
+    reportUsage?: (input: ReportUsageInput) => Promise<void>;
     resumeSubscription: (subscriptionId: string) => Promise<Subscription>;
     updateSubscription: (subscriptionId: string, patch: SubscriptionPatch) => Promise<Subscription>;
 }

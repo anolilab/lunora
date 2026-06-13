@@ -47,6 +47,7 @@ const subscriptions = defineTable({
     cancelAtPeriodEnd: v.boolean(),
     createdAt: v.number(),
     currentPeriodEnd: v.optional(v.number()),
+    currentPeriodStart: v.optional(v.number()),
     priceId: v.string(),
     provider: v.string(),
     providerSubscriptionId: v.string(),
@@ -132,6 +133,20 @@ const events = defineTable({
     type: v.string(),
 }).index("by_provider_event", ["provider", "providerEventId"], { unique: true });
 
+// Append-only metered-usage ledger: `track` writes, `check` sums over the current period. The
+// unique `by_idempotency` index makes recording exactly-once under concurrent/retried writes.
+const usageEvents = defineTable({
+    createdAt: v.number(),
+    featureId: v.string(),
+    idempotencyKey: v.string(),
+    provider: v.string(),
+    quantity: v.number(),
+    referenceId: v.string(),
+    reportedToProvider: v.boolean(),
+})
+    .index("by_idempotency", ["provider", "idempotencyKey"], { unique: true })
+    .index("by_reference_feature", ["referenceId", "featureId"]);
+
 const paymentTables: Record<string, TableDefinition> = {
     captures,
     checkouts,
@@ -144,6 +159,7 @@ const paymentTables: Record<string, TableDefinition> = {
     products,
     refunds,
     subscriptions,
+    usageEvents,
 };
 
 export default paymentTables;

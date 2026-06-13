@@ -11,6 +11,7 @@ import type { AuthorizeReference, CirrusPayment } from "./create-payment";
 import { createPayment } from "./create-payment";
 import type { PaymentDatabase, PaymentRow } from "./database-store";
 import { createDatabasePaymentStore } from "./database-store";
+import type { EntitlementsConfig } from "./entitlements";
 import type { PaymentObserver } from "./observability";
 
 /** Structural subset of Cirrus's `ctx.db` (the `findFirst`/`findMany(tableName, { where })` form). */
@@ -31,6 +32,8 @@ export interface PaymentsFromContextOptions {
     readonly adapter: PaymentAdapter;
     /** Override the default "caller owns the referenceId" authorization. */
     readonly authorize?: AuthorizeReference;
+    /** Plan → features/limits map, forwarded to the facade. Required to use `ctx.payments.check`. */
+    readonly entitlements?: EntitlementsConfig;
     /** Optional telemetry sink, forwarded to the facade. */
     readonly observability?: PaymentObserver;
 }
@@ -55,6 +58,7 @@ export const paymentsFromContext = (context: PaymentContextLike, options: Paymen
     return createPayment({
         adapter: options.adapter,
         authorize: options.authorize ?? ((referenceId) => userId !== undefined && referenceId === userId),
+        entitlements: options.entitlements,
         observability: options.observability,
         store: createDatabasePaymentStore(cirrusDatabaseToPaymentDatabase(context.db)),
     });

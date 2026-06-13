@@ -20,6 +20,7 @@ import type {
     PaymentState,
     PortalInput,
     RefundInput,
+    ReportUsageInput,
     Subscription,
     SubscriptionPatch,
     SubscriptionState,
@@ -45,6 +46,7 @@ interface StripePaymentIntentLike {
 interface StripeSubscriptionLike {
     readonly cancel_at_period_end?: boolean;
     readonly current_period_end?: number;
+    readonly current_period_start?: number;
     readonly customer?: null | string;
     readonly id: string;
     readonly items?: { data: ReadonlyArray<{ price?: { id?: string }; quantity?: number }> };
@@ -54,6 +56,7 @@ interface StripeSubscriptionLike {
 
 /** The subset of the Stripe SDK surface this adapter calls. A real `Stripe` instance satisfies it. */
 interface StripeClientLike {
+    readonly billing: { meterEvents: { create: (parameters: Record<string, unknown>, options?: StripeRequestOptions) => Promise<{ identifier?: string }> } };
     readonly billingPortal: { sessions: { create: (parameters: Record<string, unknown>) => Promise<{ url: string }> } };
     readonly checkout: {
         sessions: { create: (parameters: Record<string, unknown>, options?: StripeRequestOptions) => Promise<{ id: string; url: null | string }> };
@@ -121,6 +124,12 @@ const periodEndMs = (object: Record<string, unknown>): number | undefined => {
     return seconds === undefined ? undefined : seconds * 1000;
 };
 
+const periodStartMs = (object: Record<string, unknown>): number | undefined => {
+    const seconds = readNumber(object, "current_period_start");
+
+    return seconds === undefined ? undefined : seconds * 1000;
+};
+
 const intentToSession = (intent: StripePaymentIntentLike): PaymentSession => {
     const amount = money(BigInt(intent.amount), intent.currency);
     const state = PAYMENT_STATE_BY_STRIPE_STATUS[intent.status] ?? "initiated";
@@ -146,6 +155,7 @@ const subscriptionFromStripe = (subscription: StripeSubscriptionLike): Subscript
         cancelAtPeriodEnd: subscription.cancel_at_period_end ?? false,
         createdAt: now,
         currentPeriodEnd: subscription.current_period_end ? subscription.current_period_end * 1000 : undefined,
+        currentPeriodStart: subscription.current_period_start ? subscription.current_period_start * 1000 : undefined,
         id: subscription.id,
         priceId: subscription.items?.data[0]?.price?.id ?? "",
         provider: "stripe",
@@ -222,6 +232,7 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
                 ...base,
                 cancelAtPeriodEnd: readBoolean(object, "cancel_at_period_end"),
                 currentPeriodEnd: periodEndMs(object),
+                currentPeriodStart: periodStartMs(object),
                 customerId: readString(object, "customer"),
                 priceId: firstPriceId(object),
                 quantity: firstQuantity(object),
@@ -362,6 +373,20 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
             const partial = input.amount !== undefined && compareMoney(input.amount, session.capturedAmount) < 0;
 
             return { ...session, refundedAmount, state: partial ? "partially_refunded" : "refunded" };
+        },
+
+        reportUsage: async (input: ReportUsageInput) => {
+            // Stripe v2 Meter Events: `event_name` is the meter, `value` a string, `identifier`
+            // dedupes within the meter's aggregation window. Keyed on the Stripe customer id.
+            await client.billing.meterEvents.create(
+                {
+                    event_name: input.featureId,
+                    identifier: input.idempotencyKey,
+                    payload: { stripe_customer_id: input.customerId, value: String(input.quantity) },
+                    timestamp: input.timestamp === undefined ? undefined : Math.floor(input.timestamp / 1000),
+                },
+                { idempotencyKey: input.idempotencyKey },
+            );
         },
 
         resumeSubscription: async (subscriptionId) => {

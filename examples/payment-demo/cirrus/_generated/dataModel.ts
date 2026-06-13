@@ -29,7 +29,7 @@ export type {
     WhereOperators,
 } from "@cirrus/server/data-model";
 
-export type TableName = "customers" | "events" | "paymentSessions" | "subscriptions";
+export type TableName = "customers" | "events" | "paymentSessions" | "subscriptions" | "usageEvents";
 
 export type Id<TName extends string> = string & { readonly __table: TName };
 
@@ -73,6 +73,7 @@ export interface Doc_subscriptions {
     cancelAtPeriodEnd: boolean;
     createdAt: number;
     currentPeriodEnd?: number;
+    currentPeriodStart?: number;
     priceId: string;
     provider: string;
     providerSubscriptionId: string;
@@ -82,11 +83,24 @@ export interface Doc_subscriptions {
     updatedAt: number;
 }
 
+export interface Doc_usageEvents {
+    _id: Id<"usageEvents">;
+    _creationTime: number;
+    createdAt: number;
+    featureId: string;
+    idempotencyKey: string;
+    provider: string;
+    quantity: number;
+    referenceId: string;
+    reportedToProvider: boolean;
+}
+
 export interface DataModel {
     customers: Doc_customers;
     events: Doc_events;
     paymentSessions: Doc_paymentSessions;
     subscriptions: Doc_subscriptions;
+    usageEvents: Doc_usageEvents;
 }
 
 export type Doc<T extends keyof DataModel> = DataModel[T];
@@ -100,6 +114,7 @@ export interface IndexNamesByTable {
     events: "by_provider_event";
     paymentSessions: "by_reference" | "by_provider_session";
     subscriptions: "by_reference" | "by_provider_subscription";
+    usageEvents: "by_reference_feature" | "by_idempotency";
 }
 
 export type IndexName<T extends keyof DataModel> = IndexNamesByTable[T];
@@ -110,6 +125,7 @@ export interface SearchIndexNamesByTable {
     events: never;
     paymentSessions: never;
     subscriptions: never;
+    usageEvents: never;
 }
 
 export type SearchIndexName<T extends keyof DataModel> = SearchIndexNamesByTable[T];
@@ -120,6 +136,7 @@ export interface RankIndexNamesByTable {
     events: never;
     paymentSessions: never;
     subscriptions: never;
+    usageEvents: never;
 }
 
 export type RankIndexName<T extends keyof DataModel> = RankIndexNamesByTable[T];
@@ -167,6 +184,7 @@ export interface Insert_subscriptions {
     cancelAtPeriodEnd: boolean;
     createdAt: number;
     currentPeriodEnd?: number;
+    currentPeriodStart?: number;
     priceId: string;
     provider: string;
     providerSubscriptionId: string;
@@ -176,12 +194,25 @@ export interface Insert_subscriptions {
     updatedAt: number;
 }
 
+export interface Insert_usageEvents {
+    _id?: Id<"usageEvents">;
+    _creationTime?: number;
+    createdAt: number;
+    featureId: string;
+    idempotencyKey: string;
+    provider: string;
+    quantity: number;
+    referenceId: string;
+    reportedToProvider: boolean;
+}
+
 /** Per-table insert shape, accepted by `ctx.db.<table>.insert(...)`. */
 export interface InsertModel {
     customers: Insert_customers;
     events: Insert_events;
     paymentSessions: Insert_paymentSessions;
     subscriptions: Insert_subscriptions;
+    usageEvents: Insert_usageEvents;
 }
 
 export type Insert<T extends keyof DataModel> = InsertModel[T];
@@ -207,6 +238,7 @@ export interface Relations {
     events: {};
     paymentSessions: {};
     subscriptions: {};
+    usageEvents: {};
 }
 
 /** The `with` argument for table `T` — see `@cirrus/server/data-model`. */

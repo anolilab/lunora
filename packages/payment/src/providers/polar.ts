@@ -20,6 +20,7 @@ import type {
     PaymentSession,
     PaymentState,
     PortalInput,
+    ReportUsageInput,
     Subscription,
     SubscriptionPatch,
     SubscriptionState,
@@ -31,6 +32,7 @@ import { verifyStandardWebhook } from "../webhook";
 interface PolarSubscriptionLike {
     readonly cancelAtPeriodEnd?: boolean;
     readonly currentPeriodEnd?: null | string;
+    readonly currentPeriodStart?: null | string;
     readonly customerId?: null | string;
     readonly id: string;
     readonly metadata?: Record<string, string>;
@@ -50,6 +52,7 @@ interface PolarClientLike {
     readonly checkouts: { create: (parameters: Record<string, unknown>) => Promise<{ id: string; url: string }> };
     readonly customers: { create: (parameters: Record<string, unknown>) => Promise<{ email: null | string; id: string }> };
     readonly customerSessions: { create: (parameters: Record<string, unknown>) => Promise<{ customerPortalUrl: string }> };
+    readonly events: { ingest: (parameters: Record<string, unknown>) => Promise<{ inserted?: number }> };
     readonly orders: { get: (parameters: Record<string, unknown>) => Promise<PolarOrderLike> };
     readonly refunds: { create: (parameters: Record<string, unknown>) => Promise<{ id: string }> };
     readonly subscriptions: {
@@ -86,7 +89,7 @@ const notSupported = (operation: string): never => {
     throw new CirrusPaymentError("PROVIDER_ERROR", `polar (merchant-of-record) does not support ${operation}`);
 };
 
-const parsePeriodEnd = (value: null | string | undefined): number | undefined => {
+const parseTimestamp = (value: null | string | undefined): number | undefined => {
     if (typeof value !== "string") {
         return undefined;
     }
@@ -102,7 +105,8 @@ const subscriptionFromPolar = (subscription: PolarSubscriptionLike): Subscriptio
     return {
         cancelAtPeriodEnd: subscription.cancelAtPeriodEnd ?? false,
         createdAt: now,
-        currentPeriodEnd: parsePeriodEnd(subscription.currentPeriodEnd),
+        currentPeriodEnd: parseTimestamp(subscription.currentPeriodEnd),
+        currentPeriodStart: parseTimestamp(subscription.currentPeriodStart),
         id: subscription.id,
         priceId: subscription.productId ?? "",
         provider: "polar",
@@ -192,7 +196,8 @@ const mapEvent = (eventId: string, eventType: string, object: Record<string, unk
             return {
                 ...base,
                 cancelAtPeriodEnd: readBoolean(object, "cancel_at_period_end"),
-                currentPeriodEnd: parsePeriodEnd(readString(object, "current_period_end")),
+                currentPeriodEnd: parseTimestamp(readString(object, "current_period_end")),
+                currentPeriodStart: parseTimestamp(readString(object, "current_period_start")),
                 customerId: readString(object, "customer_id"),
                 priceId: readString(object, "product_id"),
                 referenceId: referenceFromMetadata(object),
@@ -297,6 +302,21 @@ export const createPolarAdapter = (options: PolarAdapterOptions): PaymentAdapter
                 state: "refunded",
                 updatedAt: Date.now(),
             };
+        },
+
+        reportUsage: async (input: ReportUsageInput) => {
+            // Polar event ingestion: one event per usage record, keyed to the customer by its
+            // external id (the reference id we set on customer creation). Metadata carries the value.
+            await client.events.ingest({
+                events: [
+                    {
+                        externalCustomerId: input.referenceId,
+                        metadata: { value: input.quantity },
+                        name: input.featureId,
+                        timestamp: input.timestamp === undefined ? undefined : new Date(input.timestamp).toISOString(),
+                    },
+                ],
+            });
         },
 
         resumeSubscription: async (subscriptionId) => {

@@ -66,6 +66,8 @@ export interface Subscription {
     readonly cancelAtPeriodEnd: boolean;
     readonly createdAt: number;
     readonly currentPeriodEnd?: number;
+    /** Start of the current billing period — the window `check` sums metered usage over. */
+    readonly currentPeriodStart?: number;
     readonly id: string;
     readonly priceId: string;
     readonly provider: ProviderId;
@@ -101,9 +103,83 @@ export interface CheckoutResult {
     readonly url: string;
 }
 
+/**
+ * `attach` input — subscribe a reference to a plan. A thin, plan-oriented skin over
+ * {@link CheckoutInput}: `mode` defaults to `"subscription"` (the common case), so callers pass
+ * just `{ referenceId, priceId, successUrl, cancelUrl }`.
+ */
+export interface AttachInput extends Omit<CheckoutInput, "mode"> {
+    readonly mode?: CheckoutInput["mode"];
+}
+
 export interface PortalInput {
     readonly customerId: string;
     readonly returnUrl: string;
+}
+
+/** A single durable usage record — one metered event for a `(referenceId, featureId)` pair. */
+export interface UsageEvent {
+    readonly createdAt: number;
+    readonly featureId: string;
+    /** Caller-stable dedupe key — recording the same key twice is a no-op (exactly-once `track`). */
+    readonly idempotencyKey: string;
+    readonly provider: ProviderId;
+    readonly quantity: number;
+    readonly referenceId: string;
+    /** Whether the event was successfully forwarded to the provider's metering API. */
+    readonly reportedToProvider: boolean;
+}
+
+/** `track` input — record metered usage for a reference's feature. */
+export interface TrackInput {
+    readonly featureId: string;
+    /** Caller-supplied dedupe key; a fresh one is generated when omitted (so each call records). */
+    readonly idempotencyKey?: string;
+    /** Usage amount to add (defaults to `1`). */
+    readonly quantity?: number;
+    readonly referenceId: string;
+}
+
+/** Result of a `track` call. */
+export interface TrackResult {
+    /** True when this call inserted a new usage event; false when deduplicated by idempotency key. */
+    readonly recorded: boolean;
+    /** True when the event was forwarded to the provider's metering API. */
+    readonly reportedToProvider: boolean;
+}
+
+/** `check` input — is a reference allowed to use a feature (and by how much remains)? */
+export interface CheckInput {
+    readonly featureId: string;
+    /** Units the caller intends to consume; the check passes only when this many remain (default `1`). */
+    readonly quantity?: number;
+    readonly referenceId: string;
+}
+
+/** Result of a `check` call. */
+export interface CheckResult {
+    /** Whether the reference may consume `quantity` units of the feature right now. */
+    readonly allowed: boolean;
+    /** Remaining units this period (`limit - used`), for metered features only. */
+    readonly balance?: number;
+    /** The plan-granted cap, for metered features only. */
+    readonly limit?: number;
+    /** True for a boolean feature granted without a numeric cap. */
+    readonly unlimited: boolean;
+    /** Usage consumed this period, for metered features only. */
+    readonly used?: number;
+}
+
+/** Input the adapter forwards to the provider's metering API (Stripe Meter Events / Polar ingestion). */
+export interface ReportUsageInput {
+    /** Provider customer id, when known (Stripe meter events key on it). */
+    readonly customerId?: string;
+    readonly featureId: string;
+    readonly idempotencyKey: string;
+    readonly quantity: number;
+    readonly referenceId: string;
+    /** Event time in epoch ms; defaults to now at the provider. */
+    readonly timestamp?: number;
 }
 
 export interface CaptureInput {
@@ -149,6 +225,7 @@ export interface WebhookAction {
     readonly amount?: Money;
     readonly cancelAtPeriodEnd?: boolean;
     readonly currentPeriodEnd?: number;
+    readonly currentPeriodStart?: number;
     readonly customerId?: string;
     /** Provider event id — the inbound idempotency key. */
     readonly eventId: string;

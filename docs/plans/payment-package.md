@@ -292,7 +292,16 @@ Non-negotiables that the implementation (not just the plan) has to satisfy — s
       new provider while existing subscriptions stay on their origin; no bespoke routing code needed.
 - **Phase 4 — entitlements tier:** ✅ the native `check` — `resolveEntitlements(config, subscriptions)` /
   `entitlementsForReference(store, config, ref)` derive plan / features / limits from active subscriptions (most-
-  generous limit wins). `track` (usage metering / credits) stays deferred behind the optional Autumn adapter seam.
+  generous limit wins).
+- **Phase 5 — the Autumn `track` / `check` / `attach` verb triad (native, no bundled Autumn):** ✅ the facade now
+  exposes all three as first-party verbs over the existing adapter + store. `attach` is a plan-oriented checkout
+  (`mode` defaults to `"subscription"`); `check({ featureId })` answers boolean grants _and_ metered allowances
+  (`limit − usage-this-period`, the window being the active subscription's `currentPeriodStart`); `track({ featureId,
+quantity })` appends to a durable, exactly-once usage ledger (`usageEvents` table, unique-by-idempotency-key) and —
+  when the provider advertises `usageMetering` — forwards a meter event via a new **optional** `reportUsage` adapter
+  method (Stripe v2 Meter Events / Polar event ingestion). Upstream reporting is best-effort: a provider failure is
+  observed (`usage.report_failed`), never thrown, and the local ledger `check` reads is always updated. Credits
+  (decrementing prepaid balances) remain the one piece left to Autumn for teams that want it.
 
 ## 7. Resolved decisions (best-practice defaults)
 
@@ -304,10 +313,12 @@ Non-negotiables that the implementation (not just the plan) has to satisfy — s
    uniqueness invariants trivial. _Realized_ via `createDatabasePaymentStore(ctx.db)` over the merged `paymentTables`
    — no bespoke `PaymentDO` class; payment state rides the app's existing ShardDO and inherits its OCC, reactivity,
    sharding, and `.global()`/D1 read path.
-2. **Entitlements → thin native derive-from-subscription layer (Phase 4), Autumn adapter _seam_, no bundled Autumn.**
-   Deriving `plan`/`features` from already-synced subscription state is cheap and stays in-Worker; a Postgres+Docker
-   service does not belong in the Workers runtime. Full usage-metering/credits is deferred behind an **optional**
-   adapter seam so teams that want Autumn can plug it in.
+2. **Entitlements → thin native derive-from-subscription layer (Phase 4), with `track`/`check`/`attach` as native
+   verbs (Phase 5); no bundled Autumn.** Deriving `plan`/`features` from already-synced subscription state is cheap
+   and stays in-Worker; a Postgres+Docker service does not belong in the Workers runtime. Rather than depend on
+   Autumn, the three Autumn verbs are implemented first-party over the adapter + store (usage rides a `usageEvents`
+   ledger; metering forwards through the optional `reportUsage` adapter method). Only prepaid **credit balances**
+   remain behind the optional Autumn seam.
 3. **Auth coupling → `referenceId` is a generic `string`; `@cirrus/auth` integration is optional.**
    Dependency inversion: core `@cirrus/payment` must work without auth and takes an opaque `referenceId`. A separate
    optional helper (auth as a **peer** dep) defaults it to the current session's user/org. No hard `@cirrus/auth` dep.

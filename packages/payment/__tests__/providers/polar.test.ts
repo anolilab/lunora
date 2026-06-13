@@ -30,6 +30,13 @@ const makeClient = (created: Record<string, unknown>[] = []): PolarClientLike =>
                 return { customerPortalUrl: "https://polar.test/portal" };
             },
         },
+        events: {
+            ingest: async (parameters) => {
+                created.push(parameters);
+
+                return { inserted: 1 };
+            },
+        },
         customers: {
             create: async () => {
                 return { email: "a@b.test", id: "pcus_1" };
@@ -111,6 +118,19 @@ describe("polar adapter", () => {
 
         expect(action.type).toBe("subscription.canceled");
         expect(action.subscriptionId).toBe("sub_1");
+    });
+
+    it("ingests usage as an event keyed on the external customer id", async () => {
+        const created: Record<string, unknown>[] = [];
+        const adapter = createPolarAdapter({ client: makeClient(created), webhookSecret: SECRET });
+
+        await adapter.reportUsage?.({ featureId: "api_calls", idempotencyKey: "usage_1", quantity: 3, referenceId: "user_1" });
+
+        const events = created[0]?.events as { externalCustomerId?: string; metadata?: Record<string, unknown>; name?: string }[];
+
+        expect(events[0]?.name).toBe("api_calls");
+        expect(events[0]?.externalCustomerId).toBe("user_1");
+        expect(events[0]?.metadata).toMatchObject({ value: 3 });
     });
 
     it("rejects a bad signature", async () => {

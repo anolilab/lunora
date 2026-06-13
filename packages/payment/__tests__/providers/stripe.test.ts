@@ -11,6 +11,15 @@ interface RecordedCall {
 
 const makeClient = (calls: RecordedCall[]): StripeClientLike => {
     return {
+        billing: {
+            meterEvents: {
+                create: async (parameters, options) => {
+                    calls.push({ args: [parameters, options], name: "meterEvent" });
+
+                    return { identifier: "mev_1" };
+                },
+            },
+        },
         billingPortal: {
             sessions: {
                 create: async (parameters) => {
@@ -129,5 +138,20 @@ describe("stripe adapter", () => {
         const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
 
         await expect(adapter.parseWebhook({ headers: { get: () => null }, payload: "{}" })).rejects.toMatchObject({ code: "WEBHOOK_SIGNATURE_INVALID" });
+    });
+
+    it("reports usage as a meter event keyed on the customer and idempotency key", async () => {
+        const calls: RecordedCall[] = [];
+        const adapter = createStripeAdapter({ client: makeClient(calls), webhookSecret: "whsec" });
+
+        await adapter.reportUsage?.({ customerId: "cus_1", featureId: "api_calls", idempotencyKey: "usage_1", quantity: 5, referenceId: "user_1" });
+
+        const meterEvent = calls.find((call) => call.name === "meterEvent");
+        const parameters = meterEvent?.args[0] as { event_name?: string; identifier?: string; payload?: Record<string, unknown> };
+
+        expect(parameters.event_name).toBe("api_calls");
+        expect(parameters.identifier).toBe("usage_1");
+        expect(parameters.payload).toMatchObject({ stripe_customer_id: "cus_1", value: "5" });
+        expect((meterEvent?.args[1] as { idempotencyKey?: string }).idempotencyKey).toBe("usage_1");
     });
 });

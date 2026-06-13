@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { EntitlementsConfig } from "../src/entitlements";
-import { entitlementsForReference, resolveEntitlements } from "../src/entitlements";
+import { entitlementsForReference, resolveEntitlements, usagePeriodStart } from "../src/entitlements";
 import { MemoryPaymentStore } from "../src/store";
 import type { Subscription } from "../src/types";
 
@@ -25,6 +25,22 @@ const subscription = (priceId: string, state: Subscription["state"]): Subscripti
         updatedAt: 0,
     };
 };
+
+describe("usagePeriodStart", () => {
+    it("returns the latest current-period start among active subscriptions", () => {
+        const a = { ...subscription("price_pro", "active"), currentPeriodStart: 1000 };
+        const b = { ...subscription("price_team", "active"), currentPeriodStart: 5000 };
+
+        expect(usagePeriodStart([a, b])).toBe(5000);
+    });
+
+    it("ignores inactive subscriptions and falls back to 0", () => {
+        const canceled = { ...subscription("price_pro", "canceled"), currentPeriodStart: 9000 };
+
+        expect(usagePeriodStart([canceled])).toBe(0);
+        expect(usagePeriodStart([])).toBe(0);
+    });
+});
 
 describe("resolveEntitlements", () => {
     it("grants the plan's features and limits for an active subscription", () => {
