@@ -34,7 +34,7 @@
 
 ---
 
-Payments for Cirrus. One provider-agnostic API over Stripe (Polar, Lemon Squeezy, and Paddle to follow) with webhook-driven sync into a durable store, an explicit payment/subscription state machine that makes duplicate and out-of-order webhooks safe by construction, outbound idempotency keys, and per-caller authorization on every mutation.
+Payments for Cirrus. One provider-agnostic API over Stripe and Polar (the providers Convex ships components for) with webhook-driven sync into a durable store, an explicit payment/subscription state machine that makes duplicate and out-of-order webhooks safe by construction, outbound idempotency keys, and per-caller authorization on every mutation.
 
 Switching providers is a configuration change, not a rewrite — see the [design plan](https://github.com/anolilab/cirrus/blob/alpha/docs/plans/payment-package.md).
 

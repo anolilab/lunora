@@ -6,7 +6,8 @@
 
 Add a first-class payments/billing add-on to Cirrus that:
 
-- Supports **multiple payment providers** (Stripe first, then Polar, Lemon Squeezy, Paddle).
+- Supports **multiple payment providers** — Stripe and Polar (the two Convex ships components for); the adapter
+  seam stays open for more, but the maintained set is deliberately scoped to these two.
 - Lets an app **switch providers via configuration**, not code rewrites. _Caveat:_ switching applies to **new**
   checkouts/subscriptions only — a live subscription cannot be migrated between providers, so every row carries a
   `provider` discriminator and existing subs stay on their origin provider (dual-register during migration).
@@ -31,7 +32,7 @@ a `NormalizedEvent` (`type`, `amount`, `currency`, `provider`, ids, metadata). F
 
 > Conclusion: there is **no mature, drop-in multi-provider npm package** we'd want as a runtime dependency.
 > Every credible "unified" SDK is a solo hobby project. The right move is to own a thin abstraction and wrap each
-> provider's **official** SDK (`stripe`, `@polar-sh/sdk`, `@lemonsqueezy/lemonsqueezy.js`, `@paddle/paddle-node-sdk`).
+> provider's **official** SDK (`stripe`, `@polar-sh/sdk`).
 
 ### 2b. Convex components — _the architecture to mirror_ (Cirrus is Convex-style)
 
@@ -105,12 +106,12 @@ Build `@cirrus/payment` as a **native Cirrus add-on** (like `@cirrus/auth` / `@c
 Do **not** take a runtime dependency on any generic multi-provider npm package. Wrap official provider SDKs as
 optional peer deps so a Worker only bundles the adapter it uses.
 
-### Provider rollout order
+### Providers (Convex parity)
 
-1. **Stripe** (`stripe`) — broadest, has hosted checkout + portal + robust webhooks.
-2. **Polar** (`@polar-sh/sdk`) — DX darling, metered/PWYW, MoR.
-3. **Lemon Squeezy** (`@lemonsqueezy/lemonsqueezy.js`) — Merchant-of-Record, simple subs.
-4. **Paddle** (`@paddle/paddle-node-sdk`) — MoR, enterprise.
+The maintained set matches what Convex ships components for — Stripe and Polar. Both are implemented.
+
+1. **Stripe** (`stripe`) — PSP; hosted checkout + portal + robust webhooks (Stripe-scheme signatures).
+2. **Polar** (`@polar-sh/sdk`) — Merchant-of-Record; metered/PWYW; Standard Webhooks signatures.
 
 ## 4. Package shape (mirrors existing Cirrus packages)
 
@@ -136,9 +137,7 @@ packages/payment/
 │   ├── json.ts             # defensive accessors for untyped webhook payloads (shared)
 │   └── providers/
 │       ├── stripe.ts       # injected Stripe client; Stripe-scheme webhook verify
-│       ├── polar.ts        # injected Polar client (MoR); Standard Webhooks verify
-│       ├── lemonsqueezy.ts # wraps lemonsqueezy.js            (phase 3)
-│       └── paddle.ts       # wraps `@paddle/paddle-node-sdk`  (phase 3)
+│       └── polar.ts        # injected Polar client (MoR); Standard Webhooks verify
 └── __tests__/              # adapter, webhook-normalization, store-sync, facade tests
 ```
 
@@ -152,7 +151,7 @@ Provider SDKs (`stripe`, …) as **optional peerDependencies**.
 
 ```ts
 export interface PaymentAdapter {
-  readonly identifier: "stripe" | "polar" | "lemonsqueezy" | "paddle";   // Medusa-style stable id
+  readonly identifier: "stripe" | "polar";   // Medusa-style stable id
   readonly capabilities: { merchantOfRecord: boolean; usageMetering: boolean; portal: boolean };
   validateOptions(options: unknown): void | never;                       // fail fast on misconfig
 
@@ -270,7 +269,7 @@ Non-negotiables that the implementation (not just the plan) has to satisfy — s
 - **Phase 2 — Polar adapter:** ✅ `createPolarAdapter` (injected client, Merchant-of-Record, Standard Webhooks
   verification via `verifyStandardWebhook`); `parseWebhook` now takes the request headers so each provider reads its
   own scheme. _Next:_ React components + `.global()`/D1 read path.
-- **Phase 3 — Lemon Squeezy + Paddle adapters**; provider-migration story (dual-register).
+- **Phase 3 — provider-migration story** (dual-register reconciliation between Stripe and Polar).
 - **Phase 4 — entitlements tier** (`check`/`track` à la Autumn): features, credits, usage metering, seat counts.
 
 ## 7. Resolved decisions (best-practice defaults)
@@ -291,7 +290,7 @@ Non-negotiables that the implementation (not just the plan) has to satisfy — s
    Dependency inversion: core `@cirrus/payment` must work without auth and takes an opaque `referenceId`. A separate
    optional helper (auth as a **peer** dep) defaults it to the current session's user/org. No hard `@cirrus/auth` dep.
 4. **MoR vs. PSP → encoded in the adapter, not just docs.** Each adapter exposes a `capabilities` /
-   `merchantOfRecord` flag (Stripe = PSP; Polar / Lemon Squeezy / Paddle = Merchant-of-Record). The docs table spells
+   `merchantOfRecord` flag (Stripe = PSP; Polar = Merchant-of-Record). The docs table spells
    out who owns tax/invoicing per provider so the difference is type-visible, not tribal knowledge.
 5. **Provider SDK versions → package-local optional `peerDependencies`, not a pnpm catalog.**
    Catalogs are for versions shared across packages; only `@cirrus/payment` uses `stripe` / `@polar-sh/sdk` / etc.
@@ -323,7 +322,7 @@ libraries).
 
 | Building block | npm option considered | Decision |
 | --- | --- | --- |
-| Provider APIs | `stripe`, `@polar-sh/sdk`, `@lemonsqueezy/lemonsqueezy.js`, `@paddle/paddle-node-sdk` | **Reuse** (optional peer deps; client injected). |
+| Provider APIs | `stripe`, `@polar-sh/sdk` (Convex parity) | **Reuse** (optional peer deps; client injected). |
 | Money arithmetic | [dinero.js v2 `bigint`](https://github.com/dinerojs/dinero.js) | **Reuse.** Backs `addMoney`/`subtractMoney`/`compareMoney` + `allocateMoney` (proration/seat splits). Public `Money` stays a JSON-safe `(minorUnits, currency)` pair; dinero is internal. |
 | Stripe webhook verify | `stripe` SDK `webhooks.constructEventAsync(…, webCrypto)` | **Hand-roll.** The SDK path needs `Stripe.createSubtleCryptoProvider()` (a static, not on the injected instance), which fights the structural-injection design. Our WebCrypto `verifyStripeSignature` (raw body + replay window) is leaner. |
 | State machine | [xstate](https://npmtrends.com/robot3-vs-state-machine-vs-xstate) (~17 kB), [robot3](https://blog.logrocket.com/comparing-state-machines-xstate-vs-robot/) (~1.2 kB) | **Hand-roll.** A projection FSM is two static transition tables + a guard; xstate is overkill on a Worker, robot3 still a dep for a lookup. robot3 is the pick *if* the general `@cirrus/machine` primitive (decision #6) ever lands. |
