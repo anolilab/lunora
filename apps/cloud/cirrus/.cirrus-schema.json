@@ -181,6 +181,54 @@
             "relations": {},
             "shardMode": "global"
         },
+        "invitations": {
+            "fields": {
+                "createdAt": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "email": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "expiresAt": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "invitedBy": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "organizationId": {
+                    "kind": "id",
+                    "optional": false
+                },
+                "role": {
+                    "kind": "any",
+                    "optional": false
+                },
+                "status": {
+                    "kind": "union",
+                    "optional": false
+                },
+                "tokenHash": {
+                    "kind": "string",
+                    "optional": false
+                }
+            },
+            "indexes": {
+                "by_token": {
+                    "fields": ["tokenHash"],
+                    "unique": true
+                },
+                "by_org": {
+                    "fields": ["organizationId"],
+                    "unique": false
+                }
+            },
+            "relations": {},
+            "shardMode": "global"
+        },
         "members": {
             "fields": {
                 "createdAt": {
