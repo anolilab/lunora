@@ -7,6 +7,7 @@ import { CIRRUS_FUNCTIONS } from "../cirrus/_generated/functions.js";
 import { openApiSpec } from "../cirrus/_generated/openapi.js";
 import { createShardDO } from "../cirrus/_generated/shard.js";
 import schema from "../cirrus/schema.js";
+import { createDeployRouter } from "./deploy/router";
 
 /**
  * Cirrus Cloud control-plane Worker — the platform itself, dogfooded on Cirrus
@@ -79,12 +80,17 @@ interface Env {
 
 let worker: ReturnType<typeof createWorker> | null = null;
 
+// The deploy API (`POST /v1/deploy`), mounted as the lowest-priority matcher.
+// Created once so its per-cell scheduler persists across requests.
+const deployRouter = createDeployRouter();
+
 const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
     createWorker({
         adminToken: env.CIRRUS_ADMIN_TOKEN,
         d1: env.DB,
         functions: CIRRUS_FUNCTIONS,
         globalIntrospector: env.DB ? d1Introspector(env.DB as D1DatabaseLike) : undefined,
+        httpRouter: deployRouter,
         openApiSpec,
         routes: {},
         shardDO: env.SHARD,
