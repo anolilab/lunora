@@ -11,6 +11,8 @@ import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
+import type { DockerProbe } from "../../util/docker";
+import { isDockerAvailable } from "../../util/docker";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
 import { runSchemaDriftGate } from "../../util/schema-drift-gate";
@@ -31,6 +33,8 @@ interface DeployCommandOptions {
     /** Which API spec(s) codegen emits. Defaults to codegen's `"openapi"` when omitted. */
     apiSpec?: ApiSpec;
     cwd?: string;
+    /** Docker-availability probe injected in tests. Defaults to a real `docker info` check. */
+    dockerAvailable?: DockerProbe;
     env?: string;
     /** Fetch implementation injected in tests for `--migrate` RPC calls. */
     fetchImpl?: FetchLike;
@@ -84,8 +88,43 @@ interface WranglerD1Entry {
 }
 
 interface WranglerD1Shape {
+    containers?: ReadonlyArray<{ image?: string } | null | undefined>;
     d1_databases?: ReadonlyArray<WranglerD1Entry>;
 }
+
+/** Mirrors the validator's heuristic: a container image that is a local path (vs a registry reference). */
+const isLocalImagePath = (image: string): boolean => image.startsWith("./") || image.startsWith("../") || image.startsWith("/") || image.includes("Dockerfile");
+
+/**
+ * `wrangler deploy` builds and pushes a container image with the local Docker
+ * engine whenever `containers[].image` points at a Dockerfile. Check that
+ * prerequisite up front and return an actionable error instead of letting
+ * wrangler fail mid-deploy with an opaque engine error. Returns `undefined`
+ * when no local image build is needed or Docker is available.
+ */
+const checkContainerDockerPreflight = (cwd: string, logger: Logger, dockerAvailable: DockerProbe): string | undefined => {
+    const wranglerPath = findWranglerFile(cwd);
+
+    if (!wranglerPath) {
+        return undefined;
+    }
+
+    const { parsed } = readWranglerJsonc<WranglerD1Shape>(wranglerPath);
+    const localImages = (parsed?.containers ?? []).filter((entry) => typeof entry?.image === "string" && isLocalImagePath(entry.image));
+
+    if (localImages.length === 0 || dockerAvailable()) {
+        return undefined;
+    }
+
+    const message =
+        `deploy blocked: wrangler.jsonc declares ${String(localImages.length)} container(s) built from a local Dockerfile, but no Docker-compatible ` +
+        `engine is available. Start Docker (or Colima), or point the container's \`image\` at a pre-built registry reference. ` +
+        `Note: container images must target linux/amd64.`;
+
+    logger.error(message);
+
+    return message;
+};
 
 /**
  * Resolve the worker entry `wrangler deploy` should bundle. Class-B frameworks
@@ -384,6 +423,14 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
 
     if (d1Error !== undefined) {
         return { code: 1, descriptor: undefined, error: d1Error, validation: { problems: [], wranglerPath: undefined } };
+    }
+
+    // Containers built from a local Dockerfile need a running Docker engine —
+    // fail fast with a directed message rather than deep inside wrangler.
+    const dockerError = checkContainerDockerPreflight(cwd, options.logger, options.dockerAvailable ?? isDockerAvailable);
+
+    if (dockerError !== undefined) {
+        return { code: 1, descriptor: undefined, error: dockerError, validation: { problems: [], wranglerPath: undefined } };
     }
 
     const validation = validateWrangler({ projectRoot: cwd });
