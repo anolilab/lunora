@@ -12,7 +12,13 @@ import { defineContainer } from "../src/index";
 /** Minimal fake of the pieces `@cloudflare/containers` reads off the DO ctx. */
 const fakeDurableObjectContext = (): Record<string, unknown> => {
     return {
-        blockConcurrencyWhile: async (fn: () => Promise<unknown>) => fn(),
+        // The base ctor schedules alarms inside an un-awaited
+        // `blockConcurrencyWhile(...)` critical section that touches the full
+        // workerd storage surface. We're unit-testing field application (which
+        // happens synchronously, outside this block), so we accept the callback
+        // but don't run it — otherwise the alarm machinery becomes an unhandled
+        // rejection that fails the run.
+        blockConcurrencyWhile: async () => {},
         container: { running: false },
         storage: {
             deleteAlarm: async () => {},
