@@ -153,6 +153,7 @@ export const worker = defineContainer({ image: { build: "./services/worker" } })
 `,
                 "utf8",
             );
+            mkdirSync(join(workdir, "services", "worker"), { recursive: true });
 
             const { calls, spawner } = createRecordingSpawner();
             const { logger } = silentLogger();
@@ -176,6 +177,7 @@ export const worker = defineContainer({ image: { build: "./services/worker" } })
 `,
                 "utf8",
             );
+            mkdirSync(join(workdir, "services", "worker"), { recursive: true });
 
             const { calls, spawner } = createRecordingSpawner();
             const { logger } = silentLogger();
@@ -184,6 +186,52 @@ export const worker = defineContainer({ image: { build: "./services/worker" } })
 
             expect(result.code).toBe(1);
             expect(calls).toHaveLength(0);
+        });
+
+        it("blocks deploy when a Railpack build directory is missing", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            writeFileSync(
+                join(workdir, "cirrus", "containers.ts"),
+                `import { defineContainer } from "@cirrus/container";
+export const worker = defineContainer({ image: { build: "./services/worker" } });
+`,
+                "utf8",
+            );
+            // NOTE: ./services/worker is deliberately NOT created.
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { errors, logger } = silentLogger();
+
+            const result = await runDeployCommand({ cwd: workdir, dockerAvailable: () => true, logger, railpackAvailable: () => true, spawner });
+
+            expect(result.code).toBe(1);
+            expect(calls).toHaveLength(0);
+            expect(errors.join(" ")).toContain("build directory");
+        });
+
+        it("blocks deploy when a container's Dockerfile is missing", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            writeFileSync(
+                join(workdir, "cirrus", "containers.ts"),
+                `import { defineContainer } from "@cirrus/container";
+export const transcoder = defineContainer({ image: "./containers/transcoder" });
+`,
+                "utf8",
+            );
+            // NOTE: ./containers/transcoder/Dockerfile is deliberately NOT created.
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { errors, logger } = silentLogger();
+
+            const result = await runDeployCommand({ cwd: workdir, dockerAvailable: () => true, logger, spawner });
+
+            expect(result.code).toBe(1);
+            expect(calls).toHaveLength(0);
+            expect(errors.join(" ")).toContain("Dockerfile");
         });
 
         it("bundles src/worker.ts as the deploy entry for class-B composition when present", async () => {

@@ -144,6 +144,36 @@ const checkContainerDockerPreflight = (cwd: string, logger: Logger, dockerAvaila
  */
 const resolveComposedWorkerEntry = (cwd: string): string | undefined => (existsSync(join(cwd, "src", "worker.ts")) ? "src/worker.ts" : undefined);
 
+/**
+ * Verify every container's local build source exists before wrangler/railpack
+ * runs. A Dockerfile/build-dir typo otherwise fails opaquely mid-deploy.
+ * Registry images have no local source, so they're skipped. Returns the first
+ * error message, or `undefined` when all sources exist (or none are local).
+ */
+const checkContainerSourcesExist = (cwd: string, logger: Logger): string | undefined => {
+    for (const container of discoverContainerInfo(cwd, "cirrus").containers) {
+        const { image } = container;
+
+        if (image.kind === "dockerfile" && !existsSync(join(cwd, image.dockerfilePath))) {
+            const message = `deploy blocked: container "${container.exportName}" references a Dockerfile at "${image.dockerfilePath}" that does not exist. Create it or fix the \`image\` path in cirrus/containers.ts.`;
+
+            logger.error(message);
+
+            return message;
+        }
+
+        if (image.kind === "build" && !existsSync(join(cwd, image.buildDir))) {
+            const message = `deploy blocked: container "${container.exportName}" references a Railpack build directory "${image.buildDir}" that does not exist. Create it or fix the \`image.build\` path in cirrus/containers.ts.`;
+
+            logger.error(message);
+
+            return message;
+        }
+    }
+
+    return undefined;
+};
+
 const isInteractive = (options: DeployCommandOptions): boolean => {
     // `--format json` owns stdout for the JSON document — interactive spinners
     // would corrupt it, so json mode is always non-interactive.
@@ -404,6 +434,12 @@ const runPreDeployGates = async (cwd: string, options: DeployCommandOptions): Pr
 
     if (d1Error !== undefined) {
         return d1Error;
+    }
+
+    const sourceError = checkContainerSourcesExist(cwd, options.logger);
+
+    if (sourceError !== undefined) {
+        return sourceError;
     }
 
     const dockerError = checkContainerDockerPreflight(cwd, options.logger, options.dockerAvailable ?? isDockerAvailable);
