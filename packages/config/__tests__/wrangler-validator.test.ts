@@ -609,6 +609,29 @@ describe("wrangler-validator", () => {
             expect(outOfBounds.errors.join(" ")).toContain("vcpu must be a positive number");
         });
 
+        it("rejects custom instance types that violate the memory/vcpu and disk/memory ratios", () => {
+            expect.assertions(4);
+
+            const tooLittleMemory = validateWranglerConfig(
+                baseConfig({ containers: [{ class_name: "TranscoderContainer", image: "./x/Dockerfile", instance_type: { memory_mib: 4096, vcpu: 4 }, max_instances: 1 }] }),
+            );
+
+            expect(tooLittleMemory.errors.join(" ")).toContain("≥ 3 GiB");
+
+            const tooMuchDisk = validateWranglerConfig(
+                baseConfig({ containers: [{ class_name: "TranscoderContainer", image: "./x/Dockerfile", instance_type: { disk_mb: 20_000, memory_mib: 4096 }, max_instances: 1 }] }),
+            );
+
+            expect(tooMuchDisk.errors.join(" ")).toContain("≤ 2 GB disk");
+
+            const valid = validateWranglerConfig(
+                baseConfig({ containers: [{ class_name: "TranscoderContainer", image: "./x/Dockerfile", instance_type: { disk_mb: 8000, memory_mib: 8192, vcpu: 2 }, max_instances: 1 }] }),
+            );
+
+            expect(valid.errors).toEqual([]);
+            expect(valid.warnings).toEqual([]);
+        });
+
         it("warns on a missing max_instances cap and disabled observability", () => {
             expect.assertions(2);
 

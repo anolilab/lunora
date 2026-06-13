@@ -125,6 +125,20 @@ const validateInstanceType = (entry: WranglerContainerEntry, label: string, erro
             errors.push(`${label} custom instance_type ${field} must be a positive number ≤ ${String(limit)} (got ${String(value)})`);
         }
     }
+
+    const { disk_mb: diskMb, memory_mib: memoryMib, vcpu } = instanceType;
+
+    if (typeof vcpu === "number" && typeof memoryMib === "number" && memoryMib < vcpu * 3072) {
+        errors.push(`${label} custom instance_type needs ≥ 3 GiB (3072 MiB) memory per vCPU (got ${String(memoryMib)} MiB for ${String(vcpu)} vCPU)`);
+    }
+
+    if (typeof memoryMib === "number" && typeof diskMb === "number") {
+        const maxDiskMb = Math.floor((memoryMib / 1024) * 2000);
+
+        if (diskMb > maxDiskMb) {
+            errors.push(`${label} custom instance_type allows ≤ 2 GB disk per GiB memory (≤ ${String(maxDiskMb)} MB for ${String(memoryMib)} MiB memory; got ${String(diskMb)} MB)`);
+        }
+    }
 };
 
 /** Shared lookups + sinks for one `containers[]` entry validation pass. */
