@@ -1,3 +1,6 @@
+export type { TestHarness, TestIdentity } from "./harness";
+export { cirrusTest } from "./harness";
+
 /**
  * `@cirrus/testing` — the user-facing toolkit for end-to-end testing a Cirrus app.
  *

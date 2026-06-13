@@ -56,7 +56,10 @@
         "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
-        "@cirrus/mail": "workspace:*"
+        "@cirrus/do": "workspace:*",
+        "@cirrus/mail": "workspace:*",
+        "@cirrus/server": "workspace:*",
+        "@cirrus/values": "workspace:*"
     },
     "devDependencies": {
         "@types/node": "catalog:types",

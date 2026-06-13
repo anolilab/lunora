@@ -54,6 +54,56 @@ pnpm add @cirrus/testing
 
 ## Usage
 
+### In-memory function harness
+
+`cirrusTest(schema)` runs your `query` / `mutation` / `action` functions against
+an in-memory `node:sqlite` backend — no Durable Object, no `wrangler`, no
+network. It mirrors Convex's `convexTest`: `query` / `mutation` / `action` /
+`run` / `withIdentity`, all sharing one database so a write is visible to a
+later read.
+
+```ts
+import { mutation, query, v } from "@cirrus/server";
+import { cirrusTest } from "@cirrus/testing";
+import { expect, test } from "vitest";
+
+import schema from "./schema";
+
+const send = mutation({
+    args: { author: v.string(), body: v.string() },
+    handler: (ctx, args) => ctx.db.insert("messages", args),
+});
+
+const list = query({
+    args: {},
+    handler: (ctx) => ctx.db.query("messages").collect(),
+});
+
+test("sends and lists a message", async () => {
+    const t = cirrusTest(schema);
+
+    await t.mutation(send, { author: "ada", body: "hi" });
+
+    expect(await t.query(list, {})).toHaveLength(1);
+});
+
+test("sees the injected identity", async () => {
+    const t = cirrusTest(schema).withIdentity({ userId: "u1" });
+
+    await t.run(async (ctx) => {
+        expect(ctx.auth.userId).toBe("u1");
+    });
+});
+```
+
+> **v1 scope.** `ctx.storage`, `ctx.scheduler`, `ctx.vectors`, and an action's
+> `ctx.fetch` are clearly-throwing stubs — a handler that touches one fails with
+> a "not available in the in-memory @cirrus/testing harness (v1)" error. HTTP
+> actions, scheduled-function draining, real R2 storage, `.global()`/D1 tables,
+> and Vectorize are deferred to a follow-up.
+
+### Mail-catcher helpers (E2E)
+
 ```ts
 import { extractLink, waitForMail } from "@cirrus/testing";
 
