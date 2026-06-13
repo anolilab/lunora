@@ -5,6 +5,12 @@ interface QueuedMutation<T = unknown> {
     readonly functionPath: string;
     /** Stable id used to remove the entry from durable storage once replayed; assigned by the queue when absent. */
     id?: string;
+
+    /**
+     * Issuing identity fingerprint carried through to durable storage (`null` =
+     * signed out). Absent on hydrated legacy records, which replay ambiently.
+     */
+    readonly identity?: string | null;
     /** Rejects if the mutation can no longer be replayed. */
     readonly reject: (error: unknown) => void;
     /** Resolves once the mutation has been replayed against the server. */
@@ -84,9 +90,11 @@ class OfflineQueue {
         item.id ??= nextId();
         this.items.push(item);
 
-        this.persistence?.append({ args: item.args, functionPath: item.functionPath, id: item.id, shardKey: item.shardKey }).catch((error: unknown) => {
-            reportPersistenceError(this.onPersistenceError, "append", error, item.id);
-        });
+        this.persistence
+            ?.append({ args: item.args, functionPath: item.functionPath, id: item.id, identity: item.identity, shardKey: item.shardKey })
+            .catch((error: unknown) => {
+                reportPersistenceError(this.onPersistenceError, "append", error, item.id);
+            });
 
         while (this.items.length > this.maxItems) {
             const dropped = this.items.shift();
@@ -131,6 +139,7 @@ class OfflineQueue {
                 args: mutation.args,
                 functionPath: mutation.functionPath,
                 id: mutation.id,
+                identity: mutation.identity,
                 reject: () => undefined,
                 resolve: () => undefined,
                 shardKey: mutation.shardKey,

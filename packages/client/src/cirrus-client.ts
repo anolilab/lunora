@@ -47,7 +47,7 @@ import type {
 const RPC_PATH = "/_cirrus/rpc";
 const WS_PATH = "/_cirrus/ws";
 
-/** Build the `&bucket=…` query fragment for a storage admin request, or `""` when no bucket is selected. */
+/** Build the `&amp;bucket=…` query fragment for a storage admin request, or `""` when no bucket is selected. */
 const bucketQuery = (bucket?: string): string => (bucket === undefined || bucket === "" ? "" : `&bucket=${encodeURIComponent(bucket)}`);
 
 /**
@@ -683,6 +683,9 @@ class CirrusClient {
                 const entry: QueuedMutation<ReturnOf<F>> = {
                     args: argsRecord,
                     functionPath: function_.__cirrusRef,
+                    // Persist the stamp alongside the record so a hydrated write
+                    // can only replay under the identity that queued it.
+                    identity: issuingIdentity,
                     reject: (error) => {
                         // LIFO: roll back most-recent optimistic write first so a
                         // stacked update on the same subscription restores the
@@ -1035,7 +1038,12 @@ class CirrusClient {
      * `storageUpload` function and `adminToken`. Powers the studio file
      * browser's upload control; resolves `{ etag?, key }`.
      */
-    public async uploadStorageObject(options: { body: ArrayBuffer | Blob; bucket?: string; contentType?: string; key: string }): Promise<{ etag?: string; key: string }> {
+    public async uploadStorageObject(options: {
+        body: ArrayBuffer | Blob;
+        bucket?: string;
+        contentType?: string;
+        key: string;
+    }): Promise<{ etag?: string; key: string }> {
         if (this.closed) {
             throw new Error("CirrusClient is closed");
         }
@@ -2289,12 +2297,23 @@ class CirrusClient {
         // mutations depend on each other.
         for (const item of drained) {
             // Identity guard: a write stamped under one identity must never
-            // replay under another (an unstamped/hydrated write — `undefined` —
-            // replays under whatever identity is current, matching the prior
-            // ambient behaviour for restored sessions). Mismatches are rejected,
-            // not silently dropped, so awaiting callers see a deterministic
-            // failure.
-            const stamped = item.id === undefined ? undefined : this.queuedIdentities.get(item.id);
+            // replay under another. The live `queuedIdentities` map is the
+            // source of truth for the current session; a hydrated write whose id
+            // isn't in the map falls back to the stamp persisted with the record
+            // (`item.identity`), so a reload can no longer replay another user's
+            // queued writes. Only legacy records (persisted before stamps were
+            // durable — `item.identity === undefined`) replay under whatever
+            // identity is current, matching the prior ambient behaviour.
+            // Mismatches are rejected, not silently dropped, so awaiting callers
+            // see a deterministic failure.
+            //
+            // `Map.get` returns `undefined` for unstamped/hydrated ids and
+            // `item.identity` is `undefined` for legacy records; a persisted
+            // `null` (queued while signed out) is a real value that must not be
+            // collapsed into `undefined` — hence the explicit `=== undefined`
+            // check rather than `??`.
+            const liveStamp = item.id === undefined ? undefined : this.queuedIdentities.get(item.id);
+            const stamped = liveStamp === undefined ? item.identity : liveStamp;
 
             if (stamped !== undefined && stamped !== currentIdentity) {
                 this.queuedIdentities.delete(item.id ?? "");

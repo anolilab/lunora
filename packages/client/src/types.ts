@@ -98,6 +98,14 @@ export interface PersistedMutation {
     args: Record<string, unknown>;
     functionPath: string;
     id: string;
+
+    /**
+     * Issuing identity fingerprint, persisted so a hydrated write replays only
+     * under the identity that queued it (`null` = queued while signed out).
+     * Absent on records written by older client versions, which replay under
+     * the ambient identity for back-compat.
+     */
+    identity?: string | null;
     shardKey?: string;
 }
 

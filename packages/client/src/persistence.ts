@@ -13,6 +13,7 @@ const createInMemoryPersistence = (): PersistenceAdapter => {
             args: { ...mutation.args },
             functionPath: mutation.functionPath,
             id: mutation.id,
+            identity: mutation.identity,
             shardKey: mutation.shardKey,
         };
     };

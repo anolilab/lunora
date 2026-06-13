@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { CirrusClient } from "../src/cirrus-client";
+import { isConflictError } from "../src/errors";
 import type { OptimisticUpdate } from "../src/local-store";
 import { createInMemoryPersistence } from "../src/persistence";
 import type { FunctionReference } from "../src/types";
@@ -172,6 +173,76 @@ describe("cirrusClient", () => {
                 code: "NOT_FOUND",
                 message: "missing",
             });
+        });
+
+        it("mutation conflict (409) carries the CONFLICT code so isConflictError matches", async () => {
+            expect.assertions(3);
+
+            const fetchMock = vi.fn<typeof fetch>(async () =>
+                jsonResponse({ error: { code: "CONFLICT", message: "optimistic concurrency conflict" } }, { status: 409 }),
+            );
+
+            const client = new CirrusClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const error = await client.mutation(fnRef("posts:update"), { id: "abc", title: "x" }).then(
+                () => {
+                    throw new Error("mutation should have rejected with a conflict");
+                },
+                (error_: unknown) => error_,
+            );
+
+            expect(isConflictError(error)).toBe(true);
+            expect(error).toBeInstanceOf(Error);
+            expect((error as Error).message).toBe("optimistic concurrency conflict");
+        });
+
+        it("query conflict (409) carries the CONFLICT code so isConflictError matches", async () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () =>
+                jsonResponse({ error: { code: "CONFLICT", message: "optimistic concurrency conflict" } }, { status: 409 }),
+            );
+
+            const client = new CirrusClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const error = await client.query(fnRef("posts:get"), { id: "abc" }).then(
+                () => {
+                    throw new Error("query should have rejected with a conflict");
+                },
+                (error_: unknown) => error_,
+            );
+
+            expect(isConflictError(error)).toBe(true);
+            expect((error as Error).message).toBe("optimistic concurrency conflict");
+        });
+
+        it("a non-CONFLICT coded error does not satisfy isConflictError", async () => {
+            expect.assertions(1);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ error: { code: "NOT_FOUND", message: "missing" } }, { status: 404 }));
+
+            const client = new CirrusClient({
+                fetch: fetchMock,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const error = await client.query(fnRef("posts:get"), { id: "abc" }).then(
+                () => {
+                    throw new Error("query should have rejected");
+                },
+                (error_: unknown) => error_,
+            );
+
+            expect(isConflictError(error)).toBe(false);
         });
 
         it("mutation captures x-d1-bookmark and replays it on the next query", async () => {
@@ -778,6 +849,95 @@ describe("cirrusClient", () => {
             await vi.runAllTimersAsync();
 
             await expect(pending).resolves.toEqual({ id: "1" });
+            await expect(persistence.load()).resolves.toEqual([]);
+
+            client.close();
+        });
+
+        it("a hydrated write stamped for another identity is dropped, not replayed", async () => {
+            expect.assertions(3);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { ok: true } }));
+            const persistence = createInMemoryPersistence();
+
+            // A write durably queued by a prior, signed-in session. Its stamp is
+            // a fingerprint that cannot match this fresh, unauthenticated client
+            // (whose current identity is `null`).
+            await persistence.append({ args: { title: "user-a" }, functionPath: "posts:create", identity: "12:userastamp", id: "m1" });
+
+            const client = new CirrusClient({
+                fetch: fetchMock,
+                persistence,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            await flushMicrotasks();
+            latestSocket().open();
+            await flushMicrotasks();
+
+            // The flush guard rejected the identity mismatch: no RPC was issued
+            // for the restored write, and it was un-persisted (dropped) rather
+            // than left to resurrect on the next reload.
+            expect(fetchMock).not.toHaveBeenCalled();
+            expect(sockets.some((socket) => socket.sent.some((frame) => frame.includes("posts:create")))).toBe(false);
+            await expect(persistence.load()).resolves.toEqual([]);
+
+            client.close();
+        });
+
+        it("a legacy hydrated write without a stamp still replays under the current identity", async () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { ok: true } }));
+            const persistence = createInMemoryPersistence();
+
+            // Pre-stamp record (older client): no `identity` field. Back-compat
+            // requires it to replay ambiently under whoever is now signed in.
+            await persistence.append({ args: { title: "legacy" }, functionPath: "posts:create", id: "m1" });
+
+            const client = new CirrusClient({
+                fetch: fetchMock,
+                persistence,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            await flushMicrotasks();
+            latestSocket().open();
+            await flushMicrotasks();
+
+            expect(fetchMock).toHaveBeenCalledTimes(1);
+            await expect(persistence.load()).resolves.toEqual([]);
+
+            client.close();
+        });
+
+        it("a write stamped while signed out does not replay once a user has signed in", async () => {
+            expect.assertions(2);
+
+            const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ result: { ok: true } }));
+            const persistence = createInMemoryPersistence();
+
+            await persistence.append({ args: { title: "signed-out" }, functionPath: "posts:create", id: "m1", identity: null });
+
+            const client = new CirrusClient({
+                fetch: fetchMock,
+                persistence,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            // Sign in before hydration settles (queue is still empty, so this
+            // does not drain anything). The current identity is now a non-null
+            // fingerprint, which must mismatch the persisted `null` stamp at flush.
+            client.setAuthToken("signed-in-token");
+
+            await flushMicrotasks();
+            latestSocket().open();
+            await flushMicrotasks();
+
+            expect(fetchMock).not.toHaveBeenCalled();
             await expect(persistence.load()).resolves.toEqual([]);
 
             client.close();

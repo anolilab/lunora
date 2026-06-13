@@ -93,6 +93,51 @@ describe("offlineQueue — persistence", () => {
         expect(persisted[0]?.id).not.toBe("");
     });
 
+    it("enqueue persists the identity stamp alongside the record", async () => {
+        expect.assertions(2);
+
+        const persistence = createInMemoryPersistence();
+        const append = vi.spyOn(persistence, "append");
+        const queue = new OfflineQueue({}, persistence);
+
+        queue.enqueue({ args: {}, functionPath: "posts:create", identity: "1:abc", reject: () => undefined, resolve: () => undefined });
+
+        expect(append).toHaveBeenCalledTimes(1);
+        expect(append.mock.calls[0]?.[0]).toMatchObject({ functionPath: "posts:create", identity: "1:abc" });
+    });
+
+    it("hydrate restores the persisted identity stamp onto the queued item", async () => {
+        expect.assertions(1);
+
+        const persistence = createInMemoryPersistence();
+
+        await persistence.append({ args: {}, functionPath: "a", identity: "1:abc", id: "1" });
+
+        const queue = new OfflineQueue({}, persistence);
+
+        await queue.hydrate();
+
+        const [restored] = queue.drain();
+
+        expect(restored?.identity).toBe("1:abc");
+    });
+
+    it("a legacy record without an identity hydrates with identity === undefined", async () => {
+        expect.assertions(1);
+
+        const persistence = createInMemoryPersistence();
+
+        await persistence.append({ args: {}, functionPath: "a", id: "1" });
+
+        const queue = new OfflineQueue({}, persistence);
+
+        await queue.hydrate();
+
+        const [restored] = queue.drain();
+
+        expect(restored?.identity).toBeUndefined();
+    });
+
     it("overflow un-persists the dropped (oldest) entry", async () => {
         expect.assertions(1);
 
