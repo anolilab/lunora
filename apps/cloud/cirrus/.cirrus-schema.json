@@ -135,6 +135,10 @@
                     "kind": "string",
                     "optional": false
                 },
+                "expiresAt": {
+                    "kind": "number",
+                    "optional": true
+                },
                 "kind": {
                     "kind": "any",
                     "optional": false
@@ -167,6 +171,10 @@
             "indexes": {
                 "by_project": {
                     "fields": ["projectId"],
+                    "unique": false
+                },
+                "by_kind": {
+                    "fields": ["kind"],
                     "unique": false
                 }
             },

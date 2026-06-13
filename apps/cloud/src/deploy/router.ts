@@ -1,6 +1,7 @@
 import type { ExecutionContextLike } from "@cirrus/runtime";
 
 import { api } from "../../cirrus/_generated/api.js";
+import { handleGitHubWebhook } from "../github/webhook";
 import { createAlchemyProvisioner } from "../provision";
 import type { DeployBackend, DeployTarget } from "./handler";
 import { handleDeployRequest } from "./handler";
@@ -16,6 +17,7 @@ interface RouterEnv {
     __cirrusCtx?: CirrusActionContext;
     CIRRUS_CELL?: string;
     CLOUDFLARE_API_TOKEN?: string;
+    GITHUB_WEBHOOK_SECRET?: string;
 }
 
 interface HttpRouterLike {
@@ -42,12 +44,22 @@ export const createDeployRouter = (): HttpRouterLike => {
     return {
         async fetch(request, environment) {
             const url = new URL(request.url);
+            const routerEnv = (environment ?? {}) as RouterEnv;
+
+            // GitHub webhook → preview automation (§2.3). Self-authenticating via
+            // its HMAC signature; needs no Cirrus context.
+            if (request.method === "POST" && url.pathname === "/v1/github/webhook") {
+                if (!routerEnv.GITHUB_WEBHOOK_SECRET) {
+                    return jsonError(500, "github webhook secret not configured");
+                }
+
+                return handleGitHubWebhook(request, { secret: routerEnv.GITHUB_WEBHOOK_SECRET });
+            }
 
             if (request.method !== "POST" || url.pathname !== "/v1/deploy") {
                 return jsonError(404, "not found");
             }
 
-            const routerEnv = (environment ?? {}) as RouterEnv;
             const context = routerEnv.__cirrusCtx;
 
             if (!context) {

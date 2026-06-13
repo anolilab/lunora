@@ -1,7 +1,8 @@
 import { CirrusError } from "@cirrus/server";
 
+import { previewExpiry } from "../src/deploy/preview";
 import type { Id } from "./_generated/dataModel.js";
-import { mutation, query, v } from "./_generated/server.js";
+import { internalMutation, mutation, query, v } from "./_generated/server.js";
 import { assertMember, authorizeDeployKey } from "./authz";
 
 interface DeploymentRow {
@@ -10,6 +11,7 @@ interface DeploymentRow {
     bundleHash?: string;
     createdAt: number;
     createdBy: string;
+    expiresAt?: number;
     kind: "dev" | "preview" | "production";
     organizationId: Id<"organizations">;
     projectId: Id<"projects">;
@@ -78,13 +80,41 @@ export const create = mutation({
             branch: arguments_.branch,
             createdAt: now,
             createdBy,
+            // Previews are TTL'd; the cleanup cron tears down expired ones (§2.3).
+            ...(arguments_.kind === "preview" ? { expiresAt: previewExpiry(now) } : {}),
             kind: arguments_.kind,
             organizationId: arguments_.organizationId,
-            projectId: arguments_.projectId,
+            projectId: arguments_.projectId, // secret-scanner:allow -- domain field name, not a Cypress projectId
             scriptName: arguments_.scriptName,
             status: "queued",
             updatedAt: now,
         });
+    },
+});
+
+/**
+ * Mark expired preview deployments as `destroyed` (CLOUD-PLAN.md §2.3). Driven
+ * by the cleanup cron (`cirrus/crons.ts`); `internalMutation` so it is reachable
+ * only via the cron's system dispatch, never from a client. The actual
+ * Cloudflare teardown is the provisioner's `destroy` (orchestrator) — wired once
+ * Alchemy lands; this records the lifecycle transition.
+ */
+export const cleanupExpiredPreviews = internalMutation({
+    args: {},
+    handler: async (context): Promise<{ destroyed: number }> => {
+        const now = Date.now();
+        const { page } = await context.db.deployments.findMany({ where: { kind: "preview" } });
+
+        const expired = (page as unknown as DeploymentRow[]).filter(
+            (deployment) => deployment.status !== "destroyed" && deployment.expiresAt !== undefined && deployment.expiresAt < now,
+        );
+
+        for (const deployment of expired) {
+            // eslint-disable-next-line no-await-in-loop -- small batch; sequential keeps the writer simple
+            await context.db.patch(deployment._id, { status: "destroyed", updatedAt: now });
+        }
+
+        return { destroyed: expired.length };
     },
 });
 
