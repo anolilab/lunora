@@ -278,6 +278,11 @@ export const createPayment = (options: CreatePaymentOptions): CirrusPayment => {
                 delta = target - current;
             }
 
+            // A no-op (set to the value it already holds, or add 0) writes nothing to the ledger.
+            if (delta === 0) {
+                return { recorded: false, reportedToProvider: false };
+            }
+
             const recorded = await store.recordUsage({
                 createdAt: Date.now(),
                 featureId: input.featureId,

@@ -290,6 +290,12 @@ describe("createPayment — attach / check / track", () => {
         await payment.track({ featureId: "api_calls", mode: "set", quantity: 10, referenceId: "user_1" });
 
         await expect(payment.check({ featureId: "api_calls", referenceId: "user_1" })).resolves.toMatchObject({ balance: 90, used: 10 });
+
+        // Setting to the value it already holds writes nothing.
+        await expect(payment.track({ featureId: "api_calls", mode: "set", quantity: 10, referenceId: "user_1" })).resolves.toEqual({
+            recorded: false,
+            reportedToProvider: false,
+        });
     });
 
     it("track on a provider without usage metering (Creem-style) records locally only", async () => {

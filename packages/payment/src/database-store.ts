@@ -214,6 +214,9 @@ export const createDatabasePaymentStore = (database: PaymentDatabase): PaymentSt
         },
 
         sumUsage: async (referenceId, featureId, since) => {
+            // NOTE: this reads the full lifetime ledger for the pair and filters in memory — O(events)
+            // per call. Fine for typical volumes; for hot metered features, add a per-period rollup row
+            // (or a createdAt-range query) so old periods aren't re-scanned on every check/track.
             const rows = await database.findMany("usageEvents", { featureId, referenceId });
             let total = 0;
 
