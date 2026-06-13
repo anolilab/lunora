@@ -1,5 +1,6 @@
 import { CirrusError } from "@cirrus/server";
 
+import { formatDeployKey, hashDeployKey, randomSecret } from "../src/deploy/keys";
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
 
@@ -20,18 +21,6 @@ const assertSignedIn = (userId: null | string): void => {
         throw new CirrusError("UNAUTHORIZED", "not signed in");
     }
 };
-
-const toHex = (buffer: ArrayBuffer): string => [...new Uint8Array(buffer)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-
-const randomSecret = (): string => {
-    const bytes = new Uint8Array(32);
-
-    crypto.getRandomValues(bytes);
-
-    return toHex(bytes.buffer);
-};
-
-const sha256Hex = async (input: string): Promise<string> => toHex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input)));
 
 /** List an organization's deploy keys (metadata only — the hash is never returned). */
 export const list = query({
@@ -73,9 +62,13 @@ export const issue = mutation({
     handler: async (context, arguments_): Promise<{ id: Id<"deployKeys">; key: string }> => {
         assertSignedIn(context.auth.userId);
 
-        const scope = arguments_.projectId ? `${arguments_.organizationId}:${arguments_.projectId}` : arguments_.organizationId;
-        const key = `${arguments_.type}:${scope}|${randomSecret()}`;
-        const hashedKey = await sha256Hex(key);
+        const key = formatDeployKey({
+            organizationId: arguments_.organizationId,
+            ...(arguments_.projectId ? { projectId: arguments_.projectId } : {}),
+            secret: randomSecret(),
+            type: arguments_.type,
+        });
+        const hashedKey = await hashDeployKey(key);
 
         const id = await context.db.insert("deployKeys", {
             createdAt: Date.now(),
