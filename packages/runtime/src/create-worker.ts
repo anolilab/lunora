@@ -2,8 +2,8 @@ import type { AuthAdmin, AuthIntrospector } from "./auth-admin-routes";
 import { buildAuthAdminRoutes } from "./auth-admin-routes";
 import type { ConnectorChange, ConnectorSyncPage } from "./connector-format";
 import type { FunctionArgumentDescriptor } from "./describe-args";
-import { describeArguments } from "./describe-args";
 import { CirrusError, isStructuralCirrusError, isStructuralConflictError, toErrorResponse } from "./errors";
+import { buildIntrospectionAdminRoutes } from "./introspection-admin-routes";
 import type { ObservabilityEvent, ObservabilitySink } from "./observability";
 import { emitRpcEvent } from "./observability";
 import type { FanOutSpec, QueryCoordinator, RankPageFanOutRequest } from "./query-coordinator";
@@ -895,53 +895,9 @@ const SCHEDULED_PATH = "/_cirrus/admin/scheduled";
 const SCHEDULED_STATUS_PATH = "/_cirrus/admin/scheduled/status";
 const SCHEDULED_WS_PATH = "/_cirrus/admin/scheduled/ws";
 const SCHEDULED_CANCEL_PATH = "/_cirrus/admin/scheduled/cancel";
-const FUNCTIONS_PATH = "/_cirrus/admin/functions";
-const CRON_JOBS_PATH = "/_cirrus/admin/cron-jobs";
-const OPENAPI_PATH = "/_cirrus/admin/openapi";
-const OPENRPC_PATH = "/_cirrus/admin/openrpc";
-const GLOBAL_TABLES_PATH = "/_cirrus/admin/global/tables";
-const GLOBAL_TABLE_PATH = "/_cirrus/admin/global/table";
-// `/_cirrus/admin/storage/*` + `/_cirrus/admin/vector/*` paths + handlers live in
-// `./storage-admin-routes` / `./vector-admin-routes`; `/_cirrus/admin/auth/*` in
-// `./auth-admin-routes`.
-
-/**
- * Empty-but-valid OpenAPI 3.1 document served by `GET /_cirrus/admin/openapi`
- * when no `openApiSpec` is injected on the worker. A spec-less worker still
- * answers 200 with a well-formed document (no paths), so the studio's
- * API-reference view renders a clean "no operations / not configured" state
- * rather than treating the endpoint as an error. Frozen so the shared instance
- * can't be mutated by a serializer.
- */
-const EMPTY_OPENAPI_DOCUMENT = Object.freeze({
-    info: {
-        description:
-            'No OpenAPI spec is configured on this worker. Run `cirrus codegen`, then wire the generated module to `createWorker`: `import { openApiSpec } from "./cirrus/_generated/openapi"`.',
-        title: "Cirrus API",
-        version: "0.0.0",
-    },
-    openapi: "3.1.0",
-    paths: {},
-});
-
-/**
- * Empty-but-valid OpenRPC 1.x document served by `GET /_cirrus/admin/openrpc`
- * when no `openRpcSpec` is injected on the worker. Mirrors
- * {@link EMPTY_OPENAPI_DOCUMENT}: a spec-less worker still answers 200 with a
- * well-formed document (no `methods`), so the studio's API-reference view
- * renders a clean "no operations / not configured" state rather than treating
- * the endpoint as an error. Frozen so the shared instance can't be mutated.
- */
-const EMPTY_OPENRPC_DOCUMENT = Object.freeze({
-    info: {
-        description:
-            'No OpenRPC spec is configured on this worker. Run `cirrus codegen --api-spec openrpc` (or `both`), then wire the generated module to `createWorker`: `import { openRpcSpec } from "./cirrus/_generated/openrpc"`.',
-        title: "Cirrus RPC",
-        version: "0.0.0",
-    },
-    methods: [],
-    openrpc: "1.3.2",
-});
+// The static-introspection (`functions` / `cron-jobs` / `openapi` / `openrpc` /
+// `global/*`), `/_cirrus/admin/storage/*`, `/_cirrus/admin/vector/*`, and
+// `/_cirrus/admin/auth/*` paths + handlers live in their sibling route modules.
 
 /**
  * Admin RPCs the migration endpoint is allowed to orchestrate. Spelled out
@@ -2909,125 +2865,19 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         vectorIntrospector: options.vectorIntrospector,
     });
 
-    const handleFunctionsList = (request: Request): Response => {
-        if (request.method !== "GET") {
-            throw new CirrusError("Functions endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        const registry = requireAdminOption(request, options.functions, {
-            code: "FUNCTIONS_NOT_CONFIGURED",
-            message: "functions endpoint requires a `functions` registry on the worker",
-        });
-
-        // Internal functions are never exposed — unreachable from the client RPC
-        // path, so surfacing them in the runner would only mislead. `stream`
-        // functions are likewise omitted: the runner invokes query/mutation/action
-        // only. The early-return narrows `entry.kind` to the runnable three.
-        const functions: FunctionDescriptor[] = Object.entries(registry)
-            .flatMap(([path, entry]) => {
-                if (entry.visibility === "internal" || entry.kind === "stream") {
-                    return [];
-                }
-
-                return [{ args: describeArguments(entry.args), kind: entry.kind, path }];
-            })
-            .toSorted((a, b) => a.path.localeCompare(b.path));
-
-        return Response.json({ functions }, { headers: { "content-type": "application/json" }, status: 200 });
-    };
-
-    const handleCronJobs = (request: Request): Response => {
-        if (request.method !== "GET") {
-            throw new CirrusError("Cron-jobs endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        const registry = requireAdminOption(request, options.cronJobs, {
-            code: "CRON_JOBS_NOT_CONFIGURED",
-            message: "cron-jobs endpoint requires a `cronJobs` map on the worker",
-        });
-
-        // Flatten the `cron expression → dispatches[]` map into a flat, sorted list
-        // — one row per scheduled invocation. Cloudflare exposes no runtime cron
-        // introspection, so this injected map is the only source of truth; the
-        // studio renders it read-only alongside the dynamic scheduler jobs.
-        const jobs: CronJobInfo[] = Object.entries(registry)
-            .flatMap(([cron, dispatches]) =>
-                dispatches.map((dispatch) => {return {
-                    args: dispatch.args,
-                    cron,
-                    functionPath: dispatch.functionPath,
-                    name: dispatch.name,
-                    shardKey: dispatch.shardKey,
-                }}),
-            )
-            .toSorted((a, b) => a.name.localeCompare(b.name));
-
-        return Response.json({ jobs }, { headers: { "content-type": "application/json" }, status: 200 });
-    };
-
-    const handleOpenApi = (request: Request): Response => {
-        if (request.method !== "GET") {
-            throw new CirrusError("OpenAPI endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        assertAdminAuthorized(request);
-
-        // Serve the injected spec verbatim — the runtime never assembles or
-        // validates it. With no spec configured, answer 200 with an empty-but-valid
-        // OpenAPI 3.1 document so the studio renders a clean "not configured" state.
-        const spec = options.openApiSpec ?? EMPTY_OPENAPI_DOCUMENT;
-
-        return Response.json(spec, { headers: { "content-type": "application/json" }, status: 200 });
-    };
-
-    const handleOpenRpc = (request: Request): Response => {
-        if (request.method !== "GET") {
-            throw new CirrusError("OpenRPC endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        assertAdminAuthorized(request);
-
-        // Serve the injected spec verbatim — the runtime never assembles or
-        // validates it. With no spec configured, answer 200 with an empty-but-valid
-        // OpenRPC 1.x document so the studio renders a clean "not configured" state.
-        const spec = options.openRpcSpec ?? EMPTY_OPENRPC_DOCUMENT;
-
-        return Response.json(spec, { headers: { "content-type": "application/json" }, status: 200 });
-    };
-
-    const handleGlobalTables = async (request: Request): Promise<Response> => {
-        if (request.method !== "GET") {
-            throw new CirrusError("Global-tables endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        const introspector = requireAdminOption(request, options.globalIntrospector, {
-            code: "GLOBALS_NOT_CONFIGURED",
-            message: "global endpoints require a `globalIntrospector` on the worker",
-        });
-
-        return Response.json(await introspector.listTables(), { headers: { "content-type": "application/json" }, status: 200 });
-    };
-
-    const handleGlobalTablePage = async (request: Request): Promise<Response> => {
-        if (request.method !== "GET") {
-            throw new CirrusError("Global-table endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        const introspector = requireAdminOption(request, options.globalIntrospector, {
-            code: "GLOBALS_NOT_CONFIGURED",
-            message: "global endpoints require a `globalIntrospector` on the worker",
-        });
-
-        const table = queryParameter(new URL(request.url), "table");
-
-        if (table === undefined) {
-            throw new CirrusError("Global-table endpoint requires a `table` query param", { code: "BAD_REQUEST", status: 400 });
-        }
-
-        const page = await introspector.readTablePage({ ...parsePaging(request), table });
-
-        return Response.json(page, { headers: { "content-type": "application/json" }, status: 200 });
-    };
+    const introspectionAdminRoutes = buildIntrospectionAdminRoutes({
+        assertAdmin: assertAdminAuthorized,
+        options: {
+            cronJobs: options.cronJobs,
+            functions: options.functions,
+            globalIntrospector: options.globalIntrospector,
+            openApiSpec: options.openApiSpec,
+            openRpcSpec: options.openRpcSpec,
+        },
+        parsePaging,
+        queryParameter,
+        requireAdminOption,
+    });
 
     const buildHttpActionContext = async (request: Request, env: unknown): Promise<HttpActionContext> => {
         const { claims, headers, userId } = await resolveForwardContext(request, env, options.resolveIdentity);
@@ -3713,16 +3563,12 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         [SCHEDULED_CANCEL_PATH]: (request) => handleScheduledCancel(request),
         [SCHEDULED_STATUS_PATH]: (request) => handleSchedulerStatus(request),
         [SCHEDULED_PATH]: (request) => handleScheduledList(request),
-        // `/_cirrus/admin/storage/*` + `/_cirrus/admin/vector/*` — extracted handler
-        // clusters built above and merged in (mirroring the auth plane below).
+        // Extracted handler clusters built above, merged in (mirroring the auth
+        // plane below): storage, vector, and the static-introspection reads
+        // (functions / cron-jobs / openapi / openrpc / global tables).
         ...storageAdminRoutes,
         ...vectorAdminRoutes,
-        [FUNCTIONS_PATH]: (request) => handleFunctionsList(request),
-        [CRON_JOBS_PATH]: (request) => handleCronJobs(request),
-        [OPENAPI_PATH]: (request) => handleOpenApi(request),
-        [OPENRPC_PATH]: (request) => handleOpenRpc(request),
-        [GLOBAL_TABLES_PATH]: (request) => handleGlobalTables(request),
-        [GLOBAL_TABLE_PATH]: (request) => handleGlobalTablePage(request),
+        ...introspectionAdminRoutes,
         // `/_cirrus/admin/auth/*` — the whole user-management plane, one route per
         // `AuthAdmin` op, dispatched by the descriptor table in `./auth-admin-routes`.
         ...buildAuthAdminRoutes({
