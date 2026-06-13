@@ -8,6 +8,7 @@
  */
 import type { PaymentAdapter, WebhookInput } from "../adapter";
 import idempotencyKey from "../idempotency";
+import { asRecord, readBoolean, readNumber, readString } from "../json";
 import { compareMoney, money, zeroMoney } from "../money";
 import type {
     CaptureInput,
@@ -98,15 +99,6 @@ const SUBSCRIPTION_STATE_BY_STRIPE_STATUS: Record<string, SubscriptionState> = {
     trialing: "trialing",
     unpaid: "past_due",
 };
-
-// JSON-safe accessors for the parsed webhook event (never `any`).
-const asRecord = (value: unknown): Record<string, unknown> => (typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {});
-
-const readString = (object: Record<string, unknown>, key: string): string | undefined => (typeof object[key] === "string" ? object[key] : undefined);
-
-const readNumber = (object: Record<string, unknown>, key: string): number | undefined => (typeof object[key] === "number" ? object[key] : undefined);
-
-const readBoolean = (object: Record<string, unknown>, key: string): boolean | undefined => (typeof object[key] === "boolean" ? object[key] : undefined);
 
 const readReferenceId = (object: Record<string, unknown>): string | undefined =>
     readString(asRecord(object.metadata), "referenceId") ?? readString(object, "client_reference_id");
@@ -338,7 +330,9 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
 
         identifier: "stripe",
 
-        parseWebhook: async ({ payload, signatureHeader }: WebhookInput): Promise<WebhookAction> => {
+        parseWebhook: async ({ headers, payload }: WebhookInput): Promise<WebhookAction> => {
+            const signatureHeader = headers.get("stripe-signature") ?? "";
+
             await verifyStripeSignature({ payload, secret: webhookSecret, signatureHeader, toleranceSeconds: options.webhookToleranceSeconds });
 
             const event = asRecord(JSON.parse(payload));
@@ -386,8 +380,6 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
 
             return subscriptionFromStripe(subscription);
         },
-
-        webhookSignatureHeader: "stripe-signature",
     };
 };
 

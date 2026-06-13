@@ -16,11 +16,16 @@ import type {
     WebhookAction,
 } from "./types";
 
+/** A read-only header bag; the platform `Headers` object satisfies it. */
+export interface WebhookHeaders {
+    get: (name: string) => null | string;
+}
+
 export interface WebhookInput {
+    /** Request headers (signature schemes read provider-specific headers from here). */
+    readonly headers: WebhookHeaders;
     /** Raw request body, exactly as received (required for signature verification). */
     readonly payload: string;
-    /** Provider signature header value. */
-    readonly signatureHeader: string;
 }
 
 /**
@@ -44,8 +49,6 @@ export interface PaymentAdapter {
     refundPayment: (input: RefundInput) => Promise<PaymentSession>;
     resumeSubscription: (subscriptionId: string) => Promise<Subscription>;
     updateSubscription: (subscriptionId: string, patch: SubscriptionPatch) => Promise<Subscription>;
-    /** Request header carrying the provider's webhook signature (e.g. `stripe-signature`). */
-    readonly webhookSignatureHeader: string;
 }
 
 /** Registry of adapters keyed by provider id — supports dual-register during provider migration. */

@@ -132,9 +132,10 @@ packages/payment/
 │   ├── database-store.ts   # createDatabasePaymentStore(ctx.db) — rides the app ShardDO
 │   ├── schema.ts           # defineSchema tables: products, prices, customers, subscriptions, checkouts,
 │   │                       #   payment_sessions, payments, captures, refunds, invoices, events (webhook log)
+│   ├── json.ts             # defensive accessors for untyped webhook payloads (shared)
 │   └── providers/
-│       ├── stripe.ts       # wraps `stripe`
-│       ├── polar.ts        # wraps `@polar-sh/sdk`            (phase 2)
+│       ├── stripe.ts       # injected Stripe client; Stripe-scheme webhook verify
+│       ├── polar.ts        # injected Polar client (MoR); Standard Webhooks verify
 │       ├── lemonsqueezy.ts # wraps lemonsqueezy.js            (phase 3)
 │       └── paddle.ts       # wraps `@paddle/paddle-node-sdk`  (phase 3)
 └── __tests__/              # adapter, webhook-normalization, store-sync, facade tests
@@ -263,7 +264,9 @@ Non-negotiables that the implementation (not just the plan) has to satisfy — s
 - **Phase 1 — DX wiring + reliability:** ✅ `createDatabasePaymentStore(ctx.db)` (rides the app ShardDO); _next:_
   codegen `ctx.payments` on `ActionCtx`; `@cirrus/config` binding inference; `.dev.vars` scaffolding; **scheduled
   reconciliation sweep**; observability (failed-payment / drift metrics); example app.
-- **Phase 2 — Polar adapter** + React components + `.global()`/D1 read path.
+- **Phase 2 — Polar adapter:** ✅ `createPolarAdapter` (injected client, Merchant-of-Record, Standard Webhooks
+  verification via `verifyStandardWebhook`); `parseWebhook` now takes the request headers so each provider reads its
+  own scheme. _Next:_ React components + `.global()`/D1 read path.
 - **Phase 3 — Lemon Squeezy + Paddle adapters**; provider-migration story (dual-register).
 - **Phase 4 — entitlements tier** (`check`/`track` à la Autumn): features, credits, usage metering, seat counts.
 

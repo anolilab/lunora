@@ -52,7 +52,6 @@ const fakeAdapter = (overrides: Partial<PaymentAdapter> = {}): PaymentAdapter =>
         updateSubscription: async (id) => {
             return { ...subscription("user_1", "active"), id };
         },
-        webhookSignatureHeader: "x-test-signature",
         ...overrides,
     };
 };

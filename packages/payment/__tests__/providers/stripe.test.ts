@@ -112,8 +112,9 @@ describe("stripe adapter", () => {
         const timestamp = Math.floor(Date.now() / 1000);
         const signature = await hmacSha256Hex("whsec", `${String(timestamp)}.${payload}`);
         const signatureHeader = `t=${String(timestamp)},v1=${signature}`;
+        const headers = { get: (name: string) => (name === "stripe-signature" ? signatureHeader : null) };
 
-        const action = await adapter.parseWebhook({ payload, signatureHeader });
+        const action = await adapter.parseWebhook({ headers, payload });
 
         expect(action.type).toBe("payment.captured");
         expect(action.sessionId).toBe("pi_1");
@@ -124,6 +125,6 @@ describe("stripe adapter", () => {
     it("rejects an unsigned webhook", async () => {
         const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
 
-        await expect(adapter.parseWebhook({ payload: "{}", signatureHeader: "" })).rejects.toMatchObject({ code: "WEBHOOK_SIGNATURE_INVALID" });
+        await expect(adapter.parseWebhook({ headers: { get: () => null }, payload: "{}" })).rejects.toMatchObject({ code: "WEBHOOK_SIGNATURE_INVALID" });
     });
 });

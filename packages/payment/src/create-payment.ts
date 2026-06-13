@@ -109,9 +109,8 @@ export const createPayment = (options: CreatePaymentOptions): CirrusPayment => {
 
             try {
                 const payload = await request.text();
-                const signatureHeader = request.headers.get(adapter.webhookSignatureHeader) ?? "";
 
-                action = await adapter.parseWebhook({ payload, signatureHeader });
+                action = await adapter.parseWebhook({ headers: request.headers, payload });
             } catch (error) {
                 const status = error instanceof CirrusPaymentError ? error.status : 400;
 

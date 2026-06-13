@@ -1,4 +1,4 @@
-export type { AdapterRegistry, PaymentAdapter, WebhookInput } from "./adapter";
+export type { AdapterRegistry, PaymentAdapter, WebhookHeaders, WebhookInput } from "./adapter";
 export { createAdapterRegistry } from "./adapter";
 export type { AuthorizeReference, CirrusPayment, CreatePaymentOptions } from "./create-payment";
 export { createPayment } from "./create-payment";
@@ -20,6 +20,8 @@ export {
     toMoneyJSON,
     zeroMoney,
 } from "./money";
+export type { PolarAdapterOptions, PolarClientLike } from "./providers/polar";
+export { createPolarAdapter } from "./providers/polar";
 export type { StripeAdapterOptions, StripeClientLike } from "./providers/stripe";
 export { createStripeAdapter } from "./providers/stripe";
 export { default as paymentTables } from "./schema";
@@ -57,4 +59,4 @@ export type {
     WebhookAction,
     WebhookActionType,
 } from "./types";
-export { constantTimeEqual, hmacSha256Hex, parseStripeSignatureHeader, verifyStripeSignature } from "./webhook";
+export { constantTimeEqual, hmacSha256Hex, parseStripeSignatureHeader, verifyStandardWebhook, verifyStripeSignature } from "./webhook";
