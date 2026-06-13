@@ -58,7 +58,7 @@ Why now:
 | **PartyKit** ([partykit/partykit](https://github.com/partykit/partykit))                                | The deploy UX + the **managed-vs-BYO split**: build locally (esbuild facade injecting DO class exports — exactly our `ShardDO`/`SessionDO` shape), push the bundle to the platform API, get `{name}.{user}.partykit.dev`; setting `CLOUDFLARE_API_TOKEN` flips the same CLI to the customer's own account ("cloud-prem").                                                                                                              |
 | **cloudflare/vibesdk** ([repo](https://github.com/cloudflare/vibesdk))                                  | The most complete open end-to-end reference of a control plane on WfP: dispatch namespace deploys, D1+Drizzle control-plane DB, R2/KV, wildcard subdomain routing. Study before writing ours.                                                                                                                                                                                                                                          |
 | **workers-for-platforms-example** ([repo](https://github.com/cloudflare/workers-for-platforms-example)) | Minimal dispatcher skeleton (hostname → tenant → `env.DISPATCHER.get(script, …, { limits, outbound })`).                                                                                                                                                                                                                                                                                                                               |
-| **Alchemy** ([sam-goodwin/alchemy](https://github.com/sam-goodwin/alchemy))                             | TS-native, embeddable IaC for CF resources (Apache-2.0, no wrangler dependency; resources run inside a Worker; v1 `0.93.x` ships `DispatchNamespace`/`Worker`/`D1`/`R2`/DO + `D1StateStore`) — **chosen as the provisioning engine** (§2.2) for cell bring-up, per-tenant deploy, and BYO, state backed by control-plane D1. We build on the **v2 line** (`alchemy@next`, `2.0.0-beta.55`, Effect-based); v1 is the fallback.          |
+| **Alchemy** ([sam-goodwin/alchemy](https://github.com/sam-goodwin/alchemy))                             | TS-native, embeddable IaC for CF resources (Apache-2.0, no wrangler dependency; resources run inside a Worker; ships `DispatchNamespace`/`Worker`/`D1`/`R2`/DO + pluggable state stores) — **the provisioning engine** (§2.2) for cell bring-up, per-tenant deploy, and BYO, state backed by control-plane D1. We build on the **v2 line** (`alchemy@next`, `2.0.0-beta.55`, Effect-based), no v1 fallback.                            |
 | **Supabase**                                                                                            | The open-core cut line at fleet scale (every per-project service OSS; everything fleet-shaped — provisioning, branching, billing — proprietary); **one Studio codebase serving cloud + self-host behind an `IS_PLATFORM` flag**; Branching 2.0 preview-environment DX (per-Git-branch, Git-optional, PR comments/check runs); the Management API + OAuth-apps growth engine (>60% of new projects provisioned by AI builders via API). |
 
 ---
@@ -129,22 +129,23 @@ A boring Cirrus-shaped service (we should dogfood: build it _on Cirrus_):
   is first-class, which makes preview-deployment TTL cleanup and project deletion a
   scope `destroy` rather than bespoke teardown code. Idempotent convergence also means
   a retry after rate-limit backoff is just re-running `finalize()`.
-- **Why v2 (`alchemy@next`, `2.0.0-beta.55`, Effect-based) rather than the v1 line.**
-  Starting net-new, we adopt the line Alchemy is moving toward and skip a forced
-  v1→v2 migration mid-build. The cost is that v2 is a **beta** (Effect-based rewrite),
-  so it will ship breaking changes between betas and pulls **`effect`** into the
-  control-plane dependency tree (it runs in Workers; the `@cirrus/provision` adapter
-  must not leak Effect types into the rest of Cirrus). The stable v1 line
-  (`0.93.x` = `latest`) stays the named fallback if the Phase 1 spike finds v2 gaps.
-- **State store collapses the two-sources-of-truth concern** — _verified on v1, a
-  Phase 1 spike gate on v2._ Alchemy has pluggable state stores; **v1 ships a built-in
-  `D1StateStore` and `DOStateStore`** (v2 parity is unconfirmed — docs/CDN were
-  unreachable at writing). We back each tenant's Alchemy scope with the **control-plane
-  D1** (one scope per `{cell, project, deployment}`) so Alchemy state _is_ a table in
-  the control-plane DB — not a second store fighting our deployment rows. The DB row
-  stays the human-facing record (status, bundle hash, plan); the scope is the
-  machine-facing convergence state, co-located under the same backups/PITR. If v2 lacks
-  a D1 store, the adapter supplies a custom `StateStore` over the control-plane DB.
+- **Why v2 (`alchemy@next`, `2.0.0-beta.55`, Effect-based).** We commit to the line
+  Alchemy is moving toward and skip a forced v1→v2 migration later — **no v1 fallback;
+  v2 is the engine.** The accepted cost: v2 is a **beta**, so it ships breaking changes
+  between betas and pulls **`effect`** into the control-plane dependency tree (it runs
+  in Workers; the `@cirrus/provision` adapter must not leak Effect types into the rest
+  of Cirrus). We absorb beta churn by pinning + tracking upstream and, where a gap
+  blocks us, contributing fixes upstream rather than retreating to v1.
+- **State store collapses the two-sources-of-truth concern.** Alchemy has pluggable
+  state stores (v1 ships built-in `D1StateStore`/`DOStateStore`; **confirming the v2
+  equivalent is a Phase 1 spike gate** — docs/CDN were unreachable at writing). We back
+  each tenant's Alchemy scope with the **control-plane D1** (one scope per
+  `{cell, project, deployment}`) so Alchemy state _is_ a table in the control-plane DB —
+  not a second store fighting our deployment rows. The DB row stays the human-facing
+  record (status, bundle hash, plan); the scope is the machine-facing convergence state,
+  co-located under the same backups/PITR. If v2 has no built-in D1 store, we implement
+  the adapter's own `StateStore` over the control-plane DB (a small, owned shim — not a
+  reason to leave v2).
 - **What still wraps Alchemy** (it converges one scope; it does not coordinate a
   fleet): the **per-cell rate-limit scheduler** (§2.5) paces and serializes `finalize()`
   runs against the 1,200-req/5-min account budget; **NDJSON/SSE progress** is emitted
@@ -153,10 +154,10 @@ A boring Cirrus-shaped service (we should dogfood: build it _on Cirrus_):
   **rollback** re-converges a scope to a prior bundle hash retained in R2.
 - **Risk management for a beta dependency on the revenue path:** pin the **exact** beta
   (`2.0.0-beta.55`) and bump deliberately, never floating `next`; put every Alchemy call
-  behind a thin `@cirrus/provision` adapter so a breaking beta (or a v2→stable jump) is
-  contained to one module, Effect stays quarantined behind it, and `cloudflare-typescript`
-  / Alchemy v1 remain drop-in fallbacks; keep one scope per tenant/deployment so
-  concurrent deploys never collide in state. Engage Cloudflare early regardless (§2.5) —
+  behind a thin `@cirrus/provision` adapter so a breaking beta (or the v2→stable jump) is
+  contained to one module and Effect stays quarantined behind it; keep one scope per
+  tenant/deployment so concurrent deploys never collide in state. Engage Cloudflare early
+  regardless (§2.5) —
   Alchemy provisions _through_ the same APIs, it does not change the account-limit or
   partner story.
 - **Secrets:** per-deployment env vars/secrets stored in the control plane, applied via
@@ -420,9 +421,9 @@ Ordered so every phase ships standalone DX value even if we stop there.
   untrusted-mode audit (`request.cf`, cache isolation) — §2.4 + risks 2–4. The spike
   also stands up the `@cirrus/provision` adapter against **Alchemy v2**
   (`alchemy@next`, pinned `2.0.0-beta.55`) on one cell — one `DispatchNamespace` deploy
-  with per-tenant D1/R2 and control-plane-D1-backed state — to confirm v2 exposes the
-  resources/state-store we need (else fall back to v1 `0.93.x`) before building around
-  it. Then: dispatcher Worker, deploy API + NDJSON
+  with per-tenant D1/R2 and control-plane-D1-backed state — confirming v2's resource +
+  state-store surface (and, where missing, filling it with an owned shim or an upstream
+  contribution) before building around it. Then: dispatcher Worker, deploy API + NDJSON
   progress, `cirrus login/link/deploy`, `{project}.cirrus.app`, per-deployment
   secrets + scoped tokens. Exit criterion: `cirrus init && cirrus deploy` → live URL
   in under a minute with zero Cloudflare account, zero wrangler config, zero D1
@@ -463,18 +464,18 @@ Ordered so every phase ships standalone DX value even if we stop there.
    needs an equivalent; today `--migrate` runs after traffic is live. Phase 1 can ship
    with today's semantics; the gate is a Phase 4 refinement.
 6. **Control-plane repo + license** — decide before Phase 1 code exists.
-7. **Alchemy v2-beta dependency on the revenue path.** We are building on a beta
-   (`alchemy@next` `2.0.0-beta.55`, Effect-based) by choice (§2.2) to avoid a v1→v2
-   migration. Mitigations: pin the exact beta and bump deliberately (never float
-   `next`); isolate behind the `@cirrus/provision` adapter so breaking betas and the
-   Effect dependency are quarantined; keep v1 `0.93.x` / `cloudflare-typescript` as
-   drop-in fallbacks; one state scope per tenant. Open items the Phase 1 spike **must**
-   answer on the pinned beta: (a) does v2 actually ship the `DispatchNamespace` resource
+7. **Alchemy v2-beta dependency on the revenue path** (committed, no v1 fallback —
+   §2.2). Mitigations: pin the exact beta and bump deliberately (never float `next`);
+   isolate behind the `@cirrus/provision` adapter so breaking betas and the Effect
+   dependency are quarantined; one state scope per tenant. Open items the Phase 1 spike
+   **must** answer on the pinned beta — each resolved by an owned shim or an upstream
+   contribution, not by leaving v2: (a) does v2 ship the `DispatchNamespace` resource
    and a D1/DO state store (confirmed on v1 only — docs were unreachable at writing);
-   (b) `D1StateStore` behavior under concurrent `finalize()` in one cell; (c) whether
+   (b) state-store behavior under concurrent `finalize()` in one cell; (c) whether
    `DispatchNamespace` upload exposes everything `reconcileWranglerBindings` sets today
    (DO migrations, tags, custom limits, secrets); (d) orphan teardown of per-tenant
-   D1/R2 on `destroy`. Any "no" → fall back to v1 for that surface.
+   D1/R2 on `destroy`. A hard "no" with no upstream path is the signal to escalate the
+   engine decision, not to silently dual-track v1.
 
 ---
 
@@ -497,7 +498,7 @@ Cloudflare: [WfP docs](https://developers.cloudflare.com/cloudflare-for-platform
 Repos: [workers-for-platforms-example](https://github.com/cloudflare/workers-for-platforms-example) ·
 [vibesdk](https://github.com/cloudflare/vibesdk) · [cloudflare-typescript](https://github.com/cloudflare/cloudflare-typescript) ·
 [workers-sdk](https://github.com/cloudflare/workers-sdk) · [partykit/partykit](https://github.com/partykit/partykit) ·
-[alchemy](https://github.com/sam-goodwin/alchemy) ([state stores](https://github.com/sam-goodwin/alchemy/tree/main/alchemy/src/state) · v1 `0.93.12` `latest`, Apache-2.0; v2 `alchemy@next` `2.0.0-beta.55` Effect-based, [v2.alchemy.run](https://v2.alchemy.run/)) ·
+[alchemy](https://github.com/sam-goodwin/alchemy) (Apache-2.0; build target **v2** `alchemy@next` `2.0.0-beta.55`, Effect-based, [v2.alchemy.run](https://v2.alchemy.run/); [state stores](https://github.com/sam-goodwin/alchemy/tree/main/alchemy/src/state)) ·
 [convex-backend](https://github.com/get-convex/convex-backend).
 Convex: [dev workflow](https://docs.convex.dev/understanding/workflow) ·
 [deploy CLI](https://docs.convex.dev/cli/reference/deploy) ·
