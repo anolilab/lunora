@@ -725,7 +725,13 @@ const buildStorageBucketNames = (schema: SchemaIR, ruleBuckets: ReadonlyArray<st
     return ["default", ...[...named].toSorted((a, b) => a.localeCompare(b))];
 };
 
-const emitServer = (hasAi = false, schema?: SchemaIR, storageRuleBuckets: ReadonlyArray<string> = [], containers: ReadonlyArray<ContainerIR> = []): string => {
+const emitServer = (
+    hasAi = false,
+    hasPayments = false,
+    schema?: SchemaIR,
+    storageRuleBuckets: ReadonlyArray<string> = [],
+    containers: ReadonlyArray<ContainerIR> = [],
+): string => {
     /* eslint-disable no-secrets/no-secrets -- the emitted typed-`v` signature (`ColumnValidator<IdOfTable<T>, ...>`) is dense generated TS spread across this template, not a credential */
     // The union of declared storage buckets, narrowing `ctx.storage.bucket(name)`.
     const storageBucketUnion = buildStorageBucketNames(schema ?? { tables: [], vectorIndexes: [] }, storageRuleBuckets)
@@ -738,6 +744,10 @@ const emitServer = (hasAi = false, schema?: SchemaIR, storageRuleBuckets: Readon
     // import `@cirrus/ai`.
     const aiTypeImport = hasAi ? `import type { CirrusAi } from "@cirrus/ai";\n` : "";
     const aiActionField = hasAi ? `\n    readonly ai: CirrusAi;` : "";
+    // Same gating as `ai`: the typed `ctx.payments` facade lives on ActionCtx only
+    // (payment ops are external calls), and `@cirrus/payment` is imported only when used.
+    const paymentsTypeImport = hasPayments ? `import type { CirrusPayment } from "@cirrus/payment";\n` : "";
+    const paymentsActionField = hasPayments ? `\n    readonly payments: CirrusPayment;` : "";
 
     // Same gating for containers: container calls are external I/O, so the
     // typed `ctx.containers` record lives on ActionCtx only. One property per
@@ -774,7 +784,7 @@ import type {
 } from "@cirrus/server";
 
 import type { DatabaseReaderFacade, DatabaseWriterFacade, Id as IdOfTable, OrmReader, OrmWriter, TableName } from "./dataModel.js";
-${aiTypeImport}${containersTypeImport}
+${aiTypeImport}${paymentsTypeImport}${containersTypeImport}
 export type { DataModel, Doc, Id, TableName } from "./dataModel.js";
 
 /** Storage buckets this schema declares (\`v.storage("name")\`), narrowing \`ctx.storage.bucket(name)\`. */
@@ -802,7 +812,7 @@ export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"> {
 export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"> {
     readonly db: DatabaseWriter & DatabaseWriterFacade;
     readonly orm: OrmWriter;
-    readonly storage: StorageBase<StorageBucketName>;${aiActionField}${containersActionField}
+    readonly storage: StorageBase<StorageBucketName>;${aiActionField}${paymentsActionField}${containersActionField}
 }
 
 /** \`query()\` bound to this project's typed {@link QueryCtx}. */
@@ -1050,7 +1060,6 @@ const buildStorageColumns = (schema: SchemaIR): Record<string, string[]> => {
     return byTable;
 };
 
-
 /** One flattened index entry per table, mirroring `@cirrus/do`'s `TableIndexInfo`. */
 interface EmittedTableIndex {
     fields: string[];
@@ -1262,11 +1271,64 @@ ${specEntries}
     };
 };
 
+/**
+ * The `ctx.payments` code fragments woven into the generated ShardDO, or empty strings when the
+ * project doesn't use payments. Unlike `ctx.ai` (a stateless binding), the facade is stateful —
+ * its store rides the request's `ctx.db` — so `build` is emitted *after* `db` is constructed and
+ * uses `paymentsFromContext` (the per-context wiring lives in `@cirrus/payment`, not this string).
+ */
+const emitPaymentFragments = (
+    hasPayments: boolean,
+): { build: string; configField: string; contextField: string; imports: ReadonlyArray<string>; stub: string } => {
+    if (!hasPayments) {
+        return { build: "", configField: "", contextField: "", imports: [], stub: "" };
+    }
+
+    const missing = `throw new Error("ctx.payments: no payment configured. Pass \\\`payment\\\` to createShardDO().");`;
+
+    return {
+        imports: [
+            `import type { CirrusDatabaseLike as CirrusPaymentDbLike, CirrusPayment, PaymentsFromContextOptions } from "@cirrus/payment";`,
+            `import { paymentsFromContext } from "@cirrus/payment";`,
+        ],
+        // Built after `db` (the store rides ctx.db) and `userId` (the default authorizer ties a
+        // referenceId to the caller). The adapter — which carries provider secrets — comes from
+        // the `config.payment` thunk over env. Falls back to `paymentStub`.
+        build: `
+            const payments: CirrusPayment = config.payment
+                ? paymentsFromContext({ auth: { userId: userId ?? null }, db: db as unknown as CirrusPaymentDbLike }, config.payment(env))
+                : paymentStub;
+`,
+        configField: `\n    payment?: (env: Record<string, unknown>) => PaymentsFromContextOptions;`,
+        contextField: `\n                payments,`,
+        stub: `
+const paymentStub: CirrusPayment = {
+    cancelSubscription: () => {
+        ${missing}
+    },
+    createCheckout: () => {
+        ${missing}
+    },
+    createPortalSession: () => {
+        ${missing}
+    },
+    handleWebhook: () => {
+        ${missing}
+    },
+    listSubscriptions: () => {
+        ${missing}
+    },
+} as unknown as CirrusPayment;
+`,
+    };
+};
+
 const emitShard = (
     schema: SchemaIR,
     advisories: ReadonlyArray<Finding> = [],
     rlsMetadata?: RlsMetadataIR,
     hasAi = false,
+    hasPayments = false,
     storageRules?: StorageRulesMetadataIR,
     containers: ReadonlyArray<ContainerIR> = [],
 ): string => {
@@ -1277,6 +1339,13 @@ const emitShard = (
         importLines: containerImportLines,
         specs: containerSpecs,
     } = emitContainerFragments(containers);
+    const {
+        build: paymentsBuild,
+        configField: paymentsConfigField,
+        contextField: paymentsContextField,
+        imports: paymentsImports,
+        stub: paymentStub,
+    } = emitPaymentFragments(hasPayments);
     // Drift guard + the data we emit: the advisor's `Finding`s must stay
     // assignable to the DO's `AdvisoryFinding` (the generated `CIRRUS_ADVISORIES`
     // is typed against it). This assignment fails `tsc` if the two shapes drift —
@@ -1360,6 +1429,7 @@ const emitShard = (
 
     importLines.push(
         ...containerImportLines,
+        ...paymentsImports,
         ``,
         `import schema from "../schema.js";`,
         `import { CIRRUS_FUNCTIONS, CIRRUS_MIGRATIONS } from "./functions.js";`,
@@ -1571,7 +1641,7 @@ export interface ShardDOConfig {
     /** Optional telemetry sink. When supplied, each \`ctx.log.*\` call is forwarded to \`sink.onLog\`. Pass the SAME sink you give \`createWorker({ observability })\` (which drives \`onRpc\`) to route both RPC and log events. */
     observability?: (env: Record<string, unknown>) => LogSink | undefined;
     scheduler?: (env: Record<string, unknown>) => unknown;
-    storage?: (env: Record<string, unknown>) => unknown;${vectorsConfigField}${aiConfigField}${d1ConfigField}
+    storage?: (env: Record<string, unknown>) => unknown;${vectorsConfigField}${aiConfigField}${paymentsConfigField}${d1ConfigField}
 }
 
 const schedulerStub = {
@@ -1609,7 +1679,7 @@ const storageStub = {
         throw new Error("ctx.storage: no storage configured. Pass \`storage\` to createShardDO().");
     },
 };
-${globalDatabaseStub}${vectorsStub}${aiStub}${bindTableHelper}
+${globalDatabaseStub}${vectorsStub}${aiStub}${paymentStub}${bindTableHelper}
 // Bound in-process \`ctx.run*\` composition depth so a self- or cyclically-
 // referencing call fails loudly with a clear error instead of overflowing the
 // stack. Tracked across the awaited handler chain (one DO invocation is
@@ -1959,7 +2029,7 @@ ${vectorsBuild}${aiBuild}${containersBuild}
             // (its \`list\`/\`getMetadata\` throw the "no storage configured" error).
             const storage = asBucketStorage(config.storage?.(env) ?? storageStub) as unknown as SystemReaderStorageLike;
 ${globalDatabaseLine}            const db: DatabaseWriterLike = createShardCtxDb(${databaseOptions});
-${facadeBlock}
+${facadeBlock}${paymentsBuild}
             // \`ctx.log\`: each call is captured + attributed to the executing
             // function and routed to the optional \`observability\` sink. The DO base
             // also buffers it (studio Logs panel) and emits a structured console
@@ -1983,7 +2053,7 @@ ${facadeBlock}
                 fetch: globalThis.fetch.bind(globalThis),
                 log,${ormContextField}
                 scheduler,
-                storage,${vectorsContextField}${aiContextField}${containersContextField}
+                storage,${vectorsContextField}${aiContextField}${paymentsContextField}${containersContextField}
             };
 
             ctx.runAction = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("action", reference.__cirrusRef, fnArgs, ctx);

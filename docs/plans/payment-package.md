@@ -130,6 +130,7 @@ packages/payment/
 │   ├── webhook.ts          # verify → normalize → dispatch → sync (registerPaymentRoutes)
 │   ├── store.ts            # PaymentStore interface + in-memory impl
 │   ├── database-store.ts   # createDatabasePaymentStore(ctx.db) — rides the app ShardDO
+│   ├── context.ts          # paymentsFromContext(ctx) — what codegen wires ctx.payments to
 │   ├── schema.ts           # defineSchema tables: products, prices, customers, subscriptions, checkouts,
 │   │                       #   payment_sessions, payments, captures, refunds, invoices, events (webhook log)
 │   ├── json.ts             # defensive accessors for untyped webhook payloads (shared)
@@ -261,9 +262,11 @@ Non-negotiables that the implementation (not just the plan) has to satisfy — s
 - **Phase 0 — scaffold:** `vis generate cirrus-package` → `@cirrus/payment`; types, adapter interface, facade, schema,
   DO-backed store, full Stripe adapter, raw-body webhook verification + idempotent sync, **outbound idempotency keys**,
   **mutation ownership/authz guards**, FSM transition tests + webhook fixtures. _Single-provider, working._
-- **Phase 1 — DX wiring + reliability:** ✅ `createDatabasePaymentStore(ctx.db)` (rides the app ShardDO); _next:_
-  codegen `ctx.payments` on `ActionCtx`; `@cirrus/config` binding inference; `.dev.vars` scaffolding; **scheduled
-  reconciliation sweep**; observability (failed-payment / drift metrics); example app.
+- **Phase 1 — DX wiring + reliability:** ✅ `createDatabasePaymentStore(ctx.db)` (rides the app ShardDO);
+  ✅ `paymentsFromContext(ctx, { adapter })` + ✅ codegen-wired `ctx.payments` on `ActionCtx` (gated on
+  `@cirrus/payment` import / `ctx.payments` read, mirroring `ctx.ai`; built after `db` so the store rides the
+  request). _Next:_ `@cirrus/config` binding inference; `.dev.vars` scaffolding; **scheduled reconciliation sweep**;
+  observability (failed-payment / drift metrics); example app.
 - **Phase 2 — Polar adapter:** ✅ `createPolarAdapter` (injected client, Merchant-of-Record, Standard Webhooks
   verification via `verifyStandardWebhook`); `parseWebhook` now takes the request headers so each provider reads its
   own scheme. _Next:_ React components + `.global()`/D1 read path.

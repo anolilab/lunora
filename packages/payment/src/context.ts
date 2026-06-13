@@ -1,0 +1,57 @@
+/**
+ * Build a payment facade from a Cirrus function context.
+ *
+ * This is what codegen wires `ctx.payments` to: the store rides the request's `ctx.db` (the app's
+ * ShardDO), and authorization defaults to "the caller may only act on their own `userId`" — apps
+ * keyed on org/workspace references pass a custom `authorize`. Adapters carry secrets, so the
+ * adapter is supplied by the caller (typically from a `config.payment(env)` thunk).
+ */
+import type { PaymentAdapter } from "./adapter";
+import type { AuthorizeReference, CirrusPayment } from "./create-payment";
+import { createPayment } from "./create-payment";
+import type { PaymentDatabase, PaymentRow } from "./database-store";
+import { createDatabasePaymentStore } from "./database-store";
+
+/** Structural subset of Cirrus's `ctx.db` (the `findFirst`/`findMany(tableName, { where })` form). */
+export interface CirrusDatabaseLike {
+    findFirst: (table: string, args?: { where?: Record<string, unknown> }) => Promise<Record<string, unknown> | null>;
+    findMany: (table: string, args?: { where?: Record<string, unknown> }) => Promise<{ page: Record<string, unknown>[] }>;
+    insert: (table: string, document: Record<string, unknown>) => Promise<string>;
+    patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
+}
+
+/** Structural subset of a Cirrus function context used to build payments. */
+export interface PaymentContextLike {
+    auth?: { userId?: null | string };
+    db: CirrusDatabaseLike;
+}
+
+export interface PaymentsFromContextOptions {
+    readonly adapter: PaymentAdapter;
+    /** Override the default "caller owns the referenceId" authorization. */
+    readonly authorize?: AuthorizeReference;
+}
+
+/** Adapt a Cirrus `ctx.db` to the {@link PaymentDatabase} port the store writes through. */
+export const cirrusDatabaseToPaymentDatabase = (database: CirrusDatabaseLike): PaymentDatabase => {
+    return {
+        findFirst: async (table, where) => (await database.findFirst(table, { where })) as PaymentRow | null,
+        findMany: async (table, where) => {
+            const result = await database.findMany(table, { where });
+
+            return result.page as PaymentRow[];
+        },
+        insert: async (table, document) => database.insert(table, document),
+        patch: async (id, patch) => database.patch(id, patch),
+    };
+};
+
+export const paymentsFromContext = (context: PaymentContextLike, options: PaymentsFromContextOptions): CirrusPayment => {
+    const userId = context.auth?.userId ?? undefined;
+
+    return createPayment({
+        adapter: options.adapter,
+        authorize: options.authorize ?? ((referenceId) => userId !== undefined && referenceId === userId),
+        store: createDatabasePaymentStore(cirrusDatabaseToPaymentDatabase(context.db)),
+    });
+};

@@ -77,6 +77,34 @@ export const summarize = action({ args: { text: v.string() }, handler: async (ct
             expect(result.generated.server).toContain("readonly ai: CirrusAi;");
         });
 
+        it("does not wire @cirrus/payment for a project that doesn't use it", () => {
+            expect.assertions(2);
+
+            const result = runCodegen({ projectRoot: workdir });
+
+            expect(result.generated.shard).not.toContain("@cirrus/payment");
+            expect(result.generated.server).not.toContain("@cirrus/payment");
+        });
+
+        it("wires ctx.payments end-to-end when a function reads ctx.payments", () => {
+            expect.assertions(4);
+
+            writeFileSync(
+                join(workdir, "cirrus", "billing.ts"),
+                `import { action, v } from "@cirrus/server";
+export const mySubs = action({ args: { reference: v.string() }, handler: async (ctx, { reference }) => ctx.payments.listSubscriptions(reference) });
+`,
+                "utf8",
+            );
+
+            const result = runCodegen({ projectRoot: workdir });
+
+            expect(result.generated.shard).toContain('import { paymentsFromContext } from "@cirrus/payment"');
+            expect(result.generated.shard).toContain("payments,");
+            expect(result.generated.shard).toContain("paymentStub");
+            expect(result.generated.server).toContain("readonly payments: CirrusPayment;");
+        });
+
         it("emits api.ts with grouped queries/mutations", () => {
             expect.assertions(8);
 
@@ -209,7 +237,7 @@ export const summarize = action({ args: { text: v.string() }, handler: async (ct
 
             // No schema storage columns; a rule references the "exports" bucket — it
             // must still be addressable via `ctx.storage.bucket("exports")`.
-            const server = emitServer(false, { tables: [], vectorIndexes: [] }, ["exports", "avatars"]);
+            const server = emitServer(false, false, { tables: [], vectorIndexes: [] }, ["exports", "avatars"]);
 
             expect(server).toContain('export type StorageBucketName = "default" | "avatars" | "exports"');
             // De-duped + "default" always first.
@@ -725,7 +753,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect.assertions(3);
 
             const schema: SchemaIR = { tables: [], vectorIndexes: [] };
-            const output = emitShard(schema, [], undefined, false, {
+            const output = emitShard(schema, [], undefined, false, false, {
                 rules: [{ bucket: "avatars", file: "avatars", on: "read", prefix: "user/", procedure: "upload" }],
             });
 
@@ -831,6 +859,46 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).not.toContain("@cirrus/ai");
             expect(output).not.toContain("createAi");
             expect(output).not.toContain("aiStub");
+        });
+
+        it("wires ctx.payments into the ShardDO when payments are used", () => {
+            expect.assertions(5);
+
+            const schema: SchemaIR = { tables: [], vectorIndexes: [] };
+
+            const output = emitShard(schema, [], undefined, false, true);
+
+            expect(output).toContain('import { paymentsFromContext } from "@cirrus/payment"');
+            expect(output).toContain("payment?: (env: Record<string, unknown>) => PaymentsFromContextOptions;");
+            expect(output).toContain("const paymentStub: CirrusPayment");
+            expect(output).toContain("config.payment");
+            expect(output).toContain("payments,");
+        });
+
+        it("omits @cirrus/payment entirely when payments are not used", () => {
+            expect.assertions(3);
+
+            const schema: SchemaIR = { tables: [], vectorIndexes: [] };
+
+            const output = emitShard(schema, [], undefined, false, false);
+
+            expect(output).not.toContain("@cirrus/payment");
+            expect(output).not.toContain("paymentsFromContext");
+            expect(output).not.toContain("paymentStub");
+        });
+
+        it("adds a typed ctx.payments to the generated ActionCtx when payments are used", () => {
+            expect.assertions(4);
+
+            const withPayments = emitServer(false, true);
+
+            expect(withPayments).toContain('import type { CirrusPayment } from "@cirrus/payment";');
+            expect(withPayments).toContain("readonly payments: CirrusPayment;");
+
+            const withoutPayments = emitServer(false, false);
+
+            expect(withoutPayments).not.toContain("@cirrus/payment");
+            expect(withoutPayments).not.toContain("readonly payments:");
         });
 
         it("adds a typed ctx.ai to the generated ActionCtx when AI is used (and not otherwise)", () => {

@@ -1,5 +1,7 @@
 export type { AdapterRegistry, PaymentAdapter, WebhookHeaders, WebhookInput } from "./adapter";
 export { createAdapterRegistry } from "./adapter";
+export type { CirrusDatabaseLike, PaymentContextLike, PaymentsFromContextOptions } from "./context";
+export { cirrusDatabaseToPaymentDatabase, paymentsFromContext } from "./context";
 export type { AuthorizeReference, CirrusPayment, CreatePaymentOptions } from "./create-payment";
 export { createPayment } from "./create-payment";
 export type { PaymentDatabase, PaymentRow } from "./database-store";
