@@ -128,4 +128,19 @@ export default defineSchema({
     })
         .global()
         .index("by_org", ["organizationId"]),
+
+    invitations: defineTable({
+        createdAt: v.number(),
+        email: v.string(),
+        expiresAt: v.number(),
+        invitedBy: v.string(),
+        organizationId: v.id("organizations"),
+        role: memberRole,
+        status: v.union(v.literal("pending"), v.literal("accepted"), v.literal("revoked")),
+        // SHA-256 of the invite token; the plaintext is mailed once, never stored.
+        tokenHash: v.string(),
+    })
+        .global()
+        .index("by_org", ["organizationId"])
+        .index("by_token", ["tokenHash"], { unique: true }),
 });

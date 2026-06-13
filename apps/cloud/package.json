@@ -21,6 +21,7 @@
         "@cirrus/client": "workspace:*",
         "@cirrus/d1": "workspace:*",
         "@cirrus/do": "workspace:*",
+        "@cirrus/payment": "workspace:*",
         "@cirrus/runtime": "workspace:*",
         "@cirrus/scheduler": "workspace:*",
         "@cirrus/server": "workspace:*"
