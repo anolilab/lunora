@@ -10,10 +10,14 @@
  * whose `class_name` is not exported by the worker, so binding provisioning is
  * driven strictly by which DO classes the entry actually exports — write
  * `export const ShardDO = …` and the binding appears. Capability imports
- * (`@cirrus/auth`, `@cirrus/scheduler`, `@cirrus/storage`) are softer signals:
- * a project can import `@cirrus/auth` with D1-backed sessions and never wire a
- * `SessionDO`, so those drive *hints*, not writes. `.global()` schemas drive
- * the `DB` D1 binding (D1 is not a Durable Object, so it has no class).
+ * (`@cirrus/auth`, `@cirrus/scheduler`, `@cirrus/storage`, `@cirrus/payment`)
+ * are softer signals: a project can import `@cirrus/auth` with D1-backed
+ * sessions and never wire a `SessionDO`, so those drive *hints*, not writes.
+ * `@cirrus/payment` is softer still — it has no binding at all (payment state
+ * rides the app's existing `ShardDO` via `ctx.db`), so its only config need is
+ * the provider secret pair the user must put in `.dev.vars`, which the
+ * scaffolder can't fabricate; we surface that as a hint. `.global()` schemas
+ * drive the `DB` D1 binding (D1 is not a Durable Object, so it has no class).
  */
 import type { Dirent } from "node:fs";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
@@ -72,6 +76,15 @@ const IMPORT_AUTH_PATTERN = /\bfrom\s+["']@cirrus\/auth["']/;
 const IMPORT_SCHEDULER_PATTERN = /\bfrom\s+["']@cirrus\/scheduler["']/;
 const IMPORT_STORAGE_PATTERN = /\bfrom\s+["']@cirrus\/storage["']/;
 const IMPORT_AI_PATTERN = /\bfrom\s+["']@cirrus\/ai["']/;
+const IMPORT_PAYMENT_PATTERN = /\bfrom\s+["']@cirrus\/payment["']/;
+
+/**
+ * The provider secret pairs `@cirrus/payment` reads at runtime. The package is
+ * provider-agnostic (Stripe-or-Polar, Convex parity); since we can't tell which
+ * adapter a project wires from the import alone, the hint names both pairs so
+ * the user knows exactly which secrets belong in `.dev.vars`.
+ */
+const PAYMENT_PROVIDER_SECRETS = "STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET (Stripe) or POLAR_ACCESS_TOKEN + POLAR_WEBHOOK_SECRET (Polar)";
 
 interface DurableObjectSpec {
     binding: string;
@@ -101,6 +114,8 @@ interface InferredBindings {
     usesAi: boolean;
     /** `@cirrus/auth` is imported (sessions may be D1- or `SessionDO`-backed). */
     usesAuth: boolean;
+    /** `@cirrus/payment` is imported (provider secrets must be set in `.dev.vars`; no binding). */
+    usesPayment: boolean;
     /** `@cirrus/scheduler` is imported. */
     usesScheduler: boolean;
     /** `@cirrus/storage` is imported (R2 bucket binding name is user-defined). */
@@ -112,17 +127,19 @@ interface Capabilities {
     needsD1: boolean;
     usesAi: boolean;
     usesAuth: boolean;
+    usesPayment: boolean;
     usesScheduler: boolean;
     usesStorage: boolean;
 }
 
-const NO_CAPABILITIES: Capabilities = { needsD1: false, usesAi: false, usesAuth: false, usesScheduler: false, usesStorage: false };
+const NO_CAPABILITIES: Capabilities = { needsD1: false, usesAi: false, usesAuth: false, usesPayment: false, usesScheduler: false, usesStorage: false };
 
 const mergeCapabilities = (a: Capabilities, b: Capabilities): Capabilities => {
     return {
         needsD1: a.needsD1 || b.needsD1,
         usesAi: a.usesAi || b.usesAi,
         usesAuth: a.usesAuth || b.usesAuth,
+        usesPayment: a.usesPayment || b.usesPayment,
         usesScheduler: a.usesScheduler || b.usesScheduler,
         usesStorage: a.usesStorage || b.usesStorage,
     };
@@ -144,6 +161,10 @@ const capabilityForImportSource = (source: string): Capabilities => {
 
     if (source === "@cirrus/ai") {
         return { ...NO_CAPABILITIES, usesAi: true };
+    }
+
+    if (source === "@cirrus/payment") {
+        return { ...NO_CAPABILITIES, usesPayment: true };
     }
 
     return NO_CAPABILITIES;
@@ -178,6 +199,7 @@ const regexCapabilities = (code: string): Capabilities => {
         needsD1: false,
         usesAi: IMPORT_AI_PATTERN.test(code),
         usesAuth: IMPORT_AUTH_PATTERN.test(code),
+        usesPayment: IMPORT_PAYMENT_PATTERN.test(code),
         usesScheduler: IMPORT_SCHEDULER_PATTERN.test(code),
         usesStorage: IMPORT_STORAGE_PATTERN.test(code),
     };
@@ -407,6 +429,10 @@ const describeSignals = (
         signals.push("hint: @cirrus/storage is imported; add an r2_buckets binding (bucket binding names are user-defined)");
     }
 
+    if (capabilities.usesPayment) {
+        signals.push(`hint: @cirrus/payment is imported; set the provider secrets in .dev.vars — ${PAYMENT_PROVIDER_SECRETS}`);
+    }
+
     return signals;
 };
 
@@ -435,6 +461,7 @@ const inferCirrusBindings = async (options: InferOptions): Promise<InferredBindi
         signals: describeSignals(durableObjects, needsD1, capabilities, containers),
         usesAi: capabilities.usesAi,
         usesAuth: capabilities.usesAuth,
+        usesPayment: capabilities.usesPayment,
         usesScheduler: capabilities.usesScheduler,
         usesStorage: capabilities.usesStorage,
     };

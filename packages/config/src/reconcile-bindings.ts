@@ -82,7 +82,7 @@ interface ReconcileStep {
  * `wrangler.jsonc`, when one was read) suppresses a hint whose binding is already
  * configured, so a correctly-wired project starts the dev server clean.
  *
- * Storage is silent once any `r2_buckets` binding exists (cirrus can't pick the bucket name, but if one is already declared there's nothing to add). Auth is silent once sessions have a store — a `DB` D1 binding (the default, D1-backed) or an exported `SessionDO` (DO-backed); only a project with neither has nowhere to put sessions, so only that case warns. Scheduler keys on the `SchedulerDO` export, the safe binding signal.
+ * Storage is silent once any `r2_buckets` binding exists (cirrus can't pick the bucket name, but if one is already declared there's nothing to add). Auth is silent once sessions have a store — a `DB` D1 binding (the default, D1-backed) or an exported `SessionDO` (DO-backed); only a project with neither has nowhere to put sessions, so only that case warns. Scheduler keys on the `SchedulerDO` export, the safe binding signal. Payment has no binding at all — state rides the app's existing `ShardDO` via `ctx.db`; its only need is the provider secret pair, which lives in `.dev.vars` (not `wrangler.jsonc`), so the reminder fires whenever payment is used and nothing here can confirm it away.
  */
 const collectWarnings = (inferred: InferredBindings, parsed?: WranglerShape): string[] => {
     const exported = new Set(inferred.durableObjects.map((object) => object.className));
@@ -122,6 +122,16 @@ const collectWarnings = (inferred: InferredBindings, parsed?: WranglerShape): st
     // decision we respect — but flag, since it silently swallows container logs.
     if (inferred.containers.length > 0 && parsed?.observability?.enabled === false) {
         warnings.push("containers are declared but observability is explicitly disabled in wrangler.jsonc — container logs will not be captured.");
+    }
+
+    if (inferred.usesPayment) {
+        // Payment state rides the app's existing ShardDO via ctx.db, so there is
+        // no wrangler binding to provision — only the provider secrets, which
+        // live in .dev.vars (not wrangler.jsonc) and the scaffolder can't
+        // fabricate. We always remind, since wrangler.jsonc can't confirm them.
+        warnings.push(
+            "@cirrus/payment is used; set the provider secrets in .dev.vars — STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET (Stripe) or POLAR_ACCESS_TOKEN + POLAR_WEBHOOK_SECRET (Polar).",
+        );
     }
 
     return warnings;

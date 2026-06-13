@@ -1,0 +1,254 @@
+{
+  "migrationIds": [],
+  "tables": {
+    "customers": {
+      "fields": {
+        "createdAt": {
+          "kind": "number",
+          "optional": false
+        },
+        "email": {
+          "kind": "string",
+          "optional": true
+        },
+        "provider": {
+          "kind": "string",
+          "optional": false
+        },
+        "providerCustomerId": {
+          "kind": "string",
+          "optional": false
+        },
+        "referenceId": {
+          "kind": "string",
+          "optional": false
+        }
+      },
+      "indexes": {
+        "by_reference": {
+          "fields": [
+            "referenceId"
+          ],
+          "unique": false
+        },
+        "by_provider_customer": {
+          "fields": [
+            "provider",
+            "providerCustomerId"
+          ],
+          "unique": true
+        }
+      },
+      "relations": {},
+      "shardMode": "root"
+    },
+    "events": {
+      "fields": {
+        "processedAt": {
+          "kind": "number",
+          "optional": false
+        },
+        "provider": {
+          "kind": "string",
+          "optional": false
+        },
+        "providerEventId": {
+          "kind": "string",
+          "optional": false
+        },
+        "type": {
+          "kind": "string",
+          "optional": false
+        }
+      },
+      "indexes": {
+        "by_provider_event": {
+          "fields": [
+            "provider",
+            "providerEventId"
+          ],
+          "unique": true
+        }
+      },
+      "relations": {},
+      "shardMode": "root"
+    },
+    "paymentSessions": {
+      "fields": {
+        "amountMinor": {
+          "kind": "bigint",
+          "optional": false
+        },
+        "capturedMinor": {
+          "kind": "bigint",
+          "optional": false
+        },
+        "createdAt": {
+          "kind": "number",
+          "optional": false
+        },
+        "currency": {
+          "kind": "string",
+          "optional": false
+        },
+        "provider": {
+          "kind": "string",
+          "optional": false
+        },
+        "providerSessionId": {
+          "kind": "string",
+          "optional": false
+        },
+        "referenceId": {
+          "kind": "string",
+          "optional": false
+        },
+        "refundedMinor": {
+          "kind": "bigint",
+          "optional": false
+        },
+        "state": {
+          "kind": "string",
+          "optional": false
+        },
+        "updatedAt": {
+          "kind": "number",
+          "optional": false
+        }
+      },
+      "indexes": {
+        "by_reference": {
+          "fields": [
+            "referenceId"
+          ],
+          "unique": false
+        },
+        "by_provider_session": {
+          "fields": [
+            "provider",
+            "providerSessionId"
+          ],
+          "unique": true
+        }
+      },
+      "relations": {},
+      "shardMode": "root"
+    },
+    "subscriptions": {
+      "fields": {
+        "cancelAtPeriodEnd": {
+          "kind": "boolean",
+          "optional": false
+        },
+        "createdAt": {
+          "kind": "number",
+          "optional": false
+        },
+        "currentPeriodEnd": {
+          "kind": "number",
+          "optional": true
+        },
+        "currentPeriodStart": {
+          "kind": "number",
+          "optional": true
+        },
+        "priceId": {
+          "kind": "string",
+          "optional": false
+        },
+        "provider": {
+          "kind": "string",
+          "optional": false
+        },
+        "providerSubscriptionId": {
+          "kind": "string",
+          "optional": false
+        },
+        "quantity": {
+          "kind": "number",
+          "optional": false
+        },
+        "referenceId": {
+          "kind": "string",
+          "optional": false
+        },
+        "state": {
+          "kind": "string",
+          "optional": false
+        },
+        "updatedAt": {
+          "kind": "number",
+          "optional": false
+        }
+      },
+      "indexes": {
+        "by_reference": {
+          "fields": [
+            "referenceId"
+          ],
+          "unique": false
+        },
+        "by_provider_subscription": {
+          "fields": [
+            "provider",
+            "providerSubscriptionId"
+          ],
+          "unique": true
+        }
+      },
+      "relations": {},
+      "shardMode": "root"
+    },
+    "usageEvents": {
+      "fields": {
+        "createdAt": {
+          "kind": "number",
+          "optional": false
+        },
+        "featureId": {
+          "kind": "string",
+          "optional": false
+        },
+        "idempotencyKey": {
+          "kind": "string",
+          "optional": false
+        },
+        "provider": {
+          "kind": "string",
+          "optional": false
+        },
+        "quantity": {
+          "kind": "number",
+          "optional": false
+        },
+        "referenceId": {
+          "kind": "string",
+          "optional": false
+        },
+        "reportedToProvider": {
+          "kind": "boolean",
+          "optional": false
+        }
+      },
+      "indexes": {
+        "by_reference_feature": {
+          "fields": [
+            "referenceId",
+            "featureId"
+          ],
+          "unique": false
+        },
+        "by_idempotency": {
+          "fields": [
+            "provider",
+            "idempotencyKey"
+          ],
+          "unique": true
+        }
+      },
+      "relations": {},
+      "shardMode": "root"
+    }
+  },
+  "version": 1
+}

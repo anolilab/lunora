@@ -13,6 +13,7 @@ import { discoverFunctions, listCirrusSourceFiles } from "./discover-functions";
 import discoverHttpRoutes from "./discover-http-routes";
 import discoverInserts from "./discover-inserts";
 import discoverMigrations from "./discover-migrations";
+import discoverPaymentUsage from "./discover-payment-usage";
 import discoverQueries from "./discover-queries";
 import discoverRlsProcedures, { discoverRlsMetadata } from "./discover-rls-procedures";
 import discoverSchema from "./discover-schema";
@@ -210,16 +211,22 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // ActionCtx — so non-AI projects never import the AI SDK into their worker.
     const hasAi = discoverAiUsage(project, cirrusDirectory);
 
+    // Whether any function uses payments (imports `@cirrus/payment` or reads
+    // `ctx.payments`). Gates wiring `ctx.payments` into the generated ShardDO +
+    // the typed ActionCtx — so non-payment projects never import it into their worker.
+    const hasPayments = discoverPaymentUsage(project, cirrusDirectory);
+
     const dataModelContent = emitDataModel(schema);
     const apiContent = emitApi(functions);
     const serverContent = emitServer(
         hasAi,
+        hasPayments,
         schema,
         storageRulesMetadata.rules.map((rule) => rule.bucket),
         containers,
     );
     const functionsContent = emitFunctions(functions, migrations);
-    const shardContent = emitShard(schema, advisories, rlsMetadata, hasAi, storageRulesMetadata, containers);
+    const shardContent = emitShard(schema, advisories, rlsMetadata, hasAi, hasPayments, storageRulesMetadata, containers);
     const containersContent = emitContainers(containers);
     const cronsContent = emitCrons(crons);
     const vectorsContent = emitVectors(schema.vectorIndexes);

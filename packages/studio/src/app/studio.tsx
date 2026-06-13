@@ -38,6 +38,7 @@ import { MailPanel } from "../features/logs/mail-panel";
 import type { SchedulePanelProps } from "../features/logs/schedule-panel";
 import { SchedulePanel } from "../features/logs/schedule-panel";
 import SubscriptionsPanel from "../features/logs/subscriptions-panel";
+import { PaymentsPanel } from "../features/payments/payments-panel";
 import DashboardsPanel from "../features/reports/dashboards-panel";
 import { HealthPanel } from "../features/reports/health-panel";
 import { MetricsPanel } from "../features/reports/metrics-panel";
@@ -75,6 +76,7 @@ type StudioTab =
     | "metrics"
     | "migrations"
     | "organizations"
+    | "payments"
     | "pitr"
     | "realtime"
     | "rls"
@@ -202,6 +204,7 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
     insights: <path d="M12 3a6 6 0 0 0-3.6 10.8c.5.4.8.9.9 1.5l.2 1.2h5l.2-1.2c.1-.6.4-1.1.9-1.5A6 6 0 0 0 12 3ZM9.5 20.5h5M10 18h4" />,
     logs: <path d="M5 6h14M5 10h14M5 14h9M5 18h11" />,
     mail: <path d="M4 5h16v14H4V5Zm0 1.5 8 6 8-6" />,
+    payments: <path d="M3 7h18v10H3V7Zm0 3h18M7 14h4" />,
     metrics: <path d="M5 20V10m6.5 10V4M18 20v-7M3 20h18" />,
     migrations: <path d="M4 12a8 8 0 0 1 13.7-5.6L20 8M20 4v4h-4M20 12a8 8 0 0 1-13.7 5.6L4 16m0 4v-4h4" />,
     organizations: <path d="M3 21V8l6-4 6 4v13M9 21v-5h2v5M15 11h6v10M18 14v.01M18 17v.01M6 9v.01M6 12v.01M6 15v.01" />,
@@ -240,7 +243,7 @@ const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
     { key: "storage", tabs: ["files", "storageRules"] },
     { key: "reports", tabs: ["dashboards", "metrics", "health"] },
     { key: "advisors", tabs: ["security", "rls", "insights"] },
-    { key: "logs", tabs: ["logs", "audit", "schedule", "realtime", "mail", "drains"] },
+    { key: "logs", tabs: ["logs", "audit", "schedule", "realtime", "mail", "drains", "payments"] },
     { key: "settings", tabs: ["settings"] },
 ];
 
@@ -305,6 +308,7 @@ const TABS = [
     "logs",
     "realtime",
     "mail",
+    "payments",
     "audit",
     "schedule",
     "drains",
@@ -363,6 +367,7 @@ const StudioLayout = (): ReactElement => {
             organizations: t("Organizations"),
             pitr: t("Time Travel"),
             mail: t("Mail"),
+            payments: t("Payments"),
             realtime: t("Realtime"),
             rls: t("RLS Policies"),
             schedule: t("Scheduled"),
@@ -413,6 +418,7 @@ const StudioLayout = (): ReactElement => {
             organizations: t("Browse and manage organizations, members, and invitations."),
             pitr: t("Restore a shard to a point in the last 30 days."),
             mail: t("Email your app sent, captured in dev."),
+            payments: t("Synced customers, subscriptions, and webhook events."),
             realtime: t("Active WebSocket subscriptions on this shard."),
             rls: t("Inspect row-level-security policies and roles, per table."),
             schedule: t("Inspect and cancel scheduled jobs."),
@@ -736,6 +742,7 @@ const buildRouter = ({
         organizations: <OrganizationsPanel />,
         pitr: <PitrPanel initialShardKey={initialShardKey} />,
         mail: <MailPanel />,
+        payments: <PaymentsPanel />,
         realtime: <SubscriptionsPanel initialShardKey={initialShardKey} />,
         rls: <RlsPanel />,
         schedule: <SchedulePanel loadCronJobs={scheduledCron} scheduledCancel={scheduledCancel} scheduledLoad={scheduledLoad} />,

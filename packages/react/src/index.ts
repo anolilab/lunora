@@ -11,6 +11,8 @@ export type { AuthState } from "./auth-state";
 export { useAuthState } from "./auth-state";
 export type { CirrusProviderProps } from "./cirrus-provider";
 export { CirrusProvider, useCirrus } from "./cirrus-provider";
+export type { CheckoutButtonProps, CustomerPortalButtonProps, RedirectTarget, RedirectTrigger, Subscription, UseCheckoutResult } from "./payment";
+export { CheckoutButton, CustomerPortalButton, useCheckout } from "./payment";
 export type { CirrusQueryOptions } from "./query-options";
 export { cirrusQueryOptions } from "./query-options";
 export type {

@@ -7,7 +7,9 @@ import { describe, expect, it, vi } from "vitest";
 import { CirrusProvider } from "../src/cirrus-provider";
 import { usePaginatedQuery } from "../src/use-paginated-query";
 
-const makeRef = (ref: string): FunctionReference => ({ __cirrusRef: ref });
+const makeRef = (ref: string): FunctionReference => {
+    return { __cirrusRef: ref };
+};
 
 interface PaginationOpts {
     cursor: null | string;
@@ -142,9 +144,13 @@ describe("usePaginatedCore — attach/detach refcount churn", () => {
         // page key, so the prior page's subscription must detach and a new one
         // must attach. Done inside a single `act` to maximize batching/churn.
         act(() => {
+            // eslint-disable-next-line sonarjs/no-extra-arguments -- React state setter takes an arg; sonarjs misreads its arity
             setVariant(1);
+            // eslint-disable-next-line sonarjs/no-extra-arguments -- React state setter takes an arg; sonarjs misreads its arity
             setVariant(2);
+            // eslint-disable-next-line sonarjs/no-extra-arguments -- React state setter takes an arg; sonarjs misreads its arity
             setVariant(3);
+            // eslint-disable-next-line sonarjs/no-extra-arguments -- React state setter takes an arg; sonarjs misreads its arity
             setVariant(4);
         });
 
@@ -194,6 +200,7 @@ describe("usePaginatedCore — attach/detach refcount churn", () => {
         for (let index = 0; index < 6; index += 1) {
             // eslint-disable-next-line no-await-in-loop -- intentional: settle each toggle before the next to drive distinct effect passes.
             await act(async () => {
+                // eslint-disable-next-line sonarjs/no-extra-arguments -- React state setter takes an arg; sonarjs misreads its arity
                 setVariant(index % 2);
             });
         }

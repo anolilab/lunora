@@ -20,6 +20,7 @@ const baseInferred = (overrides: Partial<InferredBindings> = {}): InferredBindin
         signals: [],
         usesAi: false,
         usesAuth: false,
+        usesPayment: false,
         usesScheduler: false,
         usesStorage: false,
         ...overrides,
@@ -165,6 +166,17 @@ describe("reconcileWranglerBindings", () => {
 
         expect(result.warnings.join(" ")).toMatch(/r2_buckets/u);
         expect(readConfig().r2_buckets).toBeUndefined();
+    });
+
+    it("warns to set the provider secrets when @cirrus/payment is used, without adding any binding", () => {
+        expect.assertions(3);
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesPayment: true }));
+
+        expect(result.warnings.join(" ")).toMatch(/STRIPE_SECRET_KEY.*POLAR_ACCESS_TOKEN/u);
+        // Payment rides the existing ShardDO via ctx.db — no new binding written.
+        expect(result.changed).toBe(false);
+        expect(readConfig().durable_objects.bindings.map((binding: { name: string }) => binding.name)).toEqual(["SHARD"]);
     });
 
     it("warns when auth is used but no SessionDO is exported, without binding SESSION", () => {
