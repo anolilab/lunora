@@ -56,6 +56,7 @@ const ADMIN_FUNCTIONS = {
     rankPage: "__cirrus_admin__:rankPage",
     readTablePage: "__cirrus_admin__:readTablePage",
     recordAuthEvent: "__cirrus_admin__:recordAuthEvent",
+    recordContainerEvent: "__cirrus_admin__:recordContainerEvent",
     recordMail: "__cirrus_admin__:recordMail",
     rlsPolicies: "__cirrus_admin__:rlsPolicies",
     runAs: "__cirrus_admin__:runAs",
@@ -934,7 +935,17 @@ const summarizeSubscriptions = (attachments: SocketAttachmentLike[]): Subscripti
     return { connections, totalConnections: connections.length, totalSubscriptions };
 };
 
-export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, findStorageReferences, listTables, MAX_PAGE_SIZE, readTablePage, RELATION_FUNCTION_PREFIX, selectMatchingIds, summarizeSubscriptions };
+export {
+    ADMIN_FUNCTION_PREFIX,
+    ADMIN_FUNCTIONS,
+    findStorageReferences,
+    listTables,
+    MAX_PAGE_SIZE,
+    readTablePage,
+    RELATION_FUNCTION_PREFIX,
+    selectMatchingIds,
+    summarizeSubscriptions,
+};
 export type {
     AdvisoriesResult,
     AdvisoryFinding,

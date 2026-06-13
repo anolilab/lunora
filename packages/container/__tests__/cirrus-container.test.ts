@@ -119,4 +119,34 @@ describe("cirrusContainer lifecycle logging", () => {
         expect(() => build().onError(new Error("crashed"))).toThrow("crashed");
         expect(JSON.parse((spy.mock.calls[0]![0] as string) ?? "{}")).toMatchObject({ event: "error", level: "error", message: "crashed" });
     });
+
+    it("does not break onStart when the ShardDO push throws (best-effort)", async () => {
+        expect.assertions(2);
+
+        const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+        // A SHARD namespace whose stub throws synchronously on `.fetch` — the
+        // best-effort push must swallow it, so `onStart` still resolves and the
+        // terminal still gets the event.
+        const throwingStub = {
+            fetch: () => {
+                throw new Error("shard unreachable");
+            },
+        };
+        const throwingShard = {
+            get: () => throwingStub,
+            idFromName: (name: string) => name,
+        };
+
+        const definition = defineContainer({ image: "./app" });
+        const instance = new CirrusContainer(
+            fakeDurableObjectContext() as never,
+            { CIRRUS_ADMIN_TOKEN: "s3cret", SHARD: throwingShard },
+            definition,
+            "transcoder",
+        );
+
+        await expect(instance.onStart()).resolves.toBeUndefined();
+        expect(JSON.parse((spy.mock.calls.at(-1)![0] as string) ?? "{}")).toMatchObject({ event: "start", type: "container" });
+    });
 });

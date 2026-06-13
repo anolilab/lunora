@@ -12,6 +12,7 @@ import { Container } from "@cloudflare/containers";
 import { resolveContainerEnvVars as resolveContainerEnvVariables } from "../define-container";
 import { emitContainerLifecycle } from "../lifecycle-event";
 import type { ContainerDefinition } from "../types";
+import { reportContainerLifecycle } from "./report-lifecycle";
 
 type DurableObjectContext = ConstructorParameters<typeof Container>[0];
 
@@ -51,21 +52,41 @@ class CirrusContainer<Env = unknown> extends Container<Env> {
     }
 
     public override onError(error: unknown): unknown {
-        emitContainerLifecycle(this.cirrusName, this.instanceId(), "error", error instanceof Error ? error.message : String(error));
+        const envelope = emitContainerLifecycle(this.cirrusName, this.instanceId(), "error", error instanceof Error ? error.message : String(error));
+
+        this.surfaceInStudioLogs(envelope);
 
         return super.onError(error);
     }
 
     public override async onStart(): Promise<void> {
-        emitContainerLifecycle(this.cirrusName, this.instanceId(), "start");
+        const envelope = emitContainerLifecycle(this.cirrusName, this.instanceId(), "start");
+
+        this.surfaceInStudioLogs(envelope);
 
         await super.onStart();
     }
 
     public override async onStop(parameters: StopParams): Promise<void> {
-        emitContainerLifecycle(this.cirrusName, this.instanceId(), "stop", `${parameters.reason} (exit ${String(parameters.exitCode)})`);
+        const envelope = emitContainerLifecycle(this.cirrusName, this.instanceId(), "stop", `${parameters.reason} (exit ${String(parameters.exitCode)})`);
+
+        this.surfaceInStudioLogs(envelope);
 
         await super.onStop(parameters);
+    }
+
+    /**
+     * Best-effort push of `envelope` into the root ShardDO's log buffer so it
+     * also appears in the Studio Logs panel (the terminal already has it via
+     * `emitContainerLifecycle`). Fire-and-forget and fully swallowed: a missing
+     * `SHARD` binding, a missing admin token, or a fetch failure NEVER throws
+     * out of a lifecycle hook — the `console` path stays the source of truth.
+     */
+    private surfaceInStudioLogs(envelope: ReturnType<typeof emitContainerLifecycle>): void {
+        // Fire-and-forget. `reportContainerLifecycle` already swallows every
+        // failure internally; the trailing `.catch` is belt-and-suspenders so a
+        // rejected promise can never become an unhandled rejection out of a hook.
+        reportContainerLifecycle(this.env, envelope).catch(() => {});
     }
 
     /**

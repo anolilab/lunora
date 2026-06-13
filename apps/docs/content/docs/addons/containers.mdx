@@ -230,6 +230,13 @@ with your `ctx.log` and RPC lines:
 [cirrus] container:transcoder#a1b2c3d4  error  exited unexpectedly
 ```
 
+The same events also appear in the Studio **Logs** panel: each lifecycle
+transition is best-effort pushed into the root shard's log buffer under the
+`container:<name>` source, so a crash-looping container shows up next to your
+function logs without leaving the dashboard. The push is best-effort by design —
+if it can't reach the shard, the `cirrus dev` terminal above remains the source
+of truth.
+
 ## Advisories
 
 Two [advisor](/docs/addons/studio) lints flag container cost/security footguns

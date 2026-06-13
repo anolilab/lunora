@@ -46,6 +46,7 @@ import {
     selectMatchingIds,
     summarizeSubscriptions,
 } from "./introspect";
+import type { LogEntry } from "./log-buffer";
 import { LogBuffer } from "./log-buffer";
 import type { RecordMailInput } from "./mail-catcher";
 import { clearCapturedMail, MAIL_TABLE, readCapturedMail, recordCapturedMail } from "./mail-catcher";
@@ -751,6 +752,56 @@ const parseRecordAuthEventArgs = (args: Record<string, unknown>): { outcome: "fa
     }
 
     return { outcome };
+};
+
+/**
+ * The mapped {@link LogEntry} one container lifecycle event becomes once parsed.
+ * `functionPath` is the synthetic `container:&lt;name>` source so the Studio Logs
+ * panel renders the row alongside `ctx.log` lines; `level` is folded to the
+ * buffer's level set; `message` is a compact `&lt;event>` / `&lt;event>: &lt;detail>`.
+ */
+type ContainerLogEntry = LogEntry & { functionPath: string };
+
+/**
+ * Validate the `__cirrus_admin__:recordContainerEvent` payload — the Container
+ * DO's best-effort push of one lifecycle transition (`@cirrus/container`'s
+ * `reportContainerLifecycle`). The reserved op carries the same envelope
+ * `emitContainerLifecycle` prints to the dev terminal under `args.event`, so the
+ * terminal and the Studio Logs panel never diverge. Maps it to a {@link LogEntry}
+ * with `functionPath: "container:&lt;name>"`. A malformed envelope throws a 400
+ * `CirrusError`, matching the other admin write parsers.
+ */
+const parseRecordContainerEventArgs = (args: Record<string, unknown>): ContainerLogEntry => {
+    const raw = args["event"];
+
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+        throw Object.assign(new Error("recordContainerEvent: `event` must be an object"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+    }
+
+    const envelope = raw as Record<string, unknown>;
+    const container = typeof envelope["container"] === "string" ? envelope["container"] : "";
+    const event = typeof envelope["event"] === "string" ? envelope["event"] : "";
+
+    if (container.trim() === "" || event.trim() === "") {
+        throw Object.assign(new Error("recordContainerEvent: `event.container` and `event.event` are required"), {
+            code: "BAD_REQUEST",
+            name: "CirrusError",
+            status: 400,
+        });
+    }
+
+    // Fold the envelope's `error`/`info` level into the buffer's level set
+    // (anything but `error` is informational, keeping the panel's filters stable).
+    const level = envelope["level"] === "error" ? "error" : "info";
+    const detail = typeof envelope["message"] === "string" ? envelope["message"] : undefined;
+    const timestamp = typeof envelope["ts"] === "number" ? envelope["ts"] : Date.now();
+
+    return {
+        functionPath: `container:${container}`,
+        level,
+        message: detail === undefined || detail === "" ? event : `${event}: ${detail}`,
+        timestamp,
+    };
 };
 
 /**
@@ -3127,6 +3178,10 @@ abstract class ShardDO {
             return this.handleRecordAuthEvent(args);
         }
 
+        if (functionPath === ADMIN_FUNCTIONS.recordContainerEvent) {
+            return this.handleRecordContainerEvent(args);
+        }
+
         if (functionPath === ADMIN_FUNCTIONS.recordMail) {
             return this.handleRecordMail(args);
         }
@@ -3159,6 +3214,25 @@ abstract class ShardDO {
         } catch {
             // Best-effort: a metrics write must never fail the call.
         }
+
+        return jsonResponse({ result: { recorded: true } }, 200);
+    }
+
+    /**
+     * Append one container lifecycle event to the in-memory {@link LogBuffer}
+     * the `getLogs` admin RPC reads, so a start/stop/error on a Container DO
+     * surfaces in the Studio Logs panel — not just the dev terminal. The
+     * Container DO pushes this best-effort (its `console` print stays the source
+     * of truth), so a missing/garbage envelope is rejected up front (400) rather
+     * than corrupting the buffer. Mapped to `functionPath: "container:&lt;name>"` so
+     * the panel renders it alongside `ctx.log` lines. Admin-gated by
+     * `handleAdminRpc`'s caller (the same `CIRRUS_ADMIN_TOKEN` bearer as every
+     * other admin write).
+     */
+    private handleRecordContainerEvent(args: Record<string, unknown>): Response {
+        const entry = parseRecordContainerEventArgs(args);
+
+        this.logs.push(entry);
 
         return jsonResponse({ result: { recorded: true } }, 200);
     }
@@ -3525,11 +3599,7 @@ abstract class ShardDO {
      * {@link readAdminOp} falls through; folded into one helper to keep that
      * dispatcher under its complexity budget.
      */
-    private readAdminStorageSignal(
-        functionPath: string,
-        sql: SqlExec,
-        args: Record<string, unknown>,
-    ): undefined | { result: unknown; tables: Set<string> } {
+    private readAdminStorageSignal(functionPath: string, sql: SqlExec, args: Record<string, unknown>): undefined | { result: unknown; tables: Set<string> } {
         if (functionPath === ADMIN_FUNCTIONS.storageReferences) {
             return this.readAdminStorageReferences(sql, args);
         }

@@ -400,6 +400,62 @@ describe("shardDO admin introspection", () => {
         expect(recordResponse.status).toBe(403);
         expect(readResponse.status).toBe(403);
     });
+
+    it("recordContainerEvent surfaces a container lifecycle event in the getLogs stream", async () => {
+        expect.assertions(4);
+
+        const shard = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const envelope = {
+            container: "transcoder",
+            event: "stop",
+            instance: "do-abc123",
+            level: "info",
+            message: "runtime_signal (exit 137)",
+            source: "cirrus",
+            ts: 1_700_000_000_000,
+            type: "container",
+        };
+
+        const recorded = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.recordContainerEvent, { event: envelope }, ADMIN_TOKEN));
+
+        expect(recorded.status).toBe(200);
+        await expect(recorded.json()).resolves.toEqual({ result: { recorded: true } });
+
+        const logs = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getLogs, {}, ADMIN_TOKEN));
+        const body = await logs.json<{ result: { entries: { functionPath?: string; level: string; message: string; timestamp: number }[] } }>();
+
+        expect(logs.status).toBe(200);
+        // `functionPath` groups it as a container source; the message folds the
+        // transition and the detail; the timestamp is the envelope's `ts`.
+        expect(body.result.entries).toContainEqual({
+            functionPath: "container:transcoder",
+            level: "info",
+            message: "stop: runtime_signal (exit 137)",
+            timestamp: 1_700_000_000_000,
+        });
+    });
+
+    it("rejects (400) a recordContainerEvent with a missing envelope", async () => {
+        expect.assertions(2);
+
+        const shard = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.recordContainerEvent, { event: { event: "start" } }, ADMIN_TOKEN));
+
+        expect(response.status).toBe(400);
+        await expect(response.json()).resolves.toMatchObject({ error: { code: "BAD_REQUEST" } });
+    });
+
+    it("admin-gates recordContainerEvent (403 without the bearer)", async () => {
+        expect.assertions(1);
+
+        const shard = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.recordContainerEvent, { event: { container: "c", event: "start" } }));
+
+        expect(response.status).toBe(403);
+    });
 });
 
 const usersSchema: SchemaLike = {
