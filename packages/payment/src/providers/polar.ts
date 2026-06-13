@@ -10,13 +10,15 @@
 import type { PaymentAdapter, WebhookInput } from "../adapter";
 import { CirrusPaymentError } from "../errors";
 import { asRecord, readBoolean, readNumber, readString } from "../json";
-import { money } from "../money";
+import { money, zeroMoney } from "../money";
 import type {
     CaptureInput,
     CheckoutInput,
     CheckoutResult,
     Customer,
     CustomerRef,
+    PaymentSession,
+    PaymentState,
     PortalInput,
     Subscription,
     SubscriptionPatch,
@@ -36,12 +38,22 @@ interface PolarSubscriptionLike {
     readonly status: string;
 }
 
+interface PolarOrderLike {
+    readonly amount?: number;
+    readonly currency?: string;
+    readonly id: string;
+    readonly status: string;
+    readonly totalAmount?: number;
+}
+
 interface PolarClientLike {
     readonly checkouts: { create: (parameters: Record<string, unknown>) => Promise<{ id: string; url: string }> };
     readonly customers: { create: (parameters: Record<string, unknown>) => Promise<{ email: null | string; id: string }> };
     readonly customerSessions: { create: (parameters: Record<string, unknown>) => Promise<{ customerPortalUrl: string }> };
+    readonly orders: { get: (parameters: Record<string, unknown>) => Promise<PolarOrderLike> };
     readonly refunds: { create: (parameters: Record<string, unknown>) => Promise<{ id: string }> };
     readonly subscriptions: {
+        get: (parameters: Record<string, unknown>) => Promise<PolarSubscriptionLike>;
         revoke: (parameters: Record<string, unknown>) => Promise<PolarSubscriptionLike>;
         update: (parameters: Record<string, unknown>) => Promise<PolarSubscriptionLike>;
     };
@@ -52,6 +64,13 @@ interface PolarAdapterOptions {
     readonly webhookSecret: string;
     readonly webhookToleranceSeconds?: number;
 }
+
+const PAYMENT_STATE_BY_POLAR_ORDER_STATUS: Record<string, PaymentState> = {
+    paid: "captured",
+    partially_refunded: "partially_refunded",
+    pending: "initiated",
+    refunded: "refunded",
+};
 
 const SUBSCRIPTION_STATE_BY_POLAR_STATUS: Record<string, SubscriptionState> = {
     active: "active",
@@ -90,6 +109,26 @@ const subscriptionFromPolar = (subscription: PolarSubscriptionLike): Subscriptio
         quantity: 1,
         referenceId: subscription.metadata?.referenceId ?? "",
         state: SUBSCRIPTION_STATE_BY_POLAR_STATUS[subscription.status] ?? "active",
+        updatedAt: now,
+    };
+};
+
+const orderToSession = (order: PolarOrderLike): PaymentSession => {
+    const now = Date.now();
+    const currency = order.currency ?? "usd";
+    const amount = money(BigInt(order.totalAmount ?? order.amount ?? 0), currency);
+    const state = PAYMENT_STATE_BY_POLAR_ORDER_STATUS[order.status] ?? "initiated";
+    const settled = state === "captured" || state === "partially_refunded" || state === "refunded";
+
+    return {
+        amount,
+        capturedAmount: settled ? amount : zeroMoney(currency),
+        createdAt: now,
+        id: order.id,
+        provider: "polar",
+        referenceId: "",
+        refundedAmount: state === "refunded" ? amount : zeroMoney(currency),
+        state,
         updatedAt: now,
     };
 };
@@ -212,6 +251,10 @@ export const createPolarAdapter = (options: PolarAdapterOptions): PaymentAdapter
 
             return { createdAt: Date.now(), email: customer.email ?? undefined, id: customer.id, provider: "polar", referenceId: ref.referenceId };
         },
+
+        getPaymentStatus: async (sessionId) => orderToSession(await client.orders.get({ id: sessionId })),
+
+        getSubscriptionStatus: async (subscriptionId) => subscriptionFromPolar(await client.subscriptions.get({ id: subscriptionId })),
 
         identifier: "polar",
 

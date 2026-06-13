@@ -42,6 +42,10 @@ export interface PaymentAdapter {
     createCheckout: (input: CheckoutInput) => Promise<CheckoutResult>;
     createPortalSession: (input: PortalInput) => Promise<{ url: string }>;
     getOrCreateCustomer: (ref: CustomerRef) => Promise<Customer>;
+    /** Fetch the provider's current truth for a payment session — the basis for reconciliation. */
+    getPaymentStatus: (sessionId: string) => Promise<PaymentSession>;
+    /** Fetch the provider's current truth for a subscription — the basis for reconciliation. */
+    getSubscriptionStatus: (subscriptionId: string) => Promise<Subscription>;
     /** Stable provider identifier (Medusa-style). */
     readonly identifier: ProviderId;
     /** Verify the signature over the raw body, then normalize the event. Throws on invalid signature. */

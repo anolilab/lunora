@@ -26,6 +26,8 @@ export type { PolarAdapterOptions, PolarClientLike } from "./providers/polar";
 export { createPolarAdapter } from "./providers/polar";
 export type { StripeAdapterOptions, StripeClientLike } from "./providers/stripe";
 export { createStripeAdapter } from "./providers/stripe";
+export type { ReconcileInput, ReconcileResult } from "./reconcile";
+export { reconcile } from "./reconcile";
 export { default as paymentTables } from "./schema";
 export type { PaymentAction, SubscriptionAction } from "./state-machine";
 export {

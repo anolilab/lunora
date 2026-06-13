@@ -62,6 +62,10 @@ const fakeAdapter: PaymentAdapter = {
     getOrCreateCustomer: async (ref) => {
         return { createdAt: 0, id: "cus_1", provider: "stripe", referenceId: ref.referenceId };
     },
+    getPaymentStatus: async () => {
+        throw new Error("not used");
+    },
+    getSubscriptionStatus: async () => subscription("user_1"),
     identifier: "stripe",
     parseWebhook: async () => {
         return { eventId: "e", provider: "stripe", type: "unhandled" };

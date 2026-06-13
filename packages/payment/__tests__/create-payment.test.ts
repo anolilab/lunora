@@ -41,6 +41,10 @@ const fakeAdapter = (overrides: Partial<PaymentAdapter> = {}): PaymentAdapter =>
         getOrCreateCustomer: async (ref) => {
             return { createdAt: 0, id: "cus_1", provider: "stripe", referenceId: ref.referenceId };
         },
+        getPaymentStatus: async () => {
+            throw new Error("not used");
+        },
+        getSubscriptionStatus: async () => subscription("user_1", "active"),
         identifier: "stripe",
         parseWebhook: async ({ payload }) => JSON.parse(payload) as WebhookAction,
         refundPayment: async () => {

@@ -60,6 +60,9 @@ const makeClient = (calls: RecordedCall[]): StripeClientLike => {
             cancel: async (id) => {
                 return { id, metadata: { referenceId: "user_1" }, status: "canceled" };
             },
+            retrieve: async (id) => {
+                return { id, items: { data: [{ price: { id: "price_1" }, quantity: 1 }] }, metadata: { referenceId: "user_1" }, status: "active" };
+            },
             update: async (id, parameters, options) => {
                 calls.push({ args: [id, parameters, options], name: "sub.update" });
 

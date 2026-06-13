@@ -35,12 +35,20 @@ const makeClient = (created: Record<string, unknown>[] = []): PolarClientLike =>
                 return { email: "a@b.test", id: "pcus_1" };
             },
         },
+        orders: {
+            get: async () => {
+                return { currency: "usd", id: "ord_1", status: "paid", totalAmount: 2500 };
+            },
+        },
         refunds: {
             create: async () => {
                 return { id: "ref_1" };
             },
         },
         subscriptions: {
+            get: async () => {
+                return { id: "sub_1", metadata: { referenceId: "user_1" }, status: "active" };
+            },
             revoke: async () => {
                 return { id: "sub_1", metadata: { referenceId: "user_1" }, status: "canceled" };
             },

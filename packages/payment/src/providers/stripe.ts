@@ -69,6 +69,7 @@ interface StripeClientLike {
     readonly refunds: { create: (parameters: Record<string, unknown>, options?: StripeRequestOptions) => Promise<{ id: string }> };
     readonly subscriptions: {
         cancel: (id: string, parameters?: Record<string, unknown>, options?: StripeRequestOptions) => Promise<StripeSubscriptionLike>;
+        retrieve: (id: string) => Promise<StripeSubscriptionLike>;
         update: (id: string, parameters: Record<string, unknown>, options?: StripeRequestOptions) => Promise<StripeSubscriptionLike>;
     };
 }
@@ -327,6 +328,10 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
 
             return { createdAt: Date.now(), email: customer.email ?? undefined, id: customer.id, provider: "stripe", referenceId: ref.referenceId };
         },
+
+        getPaymentStatus: async (sessionId) => intentToSession(await client.paymentIntents.retrieve(sessionId)),
+
+        getSubscriptionStatus: async (subscriptionId) => subscriptionFromStripe(await client.subscriptions.retrieve(subscriptionId)),
 
         identifier: "stripe",
 
