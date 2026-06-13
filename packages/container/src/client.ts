@@ -47,6 +47,11 @@ interface ContainerAccessor {
      * native autoscaling + health-aware routing this is the recommended way to
      * call a stateless container pool — it rides over a single cold/unhealthy
      * instance instead of failing the whole request.
+     *
+     * Because a retry re-issues the request, pass a **replayable** body — a path
+     * string plus an `init.body` string/`ArrayBuffer` (re-created each attempt).
+     * A pre-built `Request` carrying a stream body can only be sent once, so it
+     * is not retry-safe here; use `.get()`/`.any()` for those.
      */
     pool: (options?: PoolOptions) => ContainerHandle;
 }
