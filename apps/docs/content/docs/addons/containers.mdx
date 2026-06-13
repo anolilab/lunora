@@ -163,6 +163,34 @@ The `token` is a bearer your Worker's `resolveIdentity` recognizes — forward i
 as a container `secret`, never bake it into the image. Non-JS containers can
 `POST /_cirrus/rpc` with `{ functionPath, args }` directly (same contract).
 
+### Securing the bridge
+
+The bridge sends its token as `Authorization: Bearer <token>`. Your Worker's
+`resolveIdentity` is what validates it and maps it to the identity the called
+functions run as — without that check, anyone who reaches `/_cirrus/rpc` runs as
+whatever identity you return. Validate the bearer against a Worker secret and
+return `null` for anything that doesn't match (an unrecognised request runs
+anonymously and fails your functions' own authorization checks):
+
+```ts
+// in your worker options (createWorker / withCirrus)
+resolveIdentity: (request, env) => {
+    const header = request.headers.get("authorization");
+    const token = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : undefined;
+
+    // Compare against a Worker secret you also forward to the container.
+    if (!token || token !== env.CIRRUS_CONTAINER_TOKEN) {
+        return null; // anonymous — function-level authorization still applies
+    }
+
+    return { userId: "container:transcoder" }; // identity the bridge calls run as
+},
+```
+
+Generate the token once, set it with `wrangler secret put CIRRUS_CONTAINER_TOKEN`
+for production (and in `.dev.vars` locally), and pass the same value to the
+container as a `secret` so it can send it back. Never bake it into the image.
+
 ## Building with Railpack (no Dockerfile)
 
 Point `image` at a `{ build }` source directory and Cirrus builds the image

@@ -53,6 +53,8 @@ await cirrus.mutation("jobs:markDone", { id: pending[0].id });
 
 The token is a bearer your Worker's `resolveIdentity` recognizes — pass it to the container as a `secret`. Non-JS containers can `POST /_cirrus/rpc` with `{ functionPath, args }` directly.
 
+Secure the bridge in `resolveIdentity`: read `request.headers.get("authorization")`, strip the `Bearer ` prefix, and compare the token against a Worker secret (e.g. `env.CIRRUS_CONTAINER_TOKEN`) you also forward to the container. Return a `{ userId }` identity only on a match and `null` otherwise — an unrecognised request then runs anonymously and is rejected by your functions' own authorization checks. See [Securing the bridge](https://cirrus.dev/docs/addons/containers#securing-the-bridge) for the full example.
+
 ## Entry points
 
 - `@cirrus/container` — Node-safe: `defineContainer`, naming/normalization helpers, `createContainerContext`, and the Docker-free `createContainerTestContext` test double.
