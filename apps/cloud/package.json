@@ -1,0 +1,37 @@
+{
+    "name": "@cirrus/cloud",
+    "version": "0.0.0",
+    "private": true,
+    "license": "UNLICENSED",
+    "type": "module",
+    "sideEffects": false,
+    "engines": {
+        "node": "^22.14.0 || >=24.10.0"
+    },
+    "scripts": {
+        "codegen": "node node_modules/@cirrus/cli/dist/bin.mjs codegen",
+        "deploy": "wrangler deploy",
+        "dev": "node node_modules/@cirrus/cli/dist/bin.mjs dev",
+        "lint:eslint": "eslint .",
+        "lint:eslint:fix": "eslint . --fix",
+        "lint:types": "node node_modules/@cirrus/cli/dist/bin.mjs codegen && tsc --noEmit",
+        "test": "vitest run"
+    },
+    "dependencies": {
+        "@cirrus/client": "workspace:*",
+        "@cirrus/d1": "workspace:*",
+        "@cirrus/do": "workspace:*",
+        "@cirrus/runtime": "workspace:*",
+        "@cirrus/server": "workspace:*"
+    },
+    "devDependencies": {
+        "@cirrus/cli": "workspace:*",
+        "@cirrus/codegen": "workspace:*",
+        "@cirrus/config": "workspace:*",
+        "@cloudflare/workers-types": "catalog:cloudflare",
+        "@types/node": "catalog:types",
+        "typescript": "catalog:tsc",
+        "vitest": "catalog:test",
+        "wrangler": "catalog:cloudflare"
+    }
+}
