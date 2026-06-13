@@ -1,7 +1,33 @@
 # Cloudflare Containers in Cirrus — DX Plan
 
-Status: draft (research + design, no implementation yet)
-Date: 2026-06-12
+Status: Phases 1–3 implemented (one item deliberately deferred — see §4)
+Date: 2026-06-12 (implementation 2026-06-13)
+
+## Implementation status
+
+- **Phase 1 — shipped.** `@cirrus/container` (`defineContainer`, `ctx.containers`),
+  codegen of the Container DO classes + typed `ctx.containers`,
+  inference/reconcile/validation in `@cirrus/config`, Docker preflight in
+  `cirrus deploy`, the `cirrus containers` CLI group, the
+  `vis generate cirrus-container` generator, and docs.
+- **Phase 2 — shipped.** Railpack `image: { build }` source end-to-end:
+  validated/normalized/discovered, the config reconciler writes the
+  deterministic build tag, and `cirrus deploy` builds + pushes each build
+  container (BuildKit preflight) before wrangler runs. Orchestration is
+  injected-spawner unit-tested.
+- **Phase 3 — shipped, except the Studio panel.** Resilient
+  `ctx.containers.<name>.pool()` (retry + backoff), the container→Cirrus
+  bridge (`@cirrus/container/bridge`), two advisor lints
+  (`container_oversized_instance`, `container_public_internet`) that surface in
+  Studio's existing **Advisors** table, and dev log correlation
+  (`type: "container"` lifecycle events tagged by instance id).
+    - **Deferred: a dedicated Studio container panel.** Cloudflare exposes no
+      live container-instance state to a Worker, and `ShardDO` cannot enumerate
+      container Durable Objects — so a panel could only restate the declared
+      config already visible in `cirrus/containers.ts`. Container concerns
+      instead surface through the Advisors table (the two lints above). A panel
+      becomes worthwhile if/when Cloudflare ships an instance-state API or
+      containers report health back via a callback.
 
 ## TL;DR
 
@@ -40,22 +66,22 @@ default path.
 
 ```jsonc
 {
-  "containers": [
-    {
-      "class_name": "FfmpegContainer", // must match a DO class
-      "image": "./containers/ffmpeg/Dockerfile", // or a registry ref
-      "image_build_context": "./containers/ffmpeg",
-      "image_vars": { "BUILD_FLAG": "1" }, // --build-arg equivalents
-      "instance_type": "standard-1", // lite | basic | standard-1..4 | { vcpu, memory_mib, disk_mb }
-      "max_instances": 5,
-      "rollout_step_percentage": 25,
-      "rollout_active_grace_period": 300
-    }
-  ],
-  "durable_objects": {
-    "bindings": [{ "name": "FFMPEG", "class_name": "FfmpegContainer" }]
-  },
-  "migrations": [{ "tag": "v2", "new_sqlite_classes": ["FfmpegContainer"] }]
+    "containers": [
+        {
+            "class_name": "FfmpegContainer", // must match a DO class
+            "image": "./containers/ffmpeg/Dockerfile", // or a registry ref
+            "image_build_context": "./containers/ffmpeg",
+            "image_vars": { "BUILD_FLAG": "1" }, // --build-arg equivalents
+            "instance_type": "standard-1", // lite | basic | standard-1..4 | { vcpu, memory_mib, disk_mb }
+            "max_instances": 5,
+            "rollout_step_percentage": 25,
+            "rollout_active_grace_period": 300,
+        },
+    ],
+    "durable_objects": {
+        "bindings": [{ "name": "FFMPEG", "class_name": "FfmpegContainer" }],
+    },
+    "migrations": [{ "tag": "v2", "new_sqlite_classes": ["FfmpegContainer"] }],
 }
 ```
 
@@ -71,8 +97,8 @@ default path.
   `registry.cloudflare.com` (R2-backed, integrated auth, 50 GB/account), then
   deploys the Worker. Only changed layers are re-pushed.
 - CI can split the steps: `wrangler containers build --push` / `wrangler
-  containers push` work without a full deploy; `wrangler containers images
-  list|delete` manage the registry.
+containers push` work without a full deploy; `wrangler containers images
+list|delete` manage the registry.
 - **Docker (or a compatible engine) is required on the deploying machine.**
 
 ### Local dev
@@ -106,8 +132,8 @@ default path.
 - **Secrets:** Worker Secrets / Secrets Store, surfaced to the container via
   `envVars` (class-level) or per-instance env at `start()`. No separate
   container-secret system to integrate.
-- **Containers can reach Worker bindings** (D1, R2, KV, DOs) via *outbound
-  handlers*: plain HTTP from the container to virtual hostnames, intercepted
+- **Containers can reach Worker bindings** (D1, R2, KV, DOs) via _outbound
+  handlers_: plain HTTP from the container to virtual hostnames, intercepted
   and resolved inside the Workers runtime. The container can also address its
   own DO. (Big Phase 3 opportunity — see below.)
 - **Egress control:** `enableInternet` on the Container class gates outbound
@@ -121,14 +147,14 @@ default path.
 - Requires Workers Paid ($5/mo). Billing starts at first request and stops at
   sleep (scale-to-zero). vCPU is **active-CPU** billed ($0.000020/vCPU-s,
   375 vCPU-min/mo included); memory ($0.0000025/GiB-s, 25 GiB-h included) and
-  disk ($0.00000007/GB-s, 200 GB-h included) are billed on *provisioned*
+  disk ($0.00000007/GB-s, 200 GB-h included) are billed on _provisioned_
   instance-type size while running.
 - **Network egress is billed separately**: $0.025/GB NA+EU (1 TB/mo
   included), $0.05/GB Oceania/Korea/Taiwan, $0.04/GB elsewhere (500 GB/mo
   included) — worth a loud note in docs since Workers users aren't used to
   egress fees.
 
-### What Cloudflare does *not* provide (gaps we may want to fill)
+### What Cloudflare does _not_ provide (gaps we may want to fill)
 
 1. **Autoscaling** — pools are fixed-size (`getRandom` over N instances).
 2. **Dockerfile-less builds** — `image` must be a Dockerfile or a pre-built
@@ -145,13 +171,13 @@ Go + BuildKit LLB; detects Node, Python, Go, PHP, Java, Ruby, .NET, Deno,
 Rust, Elixir…; images come out 38–77 % smaller than Nixpacks; versions
 resolved via Mise and lockable for reproducible builds.
 
-**Fit for Cirrus:** good, as an *optional* build strategy.
+**Fit for Cirrus:** good, as an _optional_ build strategy.
 
 - Pro: `cirrus`-grade DX — "point `defineContainer` at `./services/transcoder`,
   no Dockerfile needed". Build locally → image lands in the Docker daemon →
   `wrangler containers push` → reference the pushed tag in `containers[].image`.
 - Con: needs a running **BuildKit** instance (`BUILDKIT_HOST`, typically
-  `docker run --privileged moby/buildkit`) *plus* the `railpack` binary. That
+  `docker run --privileged moby/buildkit`) _plus_ the `railpack` binary. That
   is a heavier toolchain than the wrangler-native path, where Docker alone
   suffices and wrangler does build+push itself.
 - Verdict: ship Dockerfile-first (zero extra deps, wrangler does the work),
@@ -232,24 +258,25 @@ export const transcode = action({
    emitted string template stays trivial and the behavior stays unit-testable
    in `@cirrus/container`:
 
-   ```ts
-   import { CirrusContainer } from "@cirrus/container";
-   import { transcoder } from "../containers";
+    ```ts
+    import { CirrusContainer } from "@cirrus/container";
+    import { transcoder } from "../containers";
 
-   export class TranscoderContainer extends CirrusContainer {
-       constructor(ctx: DurableObjectState, env: Env) {
-           super(ctx, env, transcoder); // applies defaultPort/sleepAfter/env and merges declared secrets from `env` into envVars
-       }
-   }
-   ```
+    export class TranscoderContainer extends CirrusContainer {
+        constructor(ctx: DurableObjectState, env: Env) {
+            super(ctx, env, transcoder); // applies defaultPort/sleepAfter/env and merges declared secrets from `env` into envVars
+        }
+    }
+    ```
 
-   The user's worker entry must re-export these (wrangler requires the DO
-   class exported from the entry): templates/init add
-   `export * from "./cirrus/_generated/containers"`, the class-A virtual
-   worker injects it automatically, and binding inference — which already
-   keys DO provisioning on entry exports — simply gains the generated class
-   names, so a missing re-export surfaces as the existing actionable hint
-   instead of a late wrangler error.
+    The user's worker entry must re-export these (wrangler requires the DO
+    class exported from the entry): templates/init add
+    `export * from "./cirrus/_generated/containers"`, the class-A virtual
+    worker injects it automatically, and binding inference — which already
+    keys DO provisioning on entry exports — simply gains the generated class
+    names, so a missing re-export surfaces as the existing actionable hint
+    instead of a late wrangler error.
+
 2. The typed `ctx.containers` surface on `ActionCtx` (only when containers
    exist, matching the `ctx.ai` pattern), built from the `CONTAINER_*` env
    bindings via a `containerClient(namespace)` helper in `@cirrus/container`.
@@ -261,11 +288,11 @@ export const transcode = action({
 
 Hook the existing seams (no new architecture):
 
-| Seam                                      | Change                                                                                                                                                                                                                                                                                |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `src/infer-bindings.ts`                   | New capability: `@cirrus/container` import + discovered `defineContainer` exports → inferred `containers[]` entries, DO bindings, migration classes.                                                                                                                                  |
-| `src/reconcile-bindings.ts`               | Extend `WranglerShape` with `containers`; new `reconcileContainers()` writes `containers[]`, the DO bindings, **appends a new migration tag** with `new_sqlite_classes` (never mutates an existing tag — DO migration tags are append-only), and sets `observability.enabled` **only when the key is absent** (an explicit `false` is a user billing decision and is respected, with a warning). Idempotent like the existing DO reconciliation. |
-| `src/wrangler-validator.ts`               | Validate: every `containers[].class_name` has a matching DO binding **and** a sqlite migration; Dockerfile path exists (or ref looks like a registry image); `instance_type` is a known name or a custom object within Cloudflare's bounds; warn when `max_instances` is missing and when `observability` is off (container logs are invisible without it). `.any(n)` pool-size checks only apply when `n` is a literal — anything else is a Phase 3 advisor concern, not a validator one. |
+| Seam                        | Change                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `src/infer-bindings.ts`     | New capability: `@cirrus/container` import + discovered `defineContainer` exports → inferred `containers[]` entries, DO bindings, migration classes.                                                                                                                                                                                                                                                                                                                                       |
+| `src/reconcile-bindings.ts` | Extend `WranglerShape` with `containers`; new `reconcileContainers()` writes `containers[]`, the DO bindings, **appends a new migration tag** with `new_sqlite_classes` (never mutates an existing tag — DO migration tags are append-only), and sets `observability.enabled` **only when the key is absent** (an explicit `false` is a user billing decision and is respected, with a warning). Idempotent like the existing DO reconciliation.                                           |
+| `src/wrangler-validator.ts` | Validate: every `containers[].class_name` has a matching DO binding **and** a sqlite migration; Dockerfile path exists (or ref looks like a registry image); `instance_type` is a known name or a custom object within Cloudflare's bounds; warn when `max_instances` is missing and when `observability` is off (container logs are invisible without it). `.any(n)` pool-size checks only apply when `n` is a literal — anything else is a Phase 3 advisor concern, not a validator one. |
 
 ### 3.5 CLI (`@cirrus/cli`)
 
@@ -293,10 +320,10 @@ Hook the existing seams (no new architecture):
 
 - `@cloudflare/vite-plugin` already runs containers in dev; we inherit that
   for free. Add to our doctor/validator layer:
-  - Docker-not-running → friendly overlay error instead of a raw plugin crash.
-  - Warn about the known caveats: no container hot-reload (press `r`),
-    `EXPOSE` required locally, Cloudflare Registry refs not pullable in
-    `vite dev`.
+    - Docker-not-running → friendly overlay error instead of a raw plugin crash.
+    - Warn about the known caveats: no container hot-reload (press `r`),
+      `EXPOSE` required locally, Cloudflare Registry refs not pullable in
+      `vite dev`.
 - Respect/forward `dev.enable_containers` and `dev.container_engine`.
 
 ### 3.7 Testing story
@@ -332,7 +359,7 @@ tests is wrong), so the unit-test path cannot depend on Docker:
 `@cirrus/container` (`defineContainer` + ctx stubs) · codegen of Container DO
 classes + `ctx.containers` · inference/reconcile/validation in
 `@cirrus/config` · Docker preflight in `cirrus deploy` · docs + one example
-app. *No new deploy infrastructure: wrangler does build, push, registry, dev.*
+app. _No new deploy infrastructure: wrangler does build, push, registry, dev._
 
 **Phase 2 — Build & ops ergonomics**
 Railpack opt-in (`image: { build }`): run `railpack build` against a local

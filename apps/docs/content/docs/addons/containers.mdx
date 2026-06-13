@@ -94,10 +94,18 @@ export const transcode = action({
 - **`.any(count?)`** — a random instance from a fixed pool (defaults to
   `maxInstances`, else 3). Use it for stateless, interchangeable work where any
   instance can serve the request.
+- **`.pool(options?)`** — like `.any()`, but resilient: each `fetch` picks a
+  random instance and, on a thrown error or a retryable response (`5xx` by
+  default), retries on a freshly-picked instance with exponential backoff.
 
 ```ts
 // Stateless pool — load-balanced across instances.
 const probe = await ctx.containers.transcoder.any().fetch("/healthz");
+
+// Resilient: rides over a single cold/unhealthy instance.
+const result = await ctx.containers.transcoder
+    .pool({ attempts: 3, backoffMs: 100, retryOn: (response) => response.status >= 500 })
+    .fetch("/transcode", { method: "POST", body });
 ```
 
 `fetch` accepts a path string (resolved against the container) or a full
@@ -105,8 +113,79 @@ const probe = await ctx.containers.transcoder.any().fetch("/healthz");
 works the same as any other `fetch`.
 
 > Cloudflare has no built-in autoscaling yet: pools are a fixed size and
-> `.any()` picks uniformly, ignoring location. For batch work, drive instances
-> from a [scheduler](/docs/addons/scheduler) cron or `runAfter`.
+> `.any()`/`.pool()` pick uniformly, ignoring location. `.pool()` is the
+> recommended call for stateless work until then; for batch work, drive
+> instances from a [scheduler](/docs/addons/scheduler) cron or `runAfter`.
+
+## Calling Cirrus from inside a container
+
+Container code calls back into your app's functions with the bridge client
+(any JS runtime — Node, Bun, Deno), over the Worker's HTTP RPC endpoint — so a
+container reads/writes app state through the same queries/mutations the browser
+uses, instead of reaching into a database directly.
+
+```ts
+import { createContainerBridge } from "@cirrus/container/bridge";
+
+const cirrus = createContainerBridge({ baseUrl: process.env.CIRRUS_URL, token: process.env.CIRRUS_TOKEN });
+
+const pending = await cirrus.query("jobs:listPending", { limit: 10 });
+await cirrus.mutation("jobs:markDone", { id: pending[0].id });
+```
+
+The `token` is a bearer your Worker's `resolveIdentity` recognizes — forward it
+as a container `secret`, never bake it into the image. Non-JS containers can
+`POST /_cirrus/rpc` with `{ functionPath, args }` directly (same contract).
+
+## Building with Railpack (no Dockerfile)
+
+Point `image` at a `{ build }` source directory and Cirrus builds the image
+with [Railpack](https://railpack.com) — Railway's Dockerfile-less builder —
+instead of you writing a Dockerfile:
+
+```ts
+export const transcoder = defineContainer({
+    image: { build: "./services/transcoder" }, // Railpack detects the stack and builds it
+    defaultPort: 8080,
+});
+```
+
+On `cirrus deploy`, each `{ build }` container is built with Railpack and
+pushed to the Cloudflare Registry (under a deterministic `cirrus-<name>:build`
+tag) before the Worker deploys. This needs the `railpack` CLI **and** a running
+BuildKit instance reachable via `BUILDKIT_HOST`, e.g.:
+
+```bash
+docker run --rm --privileged -d --name buildkit moby/buildkit
+export BUILDKIT_HOST=docker-container://buildkit
+```
+
+`cirrus deploy` preflights both and stops with setup directions if either is
+missing. The Dockerfile path remains the zero-extra-deps default — Railpack is
+purely opt-in.
+
+## Lifecycle logs
+
+The generated container classes emit a structured event on **start**, **stop**,
+and **error**, tagged with the container name and per-instance id (the
+container's `CLOUDFLARE_DURABLE_OBJECT_ID`). `cirrus dev` surfaces them inline
+with your `ctx.log` and RPC lines:
+
+```text
+[cirrus] container:transcoder#a1b2c3d4  start
+[cirrus] container:transcoder#a1b2c3d4  error  exited unexpectedly
+```
+
+## Advisories
+
+Two [advisor](/docs/addons/studio) lints flag container cost/security footguns
+in the Studio **Advisors** table and at codegen time:
+
+- **`container_oversized_instance`** — a large `standard-3`/`standard-4` (or
+  large custom) instance, whose provisioned memory + disk are billed while any
+  instance runs.
+- **`container_public_internet`** — `enableInternet` left at the default
+  (enabled); set it explicitly (`false` to close egress, `true` to opt in).
 
 ## Configuration
 
