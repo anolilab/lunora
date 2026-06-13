@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { createTemplate } from "@visulima/vis/generate";
 
 import { camelCase, kebabCase } from "./_helpers/case.js";
+import { nestFile, wireWorkerEntryReexport } from "./_helpers/wire-worker-entry.js";
 
 const DEFAULT_PORT = 8080;
 
@@ -38,9 +39,7 @@ const freshContainers = (exportName: string, directory: string): string => `impo
 
 ${definitionFor(exportName, directory)}`;
 
-const dockerfile = (
-    exportName: string,
-): string => `# Container image for the \`${exportName}\` definition in cirrus/containers.ts.
+const dockerfile = (exportName: string): string => `# Container image for the \`${exportName}\` definition in cirrus/containers.ts.
 # Cloudflare Containers run linux/amd64 images — keep the platform explicit so
 # builds from Apple Silicon don't produce an arm64 image that fails at deploy.
 FROM --platform=linux/amd64 node:22-slim
@@ -106,15 +105,26 @@ export default createTemplate({
             },
         };
 
+        // Auto-wire the worker-entry re-export for class-B/C (class-A is handled
+        // by the Vite plugin). When found, fold the rewritten entry into `files`
+        // + `filesMeta`; otherwise fall back to a printed instruction.
+        const entry = wireWorkerEntryReexport(builtins.dest_dir);
+        const entryFiles = entry ? nestFile(entry.relativePath, entry.content) : {};
+        const entryMeta = entry ? { [entry.relativePath]: { force: true } } : {};
+        const entrySuggestion = entry
+            ? `Re-exported the generated container classes from ${entry.relativePath}.`
+            : 'Re-export the generated classes from your worker entry: `export * from "./cirrus/_generated/containers"`.';
+
         const suggestions = [
             `Scaffolded ${directory}/Dockerfile (+ a starter server.mjs).`,
-            "Re-export the generated classes from your worker entry: `export * from \"./cirrus/_generated/containers\"`.",
+            entrySuggestion,
             "Run `cirrus codegen` (or just `cirrus dev`) to emit the Container class and reconcile wrangler.jsonc.",
         ];
 
         if (!existsSync(containersPath)) {
             return {
-                files: { ...dockerFiles, cirrus: { "containers.ts": freshContainers(exportName, directory) } },
+                files: { ...dockerFiles, ...entryFiles, cirrus: { "containers.ts": freshContainers(exportName, directory) } },
+                filesMeta: entryMeta,
                 suggestions: [`Created cirrus/containers.ts with container "${exportName}".`, ...suggestions],
             };
         }
@@ -128,8 +138,8 @@ export default createTemplate({
         const separator = original.endsWith("\n") ? "\n" : "\n\n";
 
         return {
-            files: { ...dockerFiles, cirrus: { "containers.ts": `${original}${separator}${definitionFor(exportName, directory)}` } },
-            filesMeta: { "cirrus/containers.ts": { force: true } },
+            files: { ...dockerFiles, ...entryFiles, cirrus: { "containers.ts": `${original}${separator}${definitionFor(exportName, directory)}` } },
+            filesMeta: { "cirrus/containers.ts": { force: true }, ...entryMeta },
             suggestions: [`Added container "${exportName}" to cirrus/containers.ts.`, ...suggestions],
         };
     },

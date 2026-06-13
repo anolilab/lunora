@@ -1,0 +1,88 @@
+/**
+ * Worker-entry auto-wiring for `cirrus-container` — kept in `_helpers/` so the
+ * tests under `tests/vis-templates/` can import it without the vis runtime.
+ *
+ * wrangler requires every container class to be exported by the deployed
+ * worker. For class-A frameworks the Vite plugin re-exports them into the
+ * virtual worker; for class-B/C (a hand-written entry calling `createShardDO`)
+ * the developer otherwise has to add `export * from "…/_generated/containers"`
+ * by hand — the easiest stumble. This finds that entry and rewrites it.
+ */
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
+
+/** Conventional worker-entry locations probed when wrangler `main` doesn't resolve. */
+const WORKER_ENTRY_FALLBACKS = ["src/server.ts", "src/server/index.ts", "src/index.ts", "src/worker.ts"];
+
+/** Read wrangler `main` with a tolerant regex (jsonc-parser isn't resolvable from a generator). */
+const readWranglerMain = (projectDirectory: string): string | undefined => {
+    for (const file of ["wrangler.jsonc", "wrangler.json"]) {
+        const path = join(projectDirectory, file);
+
+        if (!existsSync(path)) {
+            continue;
+        }
+
+        const match = /"main"\s*:\s*"([^"]+)"/u.exec(readFileSync(path, "utf8"));
+
+        return match?.[1];
+    }
+
+    return undefined;
+};
+
+/** The rewritten worker entry: its project-relative path plus the new content. */
+export interface WiredWorkerEntry {
+    content: string;
+    relativePath: string;
+}
+
+/**
+ * Find the class-B/C worker entry and return it rewritten with the container
+ * re-export appended. Conservative: only touches a file that unmistakably is a
+ * Cirrus worker entry (`createShardDO(`), is idempotent (skips when already
+ * wired), and returns `undefined` for class-A (no such file) so the caller
+ * falls back to a printed instruction.
+ */
+export const wireWorkerEntryReexport = (projectDirectory: string): undefined | WiredWorkerEntry => {
+    const main = readWranglerMain(projectDirectory);
+    const candidates = main === undefined ? WORKER_ENTRY_FALLBACKS : [main, ...WORKER_ENTRY_FALLBACKS];
+
+    for (const candidate of candidates) {
+        const absolute = join(projectDirectory, candidate);
+
+        if (!existsSync(absolute)) {
+            continue;
+        }
+
+        const source = readFileSync(absolute, "utf8");
+
+        // A real class-B/C cirrus entry only; class-A has no createShardDO file.
+        if (!source.includes("createShardDO(")) {
+            return undefined;
+        }
+
+        if (source.includes("_generated/containers")) {
+            return undefined; // already wired — idempotent.
+        }
+
+        const importPath = relative(dirname(absolute), join(projectDirectory, "cirrus", "_generated", "containers")).replaceAll("\\", "/");
+        const specifier = `${importPath.startsWith(".") ? importPath : `./${importPath}`}.js`;
+        const separator = source.endsWith("\n") ? "" : "\n";
+
+        return {
+            content: `${source}${separator}\n// Container DO classes — wrangler requires every container class to be exported by the worker.\nexport * from "${specifier}";\n`,
+            relativePath: candidate.replaceAll("\\", "/"),
+        };
+    }
+
+    return undefined;
+};
+
+/** Build a nested vis `files` object for a (possibly deep) project-relative path. */
+export const nestFile = (relativePath: string, content: string): Record<string, unknown> => {
+    const segments = relativePath.split("/");
+    const leaf = segments.pop() as string;
+
+    return segments.reduceRight<Record<string, unknown>>((accumulator, segment) => ({ [segment]: accumulator }), { [leaf]: content });
+};
