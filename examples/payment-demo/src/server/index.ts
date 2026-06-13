@@ -32,6 +32,11 @@ export const ShardDO = createShardDO({
                 webhookSecret: environment.STRIPE_WEBHOOK_SECRET,
             }),
             authorize: () => true,
+            // Telemetry hook: failed payments, past-due subscriptions, reconciliation
+            // drift, and general webhook applies — route to logs/metrics/alerts.
+            observability: (event) => {
+                console.log("[payment]", event.type, event);
+            },
         };
     },
 });

@@ -8,6 +8,7 @@
 import type { PaymentAdapter } from "./adapter";
 import { CirrusPaymentError } from "./errors";
 import idempotencyKey from "./idempotency";
+import type { PaymentObserver } from "./observability";
 import type { PaymentStore } from "./store";
 import applyWebhookAction from "./sync";
 import type { CancelSubscriptionOptions, CheckoutInput, CheckoutResult, PortalInput, Subscription } from "./types";
@@ -25,6 +26,8 @@ export interface CreatePaymentOptions {
      * for trusted server-internal callers (e.g. the reconciliation sweep).
      */
     readonly authorize?: AuthorizeReference;
+    /** Optional telemetry sink — fired on webhook apply, failed payments, and past-due subscriptions. */
+    readonly observability?: PaymentObserver;
     readonly store: PaymentStore;
 }
 
@@ -117,7 +120,7 @@ export const createPayment = (options: CreatePaymentOptions): CirrusPayment => {
                 return jsonResponse({ error: error instanceof Error ? error.message : "webhook error" }, status);
             }
 
-            const result = await applyWebhookAction(store, action);
+            const result = await applyWebhookAction(store, action, options.observability);
 
             // Acknowledge once verified so the provider stops retrying — a no-op is still a 200.
             return jsonResponse({ applied: result.applied, reason: result.reason }, 200);

@@ -12,11 +12,15 @@
  */
 import type { PaymentAdapter } from "./adapter";
 import { compareMoney } from "./money";
+import type { PaymentObserver } from "./observability";
+import { notifyObserver } from "./observability";
 import type { PaymentStore } from "./store";
 import type { PaymentSession, Subscription } from "./types";
 
 interface ReconcileInput {
     readonly adapter: PaymentAdapter;
+    /** Optional telemetry sink — fired per drifted row and once on completion. */
+    readonly observability?: PaymentObserver;
     readonly paymentSessionIds?: ReadonlyArray<string>;
     readonly store: PaymentStore;
     readonly subscriptionIds?: ReadonlyArray<string>;
@@ -44,7 +48,7 @@ const paymentDrifted = (existing: PaymentSession | undefined, current: PaymentSe
     !sameCurrencyAmount(existing.refundedAmount, current.refundedAmount);
 
 // Re-sync one subscription against the provider's truth. Returns whether the store changed.
-const reconcileSubscription = async (adapter: PaymentAdapter, store: PaymentStore, id: string): Promise<boolean> => {
+const reconcileSubscription = async (adapter: PaymentAdapter, store: PaymentStore, id: string, observer?: PaymentObserver): Promise<boolean> => {
     const current = await adapter.getSubscriptionStatus(id);
     const existing = await store.getSubscription(adapter.identifier, id);
 
@@ -54,11 +58,12 @@ const reconcileSubscription = async (adapter: PaymentAdapter, store: PaymentStor
 
     // Preserve the original createdAt when we already had the row.
     await store.upsertSubscription({ ...current, createdAt: existing?.createdAt ?? current.createdAt });
+    notifyObserver(observer, { id, kind: "subscription", provider: adapter.identifier, type: "reconcile.drift" });
 
     return true;
 };
 
-const reconcilePayment = async (adapter: PaymentAdapter, store: PaymentStore, id: string): Promise<boolean> => {
+const reconcilePayment = async (adapter: PaymentAdapter, store: PaymentStore, id: string, observer?: PaymentObserver): Promise<boolean> => {
     const current = await adapter.getPaymentStatus(id);
     const existing = await store.getPaymentSession(adapter.identifier, id);
 
@@ -67,6 +72,7 @@ const reconcilePayment = async (adapter: PaymentAdapter, store: PaymentStore, id
     }
 
     await store.upsertPaymentSession({ ...current, createdAt: existing?.createdAt ?? current.createdAt });
+    notifyObserver(observer, { id, kind: "payment", provider: adapter.identifier, type: "reconcile.drift" });
 
     return true;
 };
@@ -74,18 +80,23 @@ const reconcilePayment = async (adapter: PaymentAdapter, store: PaymentStore, id
 const countTrue = (results: ReadonlyArray<boolean>): number => results.filter(Boolean).length;
 
 const reconcile = async (input: ReconcileInput): Promise<ReconcileResult> => {
-    const { adapter, store } = input;
+    const { adapter, observability, store } = input;
     const subscriptionIds = input.subscriptionIds ?? [];
     const paymentSessionIds = input.paymentSessionIds ?? [];
 
-    const subscriptionResults = await Promise.all(subscriptionIds.map((id) => reconcileSubscription(adapter, store, id)));
-    const paymentResults = await Promise.all(paymentSessionIds.map((id) => reconcilePayment(adapter, store, id)));
+    const subscriptionResults = await Promise.all(subscriptionIds.map((id) => reconcileSubscription(adapter, store, id, observability)));
+    const paymentResults = await Promise.all(paymentSessionIds.map((id) => reconcilePayment(adapter, store, id, observability)));
+
+    const updatedPayments = countTrue(paymentResults);
+    const updatedSubscriptions = countTrue(subscriptionResults);
+
+    notifyObserver(observability, { provider: adapter.identifier, type: "reconcile.completed", updatedPayments, updatedSubscriptions });
 
     return {
         checkedPayments: paymentSessionIds.length,
         checkedSubscriptions: subscriptionIds.length,
-        updatedPayments: countTrue(paymentResults),
-        updatedSubscriptions: countTrue(subscriptionResults),
+        updatedPayments,
+        updatedSubscriptions,
     };
 };
 

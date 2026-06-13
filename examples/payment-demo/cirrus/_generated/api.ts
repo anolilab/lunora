@@ -7,7 +7,7 @@ import type { FunctionReference } from "@cirrus/client";
 export interface ApiTypes {
     billing: {
         checkout: FunctionReference<"action", { priceId: string }, { url: string; }>;
-        mySubscriptions: FunctionReference<"query", {}, unknown>;
+        mySubscriptions: FunctionReference<"query", {}, { providerSubscriptionId: string; referenceId: string; state: string }[]>;
     };
 }
 

@@ -6,6 +6,8 @@
  * caller.
  */
 import { addMoney, compareMoney, zeroMoney } from "./money";
+import type { PaymentObserver } from "./observability";
+import { notifyObserver } from "./observability";
 import type { PaymentAction, SubscriptionAction } from "./state-machine";
 import { nextPaymentState, nextSubscriptionState } from "./state-machine";
 import type { PaymentStore } from "./store";
@@ -166,7 +168,7 @@ const applySubscription = async (store: PaymentStore, action: WebhookAction): Pr
     return { applied: true, reason: "ok" };
 };
 
-const applyWebhookAction = async (store: PaymentStore, action: WebhookAction): Promise<ApplyResult> => {
+const applyWebhookAction = async (store: PaymentStore, action: WebhookAction, observer?: PaymentObserver): Promise<ApplyResult> => {
     if (action.type === "unhandled") {
         return { applied: false, reason: "unhandled" };
     }
@@ -174,16 +176,29 @@ const applyWebhookAction = async (store: PaymentStore, action: WebhookAction): P
     const fresh = await store.markEventProcessed(action.provider, action.eventId);
 
     if (!fresh) {
+        notifyObserver(observer, { eventId: action.eventId, provider: action.provider, type: "webhook.duplicate" });
+
         return { applied: false, reason: "duplicate" };
     }
 
     const paymentAction = PAYMENT_ACTION_BY_TYPE[action.type];
+    const result = paymentAction ? await applyPayment(store, action, paymentAction) : await applySubscription(store, action);
 
-    if (paymentAction) {
-        return applyPayment(store, action, paymentAction);
+    notifyObserver(observer, { action: action.type, eventId: action.eventId, provider: action.provider, reason: result.reason, type: "webhook.applied" });
+
+    // Alertable signals — emitted on the provider's report regardless of the FSM outcome.
+    if (action.type === "payment.failed") {
+        notifyObserver(observer, { provider: action.provider, referenceId: action.referenceId, sessionId: action.sessionId, type: "payment.failed" });
+    } else if (action.type === "subscription.past_due") {
+        notifyObserver(observer, {
+            provider: action.provider,
+            referenceId: action.referenceId,
+            subscriptionId: action.subscriptionId,
+            type: "subscription.past_due",
+        });
     }
 
-    return applySubscription(store, action);
+    return result;
 };
 
 export default applyWebhookAction;

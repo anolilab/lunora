@@ -133,6 +133,7 @@ packages/payment/
 │   ├── database-store.ts   # createDatabasePaymentStore(ctx.db) — rides the app ShardDO
 │   ├── context.ts          # paymentsFromContext(ctx) — what codegen wires ctx.payments to
 │   ├── reconcile.ts        # reconcile() — scheduled drift re-sync from provider truth
+│   ├── observability.ts    # PaymentObserver hook — failed-payment / drift / webhook telemetry
 │   ├── schema.ts           # defineSchema tables: products, prices, customers, subscriptions, checkouts,
 │   │                       #   payment_sessions, payments, captures, refunds, invoices, events (webhook log)
 │   ├── json.ts             # defensive accessors for untyped webhook payloads (shared)
@@ -271,7 +272,9 @@ Non-negotiables that the implementation (not just the plan) has to satisfy — s
   pipeline (no DO binding — payments ride `ctx.db`); ✅ **`examples/payment-demo`** — a runnable app wiring the whole
   stack (schema merge, `ctx.payments` checkout action, reactive subscription query, `httpAction` webhook forwarded
   into the shard, `createShardDO({ payment })`, `@cirrus/react` `CheckoutButton`), typechecking end-to-end against
-  codegen output. _Next:_ observability (failed-payment / drift metrics).
+  codegen output; ✅ **observability hook** — a `PaymentObserver` callback (`createPayment`/`paymentsFromContext`/
+  `reconcile`) firing `webhook.applied`/`webhook.duplicate`/`payment.failed`/`subscription.past_due`/`reconcile.drift`/
+  `reconcile.completed`, swallowing observer errors so telemetry can never break a payment. Phase 1 complete.
 - **Phase 2 — Polar adapter + React kit:** ✅ `createPolarAdapter` (injected client, Merchant-of-Record, Standard
   Webhooks verification via `verifyStandardWebhook`); `parseWebhook` takes the request headers so each provider reads
   its own scheme. ✅ `@cirrus/react` UI kit — `useCheckout(trigger)` + `CheckoutButton`/`CustomerPortalButton`

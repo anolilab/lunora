@@ -69,7 +69,7 @@ export type CallerCtx = ActionCtx | MutationCtx | QueryCtx;
 export interface Caller {
     billing: {
         checkout: (args: { priceId: string }) => Promise<{ url: string; }>;
-        mySubscriptions: (args?: {}) => Promise<unknown>;
+        mySubscriptions: (args?: {}) => Promise<{ providerSubscriptionId: string; referenceId: string; state: string }[]>;
         processWebhook: (args: { body: string; signature: string }) => Promise<{ applied: boolean; status: number; }>;
     };
 }
