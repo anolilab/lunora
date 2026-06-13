@@ -861,6 +861,49 @@ importers:
         specifier: catalog:test
         version: 4.1.10(@opentelemetry/api@1.9.1)(@types/node@26.1.1)(@vitest/coverage-v8@4.1.10)(@vitest/ui@4.1.10)(happy-dom@20.10.6)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@7.3.5(@types/node@26.1.1)(jiti@2.7.0)(lightningcss@1.32.0)(terser@5.48.0)(yaml@2.9.0))
 
+  apps/cloud:
+    dependencies:
+      '@cirrus/client':
+        specifier: workspace:*
+        version: link:../../packages/client
+      '@cirrus/d1':
+        specifier: workspace:*
+        version: link:../../packages/d1
+      '@cirrus/do':
+        specifier: workspace:*
+        version: link:../../packages/do
+      '@cirrus/runtime':
+        specifier: workspace:*
+        version: link:../../packages/runtime
+      '@cirrus/server':
+        specifier: workspace:*
+        version: link:../../packages/server
+    devDependencies:
+      '@cirrus/cli':
+        specifier: workspace:*
+        version: link:../../packages/cli
+      '@cirrus/codegen':
+        specifier: workspace:*
+        version: link:../../packages/codegen
+      '@cirrus/config':
+        specifier: workspace:*
+        version: link:../../packages/config
+      '@cloudflare/workers-types':
+        specifier: catalog:cloudflare
+        version: 4.20260610.1
+      '@types/node':
+        specifier: catalog:types
+        version: 25.9.2
+      typescript:
+        specifier: catalog:tsc
+        version: 6.0.3
+      vitest:
+        specifier: catalog:test
+        version: 4.1.8(@opentelemetry/api@1.9.1)(@types/node@25.9.2)(@vitest/coverage-v8@4.1.8)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.16(@types/node@25.9.2)(esbuild@0.28.0)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
+      wrangler:
+        specifier: catalog:cloudflare
+        version: 4.99.0(@cloudflare/workers-types@4.20260610.1)
+
   apps/docs:
     dependencies:
       '@babel/core':
