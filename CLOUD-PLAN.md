@@ -58,7 +58,7 @@ Why now:
 | **PartyKit** ([partykit/partykit](https://github.com/partykit/partykit))                                | The deploy UX + the **managed-vs-BYO split**: build locally (esbuild facade injecting DO class exports — exactly our `ShardDO`/`SessionDO` shape), push the bundle to the platform API, get `{name}.{user}.partykit.dev`; setting `CLOUDFLARE_API_TOKEN` flips the same CLI to the customer's own account ("cloud-prem").                                                                                                              |
 | **cloudflare/vibesdk** ([repo](https://github.com/cloudflare/vibesdk))                                  | The most complete open end-to-end reference of a control plane on WfP: dispatch namespace deploys, D1+Drizzle control-plane DB, R2/KV, wildcard subdomain routing. Study before writing ours.                                                                                                                                                                                                                                          |
 | **workers-for-platforms-example** ([repo](https://github.com/cloudflare/workers-for-platforms-example)) | Minimal dispatcher skeleton (hostname → tenant → `env.DISPATCHER.get(script, …, { limits, outbound })`).                                                                                                                                                                                                                                                                                                                               |
-| **Alchemy** ([sam-goodwin/alchemy](https://github.com/sam-goodwin/alchemy))                             | TS-native, embeddable IaC for CF resources (Apache-2.0, no wrangler dependency, now ships a `dispatch-namespace` resource; `v0.93.12`, still `0.x`) — verdict (§2.2): scoped to **cell bring-up IaC only**, not the per-tenant deploy path.                                                                                                                                                                                            |
+| **Alchemy** ([sam-goodwin/alchemy](https://github.com/sam-goodwin/alchemy))                             | TS-native, embeddable IaC for CF resources (Apache-2.0, no wrangler dependency; ships `DispatchNamespace`/`Worker`/`D1`/`R2`/DO resources + `D1StateStore`; runs inside a Worker; `v0.93.12`, still `0.x`) — **chosen as the provisioning engine** (§2.2) for cell bring-up, per-tenant deploy, and BYO, with state backed by the control-plane D1.                                                                                    |
 | **Supabase**                                                                                            | The open-core cut line at fleet scale (every per-project service OSS; everything fleet-shaped — provisioning, branching, billing — proprietary); **one Studio codebase serving cloud + self-host behind an `IS_PLATFORM` flag**; Branching 2.0 preview-environment DX (per-Git-branch, Git-optional, PR comments/check runs); the Management API + OAuth-apps growth engine (>60% of new projects provisioned by AI builders via API). |
 
 ---
@@ -71,7 +71,7 @@ Why now:
 │ cirrus CLI / @cirrus │   deploy API   │  Control plane (Worker + D1 + Queues)        │
 │ /vite plugin         ├───────────────▶│  orgs · projects · deployments · deploy keys │
 │                      │                │  secrets vault · usage metering · audit      │
-│  vite build ──▶ bundle                │  provisioning via cloudflare-typescript      │
+│  vite build ──▶ bundle                │  provisioning via Alchemy (D1-backed state)  │
 │  (facade injects DO  │                └───────┬──────────────────────────────────────┘
 │   class exports)     │                        │ multipart script upload + bindings
 │                      │                        ▼
@@ -117,31 +117,41 @@ A boring Cirrus-shaped service (we should dogfood: build it _on Cirrus_):
   `POST /deployments/:id/deploy` (bundle upload → NDJSON/SSE progress events:
   provisioning, migration, worker_upload, done — void's protocol) ·
   `POST /deployments/:id/rollback`.
-- **Provisioning:** `cloudflare-typescript` (`workersForPlatforms.dispatch.namespaces.
-scripts.update`, `d1.database.create`, `r2.buckets.create`, `customHostnames`).
-  Bundling stays client-side in our existing Vite pipeline (PartyKit model) — the
-  platform never builds user code in v1. **The per-tenant deploy is hand-rolled, not
-  an IaC engine** (decided 2026-06-12, re-checked against Alchemy `v0.93.12`): the
-  reason is _not_ capability — Alchemy is Apache-2.0, TS-native, and now ships a
-  `dispatch-namespace.ts` (Workers for Platforms) resource alongside Worker/D1/R2/DO,
-  so it _could_ make these calls. The reason is **source-of-truth shape**: a tenant
-  deployment's state of record is its control-plane DB row (current bundle hash,
-  binding set, secrets, status), and the hard parts — the per-cell rate-limit
-  scheduler (§2.5), retries with backoff, NDJSON progress streaming, rollback-artifact
-  retention — are throughput/orchestration concerns an IaC desired-state/diff/
-  state-store engine is not built for. Running Alchemy's per-resource state store
-  _alongside_ our deployment rows, at 100k+ tenant cardinality, is a second source of
-  truth and a drift class we don't want on the revenue path. SemVer status reinforces
-  caution but isn't the deciding factor: `v0.93.12` is 93 minor cycles / 268 releases
-  deep (well-iterated) yet still `0.x` (API unstable by declaration), with a v2 line
-  on Effect in development (`v2.alchemy.run`).
-  **Where Alchemy _is_ the right tool: cell bring-up** (§2.5) — dispatch namespaces,
-  dispatcher Worker, control-plane D1/R2/queues, per-cell secrets, hostname config are
-  classic low-cardinality desired-state infra, versioned in-repo and re-runnable; its
-  dispatch-namespace resource fits exactly here. Pin the version; Terraform/Pulumi is
-  the boring fallback (Supabase runs its fleet bring-up on Pulumi). Same split both
-  reference platforms use: **IaC for the fleet, custom control plane for tenants.**
-  Worth a one-day re-evaluation if Alchemy ships a stable `1.x` before Phase 1.
+- **Provisioning: Alchemy is the engine** (decided 2026-06-13, verified against
+  `v0.93.12`). [Alchemy](https://github.com/sam-goodwin/alchemy) (Apache-2.0,
+  TS-native, no wrangler dependency) ships exactly the resources we need — a
+  `DispatchNamespace` (Workers for Platforms) resource alongside `Worker`, `D1Database`,
+  `R2Bucket`, Durable Objects, and custom hostnames — and resources are just memoized
+  async functions that run **in any JS runtime, including inside a Worker/DO**, so the
+  control plane runs Alchemy in-process rather than shelling out to a CLI. One engine
+  spans all three deploy targets: **cell bring-up**, **per-tenant managed deploy**, and
+  **BYO** (Alchemy's native use case — same program, swap credentials + state-store
+  location). Programmatic shape: `const app = await alchemy(scope)` → declare resources
+  → `await app.finalize()` (creates/updates and deletes orphaned resources); teardown
+  is first-class, which makes preview-deployment TTL cleanup and project deletion a
+  scope `destroy` rather than bespoke teardown code. Idempotent convergence also means
+  a retry after rate-limit backoff is just re-running `finalize()`.
+- **The one real objection — two sources of truth — is resolved by the state store,
+  not waved away.** Alchemy has pluggable state stores and ships a built-in
+  **`D1StateStore`** and **`DOStateStore`**. We back each tenant's Alchemy scope with
+  the **control-plane D1** (one scope per `{cell, project, deployment}`), so Alchemy
+  state _is_ a table in the control-plane DB — not a second store fighting our
+  deployment rows. The DB row remains the human-facing record (status, bundle hash,
+  plan); the Alchemy scope is the machine-facing convergence state, co-located and
+  covered by the same backups/PITR.
+- **What still wraps Alchemy** (Alchemy converges one scope; it does not coordinate a
+  fleet): the **per-cell rate-limit scheduler** (§2.5) paces and serializes `finalize()`
+  runs against the 1,200-req/5-min account budget; **NDJSON/SSE progress** is emitted
+  around the run via resource lifecycle; **bundling stays in our Vite pipeline** (the
+  PartyKit model — Alchemy deploys the prebuilt bundle, never builds user code);
+  **rollback** re-converges a scope to a prior bundle hash retained in R2.
+- **Risk management for a `0.x` dependency on the revenue path:** pin the exact version;
+  put every Alchemy call behind a thin `@cirrus/provision` adapter interface so a
+  breaking change (or the in-development Effect-based `v2.alchemy.run` line) is contained
+  to one module and `cloudflare-typescript` stays a drop-in fallback; keep one scope per
+  tenant/deployment so concurrent deploys never collide in state. Engage Cloudflare early
+  regardless (§2.5) — Alchemy provisions _through_ the same APIs, it does not change the
+  account-limit or partner story.
 - **Secrets:** per-deployment env vars/secrets stored in the control plane, applied via
   the WfP script-secrets API; the `.dev.vars` grammar + placeholder/secret detection in
   `@cirrus/config` becomes the dashboard's guided setup.
@@ -264,10 +274,12 @@ platform-wide block. Four principles, in priority order:
    **sanctioned** path — Cloudflare's own Tenant docs recommend creating separate
    accounts per customer segment "to avoid getting rate limited."
 3. **All Cloudflare API traffic goes through a per-cell scheduler.** A DO-based
-   token-bucket (≤1,200/5 min per cell) that queues provisioning + deploy calls with
-   backoff and priority (interactive deploy > preview > cleanup). Deploys are
-   artifact-first: bundle to R2 once, then the scheduler performs the upload calls —
-   a CI stampede degrades to queued-but-ordered, never to dropped API calls.
+   token-bucket (≤1,200/5 min per cell) paces and serializes the Alchemy `finalize()`
+   runs (and any direct calls) with backoff and priority (interactive deploy > preview
+    > cleanup). Deploys are artifact-first: bundle to R2 once, then the scheduled
+    > `finalize()` performs the upload — a CI stampede degrades to queued-but-ordered,
+    > never to dropped API calls, and Alchemy's idempotent convergence makes a retried
+    > run safe.
 4. **A graduation ladder instead of one-size tenancy.**
    free/hobby → shared cells; growth → dedicated namespace, then **dedicated cell**
    (their own CF account operated by our control plane — also unlocks true
@@ -339,7 +351,7 @@ with a named contact is the real insurance against surprise enforcement.
 | -------------------------------------------------------------------- | ------ |
 | Control-plane service (orgs/projects/deployments/keys/audit)         | L      |
 | Dispatcher Worker + namespace setup + subdomain/custom-host routing  | M      |
-| Provisioning module over `cloudflare-typescript`                     | M      |
+| `@cirrus/provision` adapter over Alchemy (D1StateStore, scopes)      | M      |
 | CLI verbs: `login/logout/whoami`, `link`, `deploy` (managed target), |        |
 | `logs`, `rollback`; device-flow auth (PartyKit model)                | M      |
 | Hosted-studio multi-tenant shell (org/project/deployment selector)   | M      |
@@ -398,8 +410,10 @@ Ordered so every phase ships standalone DX value even if we stop there.
   spike** that proves the substrate on a real Cirrus app before any control-plane
   code: hibernated-WS subscriptions through `env.DISPATCHER.get()`, the cron
   fan-out workaround, queue-consumer behavior, the mail `send_email` binding, and an
-  untrusted-mode audit (`request.cf`, cache isolation) — §2.4 + risks 2–4. Then:
-  dispatch namespaces, dispatcher Worker, provisioning module, deploy API + NDJSON
+  untrusted-mode audit (`request.cf`, cache isolation) — §2.4 + risks 2–4. The spike
+  also stands up the `@cirrus/provision` Alchemy adapter against one cell (one
+  `DispatchNamespace` deploy with per-tenant D1/R2, D1-backed state) to confirm the
+  engine before building around it. Then: dispatcher Worker, deploy API + NDJSON
   progress, `cirrus login/link/deploy`, `{project}.cirrus.app`, per-deployment
   secrets + scoped tokens. Exit criterion: `cirrus init && cirrus deploy` → live URL
   in under a minute with zero Cloudflare account, zero wrangler config, zero D1
@@ -440,6 +454,14 @@ Ordered so every phase ships standalone DX value even if we stop there.
    needs an equivalent; today `--migrate` runs after traffic is live. Phase 1 can ship
    with today's semantics; the gate is a Phase 4 refinement.
 6. **Control-plane repo + license** — decide before Phase 1 code exists.
+7. **Alchemy `0.x` dependency on the revenue path.** Mitigations in §2.2 (pin exact
+   version; isolate behind the `@cirrus/provision` adapter; keep `cloudflare-typescript`
+   as a drop-in fallback; one state scope per tenant). Open items the Phase 1 spike must
+   answer: behavior of the `D1StateStore` under concurrent `finalize()` runs in the same
+   cell, whether `DispatchNamespace` script upload exposes everything we set today via
+   `reconcileWranglerBindings` (DO migrations, tags, custom limits, secrets), and the
+   teardown path for orphaned per-tenant D1/R2 on `destroy`. Track the Effect-based
+   `v2.alchemy.run` line but stay on pinned v1 until it is stable.
 
 ---
 
@@ -462,7 +484,8 @@ Cloudflare: [WfP docs](https://developers.cloudflare.com/cloudflare-for-platform
 Repos: [workers-for-platforms-example](https://github.com/cloudflare/workers-for-platforms-example) ·
 [vibesdk](https://github.com/cloudflare/vibesdk) · [cloudflare-typescript](https://github.com/cloudflare/cloudflare-typescript) ·
 [workers-sdk](https://github.com/cloudflare/workers-sdk) · [partykit/partykit](https://github.com/partykit/partykit) ·
-[alchemy](https://github.com/sam-goodwin/alchemy) · [convex-backend](https://github.com/get-convex/convex-backend).
+[alchemy](https://github.com/sam-goodwin/alchemy) ([state stores](https://github.com/sam-goodwin/alchemy/tree/main/alchemy/src/state) · `v0.93.12`, Apache-2.0) ·
+[convex-backend](https://github.com/get-convex/convex-backend).
 Convex: [dev workflow](https://docs.convex.dev/understanding/workflow) ·
 [deploy CLI](https://docs.convex.dev/cli/reference/deploy) ·
 [deploy keys](https://docs.convex.dev/cli/deploy-key-types) ·
