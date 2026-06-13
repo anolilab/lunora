@@ -872,6 +872,9 @@ importers:
       '@cirrus/do':
         specifier: workspace:*
         version: link:../../packages/do
+      '@cirrus/payment':
+        specifier: workspace:*
+        version: link:../../packages/payment
       '@cirrus/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
