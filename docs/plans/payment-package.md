@@ -300,8 +300,18 @@ Non-negotiables that the implementation (not just the plan) has to satisfy — s
 quantity })` appends to a durable, exactly-once usage ledger (`usageEvents` table, unique-by-idempotency-key) and —
   when the provider advertises `usageMetering` — forwards a meter event via a new **optional** `reportUsage` adapter
   method (Stripe v2 Meter Events / Polar event ingestion). Upstream reporting is best-effort: a provider failure is
-  observed (`usage.report_failed`), never thrown, and the local ledger `check` reads is always updated. Credits
-  (decrementing prepaid balances) remain the one piece left to Autumn for teams that want it.
+  observed (`usage.report_failed`), never thrown, and the local ledger `check` reads is always updated.
+    - `check` also takes a `priceId` (product access — "is this plan active?") instead of a `featureId`.
+    - `track({ mode: "set" })` reconciles the period total to an absolute value (recorded as a delta against current
+      usage; downward adjustments stay local since provider meters are additive-only).
+    - `listBalances(referenceId)` resolves every configured feature's allowance in one call (DX over per-feature `check`).
+    - **Provider-agnostic by construction.** `listBalances`, product-`check`, and the local-ledger side of `track`/`setUsage`
+      touch only the store + entitlements config — zero provider code. The only provider-specific seam is the optional
+      `reportUsage`; a provider with no metering API (e.g. **Creem** — a Polar-style merchant-of-record with checkout /
+      portal / subscriptions / refunds and a `creem-signature` HMAC-SHA256 webhook, but no usage endpoint) simply sets
+      `capabilities.usageMetering: false` and omits `reportUsage`, and metering still works fully against the local ledger.
+    - Credits (a shared multi-feature balance decremented at per-feature rates), feature **entities**/sub-balances, and
+      balance **rollover** remain the deliberate Autumn-seam line — they turn the package into a full billing service.
 
 ## 7. Resolved decisions (best-practice defaults)
 

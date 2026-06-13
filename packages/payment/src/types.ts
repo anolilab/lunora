@@ -135,7 +135,9 @@ export interface TrackInput {
     readonly featureId: string;
     /** Caller-supplied dedupe key; a fresh one is generated when omitted (so each call records). */
     readonly idempotencyKey?: string;
-    /** Usage amount to add (defaults to `1`). */
+    /** `"add"` (default) increments usage by `quantity`; `"set"` reconciles the period total to `quantity`. */
+    readonly mode?: "add" | "set";
+    /** Usage amount to add, or the absolute period total when `mode` is `"set"` (defaults to `1`). */
     readonly quantity?: number;
     readonly referenceId: string;
 }
@@ -148,9 +150,15 @@ export interface TrackResult {
     readonly reportedToProvider: boolean;
 }
 
-/** `check` input — is a reference allowed to use a feature (and by how much remains)? */
+/**
+ * `check` input — is a reference allowed something right now? Pass `featureId` to check a feature
+ * grant/allowance, or `priceId` to check active access to a product (one of the two is required).
+ */
 export interface CheckInput {
-    readonly featureId: string;
+    /** Feature to check a grant/allowance for. Provide this **or** `priceId`. */
+    readonly featureId?: string;
+    /** Provider price/product id to check active access for. Provide this **or** `featureId`. */
+    readonly priceId?: string;
     /** Units the caller intends to consume; the check passes only when this many remain (default `1`). */
     readonly quantity?: number;
     readonly referenceId: string;
@@ -168,6 +176,11 @@ export interface CheckResult {
     readonly unlimited: boolean;
     /** Usage consumed this period, for metered features only. */
     readonly used?: number;
+}
+
+/** One feature's resolved allowance for a reference — a {@link CheckResult} tagged with its feature. */
+export interface FeatureBalance extends CheckResult {
+    readonly featureId: string;
 }
 
 /** Input the adapter forwards to the provider's metering API (Stripe Meter Events / Polar ingestion). */

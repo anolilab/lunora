@@ -1321,6 +1321,9 @@ const paymentStub: CirrusPayment = {
     handleWebhook: () => {
         ${missing}
     },
+    listBalances: () => {
+        ${missing}
+    },
     listSubscriptions: () => {
         ${missing}
     },

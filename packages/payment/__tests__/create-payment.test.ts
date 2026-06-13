@@ -273,4 +273,75 @@ describe("createPayment — attach / check / track", () => {
             reportedToProvider: false,
         });
     });
+
+    it("track mode:set reconciles the period total via a delta", async () => {
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(activeSubscription("user_1"));
+
+        const payment = createPayment({ adapter: fakeAdapter({ reportUsage: undefined }), entitlements, store });
+
+        await payment.track({ featureId: "api_calls", quantity: 30, referenceId: "user_1" });
+        await payment.track({ featureId: "api_calls", mode: "set", quantity: 50, referenceId: "user_1" });
+
+        await expect(payment.check({ featureId: "api_calls", referenceId: "user_1" })).resolves.toMatchObject({ balance: 50, used: 50 });
+
+        // A downward "set" stays local (provider meters are additive) but still corrects the ledger.
+        await payment.track({ featureId: "api_calls", mode: "set", quantity: 10, referenceId: "user_1" });
+
+        await expect(payment.check({ featureId: "api_calls", referenceId: "user_1" })).resolves.toMatchObject({ balance: 90, used: 10 });
+    });
+
+    it("track on a provider without usage metering (Creem-style) records locally only", async () => {
+        const store = new MemoryPaymentStore();
+        const reported: number[] = [];
+        const payment = createPayment({
+            adapter: fakeAdapter({
+                capabilities: { merchantOfRecord: true, portal: true, usageMetering: false },
+                reportUsage: async (input) => {
+                    reported.push(input.quantity);
+                },
+            }),
+            store,
+        });
+
+        await expect(payment.track({ featureId: "api_calls", idempotencyKey: "u1", quantity: 5, referenceId: "user_1" })).resolves.toEqual({
+            recorded: true,
+            reportedToProvider: false,
+        });
+        expect(reported).toHaveLength(0);
+        await expect(store.sumUsage("user_1", "api_calls", 0)).resolves.toBe(5);
+    });
+
+    it("check by priceId answers product access", async () => {
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(activeSubscription("user_1"));
+
+        const payment = createPayment({ adapter: fakeAdapter(), store });
+
+        await expect(payment.check({ priceId: "price_1", referenceId: "user_1" })).resolves.toEqual({ allowed: true, unlimited: false });
+        await expect(payment.check({ priceId: "price_absent", referenceId: "user_1" })).resolves.toEqual({ allowed: false, unlimited: false });
+    });
+
+    it("check throws when given neither a featureId nor a priceId", async () => {
+        const payment = createPayment({ adapter: fakeAdapter(), entitlements, store: new MemoryPaymentStore() });
+
+        await expect(payment.check({ referenceId: "user_1" })).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+    });
+
+    it("listBalances resolves every configured feature in one call", async () => {
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(activeSubscription("user_1"));
+
+        const payment = createPayment({ adapter: fakeAdapter(), entitlements, store });
+
+        await payment.track({ featureId: "api_calls", quantity: 30, referenceId: "user_1" });
+
+        await expect(payment.listBalances("user_1")).resolves.toEqual([
+            { allowed: true, balance: 70, featureId: "api_calls", limit: 100, unlimited: false, used: 30 },
+            { allowed: true, featureId: "export", unlimited: true },
+        ]);
+    });
 });

@@ -271,6 +271,9 @@ const paymentStub: CirrusPayment = {
     handleWebhook: () => {
         throw new Error("ctx.payments: no payment configured. Pass \`payment\` to createShardDO().");
     },
+    listBalances: () => {
+        throw new Error("ctx.payments: no payment configured. Pass \`payment\` to createShardDO().");
+    },
     listSubscriptions: () => {
         throw new Error("ctx.payments: no payment configured. Pass \`payment\` to createShardDO().");
     },

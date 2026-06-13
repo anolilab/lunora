@@ -7,7 +7,7 @@ export { createPayment } from "./create-payment";
 export type { PaymentDatabase, PaymentRow } from "./database-store";
 export { createDatabasePaymentStore } from "./database-store";
 export type { Entitlements, EntitlementsConfig, PlanDefinition } from "./entitlements";
-export { entitlementsForReference, resolveEntitlements, usagePeriodStart } from "./entitlements";
+export { entitlementsForReference, featureNames, hasActivePrice, resolveEntitlements, usagePeriodStart } from "./entitlements";
 export type { PaymentErrorCode } from "./errors";
 export { CirrusPaymentError } from "./errors";
 export { default as idempotencyKey } from "./idempotency";
@@ -57,6 +57,7 @@ export type {
     CurrencyCode,
     Customer,
     CustomerRef,
+    FeatureBalance,
     Money,
     PaymentSession,
     PaymentState,
