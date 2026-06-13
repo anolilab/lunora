@@ -2,6 +2,7 @@ import { CirrusError } from "@cirrus/server";
 
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
+import { assertMember } from "./authz";
 
 interface DeploymentRow {
     _id: Id<"deployments">;
@@ -18,21 +19,17 @@ interface DeploymentRow {
     url?: string;
 }
 
-const assertSignedIn = (userId: null | string): string => {
-    if (!userId) {
-        throw new CirrusError("UNAUTHORIZED", "not signed in");
-    }
+interface ProjectRow {
+    _id: Id<"projects">;
+}
 
-    return userId;
-};
-
-/** A project's deployments, newest first. */
+/** A project's deployments, newest first. Caller must be a member of the org. */
 export const listByProject = query({
-    args: { projectId: v.id("projects") },
-    handler: async (context, { projectId }): Promise<DeploymentRow[]> => {
-        assertSignedIn(context.auth.userId);
+    args: { organizationId: v.id("organizations"), projectId: v.id("projects") },
+    handler: async (context, { organizationId, projectId }): Promise<DeploymentRow[]> => {
+        await assertMember(context, organizationId);
 
-        const { page } = await context.db.deployments.findMany({ where: { projectId } });
+        const { page } = await context.db.deployments.findMany({ where: { organizationId, projectId } });
 
         return (page as unknown as DeploymentRow[]).toSorted((a, b) => b.createdAt - a.createdAt);
     },
@@ -53,7 +50,15 @@ export const create = mutation({
         scriptName: v.string(),
     },
     handler: async (context, arguments_): Promise<Id<"deployments">> => {
-        const userId = assertSignedIn(context.auth.userId);
+        const { userId } = await assertMember(context, arguments_.organizationId, ["owner", "admin", "member"]);
+
+        // Integrity: the project must belong to the same org (no cross-org linkage).
+        const { page } = await context.db.projects.findMany({ where: { organizationId: arguments_.organizationId } });
+
+        if (!(page as unknown as ProjectRow[]).some((project) => project._id === arguments_.projectId)) {
+            throw new CirrusError("NOT_FOUND", "project not found in this organization");
+        }
+
         const now = Date.now();
 
         return context.db.insert("deployments", {
@@ -72,8 +77,13 @@ export const create = mutation({
 
 /**
  * Advance a deployment's lifecycle (queued → provisioning → building → live, or
- * → failed). Called by the deploy orchestrator as it works through the
- * provisioner's NDJSON progress events.
+ * → failed). Driven by the deploy orchestrator as it works through the
+ * provisioner's progress events.
+ *
+ * SYSTEM mutation: this is the seam the platform's deploy orchestrator calls,
+ * not a user action. It should become an `internalMutation` invoked behind the
+ * deploy API with a system identity; until that path exists it is gated by
+ * membership in the deployment's org.
  */
 export const updateStatus = mutation({
     args: {
@@ -83,7 +93,13 @@ export const updateStatus = mutation({
         url: v.optional(v.string()),
     },
     handler: async (context, { bundleHash, id, status, url }): Promise<void> => {
-        assertSignedIn(context.auth.userId);
+        const existing = (await context.db.get(id)) as DeploymentRow | null;
+
+        if (!existing) {
+            throw new CirrusError("NOT_FOUND", "deployment not found");
+        }
+
+        await assertMember(context, existing.organizationId);
 
         await context.db.patch(id, {
             ...(bundleHash === undefined ? {} : { bundleHash }),
