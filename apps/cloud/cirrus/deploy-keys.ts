@@ -97,9 +97,12 @@ export const revoke = mutation({
  * authoritative org/project come from the DB row, not the (untrusted) key text;
  * `parseDeployKey` is only a cheap pre-filter. On success, bumps `lastUsedAt`.
  *
- * SYSTEM mutation: this is the deploy API's authentication path, NOT a
- * user-facing call. It must be invoked server-side behind the deploy endpoint
- * (an `internalMutation` once that wiring exists), never exposed to clients.
+ * Public `mutation` by necessity: the deploy endpoint calls it through the HTTP
+ * action context's `ctx.runMutation`, whose dispatch carries no system-dispatch
+ * flag, so an `internalMutation` would be unreachable there. Public exposure is
+ * safe — lookup is by hash of a 256-bit key, so there is no enumeration oracle
+ * (an attacker must already hold a valid key), and the only side effect is the
+ * `lastUsedAt` bump on a genuine match.
  */
 export const verify = mutation({
     args: { key: v.string() },
