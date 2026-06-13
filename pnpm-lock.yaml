@@ -1011,6 +1011,9 @@ importers:
       '@cirrus/config':
         specifier: workspace:*
         version: link:../config
+      '@cirrus/container':
+        specifier: workspace:*
+        version: link:../container
       '@cirrus/d1':
         specifier: workspace:*
         version: link:../d1
@@ -1154,6 +1157,9 @@ importers:
       '@cirrus/codegen':
         specifier: workspace:*
         version: link:../codegen
+      '@cirrus/container':
+        specifier: workspace:*
+        version: link:../container
       '@cirrus/studio':
         specifier: workspace:*
         version: link:../studio

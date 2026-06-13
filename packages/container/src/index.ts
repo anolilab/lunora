@@ -12,6 +12,7 @@ export type { ContainerAccessor, ContainerBindingSpec, ContainerHandle, Containe
 export { createContainerContext, createContainerTestContext } from "./client";
 export {
     containerBindingName,
+    containerBuildTag,
     containerClassName,
     defineContainer,
     isContainerDefinition,

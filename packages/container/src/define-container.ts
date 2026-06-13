@@ -73,6 +73,15 @@ const containerClassName = (exportName: string): string => `${exportName.charAt(
 const containerBindingName = (exportName: string): string => `CONTAINER_${exportName.replaceAll(/(?<=[a-z0-9])(?=[A-Z])/g, "_").toUpperCase()}`;
 
 /**
+ * The local image tag a Railpack `{ build }` container is built and pushed
+ * under: `transcoder` → `cirrus-transcoder:build`. The config reconciler writes
+ * it as the wrangler `containers[].image`, and `cirrus deploy` builds that tag
+ * with Railpack and `wrangler containers push`es it before deploying — so all
+ * three derive the tag from this one helper and can never disagree.
+ */
+const containerBuildTag = (exportName: string): string => `cirrus-${exportName.replaceAll(/(?<=[a-z0-9])(?=[A-Z])/g, "-").toLowerCase()}:build`;
+
+/**
  * Declare a container deployed alongside the app. Pure validation + branding:
  * codegen discovers the export, emits the Container DO class
  * (`_generated/containers.ts`), and wires the typed `ctx.containers` handle;
@@ -180,6 +189,7 @@ const resolveContainerEnvVariables = (definition: ContainerDefinition, workerEnv
 
 export {
     containerBindingName,
+    containerBuildTag,
     containerClassName,
     defineContainer,
     isContainerDefinition,

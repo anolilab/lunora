@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
     containerBindingName,
+    containerBuildTag,
     containerClassName,
     defineContainer,
     isContainerDefinition,
@@ -104,6 +105,15 @@ describe(containerBindingName, () => {
         expect(containerBindingName("transcoder")).toBe("CONTAINER_TRANSCODER");
         expect(containerBindingName("imageResizer")).toBe("CONTAINER_IMAGE_RESIZER");
         expect(containerBindingName("ffmpeg2Pass")).toBe("CONTAINER_FFMPEG2_PASS");
+    });
+});
+
+describe(containerBuildTag, () => {
+    it("derives the deterministic Railpack build tag", () => {
+        expect.assertions(2);
+
+        expect(containerBuildTag("transcoder")).toBe("cirrus-transcoder:build");
+        expect(containerBuildTag("imageResizer")).toBe("cirrus-image-resizer:build");
     });
 });
 

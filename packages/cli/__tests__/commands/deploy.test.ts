@@ -142,6 +142,50 @@ describe("cirrus deploy", () => {
             expect(result.code).toBe(0);
         });
 
+        it("builds + pushes a Railpack { build } container before wrangler deploy", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            writeFileSync(
+                join(workdir, "cirrus", "containers.ts"),
+                `import { defineContainer } from "@cirrus/container";
+export const worker = defineContainer({ image: { build: "./services/worker" } });
+`,
+                "utf8",
+            );
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+
+            const result = await runDeployCommand({ cwd: workdir, dockerAvailable: () => true, logger, railpackAvailable: () => true, spawner });
+
+            expect(result.code).toBe(0);
+            // railpack build → wrangler containers push → wrangler deploy.
+            expect(calls.map((call) => call.descriptor.command)).toStrictEqual(["railpack", "pnpm", "pnpm"]);
+            expect(calls[0]?.descriptor.args).toStrictEqual(["build", "./services/worker", "--name", "cirrus-worker:build"]);
+        });
+
+        it("blocks the deploy when a { build } container needs Railpack but it is unavailable", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            writeFileSync(
+                join(workdir, "cirrus", "containers.ts"),
+                `import { defineContainer } from "@cirrus/container";
+export const worker = defineContainer({ image: { build: "./services/worker" } });
+`,
+                "utf8",
+            );
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+
+            const result = await runDeployCommand({ cwd: workdir, dockerAvailable: () => true, logger, railpackAvailable: () => false, spawner });
+
+            expect(result.code).toBe(1);
+            expect(calls).toHaveLength(0);
+        });
+
         it("bundles src/worker.ts as the deploy entry for class-B composition when present", async () => {
             expect.assertions(3);
 

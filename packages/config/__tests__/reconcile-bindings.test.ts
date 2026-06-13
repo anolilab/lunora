@@ -309,6 +309,20 @@ describe("reconcileWranglerBindings", () => {
             expect(result.warnings.join(" ")).toContain("observability is explicitly disabled");
         });
 
+        it("writes the deterministic build tag for a Railpack { build } source", () => {
+            expect.assertions(2);
+
+            const buildContainer = { ...TRANSCODER, image: { buildDir: "./services/transcoder", kind: "build" as const } };
+
+            reconcileWranglerBindings(root, baseInferred({ containers: [buildContainer] }));
+
+            const config = readConfig();
+
+            expect(config.containers[0].image).toBe("cirrus-transcoder:build");
+            // A build source has no Dockerfile, so no image_build_context is written.
+            expect(config.containers[0].image_build_context).toBeUndefined();
+        });
+
         it("writes a registry image without a build context", () => {
             expect.assertions(1);
 

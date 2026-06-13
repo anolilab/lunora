@@ -16,6 +16,7 @@
  */
 import { writeFileSync } from "node:fs";
 
+import { containerBuildTag } from "@cirrus/container";
 import { applyEdits, modify } from "jsonc-parser";
 
 import type { DurableObjectSpec, InferredBindings, InferredContainer } from "./infer-bindings";
@@ -230,11 +231,27 @@ const wranglerInstanceType = (instanceType: NonNullable<InferredContainer["insta
     return custom;
 };
 
+/** The wrangler `containers[].image` for an inferred container. */
+const imageRefFor = (container: InferredContainer): string => {
+    if (container.image.kind === "dockerfile") {
+        return container.image.dockerfilePath;
+    }
+
+    if (container.image.kind === "registry") {
+        return container.image.reference;
+    }
+
+    // A Railpack `{ build }` source: `cirrus deploy` builds + pushes this local
+    // tag (derived from the export name) before wrangler runs, so wrangler.jsonc
+    // references the pushed tag. See `containerBuildTag`.
+    return containerBuildTag(container.exportName);
+};
+
 /** Render one wrangler `containers[]` entry from an inferred container. Pure. */
 const containerEntryFor = (container: InferredContainer): Record<string, unknown> => {
     const entry: Record<string, unknown> = {
         class_name: container.className,
-        image: container.image.kind === "dockerfile" ? container.image.dockerfilePath : container.image.reference,
+        image: imageRefFor(container),
     };
 
     if (container.image.kind === "dockerfile") {

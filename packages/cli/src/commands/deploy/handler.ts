@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 
 import type { CodegenResult } from "@cirrus/codegen";
 import { discoverMigrations, runCodegen } from "@cirrus/codegen";
-import { findWranglerFile, inferCirrusBindings, readWranglerJsonc, reconcileWranglerBindings } from "@cirrus/config";
+import { discoverContainerInfo, findWranglerFile, inferCirrusBindings, readWranglerJsonc, reconcileWranglerBindings } from "@cirrus/config";
 import { join } from "@visulima/path";
 import { Spinner } from "@visulima/spinner";
 import { Project } from "ts-morph";
@@ -15,6 +15,7 @@ import type { DockerProbe } from "../../util/docker";
 import { isDockerAvailable } from "../../util/docker";
 import type { Logger } from "../../util/logger";
 import { isJsonFormat, loggerForFormat, printJson, validateOutputFormat } from "../../util/output-format";
+import { buildRailpackImages } from "../../util/railpack";
 import { runSchemaDriftGate } from "../../util/schema-drift-gate";
 import type { SpawnDescriptor, Spawner } from "../../util/spawn";
 import { defaultSpawner } from "../../util/spawn";
@@ -61,8 +62,11 @@ interface DeployCommandOptions {
 
     /** Admin bearer token for `--migrate` (falls back to `CIRRUS_ADMIN_TOKEN`). */
     migrateToken?: string;
+
     /** Worker URL for `--migrate` (defaults to the wrangler deploy target). */
     migrateUrl?: string;
+    /** Railpack-availability probe injected in tests. Defaults to a real `railpack --version` + `BUILDKIT_HOST` check. */
+    railpackAvailable?: DockerProbe;
     skipCodegen?: boolean;
     spawner?: Spawner;
     /** Re-bless the committed schema baseline with the current shape (accepts breaking drift). */
@@ -176,6 +180,35 @@ const findD1PlaceholderBinding = (cwd: string): string | undefined => {
     const placeholder = (parsed.d1_databases ?? []).find((entry) => entry.database_id === D1_PLACEHOLDER_ID);
 
     return placeholder?.binding;
+};
+
+/**
+ * Build + push any Railpack `{ build }` containers before wrangler runs. Reads
+ * the build sources from `cirrus/containers.ts` (not wrangler.jsonc — by the
+ * time it's reconciled the build kind is indistinguishable from a registry ref)
+ * and delegates to the testable {@link buildRailpackImages} orchestrator.
+ * Returns an error message when a build is blocked or fails, else `undefined`.
+ */
+const buildContainerImages = async (cwd: string, options: DeployCommandOptions): Promise<string | undefined> => {
+    const targets = discoverContainerInfo(cwd, "cirrus")
+        .containers.filter((container) => container.image.kind === "build")
+        .map((container) => {
+            return { buildDir: (container.image as { buildDir: string }).buildDir, exportName: container.exportName };
+        });
+
+    if (targets.length === 0) {
+        return undefined;
+    }
+
+    const result = await buildRailpackImages({
+        cwd,
+        logger: options.logger,
+        railpackAvailable: options.railpackAvailable,
+        spawner: options.spawner,
+        targets,
+    });
+
+    return result.code === 0 ? undefined : (result.error ?? "railpack build failed");
 };
 
 /**
@@ -359,6 +392,29 @@ const finalizeSuccessfulDeploy = async (
     return { code: 0, descriptor, validation };
 };
 
+/**
+ * Run the gates that must pass before `wrangler deploy`: the D1-placeholder
+ * hard-block, the Dockerfile-container Docker preflight, and the Railpack
+ * `{ build }` build+push step. Returns the first error message, or `undefined`
+ * when all pass. Extracted from {@link executeDeploy} to keep its complexity
+ * bounded.
+ */
+const runPreDeployGates = async (cwd: string, options: DeployCommandOptions): Promise<string | undefined> => {
+    const d1Error = checkD1Placeholder(cwd, options.logger);
+
+    if (d1Error !== undefined) {
+        return d1Error;
+    }
+
+    const dockerError = checkContainerDockerPreflight(cwd, options.logger, options.dockerAvailable ?? isDockerAvailable);
+
+    if (dockerError !== undefined) {
+        return dockerError;
+    }
+
+    return buildContainerImages(cwd, options);
+};
+
 const executeDeploy = async (options: DeployCommandOptions): Promise<DeployCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     const interactive = isInteractive(options);
@@ -415,22 +471,13 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
 
     await provisionBindings(cwd, options.logger);
 
-    // Hard-block: if any D1 binding still carries the placeholder id written by
-    // `reconcileWranglerBindings`, deploying would let `wrangler deploy` fail
-    // with a confusing "invalid database id" error deep in the output. Abort
-    // early with a clear, actionable message.
-    const d1Error = checkD1Placeholder(cwd, options.logger);
+    // Pre-wrangler gates: the D1 placeholder hard-block, the Dockerfile-container
+    // Docker preflight, and the Railpack `{ build }` build+push step. Each aborts
+    // with a directed message rather than letting wrangler fail opaquely later.
+    const preflightError = await runPreDeployGates(cwd, options);
 
-    if (d1Error !== undefined) {
-        return { code: 1, descriptor: undefined, error: d1Error, validation: { problems: [], wranglerPath: undefined } };
-    }
-
-    // Containers built from a local Dockerfile need a running Docker engine —
-    // fail fast with a directed message rather than deep inside wrangler.
-    const dockerError = checkContainerDockerPreflight(cwd, options.logger, options.dockerAvailable ?? isDockerAvailable);
-
-    if (dockerError !== undefined) {
-        return { code: 1, descriptor: undefined, error: dockerError, validation: { problems: [], wranglerPath: undefined } };
+    if (preflightError !== undefined) {
+        return { code: 1, descriptor: undefined, error: preflightError, validation: { problems: [], wranglerPath: undefined } };
     }
 
     const validation = validateWrangler({ projectRoot: cwd });
