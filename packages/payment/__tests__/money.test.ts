@@ -1,7 +1,18 @@
 import { describe, expect, it } from "vitest";
 
 import { CirrusPaymentError } from "../src/errors";
-import { addMoney, allocateMoney, compareMoney, fromMoneyJSON, isZeroDecimalCurrency, money, subtractMoney, toMoneyJSON, zeroMoney } from "../src/money";
+import {
+    addMoney,
+    allocateMoney,
+    compareMoney,
+    formatMoney,
+    fromMoneyJSON,
+    isZeroDecimalCurrency,
+    money,
+    subtractMoney,
+    toMoneyJSON,
+    zeroMoney,
+} from "../src/money";
 
 describe("money", () => {
     it("constructs from number and bigint and uppercases the currency", () => {
@@ -23,6 +34,12 @@ describe("money", () => {
         expect(compareMoney(money(1, "USD"), money(2, "USD"))).toBe(-1);
         expect(compareMoney(money(2, "USD"), money(2, "USD"))).toBe(0);
         expect(compareMoney(money(3, "USD"), money(2, "USD"))).toBe(1);
+    });
+
+    it("formats money for display, honoring the currency's minor units", () => {
+        expect(formatMoney(money(1999, "USD"))).toBe("$19.99");
+        // JPY is zero-decimal — 500 minor units is ¥500, not ¥5.00.
+        expect(formatMoney(money(500, "JPY"))).toBe("¥500");
     });
 
     it("flags zero-decimal currencies", () => {

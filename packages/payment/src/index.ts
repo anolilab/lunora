@@ -16,6 +16,7 @@ export {
     addMoney,
     allocateMoney,
     compareMoney,
+    formatMoney,
     fromMoneyJSON,
     isZeroDecimalCurrency,
     isZeroMoney,

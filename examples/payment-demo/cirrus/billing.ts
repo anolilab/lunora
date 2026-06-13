@@ -32,6 +32,12 @@ interface SubscriptionRow {
     state: string;
 }
 
+/** Open the Stripe billing portal for the demo reference (customer derived from the store). */
+export const portal = action({
+    args: {},
+    handler: async (ctx): Promise<{ url: string }> => ctx.payments.createPortalSession(DEMO_REFERENCE, "https://example.com/account"),
+});
+
 /** Reactive read of the webhook-synced subscriptions for the demo reference. */
 export const mySubscriptions = query({
     args: {},

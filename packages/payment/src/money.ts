@@ -56,6 +56,14 @@ export const money = (minorUnits: bigint | number, currency: CurrencyCode): Mone
 
 export const zeroMoney = (currency: CurrencyCode): Money => money(0n, currency);
 
+/** Localized currency string for display (e.g. `$19.99`). For UI only — never for arithmetic. */
+export const formatMoney = (value: Money, locale = "en-US"): string => {
+    const exponent = Number(exponentFor(value.currency.toUpperCase()));
+    const amount = Number(value.minorUnits) / 10 ** exponent;
+
+    return new Intl.NumberFormat(locale, { currency: value.currency, style: "currency" }).format(amount);
+};
+
 export const addMoney = (a: Money, b: Money): Money => {
     assertSameCurrency(a, b);
 

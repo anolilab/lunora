@@ -8,6 +8,7 @@ export interface ApiTypes {
     billing: {
         checkout: FunctionReference<"action", { priceId: string }, { url: string; }>;
         mySubscriptions: FunctionReference<"query", {}, { providerSubscriptionId: string; referenceId: string; state: string }[]>;
+        portal: FunctionReference<"action", {}, { url: string; }>;
     };
 }
 

@@ -179,6 +179,62 @@
         ],
         "x-cirrus-function-kind": "query"
       }
+    },
+    "/_cirrus/rpc#billing:portal": {
+      "post": {
+        "description": "Invoke the `action` `billing:portal` over the Cirrus RPC envelope (POST /_cirrus/rpc).",
+        "operationId": "billing:portal",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "args": {
+                    "additionalProperties": false,
+                    "properties": {},
+                    "required": [],
+                    "type": "object"
+                  },
+                  "functionPath": {
+                    "const": "billing:portal",
+                    "type": "string"
+                  },
+                  "shardKey": {
+                    "description": "Optional shard key; omitted routes to the default shard.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "functionPath"
+                ],
+                "type": "object"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "description": "RPC result. The shape is TS-inferred from the function's return type; best-effort — any JSON."
+                }
+              }
+            },
+            "description": "Successful RPC result (TypeScript-inferred return shape, documented best-effort)."
+          },
+          "default": {
+            "$ref": "#/components/responses/CirrusError"
+          }
+        },
+        "summary": "action: billing:portal",
+        "tags": [
+          "billing"
+        ],
+        "x-cirrus-function-kind": "action"
+      }
     }
   },
   "tags": [

@@ -11,7 +11,7 @@ import idempotencyKey from "./idempotency";
 import type { PaymentObserver } from "./observability";
 import type { PaymentStore } from "./store";
 import applyWebhookAction from "./sync";
-import type { CancelSubscriptionOptions, CheckoutInput, CheckoutResult, PortalInput, Subscription } from "./types";
+import type { CancelSubscriptionOptions, CheckoutInput, CheckoutResult, Subscription } from "./types";
 
 const jsonResponse = (body: unknown, status: number): Response => Response.json(body, { headers: { "content-type": "application/json" }, status });
 
@@ -35,7 +35,8 @@ export interface CirrusPayment {
     readonly adapter: PaymentAdapter;
     cancelSubscription: (subscriptionId: string, options?: CancelSubscriptionOptions) => Promise<Subscription>;
     createCheckout: (input: CheckoutInput) => Promise<CheckoutResult>;
-    createPortalSession: (referenceId: string, input: PortalInput) => Promise<{ url: string }>;
+    /** Open the provider billing portal for the caller's own customer (derived from the store). */
+    createPortalSession: (referenceId: string, returnUrl: string) => Promise<{ url: string }>;
     /** Verify + normalize + apply a provider webhook. Always 200 once verified, even on no-op. */
     handleWebhook: (request: Request) => Promise<Response>;
     listSubscriptions: (referenceId: string) => Promise<Subscription[]>;
@@ -90,10 +91,17 @@ export const createPayment = (options: CreatePaymentOptions): CirrusPayment => {
             let { customerId } = input;
 
             if (!customerId) {
-                const customer = await adapter.getOrCreateCustomer({ email: undefined, referenceId: input.referenceId });
+                // Reuse the reference's existing provider customer; only create one the first time.
+                const existing = await store.getCustomerByReference(adapter.identifier, input.referenceId);
 
-                customerId = customer.id;
-                await store.upsertCustomer(customer);
+                if (existing) {
+                    customerId = existing.id;
+                } else {
+                    const customer = await adapter.getOrCreateCustomer({ referenceId: input.referenceId });
+
+                    customerId = customer.id;
+                    await store.upsertCustomer(customer);
+                }
             }
 
             const key = input.idempotencyKey ?? idempotencyKey("checkout", adapter.identifier, input.referenceId, input.priceId, input.mode);
@@ -101,10 +109,17 @@ export const createPayment = (options: CreatePaymentOptions): CirrusPayment => {
             return adapter.createCheckout({ ...input, customerId, idempotencyKey: key });
         },
 
-        createPortalSession: async (referenceId, input) => {
+        createPortalSession: async (referenceId, returnUrl) => {
             await ensureAuthorized(referenceId);
 
-            return adapter.createPortalSession(input);
+            // Derive the customer from the store — never trust a caller-supplied customer id (IDOR).
+            const customer = await store.getCustomerByReference(adapter.identifier, referenceId);
+
+            if (!customer) {
+                throw new CirrusPaymentError("NOT_FOUND", `no customer for reference "${referenceId}"`);
+            }
+
+            return adapter.createPortalSession({ customerId: customer.id, returnUrl });
         },
 
         handleWebhook: async (request) => {
@@ -115,9 +130,12 @@ export const createPayment = (options: CreatePaymentOptions): CirrusPayment => {
 
                 action = await adapter.parseWebhook({ headers: request.headers, payload });
             } catch (error) {
-                const status = error instanceof CirrusPaymentError ? error.status : 400;
+                // Only surface our own (non-sensitive) error messages; mask anything unexpected.
+                if (error instanceof CirrusPaymentError) {
+                    return jsonResponse({ error: error.message }, error.status);
+                }
 
-                return jsonResponse({ error: error instanceof Error ? error.message : "webhook error" }, status);
+                return jsonResponse({ error: "webhook error" }, 400);
             }
 
             const result = await applyWebhookAction(store, action, options.observability);

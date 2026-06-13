@@ -1,4 +1,4 @@
-import { CheckoutButton, useCirrus, useQuery } from "@cirrus/react";
+import { CheckoutButton, CustomerPortalButton, useCirrus, useQuery } from "@cirrus/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
@@ -30,7 +30,8 @@ export const App = (): ReactElement => {
                 <input onChange={(event) => setPriceId(event.target.value)} style={{ display: "block", width: "100%" }} value={priceId} />
             </label>
 
-            <CheckoutButton onCheckout={() => client.action(api.billing.checkout, { priceId })}>Subscribe</CheckoutButton>
+            <CheckoutButton onCheckout={() => client.action(api.billing.checkout, { priceId })}>Subscribe</CheckoutButton>{" "}
+            <CustomerPortalButton onPortal={() => client.action(api.billing.portal, {})}>Manage billing</CustomerPortalButton>
 
             <h2>Your subscriptions</h2>
             {subscriptions === undefined ? (

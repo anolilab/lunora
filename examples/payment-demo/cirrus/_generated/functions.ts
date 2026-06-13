@@ -31,6 +31,7 @@ export interface RegisteredCirrusFunction {
 export const CIRRUS_FUNCTIONS: Record<string, RegisteredCirrusFunction> = {
     "billing:checkout": cirrus_billing_0.checkout as unknown as RegisteredCirrusFunction,
     "billing:mySubscriptions": cirrus_billing_0.mySubscriptions as unknown as RegisteredCirrusFunction,
+    "billing:portal": cirrus_billing_0.portal as unknown as RegisteredCirrusFunction,
     "billing:processWebhook": cirrus_billing_0.processWebhook as unknown as RegisteredCirrusFunction,
 };
 
@@ -70,6 +71,7 @@ export interface Caller {
     billing: {
         checkout: (args: { priceId: string }) => Promise<{ url: string; }>;
         mySubscriptions: (args?: {}) => Promise<{ providerSubscriptionId: string; referenceId: string; state: string }[]>;
+        portal: (args?: {}) => Promise<{ url: string; }>;
         processWebhook: (args: { body: string; signature: string }) => Promise<{ applied: boolean; status: number; }>;
     };
 }
@@ -93,6 +95,7 @@ export const createCaller = (context: CallerCtx): Caller => ({
     billing: {
         checkout: (args) => callRegistered(context, "billing:checkout", args),
         mySubscriptions: (args) => callRegistered(context, "billing:mySubscriptions", args),
+        portal: (args) => callRegistered(context, "billing:portal", args),
         processWebhook: (args) => callRegistered(context, "billing:processWebhook", args),
     },
 });
