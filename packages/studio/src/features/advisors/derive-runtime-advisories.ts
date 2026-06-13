@@ -1,5 +1,5 @@
 import type { AdvisorIndexHit, AdvisorShardTraffic, AdvisorTableScan } from "@cirrus/advisor";
-import { RUNTIME_LINTS, runAdvisor } from "@cirrus/advisor";
+import { runAdvisor, RUNTIME_LINTS } from "@cirrus/advisor";
 
 import type { FunctionCallStat, MetricsIndexHit, TableIndexInfo } from "../../lib/admin";
 import type { AdvisorRow } from "./advisor-view";
@@ -26,17 +26,20 @@ export interface RuntimeAdvisoryInputs {
      * Empty/absent when the RPCs are unavailable — then no dead-index check runs.
      */
     declaredIndexes?: ReadonlyArray<DeclaredIndex>;
+
     /**
      * The per-function call stats from `getFunctionStats`, whose `scannedTables`
      * carry the full-scan attribution aggregated into the hot-scan lint input.
      */
     functions?: ReadonlyArray<FunctionCallStat> | null;
+
     /**
      * The per-`(table, index)` recorded reads from the `getMetrics` payload's
      * `indexHits` (the USED-index counts). Reconciled against
      * {@link declaredIndexes}: a declared index with no matching entry is dead.
      */
     indexHits?: ReadonlyArray<MetricsIndexHit> | null;
+
     /**
      * The cross-shard request distribution from the worker's
      * `POST /_cirrus/admin/shard-traffic` endpoint (`@cirrus/runtime`'s
@@ -47,6 +50,7 @@ export interface RuntimeAdvisoryInputs {
      * worker predates the endpoint), and then `hot_shard` simply finds nothing.
      */
     shardTraffic?: ReadonlyArray<AdvisorShardTraffic> | null;
+
     /**
      * Tables already covered by the panel's `missing-index` insight (which reads
      * the same `scannedTables` signal). The hot-scan lint half suppresses its
@@ -74,11 +78,13 @@ const reconcileIndexHits = (declaredIndexes: ReadonlyArray<DeclaredIndex>, index
         readsByKey.set(key, (readsByKey.get(key) ?? 0) + hit.reads);
     }
 
-    return declaredIndexes.map((declared) => ({
-        index: declared.index,
-        reads: readsByKey.get(`${declared.table} ${declared.index}`) ?? 0,
-        table: declared.table,
-    }));
+    return declaredIndexes.map((declared) => {
+        return {
+            index: declared.index,
+            reads: readsByKey.get(`${declared.table} ${declared.index}`) ?? 0,
+            table: declared.table,
+        };
+    });
 };
 
 /**
@@ -89,13 +95,15 @@ const reconcileIndexHits = (declaredIndexes: ReadonlyArray<DeclaredIndex>, index
 const aggregateTableScans = (functions: ReadonlyArray<FunctionCallStat>): AdvisorTableScan[] => {
     const scansByTable = new Map<string, number>();
 
-    for (const fn of functions) {
-        for (const attribution of fn.scannedTables ?? []) {
+    for (const function_ of functions) {
+        for (const attribution of function_.scannedTables ?? []) {
             scansByTable.set(attribution.table, (scansByTable.get(attribution.table) ?? 0) + attribution.scans);
         }
     }
 
-    return [...scansByTable].map(([table, scans]) => ({ scans, table }));
+    return [...scansByTable].map(([table, scans]) => {
+        return { scans, table };
+    });
 };
 
 /**
@@ -103,7 +111,10 @@ const aggregateTableScans = (functions: ReadonlyArray<FunctionCallStat>): Adviso
  * Exposed so the panel can build {@link RuntimeAdvisoryInputs.declaredIndexes}
  * from its best-effort per-table fan-out without re-deriving the shape.
  */
-export const declaredIndexesFor = (table: string, indexes: ReadonlyArray<TableIndexInfo>): DeclaredIndex[] => indexes.map((index) => ({ index: index.name, table }));
+export const declaredIndexesFor = (table: string, indexes: ReadonlyArray<TableIndexInfo>): DeclaredIndex[] =>
+    indexes.map((index) => {
+        return { index: index.name, table };
+    });
 
 /**
  * Build the runtime {@link import("@cirrus/advisor").LintContext} from the
@@ -145,7 +156,10 @@ export const deriveRuntimeAdvisories = (inputs: RuntimeAdvisoryInputs): AdvisorR
     const visible =
         suppress === undefined
             ? findings
-            : findings.filter((finding) => !(finding.metadata["kind"] === "hot_scan" && typeof finding.metadata["table"] === "string" && suppress.has(finding.metadata["table"])));
+            : findings.filter(
+                  (finding) =>
+                      !(finding.metadata["kind"] === "hot_scan" && typeof finding.metadata["table"] === "string" && suppress.has(finding.metadata["table"])),
+              );
 
     return visible.map((finding) => advisoryRow(finding));
 };
