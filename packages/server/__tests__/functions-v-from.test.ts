@@ -53,7 +53,7 @@ describe("v.from() args-map integration", () => {
     it("(b) invalid name rejects before handler runs", async () => {
         expect.assertions(2);
 
-        const handler = vi.fn();
+        const handler = vi.fn<(context: MutationContext, args: unknown) => unknown>();
 
         const send = mutation({
             args: { count: v.number(), name: v.from(fakeStringSchema) },
