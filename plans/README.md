@@ -13,14 +13,19 @@ so they aren't re-audited.
 
 ## Execution order & status
 
-| Plan | Title | Priority | Effort | Depends on | Status |
-|------|-------|----------|--------|------------|--------|
-| 001  | OCC guarded-write concurrent-writer tests (`@cirrus/do`) | P1 | S | — | TODO |
-| 002  | Client-side CONFLICT contract tests + `isConflictError` guard (`@cirrus/client`) | P1 | S | — | TODO |
-| 003  | Persist identity stamps with offline-queue entries (`@cirrus/client`) | P1 | M | — | TODO |
-| 004  | Wire git-hooks bootstrap (vis hooks) + fix stale CLAUDE.md hook docs | P1 | S | — | TODO |
-| 005  | Sync CLAUDE.md package table + pnpm versions (docs, README, CI) | P2 | S | 004 (soft) | TODO |
-| 006  | Reuse ts-morph Project across dev-loop codegen runs (`@cirrus/codegen` + `@cirrus/vite`) | P2 | M | — | TODO |
+| Plan | Title                                                                                    | Priority | Effort | Depends on | Status |
+| ---- | ---------------------------------------------------------------------------------------- | -------- | ------ | ---------- | ------ |
+| 001  | OCC guarded-write concurrent-writer tests (`@cirrus/do`)                                 | P1       | S      | —          | DONE   |
+| 002  | Client-side CONFLICT contract tests + `isConflictError` guard (`@cirrus/client`)         | P1       | S      | —          | DONE   |
+| 003  | Persist identity stamps with offline-queue entries (`@cirrus/client`)                    | P1       | M      | —          | DONE   |
+| 004  | Wire git-hooks bootstrap (vis hooks) + fix stale CLAUDE.md hook docs                     | P1       | S      | —          | DONE   |
+| 005  | Sync CLAUDE.md package table + pnpm versions (docs, README, CI)                          | P2       | S      | 004 (soft) | DONE   |
+| 006  | Reuse ts-morph Project across dev-loop codegen runs (`@cirrus/codegen` + `@cirrus/vite`) | P2       | M      | —          | DONE   |
+| 007  | In-memory `cirrusTest` harness (`@cirrus/testing`, convex-test equivalent v1)            | P2       | M      | —          | DONE   |
+
+> **Implemented 2026-06-13** against current `alpha`. All seven verified green in the main checkout:
+> do 657 tests · client 162 tests · codegen 206 + vite 105 tests · testing 6 tests; all `lint:types` clean.
+> 004/005 landed identically via parallel maintainer commits (no diff vs HEAD); hooks wired (`core.hooksPath = .vis/hooks/_`).
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale)
 
