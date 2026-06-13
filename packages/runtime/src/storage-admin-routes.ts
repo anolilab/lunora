@@ -1,0 +1,182 @@
+/**
+ * The `/_cirrus/admin/storage*` route cluster, extracted from `create-worker.ts`
+ * (mirrors `./auth-admin-routes`). One driver per pathname backing the studio's
+ * file browser: list / delete / upload (sharing `/_cirrus/admin/storage` by
+ * method), a signed-URL minter, and the bucket-name list for the bucket picker.
+ *
+ * Every handler is closure-free of the worker's internals — it reaches the
+ * admin-token gate, the option registry, and the request helpers through the
+ * injected {@link StorageAdminRouteDeps}, so this module never imports runtime
+ * values from `create-worker` (only its types, erased at build).
+ */
+import type {
+    StorageDeleteFn as StorageDeleteFunction,
+    StorageListFn as StorageListFunction,
+    StorageSignedUrlFn as StorageSignedUrlFunction,
+    StorageUploadFn as StorageUploadFunction,
+} from "./create-worker";
+import { CirrusError } from "./errors";
+
+const STORAGE_PATH = "/_cirrus/admin/storage";
+const STORAGE_URL_PATH = "/_cirrus/admin/storage/url";
+const STORAGE_BUCKETS_PATH = "/_cirrus/admin/storage/buckets";
+
+// `@cirrus/storage`'s `buildSignedUrl` rejects an `expiresInSeconds` over 7 days;
+// mirror that ceiling so an over-max request is clamped, not a 500.
+const MAX_STORAGE_EXPIRES_IN_SECONDS = 7 * 24 * 60 * 60;
+
+/** The worker internals the storage routes reach through injection rather than closure. */
+interface StorageAdminRouteDeps {
+    /** Admin-token gate (throws 403). Used directly by the buckets route (which has no `requireAdminOption` value to gate). */
+    assertAdmin: (request: Request) => void;
+    /** Parse the shared `limit` / `offset` paging params. */
+    parsePaging: (request: Request) => { limit?: number; offset?: number };
+    /** Read a query param, collapsing missing/empty to `undefined`. */
+    queryParameter: (url: URL, name: string) => string | undefined;
+    /** Read the request body as bytes under the runtime's size limit (for upload). */
+    readBodyBytes: (request: Request) => Promise<ArrayBuffer>;
+    /** Admin-gate + require a configured option, else throw the `*_NOT_CONFIGURED` error. */
+    requireAdminOption: <T>(request: Request, value: T | undefined, notConfigured: { code: string; message: string }) => T;
+    /** The storage admin options off `WorkerOptions`. */
+    storage: {
+        storageBuckets?: string[];
+        storageDelete?: StorageDeleteFunction;
+        storageList?: StorageListFunction;
+        storageSignedUrl?: StorageSignedUrlFunction;
+        storageUpload?: StorageUploadFunction;
+    };
+}
+
+/**
+ * Build the `/_cirrus/admin/storage*` route map merged into the worker's internal
+ * route table.
+ */
+const buildStorageAdminRoutes = (deps: StorageAdminRouteDeps): Record<string, (request: Request) => Promise<Response> | Response> => {
+    const { assertAdmin, parsePaging, queryParameter, readBodyBytes, requireAdminOption, storage } = deps;
+
+    /** Read a required `key` off the request URL or throw a 400. */
+    const requireStorageKey = (url: URL): string => {
+        const key = queryParameter(url, "key");
+
+        if (key === undefined) {
+            throw new CirrusError("Storage endpoint requires a `key` query parameter", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        return key;
+    };
+
+    const handleStorageList = async (request: Request): Promise<Response> => {
+        const storageList = requireAdminOption(request, storage.storageList, {
+            code: "STORAGE_NOT_CONFIGURED",
+            message: "storage endpoint requires a `storageList` function on the worker",
+        });
+
+        const url = new URL(request.url);
+        const result = await storageList(queryParameter(url, "prefix"), {
+            bucket: queryParameter(url, "bucket"),
+            cursor: queryParameter(url, "cursor"),
+            ...parsePaging(request),
+        });
+
+        return Response.json(result, { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
+    const handleStorageBuckets = (request: Request): Response => {
+        if (request.method !== "GET") {
+            throw new CirrusError("Storage-buckets endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        assertAdmin(request);
+
+        // Always 200 (even with no buckets configured) so the studio simply hides
+        // the picker rather than treating absence as an error.
+        return Response.json({ buckets: storage.storageBuckets ?? [] }, { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
+    const handleStorageDelete = async (request: Request): Promise<Response> => {
+        const storageDelete = requireAdminOption(request, storage.storageDelete, {
+            code: "STORAGE_DELETE_NOT_CONFIGURED",
+            message: "storage delete requires a `storageDelete` function on the worker",
+        });
+
+        const url = new URL(request.url);
+        const key = requireStorageKey(url);
+
+        await storageDelete(key, { bucket: queryParameter(url, "bucket") });
+
+        return Response.json({ deleted: true, key }, { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
+    const handleStorageUpload = async (request: Request): Promise<Response> => {
+        const storageUpload = requireAdminOption(request, storage.storageUpload, {
+            code: "STORAGE_UPLOAD_NOT_CONFIGURED",
+            message: "storage upload requires a `storageUpload` function on the worker",
+        });
+
+        const url = new URL(request.url);
+        const key = requireStorageKey(url);
+        // The entry-point `Content-Length` guard already rejects an oversized
+        // declared length for PUT; reading the buffer here is the authoritative
+        // size check the runtime owns (R2 enforces its own ceilings downstream).
+        const body = await readBodyBytes(request);
+        const headerContentType = request.headers.get("content-type");
+        const contentType = headerContentType === null || headerContentType === "" ? undefined : headerContentType;
+
+        const result = await storageUpload(key, body, { bucket: queryParameter(url, "bucket"), contentType });
+
+        return Response.json(result, { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
+    /**
+     * Dispatch the storage endpoint by method so `GET` (list), `PUT`/`POST`
+     * (upload), and `DELETE` (delete) share one pathname.
+     */
+    const handleStorage = async (request: Request): Promise<Response> => {
+        switch (request.method) {
+            case "DELETE": {
+                return handleStorageDelete(request);
+            }
+            case "GET": {
+                return handleStorageList(request);
+            }
+            case "POST":
+            case "PUT": {
+                return handleStorageUpload(request);
+            }
+            default: {
+                throw new CirrusError("Storage endpoint requires GET, PUT, POST, or DELETE", { code: "METHOD_NOT_ALLOWED", status: 405 });
+            }
+        }
+    };
+
+    const handleStorageSignedUrl = async (request: Request): Promise<Response> => {
+        if (request.method !== "GET") {
+            throw new CirrusError("Storage URL endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        const storageSignedUrl = requireAdminOption(request, storage.storageSignedUrl, {
+            code: "STORAGE_URL_NOT_CONFIGURED",
+            message: "storage URL endpoint requires a `storageSignedUrl` function on the worker",
+        });
+
+        const url = new URL(request.url);
+        const key = requireStorageKey(url);
+        // Optional share-link lifetime; a non-numeric/absent value leaves the host's
+        // default. `@cirrus/storage`'s `buildSignedUrl` THROWS above its 7-day max,
+        // so clamp here to keep an over-max request a valid URL rather than a 500.
+        const expiresInRaw = Number(queryParameter(url, "expiresIn") ?? "");
+        const expiresInSeconds = Number.isFinite(expiresInRaw) && expiresInRaw > 0 ? Math.min(expiresInRaw, MAX_STORAGE_EXPIRES_IN_SECONDS) : undefined;
+        const signedUrl = await storageSignedUrl(key, { bucket: queryParameter(url, "bucket"), expiresInSeconds });
+
+        return Response.json({ key, url: signedUrl }, { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
+    return {
+        [STORAGE_BUCKETS_PATH]: handleStorageBuckets,
+        [STORAGE_PATH]: handleStorage,
+        [STORAGE_URL_PATH]: handleStorageSignedUrl,
+    };
+};
+
+export type { StorageAdminRouteDeps };
+export { buildStorageAdminRoutes, STORAGE_BUCKETS_PATH, STORAGE_PATH, STORAGE_URL_PATH };

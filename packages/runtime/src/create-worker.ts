@@ -9,6 +9,8 @@ import { emitRpcEvent } from "./observability";
 import type { FanOutSpec, QueryCoordinator, RankPageFanOutRequest } from "./query-coordinator";
 import type { ResolvedShard, ShardNamespaceLike } from "./resolve-shard";
 import { resolveShard } from "./resolve-shard";
+import { buildStorageAdminRoutes } from "./storage-admin-routes";
+import { buildVectorAdminRoutes } from "./vector-admin-routes";
 
 /**
  * Wire-format RPC envelope. Posted to `POST /_cirrus/rpc`.
@@ -893,21 +895,15 @@ const SCHEDULED_PATH = "/_cirrus/admin/scheduled";
 const SCHEDULED_STATUS_PATH = "/_cirrus/admin/scheduled/status";
 const SCHEDULED_WS_PATH = "/_cirrus/admin/scheduled/ws";
 const SCHEDULED_CANCEL_PATH = "/_cirrus/admin/scheduled/cancel";
-const STORAGE_PATH = "/_cirrus/admin/storage";
-const STORAGE_URL_PATH = "/_cirrus/admin/storage/url";
-const STORAGE_BUCKETS_PATH = "/_cirrus/admin/storage/buckets";
-// `@cirrus/storage`'s `buildSignedUrl` rejects an `expiresInSeconds` over 7 days;
-// mirror that ceiling here so an over-max request is clamped, not a 500.
-const MAX_STORAGE_EXPIRES_IN_SECONDS = 7 * 24 * 60 * 60;
 const FUNCTIONS_PATH = "/_cirrus/admin/functions";
 const CRON_JOBS_PATH = "/_cirrus/admin/cron-jobs";
 const OPENAPI_PATH = "/_cirrus/admin/openapi";
 const OPENRPC_PATH = "/_cirrus/admin/openrpc";
 const GLOBAL_TABLES_PATH = "/_cirrus/admin/global/tables";
 const GLOBAL_TABLE_PATH = "/_cirrus/admin/global/table";
-const VECTOR_INDEXES_PATH = "/_cirrus/admin/vector/indexes";
-const VECTOR_QUERY_PATH = "/_cirrus/admin/vector/query";
-// `/_cirrus/admin/auth/*` paths + handlers live in `./auth-admin-routes`.
+// `/_cirrus/admin/storage/*` + `/_cirrus/admin/vector/*` paths + handlers live in
+// `./storage-admin-routes` / `./vector-admin-routes`; `/_cirrus/admin/auth/*` in
+// `./auth-admin-routes`.
 
 /**
  * Empty-but-valid OpenAPI 3.1 document served by `GET /_cirrus/admin/openapi`
@@ -2889,123 +2885,29 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         );
     };
 
-    const handleStorageList = async (request: Request): Promise<Response> => {
-        const storageList = requireAdminOption(request, options.storageList, {
-            code: "STORAGE_NOT_CONFIGURED",
-            message: "storage endpoint requires a `storageList` function on the worker",
-        });
+    // The `/_cirrus/admin/storage/*` + `/_cirrus/admin/vector/*` handlers live in
+    // sibling modules (mirroring `./auth-admin-routes`); they reach the admin gate,
+    // option registry, and request helpers through injected deps.
+    const storageAdminRoutes = buildStorageAdminRoutes({
+        assertAdmin: assertAdminAuthorized,
+        parsePaging,
+        queryParameter,
+        readBodyBytes: readBodyBytesWithLimit,
+        requireAdminOption,
+        storage: {
+            storageBuckets: options.storageBuckets,
+            storageDelete: options.storageDelete,
+            storageList: options.storageList,
+            storageSignedUrl: options.storageSignedUrl,
+            storageUpload: options.storageUpload,
+        },
+    });
 
-        const url = new URL(request.url);
-        const result = await storageList(queryParameter(url, "prefix"), {
-            bucket: queryParameter(url, "bucket"),
-            cursor: queryParameter(url, "cursor"),
-            ...parsePaging(request),
-        });
-
-        return Response.json(result, { headers: { "content-type": "application/json" }, status: 200 });
-    };
-
-    const handleStorageBuckets = (request: Request): Response => {
-        if (request.method !== "GET") {
-            throw new CirrusError("Storage-buckets endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        assertAdminAuthorized(request);
-
-        // Always 200 (even with no buckets configured) so the studio simply hides
-        // the picker rather than treating absence as an error.
-        return Response.json({ buckets: options.storageBuckets ?? [] }, { headers: { "content-type": "application/json" }, status: 200 });
-    };
-
-    /** Read a required `key` off the request URL or throw a 400. */
-    const requireStorageKey = (url: URL): string => {
-        const key = queryParameter(url, "key");
-
-        if (key === undefined) {
-            throw new CirrusError("Storage endpoint requires a `key` query parameter", { code: "BAD_REQUEST", status: 400 });
-        }
-
-        return key;
-    };
-
-    const handleStorageDelete = async (request: Request): Promise<Response> => {
-        const storageDelete = requireAdminOption(request, options.storageDelete, {
-            code: "STORAGE_DELETE_NOT_CONFIGURED",
-            message: "storage delete requires a `storageDelete` function on the worker",
-        });
-
-        const url = new URL(request.url);
-        const key = requireStorageKey(url);
-
-        await storageDelete(key, { bucket: queryParameter(url, "bucket") });
-
-        return Response.json({ deleted: true, key }, { headers: { "content-type": "application/json" }, status: 200 });
-    };
-
-    const handleStorageUpload = async (request: Request): Promise<Response> => {
-        const storageUpload = requireAdminOption(request, options.storageUpload, {
-            code: "STORAGE_UPLOAD_NOT_CONFIGURED",
-            message: "storage upload requires a `storageUpload` function on the worker",
-        });
-
-        const url = new URL(request.url);
-        const key = requireStorageKey(url);
-        // The entry-point `Content-Length` guard already rejects an oversized
-        // declared length for PUT; reading the buffer here is the authoritative
-        // size check the runtime owns (R2 enforces its own ceilings downstream).
-        const body = await readBodyBytesWithLimit(request);
-        const headerContentType = request.headers.get("content-type");
-        const contentType = headerContentType === null || headerContentType === "" ? undefined : headerContentType;
-
-        const result = await storageUpload(key, body, { bucket: queryParameter(url, "bucket"), contentType });
-
-        return Response.json(result, { headers: { "content-type": "application/json" }, status: 200 });
-    };
-
-    /**
-     * Dispatch the storage endpoint by method so `GET` (list), `PUT`/`POST`
-     * (upload), and `DELETE` (delete) share one pathname. Keeps the write paths
-     * additive and self-contained alongside the read path.
-     */
-    const handleStorage = async (request: Request): Promise<Response> => {
-        switch (request.method) {
-            case "DELETE": {
-                return handleStorageDelete(request);
-            }
-            case "GET": {
-                return handleStorageList(request);
-            }
-            case "POST":
-            case "PUT": {
-                return handleStorageUpload(request);
-            }
-            default: {
-                throw new CirrusError("Storage endpoint requires GET, PUT, POST, or DELETE", { code: "METHOD_NOT_ALLOWED", status: 405 });
-            }
-        }
-    };
-
-    const handleStorageSignedUrl = async (request: Request): Promise<Response> => {
-        if (request.method !== "GET") {
-            throw new CirrusError("Storage URL endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        const storageSignedUrl = requireAdminOption(request, options.storageSignedUrl, {
-            code: "STORAGE_URL_NOT_CONFIGURED",
-            message: "storage URL endpoint requires a `storageSignedUrl` function on the worker",
-        });
-
-        const url = new URL(request.url);
-        const key = requireStorageKey(url);
-        // Optional share-link lifetime; a non-numeric/absent value leaves the host's
-        // default. `@cirrus/storage`'s `buildSignedUrl` THROWS above its 7-day max,
-        // so clamp here to keep an over-max request a valid URL rather than a 500.
-        const expiresInRaw = Number(queryParameter(url, "expiresIn") ?? "");
-        const expiresInSeconds = Number.isFinite(expiresInRaw) && expiresInRaw > 0 ? Math.min(expiresInRaw, MAX_STORAGE_EXPIRES_IN_SECONDS) : undefined;
-        const signedUrl = await storageSignedUrl(key, { bucket: queryParameter(url, "bucket"), expiresInSeconds });
-
-        return Response.json({ key, url: signedUrl }, { headers: { "content-type": "application/json" }, status: 200 });
-    };
+    const vectorAdminRoutes = buildVectorAdminRoutes({
+        readJsonBody: readJsonBodyWithLimit,
+        requireAdminOption,
+        vectorIntrospector: options.vectorIntrospector,
+    });
 
     const handleFunctionsList = (request: Request): Response => {
         if (request.method !== "GET") {
@@ -3125,53 +3027,6 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         const page = await introspector.readTablePage({ ...parsePaging(request), table });
 
         return Response.json(page, { headers: { "content-type": "application/json" }, status: 200 });
-    };
-
-    const handleVectorIndexes = async (request: Request): Promise<Response> => {
-        if (request.method !== "GET") {
-            throw new CirrusError("Vector-indexes endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        const introspector = requireAdminOption(request, options.vectorIntrospector, {
-            code: "VECTORS_NOT_CONFIGURED",
-            message: "vector endpoints require a `vectorIntrospector` on the worker",
-        });
-
-        return Response.json({ indexes: await introspector.listIndexes() }, { headers: { "content-type": "application/json" }, status: 200 });
-    };
-
-    const handleVectorQuery = async (request: Request): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new CirrusError("Vector-query endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        const introspector = requireAdminOption(request, options.vectorIntrospector, {
-            code: "VECTORS_NOT_CONFIGURED",
-            message: "vector endpoints require a `vectorIntrospector` on the worker",
-        });
-
-        if (introspector.queryIndex === undefined) {
-            throw new CirrusError("vector index querying is not enabled on this worker", { code: "VECTOR_QUERY_UNSUPPORTED", status: 400 });
-        }
-
-        const body = await readJsonBodyWithLimit(request);
-        const candidate = body as { name?: unknown; text?: unknown; topK?: unknown };
-
-        if (typeof candidate.name !== "string" || candidate.name === "") {
-            throw new CirrusError("Vector-query request requires a `name` string", { code: "BAD_REQUEST", status: 400 });
-        }
-
-        if (typeof candidate.text !== "string" || candidate.text === "") {
-            throw new CirrusError("Vector-query request requires a `text` string", { code: "BAD_REQUEST", status: 400 });
-        }
-
-        if (candidate.topK !== undefined && (typeof candidate.topK !== "number" || !Number.isInteger(candidate.topK) || candidate.topK < 1)) {
-            throw new CirrusError("Vector-query `topK` must be a positive integer", { code: "BAD_REQUEST", status: 400 });
-        }
-
-        const result = await introspector.queryIndex({ name: candidate.name, text: candidate.text, topK: candidate.topK });
-
-        return Response.json(result, { headers: { "content-type": "application/json" }, status: 200 });
     };
 
     const buildHttpActionContext = async (request: Request, env: unknown): Promise<HttpActionContext> => {
@@ -3858,17 +3713,16 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         [SCHEDULED_CANCEL_PATH]: (request) => handleScheduledCancel(request),
         [SCHEDULED_STATUS_PATH]: (request) => handleSchedulerStatus(request),
         [SCHEDULED_PATH]: (request) => handleScheduledList(request),
-        [STORAGE_PATH]: (request) => handleStorage(request),
-        [STORAGE_URL_PATH]: (request) => handleStorageSignedUrl(request),
-        [STORAGE_BUCKETS_PATH]: (request) => handleStorageBuckets(request),
+        // `/_cirrus/admin/storage/*` + `/_cirrus/admin/vector/*` — extracted handler
+        // clusters built above and merged in (mirroring the auth plane below).
+        ...storageAdminRoutes,
+        ...vectorAdminRoutes,
         [FUNCTIONS_PATH]: (request) => handleFunctionsList(request),
         [CRON_JOBS_PATH]: (request) => handleCronJobs(request),
         [OPENAPI_PATH]: (request) => handleOpenApi(request),
         [OPENRPC_PATH]: (request) => handleOpenRpc(request),
         [GLOBAL_TABLES_PATH]: (request) => handleGlobalTables(request),
         [GLOBAL_TABLE_PATH]: (request) => handleGlobalTablePage(request),
-        [VECTOR_INDEXES_PATH]: (request) => handleVectorIndexes(request),
-        [VECTOR_QUERY_PATH]: (request) => handleVectorQuery(request),
         // `/_cirrus/admin/auth/*` — the whole user-management plane, one route per
         // `AuthAdmin` op, dispatched by the descriptor table in `./auth-admin-routes`.
         ...buildAuthAdminRoutes({
