@@ -3,6 +3,7 @@
 
 import type { AdvisoryFinding, DatabaseWriterLike, DataMigrationLike, LogSink, MigrationRunResult, RunShardApplyCdcArgs, RunShardMigrationArgs, RlsPoliciesResult, RunShardRankBeforeArgs, RunShardRankPageArgs, RunShardWriteArgs, RunShardWriteResult, SchedulerLike, SchemaLike, ShardDOState, ShardRankPageResult, SqlExec, SystemReaderStorageLike } from "@cirrus/do";
 import { applyCdcChanges, createShardCtxDb, runDataMigration, runShardMigrations, ShardDO as ShardDOBase } from "@cirrus/do";
+import { bindOrm, bindTableFacade } from "@cirrus/server";
 import type { CirrusDatabaseLike as CirrusPaymentDbLike, CirrusPayment, PaymentsFromContextOptions } from "@cirrus/payment";
 import { paymentsFromContext } from "@cirrus/payment";
 
@@ -19,13 +20,144 @@ interface FunctionReference {
 const CIRRUS_TABLE_REFS: Record<string, Record<string, string>> = {};
 
 /** Declared indexes per table (secondary, search, rank, vector) for the schema viewer. */
-const CIRRUS_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: string; type: "index" | "rank" | "search" | "vector"; unique?: boolean }>> = {};
+const CIRRUS_TABLE_INDEXES: Record<string, Array<{ fields: string[]; name: string; type: "index" | "rank" | "search" | "vector"; unique?: boolean }>> = {
+    "customers": [
+        {
+            "fields": [
+                "referenceId"
+            ],
+            "name": "by_reference",
+            "type": "index"
+        },
+        {
+            "fields": [
+                "provider",
+                "providerCustomerId"
+            ],
+            "name": "by_provider_customer",
+            "type": "index",
+            "unique": true
+        }
+    ],
+    "events": [
+        {
+            "fields": [
+                "provider",
+                "providerEventId"
+            ],
+            "name": "by_provider_event",
+            "type": "index",
+            "unique": true
+        }
+    ],
+    "paymentSessions": [
+        {
+            "fields": [
+                "referenceId"
+            ],
+            "name": "by_reference",
+            "type": "index"
+        },
+        {
+            "fields": [
+                "provider",
+                "providerSessionId"
+            ],
+            "name": "by_provider_session",
+            "type": "index",
+            "unique": true
+        }
+    ],
+    "subscriptions": [
+        {
+            "fields": [
+                "referenceId"
+            ],
+            "name": "by_reference",
+            "type": "index"
+        },
+        {
+            "fields": [
+                "provider",
+                "providerSubscriptionId"
+            ],
+            "name": "by_provider_subscription",
+            "type": "index",
+            "unique": true
+        }
+    ]
+};
 
 /** Storage-key columns per table (`v.storage(...)` fields) for the file browser's records↔files join. */
 const CIRRUS_STORAGE_COLUMNS: Record<string, string[]> = {};
 
 /** Static schema advisories (computed by @cirrus/advisor at codegen time) served via `__cirrus_admin__:getAdvisories`. */
-const CIRRUS_ADVISORIES: AdvisoryFinding[] = [];
+const CIRRUS_ADVISORIES: AdvisoryFinding[] = [
+    {
+        "cacheKey": "table_without_insert:customers",
+        "categories": [
+            "SCHEMA"
+        ],
+        "description": "No function inserts into this table via `ctx.db.insert(\"<table>\", …)`. It may be read-only by design (seeded by a migration, replicated, or written through a path the advisor can't see) — or it may be dead schema.",
+        "detail": "No function calls `ctx.db.insert(\"customers\", …)` — table \"customers\" has no discovered insert path.",
+        "facing": "INTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "table": "customers"
+        },
+        "name": "table_without_insert",
+        "remediation": "If the table should be writable, add a mutation that calls `ctx.db.insert(\"<table>\", …)`. If it is read-only or seeded elsewhere, this advisory can be ignored.",
+        "title": "Table has no insert path"
+    },
+    {
+        "cacheKey": "table_without_insert:events",
+        "categories": [
+            "SCHEMA"
+        ],
+        "description": "No function inserts into this table via `ctx.db.insert(\"<table>\", …)`. It may be read-only by design (seeded by a migration, replicated, or written through a path the advisor can't see) — or it may be dead schema.",
+        "detail": "No function calls `ctx.db.insert(\"events\", …)` — table \"events\" has no discovered insert path.",
+        "facing": "INTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "table": "events"
+        },
+        "name": "table_without_insert",
+        "remediation": "If the table should be writable, add a mutation that calls `ctx.db.insert(\"<table>\", …)`. If it is read-only or seeded elsewhere, this advisory can be ignored.",
+        "title": "Table has no insert path"
+    },
+    {
+        "cacheKey": "table_without_insert:paymentSessions",
+        "categories": [
+            "SCHEMA"
+        ],
+        "description": "No function inserts into this table via `ctx.db.insert(\"<table>\", …)`. It may be read-only by design (seeded by a migration, replicated, or written through a path the advisor can't see) — or it may be dead schema.",
+        "detail": "No function calls `ctx.db.insert(\"paymentSessions\", …)` — table \"paymentSessions\" has no discovered insert path.",
+        "facing": "INTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "table": "paymentSessions"
+        },
+        "name": "table_without_insert",
+        "remediation": "If the table should be writable, add a mutation that calls `ctx.db.insert(\"<table>\", …)`. If it is read-only or seeded elsewhere, this advisory can be ignored.",
+        "title": "Table has no insert path"
+    },
+    {
+        "cacheKey": "table_without_insert:subscriptions",
+        "categories": [
+            "SCHEMA"
+        ],
+        "description": "No function inserts into this table via `ctx.db.insert(\"<table>\", …)`. It may be read-only by design (seeded by a migration, replicated, or written through a path the advisor can't see) — or it may be dead schema.",
+        "detail": "No function calls `ctx.db.insert(\"subscriptions\", …)` — table \"subscriptions\" has no discovered insert path.",
+        "facing": "INTERNAL",
+        "level": "INFO",
+        "metadata": {
+            "table": "subscriptions"
+        },
+        "name": "table_without_insert",
+        "remediation": "If the table should be writable, add a mutation that calls `ctx.db.insert(\"<table>\", …)`. If it is read-only or seeded elsewhere, this advisory can be ignored.",
+        "title": "Table has no insert path"
+    }
+];
 
 /** Read-only RLS metadata (policies + roles discovered from `.use(rls(...))` chains) served via `__cirrus_admin__:rlsPolicies` for the studio's RLS inspector. */
 const CIRRUS_RLS_METADATA: RlsPoliciesResult = {
@@ -454,6 +586,12 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 storage,
             });
 
+            const facade = db as unknown as Record<string, ReturnType<typeof bindTableFacade>>;
+            facade["customers"] = bindTableFacade(db, "customers");
+            facade["events"] = bindTableFacade(db, "events");
+            facade["paymentSessions"] = bindTableFacade(db, "paymentSessions");
+            facade["subscriptions"] = bindTableFacade(db, "subscriptions");
+
             const payments: CirrusPayment = config.payment
                 ? paymentsFromContext({ auth: { userId: userId ?? null }, db: db as unknown as CirrusPaymentDbLike }, config.payment(env))
                 : paymentStub;
@@ -480,6 +618,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 db,
                 fetch: globalThis.fetch.bind(globalThis),
                 log,
+                orm: bindOrm(facade),
                 scheduler,
                 storage,
                 payments,

@@ -1,14 +1,62 @@
-import { paymentTables } from "@cirrus/payment";
-import { defineSchema } from "@cirrus/server";
+import { defineSchema, defineTable, v } from "@cirrus/server";
 
 /**
- * payment-demo — Stripe checkout + webhook-synced subscriptions.
+ * payment-demo schema.
  *
- * `paymentTables` (customers, subscriptions, payments, invoices, the webhook
- * `events` log, …) are spread straight into the app schema, so payment state
- * lives in the app's ShardDO alongside everything else and is queried with the
- * same reactive `ctx.db`. No separate payment Durable Object.
+ * Codegen discovers tables by parsing THIS file's AST — it cannot resolve a
+ * cross-package spread like `defineSchema({ ...paymentTables })`. So the payment
+ * tables are declared inline here; `@cirrus/payment`'s exported `paymentTables`
+ * is the canonical column reference these mirror (and what its store reads/writes).
+ *
+ * Because they're declared here, an app can also opt read-heavy tables into D1
+ * for cross-region low-latency reads by chaining `.global()` (e.g. mark
+ * `subscriptions` global) — codegen routes those to `drizzle.global.ts`.
  */
 export default defineSchema({
-    ...paymentTables,
+    customers: defineTable({
+        createdAt: v.number(),
+        email: v.optional(v.string()),
+        provider: v.string(),
+        providerCustomerId: v.string(),
+        referenceId: v.string(),
+    })
+        .index("by_provider_customer", ["provider", "providerCustomerId"], { unique: true })
+        .index("by_reference", ["referenceId"]),
+
+    events: defineTable({
+        processedAt: v.number(),
+        provider: v.string(),
+        providerEventId: v.string(),
+        type: v.string(),
+    }).index("by_provider_event", ["provider", "providerEventId"], { unique: true }),
+
+    paymentSessions: defineTable({
+        amountMinor: v.bigint(),
+        capturedMinor: v.bigint(),
+        createdAt: v.number(),
+        currency: v.string(),
+        provider: v.string(),
+        providerSessionId: v.string(),
+        referenceId: v.string(),
+        refundedMinor: v.bigint(),
+        state: v.string(),
+        updatedAt: v.number(),
+    })
+        .index("by_provider_session", ["provider", "providerSessionId"], { unique: true })
+        .index("by_reference", ["referenceId"]),
+
+    subscriptions: defineTable({
+        cancelAtPeriodEnd: v.boolean(),
+        createdAt: v.number(),
+        currentPeriodEnd: v.optional(v.number()),
+        priceId: v.string(),
+        provider: v.string(),
+        providerSubscriptionId: v.string(),
+        quantity: v.number(),
+        referenceId: v.string(),
+        state: v.string(),
+        updatedAt: v.number(),
+    })
+        .index("by_provider_subscription", ["provider", "providerSubscriptionId"], { unique: true })
+        .index("by_reference", ["referenceId"]),
 });

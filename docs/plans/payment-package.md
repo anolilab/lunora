@@ -134,6 +134,7 @@ packages/payment/
 │   ├── context.ts          # paymentsFromContext(ctx) — what codegen wires ctx.payments to
 │   ├── reconcile.ts        # reconcile() — scheduled drift re-sync from provider truth
 │   ├── observability.ts    # PaymentObserver hook — failed-payment / drift / webhook telemetry
+│   ├── entitlements.ts     # resolveEntitlements() — derive plan/features/limits from subscriptions
 │   ├── schema.ts           # defineSchema tables: products, prices, customers, subscriptions, checkouts,
 │   │                       #   payment_sessions, payments, captures, refunds, invoices, events (webhook log)
 │   ├── json.ts             # defensive accessors for untyped webhook payloads (shared)
@@ -249,8 +250,14 @@ Non-negotiables that the implementation (not just the plan) has to satisfy — s
 
 ## 5. Config & DX
 
-- New bindings inferred/validated by `@cirrus/config` (`wrangler.jsonc`): the `PaymentDO` Durable Object, optional D1
-  for `.global()`, and queue for webhook side-effects.
+- **Schema declaration (known constraint):** codegen discovers tables by parsing the app's `cirrus/schema.ts` AST and
+  does **not** resolve a cross-package `defineSchema({ ...paymentTables })` spread (nor a cross-package `.extend()`).
+  So payment tables are declared **inline** in the app schema, mirroring `paymentTables` (the canonical column
+  reference). Upside: the app can chain `.global()` on read-heavy tables (e.g. `subscriptions`) so codegen routes them
+  to D1 for cross-region reads — the Phase 2 D1 read path, app-controlled. A `vis generate cirrus-payment-schema`
+  scaffold (future) can emit the inline tables so they don't drift from the store's contract.
+- Bindings inferred/validated by `@cirrus/config`: just the app's existing `SHARD` DO (payments ride `ctx.db`) — no
+  bespoke payment DO. `@cirrus/config` detects `@cirrus/payment` and hints the provider secrets.
 - Secrets scaffolded into `.dev.vars` grammar: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, plus per-provider keys.
 - Provider selection via config (e.g. `createPayment({ provider: stripeAdapter(env) })`) so swapping providers is a
   one-line change; multiple adapters can be registered simultaneously for migration.
@@ -280,8 +287,12 @@ Non-negotiables that the implementation (not just the plan) has to satisfy — s
   its own scheme. ✅ `@cirrus/react` UI kit — `useCheckout(trigger)` + `CheckoutButton`/`CustomerPortalButton`
   (headless, redirect-on-URL, decoupled from app function names — mirrors Convex's `CheckoutLink`/`CustomerPortalLink`).
   _Next:_ `.global()`/D1 read path.
-- **Phase 3 — provider-migration story** (dual-register reconciliation between Stripe and Polar).
-- **Phase 4 — entitlements tier** (`check`/`track` à la Autumn): features, credits, usage metering, seat counts.
+- **Phase 3 — provider-migration story:** ✅ _enabled by existing primitives_ — `createAdapterRegistry` (dual-register)
+  + the `provider` discriminator on every row + per-provider `reconcile`/webhook handling. New checkouts route to the
+  new provider while existing subscriptions stay on their origin; no bespoke routing code needed.
+- **Phase 4 — entitlements tier:** ✅ the native `check` — `resolveEntitlements(config, subscriptions)` /
+  `entitlementsForReference(store, config, ref)` derive plan / features / limits from active subscriptions (most-
+  generous limit wins). `track` (usage metering / credits) stays deferred behind the optional Autumn adapter seam.
 
 ## 7. Resolved decisions (best-practice defaults)
 

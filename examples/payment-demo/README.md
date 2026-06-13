@@ -4,7 +4,7 @@ A minimal Cirrus app wiring [`@cirrus/payment`](../../packages/payment) end-to-e
 
 ## What it shows
 
-- **`cirrus/schema.ts`** spreads `paymentTables` into the app schema, so payment state lives in the app's ShardDO and is read with the same reactive `ctx.db`. There is **no separate payment Durable Object**.
+- **`cirrus/schema.ts`** declares the payment tables **inline** (codegen discovers tables by parsing this file — it can't resolve a cross-package `...paymentTables` spread; `@cirrus/payment`'s `paymentTables` is the canonical column reference). Payment state lives in the app's ShardDO and is read with the same reactive `ctx.db` — **no separate payment Durable Object**. Read-heavy tables can chain `.global()` for D1-backed cross-region reads.
 - **`cirrus/billing.ts`**
   - `checkout` (action) calls `ctx.payments.createCheckout(...)` and returns the hosted-checkout `{ url }`. Reaching for `ctx.payments` is what tells codegen to wire the typed facade onto `ActionCtx`.
   - `mySubscriptions` (query) reads the synced `subscriptions` table — re-renders the instant a webhook lands.

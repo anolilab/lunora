@@ -1,10 +1,16 @@
 /**
- * Durable tables for the payment sync store, as `defineTable` builders.
+ * Durable tables for the payment sync store — the **canonical column reference** for the store's
+ * read/write contract.
  *
- * Spread `paymentTables` into your app's `defineSchema({ ... })`. Money is stored as
- * `(amountMinor: bigint, currency: string)` columns; every row carries a `provider` discriminator
- * so multiple providers can coexist during a migration. Captures and refunds are append-only
- * records linked to a payment, not booleans.
+ * NOTE: codegen discovers tables by parsing your `cirrus/schema.ts` AST, so it cannot resolve a
+ * cross-package `defineSchema({ ...paymentTables })` spread. Declare these tables **inline** in
+ * your own `cirrus/schema.ts` (mirroring the columns here) — that also lets you chain `.global()`
+ * on read-heavy tables (e.g. `subscriptions`) to serve cross-region reads from D1. See
+ * `examples/payment-demo/cirrus/schema.ts`.
+ *
+ * Money is stored as `(amountMinor: bigint, currency: string)` columns; every row carries a
+ * `provider` discriminator so multiple providers can coexist during a migration. Captures and
+ * refunds are append-only records linked to a payment, not booleans.
  */
 import type { TableDefinition } from "@cirrus/server";
 import { defineTable } from "@cirrus/server";

@@ -29,14 +29,64 @@ export type {
     WhereOperators,
 } from "@cirrus/server/data-model";
 
-export type TableName = never;
+export type TableName = "customers" | "events" | "paymentSessions" | "subscriptions";
 
 export type Id<TName extends string> = string & { readonly __table: TName };
 
+export interface Doc_customers {
+    _id: Id<"customers">;
+    _creationTime: number;
+    createdAt: number;
+    email?: string;
+    provider: string;
+    providerCustomerId: string;
+    referenceId: string;
+}
 
+export interface Doc_events {
+    _id: Id<"events">;
+    _creationTime: number;
+    processedAt: number;
+    provider: string;
+    providerEventId: string;
+    type: string;
+}
+
+export interface Doc_paymentSessions {
+    _id: Id<"paymentSessions">;
+    _creationTime: number;
+    amountMinor: bigint;
+    capturedMinor: bigint;
+    createdAt: number;
+    currency: string;
+    provider: string;
+    providerSessionId: string;
+    referenceId: string;
+    refundedMinor: bigint;
+    state: string;
+    updatedAt: number;
+}
+
+export interface Doc_subscriptions {
+    _id: Id<"subscriptions">;
+    _creationTime: number;
+    cancelAtPeriodEnd: boolean;
+    createdAt: number;
+    currentPeriodEnd?: number;
+    priceId: string;
+    provider: string;
+    providerSubscriptionId: string;
+    quantity: number;
+    referenceId: string;
+    state: string;
+    updatedAt: number;
+}
 
 export interface DataModel {
-
+    customers: Doc_customers;
+    events: Doc_events;
+    paymentSessions: Doc_paymentSessions;
+    subscriptions: Doc_subscriptions;
 }
 
 export type Doc<T extends keyof DataModel> = DataModel[T];
@@ -46,21 +96,30 @@ export type Doc<T extends keyof DataModel> = DataModel[T];
  * Used by `TableReader.withIndex()` to constrain callers to declared names.
  */
 export interface IndexNamesByTable {
-
+    customers: "by_reference" | "by_provider_customer";
+    events: "by_provider_event";
+    paymentSessions: "by_reference" | "by_provider_session";
+    subscriptions: "by_reference" | "by_provider_subscription";
 }
 
 export type IndexName<T extends keyof DataModel> = IndexNamesByTable[T];
 
 /** Per-table search-index name union. `never` for tables without searchIndex. */
 export interface SearchIndexNamesByTable {
-
+    customers: never;
+    events: never;
+    paymentSessions: never;
+    subscriptions: never;
 }
 
 export type SearchIndexName<T extends keyof DataModel> = SearchIndexNamesByTable[T];
 
 /** Per-table rank-index name union. `never` for tables without a rankIndex. */
 export interface RankIndexNamesByTable {
-
+    customers: never;
+    events: never;
+    paymentSessions: never;
+    subscriptions: never;
 }
 
 export type RankIndexName<T extends keyof DataModel> = RankIndexNamesByTable[T];
@@ -68,11 +127,61 @@ export type RankIndexName<T extends keyof DataModel> = RankIndexNamesByTable[T];
 /** Union of declared vector index names. `never` when none are declared. */
 export type VectorIndexName = never;
 
+export interface Insert_customers {
+    _id?: Id<"customers">;
+    _creationTime?: number;
+    createdAt: number;
+    email?: string;
+    provider: string;
+    providerCustomerId: string;
+    referenceId: string;
+}
 
+export interface Insert_events {
+    _id?: Id<"events">;
+    _creationTime?: number;
+    processedAt: number;
+    provider: string;
+    providerEventId: string;
+    type: string;
+}
+
+export interface Insert_paymentSessions {
+    _id?: Id<"paymentSessions">;
+    _creationTime?: number;
+    amountMinor: bigint;
+    capturedMinor: bigint;
+    createdAt: number;
+    currency: string;
+    provider: string;
+    providerSessionId: string;
+    referenceId: string;
+    refundedMinor: bigint;
+    state: string;
+    updatedAt: number;
+}
+
+export interface Insert_subscriptions {
+    _id?: Id<"subscriptions">;
+    _creationTime?: number;
+    cancelAtPeriodEnd: boolean;
+    createdAt: number;
+    currentPeriodEnd?: number;
+    priceId: string;
+    provider: string;
+    providerSubscriptionId: string;
+    quantity: number;
+    referenceId: string;
+    state: string;
+    updatedAt: number;
+}
 
 /** Per-table insert shape, accepted by `ctx.db.<table>.insert(...)`. */
 export interface InsertModel {
-
+    customers: Insert_customers;
+    events: Insert_events;
+    paymentSessions: Insert_paymentSessions;
+    subscriptions: Insert_subscriptions;
 }
 
 export type Insert<T extends keyof DataModel> = InsertModel[T];
@@ -94,7 +203,10 @@ export interface ManyRelation<Target extends keyof DataModel> {
 
 /** Per-table relation map keyed by accessor name. `{}` for tables with none. */
 export interface Relations {
-
+    customers: {};
+    events: {};
+    paymentSessions: {};
+    subscriptions: {};
 }
 
 /** The `with` argument for table `T` — see `@cirrus/server/data-model`. */

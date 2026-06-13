@@ -6,6 +6,8 @@ export type { AuthorizeReference, CirrusPayment, CreatePaymentOptions } from "./
 export { createPayment } from "./create-payment";
 export type { PaymentDatabase, PaymentRow } from "./database-store";
 export { createDatabasePaymentStore } from "./database-store";
+export type { Entitlements, EntitlementsConfig, PlanDefinition } from "./entitlements";
+export { entitlementsForReference, resolveEntitlements } from "./entitlements";
 export type { PaymentErrorCode } from "./errors";
 export { CirrusPaymentError } from "./errors";
 export { default as idempotencyKey } from "./idempotency";
