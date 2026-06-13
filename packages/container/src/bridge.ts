@@ -52,6 +52,24 @@ class ContainerBridgeError extends Error {
     }
 }
 
+/**
+ * Structural mirror of `@cirrus/client`'s `FunctionReference` — the typed
+ * handle the generated `_generated/api` object carries. Declared locally (not
+ * imported) so the bridge stays dependency-free and its `.d.ts` is
+ * self-contained; the `__cirrusPhantom` shape matches, so a real `api.x.y`
+ * reference is assignable and its arg/return types are inferable.
+ */
+interface BridgeFunctionReference<Args = unknown, Result = unknown> {
+    readonly __cirrusPhantom?: { args: Args; returns: Result };
+    readonly __cirrusRef: string;
+}
+
+/** Infer the args type from a {@link BridgeFunctionReference} (or a `@cirrus/client` reference). */
+type ArgsOfReference<Reference> = Reference extends { __cirrusPhantom?: { args: infer Args } } ? Args : never;
+
+/** Infer the result type from a {@link BridgeFunctionReference} (or a `@cirrus/client` reference). */
+type ResultOfReference<Reference> = Reference extends { __cirrusPhantom?: { returns: infer Result } } ? Result : never;
+
 interface ContainerBridge {
     /** Call an `action` by `namespace:fn` path. Alias of {@link ContainerBridge.call} for intent. */
     action: <Result = unknown>(functionPath: string, args?: Record<string, unknown>, shardKey?: string) => Promise<Result>;
@@ -61,6 +79,18 @@ interface ContainerBridge {
     mutation: <Result = unknown>(functionPath: string, args?: Record<string, unknown>, shardKey?: string) => Promise<Result>;
     /** Call a `query` by `namespace:fn` path. Alias of {@link ContainerBridge.call} for intent. */
     query: <Result = unknown>(functionPath: string, args?: Record<string, unknown>, shardKey?: string) => Promise<Result>;
+
+    /**
+     * Fully-typed call via a generated function reference. Pass a reference from
+     * the project's `_generated/api` (e.g. `api.messages.list`) and the args +
+     * result are inferred from it — the typed counterpart to {@link ContainerBridge.call}
+     * for JS/TS containers that can import the generated `api`.
+     */
+    run: <Reference extends BridgeFunctionReference>(
+        reference: Reference,
+        args: ArgsOfReference<Reference>,
+        shardKey?: string,
+    ) => Promise<ResultOfReference<Reference>>;
 }
 
 const joinUrl = (baseUrl: string, path: string): string => {
@@ -123,8 +153,15 @@ const createContainerBridge = (options: ContainerBridgeOptions): ContainerBridge
         return (body as { result: Result }).result;
     };
 
-    return { action: call, call, mutation: call, query: call };
+    const run = async <Reference extends BridgeFunctionReference>(
+        reference: Reference,
+        args: ArgsOfReference<Reference>,
+        shardKey?: string,
+        // eslint-disable-next-line no-underscore-dangle -- `__cirrusRef` is the generated wire-format reference id
+    ): Promise<ResultOfReference<Reference>> => call<ResultOfReference<Reference>>(reference.__cirrusRef, args as Record<string, unknown>, shardKey);
+
+    return { action: call, call, mutation: call, query: call, run };
 };
 
-export type { ContainerBridge, ContainerBridgeOptions, FetchLike };
+export type { BridgeFunctionReference, ContainerBridge, ContainerBridgeOptions, FetchLike };
 export { ContainerBridgeError, createContainerBridge };

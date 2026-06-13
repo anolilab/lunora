@@ -86,6 +86,22 @@ describe(createContainerBridge, () => {
         expect(new Set([cirrus.action, cirrus.call, cirrus.mutation, cirrus.query]).size).toBe(1);
     });
 
+    it("run() sends a generated function reference's __cirrusRef with inferred arg/result types", async () => {
+        expect.assertions(2);
+
+        const { calls, fetch } = stubFetch({ result: { id: "m1" } });
+        const cirrus = createContainerBridge({ baseUrl: "https://app.example.com", fetch });
+
+        // Shaped like a generated `api.messages.send` reference (phantom args/returns).
+        const reference = { __cirrusPhantom: undefined as unknown as { args: { text: string }; returns: { id: string } }, __cirrusRef: "messages:send" };
+
+        const result = await cirrus.run(reference, { text: "hi" });
+
+        // `result` is typed `{ id: string }` and `args` is typed `{ text: string }` — a wrong shape is a compile error.
+        expect(result.id).toBe("m1");
+        expect(JSON.parse(calls[0]!.body)).toStrictEqual({ args: { text: "hi" }, functionPath: "messages:send" });
+    });
+
     it("errors when no fetch is available", async () => {
         expect.assertions(1);
 

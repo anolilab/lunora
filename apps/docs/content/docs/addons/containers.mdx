@@ -150,6 +150,15 @@ const pending = await cirrus.query("jobs:listPending", { limit: 10 });
 await cirrus.mutation("jobs:markDone", { id: pending[0].id });
 ```
 
+For full type-safety, pass a generated `api` reference to `run()` — args and
+result are inferred from it:
+
+```ts
+import { api } from "../cirrus/_generated/api";
+
+const job = await cirrus.run(api.jobs.next, { queue: "transcode" }); // typed args + result
+```
+
 The `token` is a bearer your Worker's `resolveIdentity` recognizes — forward it
 as a container `secret`, never bake it into the image. Non-JS containers can
 `POST /_cirrus/rpc` with `{ functionPath, args }` directly (same contract).
