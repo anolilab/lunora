@@ -1,8 +1,7 @@
 import type { AuthAdmin, AuthIntrospector } from "./auth-admin-routes";
 import { buildAuthAdminRoutes } from "./auth-admin-routes";
 import { MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJsonBodyWithLimit } from "./body-readers";
-import { decodeConnectorCursor, encodeConnectorCursor, foldCdcPage } from "./connector-cdc";
-import type { ConnectorChange, ConnectorSyncPage } from "./connector-format";
+import { buildDataMovementAdminRoutes } from "./data-movement-admin-routes";
 import type { FunctionArgumentDescriptor } from "./describe-args";
 import { CirrusError, isStructuralCirrusError, isStructuralConflictError, toErrorResponse } from "./errors";
 import { buildIntrospectionAdminRoutes } from "./introspection-admin-routes";
@@ -774,13 +773,9 @@ const NDJSON_ENCODER = new TextEncoder();
 const RPC_PATH = "/_cirrus/rpc";
 const WS_PATH = "/_cirrus/ws";
 const SCHEDULER_DISPATCH_PATH = "/_cirrus/scheduler/dispatch";
-const EXPORT_PATH = "/_cirrus/admin/export";
-const IMPORT_PATH = "/_cirrus/admin/import";
-const SYNC_PATH = "/_cirrus/admin/sync";
-const CONNECTOR_SYNC_PATH = "/_cirrus/admin/connector/sync";
-const APPLY_PATH = "/_cirrus/admin/apply";
 // The cross-shard orchestration (`migrate` / `rank` / `rankpage` / `shard-traffic`)
-// + `pitr`, static-introspection (`functions` / `cron-jobs` / `openapi` /
+// + `pitr`, data-movement (`export` / `import` / `sync` / `connector/sync` /
+// `apply`), static-introspection (`functions` / `cron-jobs` / `openapi` /
 // `openrpc` / `global/*`), `/_cirrus/admin/storage/*`, `/_cirrus/admin/vector/*`,
 // `/_cirrus/admin/scheduled*`, and `/_cirrus/admin/auth/*` paths + handlers live
 // in their sibling route modules.
@@ -1001,48 +996,6 @@ const forwardToShard = async (namespace: ShardNamespaceLike, shardKey: string, r
     const stub = resolveShard(namespace, shardKey);
 
     return stub.fetch(request);
-};
-
-interface ExportBody {
-    tables: ReadonlyArray<string> | undefined;
-}
-
-const parseExportBody = async (request: Request): Promise<ExportBody> => {
-    let body: unknown;
-
-    try {
-        const text = await readBodyTextWithLimit(request);
-
-        body = text === "" ? {} : JSON.parse(text);
-    } catch (error) {
-        if (error instanceof CirrusError) {
-            throw error;
-        }
-
-        throw new CirrusError("Export body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
-    }
-
-    const candidate = (body ?? {}) as { tables?: unknown };
-
-    if (candidate.tables === undefined) {
-        return { tables: undefined };
-    }
-
-    if (!Array.isArray(candidate.tables)) {
-        throw new CirrusError("Export `tables` must be a string array", { code: "BAD_REQUEST", status: 400 });
-    }
-
-    const tables: string[] = [];
-
-    for (const entry of candidate.tables) {
-        if (typeof entry !== "string" || entry.length === 0) {
-            throw new CirrusError("Export `tables` entries must be non-empty strings", { code: "BAD_REQUEST", status: 400 });
-        }
-
-        tables.push(entry);
-    }
-
-    return { tables };
 };
 
 /**
@@ -1777,241 +1730,22 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         }
     };
 
-    const handleExport = async (request: Request, env: unknown): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new CirrusError("Export endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+    // The data-movement admin routes (export / sync / connector-sync / apply /
+    // import) live in a sibling module; the export/import row producers are
+    // injected because they close over the worker options and are shared with
+    // the scheduled R2 backup (mirroring the other extracted clusters).
+    const dataMovementAdminRoutes = buildDataMovementAdminRoutes({
+        applyGlobals: options.applyGlobals,
+        isAdmin: (request) => checkAdminAuth(request, options.adminToken),
+        knownTables: () => collectKnownTables(options.resolveTableSharding),
+        queryCoordinator: options.queryCoordinator,
+        resolveForwardContext: (request, env) => resolveForwardContext(request, env, options.resolveIdentity),
+        shardDO: options.shardDO,
+        streamExportRows,
+        streamingImport: (request, headers) => streamingImport(request, options, headers),
+        syncGlobals: options.syncGlobals,
+    });
 
-        if (!checkAdminAuth(request, options.adminToken)) {
-            throw new CirrusError("admin export endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
-        }
-
-        const coordinator = options.queryCoordinator;
-
-        if (!coordinator) {
-            throw new CirrusError("Export endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
-        }
-
-        const body = await parseExportBody(request);
-
-        const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
-
-        // Stream NDJSON: shard-local rows first, then global rows. Caveat: each
-        // shard returns a single materialised envelope, and the whole fan-out is
-        // collected before the stream drains, so peak worker memory still scales
-        // with the total shard-local row count — the streaming only keeps the
-        // *response* from being buffered, it does not bound the source data.
-        const stream = new ReadableStream<Uint8Array>({
-            async pull(controller) {
-                const writeRow = (row: ExportRow): void => {
-                    controller.enqueue(NDJSON_ENCODER.encode(`${JSON.stringify(row)}\n`));
-                };
-
-                try {
-                    await streamExportRows(coordinator, forwardedHeaders, body.tables, writeRow);
-                    controller.close();
-                } catch (error: unknown) {
-                    controller.error(error);
-                }
-            },
-        });
-
-        return new Response(stream, { headers: { "content-type": "application/x-ndjson" }, status: 200 });
-    };
-
-    /**
-     * Streaming-export feed (Fivetran/Airbyte-style). The caller posts a
-     * per-shard cursor map (`{ cursors: { shardKey: seq }, globalCursor }`) and
-     * gets back each shard's change page plus its new cursor, and the global
-     * (D1) page when `syncGlobals` is configured. Stateless: the consumer owns
-     * the cursors and re-posts them to resume, so the worker holds no offsets.
-     */
-    const handleCdcSync = async (request: Request, env: unknown): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new CirrusError("Sync endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        if (!checkAdminAuth(request, options.adminToken)) {
-            throw new CirrusError("admin sync endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
-        }
-
-        const coordinator = options.queryCoordinator;
-
-        if (!coordinator) {
-            throw new CirrusError("Sync endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
-        }
-
-        const raw = await readJsonBodyWithLimit(request);
-        const cursors = typeof raw["cursors"] === "object" && raw["cursors"] !== null ? (raw["cursors"] as Record<string, number>) : {};
-        const limit = typeof raw["limit"] === "number" ? raw["limit"] : undefined;
-        const globalCursor = typeof raw["globalCursor"] === "number" ? raw["globalCursor"] : 0;
-        const requestedTables = Array.isArray(raw["tables"]) ? raw["tables"].filter((table): table is string => typeof table === "string") : undefined;
-
-        const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
-
-        // Shard discovery mirrors export: explicit tables, else every known table.
-        const probeTables = requestedTables ?? collectKnownTables(options.resolveTableSharding);
-
-        const shardResult = await coordinator.orchestrateCdcSync(options.shardDO, {
-            cursors,
-            headers: forwardedHeaders,
-            limit,
-            tables: probeTables,
-        });
-
-        const global = options.syncGlobals ? await options.syncGlobals({ limit, sinceSeq: globalCursor }) : undefined;
-
-        return Response.json({ global, shards: shardResult.shards }, { status: 200 });
-    };
-
-    /**
-     * Turn-key incremental-sync source for warehouse connectors (Fivetran custom
-     * functions, Airbyte incremental sources). Wraps the same CDC machinery as
-     * {@link handleCdcSync} but exposes the standard connector contract:
-     *
-     * Request: `{ cursor?: string, limit?: number, tables?: string[] }` — `cursor`
-     * is the opaque token from the previous page (omit / empty for a fresh sync).
-     *
-     * Response ({@link ConnectorSyncPage}): `{ changes, nextCursor, hasMore }`.
-     * `changes` is a flat list of `{ table, op, doc }` rows across every shard and
-     * the global plane, ordered shard-local first then global. `nextCursor` is the
-     * opaque token to resume from; `hasMore` is `true` while any shard or the
-     * global plane returned a full page (more changes likely remain) — page until
-     * it is `false` (caught up). Stateless: the consumer owns the cursor.
-     *
-     * Incremental semantics are real CDC: the change feed records insert / update /
-     * delete with a monotonic per-source `seq`, so deletes ARE captured (a delete
-     * surfaces as `{ op: "delete", doc: { _id } }`). A consumer maps the response
-     * onto Fivetran/Airbyte via `toFivetranResponse` / `toAirbyteMessages`.
-     */
-    const handleConnectorSync = async (request: Request, env: unknown): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new CirrusError("Connector sync endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        if (!checkAdminAuth(request, options.adminToken)) {
-            throw new CirrusError("admin connector sync endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
-        }
-
-        const coordinator = options.queryCoordinator;
-
-        if (!coordinator) {
-            throw new CirrusError("Connector sync endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
-        }
-
-        const raw = await readJsonBodyWithLimit(request);
-        const state = decodeConnectorCursor(raw["cursor"]);
-        const limit = typeof raw["limit"] === "number" && raw["limit"] > 0 ? raw["limit"] : undefined;
-        const requestedTables = Array.isArray(raw["tables"]) ? raw["tables"].filter((table): table is string => typeof table === "string") : undefined;
-
-        const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
-
-        // Shard discovery mirrors export/sync: explicit tables, else every known table.
-        const probeTables = requestedTables ?? collectKnownTables(options.resolveTableSharding);
-
-        const shardResult = await coordinator.orchestrateCdcSync(options.shardDO, {
-            cursors: state.s,
-            headers: forwardedHeaders,
-            limit,
-            tables: probeTables,
-        });
-
-        const changes: ConnectorChange[] = [];
-        const nextShardCursors: Record<string, number> = { ...state.s };
-        let hasMore = false;
-
-        for (const shard of shardResult.shards) {
-            // A full page signals more rows likely remain past this cursor.
-            hasMore = foldCdcPage(changes, shard.changes ?? [], limit) || hasMore;
-            nextShardCursors[shard.shardKey] = shard.cursor;
-        }
-
-        // Global (D1) plane: same CDC contract, paged from the global cursor.
-        let nextGlobalCursor = state.g;
-
-        if (options.syncGlobals) {
-            const global = await options.syncGlobals({ limit, sinceSeq: state.g });
-
-            hasMore = foldCdcPage(changes, global.changes, limit) || hasMore;
-            nextGlobalCursor = global.cursor;
-        }
-
-        const nextCursor = encodeConnectorCursor({ g: nextGlobalCursor, s: nextShardCursors, v: 1 });
-        const page: ConnectorSyncPage = { changes, hasMore, nextCursor };
-
-        return Response.json(page, { status: 200 });
-    };
-
-    /**
-     * Replay endpoint behind `cirrus backup restore --to &lt;time>`. Accepts
-     * per-shard pre-bucketed batches (the shape `/sync` emits, so the caller
-     * just forwards each shard's changes back to the same shard — no
-     * re-bucketing, which also sidesteps deletes carrying no shard-key field)
-     * plus optional `globalChanges`. Applies them via `applyCdcChanges` and
-     * returns the counts.
-     */
-    const handleApplyCdc = async (request: Request, env: unknown): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new CirrusError("Apply endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        if (!checkAdminAuth(request, options.adminToken)) {
-            throw new CirrusError("admin apply endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
-        }
-
-        const coordinator = options.queryCoordinator;
-
-        if (!coordinator) {
-            throw new CirrusError("Apply endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
-        }
-
-        const raw = await readJsonBodyWithLimit(request);
-        const rawBatches = Array.isArray(raw["batches"]) ? raw["batches"] : [];
-        const batches = rawBatches
-            .map((batch) => batch as { changes?: unknown; shardKey?: unknown })
-            .filter(
-                (batch): batch is { changes: ReadonlyArray<Record<string, unknown>>; shardKey: string } =>
-                    typeof batch.shardKey === "string" && Array.isArray(batch.changes),
-            );
-        const globalChanges = Array.isArray(raw["globalChanges"]) ? (raw["globalChanges"] as ReadonlyArray<Record<string, unknown>>) : [];
-
-        const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
-
-        const shardResult = await coordinator.orchestrateApplyCdc(options.shardDO, { batches, headers: forwardedHeaders });
-
-        const globalApplied = globalChanges.length > 0 && options.applyGlobals ? await options.applyGlobals({ changes: globalChanges }) : 0;
-
-        return Response.json({ applied: shardResult.applied + globalApplied, failed: shardResult.failed, ok: shardResult.ok }, { status: 200 });
-    };
-
-    const handleImport = async (request: Request, env: unknown): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new CirrusError("Import endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        if (!checkAdminAuth(request, options.adminToken)) {
-            throw new CirrusError("admin import endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
-        }
-
-        if (!options.queryCoordinator) {
-            throw new CirrusError("Import endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
-        }
-
-        const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
-
-        const result = await streamingImport(request, options, forwardedHeaders);
-
-        return Response.json(result, {
-            headers: { "content-type": "application/json" },
-            status: 200,
-        });
-    };
-
-    /**
-     * Resolve the configured `SchedulerDO` stub, asserting the binding is
-     * present and the caller is an admin. Shared by the list/cancel handlers so
-     * both enforce the same gate before touching the scheduler.
-     */
     /** The `&lt;CODE>_NOT_CONFIGURED` 400 a guarded admin route throws when its backing option is absent. */
     interface NotConfiguredError {
         code: string;
@@ -2799,16 +2533,13 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         [WS_PATH]: (request, env, url) => handleWebSocketUpgrade(request, env, url),
         [RPC_PATH]: (request, env) => handleRpc(request, env),
         [SCHEDULER_DISPATCH_PATH]: (request, env) => handleSchedulerDispatch(request, env),
-        [EXPORT_PATH]: (request, env) => handleExport(request, env),
-        [IMPORT_PATH]: (request, env) => handleImport(request, env),
-        [SYNC_PATH]: (request, env) => handleCdcSync(request, env),
-        [CONNECTOR_SYNC_PATH]: (request, env) => handleConnectorSync(request, env),
-        [APPLY_PATH]: (request, env) => handleApplyCdc(request, env),
         // Extracted handler clusters built above, merged in (mirroring the auth
         // plane below): orchestration (migrate / rank / rankpage / shard-traffic /
-        // pitr), scheduled, storage, vector, and the static-introspection reads
+        // pitr), data-movement (export / import / sync / connector-sync / apply),
+        // scheduled, storage, vector, and the static-introspection reads
         // (functions / cron-jobs / openapi / openrpc / global tables).
         ...orchestrationAdminRoutes,
+        ...dataMovementAdminRoutes,
         ...scheduledAdminRoutes,
         ...storageAdminRoutes,
         ...vectorAdminRoutes,
