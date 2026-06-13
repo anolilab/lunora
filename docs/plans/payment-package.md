@@ -268,7 +268,10 @@ Non-negotiables that the implementation (not just the plan) has to satisfy — s
   request); ✅ **`reconcile()` sweep** (authoritative re-sync of drifted sessions/subscriptions via provider
   `getPaymentStatus`/`getSubscriptionStatus`; caller passes ids from a `@cirrus/scheduler` job); ✅ `@cirrus/config`
   detects `@cirrus/payment` and hints the provider secrets (`STRIPE_*` / `POLAR_*`) through its binding-reconcile
-  pipeline (no DO binding — payments ride `ctx.db`). _Next:_ observability (failed-payment / drift metrics); example app.
+  pipeline (no DO binding — payments ride `ctx.db`); ✅ **`examples/payment-demo`** — a runnable app wiring the whole
+  stack (schema merge, `ctx.payments` checkout action, reactive subscription query, `httpAction` webhook forwarded
+  into the shard, `createShardDO({ payment })`, `@cirrus/react` `CheckoutButton`), typechecking end-to-end against
+  codegen output. _Next:_ observability (failed-payment / drift metrics).
 - **Phase 2 — Polar adapter + React kit:** ✅ `createPolarAdapter` (injected client, Merchant-of-Record, Standard
   Webhooks verification via `verifyStandardWebhook`); `parseWebhook` takes the request headers so each provider reads
   its own scheme. ✅ `@cirrus/react` UI kit — `useCheckout(trigger)` + `CheckoutButton`/`CustomerPortalButton`
