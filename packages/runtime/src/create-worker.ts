@@ -9,6 +9,7 @@ import { emitRpcEvent } from "./observability";
 import type { FanOutSpec, QueryCoordinator, RankPageFanOutRequest } from "./query-coordinator";
 import type { ResolvedShard, ShardNamespaceLike } from "./resolve-shard";
 import { resolveShard } from "./resolve-shard";
+import { buildScheduledAdminRoutes } from "./scheduled-admin-routes";
 import { buildStorageAdminRoutes } from "./storage-admin-routes";
 import { buildVectorAdminRoutes } from "./vector-admin-routes";
 
@@ -891,13 +892,10 @@ const APPLY_PATH = "/_cirrus/admin/apply";
 const RANK_PATH = "/_cirrus/admin/rank";
 const RANKPAGE_PATH = "/_cirrus/admin/rankpage";
 const SHARD_TRAFFIC_PATH = "/_cirrus/admin/shard-traffic";
-const SCHEDULED_PATH = "/_cirrus/admin/scheduled";
-const SCHEDULED_STATUS_PATH = "/_cirrus/admin/scheduled/status";
-const SCHEDULED_WS_PATH = "/_cirrus/admin/scheduled/ws";
-const SCHEDULED_CANCEL_PATH = "/_cirrus/admin/scheduled/cancel";
 // The static-introspection (`functions` / `cron-jobs` / `openapi` / `openrpc` /
-// `global/*`), `/_cirrus/admin/storage/*`, `/_cirrus/admin/vector/*`, and
-// `/_cirrus/admin/auth/*` paths + handlers live in their sibling route modules.
+// `global/*`), `/_cirrus/admin/storage/*`, `/_cirrus/admin/vector/*`,
+// `/_cirrus/admin/scheduled*`, and `/_cirrus/admin/auth/*` paths + handlers live
+// in their sibling route modules.
 
 /**
  * Admin RPCs the migration endpoint is allowed to orchestrate. Spelled out
@@ -2772,74 +2770,15 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         return resolveShard(requireSchedulerNamespace(), options.schedulerInstanceName ?? "default");
     };
 
-    const handleScheduledList = async (request: Request): Promise<Response> => {
-        if (request.method !== "GET") {
-            throw new CirrusError("Scheduled-list endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        const stub = resolveSchedulerStub(request);
-
-        return stub.fetch(new Request("https://scheduler.internal/list", { method: "GET" }));
-    };
-
-    /**
-     * Proxy the SchedulerDO's `GET /status` so the studio can read the
-     * app-level workpool backlog (per-pool `{ queued, inFlight, maxConcurrency }`
-     * plus app-wide `backlog`/`inFlight` totals) that powers the SLO view. A
-     * sibling of {@link handleScheduledList}: same admin gate + scheduler-instance
-     * resolution via {@link resolveSchedulerStub}, just a different DO route.
-     */
-    const handleSchedulerStatus = async (request: Request): Promise<Response> => {
-        if (request.method !== "GET") {
-            throw new CirrusError("Scheduler-status endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        const stub = resolveSchedulerStub(request);
-
-        return stub.fetch(new Request("https://scheduler.internal/status", { method: "GET" }));
-    };
-
-    /**
-     * Proxy a browser WebSocket upgrade to the SchedulerDO's `/ws` so the
-     * studio can subscribe to the live job list. A browser `WebSocket` can't
-     * set an `Authorization` header, so the admin token is also accepted via the
-     * `?token=` query parameter — the only channel the constructor allows.
-     */
-    const handleScheduledWebSocket = (request: Request): Promise<Response> => {
-        if (request.headers.get("Upgrade") !== "websocket") {
-            throw new CirrusError("WebSocket upgrade header missing", { code: "BAD_REQUEST", status: 426 });
-        }
-
-        if (!checkAdminAuth(request, options.adminToken) && !checkAdminWsToken(request, options.adminToken)) {
-            throw new CirrusError("admin authorization required", { code: "ADMIN_FORBIDDEN", status: 403 });
-        }
-
-        const namespace = requireSchedulerNamespace();
-        const stub = resolveShard(namespace, options.schedulerInstanceName ?? "default");
-
-        return stub.fetch(new Request("https://scheduler.internal/ws", { headers: { Upgrade: "websocket" } }));
-    };
-
-    const handleScheduledCancel = async (request: Request): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new CirrusError("Scheduled-cancel endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        const stub = resolveSchedulerStub(request);
-        const body = (await request.json().catch(() => undefined)) as { id?: unknown } | undefined;
-
-        if (typeof body?.id !== "string" || body.id === "") {
-            throw new CirrusError("Scheduled-cancel requires a string `id`", { code: "BAD_REQUEST", status: 400 });
-        }
-
-        return stub.fetch(
-            new Request("https://scheduler.internal/cancel", {
-                body: JSON.stringify({ id: body.id }),
-                headers: { "content-type": "application/json" },
-                method: "POST",
-            }),
-        );
-    };
+    // The `/_cirrus/admin/scheduled*` handlers live in a sibling module; they reach
+    // the admin gate, scheduler-namespace requirement, and resolved stub through
+    // injected deps (mirroring the other extracted clusters below).
+    const scheduledAdminRoutes = buildScheduledAdminRoutes({
+        checkWsAdmin: (request) => checkAdminAuth(request, options.adminToken) || checkAdminWsToken(request, options.adminToken),
+        requireSchedulerNamespace,
+        resolveSchedulerStub,
+        schedulerInstanceName: options.schedulerInstanceName ?? "default",
+    });
 
     // The `/_cirrus/admin/storage/*` + `/_cirrus/admin/vector/*` handlers live in
     // sibling modules (mirroring `./auth-admin-routes`); they reach the admin gate,
@@ -3559,13 +3498,10 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         [RANK_PATH]: (request, env) => handleRank(request, env),
         [RANKPAGE_PATH]: (request, env) => handleRankPage(request, env),
         [SHARD_TRAFFIC_PATH]: (request, env) => handleShardTraffic(request, env),
-        [SCHEDULED_WS_PATH]: (request) => handleScheduledWebSocket(request),
-        [SCHEDULED_CANCEL_PATH]: (request) => handleScheduledCancel(request),
-        [SCHEDULED_STATUS_PATH]: (request) => handleSchedulerStatus(request),
-        [SCHEDULED_PATH]: (request) => handleScheduledList(request),
         // Extracted handler clusters built above, merged in (mirroring the auth
-        // plane below): storage, vector, and the static-introspection reads
-        // (functions / cron-jobs / openapi / openrpc / global tables).
+        // plane below): scheduled, storage, vector, and the static-introspection
+        // reads (functions / cron-jobs / openapi / openrpc / global tables).
+        ...scheduledAdminRoutes,
         ...storageAdminRoutes,
         ...vectorAdminRoutes,
         ...introspectionAdminRoutes,

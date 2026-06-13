@@ -1,0 +1,91 @@
+{
+  "migrationIds": [],
+  "tables": {
+    "channels": {
+      "fields": {
+        "createdAt": {
+          "kind": "number",
+          "optional": false
+        },
+        "createdBy": {
+          "kind": "id",
+          "optional": false
+        },
+        "name": {
+          "kind": "string",
+          "optional": false
+        }
+      },
+      "indexes": {
+        "by_name": {
+          "fields": [
+            "name"
+          ],
+          "unique": true
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    },
+    "messages": {
+      "fields": {
+        "channelId": {
+          "kind": "id",
+          "optional": false
+        },
+        "createdAt": {
+          "kind": "number",
+          "optional": false
+        },
+        "text": {
+          "kind": "string",
+          "optional": false
+        },
+        "userId": {
+          "kind": "id",
+          "optional": false
+        }
+      },
+      "indexes": {
+        "by_created": {
+          "fields": [
+            "createdAt"
+          ],
+          "unique": false
+        },
+        "by_channel_created": {
+          "fields": [
+            "channelId",
+            "_creationTime"
+          ],
+          "unique": false
+        }
+      },
+      "relations": {},
+      "shardMode": "shardBy:channelId"
+    },
+    "users": {
+      "fields": {
+        "email": {
+          "kind": "string",
+          "optional": false
+        },
+        "name": {
+          "kind": "string",
+          "optional": false
+        }
+      },
+      "indexes": {
+        "by_email": {
+          "fields": [
+            "email"
+          ],
+          "unique": true
+        }
+      },
+      "relations": {},
+      "shardMode": "global"
+    }
+  },
+  "version": 1
+}

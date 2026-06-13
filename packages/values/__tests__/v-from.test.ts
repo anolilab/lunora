@@ -132,7 +132,9 @@ describe("v.from()", () => {
         // only the context path (here: empty, top-level) is used.
         const noPath = {
             "~standard": {
-                validate: (_value: unknown) => ({ issues: [{ message: "boom" }] }),
+                validate: (_value: unknown) => {
+                    return { issues: [{ message: "boom" }] };
+                },
                 vendor: "fake",
                 version: 1 as const,
             },
@@ -151,7 +153,9 @@ describe("v.from()", () => {
         // `typeof key === "number"` branch) with a string key.
         const structured = {
             "~standard": {
-                validate: (_value: unknown) => ({ issues: [{ message: "bad", path: [{ key: "items" }, { key: 0 }] }] }),
+                validate: (_value: unknown) => {
+                    return { issues: [{ message: "bad", path: [{ key: "items" }, { key: 0 }] }] };
+                },
                 vendor: "fake",
                 version: 1 as const,
             },
@@ -170,7 +174,9 @@ describe("v.from()", () => {
         const sym = Symbol("s");
         const symbolKeyed = {
             "~standard": {
-                validate: (_value: unknown) => ({ issues: [{ message: "bad", path: [sym, "kept"] }] }),
+                validate: (_value: unknown) => {
+                    return { issues: [{ message: "bad", path: [sym, "kept"] }] };
+                },
                 vendor: "fake",
                 version: 1 as const,
             },
@@ -188,7 +194,9 @@ describe("v.from()", () => {
         // No `message` on the issue — the `first?.message ?? "..."` fallback.
         const noMessage = {
             "~standard": {
-                validate: (_value: unknown) => ({ issues: [{ path: [] as PropertyKey[] }] }),
+                validate: (_value: unknown) => {
+                    return { issues: [{ path: [] as PropertyKey[] }] };
+                },
                 vendor: "fake",
                 version: 1 as const,
             },
