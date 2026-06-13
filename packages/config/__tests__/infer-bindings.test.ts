@@ -267,4 +267,31 @@ export { TranscoderContainer } from "../../cirrus/_generated/containers.js";
 
         expect(result.containers).toEqual([]);
     });
+
+    it("infers payment from a @cirrus/payment import and hints at the provider secrets, without binding a class", async () => {
+        expect.assertions(4);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("cirrus/billing.ts", `import { createPayment } from "@cirrus/payment";\nexport const payment = () => createPayment;`);
+
+        const result = await inferCirrusBindings({ projectRoot: root });
+
+        expect(result.usesPayment).toBe(true);
+        // Payment rides the existing ShardDO via ctx.db — no extra DO binding.
+        expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
+        expect(result.signals.some((signal) => signal.includes("@cirrus/payment"))).toBe(true);
+        expect(result.signals.some((signal) => signal.includes("STRIPE_SECRET_KEY") && signal.includes("POLAR_ACCESS_TOKEN"))).toBe(true);
+    });
+
+    it("does not infer payment for a project that does not import @cirrus/payment", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+
+        const result = await inferCirrusBindings({ projectRoot: root });
+
+        expect(result.usesPayment).toBe(false);
+    });
 });
