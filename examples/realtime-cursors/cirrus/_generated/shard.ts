@@ -3,6 +3,7 @@
 
 import type { AdvisoryFinding, DatabaseWriterLike, DataMigrationLike, LogSink, MigrationRunResult, RunShardApplyCdcArgs, RunShardMigrationArgs, RlsPoliciesResult, RunShardRankBeforeArgs, RunShardRankPageArgs, RunShardWriteArgs, RunShardWriteResult, SchedulerLike, SchemaLike, ShardDOState, ShardRankPageResult, SqlExec, StorageRulesResult, SystemReaderStorageLike } from "@cirrus/do";
 import { applyCdcChanges, createShardCtxDb, runDataMigration, runShardMigrations, ShardDO as ShardDOBase } from "@cirrus/do";
+import { asBucketStorage } from "@cirrus/server";
 import { bindOrm, bindTableFacade } from "@cirrus/server";
 
 import schema from "../schema.js";
@@ -92,25 +93,6 @@ const storageStub = {
     upload: async () => {
         throw new Error("ctx.storage: no storage configured. Pass `storage` to createShardDO().");
     },
-};
-
-// Make any `config.storage` result bucket-aware so `ctx.storage.bucket(name)`
-// always resolves. A `createBucketStorage(...)` result already carries
-// `.bucket`/`.bucketName` and is returned as-is; a single `createStorage(...)`
-// (or the stub) is tagged as the `"default"` bucket, where `.bucket(name)` is the
-// identity (single-bucket apps address one binding under every name).
-const asBucketStorage = (raw: unknown): unknown => {
-    const candidate = (raw ?? {}) as { bucket?: unknown };
-
-    if (typeof candidate.bucket === "function") {
-        return candidate;
-    }
-
-    const self: Record<string, unknown> = { ...(candidate as Record<string, unknown>), bucketName: "default" };
-
-    self.bucket = () => self;
-
-    return self;
 };
 
 // Bound in-process `ctx.run*` composition depth so a self- or cyclically-
