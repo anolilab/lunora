@@ -177,5 +177,22 @@ describe("framework-compose-plugin", () => {
             // SvelteKit is class B — no class-A worker wiring exists for it.
             expect(() => buildWorkerEntrySource("sveltekit", "./cirrus/_generated")).toThrow(/no class-A worker wiring/);
         });
+
+        it("does not re-export the generated container classes by default", () => {
+            expect.hasAssertions();
+
+            expect(buildWorkerEntrySource("tanstack-start", "./cirrus/_generated")).not.toContain("/containers");
+        });
+
+        it("re-exports the generated container classes when the project declares containers", () => {
+            expect.hasAssertions();
+
+            // wrangler requires every container class_name to be exported by the
+            // worker; a class-A app has no hand-written entry, so the composed one
+            // must forward them.
+            const code = buildWorkerEntrySource("tanstack-start", "./cirrus/_generated", true);
+
+            expect(code).toContain('export * from "./cirrus/_generated/containers"');
+        });
     });
 });

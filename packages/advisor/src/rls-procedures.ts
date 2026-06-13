@@ -10,16 +10,18 @@ export interface AdvisorRlsProcedure {
     exportName: string;
     /** Source file relative to the cirrus dir, no extension. */
     file: string;
-    /** Tables read by the procedure via `ctx.db.query("table")` / `ctx.db.findMany(...)` etc. */
-    tablesRead: ReadonlyArray<string>;
-    /** Tables written by the procedure via `ctx.db.insert("table", …)` / `ctx.db.patch(...)` etc. */
-    tablesWritten: ReadonlyArray<string>;
+
     /**
      * Tables explicitly named in the `rls(policies)` array passed to `.use(rls(...))`
      * in this procedure's builder chain. Empty when the policies argument is not a
      * statically-readable array literal (conservative: `usesRls` is still `true`).
      */
     rlsTables: ReadonlyArray<string>;
+    /** Tables read by the procedure via `ctx.db.query("table")` / `ctx.db.findMany(...)` etc. */
+    tablesRead: ReadonlyArray<string>;
+    /** Tables written by the procedure via `ctx.db.insert("table", …)` / `ctx.db.patch(...)` etc. */
+    tablesWritten: ReadonlyArray<string>;
+
     /**
      * `true` when the procedure's builder chain includes `.use(rls(...))` — the
      * `rls` callee is identified by name from `@cirrus/server`. `false` when no

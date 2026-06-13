@@ -12,7 +12,7 @@ import { planViteRemoteBindings, remoteBindingsCleanupPlugin, withRemoteBindings
 import { studioPlugin } from "./studio-plugin";
 import type { CirrusPluginOptions, CirrusPlugins, CloudflarePluginOptions, OverlayPluginOptions, ResolvedCirrusPluginOptions } from "./types";
 import { withWorkerStartupHint } from "./worker-startup-hint";
-import wranglerValidatorPlugin from "./wrangler-validator-plugin";
+import { wranglerValidatorPlugin } from "./wrangler-validator-plugin";
 
 const resolveOptions = (options: CirrusPluginOptions | undefined): ResolvedCirrusPluginOptions => {
     const input = options ?? {};
@@ -159,5 +159,5 @@ export { planViteRemoteBindings, remoteBindingsCleanupPlugin, withRemoteBindings
 export { buildStudioUrl, STUDIO_PATH, studioPlugin } from "./studio-plugin";
 export type { CirrusPluginOptions, CirrusPlugins, CloudflarePluginOptions, OverlayPluginOptions, ResolvedCirrusPluginOptions } from "./types";
 export { augmentWorkerStartupError, isWorkerEntryEvalError, withWorkerStartupHint, WORKER_STARTUP_HINT } from "./worker-startup-hint";
-export { default as wranglerValidatorPlugin } from "./wrangler-validator-plugin";
+export { wranglerValidatorPlugin } from "./wrangler-validator-plugin";
 export { cirrus, VERSION };

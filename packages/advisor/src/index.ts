@@ -10,6 +10,8 @@
 import hotShard from "./lints/runtime/hot-shard";
 import indexUtilization from "./lints/runtime/index-utilization";
 import authApiCallWithoutHeaders from "./lints/static/auth-api-call-without-headers";
+import containerOversizedInstance from "./lints/static/container-oversized-instance";
+import containerPublicInternet from "./lints/static/container-public-internet";
 import duplicateIndex from "./lints/static/duplicate-index";
 import emptyIndex from "./lints/static/empty-index";
 import filterWithoutIndex from "./lints/static/filter-without-index";
@@ -22,11 +24,14 @@ import unindexedForeignKey from "./lints/static/unindexed-foreign-key";
 import type { Finding, Lint, LintContext, LintSource } from "./types";
 
 export type { AdvisorAuthApiCall } from "./authapi-calls";
+export type { AdvisorContainer } from "./containers";
 export type { AdvisorIndexHit, AdvisorTableScan } from "./index-usage";
 export type { AdvisorInsertWrite } from "./inserts";
 export { default as hotShard } from "./lints/runtime/hot-shard";
 export { default as indexUtilization } from "./lints/runtime/index-utilization";
 export { default as authApiCallWithoutHeaders } from "./lints/static/auth-api-call-without-headers";
+export { default as containerOversizedInstance } from "./lints/static/container-oversized-instance";
+export { default as containerPublicInternet } from "./lints/static/container-public-internet";
 export { default as duplicateIndex } from "./lints/static/duplicate-index";
 export { default as emptyIndex } from "./lints/static/empty-index";
 export { default as filterWithoutIndex } from "./lints/static/filter-without-index";
@@ -60,6 +65,8 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     filterWithoutIndex,
     authApiCallWithoutHeaders,
     rlsUncoveredTable,
+    containerOversizedInstance,
+    containerPublicInternet,
 ];
 
 /**

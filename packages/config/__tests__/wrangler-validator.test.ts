@@ -514,5 +514,121 @@ describe("wrangler-validator", () => {
 
             expect(result.problems.some((line) => line.includes("d1_databases"))).toBe(true);
         });
+
+        it("reports a local container image whose Dockerfile does not exist", () => {
+            expect.assertions(1);
+
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                `{
+    "name": "x",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "observability": { "enabled": true },
+    "durable_objects": {
+        "bindings": [
+            { "name": "SHARD", "class_name": "ShardDO" },
+            { "name": "CONTAINER_TRANSCODER", "class_name": "TranscoderContainer" }
+        ]
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "TranscoderContainer"] }],
+    "containers": [{ "class_name": "TranscoderContainer", "image": "./containers/transcoder/Dockerfile", "max_instances": 2 }]
+}
+`,
+                "utf8",
+            );
+
+            const result = validateWranglerProject({ projectRoot: workdir });
+
+            expect(result.problems.some((line) => line.includes("does not exist"))).toBe(true);
+        });
+    });
+
+    describe("containers", () => {
+        const baseConfig = (overrides: Partial<WranglerConfig>): WranglerConfig => {
+            return {
+                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                containers: [{ class_name: "TranscoderContainer", image: "./containers/transcoder/Dockerfile", max_instances: 2 }],
+                durable_objects: {
+                    bindings: [
+                        { class_name: "ShardDO", name: "SHARD" },
+                        { class_name: "TranscoderContainer", name: "CONTAINER_TRANSCODER" },
+                    ],
+                },
+                migrations: [{ new_sqlite_classes: ["ShardDO", "TranscoderContainer"] }],
+                observability: { enabled: true },
+                ...overrides,
+            };
+        };
+
+        it("accepts a fully wired container", () => {
+            expect.assertions(2);
+
+            const report = validateWranglerConfig(baseConfig({}));
+
+            expect(report.errors).toEqual([]);
+            expect(report.warnings).toEqual([]);
+        });
+
+        it("requires a matching durable_objects binding", () => {
+            expect.assertions(1);
+
+            const report = validateWranglerConfig(baseConfig({ durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] } }));
+
+            expect(report.errors.join(" ")).toContain("no matching durable_objects binding");
+        });
+
+        it("requires the class in new_sqlite_classes and flags new_classes", () => {
+            expect.assertions(2);
+
+            const missing = validateWranglerConfig(baseConfig({ migrations: [{ new_sqlite_classes: ["ShardDO"] }] }));
+
+            expect(missing.errors.join(" ")).toContain("missing from migrations");
+
+            const wrongKind = validateWranglerConfig(baseConfig({ migrations: [{ new_classes: ["TranscoderContainer"], new_sqlite_classes: ["ShardDO"] }] }));
+
+            expect(wrongKind.errors.join(" ")).toContain('move it to "new_sqlite_classes"');
+        });
+
+        it("rejects an unknown named instance type and out-of-bounds custom values", () => {
+            expect.assertions(2);
+
+            const unknownName = validateWranglerConfig(
+                baseConfig({
+                    containers: [{ class_name: "TranscoderContainer", image: "./x/Dockerfile", instance_type: "mega", max_instances: 1 }],
+                }),
+            );
+
+            expect(unknownName.errors.join(" ")).toContain('unknown instance_type "mega"');
+
+            const outOfBounds = validateWranglerConfig(
+                baseConfig({
+                    containers: [{ class_name: "TranscoderContainer", image: "./x/Dockerfile", instance_type: { vcpu: 8 }, max_instances: 1 }],
+                }),
+            );
+
+            expect(outOfBounds.errors.join(" ")).toContain("vcpu must be a positive number");
+        });
+
+        it("warns on a missing max_instances cap and disabled observability", () => {
+            expect.assertions(2);
+
+            const report = validateWranglerConfig(
+                baseConfig({
+                    containers: [{ class_name: "TranscoderContainer", image: "./x/Dockerfile" }],
+                    observability: { enabled: false },
+                }),
+            );
+
+            expect(report.warnings.join(" ")).toContain("no max_instances");
+            expect(report.warnings.join(" ")).toContain("observability is not enabled");
+        });
+
+        it("rejects a malformed entry without a class_name", () => {
+            expect.assertions(1);
+
+            const report = validateWranglerConfig(baseConfig({ containers: [{ image: "./x/Dockerfile" }] }));
+
+            expect(report.errors.join(" ")).toContain('non-empty "class_name"');
+        });
     });
 });

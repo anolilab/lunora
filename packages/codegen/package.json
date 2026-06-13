@@ -58,6 +58,7 @@
     },
     "dependencies": {
         "@cirrus/advisor": "workspace:*",
+        "@cirrus/container": "workspace:*",
         "@cirrus/scheduler": "workspace:*",
         "@cirrus/values": "workspace:*",
         "ts-morph": "catalog:tooling"

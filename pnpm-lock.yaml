@@ -51,6 +51,9 @@ catalogs:
       specifier: ^7.2.0
       version: 7.2.0
   cloudflare:
+    '@cloudflare/containers':
+      specifier: ^0.3.7
+      version: 0.3.7
     '@cloudflare/vitest-pool-workers':
       specifier: ^0.16.14
       version: 0.16.14
@@ -1008,6 +1011,9 @@ importers:
       '@cirrus/config':
         specifier: workspace:*
         version: link:../config
+      '@cirrus/container':
+        specifier: workspace:*
+        version: link:../container
       '@cirrus/d1':
         specifier: workspace:*
         version: link:../d1
@@ -1105,6 +1111,9 @@ importers:
       '@cirrus/advisor':
         specifier: workspace:*
         version: link:../advisor
+      '@cirrus/container':
+        specifier: workspace:*
+        version: link:../container
       '@cirrus/scheduler':
         specifier: workspace:*
         version: link:../scheduler
@@ -1148,6 +1157,9 @@ importers:
       '@cirrus/codegen':
         specifier: workspace:*
         version: link:../codegen
+      '@cirrus/container':
+        specifier: workspace:*
+        version: link:../container
       '@cirrus/studio':
         specifier: workspace:*
         version: link:../studio
@@ -1161,6 +1173,34 @@ importers:
         specifier: catalog:tooling
         version: 28.0.0
     devDependencies:
+      '@types/node':
+        specifier: catalog:types
+        version: 25.9.2
+      '@visulima/packem':
+        specifier: catalog:build
+        version: 2.0.0-alpha.87(c837d351128d955e94faadd388cf36ce)
+      '@vitest/coverage-v8':
+        specifier: catalog:test
+        version: 4.1.8(vitest@4.1.8)
+      esbuild:
+        specifier: catalog:build
+        version: 0.28.0
+      typescript:
+        specifier: catalog:tsc
+        version: 6.0.3
+      vitest:
+        specifier: catalog:test
+        version: 4.1.8(@opentelemetry/api@1.9.1)(@types/node@25.9.2)(@vitest/coverage-v8@4.1.8)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.16(@types/node@25.9.2)(esbuild@0.28.0)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
+
+  packages/container:
+    dependencies:
+      '@cloudflare/containers':
+        specifier: catalog:cloudflare
+        version: 0.3.7
+    devDependencies:
+      '@cloudflare/workers-types':
+        specifier: catalog:cloudflare
+        version: 4.20260610.1
       '@types/node':
         specifier: catalog:types
         version: 25.9.2
@@ -2609,6 +2649,9 @@ packages:
   '@clack/prompts@1.5.0':
     resolution: {integrity: sha512-wKh+wTjmrUoUdkZg8KpJO5X+p9PWV+KE9mePseq9UYWkukgTKsGS47RRL2HstwVcvDQH+PenrPJWII8+MfiiyA==}
     engines: {node: '>= 20.12.0'}
+
+  '@cloudflare/containers@0.3.7':
+    resolution: {integrity: sha512-DM9dm3FnIBSyiSJ1FLavKwl/lk3oAmTaynCzZQ9pZR0ncRPquSxkxd8Nu2MFILxmDDsPkxKsSNEh9mHHMty4Fw==}
 
   '@cloudflare/kv-asset-handler@0.5.0':
     resolution: {integrity: sha512-jxQYkj8dSIzc0cD6cMMNdOc1UVjqSqu8BZdor5s8cGjW2I8BjODt/kWPVdY+u9zj3ms75Q5qaZgnxUad83+eAg==}
@@ -13764,6 +13807,8 @@ snapshots:
       fast-string-width: 3.0.2
       fast-wrap-ansi: 0.2.2
       sisteransi: 1.0.5
+
+  '@cloudflare/containers@0.3.7': {}
 
   '@cloudflare/kv-asset-handler@0.5.0': {}
 

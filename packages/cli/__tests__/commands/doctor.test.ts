@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -70,7 +70,7 @@ describe("runDoctor", () => {
 
         seed(workdir, PLACEHOLDER_WRANGLER);
 
-        const result = runDoctor({ cwd: workdir, logger: makeLogger().logger });
+        const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
 
         expect(result.code).toBe(1);
         expect(result.findings.some((finding) => finding.level === "fail" && /placeholder database_id/u.test(finding.message))).toBe(true);
@@ -81,7 +81,7 @@ describe("runDoctor", () => {
 
         seed(workdir, CLEAN_WRANGLER);
 
-        const result = runDoctor({ cwd: workdir, logger: makeLogger().logger });
+        const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
 
         expect(result.code).toBe(0);
         expect(result.findings.some((finding) => finding.level === "fail")).toBe(false);
@@ -91,7 +91,7 @@ describe("runDoctor", () => {
     it("reports a failure when wrangler.jsonc is missing", async () => {
         expect.assertions(2);
 
-        const result = runDoctor({ cwd: workdir, logger: makeLogger().logger });
+        const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
 
         expect(result.code).toBe(1);
         expect(result.findings.some((finding) => finding.level === "fail" && /wrangler\.jsonc not found/u.test(finding.message))).toBe(true);
@@ -107,9 +107,52 @@ describe("runDoctor", () => {
 
         writeFileSync(join(workdir, ".dev.vars"), devVarsLines, "utf8");
 
-        const result = runDoctor({ cwd: workdir, logger: makeLogger().logger });
+        const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
 
         expect(result.code).toBe(0);
         expect(result.findings.some((finding) => finding.level === "warn" && /AUTH_SECRET/u.test(finding.message))).toBe(true);
+    });
+
+    const seedContainerProject = (entry: string): void => {
+        seed(
+            workdir,
+            JSON.stringify({
+                compatibility_date: "2026-04-07",
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                main: "src/server.ts",
+                name: "demo",
+            }),
+        );
+        mkdirSync(join(workdir, "src"), { recursive: true });
+        mkdirSync(join(workdir, "cirrus"), { recursive: true });
+        writeFileSync(join(workdir, "src", "server.ts"), entry, "utf8");
+        writeFileSync(
+            join(workdir, "cirrus", "containers.ts"),
+            'import { defineContainer } from "@cirrus/container";\nexport const transcoder = defineContainer({ image: "./containers/transcoder" });\n',
+            "utf8",
+        );
+    };
+
+    it("fails when a declared container is not exported by the worker entry", async () => {
+        expect.assertions(2);
+
+        seedContainerProject('import { createShardDO } from "../cirrus/_generated/shard.js";\nexport const ShardDO = createShardDO();\n');
+
+        const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+        expect(result.code).toBe(1);
+        expect(result.findings.some((finding) => finding.level === "fail" && /container "transcoder" is declared but/u.test(finding.message))).toBe(true);
+    });
+
+    it("passes when the declared container is exported by the worker entry", async () => {
+        expect.assertions(1);
+
+        seedContainerProject(
+            'import { createShardDO } from "../cirrus/_generated/shard.js";\nexport const ShardDO = createShardDO();\nexport * from "../cirrus/_generated/containers.js";\n',
+        );
+
+        const result = await runDoctor({ cwd: workdir, logger: makeLogger().logger });
+
+        expect(result.findings.some((finding) => finding.level === "pass" && /container "transcoder" is exported/u.test(finding.message))).toBe(true);
     });
 });

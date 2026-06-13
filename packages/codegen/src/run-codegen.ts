@@ -7,6 +7,7 @@ import { Project } from "ts-morph";
 import { lintSchema } from "./advisor";
 import discoverAiUsage from "./discover-ai-usage";
 import discoverAuthApiCalls from "./discover-authapi-calls";
+import { discoverContainers } from "./discover-containers";
 import discoverCrons from "./discover-crons";
 import { discoverFunctions, listCirrusSourceFiles } from "./discover-functions";
 import discoverHttpRoutes from "./discover-http-routes";
@@ -16,7 +17,8 @@ import discoverQueries from "./discover-queries";
 import discoverRlsProcedures, { discoverRlsMetadata } from "./discover-rls-procedures";
 import discoverSchema from "./discover-schema";
 import discoverStorageRulesMetadata from "./discover-storage-rules";
-import { emitApi, emitCrons, emitDataModel, emitDrizzleSchema, emitFunctions, emitServer, emitShard, emitVectors, emitWranglerCronTriggers } from "./emit";
+import { emitApi, emitContainers, emitCrons, emitDataModel, emitDrizzleSchema, emitFunctions, emitServer, emitShard, emitVectors, emitWranglerCronTriggers } from "./emit";
+import type { ContainerIR } from "./ir";
 import { buildOpenApiDocument, emitOpenApiModule } from "./openapi";
 import { buildOpenRpcDocument, emitOpenRpcModule } from "./openrpc";
 import type { SchemaSnapshot } from "./schema-drift";
@@ -174,6 +176,13 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // job: the result carries the findings and each caller surfaces them through
     // its own channel (the CLI logger, the vite overlay, the studio Advisors
     // table) rather than this library printing.
+    // Containers declared via `defineContainer` exports in `cirrus/containers.ts`.
+    // Gates `_generated/containers.ts` (the Container DO classes) + the typed
+    // `ctx.containers` on ActionCtx, feeds the config layer's wrangler
+    // reconciliation (containers[] + CONTAINER_* DO bindings + migrations), and
+    // the `container_*` advisor lints below.
+    const containers = discoverContainers(project, cirrusDirectory);
+
     const advisories =
         options.lint === false
             ? []
@@ -183,6 +192,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   discoverInserts(project, cirrusDirectory),
                   discoverAuthApiCalls(project, cirrusDirectory),
                   discoverRlsProcedures(project, cirrusDirectory),
+                  containers,
               );
 
     // Read-only RLS metadata (policies + roles) the studio's RLS inspector lists,
@@ -206,9 +216,11 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         hasAi,
         schema,
         storageRulesMetadata.rules.map((rule) => rule.bucket),
+        containers,
     );
     const functionsContent = emitFunctions(functions, migrations);
-    const shardContent = emitShard(schema, advisories, rlsMetadata, hasAi, storageRulesMetadata);
+    const shardContent = emitShard(schema, advisories, rlsMetadata, hasAi, storageRulesMetadata, containers);
+    const containersContent = emitContainers(containers);
     const cronsContent = emitCrons(crons);
     const vectorsContent = emitVectors(schema.vectorIndexes);
     const drizzleFiles = emitDrizzleSchema(schema);
@@ -263,6 +275,12 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         writeIfChanged(join(outputDirectory, "drizzle.global.ts"), drizzleFiles.global);
         writeIfChanged(join(outputDirectory, "drizzle.shard.ts"), drizzleFiles.shard);
 
+        // Only written when containers are declared — non-container projects
+        // keep a clean `_generated/` (and never import `@cirrus/container`).
+        if (containersContent !== "") {
+            writeIfChanged(join(outputDirectory, "containers.ts"), containersContent);
+        }
+
         if (wantsOpenApi) {
             // The `.json` is the portable artifact for external tooling; the
             // `.ts` (same document, inlined) is what the worker imports and
@@ -288,9 +306,11 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
 
     return {
         advisories,
+        containers,
         cronTriggers: emitWranglerCronTriggers(crons),
         generated: {
             api: apiContent,
+            containers: containersContent,
             crons: cronsContent,
             dataModel: dataModelContent,
             drizzleGlobal: drizzleFiles.global,
@@ -377,6 +397,14 @@ export interface CodegenResult {
     advisories: ReadonlyArray<Finding>;
 
     /**
+     * Containers discovered from `defineContainer` exports in
+     * `cirrus/containers.ts` — the list the config layer reconciles into
+     * wrangler's `containers[]`, `CONTAINER_*` Durable Object bindings, and
+     * migration classes. Empty when the project declares no containers.
+     */
+    containers: ReadonlyArray<ContainerIR>;
+
+    /**
      * Deduplicated cron schedules discovered from `cronJobs()` definitions —
      * the array the vite plugin reconciles into `wrangler.jsonc`'s
      * `triggers.crons`. Empty when the project declares no crons.
@@ -384,6 +412,8 @@ export interface CodegenResult {
     cronTriggers: ReadonlyArray<string>;
     generated: {
         api: string;
+        /** Container DO classes (`_generated/containers.ts`); `""` (and not written) when no containers are declared. */
+        containers: string;
         crons: string;
         dataModel: string;
         drizzleGlobal: string;

@@ -20,6 +20,8 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 
 import { init as initLexer, parse as lexModule } from "es-module-lexer";
 
+import type { ContainerIR } from "./container-info";
+import { discoverContainerInfo } from "./container-info";
 import join from "./path";
 import { discoverSchemaInfo } from "./schema-info";
 import { readWranglerJsonc, WRANGLER_FILES } from "./wrangler-path";
@@ -73,10 +75,22 @@ const IMPORT_AI_PATTERN = /\bfrom\s+["']@cirrus\/ai["']/;
 
 interface DurableObjectSpec {
     binding: string;
-    className: DurableObjectClass;
+    className: string;
+}
+
+/**
+ * A `defineContainer` declaration plus whether its generated DO class is
+ * exported by the worker entry. Only exported containers are safe to
+ * provision — wrangler rejects a `containers[].class_name` (and its Durable
+ * Object binding) that the worker doesn't export.
+ */
+interface InferredContainer extends ContainerIR {
+    exported: boolean;
 }
 
 interface InferredBindings {
+    /** Containers declared in `cirrus/containers.ts` (exported or not — see {@link InferredContainer.exported}). */
+    containers: InferredContainer[];
     /** Durable Objects the worker entry exports → safe to bind. */
     durableObjects: DurableObjectSpec[];
     /** Schema declares a `.global()` table → needs the `DB` D1 binding. */
@@ -277,6 +291,54 @@ const detectExportedDurableObjects = (entryPath: string): DurableObjectSpec[] =>
 };
 
 /**
+ * Matches an `export * from "…/_generated/containers"` (with or without the
+ * `.js` extension) — the conventional way a worker entry re-exports every
+ * generated container class at once. `es-module-lexer` lists the module
+ * request but not the names a star re-export forwards, so the path itself is
+ * the signal that all generated container classes are exported.
+ */
+const CONTAINERS_STAR_REEXPORT_PATTERN = /\bexport\s*\*\s*from\s*["'][^"']*_generated\/containers(?:\.js)?["']/;
+
+/**
+ * Whether the worker entry exports each generated container class: a named
+ * export of the class (covered by `es-module-lexer`'s export list) or the
+ * conventional `export * from "./cirrus/_generated/containers"` star
+ * re-export. Mirrors `detectExportedDurableObjects` — exports are the only
+ * safe provisioning signal, since wrangler validates `class_name` against the
+ * worker's exports at deploy.
+ */
+const detectContainerExports = (entryPath: string | undefined, containers: ReadonlyArray<ContainerIR>): InferredContainer[] => {
+    if (containers.length === 0) {
+        return [];
+    }
+
+    if (entryPath === undefined) {
+        return containers.map((container) => {
+            return { ...container, exported: false };
+        });
+    }
+
+    const code = readFileSync(entryPath, "utf8");
+    const starReexport = CONTAINERS_STAR_REEXPORT_PATTERN.test(code);
+
+    let exportedNames: Set<string>;
+
+    try {
+        const [, exports] = lexModule(code);
+
+        exportedNames = new Set(exports.map((entry) => entry.n));
+    } catch {
+        exportedNames = new Set(
+            containers.map((container) => container.className).filter((className) => new RegExp(String.raw`\bexport\b[^\n;]*\b${className}\b`).test(code)),
+        );
+    }
+
+    return containers.map((container) => {
+        return { ...container, exported: starReexport || exportedNames.has(container.className) };
+    });
+};
+
+/**
  * The schema-derived signal: a `.global()` table needs the `DB` D1 binding.
  * Delegates to the shared `discoverSchemaInfo` so inference and the wrangler
  * validator read the exact same fact. A missing or unparseable schema yields
@@ -308,12 +370,25 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
 };
 
 /** Build the human-readable provenance list. */
-const describeSignals = (durableObjects: DurableObjectSpec[], needsD1: boolean, capabilities: Capabilities): string[] => {
+const describeSignals = (
+    durableObjects: DurableObjectSpec[],
+    needsD1: boolean,
+    capabilities: Capabilities,
+    containers: ReadonlyArray<InferredContainer> = [],
+): string[] => {
     const exported = new Set(durableObjects.map((object) => object.className));
     const signals = durableObjects.map((object) => `${object.binding}/${object.className} (exported by worker entry)`);
 
     if (needsD1) {
         signals.push("DB (.global() table declared)");
+    }
+
+    for (const container of containers) {
+        signals.push(
+            container.exported
+                ? `${container.bindingName}/${container.className} (container "${container.exportName}" declared and exported)`
+                : `hint: container "${container.exportName}" is declared but ${container.className} is not exported by the worker entry — add \`export * from "./cirrus/_generated/containers"\``,
+        );
     }
 
     if (capabilities.usesAi) {
@@ -351,11 +426,13 @@ const inferCirrusBindings = async (options: InferOptions): Promise<InferredBindi
     const entryPath = resolveWorkerEntry(options.projectRoot);
     const durableObjects = entryPath ? detectExportedDurableObjects(entryPath) : [];
     const needsD1 = capabilities.needsD1 || schemaNeedsD1(options.projectRoot, schemaDirectory);
+    const containers = detectContainerExports(entryPath, discoverContainerInfo(options.projectRoot, schemaDirectory).containers);
 
     return {
+        containers,
         durableObjects,
         needsD1,
-        signals: describeSignals(durableObjects, needsD1, capabilities),
+        signals: describeSignals(durableObjects, needsD1, capabilities, containers),
         usesAi: capabilities.usesAi,
         usesAuth: capabilities.usesAuth,
         usesScheduler: capabilities.usesScheduler,
@@ -363,5 +440,5 @@ const inferCirrusBindings = async (options: InferOptions): Promise<InferredBindi
     };
 };
 
-export type { DurableObjectClass, DurableObjectSpec, InferOptions, InferredBindings };
+export type { DurableObjectClass, DurableObjectSpec, InferOptions, InferredBindings, InferredContainer };
 export { inferCirrusBindings };

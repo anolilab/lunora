@@ -2,10 +2,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ResolvedCirrusPluginOptions } from "../src/types";
-import wranglerValidatorPlugin from "../src/wrangler-validator-plugin";
+import { warnWhenDockerMissing, wranglerValidatorPlugin } from "../src/wrangler-validator-plugin";
 
 const WRANGLER_NOT_FOUND = /wrangler\.jsonc not found/u;
 const SHARD_SHARDDO = /SHARD.+ShardDO/u;
@@ -255,6 +255,66 @@ describe("wrangler-validator-plugin", () => {
             expect(() => {
                 callConfigResolved(plugin);
             }).not.toThrow();
+        });
+    });
+
+    describe("warnWhenDockerMissing", () => {
+        it("warns when a Dockerfile-built container is declared and docker is unavailable", () => {
+            expect.assertions(1);
+
+            const wranglerPath = join(workdir, "wrangler.jsonc");
+
+            writeFileSync(
+                wranglerPath,
+                `{
+    "name": "x",
+    "containers": [{ "class_name": "TranscoderContainer", "image": "./containers/transcoder/Dockerfile" }],
+}
+`,
+                "utf8",
+            );
+
+            const spy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+            warnWhenDockerMissing(wranglerPath, () => false);
+
+            expect(spy.mock.calls.join(" ")).toContain("no Docker-compatible engine is running");
+
+            spy.mockRestore();
+        });
+
+        it("stays silent for registry-image containers and when docker is available", () => {
+            expect.assertions(1);
+
+            const wranglerPath = join(workdir, "wrangler.jsonc");
+
+            writeFileSync(
+                wranglerPath,
+                `{
+    "name": "x",
+    "containers": [{ "class_name": "TranscoderContainer", "image": "docker.io/acme/transcoder:1.4" }],
+}
+`,
+                "utf8",
+            );
+
+            const spy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+            warnWhenDockerMissing(wranglerPath, () => false);
+            writeFileSync(
+                wranglerPath,
+                `{
+    "name": "x",
+    "containers": [{ "class_name": "TranscoderContainer", "image": "./containers/transcoder/Dockerfile" }],
+}
+`,
+                "utf8",
+            );
+            warnWhenDockerMissing(wranglerPath, () => true);
+
+            expect(spy).not.toHaveBeenCalled();
+
+            spy.mockRestore();
         });
     });
 });

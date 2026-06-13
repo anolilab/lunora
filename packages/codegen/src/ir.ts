@@ -181,6 +181,53 @@ export interface CronJobIR {
 }
 
 /**
+ * A container lifted from a `defineContainer()` export in
+ * `cirrus/containers.ts`. Carries everything the emitters and the config layer
+ * need to wire wrangler (`containers[]` + the Durable Object binding +
+ * migration class) and the generated `_generated/containers.ts` DO class.
+ * Names are derived via `@cirrus/container`'s shared helpers so codegen and
+ * the config layer can never disagree.
+ */
+export interface ContainerIR {
+    /** Durable Object binding name, e.g. `CONTAINER_TRANSCODER`. */
+    bindingName: string;
+    /** Static Dockerfile build args (wrangler `image_vars`), when declared as literals. */
+    buildArgs?: Record<string, string>;
+    /** Generated DO class name, e.g. `TranscoderContainer`. */
+    className: string;
+
+    /**
+     * Whether the container may open outbound internet connections, when the
+     * value was a static literal. `undefined` means the field was omitted (the
+     * platform default is `true`) or wasn't a literal. Lifted for the advisor.
+     */
+    enableInternet?: boolean;
+    /** The `cirrus/containers.ts` export name, e.g. `transcoder`. */
+    exportName: string;
+
+    /**
+     * Normalized image source: a local Dockerfile (`dockerfile`), a pre-built
+     * registry reference (`registry`), or a Railpack source directory (`build`)
+     * that the deploy step builds and pushes before wrangler runs.
+     */
+    image: { buildContext: string; dockerfilePath: string; kind: "dockerfile" } | { buildDir: string; kind: "build" } | { kind: "registry"; reference: string };
+    /** Static `instanceType`, when declared. */
+    instanceType?: string | { diskMb?: number; memoryMib?: number; vcpu?: number };
+    /** Static `maxInstances`, when declared. */
+    maxInstances?: number;
+    /** Static wrangler `containers[].name` override, when declared. */
+    name?: string;
+    /** Static rolling-deploy tuning, when declared as literals. */
+    rollout?: { gracePeriodSeconds?: number; stepPercentage?: number };
+
+    /**
+     * The static `sleepAfter` value, when it was a literal. `undefined` means
+     * omitted (platform default `"10m"`) or non-literal. Lifted for the advisor.
+     */
+    sleepAfter?: number | string;
+}
+
+/**
  * A `ctx.db.query("table")…` read discovered in a function body, reduced to what
  * the `filter_without_index` advisor lint needs: which table, whether the chain
  * narrows with an index, and whether it filters. `table` is `""` when the

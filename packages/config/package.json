@@ -61,6 +61,7 @@
     },
     "dependencies": {
         "@cirrus/codegen": "workspace:*",
+        "@cirrus/container": "workspace:*",
         "es-module-lexer": "catalog:vite",
         "jsonc-parser": "catalog:vite",
         "ts-morph": "catalog:tooling"

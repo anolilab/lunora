@@ -20,16 +20,18 @@ const run = (rlsProcedures?: AdvisorRlsProcedure[]) => rlsUncoveredTable.run({ r
  * Build a minimal AdvisorRlsProcedure. Defaults to a public, non-RLS procedure
  * that reads the "documents" table.
  */
-const proc = (overrides: Partial<AdvisorRlsProcedure> = {}): AdvisorRlsProcedure => ({
-    exportName: "listDocuments",
-    file: "documents",
-    rlsTables: [],
-    tablesRead: ["documents"],
-    tablesWritten: [],
-    usesRls: false,
-    visibility: "public",
-    ...overrides,
-});
+const proc = (overrides: Partial<AdvisorRlsProcedure> = {}): AdvisorRlsProcedure => {
+    return {
+        exportName: "listDocuments",
+        file: "documents",
+        rlsTables: [],
+        tablesRead: ["documents"],
+        tablesWritten: [],
+        usesRls: false,
+        visibility: "public",
+        ...overrides,
+    };
+};
 
 describe("rls_uncovered_table", () => {
     it("finds nothing when no rlsProcedures evidence is supplied (runtime caller)", () => {

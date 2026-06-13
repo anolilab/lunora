@@ -62,6 +62,7 @@
         "@bomb.sh/tab": "0.0.15",
         "@cirrus/codegen": "workspace:*",
         "@cirrus/config": "workspace:*",
+        "@cirrus/container": "workspace:*",
         "@cirrus/d1": "workspace:*",
         "@cirrus/studio": "workspace:*",
         "@visulima/cerebro": "3.0.0-alpha.31",

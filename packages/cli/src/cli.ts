@@ -6,6 +6,7 @@ import { addCommand } from "./commands/add";
 import { analyzeCommand } from "./commands/analyze";
 import { backupCommand } from "./commands/backup";
 import { codegenCommand } from "./commands/codegen";
+import { containersCommand } from "./commands/containers";
 import { deployCommand } from "./commands/deploy";
 import { devCommand } from "./commands/dev";
 import documentationCommand from "./commands/docs";
@@ -32,6 +33,7 @@ const COMMANDS = [
     "dev",
     "codegen",
     "deploy",
+    "containers",
     "prepare",
     "logs",
     "run",
@@ -61,6 +63,7 @@ const CLI_COMMANDS = [
     devCommand,
     codegenCommand,
     deployCommand,
+    containersCommand,
     prepareCommand,
     logsCommand,
     runCommand,

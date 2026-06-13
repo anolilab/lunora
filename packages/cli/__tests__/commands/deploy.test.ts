@@ -94,6 +94,98 @@ describe("cirrus deploy", () => {
             expect(args).toContain("deploy");
         });
 
+        it("blocks the deploy when containers build from a Dockerfile but Docker is unavailable", async () => {
+            expect.assertions(3);
+
+            const wranglerWithContainer = VALID_WRANGLER.replace(
+                '"durable_objects":',
+                `"containers": [{ "class_name": "TranscoderContainer", "image": "./containers/transcoder/Dockerfile", "max_instances": 2 }],
+    "durable_objects":`,
+            );
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWithContainer, "utf8");
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { errors, logger } = silentLogger();
+
+            const result = await runDeployCommand({ cwd: workdir, dockerAvailable: () => false, logger, spawner });
+
+            expect(result.code).toBe(1);
+            expect(calls).toHaveLength(0);
+            expect(errors.join(" ")).toContain("no Docker-compatible engine");
+        });
+
+        it("does not require Docker when the container image is a registry reference", async () => {
+            expect.assertions(1);
+
+            const wranglerWithRegistryContainer = VALID_WRANGLER.replace(
+                '"durable_objects":',
+                `"observability": { "enabled": true },
+    "containers": [{ "class_name": "TranscoderContainer", "image": "docker.io/acme/transcoder:1.4", "max_instances": 2 }],
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "TranscoderContainer"] }],
+    "durable_objects": {
+        "bindings": [
+            { "name": "SHARD", "class_name": "ShardDO" },
+            { "name": "CONTAINER_TRANSCODER", "class_name": "TranscoderContainer" }
+        ]
+    },
+    "unused_durable_objects":`,
+            );
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), wranglerWithRegistryContainer, "utf8");
+
+            const { spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+
+            const result = await runDeployCommand({ cwd: workdir, dockerAvailable: () => false, logger, spawner });
+
+            expect(result.code).toBe(0);
+        });
+
+        it("builds + pushes a Railpack { build } container before wrangler deploy", async () => {
+            expect.assertions(3);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            writeFileSync(
+                join(workdir, "cirrus", "containers.ts"),
+                `import { defineContainer } from "@cirrus/container";
+export const worker = defineContainer({ image: { build: "./services/worker" } });
+`,
+                "utf8",
+            );
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+
+            const result = await runDeployCommand({ cwd: workdir, dockerAvailable: () => true, logger, railpackAvailable: () => true, spawner });
+
+            expect(result.code).toBe(0);
+            // railpack build → wrangler containers push → wrangler deploy.
+            expect(calls.map((call) => call.descriptor.command)).toStrictEqual(["railpack", "pnpm", "pnpm"]);
+            expect(calls[0]?.descriptor.args).toStrictEqual(["build", "./services/worker", "--name", "cirrus-worker:build"]);
+        });
+
+        it("blocks the deploy when a { build } container needs Railpack but it is unavailable", async () => {
+            expect.assertions(2);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+            writeFileSync(
+                join(workdir, "cirrus", "containers.ts"),
+                `import { defineContainer } from "@cirrus/container";
+export const worker = defineContainer({ image: { build: "./services/worker" } });
+`,
+                "utf8",
+            );
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { logger } = silentLogger();
+
+            const result = await runDeployCommand({ cwd: workdir, dockerAvailable: () => true, logger, railpackAvailable: () => false, spawner });
+
+            expect(result.code).toBe(1);
+            expect(calls).toHaveLength(0);
+        });
+
         it("bundles src/worker.ts as the deploy entry for class-B composition when present", async () => {
             expect.assertions(3);
 
@@ -388,7 +480,7 @@ export const backfillNames = defineMigration({
 
                 await runDeployCommand({ cwd: workdir, logger, spawner: pretty.spawner });
 
-                expect(pretty.calls[0]?.descriptor.stdoutToStderr).toBeFalsy();
+                expect(pretty.calls[0]?.descriptor.stdoutToStderr).toBe(false);
             });
 
             it("serializes the error into the JSON document when validation fails", async () => {

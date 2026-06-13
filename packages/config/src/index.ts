@@ -1,7 +1,9 @@
+export type { ContainerIR, DiscoverContainerInfoResult } from "./container-info";
+export { discoverContainerInfo } from "./container-info";
 export type { DetectedFramework, FrameworkClass, FrameworkDetection } from "./detect-framework";
 export { detectFramework } from "./detect-framework";
 export { DEV_VARS_EXAMPLE_FILE, DEV_VARS_FILE, DEV_VARS_KEY_PATTERN, parseDevVariableEntries } from "./dev-variables-format";
-export type { InferOptions, InferredBindings } from "./infer-bindings";
+export type { InferOptions, InferredBindings, InferredContainer } from "./infer-bindings";
 export { inferCirrusBindings } from "./infer-bindings";
 export type { CirrusFormattedLine, CirrusLineLevel } from "./log-format";
 export { CIRRUS_EVENT_SOURCE, formatCirrusEvent } from "./log-format";
@@ -29,6 +31,7 @@ export { findWranglerFile, readWranglerJsonc, WRANGLER_FILES } from "./wrangler-
 export type {
     TailConsumer,
     WranglerConfig,
+    WranglerContainerEntry,
     WranglerProjectValidationOptions,
     WranglerProjectValidationResult,
     WranglerValidationReport,

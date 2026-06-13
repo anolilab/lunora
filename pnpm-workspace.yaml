@@ -98,6 +98,7 @@ catalogs:
     "@standard-schema/spec": 1.1.0
     "@types/node": 25.9.2
   cloudflare:
+    "@cloudflare/containers": ^0.3.7
     "@cloudflare/vitest-pool-workers": ^0.16.14
     "@cloudflare/workers-types": ^4.20260610.1
     miniflare: ^4.20260609.0
