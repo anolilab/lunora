@@ -1,0 +1,14 @@
+{
+    "extends": "../../tsconfig.base.json",
+    "compilerOptions": {
+        "outDir": "dist",
+        "rootDir": ".",
+        "moduleResolution": "bundler",
+        "types": ["@cloudflare/workers-types", "node"],
+        "lib": ["ES2024"],
+        "noUncheckedIndexedAccess": false,
+        "declaration": false
+    },
+    "include": ["src/**/*", "cirrus/**/*", "vitest.config.ts", "__tests__/**/*"],
+    "exclude": ["node_modules", "dist"]
+}
