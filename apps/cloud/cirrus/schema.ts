@@ -88,6 +88,8 @@ export default defineSchema({
         bundleHash: v.optional(v.string()),
         createdAt: v.number(),
         createdBy: v.string(),
+        // Preview deployments expire (TTL); the cleanup cron tears them down (§2.3).
+        expiresAt: v.optional(v.number()),
         kind: deploymentKind,
         organizationId: v.id("organizations"),
         projectId: v.id("projects"),
@@ -98,6 +100,7 @@ export default defineSchema({
         url: v.optional(v.string()),
     })
         .global()
+        .index("by_kind", ["kind"])
         .index("by_project", ["projectId"]),
 
     deployKeys: defineTable({
