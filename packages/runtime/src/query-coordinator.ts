@@ -1924,20 +1924,22 @@ export type {
     QueryCoordinatorOptions,
     RankFanOutRequest,
     RankFanOutResult,
-    RankPageDirection,
     RankPageFanOutRequest,
     RankPageFanOutResult,
-    RankPageKey,
-    RankPageRow,
     ShardError,
     ShardExportOutcome,
     ShardImportOutcome,
     ShardMigrationOutcome,
     ShardRankOutcome,
     ShardRankPageOutcome,
-    ShardRankPageResult,
     ShardRegistry,
     ShardTrafficEntry,
     ShardTrafficFanOutRequest,
     ShardTrafficFanOutResult,
 };
+// The shard-local rank-page wire types are owned by `@cirrus/do` and re-exported
+// here for consumers. Kept as a type-only `import` + `export` (not `export…from`)
+// on purpose: `@cirrus/do` is a type-only dev dependency, so a real re-export
+// edge would pull it into the runtime's production dependency graph.
+// eslint-disable-next-line unicorn/prefer-export-from -- keep @cirrus/do a type-only dev dep; no runtime re-export edge
+export type { RankPageDirection, RankPageKey, RankPageRow, ShardRankPageResult };
