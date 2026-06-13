@@ -269,9 +269,11 @@ Non-negotiables that the implementation (not just the plan) has to satisfy — s
   `getPaymentStatus`/`getSubscriptionStatus`; caller passes ids from a `@cirrus/scheduler` job); ✅ `@cirrus/config`
   detects `@cirrus/payment` and hints the provider secrets (`STRIPE_*` / `POLAR_*`) through its binding-reconcile
   pipeline (no DO binding — payments ride `ctx.db`). _Next:_ observability (failed-payment / drift metrics); example app.
-- **Phase 2 — Polar adapter:** ✅ `createPolarAdapter` (injected client, Merchant-of-Record, Standard Webhooks
-  verification via `verifyStandardWebhook`); `parseWebhook` now takes the request headers so each provider reads its
-  own scheme. _Next:_ React components + `.global()`/D1 read path.
+- **Phase 2 — Polar adapter + React kit:** ✅ `createPolarAdapter` (injected client, Merchant-of-Record, Standard
+  Webhooks verification via `verifyStandardWebhook`); `parseWebhook` takes the request headers so each provider reads
+  its own scheme. ✅ `@cirrus/react` UI kit — `useCheckout(trigger)` + `CheckoutButton`/`CustomerPortalButton`
+  (headless, redirect-on-URL, decoupled from app function names — mirrors Convex's `CheckoutLink`/`CustomerPortalLink`).
+  _Next:_ `.global()`/D1 read path.
 - **Phase 3 — provider-migration story** (dual-register reconciliation between Stripe and Polar).
 - **Phase 4 — entitlements tier** (`check`/`track` à la Autumn): features, credits, usage metering, seat counts.
 
