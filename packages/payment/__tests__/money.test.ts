@@ -40,6 +40,8 @@ describe("money", () => {
         expect(formatMoney(money(1999, "USD"))).toBe("$19.99");
         // JPY is zero-decimal — 500 minor units is ¥500, not ¥5.00.
         expect(formatMoney(money(500, "JPY"))).toBe("¥500");
+        // A malformed currency code degrades gracefully instead of throwing (Intl raises RangeError).
+        expect(formatMoney(money(1000, "US"))).toBe("10.00 US");
     });
 
     it("flags zero-decimal currencies", () => {

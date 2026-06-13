@@ -61,7 +61,12 @@ export const formatMoney = (value: Money, locale = "en-US"): string => {
     const exponent = Number(exponentFor(value.currency.toUpperCase()));
     const amount = Number(value.minorUnits) / 10 ** exponent;
 
-    return new Intl.NumberFormat(locale, { currency: value.currency, style: "currency" }).format(amount);
+    try {
+        return new Intl.NumberFormat(locale, { currency: value.currency, style: "currency" }).format(amount);
+    } catch {
+        // Intl throws RangeError on a non-ISO currency code — fall back to a plain rendering.
+        return `${amount.toFixed(exponent)} ${value.currency}`;
+    }
 };
 
 export const addMoney = (a: Money, b: Money): Money => {
