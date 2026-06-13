@@ -288,6 +288,38 @@ const checkD1Placeholder = (cwd: string, logger: Logger): string | undefined => 
     return message;
 };
 
+/**
+ * After a successful `wrangler deploy`, run any requested data migrations and —
+ * only when the whole operation succeeded — advance the committed schema
+ * baseline via the gate's deferred `rebless`. Extracted from `executeDeploy` to
+ * keep its cognitive complexity within the 15-node budget.
+ */
+const finalizeSuccessfulDeploy = async (
+    options: DeployCommandOptions,
+    cwd: string,
+    descriptor: SpawnDescriptor,
+    validation: DeployCommandResult["validation"],
+    reblessSchemaBaseline: (() => void) | undefined,
+): Promise<DeployCommandResult> => {
+    if (options.migrate) {
+        const migrateCode = await runPostDeployMigrations(options, cwd);
+
+        // Only advance the committed baseline when deploy AND its migrations
+        // succeeded; a failed migration leaves the gate measuring against the
+        // pre-deploy baseline on the retry.
+        if (migrateCode === 0) {
+            reblessSchemaBaseline?.();
+        }
+
+        return { code: migrateCode, descriptor, validation };
+    }
+
+    // Deploy succeeded — safe to advance the committed schema baseline.
+    reblessSchemaBaseline?.();
+
+    return { code: 0, descriptor, validation };
+};
+
 const executeDeploy = async (options: DeployCommandOptions): Promise<DeployCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     const interactive = isInteractive(options);
@@ -404,28 +436,7 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
         return { code: result.code, descriptor, validation };
     }
 
-    // Post-deploy migrations: only when explicitly requested AND deploy succeeded.
-    if (options.migrate) {
-        const migrateCode = await runPostDeployMigrations(options, cwd);
-
-        // Only advance the committed baseline when the whole operation — deploy
-        // AND its migrations — succeeded; a failed migration leaves the gate
-        // measuring against the pre-deploy baseline on the retry.
-        if (migrateCode === 0) {
-            reblessSchemaBaseline?.();
-        }
-
-        return { code: migrateCode, descriptor, validation };
-    }
-
-    // Deploy succeeded — now it is safe to advance the committed schema baseline.
-    reblessSchemaBaseline?.();
-
-    return {
-        code: result.code,
-        descriptor,
-        validation,
-    };
+    return finalizeSuccessfulDeploy(options, cwd, descriptor, validation, reblessSchemaBaseline);
 };
 
 /**

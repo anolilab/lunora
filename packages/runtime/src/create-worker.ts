@@ -7,7 +7,8 @@ import { CirrusError, isStructuralCirrusError, isStructuralConflictError, toErro
 import { buildIntrospectionAdminRoutes } from "./introspection-admin-routes";
 import type { ObservabilityEvent, ObservabilitySink } from "./observability";
 import { emitRpcEvent } from "./observability";
-import type { FanOutSpec, QueryCoordinator, RankPageFanOutRequest } from "./query-coordinator";
+import { buildOrchestrationAdminRoutes } from "./orchestration-admin-routes";
+import type { FanOutSpec, QueryCoordinator } from "./query-coordinator";
 import type { ResolvedShard, ShardNamespaceLike } from "./resolve-shard";
 import { resolveShard } from "./resolve-shard";
 import { buildScheduledAdminRoutes } from "./scheduled-admin-routes";
@@ -771,37 +772,17 @@ const NDJSON_ENCODER = new TextEncoder();
 
 const RPC_PATH = "/_cirrus/rpc";
 const WS_PATH = "/_cirrus/ws";
-const MIGRATE_PATH = "/_cirrus/migrate";
-const PITR_PATH = "/_cirrus/admin/pitr";
 const SCHEDULER_DISPATCH_PATH = "/_cirrus/scheduler/dispatch";
 const EXPORT_PATH = "/_cirrus/admin/export";
 const IMPORT_PATH = "/_cirrus/admin/import";
 const SYNC_PATH = "/_cirrus/admin/sync";
 const CONNECTOR_SYNC_PATH = "/_cirrus/admin/connector/sync";
 const APPLY_PATH = "/_cirrus/admin/apply";
-const RANK_PATH = "/_cirrus/admin/rank";
-const RANKPAGE_PATH = "/_cirrus/admin/rankpage";
-const SHARD_TRAFFIC_PATH = "/_cirrus/admin/shard-traffic";
-// The static-introspection (`functions` / `cron-jobs` / `openapi` / `openrpc` /
-// `global/*`), `/_cirrus/admin/storage/*`, `/_cirrus/admin/vector/*`,
+// The cross-shard orchestration (`migrate` / `rank` / `rankpage` / `shard-traffic`)
+// + `pitr`, static-introspection (`functions` / `cron-jobs` / `openapi` /
+// `openrpc` / `global/*`), `/_cirrus/admin/storage/*`, `/_cirrus/admin/vector/*`,
 // `/_cirrus/admin/scheduled*`, and `/_cirrus/admin/auth/*` paths + handlers live
 // in their sibling route modules.
-
-/**
- * Admin RPCs the migration endpoint is allowed to orchestrate. Spelled out
- * inline (rather than importing `@cirrus/do`) to keep the runtime free of a
- * hard dependency on the DO package.
- */
-const MIGRATION_ADMIN_OPS = new Set<string>(["__cirrus_admin__:migrationStatus", "__cirrus_admin__:runMigration"]);
-
-/**
- * Per-shard admin RPCs the PITR endpoint is allowed to forward. Like
- * {@link MIGRATION_ADMIN_OPS}, spelled out inline to keep the runtime free of a
- * hard dependency on `@cirrus/do`. Unlike migration, PITR targets a single
- * shard (a Durable Object's change log is per-object), so the endpoint forwards
- * to one shard rather than fanning out.
- */
-const PITR_ADMIN_OPS = new Set<string>(["__cirrus_admin__:getPitrBookmark", "__cirrus_admin__:pitrRestore"]);
 
 /**
  * Default base path the `@cirrus/auth` handler mounts under, mirroring
@@ -1015,235 +996,6 @@ const parseEnvelope = async (request: Request): Promise<RpcEnvelope> => {
     };
 };
 
-interface MigrateRequest {
-    args: Record<string, unknown>;
-    functionPath: string;
-    table: string;
-}
-
-/**
- * Parse and validate a `POST /_cirrus/migrate` body. `functionPath` is
- * restricted to the migration admin ops so the endpoint can't be used to
- * fan arbitrary RPCs across every shard.
- */
-const parseMigrateRequest = async (request: Request): Promise<MigrateRequest> => {
-    let body: unknown;
-
-    try {
-        const text = await readBodyTextWithLimit(request);
-
-        body = text === "" ? {} : JSON.parse(text);
-    } catch (error) {
-        if (error instanceof CirrusError) {
-            throw error;
-        }
-
-        throw new CirrusError("Migration body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
-    }
-
-    const candidate = (body ?? {}) as { args?: unknown; functionPath?: unknown; table?: unknown };
-
-    if (typeof candidate.table !== "string" || candidate.table.length === 0) {
-        throw new CirrusError("Migration request is missing `table`", { code: "BAD_REQUEST", status: 400 });
-    }
-
-    if (typeof candidate.functionPath !== "string" || !MIGRATION_ADMIN_OPS.has(candidate.functionPath)) {
-        throw new CirrusError("Migration request `functionPath` must be a migration admin op", { code: "BAD_REQUEST", status: 400 });
-    }
-
-    return {
-        args: (candidate.args ?? {}) as Record<string, unknown>,
-        functionPath: candidate.functionPath,
-        table: candidate.table,
-    };
-};
-
-interface RankRequestBody {
-    index: string;
-    partitionKey: string;
-    rowId: string;
-    sortValues: ReadonlyArray<unknown>;
-    table: string;
-}
-
-/**
- * Parse and validate a `POST /_cirrus/admin/rank` body. The caller supplies the
- * EXPLICIT key tuple — `table`, `index`, `partitionKey`, `sortValues`, `rowId`
- * — already built off the row doc via `@cirrus/do`'s `rankKeyFromDoc(index,
- * doc)` (the worker carries no schema, so it can't derive the tuple itself).
- * `partitionKey` may legitimately be `""` (a rankIndex with no `partitionBy`),
- * so only its type is enforced. Mirrors the shard's own `parseRankBeforeArgs`.
- */
-const parseRankRequest = async (request: Request): Promise<RankRequestBody> => {
-    let body: unknown;
-
-    try {
-        const text = await readBodyTextWithLimit(request);
-
-        body = text === "" ? {} : JSON.parse(text);
-    } catch (error) {
-        if (error instanceof CirrusError) {
-            throw error;
-        }
-
-        throw new CirrusError("Rank body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
-    }
-
-    const candidate = (body ?? {}) as { index?: unknown; partitionKey?: unknown; rowId?: unknown; sortValues?: unknown; table?: unknown };
-
-    if (typeof candidate.table !== "string" || candidate.table.length === 0) {
-        throw new CirrusError("Rank request is missing `table`", { code: "BAD_REQUEST", status: 400 });
-    }
-
-    if (typeof candidate.index !== "string" || candidate.index.length === 0) {
-        throw new CirrusError("Rank request is missing `index`", { code: "BAD_REQUEST", status: 400 });
-    }
-
-    if (typeof candidate.partitionKey !== "string") {
-        throw new CirrusError("Rank request `partitionKey` must be a string", { code: "BAD_REQUEST", status: 400 });
-    }
-
-    if (typeof candidate.rowId !== "string" || candidate.rowId.length === 0) {
-        throw new CirrusError("Rank request is missing `rowId`", { code: "BAD_REQUEST", status: 400 });
-    }
-
-    if (!Array.isArray(candidate.sortValues)) {
-        throw new CirrusError("Rank request `sortValues` must be an array", { code: "BAD_REQUEST", status: 400 });
-    }
-
-    return {
-        index: candidate.index,
-        partitionKey: candidate.partitionKey,
-        rowId: candidate.rowId,
-        sortValues: candidate.sortValues,
-        table: candidate.table,
-    };
-};
-
-interface RankPageCandidate {
-    cursor?: unknown;
-    directions?: unknown;
-    index?: unknown;
-    partitionKey?: unknown;
-    table?: unknown;
-    take?: unknown;
-}
-
-/** Validate the optional `directions` list, returning the narrowed value or `undefined`. */
-const parseRankPageDirections = (raw: unknown): ReadonlyArray<"asc" | "desc"> | undefined => {
-    if (raw === undefined) {
-        return undefined;
-    }
-
-    if (!Array.isArray(raw) || raw.some((d) => d !== "asc" && d !== "desc")) {
-        throw new CirrusError('Rank page request `directions` must be an array of "asc"|"desc"', { code: "BAD_REQUEST", status: 400 });
-    }
-
-    return raw as ReadonlyArray<"asc" | "desc">;
-};
-
-/** Validate the required `table`/`index` plus the optional `partitionKey`/`take`/`cursor` scalars. */
-const validateRankPageScalars = (candidate: RankPageCandidate): void => {
-    if (typeof candidate.table !== "string" || candidate.table.length === 0) {
-        throw new CirrusError("Rank page request is missing `table`", { code: "BAD_REQUEST", status: 400 });
-    }
-
-    if (typeof candidate.index !== "string" || candidate.index.length === 0) {
-        throw new CirrusError("Rank page request is missing `index`", { code: "BAD_REQUEST", status: 400 });
-    }
-
-    if (candidate.partitionKey !== undefined && typeof candidate.partitionKey !== "string") {
-        throw new CirrusError("Rank page request `partitionKey` must be a string", { code: "BAD_REQUEST", status: 400 });
-    }
-
-    if (candidate.take !== undefined && (typeof candidate.take !== "number" || !Number.isFinite(candidate.take))) {
-        throw new CirrusError("Rank page request `take` must be a number", { code: "BAD_REQUEST", status: 400 });
-    }
-
-    if (candidate.cursor !== undefined && candidate.cursor !== null && typeof candidate.cursor !== "string") {
-        throw new CirrusError("Rank page request `cursor` must be a string or null", { code: "BAD_REQUEST", status: 400 });
-    }
-};
-
-/**
- * Parse and validate a `POST /_cirrus/admin/rankpage` body. Unlike the
- * single-row rank endpoint, the caller doesn't supply a key tuple — only the
- * `table`/`index` to page, an optional `partitionKey` pin, an optional `take`
- * page size, an optional per-sort-key `directions` list (so the coordinator's
- * k-way merge breaks ties the same way each shard's `ORDER BY` does), and an
- * opaque `cursor` from the prior page's `continueCursor`.
- *
- * Validates once at the HTTP edge and produces the coordinator's
- * {@link RankPageFanOutRequest} directly (minus `headers`, which the route
- * injects at the call site from the forward context) — there's no separate
- * in-process request type for the route→coordinator hand-off to drift against.
- */
-const parseRankPageRequest = async (request: Request): Promise<Omit<RankPageFanOutRequest, "headers">> => {
-    let body: unknown;
-
-    try {
-        const text = await readBodyTextWithLimit(request);
-
-        body = text === "" ? {} : JSON.parse(text);
-    } catch (error) {
-        if (error instanceof CirrusError) {
-            throw error;
-        }
-
-        throw new CirrusError("Rank page body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
-    }
-
-    const candidate = (body ?? {}) as RankPageCandidate;
-
-    validateRankPageScalars(candidate);
-
-    const directions = parseRankPageDirections(candidate.directions);
-
-    return {
-        // eslint-disable-next-line unicorn/no-null -- the wire cursor is `null | string`; normalize an absent cursor to null so the coordinator starts at the first page
-        cursor: typeof candidate.cursor === "string" ? candidate.cursor : null,
-        directions,
-        index: candidate.index as string,
-        partitionKey: typeof candidate.partitionKey === "string" ? candidate.partitionKey : undefined,
-        table: candidate.table as string,
-        take: typeof candidate.take === "number" ? candidate.take : undefined,
-    };
-};
-
-interface ShardTrafficRequestBody {
-    table: string;
-}
-
-/**
- * Parse and validate a `POST /_cirrus/admin/shard-traffic` body. The caller
- * supplies only the `table` whose live shards the traffic fan-out runs across;
- * the worker carries no schema, so the table name is the whole request. The
- * fanned `getMetrics` op is fixed, so nothing else is accepted.
- */
-const parseShardTrafficRequest = async (request: Request): Promise<ShardTrafficRequestBody> => {
-    let body: unknown;
-
-    try {
-        const text = await readBodyTextWithLimit(request);
-
-        body = text === "" ? {} : JSON.parse(text);
-    } catch (error) {
-        if (error instanceof CirrusError) {
-            throw error;
-        }
-
-        throw new CirrusError("Shard-traffic body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
-    }
-
-    const candidate = (body ?? {}) as { table?: unknown };
-
-    if (typeof candidate.table !== "string" || candidate.table.length === 0) {
-        throw new CirrusError("Shard-traffic request is missing `table`", { code: "BAD_REQUEST", status: 400 });
-    }
-
-    return { table: candidate.table };
-};
-
 const forwardToShard = async (namespace: ShardNamespaceLike, shardKey: string, request: Request): Promise<Response> => {
     const stub = resolveShard(namespace, shardKey);
 
@@ -1290,37 +1042,6 @@ const parseExportBody = async (request: Request): Promise<ExportBody> => {
     }
 
     return { tables };
-};
-
-interface PitrRequest {
-    args: Record<string, unknown>;
-    functionPath: string;
-    /** Target shard; omitted means the default (root) shard. */
-    shardKey: string | undefined;
-}
-
-/**
- * Parse and validate a `POST /_cirrus/admin/pitr` body. `functionPath` is
- * restricted to the PITR admin ops so the endpoint can't be turned into a
- * general per-shard RPC bypass of the user-facing authorization callbacks.
- */
-const parsePitrRequest = async (request: Request): Promise<PitrRequest> => {
-    const body = await readJsonBodyWithLimit(request);
-    const candidate = body as { args?: unknown; functionPath?: unknown; shardKey?: unknown };
-
-    if (typeof candidate.functionPath !== "string" || !PITR_ADMIN_OPS.has(candidate.functionPath)) {
-        throw new CirrusError("PITR request `functionPath` must be a PITR admin op", { code: "BAD_REQUEST", status: 400 });
-    }
-
-    if (candidate.shardKey !== undefined && typeof candidate.shardKey !== "string") {
-        throw new CirrusError("PITR `shardKey` must be a string", { code: "BAD_REQUEST", status: 400 });
-    }
-
-    return {
-        args: (candidate.args ?? {}) as Record<string, unknown>,
-        functionPath: candidate.functionPath,
-        shardKey: candidate.shardKey,
-    };
 };
 
 /**
@@ -1883,195 +1604,19 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         );
     };
 
-    const handleMigrate = async (request: Request, env: unknown): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new CirrusError("Migration endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
+    // The cross-shard orchestration (`migrate` / `rank` / `rankpage` /
+    // `shard-traffic`) + single-shard `pitr` handlers live in a sibling module;
+    // they reach the admin gate, coordinator, shard namespace, and forward
+    // helpers through injected deps (mirroring the other extracted clusters).
+    const orchestrationAdminRoutes = buildOrchestrationAdminRoutes({
+        defaultShard,
+        forwardToShard,
+        isAdmin: (request) => checkAdminAuth(request, options.adminToken),
+        queryCoordinator: options.queryCoordinator,
+        resolveForwardContext: (request, env) => resolveForwardContext(request, env, options.resolveIdentity),
+        shardDO: options.shardDO,
+    });
 
-        if (!checkAdminAuth(request, options.adminToken)) {
-            throw new CirrusError("Admin auth required", { code: "FORBIDDEN", status: 403 });
-        }
-
-        if (!options.queryCoordinator) {
-            throw new CirrusError("Migration endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
-        }
-
-        const migrate = await parseMigrateRequest(request);
-
-        // Forward the inbound `Authorization` bearer so each shard's admin gate
-        // accepts the fanned-out RPC.
-        const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
-
-        const result = await options.queryCoordinator.orchestrateMigration(options.shardDO, {
-            args: migrate.args,
-            functionPath: migrate.functionPath,
-            headers: forwardedHeaders,
-            table: migrate.table,
-        });
-
-        return Response.json(result, {
-            headers: { "content-type": "application/json" },
-            status: 200,
-        });
-    };
-
-    /**
-     * `POST /_cirrus/admin/rank` — roll a cross-shard rank up across every live
-     * shard of a table. The shard-local per-table `rank()` refuses an index
-     * whose partition spans shards (it would return a per-shard slice); this is
-     * the path that produces the correct global `{position, total}` by fanning
-     * the `__cirrus_admin__:rankBefore` primitive out via the coordinator and
-     * summing `Σbefore + 1` / `Σtotal`.
-     *
-     * Admin-gated like the other orchestrators, since the per-shard `rankBefore`
-     * RPC it fans out is itself admin-gated — the inbound `Authorization` bearer
-     * is forwarded so each shard's admin gate accepts the fanned-out call. The
-     * caller passes the EXPLICIT key tuple (built off the row via `rankKeyFromDoc`).
-     */
-    const handleRank = async (request: Request, env: unknown): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new CirrusError("Rank endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        if (!checkAdminAuth(request, options.adminToken)) {
-            throw new CirrusError("Admin auth required", { code: "FORBIDDEN", status: 403 });
-        }
-
-        if (!options.queryCoordinator) {
-            throw new CirrusError("Rank endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
-        }
-
-        const rank = await parseRankRequest(request);
-
-        const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
-
-        const result = await options.queryCoordinator.orchestrateRank(options.shardDO, {
-            headers: forwardedHeaders,
-            index: rank.index,
-            partitionKey: rank.partitionKey,
-            rowId: rank.rowId,
-            sortValues: rank.sortValues,
-            table: rank.table,
-        });
-
-        return Response.json(result, {
-            headers: { "content-type": "application/json" },
-            status: 200,
-        });
-    };
-
-    /**
-     * `POST /_cirrus/admin/rankpage` — page a ranked query across every live
-     * shard of a `.shardBy(...)` table. The shard-local per-table `rankPage()`
-     * refuses an index whose partition spans shards (it would return a per-shard
-     * slice, not the global order); this is the path that produces the correct
-     * globally-ranked page by fanning `__cirrus_admin__:rankPage` out via the
-     * coordinator and k-way merging the per-shard slices by the rank-key tuple.
-     *
-     * Admin-gated like the other orchestrators, since the per-shard `rankPage`
-     * RPC it fans out is itself admin-gated — the inbound `Authorization` bearer
-     * is forwarded so each shard's admin gate accepts the fanned-out call.
-     */
-    const handleRankPage = async (request: Request, env: unknown): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new CirrusError("Rank page endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        if (!checkAdminAuth(request, options.adminToken)) {
-            throw new CirrusError("Admin auth required", { code: "FORBIDDEN", status: 403 });
-        }
-
-        if (!options.queryCoordinator) {
-            throw new CirrusError("Rank page endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
-        }
-
-        const rankPage = await parseRankPageRequest(request);
-
-        const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
-
-        const result = await options.queryCoordinator.orchestrateRankPage(options.shardDO, {
-            ...rankPage,
-            headers: forwardedHeaders,
-        });
-
-        return Response.json(result, {
-            headers: { "content-type": "application/json" },
-            status: 200,
-        });
-    };
-
-    /**
-     * `POST /_cirrus/admin/shard-traffic` — collect the per-shard request volume
-     * across every live shard of a `.shardBy(...)` table, the feed the studio's
-     * `hot_shard` advisor lint needs. A single shard's `getMetrics` snapshot
-     * can't reveal cross-shard skew, so this fans the cheap metrics read out via
-     * the coordinator and returns the whole shard set's `{ shardKey, requests }`
-     * totals.
-     *
-     * Admin-gated like the other orchestrators, since the per-shard `getMetrics`
-     * RPC it fans out is itself admin-gated — the inbound `Authorization` bearer
-     * is forwarded so each shard's admin gate accepts the fanned-out call.
-     */
-    const handleShardTraffic = async (request: Request, env: unknown): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new CirrusError("Shard-traffic endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        if (!checkAdminAuth(request, options.adminToken)) {
-            throw new CirrusError("Admin auth required", { code: "FORBIDDEN", status: 403 });
-        }
-
-        if (!options.queryCoordinator) {
-            throw new CirrusError("Shard-traffic endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
-        }
-
-        const trafficRequest = await parseShardTrafficRequest(request);
-
-        const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
-
-        const result = await options.queryCoordinator.orchestrateShardTraffic(options.shardDO, {
-            headers: forwardedHeaders,
-            table: trafficRequest.table,
-        });
-
-        return Response.json(result, {
-            headers: { "content-type": "application/json" },
-            status: 200,
-        });
-    };
-
-    /**
-     * `POST /_cirrus/admin/pitr` — drive native Durable-Object point-in-time
-     * recovery on a single shard. Admin-gated (its own bearer check), so it is
-     * NOT subject to the user-facing `authorizeShard`/`authorizeFunction`
-     * callbacks the public RPC path enforces; the forwarded `Authorization`
-     * header then satisfies the shard's own admin gate in `handleAdminRpc`.
-     * Forwards `getPitrBookmark` (read the current / for-a-time bookmark) or
-     * `pitrRestore` (`{ time | bookmark, restart? }`) to the chosen shard.
-     */
-    const handlePitr = async (request: Request, env: unknown): Promise<Response> => {
-        if (request.method !== "POST") {
-            throw new CirrusError("PITR endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
-        }
-
-        if (!checkAdminAuth(request, options.adminToken)) {
-            throw new CirrusError("admin PITR endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
-        }
-
-        const pitr = await parsePitrRequest(request);
-
-        // Forward the inbound admin bearer so the shard's `handleAdminRpc` gate
-        // accepts the `__cirrus_admin__:*` op.
-        const { headers: forwardedHeaders } = await resolveForwardContext(request, env, options.resolveIdentity);
-
-        const forwarded = new Request("https://shard.internal/rpc", {
-            body: JSON.stringify({ args: pitr.args, functionPath: pitr.functionPath }),
-            headers: forwardedHeaders,
-            method: "POST",
-        });
-
-        return forwardToShard(options.shardDO, pitr.shardKey ?? defaultShard, forwarded);
-    };
 
     /**
      * Forward a server-initiated function call (a scheduler dispatch or a firing
@@ -3356,19 +2901,16 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         [WS_PATH]: (request, env, url) => handleWebSocketUpgrade(request, env, url),
         [RPC_PATH]: (request, env) => handleRpc(request, env),
         [SCHEDULER_DISPATCH_PATH]: (request, env) => handleSchedulerDispatch(request, env),
-        [MIGRATE_PATH]: (request, env) => handleMigrate(request, env),
-        [PITR_PATH]: (request, env) => handlePitr(request, env),
         [EXPORT_PATH]: (request, env) => handleExport(request, env),
         [IMPORT_PATH]: (request, env) => handleImport(request, env),
         [SYNC_PATH]: (request, env) => handleCdcSync(request, env),
         [CONNECTOR_SYNC_PATH]: (request, env) => handleConnectorSync(request, env),
         [APPLY_PATH]: (request, env) => handleApplyCdc(request, env),
-        [RANK_PATH]: (request, env) => handleRank(request, env),
-        [RANKPAGE_PATH]: (request, env) => handleRankPage(request, env),
-        [SHARD_TRAFFIC_PATH]: (request, env) => handleShardTraffic(request, env),
         // Extracted handler clusters built above, merged in (mirroring the auth
-        // plane below): scheduled, storage, vector, and the static-introspection
-        // reads (functions / cron-jobs / openapi / openrpc / global tables).
+        // plane below): orchestration (migrate / rank / rankpage / shard-traffic /
+        // pitr), scheduled, storage, vector, and the static-introspection reads
+        // (functions / cron-jobs / openapi / openrpc / global tables).
+        ...orchestrationAdminRoutes,
         ...scheduledAdminRoutes,
         ...storageAdminRoutes,
         ...vectorAdminRoutes,

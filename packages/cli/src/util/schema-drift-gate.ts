@@ -92,6 +92,58 @@ interface SchemaDriftGateResult {
  * The returned `rebless` thunk (when present) is the ONLY baseline write — the
  * caller invokes it on success so a failed deploy never advances the baseline.
  */
+interface GateContext {
+    logger: Logger;
+    readOnly: boolean;
+    rebless: () => void;
+    snapshotPath: string;
+    updateBaseline: boolean;
+}
+
+/**
+ * Outcome for a present-but-corrupt baseline: block (so drift isn't silently
+ * skipped and the bad file isn't auto-overwritten) unless the developer opts
+ * into regenerating it from the current schema.
+ */
+const corruptBaselineResult = (context: GateContext): SchemaDriftGateResult => {
+    const reason =
+        `schema-drift gate: the committed baseline ${context.snapshotPath} is unreadable or malformed, so schema drift cannot be checked. ` +
+        `Fix it (e.g. resolve a merge conflict in cirrus/.cirrus-schema.json), or pass --update-schema-baseline to regenerate it from the current schema.`;
+
+    if (context.updateBaseline && !context.readOnly) {
+        context.logger.warn(`schema baseline was unreadable; regenerating from the current schema on success (--update-schema-baseline): ${context.snapshotPath}`);
+
+        return { blocked: false, changes: [], reason, rebless: context.rebless };
+    }
+
+    // Read-only callers (verify) own the reporting — staying silent here avoids
+    // the message being logged twice.
+    if (!context.readOnly) {
+        context.logger.error(reason);
+    }
+
+    return { blocked: true, changes: [], reason };
+};
+
+/**
+ * Outcome for a blocking decision: log it (unless read-only, where the caller
+ * reports), and honor `--update-schema-baseline` by deferring a re-bless to the
+ * success path rather than writing inline.
+ */
+const blockedDecisionResult = (decision: SchemaDriftDecision, context: GateContext): SchemaDriftGateResult => {
+    if (!context.readOnly) {
+        context.logger.error(decision.reason);
+    }
+
+    if (context.updateBaseline && !context.readOnly) {
+        context.logger.warn(`schema baseline will be re-blessed despite breaking drift on success (--update-schema-baseline): ${context.snapshotPath}`);
+
+        return { blocked: false, changes: decision.changes, reason: decision.reason, rebless: context.rebless };
+    }
+
+    return { blocked: true, changes: decision.changes, reason: decision.reason };
+};
+
 const runSchemaDriftGate = (options: {
     allowDrift: boolean;
     codegen: CodegenResult;
@@ -102,49 +154,24 @@ const runSchemaDriftGate = (options: {
     const { allowDrift, codegen, logger, readOnly = false, updateBaseline = false } = options;
     const snapshotPath = codegen.schemaSnapshotPath;
     const baseline = readBaseline(snapshotPath);
-    const rebless = (): void => writeBaseline(snapshotPath, codegen.schemaSnapshot);
+    const context: GateContext = {
+        logger,
+        readOnly,
+        rebless: () => {
+            writeBaseline(snapshotPath, codegen.schemaSnapshot);
+        },
+        snapshotPath,
+        updateBaseline,
+    };
 
-    // A present-but-corrupt baseline can't be diffed. Block (so drift isn't
-    // silently skipped and the bad file isn't auto-overwritten) unless the
-    // developer explicitly opts into regenerating it from the current schema.
     if (baseline.status === "corrupt") {
-        const reason =
-            `schema-drift gate: the committed baseline ${snapshotPath} is unreadable or malformed, so schema drift cannot be checked. ` +
-            `Fix it (e.g. resolve a merge conflict in cirrus/.cirrus-schema.json), or pass --update-schema-baseline to regenerate it from the current schema.`;
-
-        if (updateBaseline && !readOnly) {
-            logger.warn(`schema baseline was unreadable; regenerating from the current schema on success (--update-schema-baseline): ${snapshotPath}`);
-
-            return { blocked: false, changes: [], reason, rebless };
-        }
-
-        // Read-only callers (verify) own the reporting — staying silent here
-        // avoids the message being logged twice.
-        if (!readOnly) {
-            logger.error(reason);
-        }
-
-        return { blocked: true, changes: [], reason };
+        return corruptBaselineResult(context);
     }
 
     const decision = evaluateSchemaDrift({ allowDrift, baseline: baseline.status === "ok" ? baseline.snapshot : undefined, current: codegen.schemaSnapshot });
 
     if (decision.blocked) {
-        // Read-only callers (verify) surface the reason through their own
-        // error channel — don't log it here too (avoids a duplicate).
-        if (!readOnly) {
-            logger.error(decision.reason);
-        }
-
-        // An explicit `--update-schema-baseline` overrides the block by accepting
-        // the new shape — but the write still defers to the success path.
-        if (updateBaseline && !readOnly) {
-            logger.warn(`schema baseline will be re-blessed despite breaking drift on success (--update-schema-baseline): ${snapshotPath}`);
-
-            return { blocked: false, changes: decision.changes, reason: decision.reason, rebless };
-        }
-
-        return { blocked: true, changes: decision.changes, reason: decision.reason };
+        return blockedDecisionResult(decision, context);
     }
 
     // Non-blocked drift (safe / migration-accompanied / overridden): surface it
@@ -154,7 +181,7 @@ const runSchemaDriftGate = (options: {
             logger.info(decision.reason);
         }
 
-        return { blocked: false, changes: decision.changes, reason: decision.reason, rebless: readOnly ? undefined : rebless };
+        return { blocked: false, changes: decision.changes, reason: decision.reason, rebless: readOnly ? undefined : context.rebless };
     }
 
     return { blocked: false, changes: decision.changes, reason: decision.reason };
