@@ -8,9 +8,31 @@
  * below can satisfy the exact same shape without a workerd runtime.
  */
 
-/** What a handle needs from a Durable Object stub. */
+/** Options for explicitly starting an instance (mirrors `@cloudflare/containers`). */
+interface ContainerStartOptions {
+    /** Override outbound internet access for this start. */
+    enableInternet?: boolean;
+    /** Override the container entrypoint. */
+    entrypoint?: string[];
+    /** Per-instance environment, merged over the definition's `env`/secrets. */
+    envVars?: Record<string, string>;
+    /** Metadata labels attached for metrics/observability. */
+    labels?: Record<string, string>;
+}
+
+/** A container instance's runtime state, as returned by `getState()`. Structural — the platform adds fields over time. */
+interface ContainerInstanceState {
+    [key: string]: unknown;
+    lastChange?: number;
+}
+
+/** What a handle needs from a Durable Object stub — `fetch` plus the optional lifecycle RPCs the container DO exposes. */
 interface ContainerStubLike {
+    destroy?: () => Promise<void>;
     fetch: (input: Request) => Promise<Response>;
+    getState?: () => Promise<ContainerInstanceState>;
+    start?: (options?: ContainerStartOptions) => Promise<void>;
+    stop?: (signal?: number | string) => Promise<void>;
 }
 
 /** What the client needs from a Durable Object namespace binding. */
@@ -29,6 +51,24 @@ interface ContainerHandle {
     fetch: (input: Request | string, init?: RequestInit) => Promise<Response>;
 }
 
+/**
+ * A handle on a *named* instance (from `.get(name)`) — `fetch` plus explicit
+ * lifecycle control. The per-entity pattern (a sandbox per user, a room per
+ * game, a job runner per id) often needs to tear down or inspect the instance
+ * rather than wait for `sleepAfter`, so these wrap the container DO's
+ * `start`/`stop`/`destroy`/`getState`.
+ */
+interface ContainerInstanceHandle extends ContainerHandle {
+    /** Stop and discard the instance (its ephemeral disk is lost). */
+    destroy: () => Promise<void>;
+    /** Read the instance's current runtime state. */
+    getState: () => Promise<ContainerInstanceState>;
+    /** Explicitly start the instance, optionally with per-instance env/entrypoint. */
+    start: (options?: ContainerStartOptions) => Promise<void>;
+    /** Stop the instance (optionally with a signal); it can start again on the next request. */
+    stop: (signal?: number | string) => Promise<void>;
+}
+
 /** The per-definition accessor exposed as `ctx.containers.&lt;exportName>`. */
 interface ContainerAccessor {
     /**
@@ -37,8 +77,8 @@ interface ContainerAccessor {
      * `@cloudflare/containers`). For stateless, interchangeable workloads.
      */
     any: (count?: number) => ContainerHandle;
-    /** The instance for `name` — one container per entity (user, room, job…). */
-    get: (name: string) => ContainerHandle;
+    /** The instance for `name` — one container per entity (user, room, job…), with lifecycle control. */
+    get: (name: string) => ContainerInstanceHandle;
 
     /**
      * A resilient handle over the pool: each `fetch` picks a random instance and,
@@ -100,6 +140,35 @@ const toRequest = (input: Request | string, init?: RequestInit): Request => {
 const handleFor = (namespace: ContainerNamespaceLike, instanceName: string): ContainerHandle => {
     return {
         fetch: async (input, init) => namespace.get(namespace.idFromName(instanceName)).fetch(toRequest(input, init)),
+    };
+};
+
+/** Invoke an optional lifecycle RPC on a stub, with a directed error if the runtime doesn't expose it. */
+const lifecycleCall = async <Result>(
+    stub: ContainerStubLike,
+    method: "destroy" | "getState" | "start" | "stop",
+    binding: string,
+    argument?: unknown,
+): Promise<Result> => {
+    const rpc = stub[method];
+
+    if (typeof rpc !== "function") {
+        throw new TypeError(`ctx.containers: the "${binding}" container DO does not expose ${method}() — is @cirrus/container/do up to date?`);
+    }
+
+    return (rpc as (argument?: unknown) => Promise<Result>)(argument);
+};
+
+/** A named-instance handle: `fetch` plus the container DO's lifecycle RPCs. */
+const instanceHandleFor = (namespace: ContainerNamespaceLike, spec: ContainerBindingSpec, instanceName: string): ContainerInstanceHandle => {
+    const stub = (): ContainerStubLike => namespace.get(namespace.idFromName(instanceName));
+
+    return {
+        destroy: async () => lifecycleCall(stub(), "destroy", spec.binding),
+        fetch: async (input, init) => stub().fetch(toRequest(input, init)),
+        getState: async () => lifecycleCall(stub(), "getState", spec.binding),
+        start: async (options) => lifecycleCall(stub(), "start", spec.binding, options),
+        stop: async (signal) => lifecycleCall(stub(), "stop", spec.binding, signal),
     };
 };
 
@@ -166,7 +235,7 @@ const poolHandleFor = (namespace: ContainerNamespaceLike, spec: ContainerBinding
 const accessorFor = (namespace: ContainerNamespaceLike, spec: ContainerBindingSpec): ContainerAccessor => {
     return {
         any: (count) => handleFor(namespace, randomPoolName(count ?? spec.maxInstances ?? DEFAULT_POOL_SIZE)),
-        get: (name) => handleFor(namespace, name),
+        get: (name) => instanceHandleFor(namespace, spec, name),
         pool: (options) => poolHandleFor(namespace, spec, options),
     };
 };
@@ -228,9 +297,22 @@ const createContainerTestContext = (handlers: Record<string, ContainerTestHandle
             };
         };
 
+        // Lifecycle calls in the double are inert (resolve void / a stub state)
+        // so action tests that stop/destroy/inspect an instance don't blow up;
+        // the double exercises action logic, not real container behavior.
+        const testInstanceHandleFor = (instanceName: string): ContainerInstanceHandle => {
+            return {
+                ...testHandleFor(instanceName),
+                destroy: () => Promise.resolve(),
+                getState: () => Promise.resolve({ lastChange: 0 }),
+                start: () => Promise.resolve(),
+                stop: () => Promise.resolve(),
+            };
+        };
+
         containers[exportName] = {
             any: () => testHandleFor("pool-0"),
-            get: (name) => testHandleFor(name),
+            get: (name) => testInstanceHandleFor(name),
             // The double doesn't simulate failure/retry — pool() just routes to
             // the handler like any other call, so tests stay deterministic.
             pool: () => testHandleFor("pool-0"),
@@ -240,5 +322,15 @@ const createContainerTestContext = (handlers: Record<string, ContainerTestHandle
     return containers;
 };
 
-export type { ContainerAccessor, ContainerBindingSpec, ContainerHandle, ContainerNamespaceLike, ContainerTestHandler, PoolOptions };
+export type {
+    ContainerAccessor,
+    ContainerBindingSpec,
+    ContainerHandle,
+    ContainerInstanceHandle,
+    ContainerInstanceState,
+    ContainerNamespaceLike,
+    ContainerStartOptions,
+    ContainerTestHandler,
+    PoolOptions,
+};
 export { createContainerContext, createContainerTestContext };

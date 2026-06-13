@@ -112,6 +112,23 @@ const result = await ctx.containers.transcoder
 `Request`, and proxies WebSocket upgrades — a real-time stream to a container
 works the same as any other `fetch`.
 
+### Managing a named instance
+
+The `.get(name)` handle also exposes lifecycle control, for the per-entity
+pattern where you manage an instance rather than wait for `sleepAfter`:
+
+```ts
+const sandbox = ctx.containers.codeRunner.get(userId);
+
+await sandbox.start({ envVars: { SESSION: userId } }); // explicit start (optional per-instance env)
+const state = await sandbox.getState(); // inspect runtime state
+await sandbox.stop(); // stop (can restart on next request)
+await sandbox.destroy(); // tear down and discard the ephemeral disk
+```
+
+`.any()` and `.pool()` return fetch-only handles — lifecycle control is for
+named instances you own.
+
 > Cloudflare has no built-in autoscaling yet: pools are a fixed size and
 > `.any()`/`.pool()` pick uniformly, ignoring location. `.pool()` is the
 > recommended call for stateless work until then; for batch work, drive

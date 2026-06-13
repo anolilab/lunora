@@ -89,6 +89,73 @@ describe(createContainerContext, () => {
     });
 });
 
+describe("ctx.containers.<name>.get() lifecycle controls", () => {
+    /** A namespace whose stub records lifecycle calls + their args. */
+    const lifecycleNamespace = (): { calls: { arg: unknown; method: string }[]; namespace: ContainerNamespaceLike } => {
+        const calls: { arg: unknown; method: string }[] = [];
+        const recordVoid = (method: string) => async (arg?: unknown): Promise<void> => {
+            calls.push({ arg, method });
+        };
+
+        return {
+            calls,
+            namespace: {
+                get: () => {
+                    return {
+                        destroy: recordVoid("destroy"),
+                        fetch: async () => new Response("ok"),
+                        getState: async () => {
+                            calls.push({ arg: undefined, method: "getState" });
+
+                            return { lastChange: 7, running: true };
+                        },
+                        start: recordVoid("start"),
+                        stop: recordVoid("stop"),
+                    };
+                },
+                idFromName: (name: string) => name,
+            },
+        };
+    };
+
+    it("forwards start/stop/destroy/getState to the named instance's DO", async () => {
+        expect.assertions(5);
+
+        const { calls, namespace } = lifecycleNamespace();
+        const handle = createContainerContext({ CONTAINER_TRANSCODER: namespace }, [
+            { binding: "CONTAINER_TRANSCODER", exportName: "transcoder" },
+        ]).transcoder!.get("video-1");
+
+        await handle.start({ envVars: { LEVEL: "debug" } });
+        await handle.stop("SIGTERM");
+        await handle.destroy();
+        const state = await handle.getState();
+
+        expect(calls.map((call) => call.method)).toStrictEqual(["start", "stop", "destroy", "getState"]);
+        expect(calls[0]!.arg).toStrictEqual({ envVars: { LEVEL: "debug" } });
+        expect(calls[1]!.arg).toBe("SIGTERM");
+        expect(calls[2]!.arg).toBeUndefined();
+        expect(state).toStrictEqual({ lastChange: 7, running: true });
+    });
+
+    it("throws a directed error when the runtime stub lacks a lifecycle method", async () => {
+        expect.assertions(1);
+
+        // A fetch-only stub (older @cirrus/container/do) → stop() is unavailable.
+        const namespace: ContainerNamespaceLike = {
+            get: () => {
+                return { fetch: async () => new Response("ok") };
+            },
+            idFromName: (name) => name,
+        };
+        const handle = createContainerContext({ CONTAINER_TRANSCODER: namespace }, [
+            { binding: "CONTAINER_TRANSCODER", exportName: "transcoder" },
+        ]).transcoder!.get("a");
+
+        await expect(handle.stop()).rejects.toThrow("does not expose stop()");
+    });
+});
+
 /** A namespace whose every `fetch` runs the next scripted step (response or throw). */
 const scriptedNamespace = (steps: ReadonlyArray<() => Promise<Response>>): { calls: number; namespace: ContainerNamespaceLike } => {
     const state = { calls: 0 };

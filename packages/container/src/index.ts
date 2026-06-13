@@ -8,7 +8,17 @@
  * (which pulls in `@cloudflare/containers` → `cloudflare:workers`) lives
  * behind the `@cirrus/container/do` subpath.
  */
-export type { ContainerAccessor, ContainerBindingSpec, ContainerHandle, ContainerNamespaceLike, ContainerTestHandler, PoolOptions } from "./client";
+export type {
+    ContainerAccessor,
+    ContainerBindingSpec,
+    ContainerHandle,
+    ContainerInstanceHandle,
+    ContainerInstanceState,
+    ContainerNamespaceLike,
+    ContainerStartOptions,
+    ContainerTestHandler,
+    PoolOptions,
+} from "./client";
 export { createContainerContext, createContainerTestContext } from "./client";
 export {
     containerBindingName,
