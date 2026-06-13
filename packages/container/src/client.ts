@@ -39,6 +39,33 @@ interface ContainerAccessor {
     any: (count?: number) => ContainerHandle;
     /** The instance for `name` — one container per entity (user, room, job…). */
     get: (name: string) => ContainerHandle;
+
+    /**
+     * A resilient handle over the pool: each `fetch` picks a random instance and,
+     * on a thrown error or a retryable response (5xx by default), retries on a
+     * freshly-picked instance with exponential backoff. Until Cloudflare ships
+     * native autoscaling + health-aware routing this is the recommended way to
+     * call a stateless container pool — it rides over a single cold/unhealthy
+     * instance instead of failing the whole request.
+     */
+    pool: (options?: PoolOptions) => ContainerHandle;
+}
+
+/** Tuning for a pooled, retrying container handle. See {@link ContainerAccessor.pool}. */
+interface PoolOptions {
+    /** Total attempts before giving up (each on a freshly-picked instance). Default 3. */
+    attempts?: number;
+    /** Base backoff in ms between attempts; doubles each retry (0 disables the wait). Default 100. */
+    backoffMs?: number;
+
+    /**
+     * Whether a *returned* response should be retried on another instance.
+     * Defaults to retrying any `5xx`. A thrown error (network/start failure) is
+     * always retried regardless of this predicate.
+     */
+    retryOn?: (response: Response) => boolean;
+    /** Pool size to spread picks across. Defaults to the definition's `maxInstances`, else 3. */
+    size?: number;
 }
 
 /** Wiring info for one definition, emitted by codegen into the generated DO. */
@@ -71,15 +98,71 @@ const handleFor = (namespace: ContainerNamespaceLike, instanceName: string): Con
     };
 };
 
+/** A random pool-instance name in `[0, size)`. */
+const randomPoolName = (size: number): string =>
+    // eslint-disable-next-line sonarjs/pseudo-random -- load-balancing pick across interchangeable instances, not a security decision
+    `pool-${String(Math.floor(Math.random() * size))}`;
+
+const sleep = async (ms: number): Promise<void> => {
+    if (ms <= 0) {
+        return;
+    }
+
+    await new Promise((resolve) => {
+        setTimeout(resolve, ms);
+    });
+};
+
+/** Default retry predicate: a server error (5xx) is worth another instance. */
+const retryOnServerError = (response: Response): boolean => response.status >= 500;
+
+/**
+ * A pooled handle: each fetch picks a random instance, and on a thrown error or
+ * a retryable response retries on a freshly-picked instance with exponential
+ * backoff. Pure over the namespace, so it's testable with a fake. The final
+ * attempt's outcome (response or thrown error) is returned/propagated as-is.
+ */
+const poolHandleFor = (namespace: ContainerNamespaceLike, spec: ContainerBindingSpec, options: PoolOptions = {}): ContainerHandle => {
+    const size = options.size ?? spec.maxInstances ?? DEFAULT_POOL_SIZE;
+    const attempts = Math.max(1, options.attempts ?? 3);
+    const baseBackoff = options.backoffMs ?? 100;
+    const shouldRetry = options.retryOn ?? retryOnServerError;
+
+    return {
+        fetch: async (input, init) => {
+            let lastError: unknown;
+
+            for (let attempt = 0; attempt < attempts; attempt += 1) {
+                if (attempt > 0) {
+                    // eslint-disable-next-line no-await-in-loop -- sequential retry with backoff between attempts
+                    await sleep(baseBackoff * 2 ** (attempt - 1));
+                }
+
+                const request = toRequest(input, init);
+
+                try {
+                    // eslint-disable-next-line no-await-in-loop -- attempts are inherently sequential
+                    const response = await namespace.get(namespace.idFromName(randomPoolName(size))).fetch(request);
+
+                    if (attempt === attempts - 1 || !shouldRetry(response)) {
+                        return response;
+                    }
+                } catch (error: unknown) {
+                    lastError = error;
+                }
+            }
+
+            // Exhausted attempts after a thrown error on the last try.
+            throw lastError instanceof Error ? lastError : new Error(`ctx.containers.${spec.exportName}.pool(): all ${String(attempts)} attempts failed`);
+        },
+    };
+};
+
 const accessorFor = (namespace: ContainerNamespaceLike, spec: ContainerBindingSpec): ContainerAccessor => {
     return {
-        any: (count) => {
-            const poolSize = count ?? spec.maxInstances ?? DEFAULT_POOL_SIZE;
-
-            // eslint-disable-next-line sonarjs/pseudo-random -- load-balancing pick across interchangeable instances, not a security decision
-            return handleFor(namespace, `pool-${String(Math.floor(Math.random() * poolSize))}`);
-        },
+        any: (count) => handleFor(namespace, randomPoolName(count ?? spec.maxInstances ?? DEFAULT_POOL_SIZE)),
         get: (name) => handleFor(namespace, name),
+        pool: (options) => poolHandleFor(namespace, spec, options),
     };
 };
 
@@ -91,7 +174,7 @@ const missingBindingAccessor = (spec: ContainerBindingSpec): ContainerAccessor =
         );
     };
 
-    return { any: fail, get: fail };
+    return { any: fail, get: fail, pool: fail };
 };
 
 /**
@@ -143,11 +226,14 @@ const createContainerTestContext = (handlers: Record<string, ContainerTestHandle
         containers[exportName] = {
             any: () => testHandleFor("pool-0"),
             get: (name) => testHandleFor(name),
+            // The double doesn't simulate failure/retry — pool() just routes to
+            // the handler like any other call, so tests stay deterministic.
+            pool: () => testHandleFor("pool-0"),
         };
     }
 
     return containers;
 };
 
-export type { ContainerAccessor, ContainerBindingSpec, ContainerHandle, ContainerNamespaceLike, ContainerTestHandler };
+export type { ContainerAccessor, ContainerBindingSpec, ContainerHandle, ContainerNamespaceLike, ContainerTestHandler, PoolOptions };
 export { createContainerContext, createContainerTestContext };

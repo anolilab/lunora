@@ -89,6 +89,118 @@ describe(createContainerContext, () => {
     });
 });
 
+/** A namespace whose every `fetch` runs the next scripted step (response or throw). */
+const scriptedNamespace = (steps: ReadonlyArray<() => Promise<Response>>): { calls: number; namespace: ContainerNamespaceLike } => {
+    const state = { calls: 0 };
+
+    return {
+        get calls() {
+            return state.calls;
+        },
+        namespace: {
+            get: () => {
+                return {
+                    fetch: async () => {
+                        const step = steps[Math.min(state.calls, steps.length - 1)]!;
+
+                        state.calls += 1;
+
+                        return step();
+                    },
+                };
+            },
+            idFromName: (name: string) => name,
+        },
+    };
+};
+
+describe("ctx.containers.<name>.pool()", () => {
+    const ok = async (): Promise<Response> => new Response("ok");
+    const serverError = async (): Promise<Response> => new Response("boom", { status: 503 });
+    const thrown = (): Promise<Response> => Promise.reject(new Error("container start failed"));
+
+    it("returns the first healthy response without retrying", async () => {
+        expect.assertions(2);
+
+        const scripted = scriptedNamespace([ok]);
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: scripted.namespace }, [
+            { binding: "CONTAINER_TRANSCODER", exportName: "transcoder" },
+        ]);
+
+        const response = await containers.transcoder!.pool({ backoffMs: 0 }).fetch("/probe");
+
+        await expect(response.text()).resolves.toBe("ok");
+        expect(scripted.calls).toBe(1);
+    });
+
+    it("retries a 5xx on another instance and returns the eventual success", async () => {
+        expect.assertions(2);
+
+        const scripted = scriptedNamespace([serverError, serverError, ok]);
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: scripted.namespace }, [
+            { binding: "CONTAINER_TRANSCODER", exportName: "transcoder" },
+        ]);
+
+        const response = await containers.transcoder!.pool({ attempts: 3, backoffMs: 0 }).fetch("/probe");
+
+        await expect(response.text()).resolves.toBe("ok");
+        expect(scripted.calls).toBe(3);
+    });
+
+    it("retries a thrown error and recovers", async () => {
+        expect.assertions(2);
+
+        const scripted = scriptedNamespace([thrown, ok]);
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: scripted.namespace }, [
+            { binding: "CONTAINER_TRANSCODER", exportName: "transcoder" },
+        ]);
+
+        const response = await containers.transcoder!.pool({ attempts: 2, backoffMs: 0 }).fetch("/probe");
+
+        await expect(response.text()).resolves.toBe("ok");
+        expect(scripted.calls).toBe(2);
+    });
+
+    it("returns the last 5xx response when attempts are exhausted", async () => {
+        expect.assertions(2);
+
+        const scripted = scriptedNamespace([serverError]);
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: scripted.namespace }, [
+            { binding: "CONTAINER_TRANSCODER", exportName: "transcoder" },
+        ]);
+
+        const response = await containers.transcoder!.pool({ attempts: 2, backoffMs: 0 }).fetch("/probe");
+
+        expect(response.status).toBe(503);
+        expect(scripted.calls).toBe(2);
+    });
+
+    it("propagates the error when every attempt throws", async () => {
+        expect.assertions(1);
+
+        const scripted = scriptedNamespace([thrown]);
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: scripted.namespace }, [
+            { binding: "CONTAINER_TRANSCODER", exportName: "transcoder" },
+        ]);
+
+        await expect(containers.transcoder!.pool({ attempts: 2, backoffMs: 0 }).fetch("/probe")).rejects.toThrow("container start failed");
+    });
+
+    it("honors a custom retryOn predicate", async () => {
+        expect.assertions(2);
+
+        const scripted = scriptedNamespace([async () => new Response("rate limited", { status: 429 }), ok]);
+        const containers = createContainerContext({ CONTAINER_TRANSCODER: scripted.namespace }, [
+            { binding: "CONTAINER_TRANSCODER", exportName: "transcoder" },
+        ]);
+
+        const response = await containers.transcoder!.pool({ attempts: 2, backoffMs: 0, retryOn: (r) => r.status === 429 }).fetch("/probe");
+
+        await expect(response.text()).resolves.toBe("ok");
+        expect(scripted.calls).toBe(2);
+    });
+});
+
 describe(createContainerTestContext, () => {
     it("plays the container via the provided handler", async () => {
         expect.assertions(3);
