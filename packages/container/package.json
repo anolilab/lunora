@@ -38,6 +38,10 @@
             "types": "./dist/do/index.d.ts",
             "import": "./dist/do/index.mjs"
         },
+        "./bridge": {
+            "types": "./dist/bridge.d.ts",
+            "import": "./dist/bridge.mjs"
+        },
         "./package.json": "./package.json"
     },
     "files": [

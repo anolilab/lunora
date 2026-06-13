@@ -38,7 +38,23 @@ export const transcode = action({
 
 The config layer (`cirrus dev` / `cirrus deploy`) reconciles the wrangler `containers[]` entry, the `CONTAINER_*` Durable Object binding, and the SQLite-class migration automatically; `wrangler deploy` builds the Dockerfile with local Docker and pushes it to the Cloudflare Registry.
 
+## Calling Cirrus from inside a container
+
+Container code calls back into your app's functions with the bridge client (any JS runtime), over the Worker's HTTP RPC endpoint:
+
+```ts
+import { createContainerBridge } from "@cirrus/container/bridge";
+
+const cirrus = createContainerBridge({ baseUrl: process.env.CIRRUS_URL!, token: process.env.CIRRUS_TOKEN });
+
+const pending = await cirrus.query("jobs:listPending", { limit: 10 });
+await cirrus.mutation("jobs:markDone", { id: pending[0].id });
+```
+
+The token is a bearer your Worker's `resolveIdentity` recognizes — pass it to the container as a `secret`. Non-JS containers can `POST /_cirrus/rpc` with `{ functionPath, args }` directly.
+
 ## Entry points
 
 - `@cirrus/container` — Node-safe: `defineContainer`, naming/normalization helpers, `createContainerContext`, and the Docker-free `createContainerTestContext` test double.
 - `@cirrus/container/do` — workerd-only: the `CirrusContainer` base class the generated DO classes extend (pulls in `@cloudflare/containers`).
+- `@cirrus/container/bridge` — runtime-agnostic: `createContainerBridge` for calling Cirrus functions from inside a container.
