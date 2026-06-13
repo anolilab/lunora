@@ -1232,6 +1232,10 @@ const emitShard = (
     const importLines = [
         `import type { ${doTypeImports.join(", ")} } from "@cirrus/do";`,
         `import { applyCdcChanges, createShardCtxDb, runDataMigration, runShardMigrations, ${relationFanout.importFragment}ShardDO as ShardDOBase } from "@cirrus/do";`,
+        // `asBucketStorage` (the bucket-aware `ctx.storage` wrapper) lives in
+        // `@cirrus/server`, the single source — imported here rather than stamped
+        // inline into every generated shard.
+        `import { asBucketStorage } from "@cirrus/server";`,
     ];
 
     // The per-table facade binding lives in `@cirrus/server` so codegen and the
@@ -1497,25 +1501,6 @@ const storageStub = {
     upload: async () => {
         throw new Error("ctx.storage: no storage configured. Pass \`storage\` to createShardDO().");
     },
-};
-
-// Make any \`config.storage\` result bucket-aware so \`ctx.storage.bucket(name)\`
-// always resolves. A \`createBucketStorage(...)\` result already carries
-// \`.bucket\`/\`.bucketName\` and is returned as-is; a single \`createStorage(...)\`
-// (or the stub) is tagged as the \`"default"\` bucket, where \`.bucket(name)\` is the
-// identity (single-bucket apps address one binding under every name).
-const asBucketStorage = (raw: unknown): unknown => {
-    const candidate = (raw ?? {}) as { bucket?: unknown };
-
-    if (typeof candidate.bucket === "function") {
-        return candidate;
-    }
-
-    const self: Record<string, unknown> = { ...(candidate as Record<string, unknown>), bucketName: "default" };
-
-    self.bucket = () => self;
-
-    return self;
 };
 ${globalDatabaseStub}${vectorsStub}${aiStub}${bindTableHelper}
 // Bound in-process \`ctx.run*\` composition depth so a self- or cyclically-

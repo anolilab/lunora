@@ -1,3 +1,4 @@
+export { default as asBucketStorage } from "./as-bucket-storage";
 export type {
     ActionBuilder,
     CirrusBuilders,
