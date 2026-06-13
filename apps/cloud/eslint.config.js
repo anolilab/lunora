@@ -26,7 +26,10 @@ export default createConfig(
     // eslint-plugin-n's Node-version data flags them conservatively.
     {
         rules: {
-            "n/no-unsupported-features/node-builtins": ["error", { ignores: ["crypto", "CryptoKey", "SubtleCrypto", "TextEncoder", "Request", "Response"] }],
+            "n/no-unsupported-features/node-builtins": [
+                "error",
+                { ignores: ["crypto", "CryptoKey", "SubtleCrypto", "TextEncoder", "Request", "Response", "ReadableStream"] },
+            ],
             // `_id` / `_creationTime` are the public document fields; `__cirrus*` are
             // internal markers. Accidental dangles are still flagged.
             "no-underscore-dangle": [

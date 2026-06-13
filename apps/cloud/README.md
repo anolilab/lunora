@@ -16,31 +16,63 @@ Cloudflare Workers for Platforms; it is **not** a tenant worker.
 cirrus/
   schema.ts          control-plane data model (cells, organizations, members,
                      projects, deployments, deployKeys, auditLog)
+  authz.ts           assertMember (session) + authorizeDeployKey (CI) — the ACL gate
   cells.ts           list / register cells (CF accounts, §2.5)
-  organizations.ts   create / list / getBySlug  (+ seeds owner member)
+  organizations.ts   create / list / getBySlug  (+ seeds owner member + audit)
+  members.ts         list / add / remove (owner-admin gated)
   projects.ts        create / listByOrg
   deployments.ts     create (queued) / listByProject / updateStatus
+  deploy-keys.ts     issue / list / revoke / verify (SHA-256 hashed)
 src/
-  server.ts          control-plane Worker entry (D1-backed global tables)
+  server.ts          control-plane Worker entry (D1 global tables + deploy router)
   provision.ts       @cirrus/provision seam — the ONLY coupling to Alchemy v2
+  deploy/
+    token-bucket.ts  per-cell API budget (CF 1,200/5min, §2.5)
+    scheduler.ts     CellScheduler — paces provisioner work, priority + concurrency
+    orchestrator.ts  runDeployment state machine (queued→provisioning→live/failed)
+    keys.ts          deploy-key format / parse / hash helpers
+    handler.ts       POST /v1/deploy handler (auth → orchestrate → stream NDJSON)
+    router.ts        httpRouter mount wiring the handler to the control-plane mutations
 ```
 
 ### Topology (provisional — a real decision flagged in the plan)
 
-- `cells`, `organizations` are `.global()` (D1-backed): fleet-wide, low volume,
-  cross-org admin reads. They live in the control-plane D1 bound as `DB`.
-- `members`, `projects`, `deployments`, `deployKeys`, `auditLog` are
-  `.shardBy("organizationId")` — each org's control-plane state in its own
-  shard, so "everything in org X" reads stay shard-local.
+All control-plane tables are `.global()` (D1-backed): the plan's "Worker + D1"
+control plane, with relational, cross-queried, low-volume metadata. Reads use the
+per-table `findMany({ where })` facade. (Per-tenant _sharding_ in the plan refers
+to the tenant apps' own ShardDOs, not the control plane's own bookkeeping.)
+
+### Authorization (`cirrus/authz.ts`)
+
+Two paths gate every org-scoped function:
+
+- **User session** → `assertMember(ctx, orgId, roles?)` — dashboard callers must
+  be members; closes the IDOR hole where any signed-in user could touch any org.
+- **Deploy key** → `authorizeDeployKey(ctx, orgId, key, projectId?)` — CI/deploy
+  callers have no session; a valid, unrevoked, org-matching key is the credential.
+
+### The deploy API (`POST /v1/deploy`)
+
+Mounted as the worker's `httpRouter` (lowest-priority matcher). Flow: read the
+`Authorization: Bearer <deployKey>`, `deploy_keys:verify` it, `deployments:create`
+a queued record, then drive `runDeployment` while streaming **NDJSON progress**
+(`accepted` → `queued` → `provisioning` → `live`/`failed` → `done`), patching
+status via `deployments:updateStatus` per phase. All Cloudflare work is paced by
+the per-cell `CellScheduler`. The route reaches these mutations through the Cirrus
+action context (`env.__cirrusCtx.runMutation`); they stay **public** (not
+`internalMutation`) because that dispatch carries no system flag — an internal
+function would 404 at the RPC visibility gate — so authorization is enforced
+inside each mutation (deploy key or membership).
 
 ### The provisioning seam (`src/provision.ts`)
 
 Per `CLOUD-PLAN.md` §2.2, the control plane's only coupling to the provisioning
 engine (Alchemy v2 / `alchemy@next`, Effect-based) lives behind the `Provisioner`
-interface. It is currently a **stub that rejects loudly** — wiring it over
-`alchemy@next` (and confirming v2 exposes the `DispatchNamespace` resource + a
-control-plane-D1-backed state store) is the first Phase 1 spike deliverable
-(risk #7).
+interface. It is currently a **stub that rejects loudly** — so a deploy today runs
+the full pipeline and terminates at `failed` with a clear "not wired" message.
+Wiring it over `alchemy@next` (and confirming v2 exposes the `DispatchNamespace`
+resource + a control-plane-D1-backed state store) is the first Phase 1 spike
+deliverable (risk #7).
 
 ## Develop
 
