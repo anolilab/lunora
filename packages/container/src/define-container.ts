@@ -11,6 +11,14 @@ const NAMED_INSTANCE_TYPES = new Set(["basic", "lite", "standard-1", "standard-2
 
 const ENV_NAME_PATTERN = /^[A-Z_]\w*$/i;
 
+/**
+ * The string grammar `@cloudflare/containers`' `parseTimeExpression` accepts for
+ * `sleepAfter`: a run of digits followed by a single `s`/`m`/`h` unit (e.g.
+ * `"30s"`, `"5m"`, `"1h"`). Kept in lockstep with that parser's
+ * `/^(\d+)([smh])$/`.
+ */
+const SLEEP_AFTER_PATTERN = /^\d+[smh]$/;
+
 /** Last path segment of a `/`-separated path (input is posix-style config). */
 const basename = (path: string): string => {
     const trimmed = path.endsWith("/") ? path.slice(0, -1) : path;
@@ -131,6 +139,38 @@ const assertValidImage = (image: ContainerConfig["image"]): void => {
     }
 };
 
+/**
+ * Validate `env`/`buildArgs`/`secrets` naming and reject a name declared in both
+ * `env` and `secrets` (where the secret would silently overwrite the static env
+ * value at start). All three name sets must be valid env-var names; the
+ * collision is rejected at authoring time so the runtime resolver never has to.
+ */
+const assertValidEnvAndSecrets = (config: ContainerConfig): void => {
+    for (const name of Object.keys(config.env ?? {})) {
+        if (!ENV_NAME_PATTERN.test(name)) {
+            throw new TypeError(`defineContainer: env variable name "${name}" is not a valid environment variable name`);
+        }
+    }
+
+    for (const name of Object.keys(config.buildArgs ?? {})) {
+        if (!ENV_NAME_PATTERN.test(name)) {
+            throw new TypeError(`defineContainer: buildArg name "${name}" is not a valid environment variable name`);
+        }
+    }
+
+    const envNames = new Set(Object.keys(config.env ?? {}));
+
+    for (const secret of config.secrets ?? []) {
+        if (!ENV_NAME_PATTERN.test(secret)) {
+            throw new TypeError(`defineContainer: secret name "${secret}" is not a valid environment variable name`);
+        }
+
+        if (envNames.has(secret)) {
+            throw new TypeError(`defineContainer: "${secret}" is declared in both \`env\` and \`secrets\` — a secret would silently overwrite the static env value; pick one`);
+        }
+    }
+};
+
 const defineContainer = (config: ContainerConfig): ContainerDefinition => {
     assertValidImage(config.image);
 
@@ -154,11 +194,11 @@ const defineContainer = (config: ContainerConfig): ContainerDefinition => {
         );
     }
 
-    for (const secret of config.secrets ?? []) {
-        if (!ENV_NAME_PATTERN.test(secret)) {
-            throw new TypeError(`defineContainer: secret name "${secret}" is not a valid environment variable name`);
-        }
+    if (typeof config.sleepAfter === "string" && !SLEEP_AFTER_PATTERN.test(config.sleepAfter)) {
+        throw new TypeError(`defineContainer: \`sleepAfter\` string "${config.sleepAfter}" must be a number of seconds followed by a unit, e.g. "30s", "5m", or "1h"`);
     }
+
+    assertValidEnvAndSecrets(config);
 
     return { ...config, isCirrusContainer: true };
 };

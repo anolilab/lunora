@@ -69,6 +69,30 @@ describe(defineContainer, () => {
         expect(() => defineContainer({ image: "./app", secrets: ["NOT-VALID"] })).toThrow("not a valid environment variable name");
     });
 
+    it("rejects an invalid env variable name", () => {
+        expect.assertions(1);
+
+        expect(() => defineContainer({ env: { "BAD-NAME": "x" }, image: "./app" })).toThrow("env variable name");
+    });
+
+    it("rejects an invalid buildArg name", () => {
+        expect.assertions(1);
+
+        expect(() => defineContainer({ buildArgs: { "9bad": "x" }, image: "./app" })).toThrow("buildArg name");
+    });
+
+    it("rejects a name declared in both env and secrets", () => {
+        expect.assertions(1);
+
+        expect(() => defineContainer({ env: { API_KEY: "fallback" }, image: "./app", secrets: ["API_KEY"] })).toThrow("both `env` and `secrets`");
+    });
+
+    it("rejects an invalid sleepAfter string", () => {
+        expect.assertions(1);
+
+        expect(() => defineContainer({ image: "./app", sleepAfter: "5 minutes" })).toThrow("`sleepAfter`");
+    });
+
     it("accepts a Railpack { build } image source", () => {
         expect.assertions(1);
 
