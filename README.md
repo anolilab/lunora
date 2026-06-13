@@ -7,7 +7,7 @@
 [![License: FSL-1.1-Apache-2.0](https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg)](./LICENSE.md)
 [![Status: alpha](https://img.shields.io/badge/status-v0.1--alpha-blueviolet.svg)](#status)
 [![Node](https://img.shields.io/badge/node-%5E22.14%20%7C%7C%20%3E%3D24.10-brightgreen.svg)](./.nvmrc)
-[![pnpm](https://img.shields.io/badge/pnpm-10.32.1-f69220.svg)](./package.json)
+[![pnpm](https://img.shields.io/badge/pnpm-11.5.3-f69220.svg)](./package.json)
 [![CI](https://github.com/anolilab/cirrus/actions/workflows/test.yml/badge.svg?branch=alpha)](https://github.com/anolilab/cirrus/actions/workflows/test.yml)
 [![@cirrus/cli](https://img.shields.io/npm/v/@cirrus/cli?label=%40cirrus%2Fcli)](https://www.npmjs.com/package/@cirrus/cli)
 

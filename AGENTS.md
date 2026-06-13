@@ -6,7 +6,7 @@ This file provides guidance to AI coding agents when working with code in this r
 
 Cirrus is a pnpm monorepo for the Cirrus framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX. Packages live under `packages/<name>/`. Apps (examples, docs site, studio) live under `apps/<name>/`.
 
-**Package manager**: pnpm v10.32.1 (enforced). **Monorepo orchestration**: @visulima/vis. **Node**: ^22.14.0 || >=24.10.0.
+**Package manager**: pnpm v11.5.3 (enforced via `packageManager`). **Monorepo orchestration**: @visulima/vis. **Node**: ^22.14.0 || >=24.10.0.
 
 ## Build & Test Commands
 
@@ -80,6 +80,10 @@ The CLI binary is `cirrus`. The npm scope is `@cirrus/*`. The "main" server pack
 | `@cirrus/codegen`   | Emits `_generated/{api,server,dataModel}.ts` from `schema.ts`.                                                                                                                                                                                                                                                                                    |
 | `@cirrus/client`    | Browser SDK: WebSocket, optimistic updates, offline queue.                                                                                                                                                                                                                                                                                        |
 | `@cirrus/react`     | `useQuery` / `useMutation` / `useSubscription` / `useAuth`.                                                                                                                                                                                                                                                                                       |
+| `@cirrus/vue`       | Vue adapter: live composables (`useQuery` / `useMutation`), optimistic mutations, reactive loaders.                                                                                                                                                                                                                                               |
+| `@cirrus/solid`     | SolidJS adapter: live queries, optimistic mutations, reactive loaders.                                                                                                                                                                                                                                                                            |
+| `@cirrus/svelte`    | Svelte adapter: live stores, optimistic mutations, reactive loaders.                                                                                                                                                                                                                                                                              |
+| `@cirrus/astro`     | Astro integration: single-worker composition plus reactive-loader server helpers.                                                                                                                                                                                                                                                                 |
 | `@cirrus/db`        | TanStack DB binding: `defineCollections` wires Cirrus queries/mutations into live, indexed client collections + a durable offline-transactions outbox (optimistic, retried, client-id-keyed). Peer-deps `@tanstack/db` + `@tanstack/offline-transactions`. Scaffolded by `vis generate cirrus-collections`.                                       |
 | `@cirrus/vite`      | Vite plugin over `@cloudflare/vite-plugin` — codegen, wrangler validator, error overlay.                                                                                                                                                                                                                                                          |
 | `@cirrus/cli`       | CLI subcommands: `init`, `dev`, `deploy`, `codegen`, `run`, `reset`, `migrate`.                                                                                                                                                                                                                                                                   |
@@ -90,6 +94,11 @@ The CLI binary is `cirrus`. The npm scope is `@cirrus/*`. The "main" server pack
 | `@cirrus/ai`        | Workers AI helper on Vercel AI SDK v6 + `workers-ai-provider`: `createAi({ binding: env.AI })` → `ctx.ai` (codegen-wired on ActionCtx when used); `model()`/`embeddingModel()` take a Workers AI id or any AI SDK model (provider-agnostic); re-exports `generateText`/`streamText`/`embed`/`tool`; raw `run()` escape hatch.                     |
 | `@cirrus/advisor`   | Schema & query lints (splinter-style advisors) feeding the studio Advisors table — 8 static rules over `defineSchema` + discovered query reads & insert writes (unindexed-FK, duplicate/empty index, unknown index/relation field/table, filter-without-index, table-without-insert) + planned runtime rules over scan attribution.               |
 | `@cirrus/config`    | **Internal.** Shared CLI+Vite config/scaffolding layer: `wrangler.jsonc` validator + binding inference/reconciliation, the `.dev.vars` grammar + auto-scaffolder, and the interactive prompt helper. Used by `@cirrus/cli` and `@cirrus/vite`. Published for transparency; consumers depend on the CLI or Vite plugin and let those call into it. |
+| `@cirrus/studio`    | The Cirrus Studio: a local admin UI for your schema, data, logs, and advisors. Embedded by the CLI/Vite via `@cirrus/config`'s studio-host.                                                                                                                                                                                                       |
+| `@cirrus/mcp`       | Model Context Protocol server exposing a Cirrus deployment to AI agents (list functions/tables, run query/mutation/action).                                                                                                                                                                                                                       |
+| `@cirrus/ratelimit` | Rate limiting: token-bucket / fixed-window / sliding-window algorithms, deny list, sharding, pluggable stores, and procedure middleware.                                                                                                                                                                                                          |
+| `@cirrus/vectors`   | Cloudflare Vectorize adapter: typed vector indexes and similarity search.                                                                                                                                                                                                                                                                         |
+| `@cirrus/testing`   | Testing toolkit: an in-memory harness for queries/mutations/actions (`cirrusTest`) plus E2E mail-catcher helpers re-exported from `@cirrus/mail/testing`.                                                                                                                                                                                         |
 
 ### Layout
 
@@ -130,12 +139,12 @@ Shared dependency versions are managed via pnpm catalogs in `pnpm-workspace.yaml
 
 ### Pre-commit Hooks
 
-Husky drives two `@visulima/vis` commands on commit (configured in `vis.config.ts`):
+Git hooks are **vis-native** (no husky). The committed hook scripts live in `.vis/hooks/` and run via a generated dispatcher at `.vis/hooks/_/` (gitignored). The root `prepare` script (`vis hook install`) wires `core.hooksPath` at it on every `pnpm install`, so the hooks fire after a fresh clone. The pre-commit stage runs two `@visulima/vis` commands (configured in `vis.config.ts`):
 
 - `vis secrets --staged` — gitleaks-compatible scan over staged files; excludes from `secrets.walk.excludePatterns`.
 - `vis staged` — runs the per-glob commands declared in the top-level `staged` block (Prettier + ESLint on code, Prettier on Markdown).
 
-Hook chain (`.husky/pre-commit`) uses `set -e`, so a secret detection aborts before staged-file linting runs.
+The pre-commit script uses `set -e`, so a secret detection aborts before staged-file linting runs. If hooks aren't firing, run `pnpm exec vis hook install` (or `vis hook validate` to diagnose).
 
 ### Release
 

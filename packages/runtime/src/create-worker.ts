@@ -4,6 +4,8 @@ import { MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJson
 import { buildDataMovementAdminRoutes } from "./data-movement-admin-routes";
 import type { FunctionArgumentDescriptor } from "./describe-args";
 import { CirrusError, isStructuralCirrusError, isStructuralConflictError, toErrorResponse } from "./errors";
+import type { ExportRow } from "./export-stream";
+import { collectKnownTables, streamExportRows } from "./export-stream";
 import { streamingImport } from "./import-stream";
 import { buildIntrospectionAdminRoutes } from "./introspection-admin-routes";
 import type { ObservabilityEvent, ObservabilitySink } from "./observability";
@@ -1000,16 +1002,6 @@ const forwardToShard = async (namespace: ShardNamespaceLike, shardKey: string, r
 };
 
 /**
- * Best-effort enumeration of known tables for the auto-export path. The
- * runtime doesn't carry the schema, so we ask the resolver for a sentinel set
- * by probing common conventions; in practice the codegen-generated worker
- * wraps `resolveTableSharding` with `Object.keys(schema.tables)` and returns
- * via a side channel. For now this falls through to an empty list — the CLI
- * always passes explicit `--tables` so this path is mainly defensive.
- */
-const collectKnownTables = (_resolver: AdminTableResolver | undefined): string[] => [];
-
-/**
  * Constant-time-ish bearer check used by the admin endpoints. We accept the
  * token as a verbatim string match because the worker's existing
  * `Authorization` header handling is also plain — the per-shard gate is what
@@ -1186,7 +1178,6 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         shardDO: options.shardDO,
     });
 
-
     /**
      * Forward a server-initiated function call (a scheduler dispatch or a firing
      * cron job) to its shard. Re-applies per-shard authorization with a `null`
@@ -1349,105 +1340,6 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         return response;
     };
 
-    type ExportRow = { doc: Record<string, unknown>; table: string };
-
-    /**
-     * Split a requested table list into shard-local vs `.global()` buckets.
-     * `tables === undefined` (every table) yields two empty lists — the callers
-     * treat that case specially.
-     */
-    const partitionExportTables = (tables: ReadonlyArray<string> | undefined): { globalTables: string[]; shardLocalTables: string[] } => {
-        const shardLocalTables: string[] = [];
-        const globalTables: string[] = [];
-
-        if (tables && tables.length > 0) {
-            for (const table of tables) {
-                const info = options.resolveTableSharding?.(table);
-
-                if (info?.mode.kind === "global") {
-                    globalTables.push(table);
-                } else {
-                    shardLocalTables.push(table);
-                }
-            }
-        }
-
-        return { globalTables, shardLocalTables };
-    };
-
-    /**
-     * Fan the shard-local export out via the coordinator and write each
-     * successful shard's rows. A failed shard is skipped (its error was already
-     * surfaced through the fan-out roll-up).
-     */
-    const exportShardLocalRows = async (
-        coordinator: QueryCoordinator,
-        forwardedHeaders: Record<string, string>,
-        tables: ReadonlyArray<string> | undefined,
-        shardLocalTables: ReadonlyArray<string>,
-        writeRow: (row: ExportRow) => void,
-    ): Promise<void> => {
-        // Skip only when the caller named tables and none are shard-local. When
-        // tables is undefined the per-shard exporter visits every shard-local table.
-        if (tables !== undefined && shardLocalTables.length === 0) {
-            return;
-        }
-
-        const exportTables = tables === undefined ? [] : shardLocalTables;
-        // We still need a table list to seed the registry probe. Fall back to
-        // `resolveTableSharding`'s keys if the caller passed none — best effort;
-        // a project without the resolver will simply not fan out automatically.
-        const probeFallback = tables === undefined ? collectKnownTables(options.resolveTableSharding) : [];
-        const probeTables = exportTables.length > 0 ? exportTables : probeFallback;
-
-        const result = await coordinator.orchestrateExport(options.shardDO, {
-            args: { tables: exportTables },
-            headers: forwardedHeaders,
-            tables: probeTables,
-        });
-
-        for (const shard of result.shards) {
-            if (shard.error) {
-                continue;
-            }
-
-            for (const row of shard.rows ?? []) {
-                writeRow(row);
-            }
-        }
-    };
-
-    /**
-     * Produce export rows — shard-local first (from `orchestrateExport`'s
-     * collected per-shard envelopes), then `.global()` rows (streamed from the
-     * `exportGlobals` helper) — invoking `writeRow` for each. `tables ===
-     * undefined` means "every table". Shared by the admin export endpoint (which
-     * streams the rows back as NDJSON) and the scheduled R2 backup (which writes
-     * them to the backup store).
-     */
-    const streamExportRows = async (
-        coordinator: QueryCoordinator,
-        forwardedHeaders: Record<string, string>,
-        tables: ReadonlyArray<string> | undefined,
-        writeRow: (row: ExportRow) => void,
-    ): Promise<void> => {
-        const { globalTables, shardLocalTables } = partitionExportTables(tables);
-
-        await exportShardLocalRows(coordinator, forwardedHeaders, tables, shardLocalTables, writeRow);
-
-        // Globals: stream rows from the D1 helper when configured.
-        const exportGlobalsFunction = options.exportGlobals;
-        const wantGlobals = tables === undefined || globalTables.length > 0;
-
-        if (wantGlobals && exportGlobalsFunction) {
-            const tablesArgument = tables === undefined ? [] : globalTables;
-
-            for await (const row of exportGlobalsFunction({ tables: tablesArgument })) {
-                writeRow(row);
-            }
-        }
-    };
-
     // The data-movement admin routes (export / sync / connector-sync / apply /
     // import) live in a sibling module; the export/import row producers are
     // injected because they close over the worker options and are shared with
@@ -1459,7 +1351,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         queryCoordinator: options.queryCoordinator,
         resolveForwardContext: (request, env) => resolveForwardContext(request, env, options.resolveIdentity),
         shardDO: options.shardDO,
-        streamExportRows,
+        streamExportRows: (coordinator, headers, tables, writeRow) => streamExportRows(options, coordinator, headers, tables, writeRow),
         streamingImport: (request, headers) => streamingImport(request, options, headers),
         syncGlobals: options.syncGlobals,
     });
@@ -1719,10 +1611,13 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
                 // whenever `authorizeFanOut` is absent, independent of
                 // `authorizeShard` (enabling reverse cross-backend relations
                 // REQUIRES configuring `authorizeFanOut`).
-                throw new CirrusError("reverse cross-backend relation reads (`__cirrus_relation__:*`) require `authorizeFanOut` to be configured on the worker", {
-                    code: "FORBIDDEN_FANOUT",
-                    status: 403,
-                });
+                throw new CirrusError(
+                    "reverse cross-backend relation reads (`__cirrus_relation__:*`) require `authorizeFanOut` to be configured on the worker",
+                    {
+                        code: "FORBIDDEN_FANOUT",
+                        status: 403,
+                    },
+                );
             } else if (options.authorizeShard) {
                 // `authorizeShard` is configured but `authorizeFanOut`
                 // is not. Fan-out is a privileged op (it bypasses the
@@ -2093,7 +1988,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
                 };
 
                 try {
-                    await streamExportRows(coordinator, forwardedHeaders, tables, writeRow);
+                    await streamExportRows(options, coordinator, forwardedHeaders, tables, writeRow);
                     streamController.close();
                 } catch (error: unknown) {
                     // Capture the failure so it propagates past `put` — a stream

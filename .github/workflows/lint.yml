@@ -40,7 +40,7 @@
             - "name": "Setup pnpm"
               "uses": "pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093" # v6.0.8
               "with":
-                  "version": "11.3.0"
+                  "version": "11.5.3"
                   "run_install": false
 
             - "name": "Use Node.js 22.14"
@@ -108,7 +108,7 @@
             - "name": "Setup pnpm"
               "uses": "pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093" # v6.0.8
               "with":
-                  "version": "11.3.0"
+                  "version": "11.5.3"
                   "run_install": false
 
             - "name": "Use Node.js 22.14"
@@ -166,7 +166,7 @@
             - "name": "Setup pnpm"
               "uses": "pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093" # v6.0.8
               "with":
-                  "version": "11.3.0"
+                  "version": "11.5.3"
                   "run_install": false
 
             - "name": "Use Node.js 22.14"
@@ -226,7 +226,7 @@
             - "name": "Setup pnpm"
               "uses": "pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093" # v6.0.8
               "with":
-                  "version": "11.3.0"
+                  "version": "11.5.3"
                   "run_install": false
 
             - "name": "Use Node.js 22.14"
@@ -293,7 +293,7 @@
             - "name": "Setup pnpm"
               "uses": "pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093" # v6.0.8
               "with":
-                  "version": "11.3.0"
+                  "version": "11.5.3"
                   "run_install": false
 
             - "name": "Use Node.js 22.14"
@@ -358,7 +358,7 @@
             - "name": "Setup pnpm"
               "uses": "pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093" # v6.0.8
               "with":
-                  "version": "11.3.0"
+                  "version": "11.5.3"
                   "run_install": false
 
             - "name": "Use Node.js 22.14"
