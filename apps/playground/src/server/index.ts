@@ -9,7 +9,7 @@ import { createCrossShardRelationCapabilities, createWorker } from "@cirrus/runt
 import type { DurableObjectNamespaceLike } from "@cirrus/scheduler";
 import { createScheduler } from "@cirrus/scheduler";
 import type { R2BucketLike } from "@cirrus/storage";
-import { buildSignedUrl, createStorage, verifySignedUrl } from "@cirrus/storage";
+import { buildSignedUrl, createBucketStorage, createStorage, verifySignedUrl } from "@cirrus/storage";
 
 import { CIRRUS_CRONS } from "../../cirrus/_generated/crons.js";
 import { CIRRUS_FUNCTIONS } from "../../cirrus/_generated/functions.js";
@@ -53,6 +53,8 @@ const d1Introspector = (database: D1DatabaseLike): GlobalIntrospector => {
 export { SchedulerDO } from "./scheduler-do.js";
 
 interface ShardEnv {
+    /** Second R2 bucket, demonstrating multi-bucket `ctx.storage` — reached via `ctx.storage.bucket("avatars")`. */
+    AVATARS?: R2BucketLike;
     CIRRUS_WORKER_ORIGIN?: string;
     /** D1 binding backing `.global()` tables — wired into the DO so generic `ctx.db` writes to a global table route to it. */
     DB?: D1DatabaseLike;
@@ -112,9 +114,18 @@ export const ShardDO = createShardDO({
     storage: (env) => {
         const shardEnv = env as ShardEnv;
 
-        return shardEnv.FILES
-            ? createStorage({ bucket: shardEnv.FILES, publicBaseUrl: shardEnv.PUBLIC_STORAGE_BASE_URL, signingSecret: shardEnv.STORAGE_SECRET })
-            : undefined;
+        if (!shardEnv.FILES) {
+            return undefined;
+        }
+
+        const make = (bucket: R2BucketLike) =>
+            createStorage({ bucket, publicBaseUrl: shardEnv.PUBLIC_STORAGE_BASE_URL, signingSecret: shardEnv.STORAGE_SECRET });
+        const files = make(shardEnv.FILES);
+
+        // Multi-bucket `ctx.storage` when a second binding is present: the bare
+        // `ctx.storage` is the default (FILES) bucket, `ctx.storage.bucket("avatars")`
+        // the second. Degrades to a single bucket when AVATARS isn't bound.
+        return shardEnv.AVATARS ? createBucketStorage({ avatars: make(shardEnv.AVATARS), default: files }) : files;
     },
 });
 
@@ -122,6 +133,8 @@ interface Env {
     AUTH_SECRET?: string;
     /** Base URL the auth handler resolves callback URLs against. */
     AUTH_URL?: string;
+    /** Second R2 bucket for the studio file browser's bucket picker. */
+    AVATARS?: R2BucketLike;
     /** Bearer token gating the admin export/import and scheduled-job endpoints. */
     CIRRUS_ADMIN_TOKEN?: string;
 
@@ -275,17 +288,29 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
         // signing secret, so it's wired only when both are configured.
         ...(env.FILES
             ? (() => {
-                  const storage = createStorage({ bucket: env.FILES, publicBaseUrl: env.PUBLIC_STORAGE_BASE_URL, signingSecret: env.STORAGE_SECRET });
+                  const make = (bucket: R2BucketLike) =>
+                      createStorage({ bucket, publicBaseUrl: env.PUBLIC_STORAGE_BASE_URL, signingSecret: env.STORAGE_SECRET });
+                  // Bucket map keyed by the names the studio picker offers; `default`
+                  // is FILES, `avatars` the second binding when present. The admin ops
+                  // route by the `bucket` option the file browser forwards.
+                  const buckets: Record<string, ReturnType<typeof make>> = {
+                      default: make(env.FILES),
+                      ...(env.AVATARS ? { avatars: make(env.AVATARS) } : {}),
+                  };
+                  const pick = (name?: string) => buckets[name !== undefined && name !== "" ? name : "default"] ?? buckets.default;
 
                   return {
-                      storageDelete: storage.delete,
-                      storageList: storage.list,
+                      // Drives the studio's bucket picker; hidden when only one bucket.
+                      storageBuckets: Object.keys(buckets),
+                      storageDelete: (key: string, options?: { bucket?: string }) => pick(options?.bucket).delete(key),
+                      storageList: (prefix?: string, options?: { bucket?: string; cursor?: string; limit?: number }) => pick(options?.bucket).list(prefix, options),
                       storageSignedUrl:
                           env.PUBLIC_STORAGE_BASE_URL && env.STORAGE_SECRET
-                              ? (key: string, urlOptions?: { expiresInSeconds?: number }) =>
-                                    storage.getSignedUrl(key, { expiresInSeconds: urlOptions?.expiresInSeconds })
+                              ? (key: string, urlOptions?: { bucket?: string; expiresInSeconds?: number }) =>
+                                    pick(urlOptions?.bucket).getSignedUrl(key, { expiresInSeconds: urlOptions?.expiresInSeconds })
                               : undefined,
-                      storageUpload: (key: string, body: ArrayBuffer, options?: { contentType?: string }) => storage.upload(key, body, options),
+                      storageUpload: (key: string, body: ArrayBuffer, options?: { bucket?: string; contentType?: string }) =>
+                          pick(options?.bucket).upload(key, body, options),
                   };
               })()
             : {}),
