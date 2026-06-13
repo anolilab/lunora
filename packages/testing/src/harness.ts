@@ -55,6 +55,8 @@ interface TestHarness {
         <A extends ArgsValidator, R>(reference: RegisteredAction<A, R>, args: InferArgs<A>): Promise<R>;
         <R>(inline: InlineActionFunction<R>): Promise<R>;
     };
+    /** Close the underlying in-memory SQLite database, releasing the native handle. Idempotent; safe to call on any `withIdentity` view. */
+    close: () => void;
     /** Run a registered `mutation` (or an inline `async (context) => …`) against the harness. */
     mutation: {
         <A extends ArgsValidator, R>(reference: RegisteredMutation<A, R>, args: InferArgs<A>): Promise<R>;
@@ -124,12 +126,25 @@ const noopLog: CirrusLogger = {
  * each throws a clear error the first time a handler touches it.
  */
 const cirrusTest = (schema: TestSchema): TestHarness => {
-    const { sql } = createSqlExec();
+    const { close, sql } = createSqlExec();
     const ddlSchema = schema as unknown as SchemaLike;
 
     runShardMigrations(sql, ddlSchema);
 
     const database = createShardCtxDb({ schema: ddlSchema, sql }) as unknown as DatabaseWriter;
+
+    // One native SQLite handle backs every harness view (including `withIdentity`
+    // scopes); close it once and ignore repeat calls so any accessor can tear the
+    // harness down without double-closing the shared handle.
+    let closed = false;
+    const closeDatabase = (): void => {
+        if (closed) {
+            return;
+        }
+
+        closed = true;
+        close();
+    };
 
     const makeHarness = (identity: null | TestIdentity): TestHarness => {
         const auth: AuthState = {
@@ -219,6 +234,7 @@ const cirrusTest = (schema: TestSchema): TestHarness => {
 
         const harness: TestHarness = {
             action,
+            close: closeDatabase,
             mutation,
             query,
             run: (function_) => Promise.resolve(function_(mutationContext)),

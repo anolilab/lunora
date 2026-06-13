@@ -1,5 +1,5 @@
 import { defineSchema, defineTable, mutation, query, v } from "@cirrus/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { cirrusTest } from "../src/index";
 
@@ -30,11 +30,29 @@ const scheduleSomething = mutation({
     handler: async (ctx) => ctx.scheduler.runAfter(1000, "noop:fn", {}),
 });
 
+// Track every harness so each test's in-memory SQLite handle is closed in
+// afterEach — exercising the harness `close()` API and leaking no native handles.
+const open: ReturnType<typeof cirrusTest>[] = [];
+
+const start = (): ReturnType<typeof cirrusTest> => {
+    const t = cirrusTest(schema);
+
+    open.push(t);
+
+    return t;
+};
+
 describe("cirrusTest", () => {
+    afterEach(() => {
+        while (open.length > 0) {
+            open.pop()?.close();
+        }
+    });
+
     it("reads back a row written by a mutation", async () => {
         expect.assertions(2);
 
-        const t = cirrusTest(schema);
+        const t = start();
 
         await t.mutation(send, { author: "ada", body: "hi" });
 
@@ -47,7 +65,7 @@ describe("cirrusTest", () => {
     it("exposes direct db access via run", async () => {
         expect.assertions(1);
 
-        const t = cirrusTest(schema);
+        const t = start();
 
         await t.run(async (ctx) => ctx.db.insert("messages", { author: "grace", body: "from run" }));
 
@@ -59,7 +77,7 @@ describe("cirrusTest", () => {
     it("reflects the injected identity via withIdentity and persists writes across the scope", async () => {
         expect.assertions(3);
 
-        const t = cirrusTest(schema);
+        const t = start();
 
         await expect(t.query(whoAmI, {})).resolves.toBeNull();
 
@@ -79,7 +97,7 @@ describe("cirrusTest", () => {
     it("runs an inline query function", async () => {
         expect.assertions(1);
 
-        const t = cirrusTest(schema);
+        const t = start();
 
         await t.mutation(send, { author: "ada", body: "one" });
         await t.mutation(send, { author: "ada", body: "two" });
@@ -96,7 +114,7 @@ describe("cirrusTest", () => {
     it("throws a clear error when a handler touches a stubbed surface", async () => {
         expect.assertions(1);
 
-        const t = cirrusTest(schema);
+        const t = start();
 
         await expect(t.mutation(scheduleSomething, {})).rejects.toThrow("ctx.scheduler is not available in the in-memory @cirrus/testing harness (v1)");
     });

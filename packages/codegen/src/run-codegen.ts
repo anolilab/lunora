@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, extname, join, sep } from "node:path";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 import type { Finding } from "@cirrus/advisor";
 import { Project } from "ts-morph";
@@ -8,7 +8,7 @@ import { lintSchema } from "./advisor";
 import discoverAiUsage from "./discover-ai-usage";
 import discoverAuthApiCalls from "./discover-authapi-calls";
 import discoverCrons from "./discover-crons";
-import { discoverFunctions } from "./discover-functions";
+import { discoverFunctions, listCirrusSourceFiles } from "./discover-functions";
 import discoverHttpRoutes from "./discover-http-routes";
 import discoverInserts from "./discover-inserts";
 import discoverMigrations from "./discover-migrations";
@@ -65,45 +65,12 @@ const findTsconfig = (startPath: string): string | undefined => {
 };
 
 /**
- * Whether a `.ts` path under the cirrus directory is a test file the watcher
- * (and therefore the reused Project) should ignore — mirrors the vite plugin's
- * `onChange` filter so a reused Project never carries discovery-irrelevant test
- * modules.
+ * Normalise a path to POSIX (forward-slash) separators. ts-morph's
+ * `SourceFile.getFilePath()` always returns forward slashes regardless of
+ * platform, so any path compared against it must be normalised first or the
+ * comparison silently fails on Windows.
  */
-const isTestSourceFile = (path: string): boolean => path.includes(`${sep}__tests__${sep}`) || path.endsWith(".test.ts") || path.endsWith(".spec.ts");
-
-/**
- * Recursively collect every codegen-relevant `.ts` file under `cirrusDirectory`
- * — i.e. every non-test `.ts` outside `_generated/` and `node_modules/`
- * (`schema.ts` included). Mirrors the discovery file set so the reused Project
- * tracks exactly the files a fresh one would add.
- */
-const listProjectSourceFiles = (directory: string, accumulator: string[] = []): string[] => {
-    let entries: string[];
-
-    try {
-        entries = readdirSync(directory);
-    } catch {
-        return accumulator;
-    }
-
-    for (const entry of entries) {
-        const full = join(directory, entry);
-        const info = statSync(full);
-
-        if (info.isDirectory()) {
-            if (entry === "_generated" || entry === "node_modules") {
-                continue;
-            }
-
-            listProjectSourceFiles(full, accumulator);
-        } else if (info.isFile() && extname(entry) === ".ts" && !isTestSourceFile(full)) {
-            accumulator.push(full);
-        }
-    }
-
-    return accumulator;
-};
+const toPosixPath = (path: string): string => path.replaceAll("\\", "/");
 
 /**
  * Construct the ts-morph `Project` codegen discovers over. Prefers the user's
@@ -137,9 +104,19 @@ export const createCodegenProject = (cirrusDirectory: string): Project => {
  * dev-loop; a tsconfig change invalidates the whole cached Project upstream.
  */
 export const refreshCodegenProject = (project: Project, cirrusDirectory: string): void => {
-    const onDisk = new Set(listProjectSourceFiles(cirrusDirectory));
+    // The exact set discovery reads: every non-`schema.ts` source file (the
+    // canonical `listCirrusSourceFiles`, shared with function/migration
+    // discovery) plus `schema.ts`, which `discoverSchema` loads separately.
+    // Reusing the canonical walker keeps the reused Project's file set in
+    // lockstep with a freshly-constructed one instead of forking the rules.
+    const diskPaths = listCirrusSourceFiles(cirrusDirectory);
+    const schemaPath = join(cirrusDirectory, "schema.ts");
 
-    for (const path of onDisk) {
+    if (existsSync(schemaPath)) {
+        diskPaths.push(schemaPath);
+    }
+
+    for (const path of diskPaths) {
         const existing = project.getSourceFile(path);
 
         if (existing === undefined) {
@@ -151,12 +128,16 @@ export const refreshCodegenProject = (project: Project, cirrusDirectory: string)
 
     // Drop source files under the cirrus directory that vanished from disk, so a
     // deleted query/table never lingers in the reused Project's discovery set.
-    const cirrusPrefix = cirrusDirectory + sep;
+    // `getFilePath()` is always POSIX while `diskPaths` carry the OS separator —
+    // normalise both sides or the removal silently never fires on Windows.
+    const onDisk = new Set(diskPaths.map((path) => toPosixPath(path)));
+    const cirrusRoot = toPosixPath(cirrusDirectory);
+    const cirrusPrefix = `${cirrusRoot}/`;
 
     for (const sourceFile of project.getSourceFiles()) {
         const filePath = sourceFile.getFilePath();
 
-        if ((filePath === cirrusDirectory || filePath.startsWith(cirrusPrefix)) && !onDisk.has(filePath)) {
+        if ((filePath === cirrusRoot || filePath.startsWith(cirrusPrefix)) && !onDisk.has(filePath)) {
             project.removeSourceFile(sourceFile);
         }
     }

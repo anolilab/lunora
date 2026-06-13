@@ -96,6 +96,9 @@ test("sees the injected identity", async () => {
 });
 ```
 
+Each `cirrusTest(...)` opens an in-memory SQLite database; call `t.close()`
+(e.g. in an `afterEach`) to release the native handle when a test finishes.
+
 > **v1 scope.** `ctx.storage`, `ctx.scheduler`, `ctx.vectors`, and an action's
 > `ctx.fetch` are clearly-throwing stubs — a handler that touches one fails with
 > a "not available in the in-memory @cirrus/testing harness (v1)" error. HTTP
