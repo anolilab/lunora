@@ -1,0 +1,20 @@
+# Cirrus codegen output (regenerated on each build)
+cirrus/_generated/
+
+# Wrangler state
+.wrangler/
+.dev.vars
+.dev.vars.*
+# …but keep the committed template that documents the required secrets.
+!.dev.vars.example
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Node
+node_modules/
+
+# Local env
+.env*
+!.env.example
