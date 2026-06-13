@@ -2,7 +2,15 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import type { WranglerConfig } from "@cirrus/config";
-import { DEV_VARS_FILE, findWranglerFile, isPlaceholderValue, parseDevVariableEntries, readWranglerJsonc, validateWranglerConfig } from "@cirrus/config";
+import {
+    DEV_VARS_FILE,
+    findWranglerFile,
+    inferCirrusBindings,
+    isPlaceholderValue,
+    parseDevVariableEntries,
+    readWranglerJsonc,
+    validateWranglerConfig,
+} from "@cirrus/config";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
@@ -183,12 +191,41 @@ const checkAdminToken = (findings: Finding[]): void => {
 };
 
 /**
+ * Each declared container must be exported by the worker entry — wrangler
+ * rejects a `containers[].class_name` the worker doesn't export. Inference
+ * already computes the export status, so surface it proactively here (the
+ * generator auto-wires it, but a hand-declared container or an unrecognized
+ * entry can still miss it). Skips cleanly when no containers are declared.
+ */
+const checkContainers = async (cwd: string, findings: Finding[]): Promise<void> => {
+    let containers: Awaited<ReturnType<typeof inferCirrusBindings>>["containers"];
+
+    try {
+        ({ containers } = await inferCirrusBindings({ projectRoot: cwd }));
+    } catch {
+        return; // inference is best-effort; other checks own the real failures.
+    }
+
+    for (const container of containers) {
+        if (container.exported) {
+            findings.push({ level: "pass", message: `container "${container.exportName}" is exported by the worker entry.` });
+        } else {
+            findings.push({
+                fix: 'Add `export * from "./cirrus/_generated/containers"` to your worker entry (or re-run `vis generate cirrus-container`).',
+                level: "fail",
+                message: `container "${container.exportName}" is declared but ${container.className} is not exported by the worker entry.`,
+            });
+        }
+    }
+};
+
+/**
  * Pure, testable preflight core: run the read-only project checks against `cwd`
  * and return the aggregated findings + the exit code (1 if any hard FAIL). Does
  * no printing — the `execute` wrapper renders the report. Each check skips
  * gracefully when its input isn't present.
  */
-const runDoctor = (options: RunDoctorOptions): DoctorResult => {
+const runDoctor = async (options: RunDoctorOptions): Promise<DoctorResult> => {
     const cwd = options.cwd ?? process.cwd();
     const findings: Finding[] = [];
 
@@ -199,6 +236,7 @@ const runDoctor = (options: RunDoctorOptions): DoctorResult => {
     checkEmailDestination(parsed, findings);
     checkDevVariables(cwd, findings);
     checkAdminToken(findings);
+    await checkContainers(cwd, findings);
 
     const code = findings.some((finding) => finding.level === "fail") ? 1 : 0;
 
@@ -240,8 +278,8 @@ const renderReport = (result: DoctorResult, logger: Logger): void => {
 };
 
 /** `cirrus doctor` handler (lazy-loaded via the command's `loader`). */
-const execute: CommandHandler<DoctorOptions> = defineHandler<DoctorOptions>(({ cwd, logger }) => {
-    const result = runDoctor({ cwd, logger });
+const execute: CommandHandler<DoctorOptions> = defineHandler<DoctorOptions>(async ({ cwd, logger }) => {
+    const result = await runDoctor({ cwd, logger });
 
     renderReport(result, logger);
 
