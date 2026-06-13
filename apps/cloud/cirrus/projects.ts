@@ -1,7 +1,6 @@
-import { CirrusError } from "@cirrus/server";
-
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
+import { assertMember } from "./authz";
 
 interface ProjectRow {
     _id: Id<"projects">;
@@ -12,17 +11,11 @@ interface ProjectRow {
     slug: string;
 }
 
-const assertSignedIn = (userId: null | string): void => {
-    if (!userId) {
-        throw new CirrusError("UNAUTHORIZED", "not signed in");
-    }
-};
-
 /** List an organization's projects. */
 export const listByOrg = query({
     args: { organizationId: v.id("organizations") },
     handler: async (context, { organizationId }): Promise<ProjectRow[]> => {
-        assertSignedIn(context.auth.userId);
+        await assertMember(context, organizationId);
 
         const { page } = await context.db.projects.findMany({ where: { organizationId } });
 
@@ -38,7 +31,7 @@ export const listByOrg = query({
 export const create = mutation({
     args: { framework: v.optional(v.string()), name: v.string(), organizationId: v.id("organizations"), slug: v.string() },
     handler: async (context, arguments_): Promise<Id<"projects">> => {
-        assertSignedIn(context.auth.userId);
+        await assertMember(context, arguments_.organizationId, ["owner", "admin", "member"]);
 
         return context.db.insert("projects", {
             createdAt: Date.now(),
