@@ -410,10 +410,23 @@ with a named contact is the real insurance against surprise enforcement.
 
 Ordered so every phase ships standalone DX value even if we stop there.
 
-- **Phase 0 — Remote-binding dev (no cloud required).** Wire wrangler's remote-bindings
-  proxy session into `@cirrus/vite` (`remote: true` per binding / `CIRRUS_REMOTE=1`).
-  Closes the long-standing PLAN5-Phase-5 gap for BYO users and is a hard prerequisite
-  for the cloud-dev story. _Independent; start immediately._
+> **Status (2026-06-13).** Phase 0 is **already shipped in the framework**. Phases 1–2
+> are **substantially built** in `apps/cloud` (control plane + deploy API + auth +
+> deploy-key lifecycle + preview lifecycle + GitHub webhook + deploy client), all
+> compiling and unit-tested; the remaining work is the parts that genuinely require a
+> live Cloudflare account: the **Alchemy v2 provisioner body** (the `Provisioner` is a
+> rejecting stub today, so deploys terminate at `failed`), the **dispatcher Worker** +
+> `{project}.cirrus.app` routing, and any end-to-end "it actually deploys" validation.
+> Phases 3–4 are not started.
+
+- **Phase 0 — Remote-binding dev (no cloud required). ✅ SHIPPED.** Implemented in the
+  framework, not the cloud app: `@cirrus/config/remote-bindings.ts` tags eligible
+  bindings (`d1_databases`, `kv_namespaces`, `r2_buckets`, `queues.producers`,
+  `vectorize`, `services`) with `"remote": true` and **deliberately excludes
+  `durable_objects`** (Cloudflare has no remote-DO mode — shards stay local, risk #2),
+  wired into `@cirrus/vite` (`remote-bindings-plugin.ts`) and `cirrus dev`
+  (`resolveRemoteEnabled` / `CIRRUS_REMOTE`). 30 passing tests in
+  `packages/config/__tests__/remote-bindings.test.ts`.
 - **Phase 1 — Control-plane MVP + managed deploy.** Starts with a **constraint
   spike** that proves the substrate on a real Cirrus app before any control-plane
   code: hibernated-WS subscriptions through `env.DISPATCHER.get()`, the cron
@@ -428,10 +441,14 @@ Ordered so every phase ships standalone DX value even if we stop there.
   secrets + scoped tokens. Exit criterion: `cirrus init && cirrus deploy` → live URL
   in under a minute with zero Cloudflare account, zero wrangler config, zero D1
   placeholder editing.
-- **Phase 2 — Preview + cloud dev deployments.** Deploy-key types, branch-named TTL'd
-  previews with `--cmd` + URL injection (Vercel/Netlify/GH Actions recipes), GitHub
-  app (PR comments/check runs, `cirrus/`-only filter, auto-delete on merge/close),
-  persistent branches, per-developer dev deployments with push-on-save + log tail.
+- **Phase 2 — Preview + cloud dev deployments.** _Built:_ deploy-key types
+  (production/dev/preview), branch-named TTL'd previews (`previewScriptName` +
+  `previewExpiry`, `expiresAt` on deployments), an hourly cleanup cron
+  (`deployments.cleanupExpiredPreviews`), and a GitHub webhook (HMAC verify + PR→intent
+  parse at `POST /v1/github/webhook`). _Remaining:_ wiring the webhook intent to actually
+  trigger a preview deploy (needs a repository↔project link + a stored automation
+  credential), PR comments/check runs, `--cmd` + URL injection recipes, persistent
+  branches, and the per-developer cloud-dev push-on-save + log-tail loop (CLI + live).
   Stretch (differentiator): fork-production-data previews via DO storage snapshot +
   D1 Time Travel — needs a spike; neither Supabase nor Convex offers it.
 - **Phase 3 — Hosted studio.** Multi-tenant shell over `packages/studio`; admin-RPC
