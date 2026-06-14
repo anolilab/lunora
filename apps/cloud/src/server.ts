@@ -18,6 +18,8 @@ import { createShardDO } from "../cirrus/_generated/shard.js";
 import schema from "../cirrus/schema.js";
 import { CIRRUS_CLOUD_PLANS } from "./billing/plans";
 import { createDeployRouter } from "./deploy/router";
+import type { CronTarget } from "./fanout/cron";
+import { fanOutCron } from "./fanout/cron";
 
 /**
  * Cirrus Cloud control-plane Worker — the platform itself, dogfooded on Cirrus
@@ -137,6 +139,8 @@ interface Env {
     CIRRUS_ADMIN_TOKEN?: string;
     /** Control-plane D1 — backs the `.global()` cells/organizations tables + auth. */
     DB: unknown;
+    /** Dispatch namespace — used by the cron fan-out to tick tenants (§2.4). */
+    DISPATCHER?: { get: (scriptName: string) => { fetch: (request: Request) => Promise<Response> } };
     /** Optional GitHub OAuth app for studio social sign-in. */
     GITHUB_CLIENT_ID?: string;
     GITHUB_CLIENT_SECRET?: string;
@@ -172,6 +176,54 @@ let auth: CirrusAuth | null = null;
 // The deploy API (`POST /v1/deploy`), mounted as the lowest-priority matcher.
 // Created once so its per-cell scheduler persists across requests.
 const deployRouter = createDeployRouter();
+
+// The control plane runs an every-minute trigger; tenant crons are matched to it
+// by due-evaluation in the fan-out (§2.4). Its own code crons still fire on their
+// own declared expressions (both are in wrangler.jsonc `triggers.crons`).
+// Matches the `*/1 * * * *` expression `crons.interval({ minutes: 1 })` compiles
+// to (the "tenant cron fan-out tick" heartbeat in cirrus/crons.ts).
+const EVERY_MINUTE = "*/1 * * * *";
+
+interface CronDeploymentRow {
+    adminToken?: string;
+    cronSpecs?: string[];
+    scriptName: string;
+}
+
+/** Read live deployments that declare cron expressions, keeping admin tokens in-process. */
+const readCronTargets = async (env: Env): Promise<CronTarget[]> => {
+    if (!env.DB) {
+        return [];
+    }
+
+    const database = createD1CtxDb({ exec: buildExec(env.DB as D1DatabaseLike), schema: schema as unknown as D1CtxDbOptions["schema"] });
+    const { page } = await database.findMany("deployments", { where: { status: "live" } });
+
+    return (page as unknown as CronDeploymentRow[])
+        .filter(
+            (row): row is CronDeploymentRow & { adminToken: string; cronSpecs: string[] } =>
+                Boolean(row.adminToken) && Array.isArray(row.cronSpecs) && row.cronSpecs.length > 0,
+        )
+        .map((row) => {
+            return { adminToken: row.adminToken, cronSpecs: row.cronSpecs, scriptName: row.scriptName };
+        });
+};
+
+/** Tick one tenant's cron over the dispatcher, gated by its admin token. */
+const dispatchCronTick = async (
+    dispatcher: NonNullable<Env["DISPATCHER"]>,
+    tick: { adminToken: string; cron: string; scriptName: string },
+): Promise<boolean> => {
+    const response = await dispatcher.get(tick.scriptName).fetch(
+        new Request("https://tenant.internal/_cirrus/scheduled", {
+            body: JSON.stringify({ cron: tick.cron }),
+            headers: { authorization: `Bearer ${tick.adminToken}`, "content-type": "application/json" },
+            method: "POST",
+        }),
+    );
+
+    return response.ok;
+};
 
 /**
  * Better-auth config backing the hosted studio (§3). Hardened beyond bare
@@ -261,6 +313,21 @@ export default {
     async scheduled(controller: ScheduledControllerLike, env: Env, context: ExecutionContextLike): Promise<void> {
         worker ??= buildWorker(env);
 
+        // The control plane's own code crons fire on their declared expression.
         await worker.scheduled(controller, env, context);
+
+        // Tenant cron fan-out (§2.4): the every-minute trigger ticks each tenant
+        // whose cron is due. WfP drops `triggers.crons` for namespaced workers, so
+        // this is the only path that fires their cron jobs.
+        if (controller.cron === EVERY_MINUTE && env.DISPATCHER) {
+            const dispatcher = env.DISPATCHER;
+            const targets = await readCronTargets(env);
+
+            await fanOutCron({
+                dispatch: (tick) => dispatchCronTick(dispatcher, tick),
+                now: new Date(),
+                targets,
+            });
+        }
     },
 };
