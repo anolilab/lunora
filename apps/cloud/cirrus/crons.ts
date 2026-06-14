@@ -13,4 +13,7 @@ const crons = cronJobs();
 // Tear down expired preview deployments once an hour.
 crons.interval("cleanup expired previews", { hours: 1 }, internal.deployments.cleanupExpiredPreviews, {});
 
+// Compact closed-period platform-usage events once an hour (§4 metering rollup).
+crons.interval("rollup platform usage", { hours: 1 }, internal.usage.rollup, {});
+
 export default crons;
