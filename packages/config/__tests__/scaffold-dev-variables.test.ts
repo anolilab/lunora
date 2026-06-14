@@ -310,7 +310,8 @@ describe("ensureDevVariables", () => {
 
         writeFileSync(temporaryPath, "stale", "utf8");
 
-        await expect(ensureDevVariables({ confirm: async () => true, cwd: dir, info: () => undefined, randomHex: fixedHex })).rejects.toThrow();
+        // The exclusive-create (`wx`) write fails because the temp path already exists.
+        await expect(ensureDevVariables({ confirm: async () => true, cwd: dir, info: () => undefined, randomHex: fixedHex })).rejects.toThrow(/EEXIST/u);
 
         // The stale temp is removed by the cleanup path, and no .dev.vars was produced.
         expect(existsSync(temporaryPath)).toBe(false);

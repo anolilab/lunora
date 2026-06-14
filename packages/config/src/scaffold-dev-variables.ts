@@ -69,6 +69,12 @@ const PLACEHOLDER_MARKERS = [
     "xxx",
 ];
 
+/** RegExp metacharacters escaped before a marker is spliced into a dynamic pattern. */
+const REGEXP_SPECIAL_CHARS = /[.*+?^${}()|[\]\\]/gu;
+
+/** A marker that ends in an alphanumeric char needs an explicit trailing word boundary. */
+const MARKER_ENDS_ALPHANUMERIC = /[a-z0-9]$/u;
+
 /**
  * Whether an (already-unquoted) value looks like a fill-me-in placeholder —
  * empty, angle-bracketed, or containing a known marker — rather than a real
@@ -87,14 +93,14 @@ const isPlaceholderValue = (value: string): boolean => {
     }
 
     return PLACEHOLDER_MARKERS.some((marker) => {
-        const escaped = marker.replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+        const escaped = marker.replaceAll(REGEXP_SPECIAL_CHARS, String.raw`\$&`);
         // A marker must stand alone: bounded on the left by a string edge or a
         // non-alphanumeric char. On the right we require the same boundary *unless*
         // the marker already ends in a non-alphanumeric char (a `-`/`_` prefix
         // marker like `your-`), whose own terminator is the boundary. This stops
         // `todoist` / `examples-of-x` matching while keeping `todo`, `change-me`,
         // and the `your-`/`your_` prefixes working.
-        const needsTrailingBoundary = /[a-z0-9]$/u.test(marker);
+        const needsTrailingBoundary = MARKER_ENDS_ALPHANUMERIC.test(marker);
         const pattern = needsTrailingBoundary ? `(^|[^a-z0-9])${escaped}([^a-z0-9]|$)` : `(^|[^a-z0-9])${escaped}`;
 
         return new RegExp(pattern, "u").test(normalised);

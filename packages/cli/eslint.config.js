@@ -119,11 +119,18 @@ export default createConfig(
             "vitest/prefer-strict-equal": "off",
         },
     },
-    // Markdown code blocks: don't enforce language tags.
+    // Markdown code blocks: don't enforce language tags. The `n` Node-builtins
+    // rules reach into the scope manager, which a markdown document has none of —
+    // under ESLint 10 they throw "Cannot read properties of undefined (globalScope)"
+    // while linting docs (e.g. skills/cirrus/SKILL.md). They're meaningless on prose,
+    // so turn them off for markdown.
     {
         files: ["**/*.md", "**/*.md/**"],
         rules: {
             "markdown/fenced-code-language": "off",
+            "n/no-unsupported-features/es-builtins": "off",
+            "n/no-unsupported-features/es-syntax": "off",
+            "n/no-unsupported-features/node-builtins": "off",
         },
     },
     // Command handlers (`commands/<name>/handler.ts`) intentionally export `execute`

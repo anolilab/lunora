@@ -45,6 +45,7 @@ const rlsUncoveredTable: Lint = {
     name: "rls_uncovered_table",
     remediation:
         "Add `.use(rls(policies))` to the procedure's builder chain — e.g. `c.use(rls(myPolicies)).query(...)` — so its `ctx.db` is wrapped by the same policy evaluator as the rest of the app. If this procedure is intentionally privileged (e.g. a background job), declare it with `internalQuery` / `internalMutation` / `internalAction` instead of the public builder so the intent is explicit.",
+    // eslint-disable-next-line sonarjs/cognitive-complexity -- the policy/table cross-reference is clearest as one linear pass; splitting it would obscure the flow.
     run: (context) => {
         // No RLS procedure evidence supplied → nothing to assert.
         if (context.rlsProcedures === undefined) {
