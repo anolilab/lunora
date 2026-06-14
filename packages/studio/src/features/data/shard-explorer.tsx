@@ -170,7 +170,7 @@ const ShardExplorer = ({ onFetchTables, onSelect }: ShardExplorerProps): ReactEl
                                 </p>
                             )}
 
-                            {!loading && error === undefined && (tables?.length ?? 0) > 0 && (
+                            {!loading && error === undefined && tables !== undefined && tables.length > 0 && (
                                 <ul className="flex flex-col gap-0.5" data-testid="shard-explorer-tables">
                                     {tables.map((tableInfo) => (
                                         <li className="flex items-center justify-between text-xs" key={tableInfo.name}>

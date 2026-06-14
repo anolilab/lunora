@@ -143,6 +143,7 @@ catalogs:
     shadcn: ^4.11.0
     tailwind-merge: ^3.6.0
   frontend:
+    html-to-image: ^1.11.13
     "@solidjs/testing-library": ^0.8.10
     "@tanstack/db": ^0.6.8
     "@tanstack/offline-transactions": ^1.0.33

@@ -1,19 +1,24 @@
 "use client";
 
+import { Download01Icon } from "@hugeicons/core-free-icons";
+import { HugeiconsIcon } from "@hugeicons/react";
 import type { Edge, NodeTypes } from "@xyflow/react";
-import { Background, Controls, MiniMap, Panel, ReactFlow, useEdgesState, useNodesState } from "@xyflow/react";
+import { Background, Controls, MiniMap, Panel, ReactFlow, useEdgesState, useNodes, useNodesState, useReactFlow } from "@xyflow/react";
 import type { ChangeEvent, CSSProperties, ReactElement } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { StorageTier } from "../../components/storage-tier";
 import { TIER_META } from "../../components/storage-tier";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../components/ui/dropdown-menu";
 import { Input } from "../../components/ui/input";
 import { useT } from "../../i18n/i18n-context";
 import type { ColumnMeta } from "../../lib/admin";
+import { fireAndForget } from "../../lib/internal";
 import type { DatabaseSchemaNodeType } from "./database-schema-node";
 import { DatabaseSchemaNode } from "./database-schema-node";
+import { exportDiagramAsJson, exportDiagramAsPng, exportDiagramAsSvg } from "./diagram-export";
 import type { SchemaEdge } from "./layout";
 import { computeLayout } from "./layout";
 
@@ -180,6 +185,96 @@ const Legend = (): ReactElement => {
 };
 
 /**
+ * Export toolbar rendered inside the React Flow canvas via `Panel`.
+ *
+ * Must be mounted as a child of `ReactFlow` so it can call `useReactFlow()`
+ * and `useNodes()`. The PNG/SVG handlers locate the `.react-flow__viewport`
+ * element through a ref on the wrapping container and pass it to `html-to-image`.
+ */
+const DiagramExportPanel = ({ containerRef, testIdPrefix }: { containerRef: React.RefObject<HTMLElement | null>; testIdPrefix: string }): ReactElement => {
+    const t = useT();
+    const nodes = useNodes();
+    const { getEdges } = useReactFlow();
+    const [exporting, setExporting] = useState<"json" | "png" | "svg" | null>(null);
+
+    const handlePng = useCallback(async (): Promise<void> => {
+        const viewport = containerRef.current?.querySelector<HTMLElement>(".react-flow__viewport");
+
+        if (!viewport) {
+            return;
+        }
+
+        setExporting("png");
+
+        try {
+            await exportDiagramAsPng(viewport, nodes, `${testIdPrefix}-schema-diagram.png`);
+        } finally {
+            setExporting(null);
+        }
+    }, [containerRef, nodes, testIdPrefix]);
+
+    const handleSvg = useCallback(async (): Promise<void> => {
+        const viewport = containerRef.current?.querySelector<HTMLElement>(".react-flow__viewport");
+
+        if (!viewport) {
+            return;
+        }
+
+        setExporting("svg");
+
+        try {
+            await exportDiagramAsSvg(viewport, nodes, `${testIdPrefix}-schema-diagram.svg`);
+        } finally {
+            setExporting(null);
+        }
+    }, [containerRef, nodes, testIdPrefix]);
+
+    const handleJson = useCallback((): void => {
+        setExporting("json");
+
+        try {
+            exportDiagramAsJson(nodes, getEdges(), `${testIdPrefix}-schema-diagram.json`);
+        } finally {
+            setExporting(null);
+        }
+    }, [nodes, getEdges, testIdPrefix]);
+
+    const onClickPng = useCallback((): void => {
+        fireAndForget(handlePng());
+    }, [handlePng]);
+
+    const onClickSvg = useCallback((): void => {
+        fireAndForget(handleSvg());
+    }, [handleSvg]);
+
+    return (
+        <Panel position="top-right">
+            <DropdownMenu>
+                <DropdownMenuTrigger
+                    className="group/button inline-flex shrink-0 cursor-pointer items-center justify-center gap-1 rounded-md border border-border bg-background px-2 text-xs font-medium whitespace-nowrap hover:bg-muted disabled:pointer-events-none disabled:opacity-50"
+                    data-testid={`${testIdPrefix}-export-trigger`}
+                    disabled={exporting !== null}
+                >
+                    <HugeiconsIcon className="size-3.5" icon={Download01Icon} strokeWidth={2} />
+                    {t("Export")}
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                    <DropdownMenuItem data-testid={`${testIdPrefix}-export-png`} disabled={exporting !== null} onClick={onClickPng}>
+                        {t("PNG")}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem data-testid={`${testIdPrefix}-export-svg`} disabled={exporting !== null} onClick={onClickSvg}>
+                        {t("SVG")}
+                    </DropdownMenuItem>
+                    <DropdownMenuItem data-testid={`${testIdPrefix}-export-json`} disabled={exporting !== null} onClick={handleJson}>
+                        {t("JSON")}
+                    </DropdownMenuItem>
+                </DropdownMenuContent>
+            </DropdownMenu>
+        </Panel>
+    );
+};
+
+/**
  * A Supabase-style schema diagram on a single React Flow canvas: every table —
  * shard-local and global alike — is one node listing its columns with types and
  * PK/FK markers, and `v.id()` foreign keys are drawn handle-to-handle, including
@@ -210,6 +305,10 @@ export const SchemaDiagram = ({ columnsError, tables, testIdPrefix }: SchemaDiag
 
     const [nodes, setNodes, onNodesChange] = useNodesState<DatabaseSchemaNodeType>(seededNodes);
     const [flowEdges, setEdges, onEdgesChange] = useEdgesState(seededEdges);
+
+    // A ref to the wrapping div so the export panel can find the
+    // `.react-flow__viewport` element without leaving the React tree.
+    const canvasRef = useRef<HTMLDivElement>(null);
 
     // Re-seed when the source data or filters change (shard switch, columns
     // finished probing, a tier toggled). This resets manual drags, which is fine —
@@ -247,7 +346,11 @@ export const SchemaDiagram = ({ columnsError, tables, testIdPrefix }: SchemaDiag
 
     return (
         <section className="flex flex-col gap-2" data-testid={`${testIdPrefix}-section`}>
-            <div className="h-[560px] w-full overflow-hidden rounded-md border border-border bg-muted/20" data-testid={`${testIdPrefix}-canvas`}>
+            <div
+                className="h-[560px] w-full overflow-hidden rounded-md border border-border bg-muted/20"
+                data-testid={`${testIdPrefix}-canvas`}
+                ref={canvasRef}
+            >
                 <ReactFlow
                     edges={flowEdges}
                     elementsSelectable
@@ -303,6 +406,7 @@ export const SchemaDiagram = ({ columnsError, tables, testIdPrefix }: SchemaDiag
                     </Panel>
                     <Controls showInteractive={false} />
                     <MiniMap pannable zoomable />
+                    <DiagramExportPanel containerRef={canvasRef} testIdPrefix={testIdPrefix} />
                 </ReactFlow>
             </div>
         </section>

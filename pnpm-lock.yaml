@@ -147,6 +147,9 @@ catalogs:
     '@xyflow/react':
       specifier: ^12.11.0
       version: 12.11.0
+    html-to-image:
+      specifier: ^1.11.13
+      version: 1.11.13
     jsdom:
       specifier: ^29.1.1
       version: 29.1.1
@@ -1815,6 +1818,9 @@ importers:
       clsx:
         specifier: catalog:ui
         version: 2.1.1
+      html-to-image:
+        specifier: catalog:frontend
+        version: 1.11.13
       tailwind-merge:
         specifier: catalog:ui
         version: 3.6.0
@@ -10206,6 +10212,9 @@ packages:
 
   html-standard@0.0.13:
     resolution: {integrity: sha512-6oNfW3c1t44O7jVXu0tp4E5MbHifWlXrHlZBPt6y7vFdgLOUUh8hyzoRhfUgozlBUK6oLLYhqP1uIqbZ8ggcBA==}
+
+  html-to-image@1.11.13:
+    resolution: {integrity: sha512-cuOPoI7WApyhBElTTb9oqsawRvZ0rHhaHwghRLlTuffoD1B2aDemlCruLeZrUIIdvG7gs9xeELEPm6PhuASqrg==}
 
   html-to-text@10.0.0:
     resolution: {integrity: sha512-2OH59Gtprdczel+7Rxgpz9hGVJREaf8Lt1H4kZwWHpEn70VQKRuMNGsb2eDbwaTzrYzb0hheiOG1P7Dim0B4dQ==}
@@ -21582,6 +21591,8 @@ snapshots:
     dependencies:
       vscode-css-languageservice: 6.3.10
       vscode-languageserver-textdocument: 1.0.12
+
+  html-to-image@1.11.13: {}
 
   html-to-text@10.0.0:
     dependencies:

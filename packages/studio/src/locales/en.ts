@@ -118,6 +118,8 @@ const MESSAGE_IDS = [
     "Errors over time",
     "expires",
     "Export",
+    "PNG",
+    "SVG",
     "Export / Import",
     "Exported {count} rows.",
     "file:function",
