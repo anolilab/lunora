@@ -2,6 +2,14 @@
 # tools). Generate with: openssl rand -hex 32
 CIRRUS_ADMIN_TOKEN=replace-with-openssl-rand-hex-32
 
+# Secret backing the hosted studio's better-auth email/password sessions.
+# Generate with: openssl rand -hex 32
+AUTH_SECRET=replace-with-openssl-rand-hex-32
+
+# Optional: base URL better-auth resolves session callbacks against. Defaults to
+# the request origin when unset (fine for local dev on a single origin).
+# AUTH_URL=http://localhost:5174
+
 # Cloudflare API token for the cell's account — used by the provisioner to
 # create D1/R2 and upload tenant Workers into the dispatch namespace.
 CLOUDFLARE_API_TOKEN=replace-with-cloudflare-api-token

@@ -28,7 +28,23 @@ cirrus/
   deploy-keys.ts     issue / list / revoke / verify (SHA-256 hashed)
   crons.ts           code-first crons (hourly preview cleanup)
 src/
-  server.ts          control-plane Worker entry (D1 global tables + deploy router + crons)
+  server.ts          control-plane Worker entry (D1 global tables + deploy router
+                     + crons + better-auth `/api/auth/*` + studio identity)
+  client/            hosted studio — React SPA served alongside the Worker by @cirrus/vite
+    main.tsx         CirrusProvider + StrictMode mount
+    auth-client.ts   better-auth React client (relative /api/auth basePath)
+    App.tsx          session gate → org picker → org dashboard
+    Login.tsx        email/password sign-in + sign-up
+    OrganizationList.tsx       list + create orgs (cell-scoped)
+    OrganizationDashboard.tsx  per-org tabs (projects/members/keys/invites/usage)
+    ProjectsSection.tsx        projects + create → DeploymentsSection
+    DeploymentsSection.tsx     a project's deployments (read-only; live status)
+    MembersSection.tsx         members + add/remove
+    DeployKeysSection.tsx      issue (show-once) / revoke deploy keys
+    InvitationsSection.tsx     invite (token shown once) / revoke
+    UsageSection.tsx           current-month usage summary
+    AsyncList.tsx              loading/empty/populated helper for live lists
+    styles.css                 studio styling
   provision.ts       @cirrus/provision seam — the ONLY coupling to Alchemy v2
   deploy/
     token-bucket.ts  per-cell API budget (CF 1,200/5min, §2.5)
@@ -96,11 +112,18 @@ pnpm install                         # from the repo root
 pnpm --filter "@cirrus/cloud" run codegen     # generate cirrus/_generated/*
 pnpm --filter "@cirrus/cloud" run lint:types  # codegen + tsc --noEmit
 pnpm --filter "@cirrus/cloud" run test        # vitest
-pnpm --filter "@cirrus/cloud" run dev         # local dev (cirrus dev)
+pnpm --filter "@cirrus/cloud" run build       # vite build (Worker + studio SPA)
+pnpm --filter "@cirrus/cloud" run dev         # vite dev server (Worker + studio on one origin)
 ```
 
-Copy `.dev.vars.example` → `.dev.vars` and fill `CIRRUS_ADMIN_TOKEN`. Before a
-real deploy, create the D1 database and replace the `database_id` placeholder in
+The hosted studio (`src/client`) and the control-plane Worker (`src/server.ts`)
+are served together by `@cirrus/vite` on a single origin — the SPA talks to the
+Worker's `/api/auth/*` (better-auth) and Cirrus query/mutation endpoints with no
+cross-origin setup, mirroring how the playground app wires worker + client.
+
+Copy `.dev.vars.example` → `.dev.vars` and fill `CIRRUS_ADMIN_TOKEN` and
+`AUTH_SECRET` (the studio's better-auth session secret). Before a real deploy,
+create the D1 database and replace the `database_id` placeholder in
 `wrangler.jsonc`.
 
 ## Licensing
