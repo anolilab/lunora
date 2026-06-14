@@ -72,6 +72,7 @@ const MESSAGE_IDS = [
     "Cirrus surfaces slow functions, error spikes, and cache problems here.",
     "Clear",
     "Clear inbox",
+    "Columns unavailable",
     "CLI",
     "Client",
     "collecting samples…",

@@ -831,6 +831,171 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         });
     });
 
+    describe("emitShard — table columns", () => {
+        it("prepends system fields (_id, _creationTime) to every table", () => {
+            expect.assertions(4);
+
+            const schema: SchemaIR = {
+                tables: [
+                    {
+                        indexes: [],
+                        name: "posts",
+                        rankIndexes: [],
+                        relations: [],
+                        searchIndexes: [],
+                        shape: { title: { kind: "string" } },
+                        shardMode: "root",
+                        vectorIndexes: [],
+                    },
+                ],
+                vectorIndexes: [],
+            };
+
+            const output = emitShard(schema);
+
+            expect(output).toContain('"name": "_id"');
+            expect(output).toContain('"pk": true');
+            expect(output).toContain('"name": "_creationTime"');
+            expect(output).toContain('"type": "number"');
+        });
+
+        it("emits a scalar column with its IR kind as type", () => {
+            expect.assertions(2);
+
+            const schema: SchemaIR = {
+                tables: [
+                    {
+                        indexes: [],
+                        name: "posts",
+                        rankIndexes: [],
+                        relations: [],
+                        searchIndexes: [],
+                        shape: { title: { kind: "string" } },
+                        shardMode: "root",
+                        vectorIndexes: [],
+                    },
+                ],
+                vectorIndexes: [],
+            };
+
+            const output = emitShard(schema);
+
+            expect(output).toContain('"name": "title"');
+            expect(output).toContain('"type": "string"');
+        });
+
+        it("unwraps v.optional(...) to the inner kind and marks optional: true", () => {
+            expect.assertions(3);
+
+            const schema: SchemaIR = {
+                tables: [
+                    {
+                        indexes: [],
+                        name: "profiles",
+                        rankIndexes: [],
+                        relations: [],
+                        searchIndexes: [],
+                        shape: { bio: { kind: "optional", inner: { kind: "string" } } },
+                        shardMode: "root",
+                        vectorIndexes: [],
+                    },
+                ],
+                vectorIndexes: [],
+            };
+
+            const output = emitShard(schema);
+
+            expect(output).toContain('"name": "bio"');
+            expect(output).toContain('"optional": true');
+            expect(output).toContain('"type": "string"');
+        });
+
+        it("marks a defaulted column optional", () => {
+            expect.assertions(2);
+
+            const schema: SchemaIR = {
+                tables: [
+                    {
+                        indexes: [],
+                        name: "posts",
+                        rankIndexes: [],
+                        relations: [],
+                        searchIndexes: [],
+                        shape: { views: { kind: "number", column: { hasDefault: true, notNull: true } } },
+                        shardMode: "root",
+                        vectorIndexes: [],
+                    },
+                ],
+                vectorIndexes: [],
+            };
+
+            const output = emitShard(schema);
+
+            expect(output).toContain('"optional": true');
+            expect(output).toContain('"type": "number"');
+        });
+
+        it("records the FK target table for v.id('ref')", () => {
+            expect.assertions(2);
+
+            const schema: SchemaIR = {
+                tables: [
+                    {
+                        indexes: [],
+                        name: "posts",
+                        rankIndexes: [],
+                        relations: [],
+                        searchIndexes: [],
+                        shape: { author: { kind: "id", tableName: "users" } },
+                        shardMode: "root",
+                        vectorIndexes: [],
+                    },
+                ],
+                vectorIndexes: [],
+            };
+
+            const output = emitShard(schema);
+
+            expect(output).toContain('"ref": "users"');
+            expect(output).toContain('"type": "id"');
+        });
+
+        it("flags a v.storage() column with isStorage: true", () => {
+            expect.assertions(1);
+
+            const schema: SchemaIR = {
+                tables: [
+                    {
+                        indexes: [],
+                        name: "uploads",
+                        rankIndexes: [],
+                        relations: [],
+                        searchIndexes: [],
+                        shape: { avatar: { kind: "storage" } },
+                        shardMode: "root",
+                        vectorIndexes: [],
+                    },
+                ],
+                vectorIndexes: [],
+            };
+
+            const output = emitShard(schema);
+
+            expect(output).toContain('"isStorage": true');
+        });
+
+        it("emits the CIRRUS_TABLE_COLUMNS constant even for an empty schema", () => {
+            expect.assertions(2);
+
+            const output = emitShard({ tables: [], vectorIndexes: [] });
+
+            expect(output).toContain("const CIRRUS_TABLE_COLUMNS");
+            expect(output).toContain(
+                "CIRRUS_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: string; optional: boolean; pk?: boolean; ref?: string; type: string }>> = {}",
+            );
+        });
+    });
+
     describe("emitShard", () => {
         it("wires @cirrus/vectors auto-sync when the schema declares vector indexes", () => {
             expect.assertions(7);

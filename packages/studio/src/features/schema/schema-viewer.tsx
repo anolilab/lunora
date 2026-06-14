@@ -9,7 +9,7 @@ import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import useDebounced from "../../hooks/use-debounced";
 import { useT } from "../../i18n/i18n-context";
-import type { ColumnMeta, TableColumnsResult, TableIndexesResult, TableIndexInfo, TableInfo, TablePage } from "../../lib/admin";
+import type { ColumnMeta, TableIndexesResult, TableIndexInfo, TableInfo, TablePage, TablesColumnsResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/internal";
 import { recordShard } from "../../lib/shard-history";
@@ -33,7 +33,7 @@ interface SchemaViewerProps {
 const LIST_TABLES = adminRef(ADMIN_FUNCTIONS.listTables);
 const LIST_TABLE_INDEXES = adminRef(ADMIN_FUNCTIONS.listTableIndexes);
 const READ_TABLE_PAGE = adminRef(ADMIN_FUNCTIONS.readTablePage);
-const DESCRIBE_TABLE = adminRef(ADMIN_FUNCTIONS.describeTable);
+const DESCRIBE_TABLES = adminRef(ADMIN_FUNCTIONS.describeTables);
 
 /** Hoisted empty edge list so the diagram props don't allocate a fresh array each render. */
 const EMPTY_EDGES: ReadonlyArray<SchemaEdge> = [];
@@ -99,6 +99,11 @@ export const SchemaViewer = ({ initialShardKey, initialTable }: SchemaViewerProp
     // metadata: real types + PK/FK markers, absent from `PRAGMA table_info`).
     const [shardColumns, setShardColumns] = useState<Record<string, Record<string, ColumnMeta[]>>>({});
 
+    // Shards whose typed-column probe (`describeTable`) failed — drives the
+    // diagram's "columns unavailable" signal so a failed load isn't mistaken for
+    // an empty table.
+    const [shardColumnsError, setShardColumnsError] = useState<Record<string, boolean>>({});
+
     const [globalTables, setGlobalTables] = useState<GlobalTableInfo[] | null>(null);
     const [globalError, setGlobalError] = useState<null | string>(null);
     const [globalColumns, setGlobalColumns] = useState<Record<string, string[]>>({});
@@ -120,6 +125,7 @@ export const SchemaViewer = ({ initialShardKey, initialTable }: SchemaViewerProp
                 // diagram re-probes against the freshly listed tables.
                 setShardEdges((previous) => Object.fromEntries(Object.entries(previous).filter(([cachedShard]) => cachedShard !== shard)));
                 setShardColumns((previous) => Object.fromEntries(Object.entries(previous).filter(([cachedShard]) => cachedShard !== shard)));
+                setShardColumnsError((previous) => Object.fromEntries(Object.entries(previous).filter(([cachedShard]) => cachedShard !== shard)));
             } catch (error_) {
                 setTables(null);
                 setError(errorMessage(error_));
@@ -248,26 +254,34 @@ export const SchemaViewer = ({ initialShardKey, initialTable }: SchemaViewerProp
     // the admin op — that table just renders without typed columns.
     const probeShardSchema = useCallback(
         async (shard: string, names: string[]): Promise<void> => {
-            const results = await Promise.all(
-                names.map(async (table): Promise<{ columns: ColumnMeta[]; edges: SchemaEdge[]; table: string }> => {
-                    const [page, described] = await Promise.allSettled([
-                        client.query(READ_TABLE_PAGE, { limit: 1, offset: 0, table }, callOptions(shard)) as Promise<TablePage>,
-                        client.query(DESCRIBE_TABLE, { table }, callOptions(shard)) as Promise<TableColumnsResult>,
-                    ]);
+            const [described, pages] = await Promise.all([
+                Promise.allSettled([client.query(DESCRIBE_TABLES, { tables: names }, callOptions(shard)) as Promise<TablesColumnsResult>]),
+                Promise.all(
+                    names.map(async (table): Promise<{ edges: SchemaEdge[]; table: string }> => {
+                        const page = await Promise.allSettled([
+                            client.query(READ_TABLE_PAGE, { limit: 1, offset: 0, table }, callOptions(shard)) as Promise<TablePage>,
+                        ]);
 
-                    return {
-                        columns: described.status === "fulfilled" ? described.value.columns : [],
-                        edges: page.status === "fulfilled" ? referencesToEdges(table, page.value.refs) : [],
-                        table,
-                    };
-                }),
-            );
+                        return { edges: page[0].status === "fulfilled" ? referencesToEdges(table, page[0].value.refs) : [], table };
+                    }),
+                ),
+            ]);
+
+            const columnsByTable = described[0].status === "fulfilled" ? described[0].value.columnsByTable : {};
+
+            // The columns probe is a single batched `describeTables` call, so a
+            // failed read fails for the whole shard — driving the diagram's
+            // "columns unavailable" signal (a failed load isn't an empty table).
+            const columnsFailed = described[0].status === "rejected";
 
             setShardEdges((previous) => {
-                return { ...previous, [shard]: results.flatMap((result) => result.edges) };
+                return { ...previous, [shard]: pages.flatMap((result) => result.edges) };
             });
             setShardColumns((previous) => {
-                return { ...previous, [shard]: Object.fromEntries(results.map((result) => [result.table, result.columns])) };
+                return { ...previous, [shard]: Object.fromEntries(names.map((table) => [table, columnsByTable[table] ?? []])) };
+            });
+            setShardColumnsError((previous) => {
+                return { ...previous, [shard]: columnsFailed };
             });
         },
         [client],
@@ -340,6 +354,7 @@ export const SchemaViewer = ({ initialShardKey, initialTable }: SchemaViewerProp
                     )}
                     <SchemaDiagram
                         columnsByTable={shardColumns[shardKey] ?? EMPTY_COLUMNS}
+                        columnsError={shardColumnsError[shardKey] === true}
                         edges={shardEdges[shardKey] ?? EMPTY_EDGES}
                         tables={shardTableNames}
                         testIdPrefix="sc-graph-shard"

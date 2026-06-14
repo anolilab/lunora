@@ -34,13 +34,21 @@ describe("buildNodes", () => {
     it("builds one databaseSchema node per table, carrying its typed columns", () => {
         expect.assertions(4);
 
-        const nodes = buildNodes(TABLES, REF_EDGES, COLUMNS_BY_TABLE, "shard");
+        const nodes = buildNodes(TABLES, REF_EDGES, COLUMNS_BY_TABLE, "shard", false);
         const messages = nodes.find((node) => node.id === "messages");
 
         expect(nodes).toHaveLength(2);
         expect(messages?.type).toBe("databaseSchema");
         expect(messages?.data.columns).toHaveLength(4);
         expect(messages?.data.tier).toBe("shard");
+    });
+
+    it("marks nodes with loadError when columnsError is set", () => {
+        expect.assertions(1);
+
+        const nodes = buildNodes(TABLES, NO_EDGES, NO_COLUMNS, "shard", true);
+
+        expect(nodes.every((node) => node.data.loadError === true)).toBe(true);
     });
 });
 
@@ -93,6 +101,14 @@ describe("schemaDiagram (component)", () => {
 
         expect(screen.getByTestId("sd-empty").textContent).toContain("No tables to graph");
     });
+
+    it("shows a columns-unavailable hint when the column probe failed", () => {
+        expect.assertions(1);
+
+        render(<SchemaDiagram columnsByTable={NO_COLUMNS} columnsError edges={NO_EDGES} tables={TABLES} testIdPrefix="sd" tier="shard" />);
+
+        expect(screen.getByTestId("sd-node-messages-error").textContent).toContain("Columns unavailable");
+    });
 });
 
 /** A shard mock whose `messages` table carries a `v.id("users")` ref + typed columns via describeTable. */
@@ -115,10 +131,47 @@ const createClient = (): MockClientHooks =>
                     : { columns: ["__id__", "name"], rows: [], total: 0 };
             }
 
+            if (reference === ADMIN_FUNCTIONS.describeTables) {
+                const { tables } = args as { tables: string[] };
+
+                return { columnsByTable: Object.fromEntries(tables.map((table) => [table, COLUMNS_BY_TABLE[table] ?? []])) };
+            }
+
             if (reference === ADMIN_FUNCTIONS.describeTable) {
                 const { table } = args as { table: string };
 
                 return { columns: COLUMNS_BY_TABLE[table] ?? [] };
+            }
+
+            throw new Error(`unexpected ${reference}`);
+        },
+        readGlobalTablePage: () => {
+            return { columns: [], rows: [], total: 0 };
+        },
+    });
+
+/** A shard mock where the batched `describeTables` probe rejects to simulate a missing admin op. */
+const createClientWithColumnError = (): MockClientHooks =>
+    createMockClient({
+        listGlobalTables: () => [],
+        query: (reference, args): unknown => {
+            if (reference === ADMIN_FUNCTIONS.listTables) {
+                return [
+                    { name: "messages", rowCount: 3 },
+                    { name: "users", rowCount: 1 },
+                ];
+            }
+
+            if (reference === ADMIN_FUNCTIONS.readTablePage) {
+                const { table } = args as { table: string };
+
+                return table === "messages"
+                    ? { columns: ["__id__", "author", "text"], refs: { author: "users" }, rows: [], total: 0 }
+                    : { columns: ["__id__", "name"], rows: [], total: 0 };
+            }
+
+            if (reference === ADMIN_FUNCTIONS.describeTables) {
+                throw new Error("no admin op");
             }
 
             throw new Error(`unexpected ${reference}`);
@@ -147,5 +200,19 @@ describe("schemaDiagram (viewer integration)", () => {
         const column = await screen.findByTestId("sd-col-messages-author");
 
         expect(column.textContent).toContain("author");
+    });
+
+    it("shows the columns-unavailable hint when the describeTables probe rejects", async () => {
+        expect.assertions(1);
+
+        render(renderViewer(createClientWithColumnError()));
+
+        await screen.findByTestId("sc-table-messages");
+        fireEvent.click(screen.getByTestId("sc-view-graph"));
+
+        // describeTables rejects for the shard → shardColumnsError[shard] is true → hint renders.
+        const hint = await screen.findByTestId("sd-node-messages-error");
+
+        expect(hint.textContent).toContain("Columns unavailable");
     });
 });

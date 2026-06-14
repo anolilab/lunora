@@ -31,6 +31,7 @@ export const ADMIN_FUNCTIONS = {
     clearTable: "__cirrus_admin__:clearTable",
     deleteRows: "__cirrus_admin__:deleteRows",
     describeTable: "__cirrus_admin__:describeTable",
+    describeTables: "__cirrus_admin__:describeTables",
     exportShard: "__cirrus_admin__:exportShard",
     getAdvisories: "__cirrus_admin__:getAdvisories",
     getAuditLog: "__cirrus_admin__:getAuditLog",
@@ -334,6 +335,11 @@ export interface ColumnMeta {
 /** Payload of a `__cirrus_admin__:describeTable` call, mirroring `@cirrus/do`'s `TableColumnsResult`. */
 export interface TableColumnsResult {
     columns: ColumnMeta[];
+}
+
+/** Payload of a `__cirrus_admin__:describeTables` call, mirroring `@cirrus/do`'s `TablesColumnsResult`. */
+export interface TablesColumnsResult {
+    columnsByTable: Record<string, ColumnMeta[]>;
 }
 
 /** Severity of a static schema advisory (the advisor's `Level`, lowercased to match the studio's tab levels). */

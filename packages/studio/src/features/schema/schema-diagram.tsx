@@ -21,6 +21,8 @@ const NODE_TYPES = { databaseSchema: DatabaseSchemaNode } as unknown as NodeType
 interface SchemaDiagramProps {
     /** Typed columns per table (from `describeTable`); a table absent here renders with no rows yet. */
     readonly columnsByTable: Readonly<Record<string, ColumnMeta[]>>;
+    /** True when the typed-column probe for this tier failed — nodes show a "columns unavailable" hint instead of an empty `—`. */
+    readonly columnsError?: boolean;
     /** Foreign-key edges to draw between the tables. */
     readonly edges: ReadonlyArray<SchemaEdge>;
     /** The tables to render as nodes. */
@@ -40,13 +42,14 @@ const buildNodes = (
     edges: ReadonlyArray<SchemaEdge>,
     columnsByTable: Readonly<Record<string, ColumnMeta[]>>,
     tier: StorageTier,
+    columnsError: boolean,
 ): DatabaseSchemaNodeType[] => {
     const counts = new Map<string, number>(tables.map((name) => [name, (columnsByTable[name] ?? []).length]));
     const positions = computeLayout(tables, edges, counts);
 
     return positions.map(({ name, x, y }) => {
         return {
-            data: { columns: columnsByTable[name] ?? [], label: name, tier },
+            data: { columns: columnsByTable[name] ?? [], label: name, loadError: columnsError, tier },
             id: name,
             position: { x, y },
             type: "databaseSchema",
@@ -90,10 +93,13 @@ const buildEdges = (edges: ReadonlyArray<SchemaEdge>, columnsByTable: Readonly<R
  * cycle-safe) so the diagram opens stable, then the operator can drag nodes.
  * Read-only — connecting is disabled.
  */
-export const SchemaDiagram = ({ columnsByTable, edges, tables, testIdPrefix, tier }: SchemaDiagramProps): ReactElement => {
+export const SchemaDiagram = ({ columnsByTable, columnsError, edges, tables, testIdPrefix, tier }: SchemaDiagramProps): ReactElement => {
     const t = useT();
 
-    const seededNodes = useMemo(() => buildNodes(tables, edges, columnsByTable, tier), [tables, edges, columnsByTable, tier]);
+    const seededNodes = useMemo(
+        () => buildNodes(tables, edges, columnsByTable, tier, columnsError ?? false),
+        [tables, edges, columnsByTable, tier, columnsError],
+    );
     const seededEdges = useMemo(() => buildEdges(edges, columnsByTable), [edges, columnsByTable]);
 
     const [nodes, setNodes, onNodesChange] = useNodesState<DatabaseSchemaNodeType>(seededNodes);

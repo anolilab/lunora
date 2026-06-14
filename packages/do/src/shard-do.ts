@@ -3632,6 +3632,13 @@ abstract class ShardDO {
             return { result, tables: new Set([table === "" ? ADMIN_WILDCARD : table]) };
         }
 
+        if (functionPath === ADMIN_FUNCTIONS.describeTables) {
+            const requested = Array.isArray(args["tables"]) ? args["tables"].filter((table): table is string => typeof table === "string") : [];
+            const columnsByTable: Record<string, ColumnMeta[]> = Object.fromEntries(requested.map((table) => [table, this.tableColumns(table)]));
+
+            return { result: { columnsByTable }, tables: new Set(requested.length === 0 ? [ADMIN_WILDCARD] : requested) };
+        }
+
         if (functionPath === ADMIN_FUNCTIONS.migrationStatus) {
             const id = typeof args["id"] === "string" ? args["id"] : undefined;
 

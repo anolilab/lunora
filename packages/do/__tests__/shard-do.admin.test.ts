@@ -218,6 +218,48 @@ describe("shardDO admin introspection", () => {
         });
     });
 
+    it("returns columns for several tables in one describeTables call", async () => {
+        expect.assertions(2);
+
+        class ColumnsShard extends AdminShard {
+            // eslint-disable-next-line class-methods-use-this -- test stub mirroring the codegen override
+            protected override tableColumns(
+                table: string,
+            ): { isStorage?: boolean; name: string; optional: boolean; pk?: boolean; ref?: string; type: string }[] {
+                if (table === "messages") {
+                    return [
+                        { name: "_id", optional: false, pk: true, type: "id" },
+                        { name: "text", optional: false, type: "string" },
+                    ];
+                }
+
+                return table === "users" ? [{ name: "_id", optional: false, pk: true, type: "id" }] : [];
+            }
+        }
+
+        const shard = new ColumnsShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+        // Base hook still reports nothing per-table for an unknown table.
+        const base = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const baseResponse = await base.fetch(adminRequest(ADMIN_FUNCTIONS.describeTables, { tables: ["messages"] }, ADMIN_TOKEN));
+
+        await expect(baseResponse.json()).resolves.toEqual({ result: { columnsByTable: { messages: [] } } });
+
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.describeTables, { tables: ["messages", "users"] }, ADMIN_TOKEN));
+
+        await expect(response.json()).resolves.toEqual({
+            result: {
+                columnsByTable: {
+                    messages: [
+                        { name: "_id", optional: false, pk: true, type: "id" },
+                        { name: "text", optional: false, type: "string" },
+                    ],
+                    users: [{ name: "_id", optional: false, pk: true, type: "id" }],
+                },
+            },
+        });
+    });
+
     it("reports no advisories from the base hook, and the subclass-declared ones when overridden", async () => {
         expect.assertions(2);
 

@@ -35,6 +35,7 @@ const ADMIN_FUNCTIONS = {
     clearTable: "__cirrus_admin__:clearTable",
     deleteRows: "__cirrus_admin__:deleteRows",
     describeTable: "__cirrus_admin__:describeTable",
+    describeTables: "__cirrus_admin__:describeTables",
     exportShard: "__cirrus_admin__:exportShard",
     getAdvisories: "__cirrus_admin__:getAdvisories",
     getAuditLog: "__cirrus_admin__:getAuditLog",
@@ -51,6 +52,7 @@ const ADMIN_FUNCTIONS = {
     getSettings: "__cirrus_admin__:getSettings",
     importShard: "__cirrus_admin__:importShard",
     listTables: "__cirrus_admin__:listTables",
+    listWorkflows: "__cirrus_admin__:listWorkflows",
     migrationStatus: "__cirrus_admin__:migrationStatus",
     pitrRestore: "__cirrus_admin__:pitrRestore",
     rankBefore: "__cirrus_admin__:rankBefore",
@@ -247,6 +249,11 @@ interface TableColumnsResult {
     columns: ColumnMeta[];
 }
 
+/** Payload of a `__cirrus_admin__:describeTables` call: columns per requested table, keyed by table name. */
+interface TablesColumnsResult {
+    columnsByTable: Record<string, ColumnMeta[]>;
+}
+
 /**
  * One static schema advisory, surfaced by `__cirrus_admin__:getAdvisories`.
  * Structurally mirrors `@cirrus/advisor`'s `Finding` (splinter-shaped) — the
@@ -375,6 +382,8 @@ interface StudioFeaturesResult {
     storage: boolean;
     /** The schema declares vector indexes, `@cirrus/vectors` / `ctx.vectors` is used, or it is a declared dependency. */
     vectors: boolean;
+    /** `@cirrus/workflow` / `ctx.workflows` is used, the app declares workflows, or it is a declared dependency. */
+    workflows: boolean;
 }
 
 /** Payload of a `__cirrus_admin__:getFunctionStats` call. */
@@ -1041,4 +1050,5 @@ export type {
     TableIndexInfo,
     TableInfo,
     TablePage,
+    TablesColumnsResult,
 };
