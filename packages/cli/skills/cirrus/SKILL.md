@@ -42,11 +42,16 @@ these defaults.
 After codegen is green, use the most specific Cirrus skill for the task:
 
 - New project, or adding Cirrus to an existing app: `cirrus-quickstart`
+- Writing or reviewing schema + functions (the core authoring rules):
+  `cirrus-functions`
+- Wiring live data into a client (hooks, optimistic updates): `cirrus-realtime`
 - Authentication setup (email/password, OAuth, magic link, OTP):
   `cirrus-setup-auth`
 - Building a reusable capability — a registry item or an `@cirrus/*` package:
   `cirrus-create-package`
 - Planning or running a schema/data migration: `cirrus-migration-helper`
+- Deploying to Cloudflare (wrangler, bindings, secrets, the drift gate):
+  `cirrus-deploy`
 - Investigating performance, scan, or write-conflict issues:
   `cirrus-performance-audit`
 
