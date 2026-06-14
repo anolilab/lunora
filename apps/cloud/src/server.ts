@@ -20,6 +20,8 @@ import { CIRRUS_CLOUD_PLANS } from "./billing/plans";
 import { createDeployRouter } from "./deploy/router";
 import type { CronTarget } from "./fanout/cron";
 import { fanOutCron } from "./fanout/cron";
+import type { QueueMessage, TenantQueueGroup } from "./fanout/queue";
+import { fanOutQueue, groupByTenant } from "./fanout/queue";
 
 /**
  * Cirrus Cloud control-plane Worker — the platform itself, dogfooded on Cirrus
@@ -184,14 +186,14 @@ const deployRouter = createDeployRouter();
 // to (the "tenant cron fan-out tick" heartbeat in cirrus/crons.ts).
 const EVERY_MINUTE = "*/1 * * * *";
 
-interface CronDeploymentRow {
+interface LiveDeploymentRow {
     adminToken?: string;
     cronSpecs?: string[];
     scriptName: string;
 }
 
-/** Read live deployments that declare cron expressions, keeping admin tokens in-process. */
-const readCronTargets = async (env: Env): Promise<CronTarget[]> => {
+/** Read the live deployments (admin tokens stay in-process, never exposed over an endpoint). */
+const readLiveDeployments = async (env: Env): Promise<LiveDeploymentRow[]> => {
     if (!env.DB) {
         return [];
     }
@@ -199,14 +201,34 @@ const readCronTargets = async (env: Env): Promise<CronTarget[]> => {
     const database = createD1CtxDb({ exec: buildExec(env.DB as D1DatabaseLike), schema: schema as unknown as D1CtxDbOptions["schema"] });
     const { page } = await database.findMany("deployments", { where: { status: "live" } });
 
-    return (page as unknown as CronDeploymentRow[])
+    return page as unknown as LiveDeploymentRow[];
+};
+
+/** Live deployments that declare cron expressions, shaped for the cron fan-out. */
+const readCronTargets = async (env: Env): Promise<CronTarget[]> => {
+    const live = await readLiveDeployments(env);
+
+    return live
         .filter(
-            (row): row is CronDeploymentRow & { adminToken: string; cronSpecs: string[] } =>
+            (row): row is LiveDeploymentRow & { adminToken: string; cronSpecs: string[] } =>
                 Boolean(row.adminToken) && Array.isArray(row.cronSpecs) && row.cronSpecs.length > 0,
         )
         .map((row) => {
             return { adminToken: row.adminToken, cronSpecs: row.cronSpecs, scriptName: row.scriptName };
         });
+};
+
+/** Script id → per-deployment admin token, for the queue fan-out. */
+const readDeploymentTokens = async (env: Env): Promise<Map<string, string>> => {
+    const tokens = new Map<string, string>();
+
+    for (const row of await readLiveDeployments(env)) {
+        if (row.adminToken) {
+            tokens.set(row.scriptName, row.adminToken);
+        }
+    }
+
+    return tokens;
 };
 
 /** Tick one tenant's cron over the dispatcher, gated by its admin token. */
@@ -223,6 +245,88 @@ const dispatchCronTick = async (
     );
 
     return response.ok;
+};
+
+/**
+ * Forward one tenant's queue sub-batch to its `/_cirrus/queue` endpoint, gated by
+ * its admin token. Returns the message ids the tenant asked to retry; on a
+ * delivery failure the whole group is retried (the caller catches the throw).
+ */
+const dispatchQueueBatch = async (dispatcher: NonNullable<Env["DISPATCHER"]>, group: TenantQueueGroup, adminToken: string): Promise<string[]> => {
+    const response = await dispatcher.get(group.script).fetch(
+        new Request("https://tenant.internal/_cirrus/queue", {
+            body: JSON.stringify({ messages: group.messages, queue: "tenant" }),
+            headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
+            method: "POST",
+        }),
+    );
+
+    if (!response.ok) {
+        throw new Error(`queue forward failed: ${String(response.status)}`);
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- Response.json() is `unknown` under workers-types; tsc requires the assertion
+    const result = (await response.json()) as { retry?: unknown };
+    const retry: unknown[] = Array.isArray(result.retry) ? result.retry : [];
+
+    return retry.filter((id): id is string => typeof id === "string");
+};
+
+/** A queue batch the platform consumer drains (Cloudflare `MessageBatch`, minimally typed). */
+interface QueueBatchLike {
+    messages: ReadonlyArray<QueueMessage & { ack: () => void; retry: () => void }>;
+    queue: string;
+}
+
+/**
+ * The platform-owned queue consumer (§2.4). WfP tenants can't be queue
+ * consumers, so this account-level handler drains the shared queue, groups by
+ * the producing tenant's script, and forwards each sub-batch to that tenant's
+ * `/_cirrus/queue` (admin tokens resolved in-process). Per the tenant's reply
+ * (or a delivery failure) it retries only the failed messages.
+ */
+const handleQueueBatch = async (batch: QueueBatchLike, env: Env): Promise<void> => {
+    if (!env.DISPATCHER) {
+        batch.messages.forEach((message) => {
+            message.retry();
+        });
+
+        return;
+    }
+
+    const dispatcher = env.DISPATCHER;
+    const tokens = await readDeploymentTokens(env);
+    const { groups, unrouted } = groupByTenant(
+        batch.messages.map((message) => {
+            return { body: message.body, id: message.id };
+        }),
+    );
+    const unroutedSet = new Set(unrouted);
+
+    // A group whose tenant has no live deployment (or token) can't be delivered;
+    // treat its ids as unrouted (ack — retrying would loop) rather than retry.
+    const deliverable = groups.filter((group) => tokens.has(group.script));
+
+    for (const group of groups) {
+        if (!tokens.has(group.script)) {
+            for (const message of group.messages) {
+                unroutedSet.add(message.id);
+            }
+        }
+    }
+
+    const { retry } = await fanOutQueue({
+        dispatch: (group) => dispatchQueueBatch(dispatcher, group, tokens.get(group.script) as string),
+        groups: deliverable,
+    });
+
+    for (const message of batch.messages) {
+        if (retry.has(message.id) && !unroutedSet.has(message.id)) {
+            message.retry();
+        } else {
+            message.ack();
+        }
+    }
 };
 
 /**
@@ -309,6 +413,10 @@ export default {
         worker ??= buildWorker(env);
 
         return worker.fetch(request, env, context);
+    },
+    async queue(batch: QueueBatchLike, env: Env): Promise<void> {
+        // Platform-owned queue consumer for namespaced tenants (§2.4).
+        await handleQueueBatch(batch, env);
     },
     async scheduled(controller: ScheduledControllerLike, env: Env, context: ExecutionContextLike): Promise<void> {
         worker ??= buildWorker(env);
