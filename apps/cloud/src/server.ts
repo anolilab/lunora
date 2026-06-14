@@ -1,3 +1,5 @@
+import type { CirrusAuth, CirrusAuthOptions } from "@cirrus/auth";
+import { cirrusD1Adapter, createAuth, createAuthAdmin, ensureMigrated, handleAuthRequest } from "@cirrus/auth";
 import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@cirrus/d1";
 import { createD1CtxDb, listGlobalTables, readGlobalTablePage } from "@cirrus/d1";
 import type { ExecutionContextLike, GlobalIntrospector, ScheduledControllerLike, ShardNamespaceLike } from "@cirrus/runtime";
@@ -72,22 +74,40 @@ export const ShardDO = createShardDO({
 });
 
 interface Env {
+    /** Secret backing the studio's better-auth sessions. */
+    AUTH_SECRET?: string;
+    /** Base URL better-auth resolves callbacks against. */
+    AUTH_URL?: string;
     /** Bearer token gating the admin endpoints the studio + platform tools call. */
     CIRRUS_ADMIN_TOKEN?: string;
-    /** Control-plane D1 — backs the `.global()` cells/organizations tables. */
+    /** Control-plane D1 — backs the `.global()` cells/organizations tables + auth. */
     DB: unknown;
     SHARD: ShardNamespaceLike;
 }
 
 let worker: ReturnType<typeof createWorker> | null = null;
+let auth: CirrusAuth | null = null;
 
 // The deploy API (`POST /v1/deploy`), mounted as the lowest-priority matcher.
 // Created once so its per-cell scheduler persists across requests.
 const deployRouter = createDeployRouter();
 
+/** Better-auth config: email/password sessions backing the hosted studio. */
+const authOptions = (env: Env): CirrusAuthOptions => {
+    if (!env.AUTH_SECRET) {
+        throw new Error("AUTH_SECRET is required");
+    }
+
+    return { baseURL: env.AUTH_URL, emailAndPassword: { enabled: true }, secret: env.AUTH_SECRET };
+};
+
 const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
     createWorker({
         adminToken: env.CIRRUS_ADMIN_TOKEN,
+        // Dispatch better-auth's `/api/auth/*` routes inside the worker so the
+        // studio SPA + the control plane share an origin.
+        authAdmin: auth ? createAuthAdmin(auth) : undefined,
+        authHandler: (request) => (auth ? handleAuthRequest(auth, request) : Promise.resolve(undefined)),
         // Code-first crons (cirrus/crons.ts): the cleanup-expired-previews job
         // fires on the worker's `scheduled()` entry. The control plane is an
         // account-level worker, so its cron triggers fire normally (§2.4).
@@ -97,12 +117,28 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
         globalIntrospector: env.DB ? d1Introspector(env.DB as D1DatabaseLike) : undefined,
         httpRouter: deployRouter,
         openApiSpec,
+        resolveIdentity: async (request) => {
+            if (!auth) {
+                return null;
+            }
+
+            const session = await auth.api.getSession({ headers: request.headers });
+
+            return session?.user?.id ? { userId: session.user.id } : null;
+        },
         routes: {},
         shardDO: env.SHARD,
     });
 
 export default {
     async fetch(request: Request, env: Env, context: ExecutionContextLike): Promise<Response> {
+        if (!auth) {
+            // Runtime auth instance uses the SQL adapter; a throwaway instance on
+            // the raw D1 drives the one-time schema migration (better-auth Kysely).
+            auth = createAuth({ ...authOptions(env), database: cirrusD1Adapter(env.DB as never) });
+            await ensureMigrated(createAuth({ ...authOptions(env), database: env.DB as never }));
+        }
+
         worker ??= buildWorker(env);
 
         return worker.fetch(request, env, context);

@@ -6,7 +6,7 @@ import { createCloudflareProvisioner } from "../src/provision";
 
 const spec: TenantDeploymentSpec = {
     bindings: { d1: { binding: "DB" }, durableObjects: [{ binding: "SHARD", className: "ShardDO" }], r2: { binding: "FILES" } },
-    bundle: new TextEncoder().encode("export default {}").buffer as ArrayBuffer,
+    bundle: new TextEncoder().encode("export default {}").buffer,
     cell: "cell-1",
     dispatchNamespace: "cirrus-production",
     scriptName: "org__project",
