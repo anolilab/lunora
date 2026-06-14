@@ -25,6 +25,7 @@ import {
 import type {
     AdvisoryFinding,
     AuditLogResult,
+    ColumnMeta,
     FilterClause,
     FilterOperator,
     FunctionCallStat,
@@ -32,6 +33,7 @@ import type {
     OrderByClause,
     RlsPoliciesResult,
     StorageRulesResult,
+    StudioFeaturesResult,
     SubscriptionsResult,
     TableIndexInfo,
 } from "./introspect";
@@ -2117,6 +2119,20 @@ abstract class ShardDO {
     }
 
     /**
+     * Typed columns for `table` (name, validator-IR type, PK/FK/storage role),
+     * surfaced by the schema viewer's diagram via `__cirrus_admin__:describeTable`.
+     * Like {@link tableRefs}/{@link tableIndexes}, the base class can't see the
+     * user's `schema.ts`, so it reports none; the codegen subclass overrides this
+     * with the schema-derived list. Schema-sourced rather than read from SQLite
+     * because cirrus stores rows in a `__doc__` JSON blob, so PRAGMA recovers
+     * neither declared types nor PK/FK roles.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this with the generated schema's column metadata
+    protected tableColumns(_table: string): ColumnMeta[] {
+        return [];
+    }
+
+    /**
      * Storage-key columns per table (`{ table: [field, …] }`) — every field
      * declared `v.storage(...)` in the schema, so the admin `storageReferences`
      * read can join R2 objects back to the rows that own them (and flag orphans).
@@ -2168,6 +2184,20 @@ abstract class ShardDO {
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this with the generated storage-rule metadata
     protected storageRulesMetadata(): StorageRulesResult {
         return { rules: [] };
+    }
+
+    /**
+     * Which optional, package-backed features this deployment wires up, surfaced
+     * via `__cirrus_admin__:studioFeatures` so the studio hides nav pages whose
+     * backing package isn't enabled (mirroring how auth panels gate on
+     * capabilities). Statically discovered by `@cirrus/codegen` from the app's
+     * `cirrus/` sources + schema and emitted into the generated subclass, which
+     * overrides this. The base class can't see the user's project, so it reports
+     * every flag `false` — an un-generated `ShardDO` shows no optional pages.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this with the statically-discovered feature flags
+    protected studioFeatures(): StudioFeaturesResult {
+        return { mail: false, payments: false, scheduler: false, storage: false, vectors: false };
     }
 
     /**
@@ -3568,16 +3598,10 @@ abstract class ShardDO {
             return this.readAdminRunSql(sql, args);
         }
 
-        if (functionPath === ADMIN_FUNCTIONS.listTableIndexes) {
-            const table = typeof args["table"] === "string" ? args["table"] : "";
+        const tableSignal = this.readAdminTableSignal(functionPath, sql, args);
 
-            return { result: { indexes: this.tableIndexes(table) }, tables: new Set([table === "" ? ADMIN_WILDCARD : table]) };
-        }
-
-        if (functionPath === ADMIN_FUNCTIONS.migrationStatus) {
-            const id = typeof args["id"] === "string" ? args["id"] : undefined;
-
-            return { result: { migrations: readMigrationStatus(sql, id) }, tables: new Set([ADMIN_WILDCARD]) };
+        if (tableSignal) {
+            return tableSignal;
         }
 
         const storage = this.readAdminStorageSignal(functionPath, sql, args);
@@ -3588,6 +3612,33 @@ abstract class ShardDO {
 
         // eslint-disable-next-line unicorn/no-null -- `null` signals "not a recognized admin read", matching the subscription-outcome contract codegen subclasses implement
         return null;
+    }
+
+    /**
+     * Resolve the table-scoped introspection reads whose payload is a single
+     * `this.*()` lookup keyed by an optional `table` arg — `listTableIndexes`
+     * (declared indexes), `describeTable` (declared columns) and `migrationStatus`
+     * (the migration ledger). The first two carry their `table` (or the
+     * {@link ADMIN_WILDCARD} sentinel when unscoped); `migrationStatus` is
+     * deployment-wide, so it always carries the wildcard. Returns `undefined` for
+     * any other path so {@link readAdminOp} falls through; folded into one helper
+     * to keep that dispatcher under its complexity budget.
+     */
+    private readAdminTableSignal(functionPath: string, sql: SqlExec, args: Record<string, unknown>): undefined | { result: unknown; tables: Set<string> } {
+        if (functionPath === ADMIN_FUNCTIONS.listTableIndexes || functionPath === ADMIN_FUNCTIONS.describeTable) {
+            const table = typeof args["table"] === "string" ? args["table"] : "";
+            const result = functionPath === ADMIN_FUNCTIONS.describeTable ? { columns: this.tableColumns(table) } : { indexes: this.tableIndexes(table) };
+
+            return { result, tables: new Set([table === "" ? ADMIN_WILDCARD : table]) };
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.migrationStatus) {
+            const id = typeof args["id"] === "string" ? args["id"] : undefined;
+
+            return { result: { migrations: readMigrationStatus(sql, id) }, tables: new Set([ADMIN_WILDCARD]) };
+        }
+
+        return undefined;
     }
 
     /**
@@ -3712,6 +3763,13 @@ abstract class ShardDO {
             // `storageRulesMetadata()`): the rules the studio's access-rules view
             // lists. Schema-wide, like the other static-introspection reads.
             return this.storageRulesMetadata();
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.studioFeatures) {
+            // Read-only optional-feature flags (codegen-emitted, via
+            // `studioFeatures()`): which package-backed nav pages the studio
+            // should show. Deployment-wide, like the other static reads.
+            return this.studioFeatures();
         }
 
         return undefined;

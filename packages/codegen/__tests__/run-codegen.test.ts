@@ -105,6 +105,39 @@ export const mySubs = action({ args: { reference: v.string() }, handler: async (
             expect(result.generated.server).toContain("readonly payments: CirrusPayment;");
         });
 
+        it("gates studioFeatures end-to-end: payments on (ctx read), crons drive scheduler, storage column drives storage, mail/vectors off", () => {
+            expect.assertions(5);
+
+            writeFileSync(
+                join(workdir, "cirrus", "billing.ts"),
+                `import { action, v } from "@cirrus/server";
+export const mySubs = action({ args: { reference: v.string() }, handler: async (ctx, { reference }) => ctx.payments.listSubscriptions(reference) });
+`,
+                "utf8",
+            );
+            writeFileSync(
+                join(workdir, "cirrus", "crons.ts"),
+                `import { cronJobs } from "@cirrus/scheduler";
+import { internal } from "./_generated/api.js";
+const crons = cronJobs();
+crons.cron("ping", "0 * * * *", internal.messages.list, {});
+export default crons;
+`,
+                "utf8",
+            );
+
+            const result = runCodegen({ lint: false, projectRoot: workdir });
+
+            // payments via ctx read; scheduler via a declared cron (no @cirrus/scheduler ctx use needed);
+            // storage via the fixture's `attachments.fileKey: v.storage()` column (no ctx.storage use needed).
+            expect(result.generated.shard).toContain('"payments": true');
+            expect(result.generated.shard).toContain('"scheduler": true');
+            expect(result.generated.shard).toContain('"storage": true');
+            // The fixture app declares no mail or vector usage, so those stay hidden.
+            expect(result.generated.shard).toContain('"mail": false');
+            expect(result.generated.shard).toContain('"vectors": false');
+        });
+
         it("emits api.ts with grouped queries/mutations", () => {
             expect.assertions(8);
 
@@ -768,6 +801,33 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             const output = emitShard({ tables: [], vectorIndexes: [] });
 
             expect(output).toContain("const CIRRUS_STORAGE_RULES: StorageRulesResult = {");
+        });
+    });
+
+    describe("emitShard — studio features", () => {
+        it("emits the passed feature flags into the studioFeatures() override", () => {
+            expect.assertions(3);
+
+            const output = emitShard({ tables: [], vectorIndexes: [] }, [], undefined, false, false, undefined, [], {
+                mail: false,
+                payments: true,
+                scheduler: false,
+                storage: true,
+                vectors: false,
+            });
+
+            expect(output).toContain("protected override studioFeatures(): StudioFeaturesResult {");
+            expect(output).toContain('"payments": true');
+            expect(output).toContain('"storage": true');
+        });
+
+        it("defaults every feature flag off when none are passed", () => {
+            expect.assertions(2);
+
+            const output = emitShard({ tables: [], vectorIndexes: [] });
+
+            expect(output).toContain("const CIRRUS_STUDIO_FEATURES: StudioFeaturesResult = {");
+            expect(output).not.toContain('"payments": true');
         });
     });
 

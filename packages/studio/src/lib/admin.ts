@@ -30,6 +30,7 @@ export const ADMIN_FUNCTIONS = {
     clearCapturedMail: "__cirrus_admin__:clearCapturedMail",
     clearTable: "__cirrus_admin__:clearTable",
     deleteRows: "__cirrus_admin__:deleteRows",
+    describeTable: "__cirrus_admin__:describeTable",
     exportShard: "__cirrus_admin__:exportShard",
     getAdvisories: "__cirrus_admin__:getAdvisories",
     getAuditLog: "__cirrus_admin__:getAuditLog",
@@ -57,6 +58,7 @@ export const ADMIN_FUNCTIONS = {
     storageOrphans: "__cirrus_admin__:storageOrphans",
     storageReferences: "__cirrus_admin__:storageReferences",
     storageRules: "__cirrus_admin__:storageRules",
+    studioFeatures: "__cirrus_admin__:studioFeatures",
     writeRow: "__cirrus_admin__:writeRow",
 } as const;
 
@@ -309,6 +311,31 @@ export interface TableIndexesResult {
     indexes: TableIndexInfo[];
 }
 
+/**
+ * One column of a user table, mirroring `@cirrus/do`'s `ColumnMeta` — the
+ * schema-sourced metadata behind the schema diagram. `type` is the validator IR
+ * kind (`string`, `number`, `id`, `array`, …); `ref` names the FK target table
+ * of a `v.id("ref")` column; `pk` marks the `_id` primary key.
+ */
+export interface ColumnMeta {
+    /** `v.storage(...)` column — the value is an R2 object key. */
+    isStorage?: boolean;
+    name: string;
+    /** Optional on insert (declared `v.optional(...)` or carrying a default). */
+    optional: boolean;
+    /** Primary key — the `_id` column. */
+    pk?: boolean;
+    /** Foreign-key target table for a `v.id("target")` column. */
+    ref?: string;
+    /** Display type: the validator IR kind. */
+    type: string;
+}
+
+/** Payload of a `__cirrus_admin__:describeTable` call, mirroring `@cirrus/do`'s `TableColumnsResult`. */
+export interface TableColumnsResult {
+    columns: ColumnMeta[];
+}
+
 /** Severity of a static schema advisory (the advisor's `Level`, lowercased to match the studio's tab levels). */
 export type AdvisoryLevel = "ERROR" | "INFO" | "WARN";
 
@@ -397,6 +424,28 @@ export interface StorageRuleMetadata {
 /** Payload of a `__cirrus_admin__:storageRules` call, mirroring `@cirrus/do`'s `StorageRulesResult`. */
 export interface StorageRulesResult {
     rules: StorageRuleMetadata[];
+}
+
+/**
+ * Payload of a `__cirrus_admin__:studioFeatures` call, hand-mirroring
+ * `@cirrus/do`'s `StudioFeaturesResult` (the studio can't import `@cirrus/do`).
+ * Each flag is `true` when the app wires up that optional, package-backed feature
+ * (discovered at codegen time from imports / `ctx.*` reads / schema signals / the
+ * package being a declared dependency). The studio hides a nav page whose flag is
+ * `false` — so an app with no `@cirrus/payment` never renders the Payments page
+ * (and never surfaces its "unknown table: subscriptions" error). A worker
+ * predating this RPC returns nothing; the studio treats that as "show everything"
+ * (back-compat).
+ *
+ * A key-exhaustiveness drift guard in this package's tests (and `@cirrus/do`'s)
+ * fails the build if these keys ever diverge from the source contract.
+ */
+export interface StudioFeaturesResult {
+    mail: boolean;
+    payments: boolean;
+    scheduler: boolean;
+    storage: boolean;
+    vectors: boolean;
 }
 
 /** Severity of a buffered log entry, mirroring `@cirrus/do`'s `LogLevel`. */

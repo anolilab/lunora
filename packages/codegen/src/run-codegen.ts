@@ -5,20 +5,32 @@ import type { Finding } from "@cirrus/advisor";
 import { Project } from "ts-morph";
 
 import { lintSchema } from "./advisor";
-import discoverAiUsage from "./discover-ai-usage";
 import discoverAuthApiCalls from "./discover-authapi-calls";
 import { discoverContainers } from "./discover-containers";
 import discoverCrons from "./discover-crons";
+import { buildStudioFeatures, discoverFeatureUsage } from "./discover-feature-usage";
 import { discoverFunctions, listCirrusSourceFiles } from "./discover-functions";
 import discoverHttpRoutes from "./discover-http-routes";
 import discoverInserts from "./discover-inserts";
 import discoverMigrations from "./discover-migrations";
-import discoverPaymentUsage from "./discover-payment-usage";
+import discoverPackageDependencies from "./discover-package-dependencies";
 import discoverQueries from "./discover-queries";
 import discoverRlsProcedures, { discoverRlsMetadata } from "./discover-rls-procedures";
 import discoverSchema from "./discover-schema";
 import discoverStorageRulesMetadata from "./discover-storage-rules";
-import { emitApi, emitContainers, emitCrons, emitDataModel, emitDrizzleSchema, emitFunctions, emitServer, emitShard, emitVectors, emitWranglerCronTriggers } from "./emit";
+import {
+    buildStorageColumns,
+    emitApi,
+    emitContainers,
+    emitCrons,
+    emitDataModel,
+    emitDrizzleSchema,
+    emitFunctions,
+    emitServer,
+    emitShard,
+    emitVectors,
+    emitWranglerCronTriggers,
+} from "./emit";
 import type { ContainerIR } from "./ir";
 import { buildOpenApiDocument, emitOpenApiModule } from "./openapi";
 import { buildOpenRpcDocument, emitOpenRpcModule } from "./openrpc";
@@ -206,15 +218,31 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // emitted into the generated ShardDO's `storageRulesMetadata()` override.
     const storageRulesMetadata = discoverStorageRulesMetadata(project, cirrusDirectory);
 
-    // Whether any function uses Workers AI (imports `@cirrus/ai` or reads
-    // `ctx.ai`). Gates wiring `ctx.ai` into the generated ShardDO + the typed
-    // ActionCtx — so non-AI projects never import the AI SDK into their worker.
-    const hasAi = discoverAiUsage(project, cirrusDirectory);
+    // Single-pass code-usage detection for every optional, package-backed
+    // feature: each flag is set when a `cirrus/` source imports the feature's
+    // `@cirrus/*` package or reads its generated `ctx.*` helper. `ai` and
+    // `payments` gate wiring the SDK into the generated ShardDO + the typed
+    // ActionCtx — so a non-AI / non-payment project never imports those into its
+    // worker; the rest additionally feed the studio nav gating below.
+    const featureUsage = discoverFeatureUsage(project, cirrusDirectory);
+    const hasAi = featureUsage.ai;
+    const hasPayments = featureUsage.payments;
 
-    // Whether any function uses payments (imports `@cirrus/payment` or reads
-    // `ctx.payments`). Gates wiring `ctx.payments` into the generated ShardDO +
-    // the typed ActionCtx — so non-payment projects never import it into their worker.
-    const hasPayments = discoverPaymentUsage(project, cirrusDirectory);
+    // Which optional, package-backed features the studio should show a nav page
+    // for. `buildStudioFeatures` OR's the code-usage flags with the schema/project
+    // signals the `cirrus/`-scoped scan can't see: storage columns + access rules,
+    // declared crons, vector indexes, and — crucially for packages wired only in
+    // the worker entry (e.g. `@cirrus/mail`) — the project's declared dependencies.
+    // Emitted into the generated ShardDO's `studioFeatures()` override so the
+    // studio hides only pages whose backing package the app genuinely never wires.
+    const dependencies = discoverPackageDependencies(options.projectRoot);
+    const studioFeatures = buildStudioFeatures(featureUsage, {
+        cronCount: crons.length,
+        dependencies,
+        storageColumnCount: Object.keys(buildStorageColumns(schema)).length,
+        storageRuleCount: storageRulesMetadata.rules.length,
+        vectorIndexCount: schema.vectorIndexes.length,
+    });
 
     const dataModelContent = emitDataModel(schema);
     const apiContent = emitApi(functions);
@@ -226,7 +254,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         containers,
     );
     const functionsContent = emitFunctions(functions, migrations);
-    const shardContent = emitShard(schema, advisories, rlsMetadata, hasAi, hasPayments, storageRulesMetadata, containers);
+    const shardContent = emitShard(schema, advisories, rlsMetadata, hasAi, hasPayments, storageRulesMetadata, containers, studioFeatures);
     const containersContent = emitContainers(containers);
     const cronsContent = emitCrons(crons);
     const vectorsContent = emitVectors(schema.vectorIndexes);

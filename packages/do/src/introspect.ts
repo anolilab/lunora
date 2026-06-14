@@ -34,6 +34,7 @@ const ADMIN_FUNCTIONS = {
     clearCapturedMail: "__cirrus_admin__:clearCapturedMail",
     clearTable: "__cirrus_admin__:clearTable",
     deleteRows: "__cirrus_admin__:deleteRows",
+    describeTable: "__cirrus_admin__:describeTable",
     exportShard: "__cirrus_admin__:exportShard",
     getAdvisories: "__cirrus_admin__:getAdvisories",
     getAuditLog: "__cirrus_admin__:getAuditLog",
@@ -66,6 +67,7 @@ const ADMIN_FUNCTIONS = {
     storageOrphans: "__cirrus_admin__:storageOrphans",
     storageReferences: "__cirrus_admin__:storageReferences",
     storageRules: "__cirrus_admin__:storageRules",
+    studioFeatures: "__cirrus_admin__:studioFeatures",
     writeRow: "__cirrus_admin__:writeRow",
 } as const;
 
@@ -218,6 +220,34 @@ interface TableIndexesResult {
 }
 
 /**
+ * One column of a user table, surfaced by `__cirrus_admin__:describeTable` for
+ * the studio's schema diagram. Schema-sourced (the codegen subclass overrides
+ * `tableColumns`) rather than read from SQLite, because cirrus stores rows as a
+ * `__doc__` JSON blob, so `PRAGMA table_info` carries neither the declared field
+ * types nor the PK/FK roles. `type` is the validator IR kind (`string`,
+ * `number`, `id`, `array`, …); `ref` names the target table of a `v.id("ref")`
+ * foreign key; `pk` marks the runtime-minted `_id` primary key.
+ */
+interface ColumnMeta {
+    /** `v.storage(...)` column — the value is an R2 object key. */
+    isStorage?: boolean;
+    name: string;
+    /** Optional on insert (declared `v.optional(...)` or carrying a default). */
+    optional: boolean;
+    /** Primary key — the `_id` column. */
+    pk?: boolean;
+    /** Foreign-key target table for a `v.id("target")` column. */
+    ref?: string;
+    /** Display type: the validator IR kind. */
+    type: string;
+}
+
+/** Payload of a `__cirrus_admin__:describeTable` call: every column of the table, in schema order. */
+interface TableColumnsResult {
+    columns: ColumnMeta[];
+}
+
+/**
  * One static schema advisory, surfaced by `__cirrus_admin__:getAdvisories`.
  * Structurally mirrors `@cirrus/advisor`'s `Finding` (splinter-shaped) — the
  * codegen subclass emits these from the advisor's output, and the DO serves
@@ -315,6 +345,36 @@ interface StorageRuleMetadata {
 /** Payload of a `__cirrus_admin__:storageRules` call: the schema's storage access rules for the studio's inspector. */
 interface StorageRulesResult {
     rules: StorageRuleMetadata[];
+}
+
+/**
+ * Payload of a `__cirrus_admin__:studioFeatures` call: which optional, package-
+ * backed features this deployment actually wires up, so the studio can hide nav
+ * pages whose backing package isn't enabled. Every flag is statically determined
+ * at codegen time by OR-ing code usage (a `cirrus/` source imports the package or
+ * reads its `ctx.*` helper), the relevant schema signal (storage columns/rules,
+ * crons, vector indexes), and the package being a declared project dependency —
+ * so a package wired only in the worker entry still shows its page. A `false`
+ * flag means the studio omits that page entirely rather than rendering it and
+ * surfacing an "unknown table" error. The codegen subclass overrides the
+ * `studioFeatures()` hook with these; the default (un-generated) `ShardDO`
+ * reports every flag `false`.
+ *
+ * This shape is the wire contract codegen emits and `@cirrus/studio` hand-mirrors
+ * (it can't import `@cirrus/do`). A key-exhaustiveness drift guard in this
+ * package's tests and the studio's fails the build if the two key sets diverge.
+ */
+interface StudioFeaturesResult {
+    /** `@cirrus/mail` is imported by a `cirrus/` source or a declared dependency. */
+    mail: boolean;
+    /** `@cirrus/payment` is used (import or `ctx.payments`) or a declared dependency. */
+    payments: boolean;
+    /** `@cirrus/scheduler` / `ctx.scheduler` is used, the app declares crons, or it is a declared dependency. */
+    scheduler: boolean;
+    /** `@cirrus/storage` / `ctx.storage` is used, the schema declares storage columns/rules, or it is a declared dependency. */
+    storage: boolean;
+    /** The schema declares vector indexes, `@cirrus/vectors` / `ctx.vectors` is used, or it is a declared dependency. */
+    vectors: boolean;
 }
 
 /** Payload of a `__cirrus_admin__:getFunctionStats` call. */
@@ -951,6 +1011,7 @@ export type {
     AdvisoryFinding,
     AuditEntry,
     AuditLogResult,
+    ColumnMeta,
     DeployInfo,
     FilterClause,
     FilterOperator,
@@ -971,9 +1032,11 @@ export type {
     StorageReferenceResult,
     StorageRuleMetadata,
     StorageRulesResult,
+    StudioFeaturesResult,
     SubscriptionConnection,
     SubscriptionInfo,
     SubscriptionsResult,
+    TableColumnsResult,
     TableIndexesResult,
     TableIndexInfo,
     TableInfo,

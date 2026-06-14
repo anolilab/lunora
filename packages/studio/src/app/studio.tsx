@@ -48,8 +48,10 @@ import { SqlEditorPanel } from "../features/sql/sql-editor-panel";
 import { FileBrowser } from "../features/storage/file-browser";
 import { StorageRulesPanel } from "../features/storage/storage-rules-panel";
 import { VectorBrowser } from "../features/vectors/vector-browser";
+import useStudioFeatures from "../hooks/use-studio-features";
 import { useT } from "../i18n/i18n-context";
 import { StudioI18nProvider } from "../i18n/i18n-provider";
+import type { StudioFeaturesResult } from "../lib/admin";
 import { fireAndForget } from "../lib/internal";
 import type { FunctionDescriptor } from "../lib/types";
 import { cn } from "../lib/utils";
@@ -173,11 +175,12 @@ type StudioShellProps = Omit<StudioProps, "i18n" | "locale">;
 
 /**
  * Stable identifier for each icon-rail domain; the display label is localised.
- * Mirrors the Supabase-Studio section model (Home · Table editor · SQL · Database
- * · Auth · Storage · Reports · Advisors · Logs · Settings), the target IA in
- * `STUDIO-REDESIGN-PLAN.md` §2.
+ * Adapts the Supabase-Studio section model (Home · Database · Functions · Auth ·
+ * Storage · Reports · Advisors · Logs · Settings): the table editor, SQL editor,
+ * and schema/migrations pages all live under one `database` domain so the data
+ * and SQL surfaces sit together. Target IA in `STUDIO-REDESIGN-PLAN.md` §2.
  */
-type NavGroupKey = "advisors" | "auth" | "database" | "home" | "logs" | "reports" | "settings" | "sql" | "storage" | "tableEditor";
+type NavGroupKey = "advisors" | "auth" | "database" | "functions" | "home" | "logs" | "reports" | "settings" | "storage";
 
 /**
  * 16px line glyphs (drawn at a 24-unit grid) keyed by tab. Inline so the
@@ -236,9 +239,8 @@ type NavGroup = { readonly key: NavGroupKey; readonly tabs: ReadonlyArray<Studio
  */
 const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
     { key: "home", tabs: ["home"] },
-    { key: "tableEditor", tabs: ["data"] },
-    { key: "sql", tabs: ["sql", "functions", "api"] },
-    { key: "database", tabs: ["schema", "migrations", "vectors", "export", "pitr"] },
+    { key: "database", tabs: ["data", "sql", "schema", "migrations", "vectors", "export", "pitr"] },
+    { key: "functions", tabs: ["functions", "api"] },
     { key: "auth", tabs: ["users", "organizations", "authSessions", "authConfig"] },
     { key: "storage", tabs: ["files", "storageRules"] },
     { key: "reports", tabs: ["dashboards", "metrics", "health"] },
@@ -248,22 +250,47 @@ const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
 ];
 
 /**
+ * Optional, package-backed tabs and the feature flag that gates each. A tab
+ * listed here is hidden from the nav (and its panel made unreachable) when the
+ * deployment doesn't wire up the backing package — so an app with no
+ * `@cirrus/payment` never shows the Payments page, the way auth panels gate on
+ * capabilities. Tabs absent from this map are always shown (core surfaces). The
+ * flags come from `useStudioFeatures` (the `__cirrus_admin__:studioFeatures` RPC,
+ * statically discovered by codegen). `storage` gates both the file browser and
+ * the access-rules view; `scheduler` gates the scheduled-jobs view.
+ */
+const TAB_FEATURE: Partial<Record<StudioTab, keyof StudioFeaturesResult>> = {
+    files: "storage",
+    mail: "mail",
+    payments: "payments",
+    schedule: "scheduler",
+    storageRules: "storage",
+    vectors: "vectors",
+};
+
+/** True when a tab is shown for the given feature flags: always, unless its gating flag is off. */
+const isTabVisible = (tab: StudioTab, features: StudioFeaturesResult): boolean => {
+    const feature = TAB_FEATURE[tab];
+
+    return feature === undefined || features[feature];
+};
+
+/**
  * Which tab's glyph represents each rail domain. The rail shows one icon per
  * domain (Supabase-style); the secondary nav shows a glyph per sub-page. Most
- * domains borrow their first sub-page's icon; `database` uses the schema glyph so
- * it reads distinct from the Table-editor cylinder.
+ * domains borrow their first sub-page's icon; `database` uses the data-cylinder
+ * glyph (its first sub-page is the table editor).
  */
 const GROUP_ICON_TAB: Record<NavGroupKey, StudioTab> = {
     advisors: "security",
     auth: "users",
-    database: "schema",
+    database: "data",
+    functions: "functions",
     home: "home",
     logs: "logs",
     reports: "metrics",
     settings: "settings",
-    sql: "functions",
     storage: "files",
-    tableEditor: "data",
 };
 
 const TabIcon = ({ tab }: { readonly tab: StudioTab }): ReactElement => (
@@ -344,6 +371,31 @@ const StudioLayout = (): ReactElement => {
     const current = tabFromPathname(pathname);
     const fullHeight = FULL_HEIGHT_TABS.has(current);
 
+    // Which optional package-backed pages this deployment enables. Defaults to
+    // everything-shown until the RPC settles, so the nav never flickers a page in
+    // then out — it only ever drops a page once the worker reports it disabled.
+    const features = useStudioFeatures();
+
+    // The nav, command palette, and active-domain lookup all run off the filtered
+    // groups so a disabled feature's tab disappears from every entry point. A
+    // group whose every tab is gated off collapses out of the rail entirely.
+    const visibleGroups = useMemo(
+        () =>
+            NAV_GROUPS.map((group) => {
+                return { ...group, tabs: group.tabs.filter((tab) => isTabVisible(tab, features)) };
+            }).filter((group) => group.tabs.length > 0),
+        [features],
+    );
+
+    // Landing on (or deep-linking to) a now-hidden tab bounces to Home, so a
+    // disabled feature's panel is unreachable even by typing its URL — the same
+    // backstop `NotFoundRedirect` gives unknown paths.
+    useEffect(() => {
+        if (!isTabVisible(current, features)) {
+            fireAndForget(navigate({ replace: true, to: "/home" }));
+        }
+    }, [current, features, navigate]);
+
     // Memoised on `t` (stable per locale) so the maps re-localise when the active
     // locale changes but aren't rebuilt on every unrelated render.
     const tabLabel = useMemo<Record<StudioTab, string>>(() => {
@@ -386,13 +438,12 @@ const StudioLayout = (): ReactElement => {
             advisors: t("Advisors"),
             auth: t("Auth"),
             database: t("Database"),
+            functions: t("Functions"),
             home: t("Home"),
             logs: t("Logs"),
             reports: t("Reports"),
             settings: t("Settings"),
-            sql: t("SQL / Functions"),
             storage: t("Storage"),
-            tableEditor: t("Table editor"),
         };
     }, [t]);
 
@@ -454,7 +505,7 @@ const StudioLayout = (): ReactElement => {
     // `current` always belongs to a group, but `.find` is typed as possibly
     // undefined; fall back to the first domain (defined by the non-empty tuple
     // type) so the shell always has an active area.
-    const activeGroup = NAV_GROUPS.find((group) => group.tabs.includes(current)) ?? NAV_GROUPS[0];
+    const activeGroup = visibleGroups.find((group) => group.tabs.includes(current)) ?? NAV_GROUPS[0];
 
     const selectGroup = useCallback(
         (event: React.MouseEvent<HTMLButtonElement>): void => {
@@ -466,12 +517,12 @@ const StudioLayout = (): ReactElement => {
     // Every navigable destination, in rail order, for the ⌘K command palette.
     const commandItems = useMemo<CommandItem[]>(
         () =>
-            NAV_GROUPS.flatMap((group) =>
+            visibleGroups.flatMap((group) =>
                 group.tabs.map((tab) => {
                     return { group: groupLabel[group.key], label: tabLabel[tab], to: `/${tab}` };
                 }),
             ),
-        [groupLabel, tabLabel],
+        [groupLabel, tabLabel, visibleGroups],
     );
 
     // Collapse the 250px secondary nav to just the icon rail (Supabase's bottom
@@ -535,7 +586,7 @@ const StudioLayout = (): ReactElement => {
             <CommandPalette items={commandItems} />
             {/* Icon rail — one entry per area, settings pinned to the bottom. */}
             <nav aria-label={t("Studio areas")} className="flex flex-col items-center gap-1 border-e border-border bg-sidebar py-2" data-testid="dash-rail">
-                {NAV_GROUPS.map((group) => {
+                {visibleGroups.map((group) => {
                     // The rail icon routes to the group's first sub-page; its glyph
                     // is the domain icon (Supabase-style), not necessarily that page's.
                     const railTab = group.tabs[0] as StudioTab;

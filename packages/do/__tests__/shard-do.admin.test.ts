@@ -5,7 +5,7 @@ import type { DatabaseWriterLike, SchemaLike, SqlExec } from "../src/ctx-db";
 import { applyCdcChanges, createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
 import type { DataMigrationLike, MigrationRunResult } from "../src/data-migration";
 import { runDataMigration } from "../src/data-migration";
-import type { AdvisoryFinding } from "../src/introspect";
+import type { AdvisoryFinding, StudioFeaturesResult } from "../src/introspect";
 import { ADMIN_FUNCTIONS } from "../src/introspect";
 import type { RankIndexDefinitionLike, ShardRankPageResult } from "../src/rank";
 import { rankKeyFromDoc } from "../src/rank";
@@ -22,6 +22,21 @@ import type {
 import { ShardDO } from "../src/shard-do";
 import type { SocketAttachment } from "../src/types";
 import createSqliteExec from "./_helpers/node-sqlite";
+
+/**
+ * Canonical key set of `StudioFeaturesResult`. `@cirrus/studio` hand-mirrors this
+ * type (it can't import `@cirrus/do`) and duplicates this exact tuple in its own
+ * drift guard. `lint:types` fails here if a key is added to / removed from
+ * `StudioFeaturesResult` without updating this tuple — and there if the studio
+ * copy drifts — forcing both packages to move together.
+ */
+const STUDIO_FEATURE_KEYS = ["mail", "payments", "scheduler", "storage", "vectors"] as const;
+
+/** `true` only when `Keys` and `Canonical` are mutually assignable (the exact same key set). */
+type KeysMatch<Keys extends string, Canonical extends string> = [Keys] extends [Canonical] ? ([Canonical] extends [Keys] ? true : never) : never;
+
+// Compile-time drift guard: assigning `true` fails tsc the moment the key sets diverge.
+const STUDIO_FEATURES_KEY_GUARD: KeysMatch<keyof StudioFeaturesResult, (typeof STUDIO_FEATURE_KEYS)[number]> = true;
 
 /**
  * A real-SQLite-backed ShardDO whose `handleRpc` throws — proving the admin
@@ -162,6 +177,47 @@ describe("shardDO admin introspection", () => {
         });
     });
 
+    it("reports no columns from the base hook, and the subclass-declared ones when overridden", async () => {
+        expect.assertions(2);
+
+        // Base ShardDO can't see the user schema, so it reports an empty list.
+        const base = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const baseResponse = await base.fetch(adminRequest(ADMIN_FUNCTIONS.describeTable, { table: "messages" }, ADMIN_TOKEN));
+
+        await expect(baseResponse.json()).resolves.toEqual({ result: { columns: [] } });
+
+        // The codegen subclass overrides `tableColumns` from the schema; mimic it.
+        class ColumnsShard extends AdminShard {
+            // eslint-disable-next-line class-methods-use-this -- test stub mirroring the codegen override
+            protected override tableColumns(
+                table: string,
+            ): { isStorage?: boolean; name: string; optional: boolean; pk?: boolean; ref?: string; type: string }[] {
+                return table === "messages"
+                    ? [
+                          { name: "_id", optional: false, pk: true, type: "id" },
+                          { name: "_creationTime", optional: false, type: "number" },
+                          { name: "channelId", optional: false, ref: "channels", type: "id" },
+                          { name: "text", optional: false, type: "string" },
+                      ]
+                    : [];
+            }
+        }
+
+        const columns = new ColumnsShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await columns.fetch(adminRequest(ADMIN_FUNCTIONS.describeTable, { table: "messages" }, ADMIN_TOKEN));
+
+        await expect(response.json()).resolves.toEqual({
+            result: {
+                columns: [
+                    { name: "_id", optional: false, pk: true, type: "id" },
+                    { name: "_creationTime", optional: false, type: "number" },
+                    { name: "channelId", optional: false, ref: "channels", type: "id" },
+                    { name: "text", optional: false, type: "string" },
+                ],
+            },
+        });
+    });
+
     it("reports no advisories from the base hook, and the subclass-declared ones when overridden", async () => {
         expect.assertions(2);
 
@@ -196,6 +252,42 @@ describe("shardDO admin introspection", () => {
         const response = await advised.fetch(adminRequest(ADMIN_FUNCTIONS.getAdvisories, {}, ADMIN_TOKEN));
 
         await expect(response.json()).resolves.toEqual({ result: { advisories: [finding] } });
+    });
+
+    it("reports every studio feature off from the base hook, and the subclass-declared flags when overridden", async () => {
+        expect.assertions(2);
+
+        // Base ShardDO can't see the user's project, so it hides every optional page.
+        const base = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const baseResponse = await base.fetch(adminRequest(ADMIN_FUNCTIONS.studioFeatures, {}, ADMIN_TOKEN));
+
+        await expect(baseResponse.json()).resolves.toEqual({
+            result: { mail: false, payments: false, scheduler: false, storage: false, vectors: false },
+        });
+
+        // The codegen subclass overrides `studioFeatures()` with the discovered flags.
+        class FeaturedShard extends AdminShard {
+            // eslint-disable-next-line class-methods-use-this -- test stub mirroring the codegen override
+            protected override studioFeatures(): { mail: boolean; payments: boolean; scheduler: boolean; storage: boolean; vectors: boolean } {
+                return { mail: false, payments: true, scheduler: true, storage: false, vectors: false };
+            }
+        }
+
+        const featured = new FeaturedShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await featured.fetch(adminRequest(ADMIN_FUNCTIONS.studioFeatures, {}, ADMIN_TOKEN));
+
+        await expect(response.json()).resolves.toEqual({
+            result: { mail: false, payments: true, scheduler: true, storage: false, vectors: false },
+        });
+    });
+
+    it("keeps StudioFeaturesResult's keys in lockstep with the studio's hand-mirror", () => {
+        expect.assertions(2);
+
+        // The compile-time guard (STUDIO_FEATURES_KEY_GUARD) is what actually fails
+        // the build on drift; this asserts the tuple matches the wire shape at runtime too.
+        expect(STUDIO_FEATURES_KEY_GUARD).toBe(true);
+        expect([...STUDIO_FEATURE_KEYS]).toStrictEqual(["mail", "payments", "scheduler", "storage", "vectors"]);
     });
 
     it("derives an unused_index runtime advisory for a declared index no query exercised", async () => {
@@ -1567,12 +1659,11 @@ describe("shardDO admin bulk delete", () => {
 
     const rowCount = (): number => Number(database.raw(`SELECT COUNT(*) AS c FROM "todos"`)[0]?.["c"] ?? 0);
 
-    /** Seed `count` todos in project `projectId`, returning the writer used (its reads hit the shadow tables). */
-    const seedProject = async (writer: DatabaseWriterLike, projectId: string, count: number): Promise<void> => {
-        // gitleaks:allow -- kingfisher false positive on a test-helper signature, no secret
+    /** Seed `count` todos in the given project, returning the writer used (its reads hit the shadow tables). */
+    const seedProject = async (writer: DatabaseWriterLike, project: string, count: number): Promise<void> => {
         for (let index = 0; index < count; index += 1) {
             // eslint-disable-next-line no-await-in-loop -- sequential seed writes
-            await writer.insert("todos", { done: false, projectId, title: `t${index.toString()}` });
+            await writer.insert("todos", { done: false, projectId: project, title: `t${index.toString()}` }); // gitleaks:allow -- column name, not a secret
         }
     };
 
