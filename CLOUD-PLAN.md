@@ -239,7 +239,15 @@ pages, WfP isolation + gotcha notes). These go into the Phase 1 spike checklist 
   cannot be consumers until proven otherwise. Impact: `@cirrus/mail`'s queue-backed
   sends and the scheduler's queue-workpool variant. Mitigation mirrors crons: a
   platform-owned consumer Worker that dispatches batches back into the tenant Worker,
-  or fall back to the DO-alarm workpool on the managed tier.
+  or fall back to the DO-alarm workpool on the managed tier. _Built:_ the runtime
+  exposes an admin-gated `POST /_cirrus/queue` endpoint + a `queueHandler` option
+  (`@cirrus/runtime`); the control-plane Worker is the account-level consumer
+  (`queue()` in `src/server.ts`, bound to a shared `cirrus-tenant-queue`), grouping
+  each batch by the producing tenant's script (envelope `{ script, body }`) and
+  forwarding via `env.DISPATCHER.get(script).fetch('/_cirrus/queue')` with the
+  per-deployment admin token (in-process); per-message retry follows the tenant's
+  `{ retry: [...] }` reply (`src/fanout/queue.ts`). _Remaining:_ live validation, and
+  a producer-side helper that tags `@cirrus/mail`/scheduler messages with the script.
 - **Per-tenant resource provisioning hits account limits unevenly** (verified
   numbers) — D1: 50,000 databases/account on paid, **raisable by request to
   millions** (explicitly supported for per-tenant patterns); R2: 1,000,000
