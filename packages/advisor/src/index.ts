@@ -7,9 +7,11 @@
  * any lint uniformly, but the rules run against Cirrus's declared schema (and,
  * later, observed runtime signal) rather than Postgres catalog views.
  */
+import constraintValidator from "./lints/runtime/constraint-validator";
 import hotShard from "./lints/runtime/hot-shard";
 import indexUtilization from "./lints/runtime/index-utilization";
 import authApiCallWithoutHeaders from "./lints/static/auth-api-call-without-headers";
+import circularFk from "./lints/static/circular-fk";
 import containerOversizedInstance from "./lints/static/container-oversized-instance";
 import containerPublicInternet from "./lints/static/container-public-internet";
 import duplicateIndex from "./lints/static/duplicate-index";
@@ -27,9 +29,11 @@ export type { AdvisorAuthApiCall } from "./authapi-calls";
 export type { AdvisorContainer } from "./containers";
 export type { AdvisorIndexHit, AdvisorTableScan } from "./index-usage";
 export type { AdvisorInsertWrite } from "./inserts";
+export { default as constraintValidator } from "./lints/runtime/constraint-validator";
 export { default as hotShard } from "./lints/runtime/hot-shard";
 export { default as indexUtilization } from "./lints/runtime/index-utilization";
 export { default as authApiCallWithoutHeaders } from "./lints/static/auth-api-call-without-headers";
+export { default as circularFk } from "./lints/static/circular-fk";
 export { default as containerOversizedInstance } from "./lints/static/container-oversized-instance";
 export { default as containerPublicInternet } from "./lints/static/container-public-internet";
 export { default as duplicateIndex } from "./lints/static/duplicate-index";
@@ -46,6 +50,7 @@ export type { AdvisorRlsProcedure } from "./rls-procedures";
 export type { AdvisorIndex, AdvisorRelation, AdvisorSchema, AdvisorTable } from "./schema";
 export { fromServerSchema } from "./schema";
 export type { AdvisorShardTraffic } from "./shard-traffic";
+export type { AdvisorTableSample } from "./table-samples";
 export type { Category, Facing, Finding, Level, Lint, LintContext, LintSource } from "./types";
 
 /**
@@ -59,6 +64,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     relationReferencesUnknownTable,
     relationReferencesUnknownField,
     emptyIndex,
+    circularFk,
     unindexedForeignKey,
     duplicateIndex,
     tableWithoutInsert,
@@ -77,7 +83,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
  * no-op. Run them with `runAdvisor(ctx, { source: "runtime" })` against a live
  * deployment's aggregated metrics.
  */
-export const RUNTIME_LINTS: ReadonlyArray<Lint> = [hotShard, indexUtilization];
+export const RUNTIME_LINTS: ReadonlyArray<Lint> = [hotShard, indexUtilization, constraintValidator];
 
 /** The default lint set: the static lints, then the runtime lints. A caller filters by `source` to run one tier. */
 export const ALL_LINTS: ReadonlyArray<Lint> = [...STATIC_LINTS, ...RUNTIME_LINTS];

@@ -163,7 +163,7 @@ describe("runtime lint registration", () => {
     it("includes both runtime lints, sourced runtime", () => {
         expect.assertions(3);
 
-        expect(RUNTIME_LINTS.map((lint) => lint.name)).toStrictEqual(["hot_shard", "index_utilization"]);
+        expect(RUNTIME_LINTS.map((lint) => lint.name)).toStrictEqual(["hot_shard", "index_utilization", "constraint_validator"]);
         expect(RUNTIME_LINTS.every((lint) => lint.source === "runtime")).toBe(true);
         expect(ALL_LINTS).toContain(hotShard);
     });

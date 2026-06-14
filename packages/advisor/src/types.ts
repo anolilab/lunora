@@ -6,6 +6,7 @@ import type { AdvisorQueryRead } from "./queries";
 import type { AdvisorRlsProcedure } from "./rls-procedures";
 import type { AdvisorSchema } from "./schema";
 import type { AdvisorShardTraffic } from "./shard-traffic";
+import type { AdvisorTableSample } from "./table-samples";
 
 /**
  * Severity of a finding, mirroring splinter's `level`. `ERROR` is a definite
@@ -132,6 +133,21 @@ export interface LintContext {
      * accumulator. Absent for static callers, where the lint finds nothing.
      */
     shardTraffic?: ReadonlyArray<AdvisorShardTraffic>;
+
+    /**
+     * Bounded row samples per table — the `constraint_validator` lint input.
+     * Supplied by the studio backend, which reads up to the configured row cap
+     * from each table via `readTablePage` and assembles the existing-id set for
+     * FK referential-integrity checks. Absent for static callers or codegen
+     * feeders, where the constraint lint simply finds nothing.
+     *
+     * Each entry carries `existingIds` (every `_id` in the sample window) so
+     * FK columns can be cross-checked across tables in O(1) per value. When
+     * `truncated` is `true`, violations on rows beyond the cap are not reported
+     * — the finding description notes the sample cap so the operator understands
+     * the bounded window.
+     */
+    tableSamples?: ReadonlyArray<AdvisorTableSample>;
 
     /**
      * Per-table full-scan volume observed at runtime (the hot-scan half of the
