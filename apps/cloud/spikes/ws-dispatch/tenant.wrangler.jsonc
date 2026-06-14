@@ -1,0 +1,20 @@
+{
+    "$schema": "../../node_modules/wrangler/config-schema.json",
+    // Spike tenant Worker (CLOUD-PLAN.md §6 risk #3). Deploy INTO the dispatch
+    // namespace so the cloud dispatcher can route to it:
+    //
+    //   wrangler deploy -c tenant.wrangler.jsonc \
+    //     --dispatch-namespace cirrus-production --name ws-spike
+    //
+    // Then the dispatcher serves it at https://ws-spike.<CIRRUS_APP_DOMAIN>/...
+    // (Workers for Platforms paid add-on required.)
+    "name": "cirrus-ws-spike-tenant",
+    "main": "tenant-worker.ts",
+    "compatibility_date": "2026-06-10",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [{ "name": "WS_DO", "class_name": "WsRoom" }],
+    },
+    // SQLite-backed DO class — required for hibernatable WebSockets.
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["WsRoom"] }],
+}

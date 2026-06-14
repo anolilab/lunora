@@ -64,6 +64,7 @@ describe("cross-org IDOR guard on delete/revoke", () => {
             const { ctx, writes } = makeCtx("org_1");
 
             await fn.handler(ctx, { id: "row_x" as never, organizationId: "org_1" as never });
+
             expect(writes).toStrictEqual(["row_x"]);
         });
     }
