@@ -58,6 +58,22 @@ const renderViewer = (mock: MockClientHooks) => (
 );
 
 describe("schemaViewer", () => {
+    it("accepts the schemaEditable capability prop and still renders the diagram (overlay is a later item)", async () => {
+        expect.assertions(1);
+
+        // Item 1 only threads the flag through; the prop is a no-op placeholder
+        // here, so passing it must not change today's read-only rendering.
+        render(
+            <CirrusProvider client={createClient().asClient}>
+                <SchemaViewer schemaEditable />
+            </CirrusProvider>,
+        );
+
+        await screen.findByTestId("sc-table-messages");
+
+        expect(screen.getByTestId("sc-toggle-messages").textContent).toBe("messages (3)");
+    });
+
     it("lists tables with counts on mount", async () => {
         expect.assertions(1);
 

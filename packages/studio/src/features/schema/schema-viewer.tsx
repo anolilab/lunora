@@ -32,6 +32,15 @@ interface SchemaViewerProps {
      * (same tab already open) re-expands the target.
      */
     readonly initialTable?: string;
+
+    /**
+     * Enable the visual schema-editor overlay (add table / column / index). Off by
+     * default so the diagram stays read-only. Set only by the loopback dev hosts
+     * (see `StudioProps.schemaEditable`); consumed by the authoring overlay
+     * (plan 024 Item 4). Accepted now as a no-op placeholder so the prop threads
+     * through ahead of the overlay.
+     */
+    readonly schemaEditable?: boolean;
 }
 
 const LIST_TABLES = adminRef(ADMIN_FUNCTIONS.listTables);
@@ -157,7 +166,10 @@ const IndexList = ({
  * configured the global section simply reports it, and the shard section still
  * works.
  */
-export const SchemaViewer = ({ initialShardKey, initialTable }: SchemaViewerProps): ReactElement => {
+// `schemaEditable` is accepted but not yet consumed — the authoring overlay
+// (plan 024 Item 4) reads it. Destructured out of props so it threads through
+// the prop chain without an unused-prop lint flagging the interface field.
+export const SchemaViewer = ({ initialShardKey, initialTable, schemaEditable: _schemaEditable }: SchemaViewerProps): ReactElement => {
     const client = useCirrus();
     const t = useT();
 

@@ -316,6 +316,7 @@ const StudioAppBody = ({ basePath, clearToken, studio, onToggleTheme, onTokenCha
                     runAsIdentity={studio?.runAsIdentity}
                     scheduledCancel={studio?.scheduledCancel}
                     scheduledLoad={studio?.scheduledLoad}
+                    schemaEditable={studio?.schemaEditable}
                 />
             </ErrorBoundary>
         </>
