@@ -421,16 +421,17 @@ Ordered so every phase ships standalone DX value even if we stop there.
 >   CLI (`src/cli/`).
 > - **Phase 2:** preview TTL lifecycle + cleanup cron + GitHub webhook (HMAC +
 >   project resolution).
-> - **Phase 3:** team invitations + the **admin-RPC proxy** (`src/admin/proxy.ts`).
-> - **Phase 4:** plans + **quota enforcement** (projects/members) on
->   `@cirrus/payment`.
+> - **Phase 3:** team invitations + the **admin-RPC proxy mounted** at `POST
+/v1/admin` (per-deployment admin token stored on deploy + `deployments.adminTarget` - audit).
+> - **Phase 4:** plans + **quota enforcement** (projects/members), **usage metering**
+>   (`usageEvents` + `aggregateUsage`), and the **custom-hostname** REST port.
 >
 > **Remaining — genuinely needs live infra / external services / a frontend, to be
 > done by whoever has a Cloudflare account + provider keys:** end-to-end deploy
-> validation against real Cloudflare; per-deployment admin-token storage to wire the
-> admin proxy + the webhook→deploy trigger to live tenants; the **studio React UI**;
-> billing-provider charge wiring + custom hostnames (CF for SaaS) + managed
-> backups/PITR; and the cell bring-up IaC. The code seams for all of these exist.
+> validation against real Cloudflare; the **studio React UI**; the billing-provider
+> _charge_ call (Stripe/Polar via `@cirrus/payment`) + the Analytics-Engine metering
+> _source_; managed backups/PITR; and the cell bring-up IaC. The code seams for all
+> of these exist.
 
 - **Phase 0 — Remote-binding dev (no cloud required). ✅ SHIPPED.** Implemented in the
   framework, not the cloud app: `@cirrus/config/remote-bindings.ts` tags eligible
