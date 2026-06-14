@@ -87,6 +87,9 @@ const registeredFunctionKind = (value: unknown): "action" | "mutation" | "query"
     return undefined;
 };
 
+const registeredFunctionVisibility = (value: unknown): "internal" | "public" =>
+    typeof value === "object" && value !== null && (value as { visibility?: unknown }).visibility === "internal" ? "internal" : "public";
+
 /**
  * Build a value that throws a clear "not available in v1" error the moment a
  * handler touches the stubbed surface — but not at context construction, so
@@ -158,8 +161,8 @@ const cirrusTest = (schema: TestSchema): TestHarness => {
             auth,
             db: database,
             log: noopLog,
-            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `harness` is invoked only when a handler calls ctx.runQuery, after construction completes
-            runQuery: (reference, args) => harness.query(reference, args),
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `runInternal` is invoked only when a handler calls ctx.runQuery, after construction completes
+            runQuery: (reference, args) => runInternal("query", reference, queryContext, args) as Promise<never>,
             storage: stubProxy("storage") as QueryCtx["storage"],
             vectors: stubProxy("vectors") as QueryCtx["vectors"],
         };
@@ -168,10 +171,10 @@ const cirrusTest = (schema: TestSchema): TestHarness => {
             auth,
             db: database,
             log: noopLog,
-            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `harness` is invoked only when a handler calls ctx.runMutation, after construction completes
-            runMutation: (reference, args) => harness.mutation(reference, args),
-            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `harness` is invoked only when a handler calls ctx.runQuery, after construction completes
-            runQuery: (reference, args) => harness.query(reference, args),
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `runInternal` is invoked only when a handler calls ctx.runMutation, after construction completes
+            runMutation: (reference, args) => runInternal("mutation", reference, mutationContext, args) as Promise<never>,
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `runInternal` is invoked only when a handler calls ctx.runQuery, after construction completes
+            runQuery: (reference, args) => runInternal("query", reference, queryContext, args) as Promise<never>,
             scheduler: stubProxy("scheduler") as MutationCtx["scheduler"],
             storage: stubProxy("storage") as MutationCtx["storage"],
             vectors: stubProxy("vectors") as MutationCtx["vectors"],
@@ -182,12 +185,12 @@ const cirrusTest = (schema: TestSchema): TestHarness => {
             db: database,
             fetch: stubProxy("fetch") as ActionCtx["fetch"],
             log: noopLog,
-            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `harness` is invoked only when a handler calls ctx.runAction, after construction completes
-            runAction: (reference, args) => harness.action(reference, args),
-            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `harness` is invoked only when a handler calls ctx.runMutation, after construction completes
-            runMutation: (reference, args) => harness.mutation(reference, args),
-            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `harness` is invoked only when a handler calls ctx.runQuery, after construction completes
-            runQuery: (reference, args) => harness.query(reference, args),
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `runInternal` is invoked only when a handler calls ctx.runAction, after construction completes
+            runAction: (reference, args) => runInternal("action", reference, actionContext, args) as Promise<never>,
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `runInternal` is invoked only when a handler calls ctx.runMutation, after construction completes
+            runMutation: (reference, args) => runInternal("mutation", reference, mutationContext, args) as Promise<never>,
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure: `runInternal` is invoked only when a handler calls ctx.runQuery, after construction completes
+            runQuery: (reference, args) => runInternal("query", reference, queryContext, args) as Promise<never>,
             scheduler: stubProxy("scheduler") as ActionCtx["scheduler"],
             storage: stubProxy("storage") as ActionCtx["storage"],
             vectors: stubProxy("vectors") as ActionCtx["vectors"],
@@ -198,6 +201,7 @@ const cirrusTest = (schema: TestSchema): TestHarness => {
             reference: { handler: (context: unknown, args: never) => unknown },
             context: unknown,
             args: unknown,
+            allowInternal: boolean,
         ): Promise<unknown> => {
             const kind = registeredFunctionKind(reference);
 
@@ -205,12 +209,28 @@ const cirrusTest = (schema: TestSchema): TestHarness => {
                 throw new Error(`expected a registered ${expected}, received a ${kind ?? "non-function"} reference`);
             }
 
+            if (!allowInternal && registeredFunctionVisibility(reference) === "internal") {
+                throw new Error(
+                    `"${expected}" is an internal function — it is unreachable from the external RPC boundary in production. ` +
+                        `Call it through ctx.run${expected.charAt(0).toUpperCase()}${expected.slice(1)} from another function instead.`,
+                );
+            }
+
             return Promise.resolve(reference.handler(context, (args ?? {}) as never));
         };
 
+        // Internal (server-to-server) dispatch surface used by ctx.run*. Mirrors
+        // prod's `isSystemDispatch()` branch: internal functions are reachable here.
+        const runInternal = (
+            expected: "action" | "mutation" | "query",
+            reference: unknown,
+            context: unknown,
+            args: unknown,
+        ): Promise<unknown> => runRegistered(expected, reference as never, context, args, true);
+
         const query = ((referenceOrInline: unknown, args?: unknown): Promise<unknown> => {
             if (registeredFunctionKind(referenceOrInline)) {
-                return runRegistered("query", referenceOrInline as never, queryContext, args);
+                return runRegistered("query", referenceOrInline as never, queryContext, args, false);
             }
 
             return Promise.resolve((referenceOrInline as InlineQueryFunction<unknown>)(queryContext));
@@ -218,7 +238,7 @@ const cirrusTest = (schema: TestSchema): TestHarness => {
 
         const mutation = ((referenceOrInline: unknown, args?: unknown): Promise<unknown> => {
             if (registeredFunctionKind(referenceOrInline)) {
-                return runRegistered("mutation", referenceOrInline as never, mutationContext, args);
+                return runRegistered("mutation", referenceOrInline as never, mutationContext, args, false);
             }
 
             return Promise.resolve((referenceOrInline as InlineMutationFunction<unknown>)(mutationContext));
@@ -226,7 +246,7 @@ const cirrusTest = (schema: TestSchema): TestHarness => {
 
         const action = ((referenceOrInline: unknown, args?: unknown): Promise<unknown> => {
             if (registeredFunctionKind(referenceOrInline)) {
-                return runRegistered("action", referenceOrInline as never, actionContext, args);
+                return runRegistered("action", referenceOrInline as never, actionContext, args, false);
             }
 
             return Promise.resolve((referenceOrInline as InlineActionFunction<unknown>)(actionContext));

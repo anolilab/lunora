@@ -1,4 +1,4 @@
-import { defineSchema, defineTable, mutation, query, v } from "@cirrus/server";
+import { defineSchema, defineTable, internalMutation, mutation, query, v } from "@cirrus/server";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { cirrusTest } from "../src/index";
@@ -28,6 +28,18 @@ const whoAmI = query({
 const scheduleSomething = mutation({
     args: {},
     handler: async (ctx) => ctx.scheduler.runAfter(1000, "noop:fn", {}),
+});
+
+const internalSend = internalMutation({
+    args: { author: v.string(), body: v.string() },
+    handler: async (ctx, args) => ctx.db.insert("messages", { author: args.author, body: args.body }),
+});
+
+// A public mutation that routes through ctx.runMutation to the internal one,
+// modelling prod's trusted system dispatch (where internals are reachable).
+const sendViaInternal = mutation({
+    args: { author: v.string(), body: v.string() },
+    handler: async (ctx, args) => ctx.runMutation(internalSend, { author: args.author, body: args.body }),
 });
 
 // Track every harness so each test's in-memory SQLite handle is closed in
@@ -117,5 +129,45 @@ describe("cirrusTest", () => {
         const t = start();
 
         await expect(t.mutation(scheduleSomething, {})).rejects.toThrow("ctx.scheduler is not available in the in-memory @cirrus/testing harness (v1)");
+    });
+
+    it("rejects an internal function called on the external surface", async () => {
+        expect.assertions(2);
+
+        const t = start();
+
+        await expect(async () => t.mutation(internalSend, { author: "ada", body: "leak" })).rejects.toThrow(
+            "is an internal function — it is unreachable from the external RPC boundary in production",
+        );
+
+        // The rejected call must not have written anything.
+        const rows = await t.query(list, {});
+
+        expect(rows).toHaveLength(0);
+    });
+
+    it("allows an internal function called through ctx.runMutation", async () => {
+        expect.assertions(2);
+
+        const t = start();
+
+        await t.mutation(sendViaInternal, { author: "grace", body: "via internal" });
+
+        const rows = await t.query(list, {});
+
+        expect(rows).toHaveLength(1);
+        expect(rows[0]).toMatchObject({ author: "grace", body: "via internal" });
+    });
+
+    it("still runs a public function on the external surface", async () => {
+        expect.assertions(1);
+
+        const t = start();
+
+        await t.mutation(send, { author: "ada", body: "public ok" });
+
+        const rows = await t.query(list, {});
+
+        expect(rows).toHaveLength(1);
     });
 });
