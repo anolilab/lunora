@@ -61,7 +61,7 @@ describe(runDeployment, () => {
 
 describe(destroyDeployment, () => {
     it("calls the provisioner's destroy through the scheduler", async () => {
-        const destroyed: { cell: string; scriptName: string }[] = [];
+        const destroyed: { dispatchNamespace: string; scriptName: string }[] = [];
         const provisioner: Provisioner = {
             deploy: () => Promise.reject(new Error("unused")),
             destroy: (reference) => {
@@ -71,8 +71,8 @@ describe(destroyDeployment, () => {
             },
         };
 
-        await destroyDeployment({ cell: "cell-1", scriptName: "org__project" }, { provisioner, scheduler: ampleScheduler() });
+        await destroyDeployment({ dispatchNamespace: "cirrus-preview", scriptName: "org__project" }, { provisioner, scheduler: ampleScheduler() });
 
-        expect(destroyed).toStrictEqual([{ cell: "cell-1", scriptName: "org__project" }]);
+        expect(destroyed).toStrictEqual([{ dispatchNamespace: "cirrus-preview", scriptName: "org__project" }]);
     });
 });
