@@ -9,12 +9,12 @@ import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import useDebounced from "../../hooks/use-debounced";
 import { useT } from "../../i18n/i18n-context";
-import type { TableIndexesResult, TableIndexInfo, TableInfo, TablePage } from "../../lib/admin";
+import type { ColumnMeta, TableColumnsResult, TableIndexesResult, TableIndexInfo, TableInfo, TablePage } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/internal";
 import { recordShard } from "../../lib/shard-history";
-import type { SchemaEdge } from "./schema-graph";
-import { SchemaGraph } from "./schema-graph";
+import type { SchemaEdge } from "./layout";
+import { SchemaDiagram } from "./schema-diagram";
 
 interface SchemaViewerProps {
     /** Shard key the viewer targets. Defaults to the root shard. */
@@ -33,9 +33,12 @@ interface SchemaViewerProps {
 const LIST_TABLES = adminRef(ADMIN_FUNCTIONS.listTables);
 const LIST_TABLE_INDEXES = adminRef(ADMIN_FUNCTIONS.listTableIndexes);
 const READ_TABLE_PAGE = adminRef(ADMIN_FUNCTIONS.readTablePage);
+const DESCRIBE_TABLE = adminRef(ADMIN_FUNCTIONS.describeTable);
 
-/** Hoisted empty edge list so the graph props don't allocate a fresh array each render. */
+/** Hoisted empty edge list so the diagram props don't allocate a fresh array each render. */
 const EMPTY_EDGES: ReadonlyArray<SchemaEdge> = [];
+/** Hoisted empty column map so the diagram props don't allocate a fresh object each render. */
+const EMPTY_COLUMNS: Readonly<Record<string, ColumnMeta[]>> = {};
 
 /** How the schema is presented: a textual table list, or the relationship graph. */
 type SchemaView = "graph" | "list";
@@ -91,6 +94,11 @@ export const SchemaViewer = ({ initialShardKey, initialTable }: SchemaViewerProp
     // `refs` (one-row `readTablePage`) lazily when the graph view is opened.
     const [shardEdges, setShardEdges] = useState<Record<string, SchemaEdge[]>>({});
 
+    // Typed columns for the shard tier's diagram, keyed by shard → table →
+    // columns. Probed alongside `shardEdges` via `describeTable` (schema-sourced
+    // metadata: real types + PK/FK markers, absent from `PRAGMA table_info`).
+    const [shardColumns, setShardColumns] = useState<Record<string, Record<string, ColumnMeta[]>>>({});
+
     const [globalTables, setGlobalTables] = useState<GlobalTableInfo[] | null>(null);
     const [globalError, setGlobalError] = useState<null | string>(null);
     const [globalColumns, setGlobalColumns] = useState<Record<string, string[]>>({});
@@ -108,9 +116,10 @@ export const SchemaViewer = ({ initialShardKey, initialTable }: SchemaViewerProp
                 setColumns({});
                 setIndexes({});
                 setExpanded(null);
-                // Drop cached relationships for this shard so the graph re-probes
-                // against the freshly listed tables.
+                // Drop cached relationships + typed columns for this shard so the
+                // diagram re-probes against the freshly listed tables.
                 setShardEdges((previous) => Object.fromEntries(Object.entries(previous).filter(([cachedShard]) => cachedShard !== shard)));
+                setShardColumns((previous) => Object.fromEntries(Object.entries(previous).filter(([cachedShard]) => cachedShard !== shard)));
             } catch (error_) {
                 setTables(null);
                 setError(errorMessage(error_));
@@ -231,26 +240,34 @@ export const SchemaViewer = ({ initialShardKey, initialTable }: SchemaViewerProp
         /* eslint-enable react-you-might-not-need-an-effect/no-event-handler */
     }, [initialTable, tables, toggle]);
 
-    // Probe each shard table's `refs` (one row apiece) and collect the foreign-key
-    // edges for the graph. A single table's probe failing must not blank the
-    // graph, so each probe's rejection is swallowed and that table simply
-    // contributes no edges.
-    const probeShardEdges = useCallback(
+    // Probe each shard table's `refs` (one-row `readTablePage`) for the FK edges
+    // and its typed columns (`describeTable`) for the diagram nodes. Both reads
+    // are best-effort per table: a single table's probe failing must not blank the
+    // diagram, so each rejection is swallowed and that table simply contributes no
+    // edges/columns. `describeTable` is also tolerant of an older worker without
+    // the admin op — that table just renders without typed columns.
+    const probeShardSchema = useCallback(
         async (shard: string, names: string[]): Promise<void> => {
             const results = await Promise.all(
-                names.map(async (table): Promise<SchemaEdge[]> => {
-                    try {
-                        const page = (await client.query(READ_TABLE_PAGE, { limit: 1, offset: 0, table }, callOptions(shard))) as TablePage;
+                names.map(async (table): Promise<{ columns: ColumnMeta[]; edges: SchemaEdge[]; table: string }> => {
+                    const [page, described] = await Promise.allSettled([
+                        client.query(READ_TABLE_PAGE, { limit: 1, offset: 0, table }, callOptions(shard)) as Promise<TablePage>,
+                        client.query(DESCRIBE_TABLE, { table }, callOptions(shard)) as Promise<TableColumnsResult>,
+                    ]);
 
-                        return referencesToEdges(table, page.refs);
-                    } catch {
-                        return [];
-                    }
+                    return {
+                        columns: described.status === "fulfilled" ? described.value.columns : [],
+                        edges: page.status === "fulfilled" ? referencesToEdges(table, page.value.refs) : [],
+                        table,
+                    };
                 }),
             );
 
             setShardEdges((previous) => {
-                return { ...previous, [shard]: results.flat() };
+                return { ...previous, [shard]: results.flatMap((result) => result.edges) };
+            });
+            setShardColumns((previous) => {
+                return { ...previous, [shard]: Object.fromEntries(results.map((result) => [result.table, result.columns])) };
             });
         },
         [client],
@@ -268,12 +285,12 @@ export const SchemaViewer = ({ initialShardKey, initialTable }: SchemaViewerProp
         }
 
         fireAndForget(
-            probeShardEdges(
+            probeShardSchema(
                 shardKey,
                 tables.map((table) => table.name),
             ),
         );
-    }, [view, tables, shardKey, shardEdges, probeShardEdges]);
+    }, [view, tables, shardKey, shardEdges, probeShardSchema]);
 
     const shardTableNames = useMemo<string[]>(() => (tables ?? []).map((table) => table.name), [tables]);
     const globalTableNames = useMemo<string[]>(() => (globalTables ?? []).map((table) => table.name), [globalTables]);
@@ -321,13 +338,19 @@ export const SchemaViewer = ({ initialShardKey, initialTable }: SchemaViewerProp
                             {error}
                         </p>
                     )}
-                    <SchemaGraph edges={shardEdges[shardKey] ?? EMPTY_EDGES} tables={shardTableNames} testIdPrefix="sc-graph-shard" tier="shard" />
+                    <SchemaDiagram
+                        columnsByTable={shardColumns[shardKey] ?? EMPTY_COLUMNS}
+                        edges={shardEdges[shardKey] ?? EMPTY_EDGES}
+                        tables={shardTableNames}
+                        testIdPrefix="sc-graph-shard"
+                        tier="shard"
+                    />
                     {globalError !== null && (
                         <p data-testid="sc-global-error" role="alert">
                             {globalError}
                         </p>
                     )}
-                    <SchemaGraph edges={EMPTY_EDGES} tables={globalTableNames} testIdPrefix="sc-graph-global" tier="global" />
+                    <SchemaDiagram columnsByTable={EMPTY_COLUMNS} edges={EMPTY_EDGES} tables={globalTableNames} testIdPrefix="sc-graph-global" tier="global" />
                 </div>
             )}
 

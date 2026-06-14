@@ -2,6 +2,11 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
+/* React Flow's required base styles for the schema diagram (panning, zoom,
+   handles, edges). Only the minimal `base.css` — the table nodes are styled
+   with our own Tailwind tokens, so we don't pull in React Flow's default theme. */
+@import "@xyflow/react/dist/base.css";
+
 /* Theme tokens (shadcn palette, @custom-variant, @layer base) live in the shared
    theme.css so the library CSS and the standalone apps/studio never drift. */
 @import "./theme.css";

@@ -76,6 +76,7 @@
         "@tanstack/react-router": "catalog:frontend",
         "@tanstack/react-table": "catalog:frontend",
         "@tanstack/react-virtual": "catalog:frontend",
+        "@xyflow/react": "catalog:frontend",
         "class-variance-authority": "catalog:ui",
         "clsx": "catalog:ui",
         "tailwind-merge": "catalog:ui"
