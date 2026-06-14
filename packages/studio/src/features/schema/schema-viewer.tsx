@@ -15,10 +15,12 @@ import { useT } from "../../i18n/i18n-context";
 import type { ColumnMeta, TableIndexesResult, TableIndexInfo, TableInfo, TablePage, TablesColumnsResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/internal";
+import type { SchemaEditTable } from "../../lib/schema-edit";
 import { recordShard } from "../../lib/shard-history";
 import { cn } from "../../lib/utils";
 import type { DiagramTable } from "./schema-diagram";
 import { SchemaDiagram } from "./schema-diagram";
+import { SchemaEditorOverlay } from "./schema-editor-overlay";
 
 interface SchemaViewerProps {
     /** Shard key the viewer targets. Defaults to the root shard. */
@@ -36,9 +38,9 @@ interface SchemaViewerProps {
     /**
      * Enable the visual schema-editor overlay (add table / column / index). Off by
      * default so the diagram stays read-only. Set only by the loopback dev hosts
-     * (see `StudioProps.schemaEditable`); consumed by the authoring overlay
-     * (plan 024 Item 4). Accepted now as a no-op placeholder so the prop threads
-     * through ahead of the overlay.
+     * (see `StudioProps.schemaEditable`); when true, the authoring overlay
+     * (plan 024 Item 4) renders above the table lists and applies additive edits
+     * through the dev host's local schema-edit endpoint.
      */
     readonly schemaEditable?: boolean;
 }
@@ -166,10 +168,7 @@ const IndexList = ({
  * configured the global section simply reports it, and the shard section still
  * works.
  */
-// `schemaEditable` is accepted but not yet consumed — the authoring overlay
-// (plan 024 Item 4) reads it. Destructured out of props so it threads through
-// the prop chain without an unused-prop lint flagging the interface field.
-export const SchemaViewer = ({ initialShardKey, initialTable, schemaEditable: _schemaEditable }: SchemaViewerProps): ReactElement => {
+export const SchemaViewer = ({ initialShardKey, initialTable, schemaEditable }: SchemaViewerProps): ReactElement => {
     const client = useCirrus();
     const t = useT();
 
@@ -464,6 +463,20 @@ export const SchemaViewer = ({ initialShardKey, initialTable, schemaEditable: _s
         setTableFilter(event.target.value);
     }, []);
 
+    // After the overlay applies an additive edit (cirrus/schema.ts + codegen),
+    // re-list the shard so the new table/column/index shows. The schema-edit
+    // endpoint's returned tables describe the SOURCE schema; the studio reads the
+    // live DO via `refresh`, which now reflects the regenerated shape.
+    const onSchemaApplied = useCallback(
+        (_tables: ReadonlyArray<SchemaEditTable>): void => {
+            fireAndForget(refresh(shardKey));
+        },
+        [refresh, shardKey],
+    );
+
+    // Shard table names offered to the overlay's column/index target pickers.
+    const shardTableNames = useMemo<string[]>(() => (tables ?? []).map((table) => table.name), [tables]);
+
     return (
         <div className="flex flex-col gap-4" data-testid="cirrus-schema">
             <div className="flex flex-wrap items-center gap-3">
@@ -492,6 +505,8 @@ export const SchemaViewer = ({ initialShardKey, initialTable, schemaEditable: _s
                     </Button>
                 </div>
             </div>
+
+            {schemaEditable === true && <SchemaEditorOverlay onApplied={onSchemaApplied} tableNames={shardTableNames} />}
 
             {view === "list" && (
                 <Input

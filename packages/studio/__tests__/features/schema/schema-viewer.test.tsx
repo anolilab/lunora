@@ -58,11 +58,9 @@ const renderViewer = (mock: MockClientHooks) => (
 );
 
 describe("schemaViewer", () => {
-    it("accepts the schemaEditable capability prop and still renders the diagram (overlay is a later item)", async () => {
-        expect.assertions(1);
+    it("renders the authoring overlay only when schemaEditable is set", async () => {
+        expect.assertions(3);
 
-        // Item 1 only threads the flag through; the prop is a no-op placeholder
-        // here, so passing it must not change today's read-only rendering.
         render(
             <CirrusProvider client={createClient().asClient}>
                 <SchemaViewer schemaEditable />
@@ -71,7 +69,22 @@ describe("schemaViewer", () => {
 
         await screen.findByTestId("sc-table-messages");
 
+        // The overlay mounts above the read-only diagram; the diagram still renders.
+        expect(screen.getByTestId("sc-editor")).toBeDefined();
         expect(screen.getByTestId("sc-toggle-messages").textContent).toBe("messages (3)");
+        // It carries the add controls (a self-contained smoke check; the overlay's
+        // own behaviour is covered in schema-editor-overlay.test.tsx).
+        expect(screen.getByTestId("sc-editor-add-table")).toBeDefined();
+    });
+
+    it("omits the authoring overlay when schemaEditable is unset (read-only)", async () => {
+        expect.assertions(1);
+
+        render(renderViewer(createClient()));
+
+        await screen.findByTestId("sc-table-messages");
+
+        expect(screen.queryByTestId("sc-editor")).toBeNull();
     });
 
     it("lists tables with counts on mount", async () => {

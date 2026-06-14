@@ -741,6 +741,27 @@ const MESSAGE_IDS = [
     "Output",
     "Refresh",
     "Refreshing…",
+    // Visual schema editor (plan 024).
+    "Edit schema",
+    "Add table",
+    "Add column",
+    "Add index",
+    "Table name",
+    "Column name",
+    "Column type",
+    "Index name",
+    "Index fields (comma-separated)",
+    "Optional",
+    "Unique",
+    "Cancel",
+    "Apply",
+    "Applying…",
+    "This edit changes stored data and must go through a migration. Review the migration before applying.",
+    "Open Migrations",
+    "Schema updated.",
+    "Codegen reported diagnostics:",
+    "Editing the schema is only available in local dev.",
+    "Adds a table, column, or index to cirrus/schema.ts and reruns codegen.",
 ] as const;
 
 /** A known studio message id — one of the entries in {@link MESSAGE_IDS}. */
