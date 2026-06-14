@@ -149,6 +149,35 @@ interface SchemaLike {
     vectorIndexes: Record<string, VectorIndexDefinitionLike>;
 }
 
+/**
+ * Index names already warned about (metadata synced without a namespace). The
+ * warning is a one-time-per-process dev signal, so we dedupe by index name
+ * across every hook invocation rather than spamming on every write.
+ */
+const sharedMetadataWarned = new Set<string>();
+
+/**
+ * Emit a single dev warning when an index carrying metadata is synced with no
+ * namespace — in a multi-tenant/sharded app that silently shares one tenant's
+ * vectors + metadata with every other tenant. Side-effect-only: never touches
+ * the upsert payload. At most one warning per index name per process.
+ */
+const warnSharedMetadata = (indexName: string): void => {
+    if (sharedMetadataWarned.has(indexName)) {
+        return;
+    }
+
+    sharedMetadataWarned.add(indexName);
+
+    // eslint-disable-next-line no-console
+    console.warn(
+        `[@cirrus/vectors] index "${indexName}" syncs metadata without a namespace — in a\n` +
+            "multi-tenant/sharded app this exposes one tenant's vectors+metadata to others.\n" +
+            "Pass `namespace` (the shard/tenant key) on both write and query. Suppress via\n" +
+            "{ allowSharedMetadata: true }.",
+    );
+};
+
 const pickMetadata = (row: Record<string, unknown>, fields: ReadonlyArray<string>): Record<string, unknown> => {
     const result: Record<string, unknown> = {};
 
@@ -187,8 +216,8 @@ const pickMetadata = (row: Record<string, unknown>, fields: ReadonlyArray<string
  * upsert can itself fail — this is best-effort, the authoritative recovery is
  * re-running the (idempotent) write.
  */
-const createVectorSyncHook = (options: { namespace?: string; schema: SchemaLike; vectors: VectorSearchLike }): WriteHook => {
-    const { namespace, schema, vectors } = options;
+const createVectorSyncHook = (options: { allowSharedMetadata?: boolean; namespace?: string; schema: SchemaLike; vectors: VectorSearchLike }): WriteHook => {
+    const { allowSharedMetadata, namespace, schema, vectors } = options;
 
     return async (event: WriteEvent): Promise<void> => {
         const tableDefinition = schema.tables[event.table];
@@ -255,6 +284,10 @@ const createVectorSyncHook = (options: { namespace?: string; schema: SchemaLike;
                 await vectors.deleteByIds(entry.index.name, [event.id]);
             }),
             ...inlineToUpsert.map((entry) => async (): Promise<void> => {
+                if (!allowSharedMetadata && namespace === undefined && entry.index.metadata !== undefined && entry.index.metadata.length > 0) {
+                    warnSharedMetadata(entry.index.name);
+                }
+
                 await vectors.upsert(entry.index.name, {
                     embed: entry.index.embed,
                     id: event.id,
@@ -264,6 +297,10 @@ const createVectorSyncHook = (options: { namespace?: string; schema: SchemaLike;
                 });
             }),
             ...standaloneIndexes.map(([name, definition]) => async (): Promise<void> => {
+                if (!allowSharedMetadata && namespace === undefined && definition.metadata !== undefined) {
+                    warnSharedMetadata(name);
+                }
+
                 await vectors.upsert(name, {
                     embed: definition.embed,
                     id: event.id,

@@ -271,4 +271,109 @@ describe("createVectorSyncHook", () => {
         expect(vectors.deletes).toContainEqual(["docs-body", ["d1"]]);
         expect(vectors.deletes).toContainEqual(["docs-fulltext", ["d1"]]);
     });
+
+    it("warns once when a metadata index is synced without a namespace", async () => {
+        expect.assertions(3);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const vectors = fakeVectorSearch();
+        const schema: SchemaLike = {
+            tables: { messages: { vectorIndexes: [{ embed, field: "body", metadata: ["author"], name: "warn-no-ns" }] } },
+            vectorIndexes: {},
+        };
+        const hook = createVectorSyncHook({ schema, vectors });
+
+        await hook({ doc: { author: "ann", body: "hi" }, id: "m1", op: "insert", table: "messages" });
+
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('index "warn-no-ns" syncs metadata without a namespace'));
+
+        // A second sync of the same index does not warn again (one-time per process).
+        await hook({ doc: { author: "bob", body: "yo" }, id: "m2", op: "insert", table: "messages" });
+
+        expect(warn).toHaveBeenCalledTimes(1);
+
+        warn.mockRestore();
+    });
+
+    it("warns for a Shape B metadata index synced without a namespace", async () => {
+        expect.assertions(1);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const vectors = fakeVectorSearch();
+        const schema: SchemaLike = {
+            tables: { docs: {} },
+            vectorIndexes: {
+                "warn-standalone": {
+                    embed,
+                    metadata: (row) => {
+                        return { title: row.title };
+                    },
+                    select: (row) => String(row.title),
+                    table: "docs",
+                },
+            },
+        };
+        const hook = createVectorSyncHook({ schema, vectors });
+
+        await hook({ doc: { title: "T" }, id: "d1", op: "insert", table: "docs" });
+
+        expect(warn).toHaveBeenCalledTimes(1);
+
+        warn.mockRestore();
+    });
+
+    it("does not warn when allowSharedMetadata is set", async () => {
+        expect.assertions(1);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const vectors = fakeVectorSearch();
+        const schema: SchemaLike = {
+            tables: { messages: { vectorIndexes: [{ embed, field: "body", metadata: ["author"], name: "warn-opt-out" }] } },
+            vectorIndexes: {},
+        };
+        const hook = createVectorSyncHook({ allowSharedMetadata: true, schema, vectors });
+
+        await hook({ doc: { author: "ann", body: "hi" }, id: "m1", op: "insert", table: "messages" });
+
+        expect(warn).not.toHaveBeenCalled();
+
+        warn.mockRestore();
+    });
+
+    it("does not warn when a namespace is provided", async () => {
+        expect.assertions(1);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const vectors = fakeVectorSearch();
+        const schema: SchemaLike = {
+            tables: { messages: { vectorIndexes: [{ embed, field: "body", metadata: ["author"], name: "warn-with-ns" }] } },
+            vectorIndexes: {},
+        };
+        const hook = createVectorSyncHook({ namespace: "tenant-acme", schema, vectors });
+
+        await hook({ doc: { author: "ann", body: "hi" }, id: "m1", op: "insert", table: "messages" });
+
+        expect(warn).not.toHaveBeenCalled();
+
+        warn.mockRestore();
+    });
+
+    it("does not warn for an index without metadata even when namespace is absent", async () => {
+        expect.assertions(1);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const vectors = fakeVectorSearch();
+        const schema: SchemaLike = {
+            tables: { messages: { vectorIndexes: [{ embed, field: "body", name: "warn-no-metadata" }] } },
+            vectorIndexes: {},
+        };
+        const hook = createVectorSyncHook({ schema, vectors });
+
+        await hook({ doc: { body: "hi" }, id: "m1", op: "insert", table: "messages" });
+
+        expect(warn).not.toHaveBeenCalled();
+
+        warn.mockRestore();
+    });
 });
