@@ -1,6 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
-import { hasColumn } from "../helpers";
+import { tableColumnSet } from "../helpers";
 
 /**
  * A correctness lint with no splinter analogue — it exploits Cirrus's static
@@ -25,9 +25,11 @@ const indexReferencesUnknownField: Lint = {
         const findings = [];
 
         for (const table of context.schema.tables) {
+            const columns = tableColumnSet(table);
+
             for (const index of table.indexes) {
                 for (const field of index.fields) {
-                    if (hasColumn(table, field)) {
+                    if (columns.has(field)) {
                         continue;
                     }
 
