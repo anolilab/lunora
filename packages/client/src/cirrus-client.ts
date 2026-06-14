@@ -1558,6 +1558,12 @@ class CirrusClient {
 
         this.offlineQueue.clear();
         this.queuedIdentities.clear();
+
+        // Release client-held listener registries so callback closures (React
+        // state setters, framework refs, user data) don't outlive the client.
+        // The client is terminal after close(), so nothing should fire these.
+        this.authTokenListeners.clear();
+        this.statusListeners.clear();
     }
 
     // --- Internals ----------------------------------------------------------

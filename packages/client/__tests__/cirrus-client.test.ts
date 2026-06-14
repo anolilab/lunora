@@ -1808,6 +1808,35 @@ describe("cirrusClient", () => {
             // Only the immediate idle callback landed before unsubscribe.
             expect(seen).toEqual(["idle"]);
         });
+
+        it("close() releases auth/status listeners so they no longer fire", () => {
+            expect.assertions(2);
+
+            const client = new CirrusClient({
+                fetch: async () => jsonResponse({ result: null }),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            const tokens: (string | null)[] = [];
+            const statuses: string[] = [];
+
+            client.onAuthTokenChange((token) => tokens.push(token));
+            // onConnectionStatus fires once immediately with the current status.
+            client.onConnectionStatus((status) => statuses.push(status));
+
+            client.close();
+
+            // After close() the listener registries are cleared, so a later
+            // token change must not invoke the previously-registered listener.
+            client.setAuthToken("post-close-token");
+
+            // The auth listener never fired (close cleared the Set before the
+            // token change), and the status listener only saw the immediate
+            // idle callback from registration — nothing post-close.
+            expect(tokens).toEqual([]);
+            expect(statuses).toEqual(["idle"]);
+        });
     });
 
     describe("cirrusClient — scheduled-jobs subscription", () => {
