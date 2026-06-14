@@ -22,7 +22,7 @@
         "@cirrus/vite": "workspace:*",
         "react": "catalog:frontend",
         "react-dom": "catalog:frontend",
-        "stripe": "^19.0.0"
+        "stripe": "^22.2.1"
     },
     "devDependencies": {
         "@cirrus/cli": "workspace:*",
