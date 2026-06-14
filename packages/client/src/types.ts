@@ -410,6 +410,8 @@ export interface GlobalTableInfo {
 /** A window of rows from one global table, from `/_cirrus/admin/global/table`. */
 export interface GlobalTablePage {
     columns: string[];
+    /** FK columns (local column → referenced table) for external tables with real `REFERENCES` constraints, from `PRAGMA foreign_key_list`. */
+    refs?: Record<string, string>;
     rows: Record<string, unknown>[];
     total: number;
 }

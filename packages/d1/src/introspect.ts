@@ -42,6 +42,15 @@ interface GlobalTableInfo {
 /** A window of rows from one table, plus the column list and total size. */
 interface GlobalTablePage {
     columns: string[];
+
+    /**
+     * Foreign-key columns (local column → referenced table) for tables that carry
+     * real SQL `REFERENCES` constraints — recovered from `PRAGMA foreign_key_list`.
+     * Schema `.global()` tables omit this (their refs come from `describeTables`);
+     * external tables (e.g. better-auth's `session`/`twoFactor`) expose it so the
+     * schema diagram can draw their global→global FK edges.
+     */
+    refs?: Record<string, string>;
     rows: Record<string, unknown>[];
     total: number;
 }
@@ -126,6 +135,40 @@ const resolveColumns = async (exec: D1Exec, schema: SchemaLike, table: string): 
 };
 
 /**
+ * Foreign keys for `table`, recovered from `PRAGMA foreign_key_list` as a
+ * `{ localColumn: referencedTable }` map. Schema `.global()` tables return
+ * `undefined` — their FK metadata flows authoritatively through `describeTables`,
+ * so we don't double-source it here. External tables (e.g. better-auth's, which
+ * emit real `REFERENCES` constraints) return their declared FKs, letting the
+ * schema diagram draw their global→global edges. Returns `undefined` when there
+ * are no foreign keys, so callers can omit the field rather than send `{}`.
+ */
+const resolveReferences = async (exec: D1Exec, schema: SchemaLike, table: string): Promise<Record<string, string> | undefined> => {
+    if (schema.tables[table]) {
+        return undefined;
+    }
+
+    const rows = await exec.all(`PRAGMA foreign_key_list(${quoteIdentifier(table)})`, []);
+
+    if (rows.length === 0) {
+        return undefined;
+    }
+
+    const references: Record<string, string> = {};
+
+    for (const row of rows) {
+        const from = String(row["from"]);
+        const target = String(row["table"]);
+
+        // First constraint wins per column — composite FKs are rare here and the
+        // diagram links a column to a single table.
+        references[from] ??= target;
+    }
+
+    return references;
+};
+
+/**
  * List every browsable D1 table with its row count, ordered by name. Surfaces
  * both the schema's `.global()` tables (provisioned first) and external tables
  * (auth, etc.); internal/companion tables are excluded.
@@ -167,8 +210,9 @@ const readGlobalTablePage = async (exec: D1Exec, schema: SchemaLike, options: Re
     const total = await countRows(exec, quoted);
     const raw = await exec.all(`SELECT * FROM ${quoted} LIMIT ? OFFSET ?`, [limit, offset]);
     const rows = raw.map((row) => decodeRow(schema, table, row));
+    const [columns, references] = await Promise.all([resolveColumns(exec, schema, table), resolveReferences(exec, schema, table)]);
 
-    return { columns: await resolveColumns(exec, schema, table), rows, total };
+    return references === undefined ? { columns, rows, total } : { columns, refs: references, rows, total };
 };
 
 export { listGlobalTables, readGlobalTablePage };

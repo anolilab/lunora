@@ -37,11 +37,18 @@ const createClient = (): MockClientHooks =>
                 return { indexes: table === "messages" ? [{ fields: ["author"], name: "by_author", type: "index", unique: true }] : [] };
             }
 
+            if (reference === ADMIN_FUNCTIONS.describeTables) {
+                return { columnsByTable: {} };
+            }
+
             throw new Error(`unexpected ${reference}`);
         },
-        readGlobalTablePage: ({ table }) => {
-            return { columns: table === "user" ? ["_id", "email"] : ["_id", "token"], rows: [], total: 0 };
-        },
+        readGlobalTablePage: ({ table }) =>
+            // `session.userId → user` recovered from PRAGMA foreign keys; `user` is the
+            // referenced external table (PK column `id`, no FKs of its own).
+            table === "user"
+                ? { columns: ["id", "email"], rows: [], total: 0 }
+                : { columns: ["id", "token", "userId"], refs: { userId: "user" }, rows: [], total: 0 },
     });
 
 const renderViewer = (mock: MockClientHooks) => (
@@ -140,6 +147,56 @@ describe("schemaViewer", () => {
         fireEvent.click(screen.getByTestId("sc-global-toggle-session"));
 
         expect(mock.readGlobalTablePage).toHaveBeenCalledTimes(1);
+    });
+
+    it("filters the table lists by name as the operator types", async () => {
+        expect.assertions(2);
+
+        render(renderViewer(createClient()));
+
+        await screen.findByTestId("sc-table-users");
+
+        fireEvent.change(screen.getByTestId("sc-filter"), { target: { value: "mess" } });
+
+        // `messages` matches the filter; `users` is filtered out of the shard list.
+        expect(screen.getByTestId("sc-table-messages")).toBeDefined();
+        expect(screen.queryByTestId("sc-table-users")).toBeNull();
+    });
+
+    it("graphs both tiers on one canvas and filters a tier off in-canvas", async () => {
+        expect.assertions(3);
+
+        render(renderViewer(createClient()));
+
+        await screen.findByTestId("sc-table-messages");
+        fireEvent.click(screen.getByTestId("sc-view-graph"));
+
+        // A single canvas holds both a shard node (`messages`) and a global node (`user`).
+        await screen.findByTestId("sd-node-messages");
+
+        expect(screen.getByTestId("sd-node-user")).toBeDefined();
+
+        // The in-canvas tier filter drops the global tier's nodes.
+        fireEvent.click(screen.getByTestId("sc-graph-tier-global"));
+
+        expect(screen.queryByTestId("sd-node-user")).toBeNull();
+        expect(screen.getByTestId("sd-node-messages")).toBeDefined();
+    });
+
+    it("marks an external global table's FK column, recovered from PRAGMA foreign keys", async () => {
+        expect.assertions(1);
+
+        render(renderViewer(createClient()));
+
+        await screen.findByTestId("sc-table-messages");
+        fireEvent.click(screen.getByTestId("sc-view-graph"));
+
+        // `session.userId` carries a `ref` from `readGlobalTablePage`'s `refs` map
+        // (no schema entry), so its node row shows the FK badge → the global→global
+        // edge can be drawn.
+        const column = await screen.findByTestId("sd-col-session-userId");
+
+        expect(column.textContent).toContain("FK");
     });
 
     it("still shows shard tables when global discovery fails (D1 not configured)", async () => {

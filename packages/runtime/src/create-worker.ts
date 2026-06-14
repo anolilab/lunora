@@ -236,6 +236,8 @@ interface GlobalTableInfo {
 /** A window of rows from one global table. Mirrors `@cirrus/d1`'s `GlobalTablePage`. */
 interface GlobalTablePage {
     columns: string[];
+    /** FK columns (local column → referenced table) for external tables with real `REFERENCES` constraints. */
+    refs?: Record<string, string>;
     rows: Record<string, unknown>[];
     total: number;
 }

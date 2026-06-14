@@ -31,7 +31,7 @@ interface DatabaseSchemaColumn {
  * satisfies React Flow's `Record&lt;string, unknown>` data constraint.
  */
 type DatabaseSchemaNodeData = {
-    columns: DatabaseSchemaColumn[];
+    columns: ReadonlyArray<DatabaseSchemaColumn>;
     label: string;
     /** True when this table's columns failed to load — show a hint, not a bare `—`. */
     loadError?: boolean;

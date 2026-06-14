@@ -2,8 +2,8 @@ import { CirrusProvider } from "@cirrus/react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
-import type { SchemaEdge } from "../../../src/features/schema/layout";
-import { buildEdges, buildNodes, SchemaDiagram } from "../../../src/features/schema/schema-diagram";
+import type { DiagramTable } from "../../../src/features/schema/schema-diagram";
+import { buildEdges, buildNodes, deriveEdges, SchemaDiagram } from "../../../src/features/schema/schema-diagram";
 import { SchemaViewer } from "../../../src/features/schema/schema-viewer";
 import type { ColumnMeta } from "../../../src/lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../src/lib/admin";
@@ -24,29 +24,52 @@ const USERS_COLUMNS: ColumnMeta[] = [
 ];
 
 const COLUMNS_BY_TABLE: Record<string, ColumnMeta[]> = { messages: MESSAGES_COLUMNS, users: USERS_COLUMNS };
-const TABLES = ["messages", "users"];
-const REF_EDGES: SchemaEdge[] = [{ column: "author", from: "messages", to: "users" }];
-const NO_TABLES: string[] = [];
-const NO_EDGES: SchemaEdge[] = [];
-const NO_COLUMNS: Record<string, ColumnMeta[]> = {};
+
+// `messages` is shard-local and `users` is global, so the `messages.author → users`
+// FK is a cross-tier edge — exactly the relationship the single unified canvas
+// must draw and two split per-tier canvases could not.
+const DIAGRAM_TABLES: DiagramTable[] = [
+    { columns: MESSAGES_COLUMNS, name: "messages", tier: "shard" },
+    { columns: USERS_COLUMNS, name: "users", tier: "global" },
+];
+
+const NO_TABLES: DiagramTable[] = [];
+const UNPROBED_TABLES: DiagramTable[] = [
+    { columns: [], name: "messages", tier: "shard" },
+    { columns: [], name: "users", tier: "global" },
+];
+
+describe("deriveEdges", () => {
+    it("derives a cross-tier FK edge straight from a column's ref", () => {
+        expect.assertions(2);
+
+        const edges = deriveEdges(DIAGRAM_TABLES);
+
+        expect(edges).toHaveLength(1);
+        expect(edges[0]).toStrictEqual({ column: "author", from: "messages", to: "users" });
+    });
+});
 
 describe("buildNodes", () => {
-    it("builds one databaseSchema node per table, carrying its typed columns", () => {
-        expect.assertions(4);
+    it("builds one databaseSchema node per table, carrying its typed columns and tier", () => {
+        expect.assertions(5);
 
-        const nodes = buildNodes(TABLES, REF_EDGES, COLUMNS_BY_TABLE, "shard", false);
+        const nodes = buildNodes(DIAGRAM_TABLES, false);
         const messages = nodes.find((node) => node.id === "messages");
+        const users = nodes.find((node) => node.id === "users");
 
         expect(nodes).toHaveLength(2);
         expect(messages?.type).toBe("databaseSchema");
         expect(messages?.data.columns).toHaveLength(4);
         expect(messages?.data.tier).toBe("shard");
+        // The global table keeps its tier so its node renders the global badge.
+        expect(users?.data.tier).toBe("global");
     });
 
     it("marks nodes with loadError when columnsError is set", () => {
         expect.assertions(1);
 
-        const nodes = buildNodes(TABLES, NO_EDGES, NO_COLUMNS, "shard", true);
+        const nodes = buildNodes(UNPROBED_TABLES, true);
 
         expect(nodes.every((node) => node.data.loadError === true)).toBe(true);
     });
@@ -56,7 +79,7 @@ describe("buildEdges", () => {
     it("draws an FK edge from the referenced PK (source) to the referencing column (target)", () => {
         expect.assertions(4);
 
-        const edges = buildEdges(REF_EDGES, COLUMNS_BY_TABLE);
+        const edges = buildEdges(DIAGRAM_TABLES);
 
         expect(edges).toHaveLength(1);
         // `messages.author → users`: the edge flows from `users`' PK to `messages.author`.
@@ -68,15 +91,48 @@ describe("buildEdges", () => {
     it("targets the referencing column's handle", () => {
         expect.assertions(1);
 
-        const edges = buildEdges(REF_EDGES, COLUMNS_BY_TABLE);
+        const edges = buildEdges(DIAGRAM_TABLES);
 
         expect(edges[0]?.targetHandle).toBe("author");
     });
 
-    it("skips an edge when the columns aren't loaded (handles would be missing)", () => {
+    it("skips an edge when the referenced table isn't present (its handle would be missing)", () => {
         expect.assertions(1);
 
-        expect(buildEdges(REF_EDGES, NO_COLUMNS)).toHaveLength(0);
+        // `messages` references `users`, but `users` is filtered out of the set.
+        expect(buildEdges([{ columns: MESSAGES_COLUMNS, name: "messages", tier: "shard" }])).toHaveLength(0);
+    });
+
+    it("draws a global→global edge onto an external table's `id` PK (no `_id`, no pk flag)", () => {
+        expect.assertions(3);
+
+        // Two external global tables, as recovered from PRAGMA: `user` uses the
+        // `id` PK (no `_id`, no pk flag); `session.userId` carries the FK ref.
+        const externalGlobals: DiagramTable[] = [
+            {
+                columns: [
+                    { name: "id", optional: false, type: "" },
+                    { name: "email", optional: false, type: "" },
+                ],
+                name: "user",
+                tier: "global",
+            },
+            {
+                columns: [
+                    { name: "id", optional: false, type: "" },
+                    { name: "userId", optional: false, ref: "user", type: "id" },
+                ],
+                name: "session",
+                tier: "global",
+            },
+        ];
+
+        const edges = buildEdges(externalGlobals);
+
+        expect(edges).toHaveLength(1);
+        // The source handle is the external table's `id`, not Cirrus's `_id`.
+        expect(edges[0]).toMatchObject({ source: "user", sourceHandle: "id", target: "session", targetHandle: "userId" });
+        expect(edges[0]?.id).toBe("session.userId->user");
     });
 });
 
@@ -84,7 +140,7 @@ describe("schemaDiagram (component)", () => {
     it("renders a node per table with its columns and PK/FK markers", () => {
         expect.assertions(5);
 
-        render(<SchemaDiagram columnsByTable={COLUMNS_BY_TABLE} edges={REF_EDGES} tables={TABLES} testIdPrefix="sd" tier="shard" />);
+        render(<SchemaDiagram tables={DIAGRAM_TABLES} testIdPrefix="sd" />);
 
         expect(screen.getByTestId("sd-node-messages")).toBeDefined();
         expect(screen.getByTestId("sd-node-users")).toBeDefined();
@@ -94,10 +150,24 @@ describe("schemaDiagram (component)", () => {
         expect(screen.getByTestId("sd-col-messages-author").textContent).toContain("FK");
     });
 
+    it("filters a storage tier off with the in-canvas tier control", () => {
+        expect.assertions(3);
+
+        render(<SchemaDiagram tables={DIAGRAM_TABLES} testIdPrefix="sd" />);
+
+        expect(screen.getByTestId("sd-node-users")).toBeDefined();
+
+        // Toggling the global tier off drops its node from the single canvas.
+        fireEvent.click(screen.getByTestId("sd-tier-global"));
+
+        expect(screen.queryByTestId("sd-node-users")).toBeNull();
+        expect(screen.getByTestId("sd-node-messages")).toBeDefined();
+    });
+
     it("shows an empty state when there are no tables", () => {
         expect.assertions(1);
 
-        render(<SchemaDiagram columnsByTable={NO_COLUMNS} edges={NO_EDGES} tables={NO_TABLES} testIdPrefix="sd" tier="global" />);
+        render(<SchemaDiagram tables={NO_TABLES} testIdPrefix="sd" />);
 
         expect(screen.getByTestId("sd-empty").textContent).toContain("No tables to graph");
     });
@@ -105,13 +175,13 @@ describe("schemaDiagram (component)", () => {
     it("shows a columns-unavailable hint when the column probe failed", () => {
         expect.assertions(1);
 
-        render(<SchemaDiagram columnsByTable={NO_COLUMNS} columnsError edges={NO_EDGES} tables={TABLES} testIdPrefix="sd" tier="shard" />);
+        render(<SchemaDiagram columnsError tables={UNPROBED_TABLES} testIdPrefix="sd" />);
 
         expect(screen.getByTestId("sd-node-messages-error").textContent).toContain("Columns unavailable");
     });
 });
 
-/** A shard mock whose `messages` table carries a `v.id("users")` ref + typed columns via describeTable. */
+/** A shard mock whose `messages` table carries a `v.id("users")` ref + typed columns via describeTables. */
 const createClient = (): MockClientHooks =>
     createMockClient({
         listGlobalTables: () => [],
@@ -127,7 +197,7 @@ const createClient = (): MockClientHooks =>
                 const { table } = args as { table: string };
 
                 return table === "messages"
-                    ? { columns: ["__id__", "author", "text"], refs: { author: "users" }, rows: [], total: 0 }
+                    ? { columns: ["__id__", "author", "text"], rows: [], total: 0 }
                     : { columns: ["__id__", "name"], rows: [], total: 0 };
             }
 
@@ -135,12 +205,6 @@ const createClient = (): MockClientHooks =>
                 const { tables } = args as { tables: string[] };
 
                 return { columnsByTable: Object.fromEntries(tables.map((table) => [table, COLUMNS_BY_TABLE[table] ?? []])) };
-            }
-
-            if (reference === ADMIN_FUNCTIONS.describeTable) {
-                const { table } = args as { table: string };
-
-                return { columns: COLUMNS_BY_TABLE[table] ?? [] };
             }
 
             throw new Error(`unexpected ${reference}`);
@@ -154,20 +218,12 @@ const createClient = (): MockClientHooks =>
 const createClientWithColumnError = (): MockClientHooks =>
     createMockClient({
         listGlobalTables: () => [],
-        query: (reference, args): unknown => {
+        query: (reference): unknown => {
             if (reference === ADMIN_FUNCTIONS.listTables) {
                 return [
                     { name: "messages", rowCount: 3 },
                     { name: "users", rowCount: 1 },
                 ];
-            }
-
-            if (reference === ADMIN_FUNCTIONS.readTablePage) {
-                const { table } = args as { table: string };
-
-                return table === "messages"
-                    ? { columns: ["__id__", "author", "text"], refs: { author: "users" }, rows: [], total: 0 }
-                    : { columns: ["__id__", "name"], rows: [], total: 0 };
             }
 
             if (reference === ADMIN_FUNCTIONS.describeTables) {
@@ -196,7 +252,7 @@ describe("schemaDiagram (viewer integration)", () => {
         await screen.findByTestId("sc-table-messages");
         fireEvent.click(screen.getByTestId("sc-view-graph"));
 
-        // The shard diagram renders the `messages` node, with its `author` FK column probed via describeTable.
+        // The unified diagram renders the `messages` node, with its `author` FK column probed via describeTables.
         const column = await screen.findByTestId("sd-col-messages-author");
 
         expect(column.textContent).toContain("author");

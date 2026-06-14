@@ -42,6 +42,9 @@ describe("d1 introspect", () => {
         harness.ddl(`CREATE TABLE "plans" ("id" TEXT PRIMARY KEY, "_creationTime" INTEGER NOT NULL, "tier" TEXT)`);
         // An external (non-schema) table, e.g. better-auth's — must surface, with secrets redacted.
         harness.ddl(`CREATE TABLE "user" ("id" TEXT PRIMARY KEY, "email" TEXT, "passwordHash" TEXT)`);
+        // An external table with a real FK constraint (better-auth emits these) — its
+        // ref must surface via PRAGMA foreign_key_list so the diagram can draw the edge.
+        harness.ddl(`CREATE TABLE "session" ("id" TEXT PRIMARY KEY, "token" TEXT, "userId" TEXT REFERENCES "user" ("id") ON DELETE CASCADE)`);
         // Internal/companion tables that must never surface.
         harness.ddl(`CREATE TABLE "_cf_KV" ("k" TEXT, "v" BLOB)`);
         harness.ddl(`CREATE TABLE "organizations__agg_byActive" ("__key__" TEXT, "__value__" REAL)`);
@@ -62,6 +65,7 @@ describe("d1 introspect", () => {
             await expect(listGlobalTables(harness.exec, schema)).resolves.toEqual([
                 { name: "organizations", rowCount: 2 },
                 { name: "plans", rowCount: 1 },
+                { name: "session", rowCount: 0 },
                 { name: "user", rowCount: 1 },
             ]);
         });
@@ -98,6 +102,33 @@ describe("d1 introspect", () => {
             expect(page.rows).toHaveLength(1);
             expect(page.rows[0]).toMatchObject({ _id: "o2" });
             expect(page.total).toBe(2);
+        });
+
+        it("recovers an external table's foreign keys as a column→table ref map", async () => {
+            expect.assertions(2);
+
+            const page = await readGlobalTablePage(harness.exec, schema, { table: "session" });
+
+            // `session.userId → user`, recovered from PRAGMA foreign_key_list, so the
+            // schema diagram can draw the global→global edge.
+            expect(page.refs).toEqual({ userId: "user" });
+            expect(page.columns).toEqual(["id", "token", "userId"]);
+        });
+
+        it("omits refs for a schema-global table (its FK metadata flows through describeTables)", async () => {
+            expect.assertions(1);
+
+            const page = await readGlobalTablePage(harness.exec, schema, { table: "organizations" });
+
+            expect(page.refs).toBeUndefined();
+        });
+
+        it("omits refs for an external table with no foreign keys", async () => {
+            expect.assertions(1);
+
+            const page = await readGlobalTablePage(harness.exec, schema, { table: "user" });
+
+            expect(page.refs).toBeUndefined();
         });
 
         it("rejects an internal table", async () => {

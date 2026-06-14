@@ -1,19 +1,23 @@
 import type { GlobalTableInfo } from "@cirrus/client";
 import { useCirrus } from "@cirrus/react";
-import type { CSSProperties, ReactElement } from "react";
+import type { ChangeEvent, ReactElement, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ShardInput } from "../../components/shard-input";
-import { StorageTierBadge, StorageTierHint } from "../../components/storage-tier";
+import { StorageTierBadge, TIER_META } from "../../components/storage-tier";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
+import { EmptyState } from "../../components/ui/empty-state";
+import { Input } from "../../components/ui/input";
 import useDebounced from "../../hooks/use-debounced";
 import { useT } from "../../i18n/i18n-context";
 import type { ColumnMeta, TableIndexesResult, TableIndexInfo, TableInfo, TablePage, TablesColumnsResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/internal";
 import { recordShard } from "../../lib/shard-history";
-import type { SchemaEdge } from "./layout";
+import { cn } from "../../lib/utils";
+import type { DiagramTable } from "./schema-diagram";
 import { SchemaDiagram } from "./schema-diagram";
 
 interface SchemaViewerProps {
@@ -35,41 +39,118 @@ const LIST_TABLE_INDEXES = adminRef(ADMIN_FUNCTIONS.listTableIndexes);
 const READ_TABLE_PAGE = adminRef(ADMIN_FUNCTIONS.readTablePage);
 const DESCRIBE_TABLES = adminRef(ADMIN_FUNCTIONS.describeTables);
 
-/** Hoisted empty edge list so the diagram props don't allocate a fresh array each render. */
-const EMPTY_EDGES: ReadonlyArray<SchemaEdge> = [];
-/** Hoisted empty column map so the diagram props don't allocate a fresh object each render. */
+/** Hoisted empty column map so the diagram model doesn't allocate a fresh object each render. */
 const EMPTY_COLUMNS: Readonly<Record<string, ColumnMeta[]>> = {};
+/** Hoisted empty column-name list so an un-probed table's chip row doesn't allocate a fresh array. */
+const EMPTY_COLUMN_NAMES: ReadonlyArray<string> = [];
+/** Hoisted empty typed-column list so an un-probed diagram table doesn't allocate a fresh array. */
+const EMPTY_COLUMN_META: ReadonlyArray<ColumnMeta> = [];
 
 /** How the schema is presented: a textual table list, or the relationship graph. */
 type SchemaView = "graph" | "list";
 
+/** A right-pointing chevron that rotates down when its row is expanded. */
+const ChevronIcon = ({ open }: { readonly open: boolean }): ReactElement => (
+    <svg
+        aria-hidden="true"
+        className={cn("size-3.5 shrink-0 text-muted-foreground transition-transform duration-150", open && "rotate-90")}
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth={1.8}
+        viewBox="0 0 24 24"
+    >
+        <path d="m9 6 6 6-6 6" />
+    </svg>
+);
+
+interface TableEntryProps {
+    /** Expanded body (columns, indexes). */
+    readonly children: ReactNode;
+    readonly expanded: boolean;
+    readonly name: string;
+    readonly onToggle: () => void;
+    readonly rowCount: number;
+    /** `data-testid` for the `&lt;li>`. */
+    readonly rowTestId: string;
+    /** `data-testid` for the toggle `&lt;button>`. */
+    readonly toggleTestId: string;
+}
+
 /**
- * Turn a `readTablePage`'s `refs` map (column → target table) into directed
- * foreign-key edges from `from` to each referenced target. Tolerates a missing
- * `refs` field (the probe failed or the table has no `v.id` columns).
+ * One expandable table row: a full-width toggle button (chevron · monospace name ·
+ * muted row count) over a collapsible body. The button's text is exactly
+ * `name (rowCount)` so deep-links and tests can match it verbatim.
  */
-const referencesToEdges = (from: string, references: Record<string, string> | undefined): SchemaEdge[] => {
-    if (references === undefined) {
-        return [];
-    }
+const TableEntry = ({ children, expanded, name, onToggle, rowCount, rowTestId, toggleTestId }: TableEntryProps): ReactElement => (
+    <li className="border-t border-border/60 first:border-t-0" data-testid={rowTestId}>
+        <button
+            aria-expanded={expanded}
+            className="flex w-full items-center gap-2 px-3 py-2 text-start transition-colors hover:bg-muted/50 aria-expanded:bg-muted/40"
+            data-testid={toggleTestId}
+            onClick={onToggle}
+            type="button"
+        >
+            <ChevronIcon open={expanded} />
+            <span className="truncate font-mono text-xs text-foreground" title={name}>
+                {name}
+            </span>{" "}
+            <span className="ms-auto shrink-0 text-xs text-muted-foreground tabular-nums">({rowCount})</span>
+        </button>
+        {expanded && <div className="px-3 pb-3 ps-8">{children}</div>}
+    </li>
+);
 
-    return Object.entries(references).map(([column, to]) => {
-        return { column, from, to };
-    });
-};
+/** A wrapped row of monospace column-name pills — the expanded body of a table row. */
+const ColumnChips = ({ columns, testId }: { readonly columns: ReadonlyArray<string>; readonly testId: string }): ReactElement => (
+    <ul className="flex flex-wrap gap-1.5 pt-1" data-testid={testId}>
+        {columns.map((column) => (
+            <li className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground" key={column}>
+                {column}
+            </li>
+        ))}
+    </ul>
+);
 
-const SECTION_STYLE: CSSProperties = { margin: "0 0 20px" };
-const SECTION_HEADING_STYLE: CSSProperties = { alignItems: "center", display: "flex", gap: 8, margin: "0 0 4px" };
-const SECTION_TITLE_STYLE: CSSProperties = { fontSize: 14, fontWeight: 600, margin: 0 };
+/** The declared-index list under an expanded shard table: name · kind · unique · fields. */
+const IndexList = ({
+    heading,
+    indexes,
+    testId,
+}: {
+    readonly heading: string;
+    readonly indexes: ReadonlyArray<TableIndexInfo>;
+    readonly testId: string;
+}): ReactElement => (
+    <div className="pt-3">
+        <p className="mb-1.5 text-[10px] font-semibold tracking-wide text-muted-foreground uppercase">{heading}</p>
+        <ul className="flex flex-col gap-1" data-testid={testId}>
+            {indexes.map((index) => (
+                <li className="flex flex-wrap items-center gap-1.5 text-xs" key={`${index.type}:${index.name}`}>
+                    <span className="font-mono">{index.name}</span>
+                    <Badge variant="outline">{index.type}</Badge>
+                    {index.unique === true && <Badge variant="secondary">unique</Badge>}
+                    <span className="text-muted-foreground">{index.fields.join(", ")}</span>
+                </li>
+            ))}
+        </ul>
+    </div>
+);
 
 /**
- * Schema overview that shows both storage tiers side by side so the distinction
- * is never a mystery. The shard section lists every user table in the selected
- * Durable Object with row counts, and probes a table's columns on expand via a
- * one-row `__cirrus_admin__:readTablePage` (`PRAGMA table_info`). The global
- * section lists every `.global()` table — including the auth tables (`user`,
- * `session`, …) — via the client's `listGlobalTables()`, reading columns from a
- * one-row `readGlobalTablePage` on expand.
+ * Schema overview that shows both storage tiers so the distinction is never a
+ * mystery. The shard section lists every user table in the selected Durable
+ * Object with row counts, and probes a table's columns on expand via a one-row
+ * `__cirrus_admin__:readTablePage` (`PRAGMA table_info`). The global section
+ * lists every `.global()` table — including the auth tables (`user`, `session`,
+ * …) — via the client's `listGlobalTables()`, reading columns from a one-row
+ * `readGlobalTablePage` on expand.
+ *
+ * Two presentations: a **Table list** (searchable, expandable cards per tier)
+ * and a **Graph** — a single React Flow relationship diagram showing both tiers
+ * on one canvas, with cross-tier FK edges and its own in-canvas find-table box,
+ * tier filter, and legend.
  *
  * Read-only and gated by the server's `CIRRUS_ADMIN_TOKEN`, like the rest of the
  * studio's admin surface. Global discovery is best-effort: if D1 isn't
@@ -82,6 +163,7 @@ export const SchemaViewer = ({ initialShardKey, initialTable }: SchemaViewerProp
 
     const [view, setView] = useState<SchemaView>("list");
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
+    const [tableFilter, setTableFilter] = useState<string>("");
     const [tables, setTables] = useState<TableInfo[] | null>(null);
     const [error, setError] = useState<null | string>(null);
     const [columns, setColumns] = useState<Record<string, string[]>>({});
@@ -89,17 +171,15 @@ export const SchemaViewer = ({ initialShardKey, initialTable }: SchemaViewerProp
     const [indexes, setIndexes] = useState<Record<string, TableIndexInfo[]>>({});
     const [expanded, setExpanded] = useState<null | string>(null);
 
-    // Foreign-key edges for the shard tier, keyed by shard so a shard switch
-    // can't show a previous shard's relationships. Built by probing each table's
-    // `refs` (one-row `readTablePage`) lazily when the graph view is opened.
-    const [shardEdges, setShardEdges] = useState<Record<string, SchemaEdge[]>>({});
-
-    // Typed columns for the shard tier's diagram, keyed by shard → table →
-    // columns. Probed alongside `shardEdges` via `describeTable` (schema-sourced
-    // metadata: real types + PK/FK markers, absent from `PRAGMA table_info`).
+    // Typed columns for the diagram, keyed by shard → table → columns. Probed
+    // once per shard via a single batched `describeTables` over every table —
+    // shard-local AND global — when the graph opens. The metadata is
+    // schema-sourced (real types + PK/FK markers, absent from `PRAGMA
+    // table_info`), and the diagram derives the FK edges (including cross-tier
+    // ones) straight from the columns' `ref`s.
     const [shardColumns, setShardColumns] = useState<Record<string, Record<string, ColumnMeta[]>>>({});
 
-    // Shards whose typed-column probe (`describeTable`) failed — drives the
+    // Shards whose typed-column probe (`describeTables`) failed — drives the
     // diagram's "columns unavailable" signal so a failed load isn't mistaken for
     // an empty table.
     const [shardColumnsError, setShardColumnsError] = useState<Record<string, boolean>>({});
@@ -121,9 +201,8 @@ export const SchemaViewer = ({ initialShardKey, initialTable }: SchemaViewerProp
                 setColumns({});
                 setIndexes({});
                 setExpanded(null);
-                // Drop cached relationships + typed columns for this shard so the
-                // diagram re-probes against the freshly listed tables.
-                setShardEdges((previous) => Object.fromEntries(Object.entries(previous).filter(([cachedShard]) => cachedShard !== shard)));
+                // Drop cached typed columns for this shard so the diagram
+                // re-probes against the freshly listed tables.
                 setShardColumns((previous) => Object.fromEntries(Object.entries(previous).filter(([cachedShard]) => cachedShard !== shard)));
                 setShardColumnsError((previous) => Object.fromEntries(Object.entries(previous).filter(([cachedShard]) => cachedShard !== shard)));
             } catch (error_) {
@@ -246,39 +325,63 @@ export const SchemaViewer = ({ initialShardKey, initialTable }: SchemaViewerProp
         /* eslint-enable react-you-might-not-need-an-effect/no-event-handler */
     }, [initialTable, tables, toggle]);
 
-    // Probe each shard table's `refs` (one-row `readTablePage`) for the FK edges
-    // and its typed columns (`describeTable`) for the diagram nodes. Both reads
-    // are best-effort per table: a single table's probe failing must not blank the
-    // diagram, so each rejection is swallowed and that table simply contributes no
-    // edges/columns. `describeTable` is also tolerant of an older worker without
-    // the admin op — that table just renders without typed columns.
-    const probeShardSchema = useCallback(
-        async (shard: string, names: string[]): Promise<void> => {
-            const [described, pages] = await Promise.all([
-                Promise.allSettled([client.query(DESCRIBE_TABLES, { tables: names }, callOptions(shard)) as Promise<TablesColumnsResult>]),
+    // Probe every table's columns once per shard when the graph opens. Schema
+    // metadata comes from one batched `describeTables` over both tiers (real types
+    // + PK/FK markers); the diagram derives its FK edges — including cross-tier
+    // ones (a shard column referencing a global table) — straight from the columns'
+    // `ref`s, so no separate per-table edge probe is needed.
+    //
+    // `describeTables` only covers tables declared in `defineSchema`. Plugin-owned
+    // global tables (the auth tables — account, session, …) live in D1 but aren't
+    // in the schema, so they get NO typed columns there. For those we fall back to
+    // `readGlobalTablePage` (the same PRAGMA the list view uses) to at least render
+    // their column names. A `describeTables` rejection (an older worker without the
+    // admin op) flags the shard so schema tables show "columns unavailable" rather
+    // than mistaking the failure for empty tables.
+    const probeSchema = useCallback(
+        async (shard: string, shardNames: string[], globalNames: string[]): Promise<void> => {
+            const [described, globalPages] = await Promise.all([
+                Promise.allSettled([
+                    client.query(DESCRIBE_TABLES, { tables: [...shardNames, ...globalNames] }, callOptions(shard)) as Promise<TablesColumnsResult>,
+                ]),
                 Promise.all(
-                    names.map(async (table): Promise<{ edges: SchemaEdge[]; table: string }> => {
-                        const page = await Promise.allSettled([
-                            client.query(READ_TABLE_PAGE, { limit: 1, offset: 0, table }, callOptions(shard)) as Promise<TablePage>,
-                        ]);
+                    globalNames.map(async (table): Promise<{ columns: string[]; refs: Record<string, string>; table: string }> => {
+                        const page = await Promise.allSettled([client.readGlobalTablePage({ limit: 1, offset: 0, table })]);
+                        const value = page[0].status === "fulfilled" ? page[0].value : undefined;
 
-                        return { edges: page[0].status === "fulfilled" ? referencesToEdges(table, page[0].value.refs) : [], table };
+                        return { columns: value?.columns ?? [], refs: value?.refs ?? {}, table };
                     }),
                 ),
             ]);
 
-            const columnsByTable = described[0].status === "fulfilled" ? described[0].value.columnsByTable : {};
-
-            // The columns probe is a single batched `describeTables` call, so a
-            // failed read fails for the whole shard — driving the diagram's
-            // "columns unavailable" signal (a failed load isn't an empty table).
+            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- defensive: an older/malformed worker can resolve a fulfilled payload without columnsByTable, which the static type can't express
+            const typedColumns = described[0].status === "fulfilled" ? (described[0].value?.columnsByTable ?? {}) : {};
             const columnsFailed = described[0].status === "rejected";
 
-            setShardEdges((previous) => {
-                return { ...previous, [shard]: pages.flatMap((result) => result.edges) };
+            // Name-only columns for global tables the schema doesn't know about.
+            // PRAGMA gives no types, but `PRAGMA foreign_key_list` recovers real FK
+            // constraints, so a column that references another table carries its
+            // `ref` — letting the diagram draw global→global edges (e.g. better-auth's
+            // `session.userId → user`, `twoFactor.userId → user`).
+            const globalFallback = new Map<string, ColumnMeta[]>(
+                globalPages.map(({ columns: columnNames, refs, table }) => [
+                    table,
+                    columnNames.map((name): ColumnMeta => {
+                        const ref = refs[name];
+
+                        return ref === undefined ? { name, optional: false, type: "" } : { name, optional: false, ref, type: "id" };
+                    }),
+                ]),
+            );
+
+            const resolved = [...shardNames, ...globalNames].map((table): [string, ColumnMeta[]] => {
+                const typed = typedColumns[table] ?? [];
+
+                return [table, typed.length > 0 ? typed : (globalFallback.get(table) ?? [])];
             });
+
             setShardColumns((previous) => {
-                return { ...previous, [shard]: Object.fromEntries(names.map((table) => [table, columnsByTable[table] ?? []])) };
+                return { ...previous, [shard]: Object.fromEntries(resolved) };
             });
             setShardColumnsError((previous) => {
                 return { ...previous, [shard]: columnsFailed };
@@ -287,27 +390,57 @@ export const SchemaViewer = ({ initialShardKey, initialTable }: SchemaViewerProp
         [client],
     );
 
-    // When the graph opens (or the shard's tables change) probe the relationships
+    // When the graph opens (or the shard switches) probe every table's columns
     // once per shard. List view never probes, so the graph cost is opt-in. This is
     // a genuine lazy data-load, not a click handler: it must also re-run when the
     // shard's `tables` change (after a re-seed) or `shardKey` switches, so it stays
     // an effect keyed on those values rather than firing from the toggle's onClick.
+    // It waits for global discovery to resolve (success or failure) so the probe
+    // covers global table names too.
     useEffect(() => {
         // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- lazy data-load gated on view + shard, not an event handler
-        if (view !== "graph" || tables === null || shardEdges[shardKey] !== undefined) {
+        if (view !== "graph" || tables === null || (globalTables === null && globalError === null) || shardColumns[shardKey] !== undefined) {
             return;
         }
 
         fireAndForget(
-            probeShardSchema(
+            probeSchema(
                 shardKey,
                 tables.map((table) => table.name),
+                (globalTables ?? []).map((table) => table.name),
             ),
         );
-    }, [view, tables, shardKey, shardEdges, probeShardSchema]);
+    }, [view, tables, globalTables, globalError, shardKey, shardColumns, probeSchema]);
 
-    const shardTableNames = useMemo<string[]>(() => (tables ?? []).map((table) => table.name), [tables]);
-    const globalTableNames = useMemo<string[]>(() => (globalTables ?? []).map((table) => table.name), [globalTables]);
+    // The unified diagram model: every table across both tiers, tagged with its
+    // storage tier and carrying the columns probed for this shard (schema-typed
+    // where available, name-only PRAGMA fallback for plugin-owned global tables).
+    // A shard column referencing a global table resolves to a real node, so the
+    // cross-tier FK edge can render.
+    const diagramTables = useMemo<DiagramTable[]>(() => {
+        const columnsForShard = shardColumns[shardKey] ?? EMPTY_COLUMNS;
+        const shardOnes = (tables ?? []).map((table): DiagramTable => {
+            return { columns: columnsForShard[table.name] ?? EMPTY_COLUMN_META, name: table.name, tier: "shard" };
+        });
+        const globalOnes = (globalTables ?? []).map((table): DiagramTable => {
+            return { columns: columnsForShard[table.name] ?? EMPTY_COLUMN_META, name: table.name, tier: "global" };
+        });
+
+        return [...shardOnes, ...globalOnes];
+    }, [tables, globalTables, shardColumns, shardKey]);
+
+    // Substring filter (case-insensitive) over each tier's table names, applied
+    // only in the list view. An empty filter shows every table.
+    const filteredTables = useMemo<TableInfo[]>(() => {
+        const needle = tableFilter.trim().toLowerCase();
+
+        return (tables ?? []).filter((table) => table.name.toLowerCase().includes(needle));
+    }, [tables, tableFilter]);
+    const filteredGlobalTables = useMemo<GlobalTableInfo[]>(() => {
+        const needle = tableFilter.trim().toLowerCase();
+
+        return (globalTables ?? []).filter((table) => table.name.toLowerCase().includes(needle));
+    }, [globalTables, tableFilter]);
 
     const showList = useCallback((): void => {
         setView("list");
@@ -315,168 +448,184 @@ export const SchemaViewer = ({ initialShardKey, initialTable }: SchemaViewerProp
     const showGraph = useCallback((): void => {
         setView("graph");
     }, []);
+    const onFilterChange = useCallback((event: ChangeEvent<HTMLInputElement>): void => {
+        setTableFilter(event.target.value);
+    }, []);
 
     return (
-        <div data-testid="cirrus-schema">
-            <div>
+        <div className="flex flex-col gap-4" data-testid="cirrus-schema">
+            <div className="flex flex-wrap items-center gap-3">
                 <ShardInput onChange={setShardKey} testId="sc-shard-input" value={shardKey} />
+
+                <div aria-label={t("Schema view")} className="flex gap-1.5" data-testid="sc-view-toggle" role="group">
+                    <Button
+                        aria-pressed={view === "list"}
+                        data-testid="sc-view-list"
+                        onClick={showList}
+                        size="xs"
+                        type="button"
+                        variant={view === "list" ? "default" : "outline"}
+                    >
+                        {t("Table list")}
+                    </Button>
+                    <Button
+                        aria-pressed={view === "graph"}
+                        data-testid="sc-view-graph"
+                        onClick={showGraph}
+                        size="xs"
+                        type="button"
+                        variant={view === "graph" ? "default" : "outline"}
+                    >
+                        {t("Graph")}
+                    </Button>
+                </div>
             </div>
 
-            <div aria-label={t("Schema view")} className="my-3 flex gap-1.5" data-testid="sc-view-toggle" role="group">
-                <Button
-                    aria-pressed={view === "list"}
-                    data-testid="sc-view-list"
-                    onClick={showList}
-                    size="xs"
-                    type="button"
-                    variant={view === "list" ? "default" : "outline"}
-                >
-                    {t("Table list")}
-                </Button>
-                <Button
-                    aria-pressed={view === "graph"}
-                    data-testid="sc-view-graph"
-                    onClick={showGraph}
-                    size="xs"
-                    type="button"
-                    variant={view === "graph" ? "default" : "outline"}
-                >
-                    {t("Graph")}
-                </Button>
-            </div>
+            {view === "list" && (
+                <Input
+                    aria-label={t("Filter tables")}
+                    className="h-8 max-w-xs"
+                    data-testid="sc-filter"
+                    onChange={onFilterChange}
+                    placeholder={t("Filter tables")}
+                    value={tableFilter}
+                />
+            )}
 
             {view === "graph" && (
-                <div className="flex flex-col gap-5" data-testid="sc-graph-view">
+                <div className="flex flex-col gap-2" data-testid="sc-graph-view">
                     {error !== null && (
-                        <p data-testid="sc-error" role="alert">
+                        <p className="text-sm text-destructive" data-testid="sc-error" role="alert">
                             {error}
                         </p>
                     )}
-                    <SchemaDiagram
-                        columnsByTable={shardColumns[shardKey] ?? EMPTY_COLUMNS}
-                        columnsError={shardColumnsError[shardKey] === true}
-                        edges={shardEdges[shardKey] ?? EMPTY_EDGES}
-                        tables={shardTableNames}
-                        testIdPrefix="sc-graph-shard"
-                        tier="shard"
-                    />
                     {globalError !== null && (
-                        <p data-testid="sc-global-error" role="alert">
+                        <p className="text-sm text-destructive" data-testid="sc-global-error" role="alert">
                             {globalError}
                         </p>
                     )}
-                    <SchemaDiagram columnsByTable={EMPTY_COLUMNS} edges={EMPTY_EDGES} tables={globalTableNames} testIdPrefix="sc-graph-global" tier="global" />
+                    <SchemaDiagram columnsError={shardColumnsError[shardKey] === true} tables={diagramTables} testIdPrefix="sc-graph" />
                 </div>
             )}
 
             {view === "list" && (
-                <>
-                    <section data-testid="sc-shard-section" style={SECTION_STYLE}>
-                        <div style={SECTION_HEADING_STYLE}>
-                            <StorageTierBadge tier="shard" />
-                            <h3 style={SECTION_TITLE_STYLE}>Shard tables</h3>
-                        </div>
-                        <StorageTierHint tier="shard" />
+                <div className="flex flex-col gap-4">
+                    <Card data-testid="sc-shard-section" size="sm">
+                        <CardHeader>
+                            <div className="flex items-center gap-2">
+                                <StorageTierBadge tier="shard" />
+                                <CardTitle>{t("Shard tables")}</CardTitle>
+                                {tables !== null && (
+                                    <Badge className="ms-auto tabular-nums" variant="outline">
+                                        {filteredTables.length}
+                                    </Badge>
+                                )}
+                            </div>
+                            <CardDescription>{TIER_META.shard.hint}</CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                            {error !== null && (
+                                <p className="text-sm text-destructive" data-testid="sc-error" role="alert">
+                                    {error}
+                                </p>
+                            )}
 
-                        {error !== null && (
-                            <p data-testid="sc-error" role="alert">
-                                {error}
-                            </p>
-                        )}
+                            {tables !== null && tables.length === 0 && (
+                                <p className="text-sm text-muted-foreground" data-testid="sc-empty">
+                                    {t("No tables in this shard.")}
+                                </p>
+                            )}
 
-                        {tables !== null && tables.length === 0 && (
-                            <p className="text-sm text-muted-foreground" data-testid="sc-empty">
-                                {t("No tables in this shard.")}
-                            </p>
-                        )}
+                            {tables !== null && tables.length > 0 && filteredTables.length === 0 && (
+                                <p className="text-sm text-muted-foreground" data-testid="sc-no-match">
+                                    {t("No tables match your filter.")}
+                                </p>
+                            )}
 
-                        {tables !== null && tables.length > 0 && (
-                            <ul data-testid="sc-table-list">
-                                {tables.map((table) => (
-                                    <li data-testid={`sc-table-${table.name}`} key={table.name}>
-                                        <button
-                                            aria-expanded={expanded === table.name}
-                                            data-testid={`sc-toggle-${table.name}`}
+                            {filteredTables.length > 0 && (
+                                <ul className="-mx-3 overflow-hidden rounded-md border border-border" data-testid="sc-table-list">
+                                    {filteredTables.map((table) => {
+                                        const cacheKey = `${shardKey}:${table.name}`;
+                                        const tableIndexes = indexes[cacheKey] ?? [];
+
+                                        return (
+                                            <TableEntry
+                                                expanded={expanded === table.name}
+                                                key={table.name}
+                                                name={table.name}
+                                                // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row toggle closes over table.name; admin dev-tool render path
+                                                onToggle={() => {
+                                                    fireAndForget(toggle(table.name));
+                                                }}
+                                                rowCount={table.rowCount}
+                                                rowTestId={`sc-table-${table.name}`}
+                                                toggleTestId={`sc-toggle-${table.name}`}
+                                            >
+                                                <ColumnChips columns={columns[cacheKey] ?? EMPTY_COLUMN_NAMES} testId={`sc-columns-${table.name}`} />
+                                                {tableIndexes.length > 0 && (
+                                                    <IndexList heading={t("Indexes")} indexes={tableIndexes} testId={`sc-indexes-${table.name}`} />
+                                                )}
+                                            </TableEntry>
+                                        );
+                                    })}
+                                </ul>
+                            )}
+                        </CardContent>
+                    </Card>
+
+                    <Card data-testid="sc-global-section" size="sm">
+                        <CardHeader>
+                            <div className="flex items-center gap-2">
+                                <StorageTierBadge tier="global" />
+                                <CardTitle>{t("Global tables (D1)")}</CardTitle>
+                                {globalTables !== null && (
+                                    <Badge className="ms-auto tabular-nums" variant="outline">
+                                        {filteredGlobalTables.length}
+                                    </Badge>
+                                )}
+                            </div>
+                            <CardDescription>{TIER_META.global.hint}</CardDescription>
+                        </CardHeader>
+                        <CardContent>
+                            {globalError !== null && (
+                                <p className="text-sm text-destructive" data-testid="sc-global-error" role="alert">
+                                    {globalError}
+                                </p>
+                            )}
+
+                            {globalTables !== null && globalTables.length === 0 && (
+                                <EmptyState description={TIER_META.global.hint} testId="sc-global-empty" title={t("No global tables.")} />
+                            )}
+
+                            {globalTables !== null && globalTables.length > 0 && filteredGlobalTables.length === 0 && (
+                                <p className="text-sm text-muted-foreground" data-testid="sc-global-no-match">
+                                    {t("No tables match your filter.")}
+                                </p>
+                            )}
+
+                            {filteredGlobalTables.length > 0 && (
+                                <ul className="-mx-3 overflow-hidden rounded-md border border-border" data-testid="sc-global-table-list">
+                                    {filteredGlobalTables.map((table) => (
+                                        <TableEntry
+                                            expanded={globalExpanded === table.name}
+                                            key={table.name}
+                                            name={table.name}
                                             // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row toggle closes over table.name; admin dev-tool render path
-                                            onClick={() => {
-                                                fireAndForget(toggle(table.name));
-                                            }}
-                                            type="button"
-                                        >
-                                            {table.name} ({table.rowCount})
-                                        </button>
-                                        {expanded === table.name && (
-                                            <ul data-testid={`sc-columns-${table.name}`}>
-                                                {(columns[`${shardKey}:${table.name}`] ?? []).map((column) => (
-                                                    <li key={column}>{column}</li>
-                                                ))}
-                                            </ul>
-                                        )}
-                                        {expanded === table.name && (indexes[`${shardKey}:${table.name}`] ?? []).length > 0 && (
-                                            <ul className="mt-1 flex flex-col gap-1" data-testid={`sc-indexes-${table.name}`}>
-                                                {(indexes[`${shardKey}:${table.name}`] ?? []).map((index) => (
-                                                    <li className="flex flex-wrap items-center gap-1.5 text-xs" key={`${index.type}:${index.name}`}>
-                                                        <span className="font-mono">{index.name}</span>
-                                                        <Badge variant="outline">{index.type}</Badge>
-                                                        {index.unique === true && <Badge variant="secondary">unique</Badge>}
-                                                        <span className="text-muted-foreground">{index.fields.join(", ")}</span>
-                                                    </li>
-                                                ))}
-                                            </ul>
-                                        )}
-                                    </li>
-                                ))}
-                            </ul>
-                        )}
-                    </section>
-
-                    <section data-testid="sc-global-section" style={SECTION_STYLE}>
-                        <div style={SECTION_HEADING_STYLE}>
-                            <StorageTierBadge tier="global" />
-                            <h3 style={SECTION_TITLE_STYLE}>Global tables</h3>
-                        </div>
-                        <StorageTierHint tier="global" />
-
-                        {globalError !== null && (
-                            <p data-testid="sc-global-error" role="alert">
-                                {globalError}
-                            </p>
-                        )}
-
-                        {globalTables !== null && globalTables.length === 0 && (
-                            <p className="text-sm text-muted-foreground" data-testid="sc-global-empty">
-                                {t("No global tables.")}
-                            </p>
-                        )}
-
-                        {globalTables !== null && globalTables.length > 0 && (
-                            <ul data-testid="sc-global-table-list">
-                                {globalTables.map((table) => (
-                                    <li data-testid={`sc-global-table-${table.name}`} key={table.name}>
-                                        <button
-                                            aria-expanded={globalExpanded === table.name}
-                                            data-testid={`sc-global-toggle-${table.name}`}
-                                            // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-row toggle closes over table.name; admin dev-tool render path
-                                            onClick={() => {
+                                            onToggle={() => {
                                                 fireAndForget(toggleGlobal(table.name));
                                             }}
-                                            type="button"
+                                            rowCount={table.rowCount}
+                                            rowTestId={`sc-global-table-${table.name}`}
+                                            toggleTestId={`sc-global-toggle-${table.name}`}
                                         >
-                                            {table.name} ({table.rowCount})
-                                        </button>
-                                        {globalExpanded === table.name && (
-                                            <ul data-testid={`sc-global-columns-${table.name}`}>
-                                                {(globalColumns[table.name] ?? []).map((column) => (
-                                                    <li key={column}>{column}</li>
-                                                ))}
-                                            </ul>
-                                        )}
-                                    </li>
-                                ))}
-                            </ul>
-                        )}
-                    </section>
-                </>
+                                            <ColumnChips columns={globalColumns[table.name] ?? EMPTY_COLUMN_NAMES} testId={`sc-global-columns-${table.name}`} />
+                                        </TableEntry>
+                                    ))}
+                                </ul>
+                            )}
+                        </CardContent>
+                    </Card>
+                </div>
             )}
         </div>
     );
