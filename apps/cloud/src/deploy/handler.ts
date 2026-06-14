@@ -1,4 +1,5 @@
 import type { Provisioner, TenantDeploymentSpec } from "../provision";
+import { randomSecret } from "./keys";
 import type { DeployProgress } from "./orchestrator";
 import { runDeployment } from "./orchestrator";
 import type { CellScheduler } from "./scheduler";
@@ -30,11 +31,12 @@ export interface DeployTarget {
  */
 export interface DeployBackend {
     createDeployment: (input: {
+        adminToken: string;
         branch?: string;
         key: string;
         kind: DeployKind;
         organizationId: string;
-        projectId: string;
+        projectId: string; // secret-scanner:allow -- domain field name
         scriptName: string;
     }) => Promise<{ deploymentId: string }>;
     updateStatus: (input: {
@@ -107,10 +109,22 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
     const kind = body.kind ?? target.type;
     const { branch, projectId, scriptName } = body;
 
+    // The platform-minted tenant admin token: recorded on the deployment (for the
+    // admin proxy) and set as the worker's CIRRUS_ADMIN_TOKEN secret.
+    const adminToken = randomSecret();
+
     let deploymentId: string;
 
     try {
-        ({ deploymentId } = await deps.backend.createDeployment({ branch, key, kind, organizationId: target.organizationId, projectId, scriptName }));
+        ({ deploymentId } = await deps.backend.createDeployment({
+            adminToken,
+            branch,
+            key,
+            kind,
+            organizationId: target.organizationId,
+            projectId,
+            scriptName,
+        }));
     } catch (error) {
         return json(403, { error: error instanceof Error ? error.message : "failed to record deployment" });
     }
@@ -130,7 +144,7 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
                 cell: deps.cell,
                 dispatchNamespace: deps.dispatchNamespace(kind),
                 scriptName,
-                secrets: {},
+                secrets: { CIRRUS_ADMIN_TOKEN: adminToken },
                 tags: [`org:${target.organizationId}`, `project:${projectId}`, `env:${kind}`],
             };
 
