@@ -299,9 +299,7 @@ describe("reconcileWranglerBindings", () => {
             expect(result.warnings.join(" ")).toContain("not exported by the worker entry");
             expect(readConfig().containers).toBeUndefined();
             // The structured gap (for the dev error overlay) mirrors the warning.
-            expect(result.exportGaps).toStrictEqual([
-                { className: "TranscoderContainer", exportName: "transcoder", kind: "container", module: "containers" },
-            ]);
+            expect(result.exportGaps).toStrictEqual([{ className: "TranscoderContainer", exportName: "transcoder", kind: "container", module: "containers" }]);
         });
 
         it("respects an explicit observability opt-out, with a warning", () => {

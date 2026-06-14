@@ -49,6 +49,20 @@ class AdminShard extends ShardDO {
     }
 }
 
+/**
+ * Mirrors the codegen subclass that overrides `workflowsMetadata()` with the
+ * project's discovered workflow declarations — shared by every test that needs
+ * a shard which "sees" the order-pipeline workflow.
+ */
+class DeclaredWorkflowShard extends AdminShard {
+    // eslint-disable-next-line class-methods-use-this -- test stub mirroring the codegen override
+    protected override workflowsMetadata(): { workflows: { binding: string; className: string; exportName: string; name: string }[] } {
+        return {
+            workflows: [{ binding: "WORKFLOW_ORDER_PIPELINE", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" }],
+        };
+    }
+}
+
 const ADMIN_TOKEN = "s3cret-admin";
 
 /**
@@ -349,18 +363,7 @@ describe("shardDO admin introspection", () => {
         await expect(baseResponse.json()).resolves.toEqual({ result: { workflows: [] } });
 
         // The codegen subclass overrides `workflowsMetadata()` with the discovered declarations.
-        class WorkflowShard extends AdminShard {
-            // eslint-disable-next-line class-methods-use-this -- test stub mirroring the codegen override
-            protected override workflowsMetadata(): { workflows: { binding: string; className: string; exportName: string; name: string }[] } {
-                return {
-                    workflows: [
-                        { binding: "WORKFLOW_ORDER_PIPELINE", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" },
-                    ],
-                };
-            }
-        }
-
-        const withWorkflows = new WorkflowShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const withWorkflows = new DeclaredWorkflowShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
         const response = await withWorkflows.fetch(adminRequest(ADMIN_FUNCTIONS.listWorkflows, {}, ADMIN_TOKEN));
 
         await expect(response.json()).resolves.toEqual({
@@ -375,15 +378,6 @@ describe("shardDO admin introspection", () => {
 
         const created: { id?: string; params?: unknown }[] = [];
 
-        // A shard whose env carries a fake `WORKFLOW_*` binding and whose
-        // codegen hook declares the matching workflow.
-        class StartShard extends AdminShard {
-            // eslint-disable-next-line class-methods-use-this -- test stub mirroring the codegen override
-            protected override workflowsMetadata(): { workflows: { binding: string; className: string; exportName: string; name: string }[] } {
-                return { workflows: [{ binding: "WORKFLOW_ORDER_PIPELINE", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" }] };
-            }
-        }
-
         const binding = {
             create: (options: { id?: string; params?: unknown }) => {
                 created.push(options);
@@ -393,7 +387,9 @@ describe("shardDO admin introspection", () => {
             get: () => Promise.reject(new Error("get must not run for create")),
         };
 
-        const shard = new StartShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN, WORKFLOW_ORDER_PIPELINE: binding });
+        // A shard whose env carries a fake `WORKFLOW_*` binding and whose
+        // codegen hook declares the matching workflow.
+        const shard = new DeclaredWorkflowShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN, WORKFLOW_ORDER_PIPELINE: binding });
         const response = await shard.fetch(
             adminRequest(ADMIN_FUNCTIONS.createWorkflowInstance, { exportName: "orderPipeline", params: { orderId: "o1" } }, ADMIN_TOKEN),
         );
@@ -405,19 +401,12 @@ describe("shardDO admin introspection", () => {
     it("reports a workflow instance's status, output, and error", async () => {
         expect.assertions(1);
 
-        class StatusShard extends AdminShard {
-            // eslint-disable-next-line class-methods-use-this -- test stub mirroring the codegen override
-            protected override workflowsMetadata(): { workflows: { binding: string; className: string; exportName: string; name: string }[] } {
-                return { workflows: [{ binding: "WORKFLOW_ORDER_PIPELINE", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" }] };
-            }
-        }
-
         const binding = {
             create: () => Promise.reject(new Error("create must not run for status")),
             get: (id: string) => Promise.resolve({ id, status: () => Promise.resolve({ output: { total: 42 }, status: "complete" }) }),
         };
 
-        const shard = new StatusShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN, WORKFLOW_ORDER_PIPELINE: binding });
+        const shard = new DeclaredWorkflowShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN, WORKFLOW_ORDER_PIPELINE: binding });
         const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getWorkflowInstanceStatus, { exportName: "orderPipeline", id: "wf-1" }, ADMIN_TOKEN));
 
         await expect(response.json()).resolves.toEqual({ result: { id: "wf-1", output: { total: 42 }, status: "complete" } });
@@ -436,14 +425,7 @@ describe("shardDO admin introspection", () => {
         expect.assertions(1);
 
         // Declares the workflow but provides no matching env binding.
-        class MissingBindingShard extends AdminShard {
-            // eslint-disable-next-line class-methods-use-this -- test stub mirroring the codegen override
-            protected override workflowsMetadata(): { workflows: { binding: string; className: string; exportName: string; name: string }[] } {
-                return { workflows: [{ binding: "WORKFLOW_ORDER_PIPELINE", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" }] };
-            }
-        }
-
-        const shard = new MissingBindingShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new DeclaredWorkflowShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
         const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.createWorkflowInstance, { exportName: "orderPipeline" }, ADMIN_TOKEN));
 
         expect(response.status).toBe(400);

@@ -392,95 +392,97 @@ const CellEditor = ({
  * editable and the column isn't a meta column — double-click opens an inline
  * {@link CellEditor} that stages the change.
  */
-const EditableCell = memo(({ cell, edit, mask, refs }: { cell: Cell<TableRow, unknown>; edit: GridEdit; mask: MaskView; refs: GridReferences }): ReactElement => {
-    const column = cell.column.id;
-    const rawValue = cell.getValue();
-    const id = rowId(cell.row.original);
-    const target = refs.columns?.[column];
+const EditableCell = memo(
+    ({ cell, edit, mask, refs }: { cell: Cell<TableRow, unknown>; edit: GridEdit; mask: MaskView; refs: GridReferences }): ReactElement => {
+        const column = cell.column.id;
+        const rawValue = cell.getValue();
+        const id = rowId(cell.row.original);
+        const target = refs.columns?.[column];
 
-    // Mask preview takes precedence over every other branch: when the toggle is on
-    // and this column is mask-covered, render only the masked value — no
-    // foreign-key link, no inline editor, no expand-to-raw affordance. This is a
-    // render-only preview of what a `.use(mask(...))` caller would see; the stored
-    // row is untouched and the operator can toggle the preview off to edit.
-    if (mask.enabled && mask.columns.has(column)) {
-        return (
-            <span className="text-muted-foreground italic" data-testid={`db-masked-${column}`} title="Masked (preview)">
-                <CellValue value={maskCell(rawValue, column, mask)} />
-            </span>
-        );
-    }
+        // Mask preview takes precedence over every other branch: when the toggle is on
+        // and this column is mask-covered, render only the masked value — no
+        // foreign-key link, no inline editor, no expand-to-raw affordance. This is a
+        // render-only preview of what a `.use(mask(...))` caller would see; the stored
+        // row is untouched and the operator can toggle the preview off to edit.
+        if (mask.enabled && mask.columns.has(column)) {
+            return (
+                <span className="text-muted-foreground italic" data-testid={`db-masked-${column}`} title="Masked (preview)">
+                    <CellValue value={maskCell(rawValue, column, mask)} />
+                </span>
+            );
+        }
 
-    if (target !== undefined && (typeof rawValue === "string" || typeof rawValue === "number") && String(rawValue) !== "") {
-        // Keyed on target:id so a reused cell instance (an idless row at the same
-        // index across pages) starts its preview state fresh rather than stale.
-        return (
-            <RefCell
-                column={column}
-                id={String(rawValue)}
-                key={`${target}:${String(rawValue)}`}
-                onNavigate={refs.onNavigate}
-                onPreview={refs.onPreview}
-                target={target}
-            />
-        );
-    }
+        if (target !== undefined && (typeof rawValue === "string" || typeof rawValue === "number") && String(rawValue) !== "") {
+            // Keyed on target:id so a reused cell instance (an idless row at the same
+            // index across pages) starts its preview state fresh rather than stale.
+            return (
+                <RefCell
+                    column={column}
+                    id={String(rawValue)}
+                    key={`${target}:${String(rawValue)}`}
+                    onNavigate={refs.onNavigate}
+                    onPreview={refs.onPreview}
+                    target={target}
+                />
+            );
+        }
 
-    // An idless row can't be addressed for a patch, so its cells are read-only.
-    // Returning early also narrows `id` to a string for the editable path below.
-    if (id === null) {
+        // An idless row can't be addressed for a patch, so its cells are read-only.
+        // Returning early also narrows `id` to a string for the editable path below.
+        if (id === null) {
+            return (
+                <>
+                    <CellValue value={rawValue} />
+                    <CellExpandButton column={column} onExpand={edit.onExpandCell} value={rawValue} />
+                </>
+            );
+        }
+
+        const staged = edit.stagedValue(id, column);
+        const display = staged === undefined ? rawValue : staged.value;
+        const canEdit = edit.editable && edit.editableColumn(column);
+        const isEditing = edit.editingCell !== null && edit.editingCell.rowId === id && edit.editingCell.column === column;
+
+        if (isEditing) {
+            return (
+                <CellEditor
+                    column={column}
+                    initial={display}
+                    onCancel={edit.cancelEdit}
+                    // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-cell commit closes over the row id + raw value; admin dev-tool render path
+                    onCommit={(raw) => {
+                        edit.stage(id, column, coerceCellValue(raw, rawValue));
+                        edit.cancelEdit();
+                    }}
+                    recordId={id}
+                />
+            );
+        }
+
+        let cellClass: string | undefined;
+
+        if (staged !== undefined) {
+            cellClass = "rounded bg-amber-500/15 px-1";
+        } else if (canEdit) {
+            cellClass = "cursor-text";
+        }
+
+        const onDoubleClick = canEdit
+            ? (): void => {
+                  edit.startEdit(id, column);
+              }
+            : undefined;
+
         return (
             <>
-                <CellValue value={rawValue} />
-                <CellExpandButton column={column} onExpand={edit.onExpandCell} value={rawValue} />
+                <span className={cellClass} data-testid={`db-cell-${id}-${column}`} onDoubleClick={onDoubleClick}>
+                    <CellValue value={display} />
+                </span>
+                <CellExpandButton column={column} onExpand={edit.onExpandCell} value={display} />
             </>
         );
-    }
-
-    const staged = edit.stagedValue(id, column);
-    const display = staged === undefined ? rawValue : staged.value;
-    const canEdit = edit.editable && edit.editableColumn(column);
-    const isEditing = edit.editingCell !== null && edit.editingCell.rowId === id && edit.editingCell.column === column;
-
-    if (isEditing) {
-        return (
-            <CellEditor
-                column={column}
-                initial={display}
-                onCancel={edit.cancelEdit}
-                // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- per-cell commit closes over the row id + raw value; admin dev-tool render path
-                onCommit={(raw) => {
-                    edit.stage(id, column, coerceCellValue(raw, rawValue));
-                    edit.cancelEdit();
-                }}
-                recordId={id}
-            />
-        );
-    }
-
-    let cellClass: string | undefined;
-
-    if (staged !== undefined) {
-        cellClass = "rounded bg-amber-500/15 px-1";
-    } else if (canEdit) {
-        cellClass = "cursor-text";
-    }
-
-    const onDoubleClick = canEdit
-        ? (): void => {
-              edit.startEdit(id, column);
-          }
-        : undefined;
-
-    return (
-        <>
-            <span className={cellClass} data-testid={`db-cell-${id}-${column}`} onDoubleClick={onDoubleClick}>
-                <CellValue value={display} />
-            </span>
-            <CellExpandButton column={column} onExpand={edit.onExpandCell} value={display} />
-        </>
-    );
-});
+    },
+);
 
 /**
  * One grid column header: the sort toggle, a drag handle for reordering (native

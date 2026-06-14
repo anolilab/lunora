@@ -210,7 +210,9 @@ const WorkflowsPanel = (): ReactElement => {
             )}
 
             <p className="text-sm text-muted-foreground">
-                {t("Workflows are declared in code with defineWorkflow and run as durable Cloudflare Workflows. Start an instance and observe its status below.")}
+                {t(
+                    "Workflows are declared in code with defineWorkflow and run as durable Cloudflare Workflows. Start an instance and observe its status below.",
+                )}
             </p>
 
             {data !== null && workflows.length === 0 ? (

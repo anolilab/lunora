@@ -75,10 +75,7 @@ export default createTemplate({
             ? `Re-exported the generated workflow classes from ${entry.relativePath}.`
             : 'Re-export the generated classes from your worker entry: `export * from "./cirrus/_generated/workflows"`.';
 
-        const suggestions = [
-            entrySuggestion,
-            "Run `cirrus codegen` (or just `cirrus dev`) to emit the WorkflowEntrypoint class and reconcile wrangler.jsonc.",
-        ];
+        const suggestions = [entrySuggestion, "Run `cirrus codegen` (or just `cirrus dev`) to emit the WorkflowEntrypoint class and reconcile wrangler.jsonc."];
 
         if (!existsSync(workflowsPath)) {
             return {

@@ -130,7 +130,7 @@ describe("emit (workflows)", () => {
 
         expect(content).toContain('import CirrusWorkflow from "@cirrus/workflow/do";');
         expect(content).toContain('import { orderPipeline } from "../workflows.js";');
-         
+
         expect(content).toContain(
             // eslint-disable-next-line no-secrets/no-secrets -- asserting on dense generated TS, not a credential
             "export class OrderPipelineWorkflow extends CirrusWorkflow<WorkflowParamsOf<typeof orderPipeline>, WorkflowOutputOf<typeof orderPipeline>> {",

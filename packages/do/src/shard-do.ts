@@ -3460,7 +3460,12 @@ abstract class ShardDO {
 
         const binding = (this.env as Record<string, unknown> | undefined)?.[metadata.binding];
 
-        if (typeof binding !== "object" || binding === null || typeof (binding as WorkflowBindingHandle).create !== "function" || typeof (binding as WorkflowBindingHandle).get !== "function") {
+        if (
+            typeof binding !== "object" ||
+            binding === null ||
+            typeof (binding as WorkflowBindingHandle).create !== "function" ||
+            typeof (binding as WorkflowBindingHandle).get !== "function"
+        ) {
             throw Object.assign(new Error(`workflow binding "${metadata.binding}" is not available on this deployment`), {
                 code: "BAD_REQUEST",
                 name: "CirrusError",

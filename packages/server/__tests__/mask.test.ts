@@ -255,9 +255,7 @@ describe("mask — read path", () => {
         const handler = cirrus.query
             .use(maskForTest({ users: { email: "redact" } }))
             // `.order()` is a chainable reader link: it must survive the mask wrapper, not throw.
-            .query(async ({ ctx }) =>
-                (ctx as unknown as TestContext).db.query("users").withIndex("by_email").order("desc").collect(),
-            );
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.query("users").withIndex("by_email").order("desc").collect());
 
         const rows = await handler.handler(makeContext(database, "u1"), {});
 
