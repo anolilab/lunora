@@ -245,9 +245,24 @@ const handleSecretRoute = async (request: Request, environment: RouterEnv): Prom
         return jsonError(400, "organizationId, projectId, name and value are required");
     }
 
-    try {
-        const { ciphertext, iv } = await encryptSecret(environment.SECRET_ENCRYPTION_KEY, secret.value);
+    // CIRRUS_ADMIN_TOKEN is platform-owned and always wins at deploy time, so a
+    // tenant secret with that name would be a silent no-op — reject it up front.
+    if (secret.name === "CIRRUS_ADMIN_TOKEN") {
+        return jsonError(400, "CIRRUS_ADMIN_TOKEN is a reserved secret name");
+    }
 
+    // Encryption failure is a server misconfiguration (e.g. a malformed master
+    // key) → 500, kept distinct from the membership 403 the store mutation raises.
+    let ciphertext: string;
+    let iv: string;
+
+    try {
+        ({ ciphertext, iv } = await encryptSecret(environment.SECRET_ENCRYPTION_KEY, secret.value));
+    } catch (error) {
+        return jsonError(500, error instanceof Error ? error.message : "secret encryption failed");
+    }
+
+    try {
         await context.runMutation(api.secrets.store, {
             ciphertext,
             iv,
