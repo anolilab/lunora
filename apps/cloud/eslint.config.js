@@ -13,6 +13,9 @@ export default createConfig(
             "**/test-results/**",
             "**/coverage/**",
             "**/.wrangler/**",
+            // Standalone spike harnesses — deployed independently with their own
+            // wrangler/tsc, not part of the control-plane build (see spikes/*/README).
+            "**/spikes/**",
             "**/*.md",
             "**/*.md/**",
             "**/vitest.config.ts",
