@@ -295,6 +295,10 @@
                     "kind": "string",
                     "optional": true
                 },
+                "githubRepo": {
+                    "kind": "string",
+                    "optional": true
+                },
                 "name": {
                     "kind": "string",
                     "optional": false
@@ -312,6 +316,10 @@
                 "by_org_slug": {
                     "fields": ["organizationId", "slug"],
                     "unique": true
+                },
+                "by_github_repo": {
+                    "fields": ["githubRepo"],
+                    "unique": false
                 }
             },
             "relations": {},
