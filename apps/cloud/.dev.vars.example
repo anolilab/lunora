@@ -1,3 +1,11 @@
 # Bearer token gating the control plane's admin endpoints (studio + platform
 # tools). Generate with: openssl rand -hex 32
 CIRRUS_ADMIN_TOKEN=replace-with-openssl-rand-hex-32
+
+# Cloudflare API token for the cell's account — used by the provisioner to
+# create D1/R2 and upload tenant Workers into the dispatch namespace.
+CLOUDFLARE_API_TOKEN=replace-with-cloudflare-api-token
+
+# Secret shared with the GitHub App/webhook; verifies x-hub-signature-256.
+# Generate with: openssl rand -hex 32
+GITHUB_WEBHOOK_SECRET=replace-with-openssl-rand-hex-32
