@@ -411,8 +411,10 @@ with a named contact is the real insurance against surprise enforcement.
 Ordered so every phase ships standalone DX value even if we stop there.
 
 > **Status (2026-06-14).** Phase 0 shipped in the framework. The control-plane
-> **backend is feature-complete as code** in `apps/cloud` (60 unit tests; codegen
-> /eslint/tsc clean) across all phases:
+> **backend is feature-complete as code** in `apps/cloud` (62 unit tests; codegen
+> /eslint/tsc clean; the studio SPA compiles via `vite build`) across all phases —
+> and the **hosted studio React UI now exists** (`src/client`, served with the
+> Worker by `@cirrus/vite`):
 >
 > - **Phase 1:** control plane + deploy API (NDJSON) + deploy-key lifecycle + a
 >   **real provisioner** over the Cloudflare REST API (`src/cloudflare/api.ts`;
@@ -426,12 +428,13 @@ Ordered so every phase ships standalone DX value even if we stop there.
 > - **Phase 4:** plans + **quota enforcement** (projects/members), **usage metering**
 >   (`usageEvents` + `aggregateUsage`), and the **custom-hostname** REST port.
 >
-> **Remaining — genuinely needs live infra / external services / a frontend, to be
-> done by whoever has a Cloudflare account + provider keys:** end-to-end deploy
-> validation against real Cloudflare; the **studio React UI**; the billing-provider
-> _charge_ call (Stripe/Polar via `@cirrus/payment`) + the Analytics-Engine metering
-> _source_; managed backups/PITR; and the cell bring-up IaC. The code seams for all
-> of these exist.
+> **Remaining — genuinely needs live infra / external services, to be done by
+> whoever has a Cloudflare account + provider keys:** end-to-end deploy validation
+> against real Cloudflare; browser/e2e testing of the studio UI (it compiles and
+> wires to the live queries, but has not been exercised against a running backend
+> here); the billing-provider _charge_ call (Stripe/Polar via `@cirrus/payment`) +
+> the Analytics-Engine metering _source_; managed backups/PITR; and the cell
+> bring-up IaC. The code seams for all of these exist.
 
 - **Phase 0 — Remote-binding dev (no cloud required). ✅ SHIPPED.** Implemented in the
   framework, not the cloud app: `@cirrus/config/remote-bindings.ts` tags eligible
@@ -467,9 +470,14 @@ Ordered so every phase ships standalone DX value even if we stop there.
   D1 Time Travel — needs a spike; neither Supabase nor Convex offers it.
 - **Phase 3 — Hosted studio.** _Built:_ **team invitations** (`cirrus/invitations.ts` —
   invite/list/revoke/accept, single-use SHA-256-hashed tokens, owner-admin gated,
-  accept-by-token adds the member). _Remaining:_ the multi-tenant studio UI shell over
-  `packages/studio`, the admin-RPC proxy (ACL/audit/rate limits in front of live tenant
-  workers), and guided secret setup (reuses `@cirrus/config`).
+  accept-by-token adds the member); the **admin-RPC proxy** (`src/admin/proxy.ts`,
+  mounted at `POST /v1/admin` — ACL + per-deployment admin token + audit); and the
+  **hosted studio React SPA** (`src/client`): better-auth-gated, org picker + per-org
+  dashboard tabs for projects, deployments, members, deploy keys, invitations, and
+  usage, served on one origin with the Worker via `@cirrus/vite`. _Remaining:_
+  browser/e2e validation against a live backend, deeper integration with
+  `packages/studio` (schema/data/logs/advisors views), and guided secret setup
+  (reuses `@cirrus/config`).
 - **Phase 4 — Domains, billing, ops.** _Built:_ **plans + quota entitlements**
   (`src/billing/plans.ts` on `@cirrus/payment`'s entitlements model — free/pro/enterprise
   with per-resource limits + feature flags; `effectiveLimit`/`withinQuota` with a

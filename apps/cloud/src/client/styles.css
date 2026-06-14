@@ -1,0 +1,327 @@
+:root {
+    --bg: #0b1020;
+    --surface: #151b30;
+    --surface-2: #1d2440;
+    --border: #2a3252;
+    --text: #e8ecf6;
+    --muted: #8a93b2;
+    --primary: #5b8cff;
+    --primary-ink: #ffffff;
+    --danger: #ff6b6b;
+    --ok: #3ecf8e;
+    color-scheme: dark;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+}
+
+a {
+    color: var(--primary);
+}
+
+.loading {
+    margin: 4rem auto;
+    text-align: center;
+    color: var(--muted);
+}
+
+/* ── Auth ─────────────────────────────────────────── */
+.auth-shell {
+    display: grid;
+    place-items: center;
+    min-height: 100vh;
+    padding: 1rem;
+}
+
+.auth-card {
+    width: 100%;
+    max-width: 360px;
+}
+
+/* ── App shell ────────────────────────────────────── */
+.app {
+    min-height: 100vh;
+}
+
+.topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+}
+
+.topbar-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.brand {
+    font-weight: 700;
+    font-size: 1.05rem;
+    background: none;
+    border: none;
+    color: var(--text);
+    cursor: pointer;
+    padding: 0;
+}
+
+.content {
+    max-width: 880px;
+    margin: 0 auto;
+    padding: 24px 20px 64px;
+}
+
+/* ── Layout primitives ────────────────────────────── */
+.stack {
+    display: grid;
+    gap: 16px;
+}
+
+.card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 18px 20px;
+}
+
+.card h2,
+.card h3 {
+    margin: 0 0 12px;
+}
+
+.muted {
+    color: var(--muted);
+}
+
+.error {
+    color: var(--danger);
+}
+
+.breadcrumb {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.breadcrumb h2,
+.breadcrumb h3 {
+    margin: 0;
+}
+
+/* ── Tabs ─────────────────────────────────────────── */
+.tabs {
+    display: flex;
+    gap: 4px;
+    flex-wrap: wrap;
+    border-bottom: 1px solid var(--border);
+}
+
+.tab {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--muted);
+    padding: 8px 14px;
+    cursor: pointer;
+    font-size: 0.95rem;
+}
+
+.tab.active {
+    color: var(--text);
+    border-bottom-color: var(--primary);
+}
+
+/* ── Lists & rows ─────────────────────────────────── */
+.list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 6px;
+}
+
+.row,
+.row-button {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-2);
+    text-align: left;
+    color: var(--text);
+}
+
+.row-button {
+    cursor: pointer;
+}
+
+.row-button:hover {
+    border-color: var(--primary);
+}
+
+.row-title {
+    font-weight: 600;
+    flex: 0 0 auto;
+}
+
+.badge {
+    font-size: 0.75rem;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--muted);
+}
+
+/* ── Forms ────────────────────────────────────────── */
+.form-grid {
+    display: grid;
+    gap: 12px;
+}
+
+.inline-form {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+}
+
+label {
+    display: grid;
+    gap: 4px;
+    font-size: 0.9rem;
+    color: var(--muted);
+}
+
+input,
+select {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 9px 11px;
+    color: var(--text);
+    font-size: 0.95rem;
+}
+
+input:focus,
+select:focus {
+    outline: none;
+    border-color: var(--primary);
+}
+
+button {
+    font: inherit;
+}
+
+button.primary {
+    background: var(--primary);
+    color: var(--primary-ink);
+    border: none;
+    border-radius: 8px;
+    padding: 9px 16px;
+    cursor: pointer;
+    font-weight: 600;
+}
+
+button.primary:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
+button.link {
+    background: none;
+    border: none;
+    color: var(--primary);
+    cursor: pointer;
+    padding: 4px;
+}
+
+button.link.danger {
+    color: var(--danger);
+}
+
+/* ── Callouts / secrets ───────────────────────────── */
+.callout {
+    background: var(--surface-2);
+    border: 1px solid var(--primary);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 12px;
+    display: grid;
+    gap: 8px;
+}
+
+.secret {
+    display: block;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    word-break: break-all;
+}
+
+/* ── Tables ───────────────────────────────────────── */
+.table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+
+.table th,
+.table td {
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+}
+
+.table th {
+    color: var(--muted);
+    font-weight: 600;
+}
+
+.status {
+    text-transform: capitalize;
+}
+
+.status-live {
+    color: var(--ok);
+}
+
+.status-failed {
+    color: var(--danger);
+}
+
+/* ── Metrics ──────────────────────────────────────── */
+.metrics {
+    display: flex;
+    gap: 28px;
+    flex-wrap: wrap;
+}
+
+.metric {
+    display: grid;
+    gap: 2px;
+}
+
+.metric-value {
+    font-size: 1.6rem;
+    font-weight: 700;
+}
