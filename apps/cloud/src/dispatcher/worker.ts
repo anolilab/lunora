@@ -70,9 +70,16 @@ export default {
             // plan, falling back to the free tier when the plan is unknown.
             const limits = limitsForPlan(route.plan);
             const userWorker = env.DISPATCHER.get(route.scriptName, undefined, { limits });
+            // A WebSocket upgrade returns a 101 response carrying `webSocket`;
+            // returning it verbatim hands the hibernatable socket back to the
+            // eyeball (Cirrus's `/_cirrus/ws` subscription path). Post-upgrade
+            // message invocations run inside the tenant's DO, not back through
+            // this dispatcher — see spikes/ws-dispatch for the live validation.
             const response = await userWorker.fetch(request);
 
-            // Per-request metering source (fire-and-forget; no-op without the binding).
+            // Per-request metering source (fire-and-forget; no-op without the
+            // binding). A WS upgrade is counted once here; per-message frames are
+            // metered by the DO/AE path, not re-counted on every frame.
             recordRequestUsage(env.USAGE_ANALYTICS, { plan: route.plan ?? "free", scriptName: route.scriptName });
 
             return response;
