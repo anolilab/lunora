@@ -83,6 +83,13 @@ const currentPeriodStart = (): number => {
  * summed row — bounding row growth while leaving `summary` (which sums) exact.
  * The current period is left untouched so live writes never race the compaction.
  * SYSTEM only (cron dispatch).
+ *
+ * The D1/global backend has no multi-statement transaction, so the write order
+ * is chosen to fail safe: **delete the extra rows first, then set the survivor's
+ * total last**. A crash mid-compaction can only *under*-count (some rows gone
+ * before the survivor is updated) — it can never leave the summed row alongside
+ * surviving originals, which would *double-count* (over-bill). The survivor is
+ * patched (not insert-then-delete) so no orphan summed row can ever exist.
  */
 export const rollup = internalMutation({
     args: {},
@@ -91,42 +98,37 @@ export const rollup = internalMutation({
         const { page } = await context.db.platformUsage.findMany({});
         const closed = (page as unknown as PlatformUsageRow[]).filter((row) => row.periodStart < cutoff);
 
-        const groups = new Map<
-            string,
-            { kind: PlatformUsageRow["kind"]; organizationId: Id<"organizations">; periodStart: number; rows: PlatformUsageRow[]; total: number }
-        >();
+        const groups = new Map<string, PlatformUsageRow[]>();
 
         for (const row of closed) {
             const groupKey = `${row.organizationId}|${String(row.periodStart)}|${row.kind}`;
-            const group = groups.get(groupKey) ?? { kind: row.kind, organizationId: row.organizationId, periodStart: row.periodStart, rows: [], total: 0 };
+            const group = groups.get(groupKey) ?? [];
 
-            group.rows.push(row);
-            group.total += row.quantity;
+            group.push(row);
             groups.set(groupKey, group);
         }
 
         let compacted = 0;
 
-        for (const group of groups.values()) {
-            if (group.rows.length < 2) {
+        for (const rows of groups.values()) {
+            if (rows.length < 2) {
                 continue;
             }
 
-            // eslint-disable-next-line no-await-in-loop -- sequential keeps the writer simple; volumes are small
-            await context.db.insert("platformUsage", {
-                createdAt: Date.now(),
-                kind: group.kind,
-                organizationId: group.organizationId,
-                periodStart: group.periodStart,
-                quantity: group.total,
-            });
+            const [survivor, ...extras] = rows;
+            const total = rows.reduce((sum, row) => sum + row.quantity, 0);
 
-            for (const row of group.rows) {
+            // Delete the extras first (fail-safe ordering — see the doc comment).
+            for (const row of extras) {
                 // eslint-disable-next-line no-await-in-loop -- sequential delete of the now-summed rows
                 await context.db.delete(row._id);
             }
 
-            compacted += group.rows.length;
+            // Then fold the group total onto the surviving row.
+            // eslint-disable-next-line no-await-in-loop -- one patch per group; volumes are small
+            await context.db.patch(survivor._id, { quantity: total });
+
+            compacted += extras.length;
         }
 
         return { compacted };

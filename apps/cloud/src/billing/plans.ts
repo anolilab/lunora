@@ -47,14 +47,15 @@ export const effectiveLimit = (entitlements: Entitlements, resource: QuotaResour
 export const withinQuota = (entitlements: Entitlements, resource: QuotaResource, current: number): boolean => current < effectiveLimit(entitlements, resource);
 
 /**
- * Limit for a resource by plan **name** (the `organizations.plan` column) — used
- * to enforce quota in mutations without resolving live subscription state. Falls
- * back to the free baseline for unknown plans.
+ * Plan tiers, most-generous first. The single source of precedence — used to
+ * pick the effective tier when several plans are active and to order runtime
+ * limits. (Quota itself resolves from live subscription entitlements, not a
+ * plan name — see `cirrus/entitlements.ts`.)
  */
-export const planLimit = (plan: string, resource: QuotaResource): number => CIRRUS_CLOUD_PLANS.plans[plan]?.limits?.[resource] ?? FREE_LIMITS[resource] ?? 0;
+export const PLAN_PRECEDENCE = ["enterprise", "pro", "free"] as const;
 
-/** Whether the plan has room for one more `resource` given the current count. */
-export const withinPlanQuota = (plan: string, resource: QuotaResource, current: number): boolean => current < planLimit(plan, resource);
+/** The most-generous plan among the active ones, or `free` when none match. */
+export const highestPlan = (plans: ReadonlyArray<string>): string => PLAN_PRECEDENCE.find((plan) => plans.includes(plan)) ?? "free";
 
 /** Per-request runtime caps applied by the dispatcher via `env.DISPATCHER.get(..., { limits })`. */
 export interface RuntimeLimits {
