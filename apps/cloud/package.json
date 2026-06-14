@@ -9,30 +9,40 @@
         "node": "^22.14.0 || >=24.10.0"
     },
     "scripts": {
+        "build": "vite build",
         "codegen": "node node_modules/@cirrus/cli/dist/bin.mjs codegen",
         "deploy": "wrangler deploy",
-        "dev": "node node_modules/@cirrus/cli/dist/bin.mjs dev",
+        "dev": "vite",
         "lint:eslint": "eslint .",
         "lint:eslint:fix": "eslint . --fix",
         "lint:types": "node node_modules/@cirrus/cli/dist/bin.mjs codegen && tsc --noEmit",
         "test": "vitest run"
     },
     "dependencies": {
+        "@cirrus/auth": "workspace:*",
         "@cirrus/client": "workspace:*",
         "@cirrus/d1": "workspace:*",
         "@cirrus/do": "workspace:*",
         "@cirrus/payment": "workspace:*",
+        "@cirrus/react": "workspace:*",
         "@cirrus/runtime": "workspace:*",
         "@cirrus/scheduler": "workspace:*",
-        "@cirrus/server": "workspace:*"
+        "@cirrus/server": "workspace:*",
+        "better-auth": "catalog:auth",
+        "react": "catalog:frontend",
+        "react-dom": "catalog:frontend"
     },
     "devDependencies": {
         "@cirrus/cli": "workspace:*",
         "@cirrus/codegen": "workspace:*",
         "@cirrus/config": "workspace:*",
+        "@cirrus/vite": "workspace:*",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@types/node": "catalog:types",
+        "@types/react": "catalog:frontend",
+        "@types/react-dom": "catalog:frontend",
         "typescript": "catalog:tsc",
+        "vite": "catalog:vite",
         "vitest": "catalog:test",
         "wrangler": "catalog:cloudflare"
     }

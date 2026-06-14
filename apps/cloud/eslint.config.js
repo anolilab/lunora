@@ -16,6 +16,7 @@ export default createConfig(
             "**/*.md",
             "**/*.md/**",
             "**/vitest.config.ts",
+            "**/vite.config.ts",
             "**/wrangler.jsonc",
             "**/package.json",
             "**/tsconfig*.json",
@@ -28,7 +29,21 @@ export default createConfig(
         rules: {
             "n/no-unsupported-features/node-builtins": [
                 "error",
-                { ignores: ["crypto", "CryptoKey", "SubtleCrypto", "TextEncoder", "Request", "Response", "ReadableStream"] },
+                {
+                    ignores: [
+                        "crypto",
+                        "CryptoKey",
+                        "SubtleCrypto",
+                        "TextEncoder",
+                        "Request",
+                        "Response",
+                        "ReadableStream",
+                        // Browser globals used by the hosted-studio SPA (src/client).
+                        "localStorage",
+                        "sessionStorage",
+                        "navigator",
+                    ],
+                },
             ],
             // `_id` / `_creationTime` are the public document fields; `__cirrus*` are
             // internal markers. Accidental dangles are still flagged.
@@ -79,7 +94,7 @@ export default createConfig(
     // wrangler reference them by name, so a single-export file is still idiomatically
     // a named export.
     {
-        files: ["cirrus/**/*.ts", "src/**/*.ts"],
+        files: ["cirrus/**/*.ts", "src/**/*.{ts,tsx}"],
         rules: {
             "import/exports-last": "off",
             "import/prefer-default-export": "off",
@@ -89,15 +104,27 @@ export default createConfig(
     // untyped `env` / binding values TS sees as non-null, and for query "not
     // found" returns (matching the framework's own example apps).
     {
-        files: ["cirrus/**/*.ts", "src/**/*.ts"],
+        files: ["cirrus/**/*.ts", "src/**/*.{ts,tsx}"],
         rules: {
             "@typescript-eslint/no-unnecessary-condition": "off",
             "unicorn/no-null": "off",
         },
     },
+    // Hosted-studio React UI (src/client): PascalCase component filenames (React
+    // convention), inline event handlers (idiomatic for the admin UI; no perf
+    // concern), and `void promise` to mark intentional fire-and-forget in handlers.
+    {
+        files: ["src/client/**/*.{ts,tsx}"],
+        rules: {
+            "no-void": "off",
+            "react-perf/jsx-no-new-function-as-prop": "off",
+            "sonarjs/void-use": "off",
+            "unicorn/filename-case": "off",
+        },
+    },
     // JSDoc-in-comment false positives: indented prose/list blocks inside doc comments.
     {
-        files: ["**/*.ts"],
+        files: ["**/*.{ts,tsx}"],
         rules: {
             "jsdoc/check-indentation": "off",
             "jsdoc/no-undefined-types": "off",
