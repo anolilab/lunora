@@ -10,7 +10,7 @@ What survives in this directory:
 | ---- | --------------------------------------------------------- | ------------------------- | ----------- |
 | 022  | Borrow from localflare + d1-manager into Studio (7 items) | studio, do, advisor       | IN PROGRESS |
 | 024  | Visual schema editor (local-dev `schema.ts` + codegen)    | config, vite, cli, studio | TODO        |
-| 025  | Access-rule editor + permissions playground               | studio (+config)          | TODO        |
+| 025  | Access-rule editor + permissions playground               | studio (+config)          | IN PROGRESS |
 | 026  | Datasette faceting + shareable canned queries             | do, studio                | TODO        |
 
 Plus [`convex-gap-analysis.md`](convex-gap-analysis.md) — a reference, point-in-time
