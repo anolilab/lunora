@@ -89,3 +89,18 @@ export const authorizeDeployKey = async (
 
     return row._id;
 };
+
+/**
+ * Assert that a row exists and belongs to `organizationId`, throwing `NOT_FOUND`
+ * otherwise. Guards the cross-org IDOR on org-scoped delete/revoke mutations:
+ * being an owner/admin of org A must not let you mutate org B's row by passing
+ * A's id with B's row id. Centralized here so the check (and its error contract)
+ * lives in one place.
+ */
+export const assertRowInOrg = async <T extends string>(context: QueryContext, id: Id<T>, organizationId: Id<"organizations">, label: string): Promise<void> => {
+    const row = (await context.db.get(id)) as { organizationId?: Id<"organizations"> } | null;
+
+    if (row?.organizationId !== organizationId) {
+        throw new CirrusError("NOT_FOUND", `${label} not found in this organization`);
+    }
+};
