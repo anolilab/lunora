@@ -39,6 +39,8 @@ export interface DeployBackend {
         projectId: string; // secret-scanner:allow -- domain field name
         scriptName: string;
     }) => Promise<{ deploymentId: string }>;
+    /** Decrypted tenant env secrets to inject into the deployed Worker (§7). Optional. */
+    resolveSecrets?: (input: { key: string; organizationId: string; projectId: string }) => Promise<Record<string, string>>; // secret-scanner:allow -- domain field name
     updateStatus: (input: {
         bundleHash?: string;
         deploymentId: string;
@@ -138,13 +140,17 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
 
             write({ deploymentId, event: "accepted" });
 
+            // Tenant env secrets are decrypted and merged in; CIRRUS_ADMIN_TOKEN
+            // is platform-owned and always wins over a same-named tenant secret.
+            const tenantSecrets = (await deps.backend.resolveSecrets?.({ key, organizationId: target.organizationId, projectId })) ?? {};
+
             const spec: TenantDeploymentSpec = {
                 bindings: {},
                 bundle: new ArrayBuffer(0),
                 cell: deps.cell,
                 dispatchNamespace: deps.dispatchNamespace(kind),
                 scriptName,
-                secrets: { CIRRUS_ADMIN_TOKEN: adminToken },
+                secrets: { ...tenantSecrets, CIRRUS_ADMIN_TOKEN: adminToken },
                 tags: [`org:${target.organizationId}`, `project:${projectId}`, `env:${kind}`],
             };
 

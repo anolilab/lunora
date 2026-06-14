@@ -3,11 +3,13 @@ import type { ReactElement } from "react";
 import { useState } from "react";
 
 import { api } from "../../cirrus/_generated/api.js";
+import { ActivitySection } from "./ActivitySection";
 import { BillingSection } from "./BillingSection";
 import { DeployKeysSection } from "./DeployKeysSection";
 import { InvitationsSection } from "./InvitationsSection";
 import { MembersSection } from "./MembersSection";
 import { ProjectsSection } from "./ProjectsSection";
+import { SecretsSection } from "./SecretsSection";
 import type { OrgId } from "./types";
 import { UsageSection } from "./UsageSection";
 
@@ -16,15 +18,17 @@ interface OrganizationDashboardProps {
     organizationId: OrgId;
 }
 
-type Tab = "billing" | "invitations" | "keys" | "members" | "projects" | "usage";
+type Tab = "activity" | "billing" | "invitations" | "keys" | "members" | "projects" | "secrets" | "usage";
 
 const TABS: { id: Tab; label: string }[] = [
     { id: "projects", label: "Projects" },
     { id: "members", label: "Members" },
     { id: "keys", label: "Deploy keys" },
+    { id: "secrets", label: "Secrets" },
     { id: "invitations", label: "Invitations" },
     { id: "usage", label: "Usage" },
     { id: "billing", label: "Billing" },
+    { id: "activity", label: "Activity" },
 ];
 
 /**
@@ -67,8 +71,10 @@ export const OrganizationDashboard = ({ onBack, organizationId }: OrganizationDa
             {tab === "members" ? <MembersSection organizationId={organizationId} /> : null}
             {tab === "keys" ? <DeployKeysSection organizationId={organizationId} /> : null}
             {tab === "invitations" ? <InvitationsSection organizationId={organizationId} /> : null}
+            {tab === "secrets" ? <SecretsSection organizationId={organizationId} /> : null}
             {tab === "usage" ? <UsageSection organizationId={organizationId} /> : null}
             {tab === "billing" ? <BillingSection organizationId={organizationId} /> : null}
+            {tab === "activity" ? <ActivitySection organizationId={organizationId} /> : null}
         </div>
     );
 };

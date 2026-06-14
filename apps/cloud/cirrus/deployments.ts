@@ -4,6 +4,20 @@ import { previewExpiry } from "../src/deploy/preview";
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, mutation, query, v } from "./_generated/server.js";
 import { assertMember, authorizeDeployKey } from "./authz";
+import { orgEntitlements } from "./entitlements";
+
+/** The most generous active plan name (drives the dispatcher's runtime limits). */
+const bestPlan = (plans: ReadonlyArray<string>): string => {
+    if (plans.includes("enterprise")) {
+        return "enterprise";
+    }
+
+    if (plans.includes("pro")) {
+        return "pro";
+    }
+
+    return "free";
+};
 
 interface DeploymentRow {
     _id: Id<"deployments">;
@@ -43,6 +57,28 @@ export const adminTarget = query({
         }
 
         return { adminToken: deployment.adminToken, url: deployment.url };
+    },
+});
+
+/**
+ * Resolve a dispatch-namespace script id to its org's plan name, for the
+ * dispatcher's per-plan runtime limits (§4). Public + unauthenticated by design
+ * (returns only a non-sensitive plan tier); the dispatcher reaches it through a
+ * bearer-gated control-plane endpoint. Unknown scripts resolve to `free`.
+ */
+export const planForScript = query({
+    args: { scriptName: v.string() },
+    handler: async (context, { scriptName }): Promise<{ plan: string }> => {
+        const { page } = await context.db.deployments.findMany({ where: { scriptName } });
+        const deployment = (page as unknown as DeploymentRow[])[0];
+
+        if (!deployment) {
+            return { plan: "free" };
+        }
+
+        const entitlements = await orgEntitlements(context, deployment.organizationId);
+
+        return { plan: bestPlan(entitlements.plans) };
     },
 });
 
