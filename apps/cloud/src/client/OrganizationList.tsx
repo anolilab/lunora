@@ -10,8 +10,6 @@ interface OrganizationListProps {
     onSelect: (id: OrgId) => void;
 }
 
-const PLANS = ["free", "pro", "enterprise"] as const;
-
 /** Derive a url-safe slug from a free-text organization name. */
 const slugify = (value: string): string => {
     let out = "";
@@ -49,7 +47,6 @@ export const OrganizationList = ({ onSelect }: OrganizationListProps): ReactElem
 
     const [name, setName] = useState("");
     const [slug, setSlug] = useState("");
-    const [plan, setPlan] = useState<(typeof PLANS)[number]>("free");
     const [cellId, setCellId] = useState<CellId | "">("");
     const [error, setError] = useState<string | null>(null);
 
@@ -86,6 +83,7 @@ export const OrganizationList = ({ onSelect }: OrganizationListProps): ReactElem
 
             <section className="card">
                 <h2>New organization</h2>
+                <p className="muted">New organizations start on the free plan — upgrade later from the Billing tab.</p>
                 {cells?.length === 0 ? (
                     <p className="muted">No cells registered yet. Register a cell (account shard) before creating an organization.</p>
                 ) : null}
@@ -103,7 +101,7 @@ export const OrganizationList = ({ onSelect }: OrganizationListProps): ReactElem
 
                         void (async () => {
                             try {
-                                const id = await createOrg.mutate({ cellId, name, plan, slug: effectiveSlug });
+                                const id = await createOrg.mutate({ cellId, name, slug: effectiveSlug });
                                 setName("");
                                 setSlug("");
                                 onSelect(id);
@@ -134,22 +132,6 @@ export const OrganizationList = ({ onSelect }: OrganizationListProps): ReactElem
                             placeholder={slugify(name) || "acme"}
                             value={slug}
                         />
-                    </label>
-                    <label htmlFor="org-plan">
-                        Plan
-                        <select
-                            id="org-plan"
-                            onChange={(event) => {
-                                setPlan(event.target.value as (typeof PLANS)[number]);
-                            }}
-                            value={plan}
-                        >
-                            {PLANS.map((value) => (
-                                <option key={value} value={value}>
-                                    {value}
-                                </option>
-                            ))}
-                        </select>
                     </label>
                     <label htmlFor="org-cell">
                         Cell

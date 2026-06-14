@@ -2,7 +2,7 @@ import { CirrusError } from "@cirrus/server";
 
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
-import { assertMember } from "./authz";
+import { assertMember, assertRowInOrg } from "./authz";
 import { assertWithinQuota } from "./entitlements";
 
 interface MemberRow {
@@ -63,6 +63,7 @@ export const remove = mutation({
     args: { id: v.id("members"), organizationId: v.id("organizations") },
     handler: async (context, { id, organizationId }): Promise<void> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
+        await assertRowInOrg(context, id, organizationId, "member");
 
         await context.db.delete(id);
     },

@@ -1,6 +1,6 @@
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
-import { assertMember, authorizeDeployKey } from "./authz";
+import { assertMember, assertRowInOrg, authorizeDeployKey } from "./authz";
 
 /**
  * Tenant secrets (CLOUD-PLAN.md §7). Values are AES-256-GCM encrypted at the
@@ -92,6 +92,7 @@ export const remove = mutation({
     args: { id: v.id("secrets"), organizationId: v.id("organizations") },
     handler: async (context, { id, organizationId }): Promise<void> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
+        await assertRowInOrg(context, id, organizationId, "secret");
 
         await context.db.delete(id);
     },
