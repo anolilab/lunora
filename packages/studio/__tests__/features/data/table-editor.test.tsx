@@ -218,6 +218,63 @@ describe("tableEditor", () => {
             },
         });
 
+    it("hydrates the search box from a deep-linked URL view", async () => {
+        expect.assertions(2);
+
+        render(renderEditor(createEditorClient(), "/data?table=messages&search=needle").ui);
+
+        await screen.findByTestId("db-page");
+
+        // The substring search rode in on the URL and seeds the filter box, so the
+        // pasted link reconstructs the exact view rather than an empty table.
+        expect(screen.getByTestId<HTMLInputElement>("db-filter").value).toBe("needle");
+        expect(screen.getByTestId("db-page")).toBeDefined();
+    });
+
+    it("saves the current view and applies it from the toolbar", async () => {
+        expect.assertions(3);
+
+        localStorage.clear();
+
+        const { router, ui } = renderEditor(createEditorClient(), "/data?table=messages&search=needle");
+
+        render(ui);
+
+        await screen.findByTestId("db-page");
+
+        // Name and save the current view.
+        fireEvent.click(screen.getByTestId("db-save-query"));
+        fireEvent.change(screen.getByTestId("db-save-query-name"), { target: { value: "errors" } });
+        fireEvent.click(screen.getByTestId("db-save-query-confirm"));
+
+        // The named view appears in the saved row.
+        const chip = await screen.findByTestId("db-saved-query-errors");
+
+        expect(chip.textContent).toBe("errors");
+
+        // Navigate away to a clean table, then apply the saved view — it restores the URL.
+        await router.navigate({ search: { table: "messages" }, to: "/data" });
+
+        await waitFor(() => {
+            if (router.state.location.search["search"] !== undefined) {
+                throw new Error("search not yet cleared");
+            }
+        });
+
+        fireEvent.click(screen.getByTestId("db-saved-query-errors"));
+
+        await waitFor(() => {
+            if (router.state.location.search["search"] !== "needle") {
+                throw new Error("apply did not restore the view");
+            }
+        });
+
+        expect(router.state.location.search["search"]).toBe("needle");
+        expect(tableParam(router)).toBe("messages");
+
+        localStorage.clear();
+    });
+
     it("follows a v.id ref into a global table by switching to the global tier", async () => {
         expect.assertions(3);
 

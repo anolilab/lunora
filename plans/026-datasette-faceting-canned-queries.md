@@ -173,7 +173,7 @@ workerd run.
 
 ## Item breakdown
 
-- [ ] **Item 1 — Faceting.** Add the `facetColumn` read-only admin op (DO
+- [x] **Item 1 — Faceting.** Add the `facetColumn` read-only admin op (DO
       introspect, bound params, reuses the active filters/search so facets reflect the
       current view, validates the column against known columns, caps at top-N with a
       `truncated` flag). Add the studio admin-function entry + result type. Add a facet
@@ -182,7 +182,7 @@ workerd run.
       DO builder unit test (correct `GROUP BY` SQL, bound params, unknown-column
       rejected, cap applied); studio test that a mocked facet result renders and a
       click adds the filter.
-- [ ] **Item 2 — Shareable canned queries.** Serialize the data-browser view
+- [x] **Item 2 — Shareable canned queries.** Serialize the data-browser view
       (table, tier, shard, filters, search, orderBy) into TanStack Router search params
       so the URL is the shareable query; hydrate state from the URL on load (so a
       pasted link reconstructs the view). Add a "Copy link" affordance and a
@@ -274,18 +274,18 @@ value/count rows; clicking a value adds the `eq` filter to the query args.
 
 Machine-checkable. ALL must hold when complete (per-item subsets gate each PR):
 
-- [ ] `pnpm run build:packages` exits 0
-- [ ] `pnpm --filter "@cirrus/do" run test -- introspect` exits 0 (builder unit
+- [x] `pnpm run build:packages` exits 0
+- [x] `pnpm --filter "@cirrus/do" run test -- introspect` exits 0 (builder unit
       test; not a workerd run)
-- [ ] `pnpm --filter "@cirrus/studio..." run build` exits 0
-- [ ] `pnpm --filter "@cirrus/studio" run test -- data` exits 0
-- [ ] `pnpm --filter "@cirrus/studio" run lint:types` + `lint:eslint` exit 0
-- [ ] `git grep -n "facetColumn" packages/do/src packages/studio/src` shows it
+- [x] `pnpm --filter "@cirrus/studio..." run build` exits 0
+- [x] `pnpm --filter "@cirrus/studio" run test -- data` exits 0
+- [x] `pnpm --filter "@cirrus/studio" run lint:types` + `lint:eslint` exit 0
+- [x] `git grep -n "facetColumn" packages/do/src packages/studio/src` shows it
       threaded DO → studio
-- [ ] No write/schema/auth change:
+- [x] No write/schema/auth change:
       `git grep -n "ALTER TABLE\|CREATE TABLE\|INSERT INTO\|UPDATE \|DELETE FROM" packages/do/src/introspect.ts`
       shows no new mutating SQL from this plan (facet is `SELECT … GROUP BY` only)
-- [ ] `plans/README.md` status row for 026 updated
+- [x] `plans/README.md` status row for 026 updated
 
 ## STOP conditions
 
