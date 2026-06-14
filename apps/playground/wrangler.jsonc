@@ -11,6 +11,11 @@
         ],
     },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "SchedulerDO"] }],
+    // Cloudflare Workflows are NOT Durable Objects — they live in their own
+    // `workflows[]` array with no migration entry. `class_name` must be exported
+    // by the worker entry (see `ChannelWelcomeWorkflow` in src/server/index.ts).
+    // `cirrus dev` auto-reconciles this from `cirrus/workflows.ts`.
+    "workflows": [{ "binding": "WORKFLOW_CHANNEL_WELCOME", "class_name": "ChannelWelcomeWorkflow", "name": "channel-welcome" }],
     "d1_databases": [
         {
             "binding": "DB",

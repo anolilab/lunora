@@ -23,6 +23,7 @@ const baseInferred = (overrides: Partial<InferredBindings> = {}): InferredBindin
         usesPayment: false,
         usesScheduler: false,
         usesStorage: false,
+        workflows: [],
         ...overrides,
     };
 };
@@ -290,13 +291,17 @@ describe("reconcileWranglerBindings", () => {
         });
 
         it("skips an unexported container and warns instead", () => {
-            expect.assertions(3);
+            expect.assertions(4);
 
             const result = reconcileWranglerBindings(root, baseInferred({ containers: [{ ...TRANSCODER, exported: false }] }));
 
             expect(result.changed).toBe(false);
             expect(result.warnings.join(" ")).toContain("not exported by the worker entry");
             expect(readConfig().containers).toBeUndefined();
+            // The structured gap (for the dev error overlay) mirrors the warning.
+            expect(result.exportGaps).toStrictEqual([
+                { className: "TranscoderContainer", exportName: "transcoder", kind: "container", module: "containers" },
+            ]);
         });
 
         it("respects an explicit observability opt-out, with a warning", () => {
@@ -373,6 +378,77 @@ describe("reconcileWranglerBindings", () => {
             reconcileWranglerBindings(root, baseInferred({ containers: [customContainer] }));
 
             expect(readConfig().containers[0].instance_type).toEqual({ memory_mib: 4096, vcpu: 1 });
+        });
+    });
+
+    describe("workflows", () => {
+        const ORDER_PIPELINE = {
+            bindingName: "WORKFLOW_ORDER_PIPELINE",
+            className: "OrderPipelineWorkflow",
+            exported: true,
+            exportName: "orderPipeline",
+            name: "order-pipeline",
+        };
+
+        it("provisions only the workflows[] entry — no DO binding, no migration class", () => {
+            expect.assertions(5);
+
+            const result = reconcileWranglerBindings(root, baseInferred({ workflows: [ORDER_PIPELINE] }));
+
+            expect(result.changed).toBe(true);
+            expect(result.added).toContain("workflows/OrderPipelineWorkflow");
+
+            const config = readConfig();
+
+            expect(config.workflows).toEqual([{ binding: "WORKFLOW_ORDER_PIPELINE", class_name: "OrderPipelineWorkflow", name: "order-pipeline" }]);
+            // Workflows are not Durable Objects: never bound, never migrated.
+            expect(config.durable_objects.bindings.map((binding: { name: string }) => binding.name)).not.toContain("WORKFLOW_ORDER_PIPELINE");
+            expect(config.migrations.flatMap((migration: { new_sqlite_classes?: string[] }) => migration.new_sqlite_classes ?? [])).not.toContain(
+                "OrderPipelineWorkflow",
+            );
+        });
+
+        it("is idempotent — a second run is a no-op", () => {
+            expect.assertions(1);
+
+            reconcileWranglerBindings(root, baseInferred({ workflows: [ORDER_PIPELINE] }));
+
+            const second = reconcileWranglerBindings(root, baseInferred({ workflows: [ORDER_PIPELINE] }));
+
+            expect(second.changed).toBe(false);
+        });
+
+        it("skips an unexported workflow and warns instead", () => {
+            expect.assertions(4);
+
+            const result = reconcileWranglerBindings(root, baseInferred({ workflows: [{ ...ORDER_PIPELINE, exported: false }] }));
+
+            expect(result.changed).toBe(false);
+            expect(result.warnings.join(" ")).toContain("not exported by the worker entry");
+            expect(readConfig().workflows).toBeUndefined();
+            // The structured gap (for the dev error overlay) mirrors the warning.
+            expect(result.exportGaps).toStrictEqual([
+                { className: "OrderPipelineWorkflow", exportName: "orderPipeline", kind: "workflow", module: "workflows" },
+            ]);
+        });
+
+        it("appends a new workflow alongside an existing one, matched by class_name", () => {
+            expect.assertions(2);
+
+            reconcileWranglerBindings(root, baseInferred({ workflows: [ORDER_PIPELINE] }));
+
+            const SECOND = {
+                bindingName: "WORKFLOW_SEND_RECEIPT",
+                className: "SendReceiptWorkflow",
+                exported: true,
+                exportName: "sendReceipt",
+                name: "send-receipt",
+            };
+
+            const result = reconcileWranglerBindings(root, baseInferred({ workflows: [ORDER_PIPELINE, SECOND] }));
+
+            expect(result.added).toEqual(["workflows/SendReceiptWorkflow"]);
+            expect(readConfig().workflows.map((entry: { class_name: string }) => entry.class_name)).toEqual(["OrderPipelineWorkflow", "SendReceiptWorkflow"]);
         });
     });
 });

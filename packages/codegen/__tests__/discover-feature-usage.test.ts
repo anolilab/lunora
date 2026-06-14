@@ -10,9 +10,9 @@ import { buildStudioFeatures, discoverFeatureUsage } from "../src/discover-featu
 
 let workdir: string;
 
-const ALL_OFF: FeatureUsage = { ai: false, mail: false, payments: false, scheduler: false, storage: false, vectors: false };
+const ALL_OFF: FeatureUsage = { ai: false, mail: false, payments: false, scheduler: false, storage: false, vectors: false, workflows: false };
 
-const NO_SIGNALS = { cronCount: 0, dependencies: new Set<string>(), storageColumnCount: 0, storageRuleCount: 0, vectorIndexCount: 0 };
+const NO_SIGNALS = { cronCount: 0, dependencies: new Set<string>(), storageColumnCount: 0, storageRuleCount: 0, vectorIndexCount: 0, workflowCount: 0 };
 
 describe("discover-feature-usage", () => {
     beforeEach(() => {
@@ -125,6 +125,7 @@ describe("discover-feature-usage", () => {
                 scheduler: false,
                 storage: false,
                 vectors: false,
+                workflows: false,
             });
         });
 
@@ -143,6 +144,7 @@ describe("discover-feature-usage", () => {
                 storageColumnCount: 2,
                 storageRuleCount: 0,
                 vectorIndexCount: 3,
+                workflowCount: 0,
             });
 
             expect(result.scheduler).toBe(true);

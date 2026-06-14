@@ -61,6 +61,7 @@
         "@cirrus/container": "workspace:*",
         "@cirrus/scheduler": "workspace:*",
         "@cirrus/values": "workspace:*",
+        "@cirrus/workflow": "workspace:*",
         "ts-morph": "catalog:tooling"
     },
     "devDependencies": {

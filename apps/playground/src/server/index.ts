@@ -50,6 +50,9 @@ const d1Introspector = (database: D1DatabaseLike): GlobalIntrospector => {
     };
 };
 
+// WorkflowEntrypoint class for `cirrus/workflows.ts` — wrangler requires every
+// declared `workflows[].class_name` to be exported by the worker entry.
+export { ChannelWelcomeWorkflow } from "../../cirrus/_generated/workflows.js";
 export { SchedulerDO } from "./scheduler-do.js";
 
 interface ShardEnv {
@@ -303,7 +306,8 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
                       // Drives the studio's bucket picker; hidden when only one bucket.
                       storageBuckets: Object.keys(buckets),
                       storageDelete: (key: string, options?: { bucket?: string }) => pick(options?.bucket).delete(key),
-                      storageList: (prefix?: string, options?: { bucket?: string; cursor?: string; limit?: number }) => pick(options?.bucket).list(prefix, options),
+                      storageList: (prefix?: string, options?: { bucket?: string; cursor?: string; limit?: number }) =>
+                          pick(options?.bucket).list(prefix, options),
                       storageSignedUrl:
                           env.PUBLIC_STORAGE_BASE_URL && env.STORAGE_SECRET
                               ? (key: string, urlOptions?: { bucket?: string; expiresInSeconds?: number }) =>

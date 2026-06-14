@@ -33,6 +33,7 @@ const ADMIN_FUNCTIONS = {
     cdcSync: "__cirrus_admin__:cdcSync",
     clearCapturedMail: "__cirrus_admin__:clearCapturedMail",
     clearTable: "__cirrus_admin__:clearTable",
+    createWorkflowInstance: "__cirrus_admin__:createWorkflowInstance",
     deleteRows: "__cirrus_admin__:deleteRows",
     describeTable: "__cirrus_admin__:describeTable",
     describeTables: "__cirrus_admin__:describeTables",
@@ -410,6 +411,52 @@ interface StudioFeaturesResult {
     /** `@cirrus/workflow` / `ctx.workflows` is used, the app declares workflows, or it is a declared dependency. */
     workflows: boolean;
 }
+
+/**
+ * One declared Cloudflare Workflow, surfaced by `__cirrus_admin__:listWorkflows`
+ * for the studio's Workflows page. Statically discovered by `@cirrus/codegen`
+ * from `cirrus/workflows.ts` (the codegen subclass overrides the base hook);
+ * workflows are not Durable Objects and carry no runtime state in the shard, so
+ * this is pure declaration metadata. `name` is the deployed `workflows[].name`,
+ * `binding` the generated `WORKFLOW_*` env binding, `className` the generated
+ * `WorkflowEntrypoint` subclass, and `exportName` the `cirrus/workflows.ts`
+ * export the handle is addressed by (`ctx.workflows.get("exportName")`).
+ */
+interface WorkflowMetadata {
+    binding: string;
+    className: string;
+    exportName: string;
+    name: string;
+}
+
+/** Payload of a `__cirrus_admin__:listWorkflows` call: every declared workflow, sorted by export name. */
+interface WorkflowsResult {
+    workflows: WorkflowMetadata[];
+}
+
+/* eslint-disable no-secrets/no-secrets -- reserved admin RPC names (`createWorkflowInstance`/`getWorkflowInstanceStatus`) are framework constants, not credentials */
+
+/**
+ * Lifecycle state of a workflow instance, mirrored from `@cirrus/workflow`'s
+ * `WorkflowInstanceStatus` so `@cirrus/do` carries no dependency on the workflow
+ * package. Returned by `getWorkflowInstanceStatus` and `createWorkflowInstance`.
+ */
+type WorkflowInstanceState = "complete" | "errored" | "paused" | "queued" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
+
+/** Payload of a `__cirrus_admin__:createWorkflowInstance` call: the freshly created instance id and its initial status. */
+interface CreateWorkflowInstanceResult {
+    id: string;
+    status: WorkflowInstanceState;
+}
+
+/** Payload of a `__cirrus_admin__:getWorkflowInstanceStatus` call: the instance's current status plus output/error when present. */
+interface WorkflowInstanceStatusResult {
+    error?: { message: string; name: string };
+    id: string;
+    output?: unknown;
+    status: WorkflowInstanceState;
+}
+/* eslint-enable no-secrets/no-secrets */
 
 /** Payload of a `__cirrus_admin__:getFunctionStats` call. */
 interface FunctionStatsResult {
@@ -1079,4 +1126,8 @@ export type {
     TableInfo,
     TablePage,
     TablesColumnsResult,
+    WorkflowInstanceState,
+    WorkflowInstanceStatusResult,
+    WorkflowMetadata,
+    WorkflowsResult,
 };

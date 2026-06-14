@@ -30,7 +30,7 @@ import createSqliteExec from "./_helpers/node-sqlite";
  * `StudioFeaturesResult` without updating this tuple — and there if the studio
  * copy drifts — forcing both packages to move together.
  */
-const STUDIO_FEATURE_KEYS = ["mail", "payments", "scheduler", "storage", "vectors"] as const;
+const STUDIO_FEATURE_KEYS = ["mail", "payments", "scheduler", "storage", "vectors", "workflows"] as const;
 
 /** `true` only when `Keys` and `Canonical` are mutually assignable (the exact same key set). */
 type KeysMatch<Keys extends string, Canonical extends string> = [Keys] extends [Canonical] ? ([Canonical] extends [Keys] ? true : never) : never;
@@ -304,14 +304,21 @@ describe("shardDO admin introspection", () => {
         const baseResponse = await base.fetch(adminRequest(ADMIN_FUNCTIONS.studioFeatures, {}, ADMIN_TOKEN));
 
         await expect(baseResponse.json()).resolves.toEqual({
-            result: { mail: false, payments: false, scheduler: false, storage: false, vectors: false },
+            result: { mail: false, payments: false, scheduler: false, storage: false, vectors: false, workflows: false },
         });
 
         // The codegen subclass overrides `studioFeatures()` with the discovered flags.
         class FeaturedShard extends AdminShard {
             // eslint-disable-next-line class-methods-use-this -- test stub mirroring the codegen override
-            protected override studioFeatures(): { mail: boolean; payments: boolean; scheduler: boolean; storage: boolean; vectors: boolean } {
-                return { mail: false, payments: true, scheduler: true, storage: false, vectors: false };
+            protected override studioFeatures(): {
+                mail: boolean;
+                payments: boolean;
+                scheduler: boolean;
+                storage: boolean;
+                vectors: boolean;
+                workflows: boolean;
+            } {
+                return { mail: false, payments: true, scheduler: true, storage: false, vectors: false, workflows: true };
             }
         }
 
@@ -319,7 +326,7 @@ describe("shardDO admin introspection", () => {
         const response = await featured.fetch(adminRequest(ADMIN_FUNCTIONS.studioFeatures, {}, ADMIN_TOKEN));
 
         await expect(response.json()).resolves.toEqual({
-            result: { mail: false, payments: true, scheduler: true, storage: false, vectors: false },
+            result: { mail: false, payments: true, scheduler: true, storage: false, vectors: false, workflows: true },
         });
     });
 
@@ -329,7 +336,117 @@ describe("shardDO admin introspection", () => {
         // The compile-time guard (STUDIO_FEATURES_KEY_GUARD) is what actually fails
         // the build on drift; this asserts the tuple matches the wire shape at runtime too.
         expect(STUDIO_FEATURES_KEY_GUARD).toBe(true);
-        expect([...STUDIO_FEATURE_KEYS]).toStrictEqual(["mail", "payments", "scheduler", "storage", "vectors"]);
+        expect([...STUDIO_FEATURE_KEYS]).toStrictEqual(["mail", "payments", "scheduler", "storage", "vectors", "workflows"]);
+    });
+
+    it("serves declared-workflow metadata from the codegen-overridden hook", async () => {
+        expect.assertions(2);
+
+        // Base ShardDO can't see the user's project, so it lists no workflows.
+        const base = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const baseResponse = await base.fetch(adminRequest(ADMIN_FUNCTIONS.listWorkflows, {}, ADMIN_TOKEN));
+
+        await expect(baseResponse.json()).resolves.toEqual({ result: { workflows: [] } });
+
+        // The codegen subclass overrides `workflowsMetadata()` with the discovered declarations.
+        class WorkflowShard extends AdminShard {
+            // eslint-disable-next-line class-methods-use-this -- test stub mirroring the codegen override
+            protected override workflowsMetadata(): { workflows: { binding: string; className: string; exportName: string; name: string }[] } {
+                return {
+                    workflows: [
+                        { binding: "WORKFLOW_ORDER_PIPELINE", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" },
+                    ],
+                };
+            }
+        }
+
+        const withWorkflows = new WorkflowShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await withWorkflows.fetch(adminRequest(ADMIN_FUNCTIONS.listWorkflows, {}, ADMIN_TOKEN));
+
+        await expect(response.json()).resolves.toEqual({
+            result: {
+                workflows: [{ binding: "WORKFLOW_ORDER_PIPELINE", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" }],
+            },
+        });
+    });
+
+    it("starts a workflow instance through the declared binding", async () => {
+        expect.assertions(2);
+
+        const created: { id?: string; params?: unknown }[] = [];
+
+        // A shard whose env carries a fake `WORKFLOW_*` binding and whose
+        // codegen hook declares the matching workflow.
+        class StartShard extends AdminShard {
+            // eslint-disable-next-line class-methods-use-this -- test stub mirroring the codegen override
+            protected override workflowsMetadata(): { workflows: { binding: string; className: string; exportName: string; name: string }[] } {
+                return { workflows: [{ binding: "WORKFLOW_ORDER_PIPELINE", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" }] };
+            }
+        }
+
+        const binding = {
+            create: (options: { id?: string; params?: unknown }) => {
+                created.push(options);
+
+                return Promise.resolve({ id: options.id ?? "wf-generated", status: () => Promise.resolve({ status: "queued" }) });
+            },
+            get: () => Promise.reject(new Error("get must not run for create")),
+        };
+
+        const shard = new StartShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN, WORKFLOW_ORDER_PIPELINE: binding });
+        const response = await shard.fetch(
+            adminRequest(ADMIN_FUNCTIONS.createWorkflowInstance, { exportName: "orderPipeline", params: { orderId: "o1" } }, ADMIN_TOKEN),
+        );
+
+        await expect(response.json()).resolves.toEqual({ result: { id: "wf-generated", status: "queued" } });
+        expect(created).toStrictEqual([{ id: undefined, params: { orderId: "o1" } }]);
+    });
+
+    it("reports a workflow instance's status, output, and error", async () => {
+        expect.assertions(1);
+
+        class StatusShard extends AdminShard {
+            // eslint-disable-next-line class-methods-use-this -- test stub mirroring the codegen override
+            protected override workflowsMetadata(): { workflows: { binding: string; className: string; exportName: string; name: string }[] } {
+                return { workflows: [{ binding: "WORKFLOW_ORDER_PIPELINE", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" }] };
+            }
+        }
+
+        const binding = {
+            create: () => Promise.reject(new Error("create must not run for status")),
+            get: (id: string) => Promise.resolve({ id, status: () => Promise.resolve({ output: { total: 42 }, status: "complete" }) }),
+        };
+
+        const shard = new StatusShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN, WORKFLOW_ORDER_PIPELINE: binding });
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getWorkflowInstanceStatus, { exportName: "orderPipeline", id: "wf-1" }, ADMIN_TOKEN));
+
+        await expect(response.json()).resolves.toEqual({ result: { id: "wf-1", output: { total: 42 }, status: "complete" } });
+    });
+
+    it("rejects starting an undeclared workflow with a 400", async () => {
+        expect.assertions(1);
+
+        const shard = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.createWorkflowInstance, { exportName: "ghost" }, ADMIN_TOKEN));
+
+        expect(response.status).toBe(400);
+    });
+
+    it("rejects starting a declared workflow whose binding is absent with a 400", async () => {
+        expect.assertions(1);
+
+        // Declares the workflow but provides no matching env binding.
+        class MissingBindingShard extends AdminShard {
+            // eslint-disable-next-line class-methods-use-this -- test stub mirroring the codegen override
+            protected override workflowsMetadata(): { workflows: { binding: string; className: string; exportName: string; name: string }[] } {
+                return { workflows: [{ binding: "WORKFLOW_ORDER_PIPELINE", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" }] };
+            }
+        }
+
+        const shard = new MissingBindingShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.createWorkflowInstance, { exportName: "orderPipeline" }, ADMIN_TOKEN));
+
+        expect(response.status).toBe(400);
     });
 
     it("derives an unused_index runtime advisory for a declared index no query exercised", async () => {

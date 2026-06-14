@@ -14,6 +14,7 @@ import type {
     TableIR,
     ValidatorIR,
     VectorIndexIR,
+    WorkflowIR,
 } from "./ir";
 import sanitizeNamespace from "./paths";
 
@@ -739,13 +740,23 @@ const buildStorageBucketNames = (schema: SchemaIR, ruleBuckets: ReadonlyArray<st
     return ["default", ...[...named].toSorted((a, b) => a.localeCompare(b))];
 };
 
-const emitServer = (
+interface EmitServerOptions {
+    containers?: ReadonlyArray<ContainerIR>;
+    hasAi?: boolean;
+    hasPayments?: boolean;
+    schema?: SchemaIR;
+    storageRuleBuckets?: ReadonlyArray<string>;
+    workflows?: ReadonlyArray<WorkflowIR>;
+}
+
+const emitServer = ({
+    containers = [],
     hasAi = false,
     hasPayments = false,
-    schema?: SchemaIR,
-    storageRuleBuckets: ReadonlyArray<string> = [],
-    containers: ReadonlyArray<ContainerIR> = [],
-): string => {
+    schema,
+    storageRuleBuckets = [],
+    workflows = [],
+}: EmitServerOptions = {}): string => {
     /* eslint-disable no-secrets/no-secrets -- the emitted typed-`v` signature (`ColumnValidator<IdOfTable<T>, ...>`) is dense generated TS spread across this template, not a credential */
     // The union of declared storage buckets, narrowing `ctx.storage.bucket(name)`.
     const storageBucketUnion = buildStorageBucketNames(schema ?? { tables: [], vectorIndexes: [] }, storageRuleBuckets)
@@ -771,6 +782,33 @@ const emitServer = (
         containers.length > 0
             ? `\n    readonly containers: {${containers.map((container) => `\n        readonly ${container.exportName}: ContainerAccessor;`).join("")}\n    };`
             : "";
+
+    // Workflows live on BOTH MutationCtx and ActionCtx (a workflow can be kicked
+    // off from a mutation or an action — mirrors `ctx.scheduler`). The base
+    // contexts already carry an untyped `Workflows`; when the project declares
+    // workflows we narrow it to a typed `get(name)` over the exact export names,
+    // each handle's params inferred from the `defineWorkflow` definition.
+    const hasWorkflows = workflows.length > 0;
+    const workflowsTypeImport = hasWorkflows
+        ? `import type { WorkflowHandle } from "@cirrus/workflow";\nimport type * as cirrusWorkflowDefinitions from "../workflows.js";\n`
+        : "";
+    const workflowsTypeBlock = hasWorkflows
+        ? `
+
+/** Params type carried by a \`defineWorkflow\` definition (its phantom \`__params\`). */
+type WorkflowParamsOf<Definition> = Definition extends { __params?: infer Params }
+    ? unknown extends Params
+        ? Record<string, unknown>
+        : NonNullable<Params>
+    : Record<string, unknown>;
+
+/** This project's declared workflows, addressable from \`ctx.workflows\` by their \`cirrus/workflows.ts\` export name. */
+export interface CirrusWorkflows {
+${workflows.map((workflow) => `    get(name: ${JSON.stringify(workflow.exportName)}): WorkflowHandle<WorkflowParamsOf<typeof cirrusWorkflowDefinitions.${workflow.exportName}>>;`).join("\n")}
+}`
+        : "";
+    const workflowsOmit = hasWorkflows ? ` | "workflows"` : "";
+    const workflowsContextField = hasWorkflows ? `\n    readonly workflows: CirrusWorkflows;` : "";
 
     const server = `${GENERATED_HEADER}import {
     action as actionBase,
@@ -798,11 +836,11 @@ import type {
 } from "@cirrus/server";
 
 import type { DatabaseReaderFacade, DatabaseWriterFacade, Id as IdOfTable, OrmReader, OrmWriter, TableName } from "./dataModel.js";
-${aiTypeImport}${paymentsTypeImport}${containersTypeImport}
+${aiTypeImport}${paymentsTypeImport}${containersTypeImport}${workflowsTypeImport}
 export type { DataModel, Doc, Id, TableName } from "./dataModel.js";
 
 /** Storage buckets this schema declares (\`v.storage("name")\`), narrowing \`ctx.storage.bucket(name)\`. */
-export type StorageBucketName = ${storageBucketUnion};
+export type StorageBucketName = ${storageBucketUnion};${workflowsTypeBlock}
 
 /**
  * Project-typed contexts. The base contexts from \`@cirrus/server\` are
@@ -817,16 +855,16 @@ export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"> {
     readonly storage: ReadOnlyStorage<StorageBucketName>;
 }
 
-export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"> {
+export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"${workflowsOmit}> {
     readonly db: DatabaseWriter & DatabaseWriterFacade;
     readonly orm: OrmWriter;
-    readonly storage: ReadOnlyStorage<StorageBucketName>;
+    readonly storage: ReadOnlyStorage<StorageBucketName>;${workflowsContextField}
 }
 
-export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"> {
+export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"${workflowsOmit}> {
     readonly db: DatabaseWriter & DatabaseWriterFacade;
     readonly orm: OrmWriter;
-    readonly storage: StorageBase<StorageBucketName>;${aiActionField}${paymentsActionField}${containersActionField}
+    readonly storage: StorageBase<StorageBucketName>;${aiActionField}${paymentsActionField}${containersActionField}${workflowsContextField}
 }
 
 /** \`query()\` bound to this project's typed {@link QueryCtx}. */
@@ -1342,6 +1380,135 @@ ${specEntries}
 };
 
 /**
+ * Emit `_generated/workflows.ts` — one `WorkflowEntrypoint` class per
+ * `defineWorkflow` export, each a thin subclass of `CirrusWorkflow`
+ * (`@cirrus/workflow/do`) constructed with the user's definition object. The
+ * worker entry must re-export these classes: wrangler requires every
+ * `workflows[].class_name` to be exported by the deployed worker. Returns ""
+ * when the project declares no workflows (the file is not written then).
+ */
+/* eslint-disable no-secrets/no-secrets -- the emitted WorkflowEntrypoint subclasses and `WorkflowParamsOf`/`WorkflowOutputOf` generics are dense generated TS, not credentials */
+const emitWorkflows = (workflows: ReadonlyArray<WorkflowIR>): string => {
+    if (workflows.length === 0) {
+        return "";
+    }
+
+    const classes = workflows
+        .map((workflow) => {
+            assertIdentifier(workflow.exportName, `workflow export "${workflow.exportName}"`);
+            assertIdentifier(workflow.className, `workflow class "${workflow.className}"`);
+
+            return `/** WorkflowEntrypoint for the \`${workflow.exportName}\` definition (binding \`${workflow.bindingName}\`). */
+export class ${workflow.className} extends CirrusWorkflow<WorkflowParamsOf<typeof ${workflow.exportName}>, WorkflowOutputOf<typeof ${workflow.exportName}>> {
+    public constructor(ctx: ConstructorParameters<typeof CirrusWorkflow>[0], env: Record<string, unknown>) {
+        super(ctx, env, ${workflow.exportName}, "${workflow.exportName}");
+    }
+}
+`;
+        })
+        .join("\n");
+
+    const imports = workflows.map((workflow) => workflow.exportName).join(", ");
+
+    return `${GENERATED_HEADER}/**
+ * WorkflowEntrypoint classes for the workflows declared in
+ * \`cirrus/workflows.ts\`. Re-export them from your worker entry — wrangler
+ * requires each \`workflows[].class_name\` to be exported by the worker:
+ *
+ * \`export * from "./cirrus/_generated/workflows.js";\`
+ */
+import CirrusWorkflow from "@cirrus/workflow/do";
+
+import { ${imports} } from "../workflows.js";
+
+/** Params type carried by a \`defineWorkflow\` definition (its phantom \`__params\`), so each entrypoint keeps the authored \`ctx.params\` type. */
+type WorkflowParamsOf<Definition> = Definition extends { __params?: infer Params }
+    ? unknown extends Params
+        ? Record<string, unknown>
+        : NonNullable<Params>
+    : Record<string, unknown>;
+
+/** Output type carried by a \`defineWorkflow\` definition (its phantom \`__output\`), so each entrypoint keeps the authored return type. */
+type WorkflowOutputOf<Definition> = Definition extends { __output?: infer Output } ? Output : unknown;
+
+${classes}`;
+};
+/* eslint-enable no-secrets/no-secrets */
+
+/**
+ * The `ctx.workflows` code fragments woven into the generated ShardDO, or empty
+ * strings when the project declares no workflows. Mirrors
+ * {@link emitContainerFragments}: the spec list is emitted as a
+ * `CIRRUS_WORKFLOWS` const and handed to `createWorkflowContext`, which resolves
+ * the `WORKFLOW_*` bindings off `env` lazily (a missing binding only throws when
+ * the handle is used).
+ */
+const emitWorkflowFragments = (workflows: ReadonlyArray<WorkflowIR>): { build: string; contextField: string; importLines: string[]; specs: string } => {
+    if (workflows.length === 0) {
+        return { build: "", contextField: "", importLines: [], specs: "" };
+    }
+
+    for (const workflow of workflows) {
+        assertIdentifier(workflow.exportName, `workflow export "${workflow.exportName}"`);
+        assertIdentifier(workflow.bindingName, `workflow binding "${workflow.bindingName}"`);
+    }
+
+    const specEntries = workflows.map((workflow) => `    { binding: "${workflow.bindingName}", exportName: "${workflow.exportName}" },`).join("\n");
+
+    return {
+        build: `
+            const workflows = createWorkflowContext(env, CIRRUS_WORKFLOWS);
+`,
+        contextField: `\n                workflows,`,
+        importLines: [`import type { WorkflowBindingSpec } from "@cirrus/workflow";`, `import { createWorkflowContext } from "@cirrus/workflow";`],
+        // eslint-disable-next-line no-secrets/no-secrets -- the emitted readonly-array type annotation is dense generated TS, not a credential
+        specs: `
+/** Wiring specs for \`ctx.workflows\` (codegen-derived from \`cirrus/workflows.ts\`). */
+const CIRRUS_WORKFLOWS: ReadonlyArray<WorkflowBindingSpec> = [
+${specEntries}
+];
+`,
+    };
+};
+
+/**
+ * Read-only declared-workflow metadata fragments for the studio's workflows view:
+ * the `CIRRUS_WORKFLOWS_INFO` constant (the discovered {@link WorkflowIR} set
+ * mapped to the DO's `WorkflowMetadata` wire shape) and the `workflowsMetadata()`
+ * override that returns it. Both are empty strings unless the project declares
+ * workflows — when it has none the base-class hook (an empty list) stands, so the
+ * generated shard stays byte-identical to a workflow-free app.
+ */
+const emitWorkflowsMetadataFragments = (workflows: ReadonlyArray<WorkflowIR>): { constant: string; override: string } => {
+    if (workflows.length === 0) {
+        return { constant: "", override: "" };
+    }
+
+    const metadata: WorkflowsResult = {
+        workflows: workflows.map((workflow) => {
+            return {
+                binding: workflow.bindingName,
+                className: workflow.className,
+                exportName: workflow.exportName,
+                name: workflow.name,
+            };
+        }),
+    };
+
+    return {
+        constant: `
+/** Read-only declared-workflow metadata (discovered from \`cirrus/workflows.ts\`) served via \`__cirrus_admin__:listWorkflows\` for the studio's workflows view. */
+const CIRRUS_WORKFLOWS_INFO: WorkflowsResult = ${JSON.stringify(metadata, undefined, 4)};
+`,
+        override: `
+        protected override workflowsMetadata(): WorkflowsResult {
+            return CIRRUS_WORKFLOWS_INFO;
+        }
+`,
+    };
+};
+
+/**
  * The `ctx.payments` code fragments woven into the generated ShardDO, or empty strings when the
  * project doesn't use payments. Unlike `ctx.ai` (a stateless binding), the facade is stateful —
  * its store rides the request's `ctx.db` — so `build` is emitted *after* `db` is constructed and
@@ -1471,6 +1638,12 @@ const emitShard = ({
         specs: containerSpecs,
     } = emitContainerFragments(containers);
     const {
+        build: workflowsBuild,
+        contextField: workflowsContextField,
+        importLines: workflowImportLines,
+        specs: workflowSpecs,
+    } = emitWorkflowFragments(workflows);
+    const {
         build: paymentsBuild,
         configField: paymentsConfigField,
         contextField: paymentsContextField,
@@ -1509,7 +1682,12 @@ const emitShard = ({
         scheduler: false,
         storage: false,
         vectors: false,
+        workflows: false,
     };
+    // Read-only declared-workflow metadata fragments for the studio's workflows
+    // view (the `CIRRUS_WORKFLOWS_INFO` constant + the `workflowsMetadata()`
+    // override), both empty unless the project declares workflows.
+    const { constant: workflowsMetadataConst, override: workflowsMetadataOverride } = emitWorkflowsMetadataFragments(workflows);
     const hasVectors = schema.vectorIndexes.length > 0;
     const hasGlobalTables = schema.tables.some((table) => table.shardMode === "global");
     const hasTables = schema.tables.length > 0;
@@ -1521,29 +1699,7 @@ const emitShard = ({
     // The facade option types (AggregateOptions/QueryArgs/RestrictableQueryOptions/
     // SearchFilterBuilderLike/…) are no longer imported here — `bindTableFacade`
     // (from `@cirrus/server`) now owns the per-table accessor binding.
-    const doTypeImports = [
-        "AdvisoryFinding",
-        "DatabaseWriterLike",
-        "DataMigrationLike",
-        "LogSink",
-        "MigrationRunResult",
-        "RunShardApplyCdcArgs",
-        "RunShardMigrationArgs",
-        "RlsPoliciesResult",
-        "RunShardRankBeforeArgs",
-        "RunShardRankPageArgs",
-        "RunShardWriteArgs",
-        "RunShardWriteResult",
-        "SchedulerLike",
-        "SchemaLike",
-        "ShardDOState",
-        "ShardRankPageResult",
-        "SqlExec",
-        "StorageRulesResult",
-        "StudioFeaturesResult",
-        "SystemReaderStorageLike",
-        ...(hasVectors ? ["WriteHook"] : []),
-    ];
+    const doTypeImports = buildDoTypeImports(hasVectors, workflows.length > 0);
 
     // Reverse cross-backend relation override + its `@cirrus/do` import fragment
     // (both empty unless the project has `.global()` tables). See `emitRelationFanout`.
@@ -1578,6 +1734,7 @@ const emitShard = ({
 
     importLines.push(
         ...containerImportLines,
+        ...workflowImportLines,
         ...paymentsImports,
         ``,
         `import schema from "../schema.js";`,
@@ -1962,7 +2119,7 @@ ${relationFanout.override}
         protected override studioFeatures(): StudioFeaturesResult {
             return CIRRUS_STUDIO_FEATURES;
         }
-
+${workflowsMetadataOverride}
         protected override advisories(): AdvisoryFinding[] {
             return CIRRUS_ADVISORIES;
         }
@@ -2191,7 +2348,7 @@ ${relationFanout.override}
             const env = (this.env ?? {}) as Record<string, unknown>;
             const userId = this.getCurrentUserId();
             const identity = this.getCurrentIdentity();
-${vectorsBuild}${aiBuild}${containersBuild}
+${vectorsBuild}${aiBuild}${containersBuild}${workflowsBuild}
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
             // Build the storage adapter once and share it between \`ctx.storage\`
             // and \`ctx.db.system._storage\` so both read the same R2 binding. The
@@ -2223,7 +2380,7 @@ ${facadeBlock}${paymentsBuild}
                 fetch: globalThis.fetch.bind(globalThis),
                 log,${ormContextField}
                 scheduler,
-                storage,${vectorsContextField}${aiContextField}${paymentsContextField}${containersContextField}
+                storage,${vectorsContextField}${aiContextField}${paymentsContextField}${containersContextField}${workflowsContextField}
             };
 
             ctx.runAction = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("action", reference.__cirrusRef, fnArgs, ctx);
@@ -2622,6 +2779,7 @@ export {
     emitServer,
     emitShard,
     emitVectors,
+    emitWorkflows,
     emitWranglerCronTriggers,
     GENERATED_HEADER,
 };

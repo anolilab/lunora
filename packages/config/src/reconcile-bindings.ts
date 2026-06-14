@@ -19,7 +19,7 @@ import { writeFileSync } from "node:fs";
 import { containerBuildTag } from "@cirrus/container";
 import { applyEdits, modify } from "jsonc-parser";
 
-import type { DurableObjectSpec, InferredBindings, InferredContainer } from "./infer-bindings";
+import type { DurableObjectSpec, InferredBindings, InferredContainer, InferredWorkflow } from "./infer-bindings";
 import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 
 const FORMATTING = { formattingOptions: { insertSpaces: true, tabSize: 4 } } as const;
@@ -47,6 +47,12 @@ interface ContainerEntry {
     class_name?: string;
 }
 
+interface WorkflowEntry {
+    binding?: string;
+    class_name?: string;
+    name?: string;
+}
+
 interface WranglerShape {
     ai?: { binding?: string };
     containers?: ReadonlyArray<ContainerEntry>;
@@ -56,6 +62,27 @@ interface WranglerShape {
     name?: string;
     observability?: { enabled?: boolean };
     r2_buckets?: ReadonlyArray<{ binding?: string }>;
+    workflows?: ReadonlyArray<WorkflowEntry>;
+}
+
+/**
+ * A container/workflow that is declared (so codegen emits its class) but the
+ * worker entry never re-exports — the one wiring step the generators can't always
+ * do for the developer. wrangler rejects a `class_name` the deployed worker
+ * doesn't export, so a deploy fails late on this; surfacing it as structured data
+ * lets the Vite plugin raise it in the dev error overlay (not just the console)
+ * the moment the gap appears. The human-readable form is also folded into
+ * {@link ReconcileBindingsResult.warnings}.
+ */
+interface ExportGap {
+    /** Generated class wrangler needs exported, e.g. `OrderPipelineWorkflow`. */
+    className: string;
+    /** The `cirrus/{containers,workflows}.ts` export name, e.g. `orderPipeline`. */
+    exportName: string;
+    /** Which declaration is unexported. */
+    kind: "container" | "workflow";
+    /** The `_generated/<module>` to re-export from, e.g. `workflows`. */
+    module: "containers" | "workflows";
 }
 
 interface ReconcileBindingsResult {
@@ -63,6 +90,12 @@ interface ReconcileBindingsResult {
     added: string[];
     /** `true` when `wrangler.jsonc` was rewritten. */
     changed: boolean;
+    /**
+     * Declared containers/workflows the worker entry doesn't re-export — the
+     * structured form of the corresponding `warnings` entries, for the dev error
+     * overlay. Empty when every declaration is wired.
+     */
+    exportGaps: ExportGap[];
     /** Reason reconciliation was skipped, for logging. */
     reason?: string;
     /** Non-fatal hints for capabilities that cannot be auto-provisioned. */
@@ -70,6 +103,30 @@ interface ReconcileBindingsResult {
     /** Resolved wrangler path, or `undefined` when none was found. */
     wranglerPath?: string;
 }
+
+/**
+ * The declared-but-not-re-exported containers and workflows, as structured
+ * {@link ExportGap}s. The same gaps `collectWarnings` renders into prose — kept
+ * here as data so the Vite plugin can raise them in the error overlay with a
+ * precise remediation, rather than re-parsing the warning strings.
+ */
+const collectExportGaps = (inferred: InferredBindings): ExportGap[] => {
+    const gaps: ExportGap[] = [];
+
+    for (const container of inferred.containers) {
+        if (!container.exported) {
+            gaps.push({ className: container.className, exportName: container.exportName, kind: "container", module: "containers" });
+        }
+    }
+
+    for (const workflow of inferred.workflows) {
+        if (!workflow.exported) {
+            gaps.push({ className: workflow.className, exportName: workflow.exportName, kind: "workflow", module: "workflows" });
+        }
+    }
+
+    return gaps;
+};
 
 interface ReconcileStep {
     added: string[];
@@ -113,6 +170,14 @@ const collectWarnings = (inferred: InferredBindings, parsed?: WranglerShape): st
         if (!container.exported) {
             warnings.push(
                 `container "${container.exportName}" is declared but ${container.className} is not exported by the worker entry; add \`export * from "./cirrus/_generated/containers"\` so its binding can be provisioned.`,
+            );
+        }
+    }
+
+    for (const workflow of inferred.workflows) {
+        if (!workflow.exported) {
+            warnings.push(
+                `workflow "${workflow.exportName}" is declared but ${workflow.className} is not exported by the worker entry; add \`export * from "./cirrus/_generated/workflows"\` so its binding can be provisioned.`,
             );
         }
     }
@@ -325,6 +390,31 @@ const reconcileContainers = (text: string, parsed: WranglerShape, containers: Re
     return { added, text: nextText };
 };
 
+/** Render one wrangler `workflows[]` entry from an inferred workflow. Pure. */
+const workflowEntryFor = (workflow: InferredWorkflow): Record<string, unknown> => {
+    return { binding: workflow.bindingName, class_name: workflow.className, name: workflow.name };
+};
+
+/**
+ * Add any missing `workflows[]` entries (matched by `class_name`). Workflows are
+ * NOT Durable Objects, so — unlike containers — this writes ONLY the
+ * `workflows[]` array: no `durable_objects` binding, no `migrations` class, no
+ * `observability` toggle. Pure.
+ */
+const reconcileWorkflows = (text: string, parsed: WranglerShape, workflows: ReadonlyArray<InferredWorkflow>): ReconcileStep => {
+    const existing = parsed.workflows ?? [];
+    const existingClasses = new Set(existing.map((entry) => entry.class_name));
+    const missing = workflows.filter((workflow) => !existingClasses.has(workflow.className));
+
+    if (missing.length === 0) {
+        return { added: [], text };
+    }
+
+    const nextText = applyModify(text, ["workflows"], [...existing, ...missing.map((workflow) => workflowEntryFor(workflow))]);
+
+    return { added: missing.map((workflow) => `workflows/${workflow.className}`), text: nextText };
+};
+
 /**
  * Reconcile inferred Durable Object / D1 bindings into `wrangler.jsonc`.
  *
@@ -334,15 +424,17 @@ const reconcileContainers = (text: string, parsed: WranglerShape, containers: Re
 const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindings): ReconcileBindingsResult => {
     const wranglerPath = findWranglerFile(projectRoot);
 
+    const exportGaps = collectExportGaps(inferred);
+
     if (!wranglerPath) {
         // No config to inspect — emit the raw capability hints unfiltered.
-        return { added: [], changed: false, reason: "wrangler.jsonc not found", warnings: collectWarnings(inferred) };
+        return { added: [], changed: false, exportGaps, reason: "wrangler.jsonc not found", warnings: collectWarnings(inferred) };
     }
 
     const { parsed, text: original } = readWranglerJsonc<WranglerShape>(wranglerPath);
 
     if (parsed === undefined) {
-        return { added: [], changed: false, reason: `failed to parse ${wranglerPath} as JSONC`, warnings: collectWarnings(inferred), wranglerPath };
+        return { added: [], changed: false, exportGaps, reason: `failed to parse ${wranglerPath} as JSONC`, warnings: collectWarnings(inferred), wranglerPath };
     }
 
     // Hints are filtered against the existing config so a wired-up project is quiet.
@@ -359,15 +451,23 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
         }),
     ];
 
+    // Only exported workflow classes are provisionable — wrangler rejects a
+    // class_name the worker doesn't export. Workflows are NOT Durable Objects,
+    // so they get their own `workflows[]` step and never touch durable_objects
+    // / migrations (no `requiredDurableObjects` entry, unlike containers).
+    const exportedWorkflows = inferred.workflows.filter((workflow) => workflow.exported);
+
     // Each step rewrites `text` but reads the original `parsed`; this is only
     // safe because the steps touch disjoint top-level keys (durable_objects /
-    // migrations vs d1_databases vs ai vs containers / observability). A future
-    // step that depends on a key an earlier step mutated must re-parse rather
-    // than reuse `parsed`.
+    // migrations vs d1_databases vs ai vs containers / observability vs
+    // workflows). A future step that depends on a key an earlier step mutated
+    // must re-parse rather than reuse `parsed`.
     const doStep = reconcileDurableObjects(original, parsed, requiredDurableObjects);
     const d1Step = inferred.needsD1 ? reconcileD1(doStep.text, parsed) : { added: [], text: doStep.text };
     const aiStep = inferred.usesAi ? reconcileAi(d1Step.text, parsed) : { added: [], text: d1Step.text };
     const containerStep = exportedContainers.length > 0 ? reconcileContainers(aiStep.text, parsed, exportedContainers) : { added: [], text: aiStep.text };
+    const workflowStep =
+        exportedWorkflows.length > 0 ? reconcileWorkflows(containerStep.text, parsed, exportedWorkflows) : { added: [], text: containerStep.text };
 
     // A freshly-written DB binding carries a placeholder id; surface it so the
     // user runs `wrangler d1 create` before the deploy reaches wrangler (which
@@ -378,14 +478,20 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
         );
     }
 
-    if (containerStep.text === original) {
-        return { added: [], changed: false, reason: "bindings already in sync", warnings, wranglerPath };
+    if (workflowStep.text === original) {
+        return { added: [], changed: false, exportGaps, reason: "bindings already in sync", warnings, wranglerPath };
     }
 
-    writeFileSync(wranglerPath, containerStep.text, "utf8");
+    writeFileSync(wranglerPath, workflowStep.text, "utf8");
 
-    return { added: [...doStep.added, ...d1Step.added, ...aiStep.added, ...containerStep.added], changed: true, warnings, wranglerPath };
+    return {
+        added: [...doStep.added, ...d1Step.added, ...aiStep.added, ...containerStep.added, ...workflowStep.added],
+        changed: true,
+        exportGaps,
+        warnings,
+        wranglerPath,
+    };
 };
 
-export type { ReconcileBindingsResult };
+export type { ExportGap, ReconcileBindingsResult };
 export { reconcileWranglerBindings };

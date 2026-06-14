@@ -651,6 +651,108 @@ const parseWriteRowArgs = (args: Record<string, unknown>): RunShardWriteArgs => 
     return { doc: record, id, op, table };
 };
 
+/* eslint-disable no-secrets/no-secrets -- reserved admin RPC + workflow type names are framework constants, not credentials */
+
+/**
+ * Minimal structural shape of a created/fetched workflow instance handle, mirrored
+ * from `@cirrus/workflow`'s `WorkflowInstanceLike` so `@cirrus/do` stays free of a
+ * dependency on the workflow package. Only the members the admin ops touch (`id`
+ * and `status()`) are modelled.
+ */
+interface WorkflowInstanceHandle {
+    id: string;
+    status: () => Promise<{ error?: { message?: unknown; name?: unknown }; output?: unknown; status?: unknown }>;
+}
+
+/**
+ * Minimal structural shape of a Cloudflare Workflows binding (the `env.WORKFLOW_*`
+ * object), mirrored from `@cirrus/workflow`'s `WorkflowBindingLike`. Only `create`
+ * and `get` — the members the studio's start/observe ops call — are modelled.
+ */
+interface WorkflowBindingHandle {
+    create: (options?: { id?: string; params?: unknown }) => Promise<WorkflowInstanceHandle>;
+    get: (id: string) => Promise<WorkflowInstanceHandle>;
+}
+
+/** Parsed `__cirrus_admin__:createWorkflowInstance` payload: which declared workflow to start, plus optional id/params. */
+interface CreateWorkflowInstanceArgs {
+    exportName: string;
+    id?: string;
+    params?: unknown;
+}
+
+/**
+ * Validate the `__cirrus_admin__:createWorkflowInstance` payload. Requires a
+ * non-empty `exportName` (the `cirrus/workflows.ts` export the handle is addressed
+ * by); `id` and `params` are optional. Throws a 400 `CirrusError` on a bad shape.
+ */
+const parseCreateWorkflowInstanceArgs = (args: Record<string, unknown>): CreateWorkflowInstanceArgs => {
+    const exportName = typeof args["exportName"] === "string" ? args["exportName"].trim() : "";
+
+    if (exportName === "") {
+        throw Object.assign(new Error("createWorkflowInstance: `exportName` is required"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+    }
+
+    const id = typeof args["id"] === "string" && args["id"] !== "" ? args["id"] : undefined;
+
+    return { exportName, id, params: args["params"] };
+};
+
+/** Parsed `__cirrus_admin__:getWorkflowInstanceStatus` payload: which workflow and which instance to inspect. */
+interface GetWorkflowInstanceStatusArgs {
+    exportName: string;
+    id: string;
+}
+
+/**
+ * Validate the `__cirrus_admin__:getWorkflowInstanceStatus` payload. Requires both
+ * a non-empty `exportName` and a non-empty instance `id`. Throws a 400
+ * `CirrusError` otherwise.
+ */
+const parseGetWorkflowInstanceStatusArgs = (args: Record<string, unknown>): GetWorkflowInstanceStatusArgs => {
+    const exportName = typeof args["exportName"] === "string" ? args["exportName"].trim() : "";
+    const id = typeof args["id"] === "string" ? args["id"].trim() : "";
+
+    if (exportName === "") {
+        throw Object.assign(new Error("getWorkflowInstanceStatus: `exportName` is required"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+    }
+
+    if (id === "") {
+        throw Object.assign(new Error("getWorkflowInstanceStatus: `id` is required"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+    }
+
+    return { exportName, id };
+};
+
+/** The lifecycle states a workflow instance can report (mirrors `@cirrus/workflow`'s `WorkflowInstanceStatus`). */
+const WORKFLOW_INSTANCE_STATES: ReadonlySet<string> = new Set<WorkflowInstanceStatusResult["status"]>([
+    "complete",
+    "errored",
+    "paused",
+    "queued",
+    "running",
+    "terminated",
+    "unknown",
+    "waiting",
+    "waitingForPause",
+]);
+
+/** Coerce an unknown `status()` payload field into a known instance state, defaulting to `"unknown"`. */
+const toWorkflowInstanceState = (raw: unknown): WorkflowInstanceStatusResult["status"] =>
+    typeof raw === "string" && WORKFLOW_INSTANCE_STATES.has(raw) ? (raw as WorkflowInstanceStatusResult["status"]) : "unknown";
+
+/** Narrow an unknown `status()` error field into the `{ message, name }` wire shape, or `undefined` when absent. */
+const toWorkflowInstanceError = (raw: unknown): WorkflowInstanceStatusResult["error"] => {
+    if (typeof raw !== "object" || raw === null) {
+        return undefined;
+    }
+
+    const { message, name } = raw as { message?: unknown; name?: unknown };
+
+    return { message: typeof message === "string" ? message : "", name: typeof name === "string" ? name : "Error" };
+};
+/* eslint-enable no-secrets/no-secrets */
+
 /** The structured-filter operators accepted over the wire (mirrors `FilterOperator`). */
 const FILTER_OPERATORS: ReadonlySet<string> = new Set<FilterOperator>(["contains", "eq", "gt", "gte", "lt", "lte", "ne"]);
 
@@ -2216,7 +2318,21 @@ abstract class ShardDO {
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this with the statically-discovered feature flags
     protected studioFeatures(): StudioFeaturesResult {
-        return { mail: false, payments: false, scheduler: false, storage: false, vectors: false };
+        return { mail: false, payments: false, scheduler: false, storage: false, vectors: false, workflows: false };
+    }
+
+    /**
+     * The Cloudflare Workflows declared by this app, surfaced via
+     * `__cirrus_admin__:listWorkflows` for the studio's Workflows page. Workflows
+     * are NOT Durable Objects and hold no shard state, so this is pure
+     * declaration metadata statically discovered by `@cirrus/codegen` from
+     * `cirrus/workflows.ts` and emitted into the generated subclass, which
+     * overrides this. The base class can't see the user's project, so it reports
+     * none — an un-generated `ShardDO` lists zero workflows.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this with the statically-discovered workflow metadata
+    protected workflowsMetadata(): WorkflowsResult {
+        return { workflows: [] };
     }
 
     /**
@@ -3243,6 +3359,14 @@ abstract class ShardDO {
             return this.handleSendTestMail(args);
         }
 
+        if (functionPath === ADMIN_FUNCTIONS.createWorkflowInstance) {
+            return this.handleCreateWorkflowInstance(args);
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.getWorkflowInstanceStatus) {
+            return this.handleGetWorkflowInstanceStatus(args);
+        }
+
         return this.handlePitrAdminOp(functionPath, args);
     }
 
@@ -3316,6 +3440,81 @@ abstract class ShardDO {
 
         return jsonResponse({ result }, 200);
     }
+
+    /* eslint-disable no-secrets/no-secrets -- reserved admin RPC names are framework constants, not credentials */
+
+    /**
+     * Resolve a declared workflow's runtime binding handle from this shard's `env`.
+     * Looks the `exportName` up in {@link workflowsMetadata} (the codegen subclass's
+     * statically-discovered list) to find its generated `WORKFLOW_*` binding, then
+     * reads `env[binding]` and validates it carries the `create`/`get` methods. A
+     * bad export name or a missing/malformed binding throws a 400 `CirrusError` so
+     * the studio surfaces an actionable message instead of a generic 500.
+     */
+    private resolveWorkflowBinding(exportName: string): WorkflowBindingHandle {
+        const metadata = this.workflowsMetadata().workflows.find((workflow) => workflow.exportName === exportName);
+
+        if (!metadata) {
+            throw Object.assign(new Error(`workflow "${exportName}" is not declared`), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+        }
+
+        const binding = (this.env as Record<string, unknown> | undefined)?.[metadata.binding];
+
+        if (typeof binding !== "object" || binding === null || typeof (binding as WorkflowBindingHandle).create !== "function" || typeof (binding as WorkflowBindingHandle).get !== "function") {
+            throw Object.assign(new Error(`workflow binding "${metadata.binding}" is not available on this deployment`), {
+                code: "BAD_REQUEST",
+                name: "CirrusError",
+                status: 400,
+            });
+        }
+
+        return binding as WorkflowBindingHandle;
+    }
+
+    /**
+     * Serve `__cirrus_admin__:createWorkflowInstance` — the studio's "Start
+     * instance" button. Resolves the declared workflow's `WORKFLOW_*` binding and
+     * calls `.create({ id?, params })`, returning the new instance's id and initial
+     * status. No SQLite write happens (workflows are not Durable Objects and hold
+     * no shard state), so this only records an audit entry — there's nothing to
+     * flush. Admin-gated by `handleAdminRpc`'s caller.
+     */
+    private async handleCreateWorkflowInstance(args: Record<string, unknown>): Promise<Response> {
+        const parsed = parseCreateWorkflowInstanceArgs(args);
+        const binding = this.resolveWorkflowBinding(parsed.exportName);
+
+        const instance = await binding.create({ id: parsed.id, params: parsed.params });
+        const snapshot = await instance.status();
+        const result: CreateWorkflowInstanceResult = { id: instance.id, status: toWorkflowInstanceState(snapshot.status) };
+
+        this.recordAudit("createWorkflowInstance", { id: instance.id, detail: { exportName: parsed.exportName } });
+
+        return jsonResponse({ result }, 200);
+    }
+
+    /**
+     * Serve `__cirrus_admin__:getWorkflowInstanceStatus` — the studio's instance
+     * observer. Resolves the workflow binding, fetches the instance handle by id,
+     * and reports its current status plus output/error when present. Read-only:
+     * inspecting an instance mutates no shard state, so nothing is flushed or
+     * audited. Admin-gated by `handleAdminRpc`'s caller.
+     */
+    private async handleGetWorkflowInstanceStatus(args: Record<string, unknown>): Promise<Response> {
+        const parsed = parseGetWorkflowInstanceStatusArgs(args);
+        const binding = this.resolveWorkflowBinding(parsed.exportName);
+
+        const instance = await binding.get(parsed.id);
+        const snapshot = await instance.status();
+        const result: WorkflowInstanceStatusResult = {
+            error: toWorkflowInstanceError(snapshot.error),
+            id: parsed.id,
+            output: snapshot.output,
+            status: toWorkflowInstanceState(snapshot.status),
+        };
+
+        return jsonResponse({ result }, 200);
+    }
+    /* eslint-enable no-secrets/no-secrets */
 
     /**
      * Run `run()` with the per-request identity pinned to (`userId`, `identity`),
@@ -3803,6 +4002,14 @@ abstract class ShardDO {
             // `studioFeatures()`): which package-backed nav pages the studio
             // should show. Deployment-wide, like the other static reads.
             return this.studioFeatures();
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.listWorkflows) {
+            // Read-only declared-workflow metadata (codegen-emitted, via
+            // `workflowsMetadata()`): the Cloudflare Workflows the studio's
+            // Workflows page lists. Deployment-wide static declaration data,
+            // like the other static reads (workflows hold no shard state).
+            return this.workflowsMetadata();
         }
 
         return undefined;

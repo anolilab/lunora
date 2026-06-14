@@ -613,19 +613,36 @@ describe("wrangler-validator", () => {
             expect.assertions(4);
 
             const tooLittleMemory = validateWranglerConfig(
-                baseConfig({ containers: [{ class_name: "TranscoderContainer", image: "./x/Dockerfile", instance_type: { memory_mib: 4096, vcpu: 4 }, max_instances: 1 }] }),
+                baseConfig({
+                    containers: [
+                        { class_name: "TranscoderContainer", image: "./x/Dockerfile", instance_type: { memory_mib: 4096, vcpu: 4 }, max_instances: 1 },
+                    ],
+                }),
             );
 
             expect(tooLittleMemory.errors.join(" ")).toContain("≥ 3 GiB");
 
             const tooMuchDisk = validateWranglerConfig(
-                baseConfig({ containers: [{ class_name: "TranscoderContainer", image: "./x/Dockerfile", instance_type: { disk_mb: 20_000, memory_mib: 4096 }, max_instances: 1 }] }),
+                baseConfig({
+                    containers: [
+                        { class_name: "TranscoderContainer", image: "./x/Dockerfile", instance_type: { disk_mb: 20_000, memory_mib: 4096 }, max_instances: 1 },
+                    ],
+                }),
             );
 
             expect(tooMuchDisk.errors.join(" ")).toContain("≤ 2 GB disk");
 
             const valid = validateWranglerConfig(
-                baseConfig({ containers: [{ class_name: "TranscoderContainer", image: "./x/Dockerfile", instance_type: { disk_mb: 8000, memory_mib: 8192, vcpu: 2 }, max_instances: 1 }] }),
+                baseConfig({
+                    containers: [
+                        {
+                            class_name: "TranscoderContainer",
+                            image: "./x/Dockerfile",
+                            instance_type: { disk_mb: 8000, memory_mib: 8192, vcpu: 2 },
+                            max_instances: 1,
+                        },
+                    ],
+                }),
             );
 
             expect(valid.errors).toEqual([]);
@@ -652,6 +669,67 @@ describe("wrangler-validator", () => {
             const report = validateWranglerConfig(baseConfig({ containers: [{ image: "./x/Dockerfile" }] }));
 
             expect(report.errors.join(" ")).toContain('non-empty "class_name"');
+        });
+    });
+
+    describe("workflows", () => {
+        const baseConfig = (overrides: Partial<WranglerConfig>): WranglerConfig => {
+            return {
+                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                migrations: [{ new_sqlite_classes: ["ShardDO"] }],
+                workflows: [{ binding: "WORKFLOW_ORDER_PIPELINE", class_name: "OrderPipelineWorkflow", name: "order-pipeline" }],
+                ...overrides,
+            };
+        };
+
+        it("accepts a well-formed workflows entry — no DO binding or migration required", () => {
+            expect.assertions(2);
+
+            const report = validateWranglerConfig(baseConfig({}));
+
+            expect(report.errors).toEqual([]);
+            expect(report.warnings).toEqual([]);
+        });
+
+        it("rejects workflows that is not an array", () => {
+            expect.assertions(1);
+
+            const report = validateWranglerConfig(baseConfig({ workflows: {} as never }));
+
+            expect(report.errors.join(" ")).toContain("workflows must be an array");
+        });
+
+        it("rejects an entry missing a binding", () => {
+            expect.assertions(1);
+
+            const report = validateWranglerConfig(baseConfig({ workflows: [{ class_name: "OrderPipelineWorkflow", name: "order-pipeline" }] }));
+
+            expect(report.errors.join(" ")).toContain('must have a non-empty "binding"');
+        });
+
+        it("rejects an entry missing a class_name", () => {
+            expect.assertions(1);
+
+            const report = validateWranglerConfig(baseConfig({ workflows: [{ binding: "WORKFLOW_ORDER_PIPELINE", name: "order-pipeline" }] }));
+
+            expect(report.errors.join(" ")).toContain('must have a non-empty "class_name"');
+        });
+
+        it("rejects an entry missing a name", () => {
+            expect.assertions(1);
+
+            const report = validateWranglerConfig(baseConfig({ workflows: [{ binding: "WORKFLOW_ORDER_PIPELINE", class_name: "OrderPipelineWorkflow" }] }));
+
+            expect(report.errors.join(" ")).toContain('must have a non-empty "name"');
+        });
+
+        it("rejects a non-object entry", () => {
+            expect.assertions(1);
+
+            const report = validateWranglerConfig(baseConfig({ workflows: [null] as never }));
+
+            expect(report.errors.join(" ")).toContain("must be a { name, binding, class_name } object");
         });
     });
 });

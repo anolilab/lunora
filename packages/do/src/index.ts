@@ -129,6 +129,9 @@ export type {
     TableIndexInfo,
     TableInfo,
     TablePage,
+    TablesColumnsResult,
+    WorkflowMetadata,
+    WorkflowsResult,
 } from "./introspect";
 export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS, listTables, readTablePage, RELATION_FUNCTION_PREFIX, selectMatchingIds } from "./introspect";
 export type { LogEntry, LogLevel } from "./log-buffer";

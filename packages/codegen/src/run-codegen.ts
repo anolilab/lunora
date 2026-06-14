@@ -32,9 +32,10 @@ import {
     emitServer,
     emitShard,
     emitVectors,
+    emitWorkflows,
     emitWranglerCronTriggers,
 } from "./emit";
-import type { ContainerIR } from "./ir";
+import type { ContainerIR, WorkflowIR } from "./ir";
 import { buildOpenApiDocument, emitOpenApiModule } from "./openapi";
 import { buildOpenRpcDocument, emitOpenRpcModule } from "./openrpc";
 import type { SchemaSnapshot } from "./schema-drift";
@@ -199,6 +200,13 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // the `container_*` advisor lints below.
     const containers = discoverContainers(project, cirrusDirectory);
 
+    // Workflows declared via `defineWorkflow` exports in `cirrus/workflows.ts`.
+    // Gates `_generated/workflows.ts` (the WorkflowEntrypoint classes) + the
+    // typed `ctx.workflows` on Mutation/Action contexts, and feeds the config
+    // layer's wrangler reconciliation (the `workflows[]` array — NOT a Durable
+    // Object binding or migration; workflows are not DOs).
+    const workflows = discoverWorkflows(project, cirrusDirectory);
+
     const advisories =
         options.lint === false
             ? []
@@ -342,6 +350,12 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
             writeIfChanged(join(outputDirectory, "containers.ts"), containersContent);
         }
 
+        // Only written when workflows are declared — non-workflow projects keep a
+        // clean `_generated/` (and never import `@cirrus/workflow`).
+        if (workflowsContent !== "") {
+            writeIfChanged(join(outputDirectory, "workflows.ts"), workflowsContent);
+        }
+
         if (wantsOpenApi) {
             // The `.json` is the portable artifact for external tooling; the
             // `.ts` (same document, inlined) is what the worker imports and
@@ -384,10 +398,12 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
             server: serverContent,
             shard: shardContent,
             vectors: vectorsContent,
+            workflows: workflowsContent,
         },
         outputDirectory,
         schemaSnapshot,
         schemaSnapshotPath,
+        workflows,
     };
 };
 
@@ -504,6 +520,8 @@ export interface CodegenResult {
         shard: string;
         /** Static vector-index registry (`_generated/vectors.ts`) — `CIRRUS_VECTOR_INDEXES`. Empty array body when the schema declares none. */
         vectors: string;
+        /** WorkflowEntrypoint classes (`_generated/workflows.ts`); `""` (and not written) when no workflows are declared. */
+        workflows: string;
     };
     outputDirectory: string;
 
@@ -518,6 +536,14 @@ export interface CodegenResult {
 
     /** Absolute path of the committed baseline file (`cirrus/.cirrus-schema.json`). */
     schemaSnapshotPath: string;
+
+    /**
+     * Workflows discovered from `defineWorkflow` exports in
+     * `cirrus/workflows.ts` — the list the config layer reconciles into
+     * wrangler's `workflows[]` array. Workflows are NOT Durable Objects, so this
+     * adds no binding or migration. Empty when the project declares no workflows.
+     */
+    workflows: ReadonlyArray<WorkflowIR>;
 }
 
 // Exports kept at end-of-file per the package's `import/exports-last` rule.

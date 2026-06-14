@@ -169,6 +169,8 @@ vis generate cirrus-mutation --name=sendMessage
 vis generate cirrus-action --name=syncWithStripe
 vis generate cirrus-table --name=invoices                  # AST-merges into cirrus/schema.ts (creates it if missing)
 vis generate cirrus-cron --name='clear presence'           # AST-appends to cirrus/crons.ts (creates it if missing)
+vis generate cirrus-container --name=transcoder            # → cirrus/containers.ts + containers/<name>/Dockerfile, wires the worker entry
+vis generate cirrus-workflow --name=orderPipeline          # appends to cirrus/workflows.ts (creates it if missing), wires the worker entry
 vis generate cirrus-collections                            # → cirrus/collections.ts (@cirrus/db, wired from schema + functions)
 vis generate cirrus-package --name=foo --description='…'   # → packages/foo/
 vis generate --list                                         # show all available generators

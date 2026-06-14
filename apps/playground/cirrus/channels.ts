@@ -30,7 +30,7 @@ export const create = mutation({
     handler: async (context, { id, name }): Promise<Id<"channels">> => {
         const userId = (context.auth.userId ?? "anonymous") as Id<"users">;
 
-        return context.db.insert(
+        const channelId = await context.db.insert(
             "channels",
             {
                 createdAt: Date.now(),
@@ -39,5 +39,12 @@ export const create = mutation({
             },
             id ? { clientId: id } : undefined,
         );
+
+        // Kick off the durable per-channel welcome sequence (see
+        // cirrus/workflows.ts). Fire-and-forget: the workflow runs on its own
+        // schedule — it posts a greeting, sleeps a minute, then posts a tip.
+        await context.workflows.get("channelWelcome").create({ params: { channelId } });
+
+        return channelId;
     },
 });

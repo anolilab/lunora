@@ -33,6 +33,8 @@ interface FeatureUsage {
     storage: boolean;
     /** A source imports `@cirrus/vectors` or reads `ctx.vectors`. */
     vectors: boolean;
+    /** A source imports `@cirrus/workflow` or reads `ctx.workflows`. */
+    workflows: boolean;
 }
 
 /** One feature's code-usage probe: its `@cirrus/*` package and optional `ctx.*` helper name. */
@@ -50,6 +52,7 @@ const PROBES: Record<keyof FeatureUsage, FeatureProbe> = {
     scheduler: { contextProperty: "scheduler", moduleSpecifier: "@cirrus/scheduler" },
     storage: { contextProperty: "storage", moduleSpecifier: "@cirrus/storage" },
     vectors: { contextProperty: "vectors", moduleSpecifier: "@cirrus/vectors" },
+    workflows: { contextProperty: "workflows", moduleSpecifier: "@cirrus/workflow" },
 };
 
 /**
@@ -71,6 +74,8 @@ interface StudioFeatureSignals {
     storageRuleCount: number;
     /** Number of declared vector indexes. */
     vectorIndexCount: number;
+    /** Number of declared workflows — any `defineWorkflow` means the workflows page is relevant. */
+    workflowCount: number;
 }
 
 /**
@@ -111,7 +116,7 @@ const readsContextProperty = (sourceFile: SourceFile, property: string): boolean
  * `payments`) and — via {@link buildStudioFeatures} — the studio nav.
  */
 const discoverFeatureUsage = (project: Project, cirrusDirectory: string): FeatureUsage => {
-    const usage: FeatureUsage = { ai: false, mail: false, payments: false, scheduler: false, storage: false, vectors: false };
+    const usage: FeatureUsage = { ai: false, mail: false, payments: false, scheduler: false, storage: false, vectors: false, workflows: false };
     const keys = Object.keys(PROBES) as (keyof FeatureUsage)[];
 
     for (const filePath of listCirrusSourceFiles(cirrusDirectory)) {
@@ -160,6 +165,7 @@ const buildStudioFeatures = (usage: FeatureUsage, signals: StudioFeatureSignals)
         scheduler: usage.scheduler || signals.cronCount > 0 || signals.dependencies.has("@cirrus/scheduler"),
         storage: usage.storage || signals.storageRuleCount > 0 || signals.storageColumnCount > 0 || signals.dependencies.has("@cirrus/storage"),
         vectors: usage.vectors || signals.vectorIndexCount > 0 || signals.dependencies.has("@cirrus/vectors"),
+        workflows: usage.workflows || signals.workflowCount > 0 || signals.dependencies.has("@cirrus/workflow"),
     };
 };
 

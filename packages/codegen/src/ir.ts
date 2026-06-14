@@ -228,6 +228,51 @@ export interface ContainerIR {
 }
 
 /**
+ * A workflow lifted from a `defineWorkflow()` export in `cirrus/workflows.ts`.
+ * Carries what the emitters and the config layer need to wire the wrangler
+ * `workflows[]` entry and the generated `_generated/workflows.ts`
+ * `WorkflowEntrypoint` class. Unlike containers, workflows are NOT Durable
+ * Objects — wrangler gets only a `workflows[]` entry, never a `durable_objects`
+ * binding or a migration class. Names are derived via `@cirrus/workflow`'s
+ * shared helpers so codegen and the config layer can never disagree.
+ */
+export interface WorkflowIR {
+    /** The Cloudflare `Workflow` binding name, e.g. `WORKFLOW_ORDER_PIPELINE`. */
+    bindingName: string;
+    /** Generated `WorkflowEntrypoint` class name, e.g. `OrderPipelineWorkflow`. */
+    className: string;
+    /** The `cirrus/workflows.ts` export name, e.g. `orderPipeline`. */
+    exportName: string;
+
+    /**
+     * The stable wrangler `workflows[].name`. Defaults to the kebab-cased export
+     * name (`orderPipeline` → `order-pipeline`); a static `name:` literal in the
+     * definition overrides it.
+     */
+    name: string;
+}
+
+/**
+ * A `ctx.workflows.get("name")…` call discovered in a function body — the
+ * use-site analog of {@link WorkflowIR} (which is the declaration side). Feeds
+ * the `workflow_unused` lint (a declared workflow with zero call sites) and the
+ * `workflow_unknown_target` lint (a `.get("x")` whose `x` isn't declared — a
+ * typo catcher). {@link WorkflowCallIR.workflow} is `""` when the `get(...)`
+ * argument is not a string literal (a dynamic name — which suppresses the
+ * unused-workflow heuristic rather than producing a false positive).
+ */
+export interface WorkflowCallIR {
+    /** Export binding name of the function performing the call, e.g. `create`. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/cirrus/`, without extension (the api namespace). */
+    file: string;
+    /** 1-based line of the `get(...)` call. */
+    line: number;
+    /** The referenced workflow export name, or `""` when the argument is not a string literal. */
+    workflow: string;
+}
+
+/**
  * A `ctx.db.query("table")…` read discovered in a function body, reduced to what
  * the `filter_without_index` advisor lint needs: which table, whether the chain
  * narrows with an index, and whether it filters. `table` is `""` when the

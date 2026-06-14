@@ -268,6 +268,71 @@ export { TranscoderContainer } from "../../cirrus/_generated/containers.js";
         expect(result.containers).toEqual([]);
     });
 
+    const WORKFLOWS_TS = `import { defineWorkflow } from "@cirrus/workflow";
+
+export const orderPipeline = defineWorkflow({ run: async () => {} });
+`;
+
+    it("infers a declared workflow as exported via the star re-export", async () => {
+        expect.assertions(3);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("cirrus/workflows.ts", WORKFLOWS_TS);
+        write(
+            "src/server/index.ts",
+            `${ENTRY_SHARD_ONLY}
+export * from "../../cirrus/_generated/workflows.js";
+`,
+        );
+
+        const result = await inferCirrusBindings({ projectRoot: root });
+
+        expect(result.workflows).toHaveLength(1);
+        expect(result.workflows[0]).toMatchObject({ bindingName: "WORKFLOW_ORDER_PIPELINE", className: "OrderPipelineWorkflow", exported: true });
+        expect(result.signals.join(" ")).toContain('workflow "orderPipeline" declared and exported');
+    });
+
+    it("infers a declared workflow as exported via a named re-export", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("cirrus/workflows.ts", WORKFLOWS_TS);
+        write(
+            "src/server/index.ts",
+            `${ENTRY_SHARD_ONLY}
+export { OrderPipelineWorkflow } from "../../cirrus/_generated/workflows.js";
+`,
+        );
+
+        const result = await inferCirrusBindings({ projectRoot: root });
+
+        expect(result.workflows[0]).toMatchObject({ exported: true });
+    });
+
+    it("flags a declared workflow the entry does not export", async () => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("cirrus/workflows.ts", WORKFLOWS_TS);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+
+        const result = await inferCirrusBindings({ projectRoot: root });
+
+        expect(result.workflows[0]).toMatchObject({ exported: false });
+        expect(result.signals.join(" ")).toContain("not exported by the worker entry");
+    });
+
+    it("reports no workflows for a project without cirrus/workflows.ts", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+
+        const result = await inferCirrusBindings({ projectRoot: root });
+
+        expect(result.workflows).toEqual([]);
+    });
+
     it("infers payment from a @cirrus/payment import and hints at the provider secrets, without binding a class", async () => {
         expect.assertions(4);
 

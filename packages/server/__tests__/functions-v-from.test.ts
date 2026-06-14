@@ -29,6 +29,7 @@ const makeMutationContext = (): MutationContext => {
         scheduler: {} as MutationContext["scheduler"],
         storage: {} as MutationContext["storage"],
         vectors: {} as MutationContext["vectors"],
+        workflows: {} as MutationContext["workflows"],
     };
 };
 

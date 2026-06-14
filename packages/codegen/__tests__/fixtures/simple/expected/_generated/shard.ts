@@ -194,7 +194,8 @@ const CIRRUS_STUDIO_FEATURES: StudioFeaturesResult = {
     "payments": false,
     "scheduler": false,
     "storage": true,
-    "vectors": false
+    "vectors": false,
+    "workflows": false
 };
 
 export interface ShardDOConfig {

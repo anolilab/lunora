@@ -282,11 +282,6 @@ const dataFor = (reference: string, args: unknown): unknown => {
 
             return { ...page, rows };
         }
-        case ADMIN_FUNCTIONS.studioFeatures: {
-            // The mock dev harness exercises every panel, so report every optional
-            // feature enabled — the studio then shows all nav pages.
-            return { mail: true, payments: true, scheduler: true, storage: true, vectors: true };
-        }
         case ADMIN_FUNCTIONS.runSql: {
             return {
                 columns: ["author", "messages", "reactions"],
@@ -298,6 +293,11 @@ const dataFor = (reference: string, args: unknown): unknown => {
                 ],
                 truncated: false,
             };
+        }
+        case ADMIN_FUNCTIONS.studioFeatures: {
+            // The mock dev harness exercises every panel, so report every optional
+            // feature enabled — the studio then shows all nav pages.
+            return { mail: true, payments: true, scheduler: true, storage: true, vectors: true, workflows: true };
         }
         default: {
             return { columns: [], entries: [], rows: [], total: 0 };

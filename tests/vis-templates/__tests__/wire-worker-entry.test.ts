@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 
-import { nestFile, wireWorkerEntryReexport } from "../../../.vis/templates/_helpers/wire-worker-entry.js";
+import { nestFile, wireWorkerEntryReexport, WORKFLOWS_TARGET } from "../../../.vis/templates/_helpers/wire-worker-entry.js";
 
 let workdir: string;
 
@@ -64,6 +64,24 @@ describe("wireWorkerEntryReexport", () => {
         write("src/server.ts", `${CLASS_BC_ENTRY}export * from "../cirrus/_generated/containers.js";\n`);
 
         expect(wireWorkerEntryReexport(workdir)).toBeUndefined();
+    });
+
+    test("appends the workflows re-export when targeted with WORKFLOWS_TARGET", () => {
+        write("wrangler.jsonc", `{ "main": "src/server.ts" }`);
+        write("src/server.ts", CLASS_BC_ENTRY);
+
+        const result = wireWorkerEntryReexport(workdir, WORKFLOWS_TARGET);
+
+        expect(result?.relativePath).toBe("src/server.ts");
+        expect(result?.content).toContain('export * from "../cirrus/_generated/workflows.js"');
+        expect(result?.content).toContain("export const ShardDO = createShardDO();");
+    });
+
+    test("workflows target is idempotent independently of the containers re-export", () => {
+        write("wrangler.jsonc", `{ "main": "src/server.ts" }`);
+        write("src/server.ts", `${CLASS_BC_ENTRY}export * from "../cirrus/_generated/workflows.js";\n`);
+
+        expect(wireWorkerEntryReexport(workdir, WORKFLOWS_TARGET)).toBeUndefined();
     });
 
     test("skips a class-A project (no createShardDO entry to touch)", () => {

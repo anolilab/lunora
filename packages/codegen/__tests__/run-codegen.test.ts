@@ -270,7 +270,7 @@ export default crons;
 
             // No schema storage columns; a rule references the "exports" bucket — it
             // must still be addressable via `ctx.storage.bucket("exports")`.
-            const server = emitServer(false, false, { tables: [], vectorIndexes: [] }, ["exports", "avatars"]);
+            const server = emitServer({ schema: { tables: [], vectorIndexes: [] }, storageRuleBuckets: ["exports", "avatars"] });
 
             expect(server).toContain('export type StorageBucketName = "default" | "avatars" | "exports"');
             // De-duped + "default" always first.
@@ -786,8 +786,11 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect.assertions(3);
 
             const schema: SchemaIR = { tables: [], vectorIndexes: [] };
-            const output = emitShard(schema, [], undefined, false, false, {
-                rules: [{ bucket: "avatars", file: "avatars", on: "read", prefix: "user/", procedure: "upload" }],
+            const output = emitShard({
+                schema,
+                storageRules: {
+                    rules: [{ bucket: "avatars", file: "avatars", on: "read", prefix: "user/", procedure: "upload" }],
+                },
             });
 
             expect(output).toContain("protected override storageRulesMetadata(): StorageRulesResult {");
@@ -798,7 +801,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         it("emits an empty storage-rules metadata when none are declared", () => {
             expect.assertions(1);
 
-            const output = emitShard({ tables: [], vectorIndexes: [] });
+            const output = emitShard({ schema: { tables: [], vectorIndexes: [] } });
 
             expect(output).toContain("const CIRRUS_STORAGE_RULES: StorageRulesResult = {");
         });
@@ -808,12 +811,16 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         it("emits the passed feature flags into the studioFeatures() override", () => {
             expect.assertions(3);
 
-            const output = emitShard({ tables: [], vectorIndexes: [] }, [], undefined, false, false, undefined, [], {
-                mail: false,
-                payments: true,
-                scheduler: false,
-                storage: true,
-                vectors: false,
+            const output = emitShard({
+                schema: { tables: [], vectorIndexes: [] },
+                studioFeatures: {
+                    mail: false,
+                    payments: true,
+                    scheduler: false,
+                    storage: true,
+                    vectors: false,
+                    workflows: false,
+                },
             });
 
             expect(output).toContain("protected override studioFeatures(): StudioFeaturesResult {");
@@ -824,10 +831,39 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         it("defaults every feature flag off when none are passed", () => {
             expect.assertions(2);
 
-            const output = emitShard({ tables: [], vectorIndexes: [] });
+            const output = emitShard({ schema: { tables: [], vectorIndexes: [] } });
 
             expect(output).toContain("const CIRRUS_STUDIO_FEATURES: StudioFeaturesResult = {");
             expect(output).not.toContain('"payments": true');
+        });
+    });
+
+    describe("emitShard — workflows metadata", () => {
+        it("emits the declared workflows into the workflowsMetadata() override", () => {
+            expect.assertions(4);
+
+            const output = emitShard({
+                schema: { tables: [], vectorIndexes: [] },
+                workflows: [
+                    { bindingName: "WORKFLOW_ORDER_PIPELINE", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" },
+                ],
+            });
+
+            expect(output).toContain("protected override workflowsMetadata(): WorkflowsResult {");
+            expect(output).toContain("const CIRRUS_WORKFLOWS_INFO: WorkflowsResult = {");
+            expect(output).toContain('"binding": "WORKFLOW_ORDER_PIPELINE"');
+            expect(output).toContain('"name": "order-pipeline"');
+        });
+
+        it("omits the workflows metadata constant and override when none are declared", () => {
+            expect.assertions(3);
+
+            const output = emitShard({ schema: { tables: [], vectorIndexes: [] } });
+
+            expect(output).not.toContain("CIRRUS_WORKFLOWS_INFO");
+            expect(output).not.toContain("workflowsMetadata()");
+            // Its `@cirrus/do` type import is gated too, so a workflow-free shard never names it.
+            expect(output).not.toContain("WorkflowsResult");
         });
     });
 
@@ -851,7 +887,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 vectorIndexes: [],
             };
 
-            const output = emitShard(schema);
+            const output = emitShard({ schema });
 
             expect(output).toContain('"name": "_id"');
             expect(output).toContain('"pk": true');
@@ -878,7 +914,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 vectorIndexes: [],
             };
 
-            const output = emitShard(schema);
+            const output = emitShard({ schema });
 
             expect(output).toContain('"name": "title"');
             expect(output).toContain('"type": "string"');
@@ -903,7 +939,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 vectorIndexes: [],
             };
 
-            const output = emitShard(schema);
+            const output = emitShard({ schema });
 
             expect(output).toContain('"name": "bio"');
             expect(output).toContain('"optional": true');
@@ -929,7 +965,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 vectorIndexes: [],
             };
 
-            const output = emitShard(schema);
+            const output = emitShard({ schema });
 
             expect(output).toContain('"optional": true');
             expect(output).toContain('"type": "number"');
@@ -954,7 +990,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 vectorIndexes: [],
             };
 
-            const output = emitShard(schema);
+            const output = emitShard({ schema });
 
             expect(output).toContain('"ref": "users"');
             expect(output).toContain('"type": "id"');
@@ -979,7 +1015,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 vectorIndexes: [],
             };
 
-            const output = emitShard(schema);
+            const output = emitShard({ schema });
 
             expect(output).toContain('"isStorage": true');
         });
@@ -987,7 +1023,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         it("emits the CIRRUS_TABLE_COLUMNS constant even for an empty schema", () => {
             expect.assertions(2);
 
-            const output = emitShard({ tables: [], vectorIndexes: [] });
+            const output = emitShard({ schema: { tables: [], vectorIndexes: [] } });
 
             expect(output).toContain("const CIRRUS_TABLE_COLUMNS");
             expect(output).toContain(
@@ -1016,7 +1052,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 vectorIndexes: [{ field: "body", name: "by_body", table: "docs" }],
             };
 
-            const output = emitShard(schema);
+            const output = emitShard({ schema });
 
             // Vectors variant: pull the adapters + the Vectorize binding type.
             expect(output).toContain('import { createContextVectors, createVectors, createVectorSyncHook } from "@cirrus/vectors"');
@@ -1049,7 +1085,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 vectorIndexes: [],
             };
 
-            const output = emitShard(schema);
+            const output = emitShard({ schema });
 
             expect(output).not.toContain("@cirrus/vectors");
             expect(output).not.toContain("createVectorSyncHook");
@@ -1062,7 +1098,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const schema: SchemaIR = { tables: [], vectorIndexes: [] };
 
-            const output = emitShard(schema, [], undefined, true);
+            const output = emitShard({ schema, hasAi: true });
 
             // Pull the AI helper + binding type, expose the override config field,
             // and assemble ctx.ai (built from env.AI, with a throwing stub fallback).
@@ -1079,7 +1115,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const schema: SchemaIR = { tables: [], vectorIndexes: [] };
 
-            const output = emitShard(schema, [], undefined, false);
+            const output = emitShard({ schema });
 
             expect(output).not.toContain("@cirrus/ai");
             expect(output).not.toContain("createAi");
@@ -1091,7 +1127,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const schema: SchemaIR = { tables: [], vectorIndexes: [] };
 
-            const output = emitShard(schema, [], undefined, false, true);
+            const output = emitShard({ schema, hasPayments: true });
 
             expect(output).toContain('import { paymentsFromContext } from "@cirrus/payment"');
             expect(output).toContain("payment?: (env: Record<string, unknown>) => PaymentsFromContextOptions;");
@@ -1105,7 +1141,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const schema: SchemaIR = { tables: [], vectorIndexes: [] };
 
-            const output = emitShard(schema, [], undefined, false, false);
+            const output = emitShard({ schema });
 
             expect(output).not.toContain("@cirrus/payment");
             expect(output).not.toContain("paymentsFromContext");
@@ -1115,12 +1151,12 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         it("adds a typed ctx.payments to the generated ActionCtx when payments are used", () => {
             expect.assertions(4);
 
-            const withPayments = emitServer(false, true);
+            const withPayments = emitServer({ hasPayments: true });
 
             expect(withPayments).toContain('import type { CirrusPayment } from "@cirrus/payment";');
             expect(withPayments).toContain("readonly payments: CirrusPayment;");
 
-            const withoutPayments = emitServer(false, false);
+            const withoutPayments = emitServer({});
 
             expect(withoutPayments).not.toContain("@cirrus/payment");
             expect(withoutPayments).not.toContain("readonly payments:");
@@ -1129,12 +1165,12 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
         it("adds a typed ctx.ai to the generated ActionCtx when AI is used (and not otherwise)", () => {
             expect.assertions(4);
 
-            const withAi = emitServer(true);
+            const withAi = emitServer({ hasAi: true });
 
             expect(withAi).toContain('import type { CirrusAi } from "@cirrus/ai";');
             expect(withAi).toContain("readonly ai: CirrusAi;");
 
-            const withoutAi = emitServer(false);
+            const withoutAi = emitServer({});
 
             expect(withoutAi).not.toContain("@cirrus/ai");
             expect(withoutAi).not.toContain("readonly ai:");
@@ -1169,7 +1205,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 vectorIndexes: [],
             };
 
-            const output = emitShard(schema);
+            const output = emitShard({ schema });
 
             // The D1 config thunk + fallback stub appear only because a `.global()` table exists.
             expect(output).toContain(
@@ -1220,7 +1256,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 vectorIndexes: [],
             };
 
-            const output = emitShard(schema);
+            const output = emitShard({ schema });
 
             expect(output).not.toContain("globalDbStub");
             expect(output).not.toContain("config.d1");
@@ -1247,7 +1283,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
                 vectorIndexes: [],
             };
 
-            const output = emitShard(schema);
+            const output = emitShard({ schema });
 
             // The scheduler is resolved once, typed for the ctx-db options surface.
             expect(output).toContain("SchedulerLike");

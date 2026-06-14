@@ -61,14 +61,7 @@ export type {
     VectorizeOptions,
 } from "./schema";
 export { defineAggregateIndex, defineRankIndex, defineSchema, defineTable, defineVectorIndex } from "./schema";
-export type {
-    DefineStorageRuleInput,
-    StorageOperation,
-    StorageRule,
-    StorageRuleContext,
-    StorageRuleDecision,
-    StorageRulesOptions,
-} from "./storage/index";
+export type { DefineStorageRuleInput, StorageOperation, StorageRule, StorageRuleContext, StorageRuleDecision, StorageRulesOptions } from "./storage/index";
 export { defineStorageRule, defineStorageRules, storageRules } from "./storage/index";
 export type {
     ActionCtx,
@@ -145,6 +138,12 @@ export type {
     VectorSearch,
     VectorSearchReader,
     VectorUpsertInput,
+    WorkflowCreateOptions,
+    WorkflowHandle,
+    WorkflowInstance,
+    WorkflowInstanceStatus,
+    Workflows,
+    WorkflowStatusResult,
 } from "./types";
 export { anyApi } from "./types";
 // Re-export the code-first cron builder so users declare crons from the main

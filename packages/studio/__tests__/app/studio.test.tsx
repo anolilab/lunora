@@ -30,7 +30,7 @@ const createClient = (features?: Partial<StudioFeaturesResult>): MockClientHooks
             // Optional-feature flags drive which nav pages render. Default every
             // flag on (the studio's back-compat default) unless a test overrides one.
             if (reference === ADMIN_FUNCTIONS.studioFeatures) {
-                return { mail: true, payments: true, scheduler: true, storage: true, vectors: true, ...features };
+                return { mail: true, payments: true, scheduler: true, storage: true, vectors: true, workflows: true, ...features };
             }
 
             // The logs panel mounts when its domain is opened; hand it the real
@@ -57,7 +57,7 @@ const renderStudio = (mock: MockClientHooks) => (
  * studio copy of the type drifts from this tuple — keeping both packages' copies
  * of the wire contract in lockstep.
  */
-const STUDIO_FEATURE_KEYS = ["mail", "payments", "scheduler", "storage", "vectors"] as const;
+const STUDIO_FEATURE_KEYS = ["mail", "payments", "scheduler", "storage", "vectors", "workflows"] as const;
 
 /** `true` only when `Keys` and `Canonical` are mutually assignable (the exact same key set). */
 type KeysMatch<Keys extends string, Canonical extends string> = [Keys] extends [Canonical] ? ([Canonical] extends [Keys] ? true : never) : never;
@@ -209,6 +209,6 @@ describe("studio", () => {
         // The compile-time guard (STUDIO_FEATURES_KEY_GUARD) fails the build on drift;
         // this asserts the canonical tuple at runtime so the guard can't be silently deleted.
         expect(STUDIO_FEATURES_KEY_GUARD).toBe(true);
-        expect([...STUDIO_FEATURE_KEYS]).toStrictEqual(["mail", "payments", "scheduler", "storage", "vectors"]);
+        expect([...STUDIO_FEATURE_KEYS]).toStrictEqual(["mail", "payments", "scheduler", "storage", "vectors", "workflows"]);
     });
 });

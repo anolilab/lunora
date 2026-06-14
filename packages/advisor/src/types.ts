@@ -153,6 +153,23 @@ export interface LintContext {
      * and shards. Absent for static callers, where the lint finds nothing.
      */
     tableScans?: ReadonlyArray<AdvisorTableScan>;
+
+    /**
+     * `ctx.workflows.get("name")` call sites discovered in function bodies — the
+     * use-side input the `workflow_unused` and `workflow_unknown_target` lints
+     * cross-reference against {@link LintContext.workflows}. Supplied by the
+     * codegen feeder; absent for runtime callers, where the workflow lints find
+     * nothing.
+     */
+    workflowCalls?: ReadonlyArray<AdvisorWorkflowCall>;
+
+    /**
+     * Workflows declared via `defineWorkflow` exports in `cirrus/workflows.ts` —
+     * the declaration-side input for the `workflow_*` lints. Supplied by the
+     * codegen feeder; absent for runtime callers, where the workflow lints find
+     * nothing.
+     */
+    workflows?: ReadonlyArray<AdvisorWorkflow>;
 }
 
 /**

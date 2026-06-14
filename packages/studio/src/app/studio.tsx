@@ -48,6 +48,7 @@ import { SqlEditorPanel } from "../features/sql/sql-editor-panel";
 import { FileBrowser } from "../features/storage/file-browser";
 import { StorageRulesPanel } from "../features/storage/storage-rules-panel";
 import { VectorBrowser } from "../features/vectors/vector-browser";
+import WorkflowsPanel from "../features/workflows/workflows-panel";
 import useStudioFeatures from "../hooks/use-studio-features";
 import { useT } from "../i18n/i18n-context";
 import { StudioI18nProvider } from "../i18n/i18n-provider";
@@ -89,7 +90,8 @@ type StudioTab =
     | "sql"
     | "storageRules"
     | "users"
-    | "vectors";
+    | "vectors"
+    | "workflows";
 
 interface StudioProps {
     /**
@@ -226,6 +228,7 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
         <path d="M16 20v-2a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v2M9.5 10a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm11.5 10v-2a4 4 0 0 0-3-3.85M16 3.13A4 4 0 0 1 16 11" />
     ),
     vectors: <path d="M4 7l8-4 8 4-8 4-8-4Zm0 5 8 4 8-4M4 17l8 4 8-4" />,
+    workflows: <path d="M5 5h5v5H5V5Zm9 9h5v5h-5v-5ZM7.5 10v2a2 2 0 0 0 2 2H14m2.5-4V8a2 2 0 0 0-2-2H10" />,
 };
 
 /** One icon-rail domain and the sub-pages its secondary nav lists. */
@@ -240,7 +243,7 @@ type NavGroup = { readonly key: NavGroupKey; readonly tabs: ReadonlyArray<Studio
 const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
     { key: "home", tabs: ["home"] },
     { key: "database", tabs: ["data", "sql", "schema", "migrations", "vectors", "export", "pitr"] },
-    { key: "functions", tabs: ["functions", "api"] },
+    { key: "functions", tabs: ["functions", "api", "workflows"] },
     { key: "auth", tabs: ["users", "organizations", "authSessions", "authConfig"] },
     { key: "storage", tabs: ["files", "storageRules"] },
     { key: "reports", tabs: ["dashboards", "metrics", "health"] },
@@ -266,6 +269,7 @@ const TAB_FEATURE: Partial<Record<StudioTab, keyof StudioFeaturesResult>> = {
     schedule: "scheduler",
     storageRules: "storage",
     vectors: "vectors",
+    workflows: "workflows",
 };
 
 /** True when a tab is shown for the given feature flags: always, unless its gating flag is off. */
@@ -315,6 +319,7 @@ const TABS = [
     "sql",
     "functions",
     "api",
+    "workflows",
     "schema",
     "migrations",
     "vectors",
@@ -430,6 +435,7 @@ const StudioLayout = (): ReactElement => {
             storageRules: t("Access Rules"),
             users: t("Users"),
             vectors: t("Vectors"),
+            workflows: t("Workflows"),
         };
     }, [t]);
 
@@ -480,6 +486,7 @@ const StudioLayout = (): ReactElement => {
             storageRules: t("Inspect storage access rules — per bucket, operation, and key prefix."),
             users: t("Manage auth users — roles, bans, sessions, and identity."),
             vectors: t("Browse Vectorize indexes and run similarity searches."),
+            workflows: t("Inspect declared Cloudflare Workflows and their bindings."),
         };
     }, [t]);
 
@@ -804,6 +811,7 @@ const buildRouter = ({
         storageRules: <StorageRulesPanel />,
         users: <UsersPanel />,
         vectors: <VectorBrowser />,
+        workflows: <WorkflowsPanel />,
     };
 
     // `/` renders the Home overview directly (no async redirect, so the first

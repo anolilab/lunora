@@ -23,6 +23,7 @@ export {
     emitServer,
     emitShard,
     emitVectors,
+    emitWorkflows,
     emitWranglerCronTriggers,
     GENERATED_HEADER,
 } from "./emit";
@@ -48,6 +49,7 @@ export type {
     TableIR,
     ValidatorIR,
     VectorIndexIR,
+    WorkflowIR,
 } from "./ir";
 export type { OpenApiEmitInput } from "./openapi";
 export { buildOpenApiDocument, emitOpenApi, emitOpenApiModule } from "./openapi";

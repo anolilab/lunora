@@ -29,6 +29,7 @@
         "@cirrus/storage": "workspace:*",
         "@cirrus/studio": "workspace:*",
         "@cirrus/vite": "workspace:*",
+        "@cirrus/workflow": "workspace:*",
         "@tanstack/db": "catalog:frontend",
         "@tanstack/offline-transactions": "catalog:frontend",
         "@tanstack/react-db": "catalog:frontend",

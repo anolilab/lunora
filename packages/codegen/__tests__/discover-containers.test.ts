@@ -218,19 +218,19 @@ describe("emit (containers)", () => {
     it("emitServer types ctx.containers on ActionCtx only when containers exist", () => {
         expect.assertions(4);
 
-        const withContainers = emitServer(false, false, EMPTY_SCHEMA, [], discover());
+        const withContainers = emitServer({ schema: EMPTY_SCHEMA, containers: discover() });
 
         expect(withContainers).toContain('import type { ContainerAccessor } from "@cirrus/container";');
         expect(withContainers).toContain("readonly containers: {");
         expect(withContainers).toContain("readonly transcoder: ContainerAccessor;");
 
-        expect(emitServer(false, false, EMPTY_SCHEMA, [], [])).not.toContain("readonly containers: {");
+        expect(emitServer({ schema: EMPTY_SCHEMA })).not.toContain("readonly containers: {");
     });
 
     it("emitShard wires createContainerContext into the built ctx", () => {
         expect.assertions(4);
 
-        const shard = emitShard(EMPTY_SCHEMA, [], undefined, false, false, undefined, discover());
+        const shard = emitShard({ schema: EMPTY_SCHEMA, containers: discover() });
 
         expect(shard).toContain('import { createContainerContext } from "@cirrus/container";');
         expect(shard).toContain('{ binding: "CONTAINER_TRANSCODER", exportName: "transcoder", maxInstances: 5 },');
@@ -241,6 +241,6 @@ describe("emit (containers)", () => {
     it("emitShard stays container-free without definitions", () => {
         expect.assertions(1);
 
-        expect(emitShard(EMPTY_SCHEMA, [], undefined, false, false, undefined, [])).not.toContain("CIRRUS_CONTAINERS");
+        expect(emitShard({ schema: EMPTY_SCHEMA })).not.toContain("CIRRUS_CONTAINERS");
     });
 });

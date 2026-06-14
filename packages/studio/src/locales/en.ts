@@ -719,6 +719,28 @@ const MESSAGE_IDS = [
     "Operation",
     "Storage rules are declared in code with defineStorageRule and gate ctx.storage access per bucket. This view is read-only.",
     "Write",
+    // Workflows view.
+    "Workflows",
+    "Inspect declared Cloudflare Workflows and their bindings.",
+    "Binding",
+    "Class",
+    "No workflows defined",
+    "No defineWorkflow is declared in cirrus/workflows.ts in this deployment. Add one to run a durable, multi-step workflow.",
+    "Workflows are declared in code with defineWorkflow and run as durable Cloudflare Workflows. This view is read-only.",
+    "Workflows are declared in code with defineWorkflow and run as durable Cloudflare Workflows. Start an instance and observe its status below.",
+    "Start instance",
+    "Starting…",
+    "Workflow",
+    "Instance id",
+    "Instance id (optional)",
+    "Params (JSON)",
+    "Params (JSON, optional)",
+    "Params must be valid JSON",
+    "Instances",
+    "Status",
+    "Output",
+    "Refresh",
+    "Refreshing…",
 ] as const;
 
 /** A known studio message id — one of the entries in {@link MESSAGE_IDS}. */

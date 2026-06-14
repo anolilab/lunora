@@ -1,12 +1,14 @@
 /**
- * Worker-entry auto-wiring for `cirrus-container` — kept in `_helpers/` so the
- * tests under `tests/vis-templates/` can import it without the vis runtime.
+ * Worker-entry auto-wiring for `cirrus-container` / `cirrus-workflow` — kept in
+ * `_helpers/` so the tests under `tests/vis-templates/` can import it without
+ * the vis runtime.
  *
- * wrangler requires every container class to be exported by the deployed
- * worker. For class-A frameworks the Vite plugin re-exports them into the
- * virtual worker; for class-B/C (a hand-written entry calling `createShardDO`)
- * the developer otherwise has to add `export * from "…/_generated/containers"`
- * by hand — the easiest stumble. This finds that entry and rewrites it.
+ * wrangler requires every container/workflow class to be exported by the
+ * deployed worker. For class-A frameworks the Vite plugin re-exports them into
+ * the virtual worker; for class-B/C (a hand-written entry calling
+ * `createShardDO`) the developer otherwise has to add
+ * `export * from "…/_generated/<module>"` by hand — the easiest stumble. This
+ * finds that entry and rewrites it.
  */
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
@@ -37,14 +39,32 @@ export interface WiredWorkerEntry {
     relativePath: string;
 }
 
+/** Which `_generated/<module>` to re-export, and the comment placed above it. */
+export interface ReexportTarget {
+    comment: string;
+    module: string;
+}
+
+/** Default target — the container DO classes (the original behaviour). */
+const CONTAINERS_TARGET: ReexportTarget = {
+    comment: "// Container DO classes — wrangler requires every container class to be exported by the worker.",
+    module: "containers",
+};
+
+/** WorkflowEntrypoint classes — wrangler requires every `workflows[].class_name` to be exported. */
+export const WORKFLOWS_TARGET: ReexportTarget = {
+    comment: "// WorkflowEntrypoint classes — wrangler requires every workflows[].class_name to be exported by the worker.",
+    module: "workflows",
+};
+
 /**
- * Find the class-B/C worker entry and return it rewritten with the container
- * re-export appended. Conservative: only touches a file that unmistakably is a
- * Cirrus worker entry (`createShardDO(`), is idempotent (skips when already
- * wired), and returns `undefined` for class-A (no such file) so the caller
- * falls back to a printed instruction.
+ * Find the class-B/C worker entry and return it rewritten with the
+ * `_generated/<target.module>` re-export appended. Conservative: only touches a
+ * file that unmistakably is a Cirrus worker entry (`createShardDO(`), is
+ * idempotent (skips when already wired), and returns `undefined` for class-A
+ * (no such file) so the caller falls back to a printed instruction.
  */
-export const wireWorkerEntryReexport = (projectDirectory: string): undefined | WiredWorkerEntry => {
+export const wireWorkerEntryReexport = (projectDirectory: string, target: ReexportTarget = CONTAINERS_TARGET): undefined | WiredWorkerEntry => {
     const main = readWranglerMain(projectDirectory);
     const candidates = main === undefined ? WORKER_ENTRY_FALLBACKS : [main, ...WORKER_ENTRY_FALLBACKS];
 
@@ -62,16 +82,16 @@ export const wireWorkerEntryReexport = (projectDirectory: string): undefined | W
             return undefined;
         }
 
-        if (source.includes("_generated/containers")) {
+        if (source.includes(`_generated/${target.module}`)) {
             return undefined; // already wired — idempotent.
         }
 
-        const importPath = relative(dirname(absolute), join(projectDirectory, "cirrus", "_generated", "containers")).replaceAll("\\", "/");
+        const importPath = relative(dirname(absolute), join(projectDirectory, "cirrus", "_generated", target.module)).replaceAll("\\", "/");
         const specifier = `${importPath.startsWith(".") ? importPath : `./${importPath}`}.js`;
         const separator = source.endsWith("\n") ? "" : "\n";
 
         return {
-            content: `${source}${separator}\n// Container DO classes — wrangler requires every container class to be exported by the worker.\nexport * from "${specifier}";\n`,
+            content: `${source}${separator}\n${target.comment}\nexport * from "${specifier}";\n`,
             relativePath: candidate.replaceAll("\\", "/"),
         };
     }

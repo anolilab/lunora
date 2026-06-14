@@ -21,6 +21,7 @@ const DEFAULT_STUDIO_FEATURES: StudioFeaturesResult = {
     scheduler: true,
     storage: true,
     vectors: true,
+    workflows: true,
 };
 
 /** Coerce an unknown wire payload into a {@link StudioFeaturesResult}, defaulting any missing flag to shown. */
@@ -38,6 +39,7 @@ const coerceFeatures = (raw: unknown): StudioFeaturesResult => {
         scheduler: flag("scheduler"),
         storage: flag("storage"),
         vectors: flag("vectors"),
+        workflows: flag("workflows"),
     };
 };
 

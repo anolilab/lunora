@@ -29,6 +29,7 @@ export const ADMIN_FUNCTION_PREFIX = "__cirrus_admin__:";
 export const ADMIN_FUNCTIONS = {
     clearCapturedMail: "__cirrus_admin__:clearCapturedMail",
     clearTable: "__cirrus_admin__:clearTable",
+    createWorkflowInstance: "__cirrus_admin__:createWorkflowInstance",
     deleteRows: "__cirrus_admin__:deleteRows",
     describeTable: "__cirrus_admin__:describeTable",
     describeTables: "__cirrus_admin__:describeTables",
@@ -479,7 +480,51 @@ export interface StudioFeaturesResult {
     scheduler: boolean;
     storage: boolean;
     vectors: boolean;
+    workflows: boolean;
 }
+
+/**
+ * One declared Cloudflare Workflow, hand-mirroring `@cirrus/do`'s
+ * `WorkflowMetadata` (the studio can't import `@cirrus/do`). Pure declaration
+ * data — workflows hold no shard runtime state — discovered at codegen time from
+ * `cirrus/workflows.ts`. `binding` is the wrangler `Workflow` binding name,
+ * `className` the generated `WorkflowEntrypoint` subclass, `exportName` the
+ * `defineWorkflow` export, and `name` the stable deployed `workflows[].name`.
+ */
+export interface WorkflowMetadata {
+    binding: string;
+    className: string;
+    exportName: string;
+    name: string;
+}
+
+/** Payload of a `__cirrus_admin__:listWorkflows` call, hand-mirroring `@cirrus/do`'s `WorkflowsResult`. */
+export interface WorkflowsResult {
+    workflows: WorkflowMetadata[];
+}
+
+/* eslint-disable no-secrets/no-secrets -- reserved admin RPC names are framework constants, not credentials */
+
+/**
+ * Lifecycle state of a workflow instance, hand-mirroring `@cirrus/do`'s
+ * `WorkflowInstanceState` (itself mirrored from `@cirrus/workflow`).
+ */
+export type WorkflowInstanceState = "complete" | "errored" | "paused" | "queued" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
+
+/** Payload of a `__cirrus_admin__:createWorkflowInstance` call: the new instance id and its initial status. */
+export interface CreateWorkflowInstanceResult {
+    id: string;
+    status: WorkflowInstanceState;
+}
+
+/** Payload of a `__cirrus_admin__:getWorkflowInstanceStatus` call: the instance's current status plus output/error when present. */
+export interface WorkflowInstanceStatusResult {
+    error?: { message: string; name: string };
+    id: string;
+    output?: unknown;
+    status: WorkflowInstanceState;
+}
+/* eslint-enable no-secrets/no-secrets */
 
 /** Severity of a buffered log entry, mirroring `@cirrus/do`'s `LogLevel`. */
 export type LogLevel = "debug" | "error" | "info" | "warn";

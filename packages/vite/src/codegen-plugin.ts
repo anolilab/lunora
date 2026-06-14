@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 
 import { CodegenDiagnosticError, createCodegenProject, refreshCodegenProject, runCodegen } from "@cirrus/codegen";
+import type { ExportGap } from "@cirrus/config";
 import { inferCirrusBindings, reconcileWranglerBindings } from "@cirrus/config";
 import type { Project } from "ts-morph";
 import type { Plugin, ViteDevServer } from "vite";
@@ -15,15 +16,40 @@ const DEBOUNCE_MS = 100;
 const TSCONFIG_VARIANT_RE = /[/\\]tsconfig\..+\.json$/u;
 
 /**
+ * Compose the dev error-overlay message for declared-but-not-re-exported
+ * containers/workflows. These would otherwise fail only at `wrangler deploy`
+ * (which rejects a `class_name` the worker doesn't export); surfacing the precise
+ * fix in the browser overlay turns a late deploy failure into an immediate,
+ * actionable dev-time error.
+ */
+const formatExportGapOverlay = (gaps: ReadonlyArray<ExportGap>): string => {
+    const lines = gaps.map((gap) => `  • ${gap.kind} "${gap.exportName}" — class ${gap.className} is not exported by your worker entry.`);
+    const hints = [...new Set(gaps.map((gap) => gap.module))].map((module) => `  export * from "./cirrus/_generated/${module}";`);
+
+    return [
+        `[cirrus] ${String(gaps.length)} declared ${gaps.length === 1 ? "binding is" : "bindings are"} not exported by your worker entry — \`wrangler deploy\` will fail.`,
+        ...lines,
+        "",
+        "Add to your worker entry:",
+        ...hints,
+    ].join("\n");
+};
+
+/**
  * Infer the Cloudflare bindings the project's code implies and reconcile them
  * into `wrangler.jsonc` (Durable Objects, their migration classes, and the
  * `DB` D1 binding for `.global()` schemas). Best-effort and idempotent — runs
  * once at startup so the user never hand-writes binding boilerplate. A failure
  * here must never abort codegen; the wrangler validator reports real problems.
+ *
+ * `onExportGaps` (dev only) is invoked when a declared container/workflow isn't
+ * re-exported by the worker entry, so the caller can raise it in the browser
+ * error overlay in addition to the console warning.
  */
 const reconcileBindingsSafely = async (
     options: Pick<ResolvedCirrusPluginOptions, "projectRoot" | "schemaDir">,
     logger: { info?: (message: string) => void; warn: (message: string) => void },
+    onExportGaps?: (gaps: ReadonlyArray<ExportGap>) => void,
 ): Promise<void> => {
     try {
         const inferred = await inferCirrusBindings({ projectRoot: options.projectRoot, schemaDir: options.schemaDir });
@@ -35,6 +61,10 @@ const reconcileBindingsSafely = async (
 
         for (const warning of reconciled.warnings) {
             logger.warn(`[cirrus] ${warning}`);
+        }
+
+        if (reconciled.exportGaps.length > 0) {
+            onExportGaps?.(reconciled.exportGaps);
         }
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
@@ -167,8 +197,16 @@ const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
 
             // Auto-provision the bindings the code implies. Done once at startup
             // (not on every schema edit): bindings change rarely and a restart
-            // picks up a newly-added capability.
-            await reconcileBindingsSafely(options, logger);
+            // picks up a newly-added capability. In dev, a declared-but-not-
+            // re-exported container/workflow is raised in the browser error
+            // overlay (Vite buffers it and replays to clients on connect) so the
+            // fix surfaces here rather than at a late `wrangler deploy` failure.
+            await reconcileBindingsSafely(options, logger, (gaps) => {
+                devServer?.hot.send({
+                    err: { loc: undefined, message: formatExportGapOverlay(gaps), stack: "" },
+                    type: "error",
+                });
+            });
         },
         configureServer(server: ViteDevServer) {
             devServer = server;

@@ -51,6 +51,17 @@ interface WranglerContainerEntry {
     max_instances?: number;
 }
 
+/**
+ * A wrangler `workflows[]` entry (parsed from untrusted JSONC). Unlike
+ * containers, workflows are NOT Durable Objects — the entry stands alone (no
+ * `durable_objects` binding, no migration class).
+ */
+interface WranglerWorkflowEntry {
+    binding?: string;
+    class_name?: string;
+    name?: string;
+}
+
 interface WranglerConfig {
     compatibility_date?: string;
     compatibility_flags?: ReadonlyArray<string>;
@@ -66,6 +77,9 @@ interface WranglerConfig {
     // otherwise malformed; the validators below guard against that at runtime.
     tail_consumers?: ReadonlyArray<TailConsumer | null | undefined>;
     vectorize?: ReadonlyArray<{ binding?: string; index_name?: string } | null | undefined>;
+    // Parsed from untrusted JSONC, so individual entries may be `null` or
+    // otherwise malformed; `validateWorkflows` guards against that at runtime.
+    workflows?: ReadonlyArray<WranglerWorkflowEntry | null | undefined>;
 }
 
 interface WranglerValidationReport {
@@ -136,7 +150,9 @@ const validateInstanceType = (entry: WranglerContainerEntry, label: string, erro
         const maxDiskMb = Math.floor((memoryMib / 1024) * 2000);
 
         if (diskMb > maxDiskMb) {
-            errors.push(`${label} custom instance_type allows ≤ 2 GB disk per GiB memory (≤ ${String(maxDiskMb)} MB for ${String(memoryMib)} MiB memory; got ${String(diskMb)} MB)`);
+            errors.push(
+                `${label} custom instance_type allows ≤ 2 GB disk per GiB memory (≤ ${String(maxDiskMb)} MB for ${String(memoryMib)} MiB memory; got ${String(diskMb)} MB)`,
+            );
         }
     }
 };
@@ -228,6 +244,50 @@ const validateContainers = (wrangler: WranglerConfig, errors: string[], warnings
         warnings.push(
             'containers are configured but observability is not enabled — container logs will not be captured (add { "observability": { "enabled": true } })',
         );
+    }
+};
+
+/**
+ * Each `workflows[]` entry must be a well-formed `{ name, binding, class_name }`
+ * triple. Workflows are not Durable Objects, so there is nothing to cross-check
+ * against `durable_objects`/`migrations` — only the shape matters here; the
+ * deployed worker is responsible for exporting each `class_name`.
+ */
+const validateWorkflows = (wrangler: WranglerConfig, errors: string[]): void => {
+    if (wrangler.workflows === undefined) {
+        return;
+    }
+
+    if (!Array.isArray(wrangler.workflows)) {
+        errors.push("workflows must be an array of { name, binding, class_name } entries");
+
+        return;
+    }
+
+    // `Array.isArray` widens the readonly element type to `any`; restore it so
+    // member access below stays type-safe (mirrors `validateContainers`).
+    const entries = wrangler.workflows as ReadonlyArray<WranglerWorkflowEntry | null | undefined>;
+
+    for (const [index, entry] of entries.entries()) {
+        const label = `workflows[${String(index)}]`;
+
+        if (!entry || typeof entry !== "object") {
+            errors.push(`${label} must be a { name, binding, class_name } object`);
+
+            continue;
+        }
+
+        if (typeof entry.binding !== "string" || entry.binding.length === 0) {
+            errors.push(`${label} must have a non-empty "binding" naming the Workflow binding (e.g. WORKFLOW_ORDER_PIPELINE)`);
+        }
+
+        if (typeof entry.class_name !== "string" || entry.class_name.length === 0) {
+            errors.push(`${label} must have a non-empty "class_name" naming the exported WorkflowEntrypoint class`);
+        }
+
+        if (typeof entry.name !== "string" || entry.name.length === 0) {
+            errors.push(`${label} must have a non-empty "name" naming the deployed workflow`);
+        }
     }
 };
 
@@ -335,6 +395,7 @@ const validateWranglerConfig = (wrangler: WranglerConfig | undefined, schema?: S
     validateVectorizeBindings(wrangler, schema?.vectorIndexNames ?? [], errors);
     validateTailConsumers(wrangler, errors);
     validateContainers(wrangler, errors, warnings);
+    validateWorkflows(wrangler, errors);
 
     return { errors, valid: errors.length === 0, warnings };
 };
@@ -433,5 +494,6 @@ export type {
     WranglerProjectValidationOptions,
     WranglerProjectValidationResult,
     WranglerValidationReport,
+    WranglerWorkflowEntry,
 };
 export { REQUIRED_COMPATIBILITY_DATE, REQUIRED_FLAG, validateWrangler, validateWranglerConfig, validateWranglerProject, withTailConsumer };

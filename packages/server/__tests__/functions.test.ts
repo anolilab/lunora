@@ -24,6 +24,7 @@ const makeMutationContext = (): MutationContext => {
         scheduler: {} as MutationContext["scheduler"],
         storage: {} as MutationContext["storage"],
         vectors: {} as MutationContext["vectors"],
+        workflows: {} as MutationContext["workflows"],
     };
 };
 
@@ -39,6 +40,7 @@ const makeActionContext = (): ActionContext => {
         scheduler: {} as ActionContext["scheduler"],
         storage: {} as ActionContext["storage"],
         vectors: {} as ActionContext["vectors"],
+        workflows: {} as ActionContext["workflows"],
     };
 };
 

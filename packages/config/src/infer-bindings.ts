@@ -28,6 +28,8 @@ import type { ContainerIR } from "./container-info";
 import { discoverContainerInfo } from "./container-info";
 import join from "./path";
 import { discoverSchemaInfo } from "./schema-info";
+import type { WorkflowIR } from "./workflow-info";
+import { discoverWorkflowInfo } from "./workflow-info";
 import { readWranglerJsonc, WRANGLER_FILES } from "./wrangler-path";
 
 /** Source file extensions worth scanning for capability signals. */
@@ -101,6 +103,17 @@ interface InferredContainer extends ContainerIR {
     exported: boolean;
 }
 
+/**
+ * A `defineWorkflow` declaration plus whether its generated
+ * `WorkflowEntrypoint` class is exported by the worker entry. Only exported
+ * workflows are safe to provision — wrangler rejects a `workflows[].class_name`
+ * the worker doesn't export. Workflows are NOT Durable Objects, so this never
+ * implies a `durable_objects` binding or migration.
+ */
+interface InferredWorkflow extends WorkflowIR {
+    exported: boolean;
+}
+
 interface InferredBindings {
     /** Containers declared in `cirrus/containers.ts` (exported or not — see {@link InferredContainer.exported}). */
     containers: InferredContainer[];
@@ -120,6 +133,8 @@ interface InferredBindings {
     usesScheduler: boolean;
     /** `@cirrus/storage` is imported (R2 bucket binding name is user-defined). */
     usesStorage: boolean;
+    /** Workflows declared in `cirrus/workflows.ts` (exported or not — see {@link InferredWorkflow.exported}). */
+    workflows: InferredWorkflow[];
 }
 
 /** Which capabilities a unit of source imports. Pure value, no mutation. */
@@ -361,6 +376,53 @@ const detectContainerExports = (entryPath: string | undefined, containers: Reado
 };
 
 /**
+ * Matches an `export * from "…/_generated/workflows"` (with or without the
+ * `.js` extension) — the conventional way a worker entry re-exports every
+ * generated `WorkflowEntrypoint` class at once. `es-module-lexer` lists the
+ * module request but not the names a star re-export forwards, so the path
+ * itself is the signal that all generated workflow classes are exported.
+ */
+const WORKFLOWS_STAR_REEXPORT_PATTERN = /\bexport\s*\*\s*from\s*["'][^"']*_generated\/workflows(?:\.js)?["']/;
+
+/**
+ * Whether the worker entry exports each generated `WorkflowEntrypoint` class: a
+ * named export of the class or the conventional
+ * `export * from "./cirrus/_generated/workflows"` star re-export. Mirrors
+ * {@link detectContainerExports} — exports are the only safe provisioning
+ * signal, since wrangler validates `class_name` against the worker's exports.
+ */
+const detectWorkflowExports = (entryPath: string | undefined, workflows: ReadonlyArray<WorkflowIR>): InferredWorkflow[] => {
+    if (workflows.length === 0) {
+        return [];
+    }
+
+    if (entryPath === undefined) {
+        return workflows.map((workflow) => {
+            return { ...workflow, exported: false };
+        });
+    }
+
+    const code = readFileSync(entryPath, "utf8");
+    const starReexport = WORKFLOWS_STAR_REEXPORT_PATTERN.test(code);
+
+    let exportedNames: Set<string>;
+
+    try {
+        const [, exports] = lexModule(code);
+
+        exportedNames = new Set(exports.map((entry) => entry.n));
+    } catch {
+        exportedNames = new Set(
+            workflows.map((workflow) => workflow.className).filter((className) => new RegExp(String.raw`\bexport\b[^\n;]*\b${className}\b`).test(code)),
+        );
+    }
+
+    return workflows.map((workflow) => {
+        return { ...workflow, exported: starReexport || exportedNames.has(workflow.className) };
+    });
+};
+
+/**
  * The schema-derived signal: a `.global()` table needs the `DB` D1 binding.
  * Delegates to the shared `discoverSchemaInfo` so inference and the wrangler
  * validator read the exact same fact. A missing or unparseable schema yields
@@ -397,6 +459,7 @@ const describeSignals = (
     needsD1: boolean,
     capabilities: Capabilities,
     containers: ReadonlyArray<InferredContainer> = [],
+    workflows: ReadonlyArray<InferredWorkflow> = [],
 ): string[] => {
     const exported = new Set(durableObjects.map((object) => object.className));
     const signals = durableObjects.map((object) => `${object.binding}/${object.className} (exported by worker entry)`);
@@ -410,6 +473,14 @@ const describeSignals = (
             container.exported
                 ? `${container.bindingName}/${container.className} (container "${container.exportName}" declared and exported)`
                 : `hint: container "${container.exportName}" is declared but ${container.className} is not exported by the worker entry — add \`export * from "./cirrus/_generated/containers"\``,
+        );
+    }
+
+    for (const workflow of workflows) {
+        signals.push(
+            workflow.exported
+                ? `${workflow.bindingName}/${workflow.className} (workflow "${workflow.exportName}" declared and exported)`
+                : `hint: workflow "${workflow.exportName}" is declared but ${workflow.className} is not exported by the worker entry — add \`export * from "./cirrus/_generated/workflows"\``,
         );
     }
 
@@ -453,19 +524,21 @@ const inferCirrusBindings = async (options: InferOptions): Promise<InferredBindi
     const durableObjects = entryPath ? detectExportedDurableObjects(entryPath) : [];
     const needsD1 = capabilities.needsD1 || schemaNeedsD1(options.projectRoot, schemaDirectory);
     const containers = detectContainerExports(entryPath, discoverContainerInfo(options.projectRoot, schemaDirectory).containers);
+    const workflows = detectWorkflowExports(entryPath, discoverWorkflowInfo(options.projectRoot, schemaDirectory).workflows);
 
     return {
         containers,
         durableObjects,
         needsD1,
-        signals: describeSignals(durableObjects, needsD1, capabilities, containers),
+        signals: describeSignals(durableObjects, needsD1, capabilities, containers, workflows),
         usesAi: capabilities.usesAi,
         usesAuth: capabilities.usesAuth,
         usesPayment: capabilities.usesPayment,
         usesScheduler: capabilities.usesScheduler,
         usesStorage: capabilities.usesStorage,
+        workflows,
     };
 };
 
-export type { DurableObjectClass, DurableObjectSpec, InferOptions, InferredBindings, InferredContainer };
+export type { DurableObjectClass, DurableObjectSpec, InferOptions, InferredBindings, InferredContainer, InferredWorkflow };
 export { inferCirrusBindings };
