@@ -120,6 +120,8 @@ export default createConfig(
             "unicorn/no-null": "off",
             "unicorn/prevent-abbreviations": "off",
             "unused-imports/no-unused-vars": "off",
+            "react-perf/jsx-no-new-function-as-prop": "off",
+            "react-perf/jsx-no-new-object-as-prop": "off",
             "vitest/prefer-describe-function-title": "off",
             "vitest/prefer-strict-equal": "off",
         },

@@ -11,9 +11,11 @@ import { DataBrowserTableView } from "./data-browser-grid";
 import type { EditableFilter } from "./data-filters";
 import { DataFilters } from "./data-filters";
 import { TransposedTable } from "./data-grid";
+import { GenerateRowsDialog } from "./generate-rows-dialog";
 import { CellDetailDialog, GridActionsBar } from "./grid-features";
 import GridPagination from "./grid-pagination";
 import { useDataBrowser } from "./hooks/use-data-browser";
+import { useGenerateRows } from "./hooks/use-generate-rows";
 import { RowDetailDrawer } from "./row-detail";
 import RowFormEditor from "./row-form";
 import { StagedDiffPanel } from "./staged-edits";
@@ -116,6 +118,7 @@ const DataBrowserViewControls = ({
     onClearTable,
     onFilterChange,
     onFiltersChange,
+    onGenerateRows,
     onShowJson,
     onShowTable,
     total,
@@ -131,6 +134,7 @@ const DataBrowserViewControls = ({
     onClearTable: () => void;
     onFilterChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
     onFiltersChange: (filters: EditableFilter[]) => void;
+    onGenerateRows: () => void;
     onShowJson: () => void;
     onShowTable: () => void;
     total: number;
@@ -159,6 +163,11 @@ const DataBrowserViewControls = ({
                 {editable && (
                     <button className={CONTROL_BTN} data-testid="db-add-row" onClick={onAddRow} type="button">
                         Add row
+                    </button>
+                )}
+                {editable && (
+                    <button className={CONTROL_BTN} data-testid="db-generate-rows" onClick={onGenerateRows} type="button">
+                        {t("Generate rows")}
                     </button>
                 )}
                 {editable && total > 0 && (filter !== "" || filters.length > 0) && (
@@ -258,6 +267,33 @@ export const DataBrowser = ({
         viewMode,
         writeError,
     } = useDataBrowser({ initialShardKey, onSelectTable, pageSize: initialPageSize, tableParam });
+
+    // Generate & insert dummy rows via @faker-js/faker.
+    const onRefreshAfterGenerate = useCallback((): void => {
+        if (selectedTable !== null) {
+            selectTable(selectedTable);
+        }
+    }, [selectedTable, selectTable]);
+
+    const {
+        closeDialog: closeGenerateDialog,
+        columnMeta,
+        fkPools,
+        insertBatch,
+        open: generateOpen,
+        openDialog: openGenerateDialog,
+    } = useGenerateRows(onRefreshAfterGenerate);
+
+    const onOpenGenerateRows = useCallback((): void => {
+        if (selectedTable !== null) {
+            openGenerateDialog(selectedTable, shardKey);
+        }
+    }, [openGenerateDialog, selectedTable, shardKey]);
+
+    const onInsertGeneratedRows = useCallback(
+        (rows: ReadonlyArray<Record<string, unknown>>): Promise<string | undefined> => insertBatch(rows, closeGenerateDialog),
+        [insertBatch, closeGenerateDialog],
+    );
 
     // The row whose full document the detail drawer is showing, if any. Pure
     // view state — kept out of the data hook since it touches no fetch logic.
@@ -364,6 +400,7 @@ export const DataBrowser = ({
                                 onClearTable={clearTable}
                                 onFilterChange={onFilterChange}
                                 onFiltersChange={onFiltersChange}
+                                onGenerateRows={onOpenGenerateRows}
                                 onShowJson={showJson}
                                 onShowTable={showTable}
                                 total={total}
@@ -476,6 +513,16 @@ export const DataBrowser = ({
             )}
 
             {expandedCell !== null && <CellDetailDialog column={expandedCell.column} onClose={closeExpandedCell} value={expandedCell.value} />}
+
+            {generateOpen && selectedTable !== null && columnMeta !== undefined && (
+                <GenerateRowsDialog
+                    columns={columnMeta}
+                    fkPools={fkPools}
+                    onClose={closeGenerateDialog}
+                    onInsertRows={onInsertGeneratedRows}
+                    table={selectedTable}
+                />
+            )}
         </div>
     );
 };
