@@ -66,6 +66,10 @@ catalogs:
     wrangler:
       specifier: ^4.100.0
       version: 4.100.0
+  data:
+    '@faker-js/faker':
+      specifier: ^9.0.0
+      version: 9.9.0
   dev:
     '@anolilab/semantic-release-preset':
       specifier: ^13.4.16
@@ -1778,6 +1782,9 @@ importers:
       '@cirrus/react':
         specifier: workspace:*
         version: link:../react
+      '@faker-js/faker':
+        specifier: catalog:data
+        version: 9.9.0
       '@hugeicons/core-free-icons':
         specifier: catalog:ui
         version: 4.2.0
@@ -3701,6 +3708,10 @@ packages:
     peerDependenciesMeta:
       '@noble/hashes':
         optional: true
+
+  '@faker-js/faker@9.9.0':
+    resolution: {integrity: sha512-OEl393iCOoo/z8bMezRlJu+GlRGlsKbUAN7jKB6LhnKoqKve5DXRpalbItIIcwnCjs1k/FOPjFzcA6Qn+H+YbA==}
+    engines: {node: '>=18.0.0', npm: '>=9.0.0'}
 
   '@floating-ui/core@1.7.5':
     resolution: {integrity: sha512-1Ih4WTWyw0+lKyFMcBHGbb5U5FtuHJuujoyyr5zTaWS5EYMeT6Jb2AuDeftsCsEuchO+mM2ij5+q9crhydzLhQ==}
@@ -15243,6 +15254,8 @@ snapshots:
   '@exodus/bytes@1.15.1(@noble/hashes@2.2.0)':
     optionalDependencies:
       '@noble/hashes': 2.2.0
+
+  '@faker-js/faker@9.9.0': {}
 
   '@floating-ui/core@1.7.5':
     dependencies:

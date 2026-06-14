@@ -1,3 +1,4 @@
+import { useCirrus } from "@cirrus/react";
 import type { ReactElement, ReactNode } from "react";
 import { useCallback, useMemo, useState } from "react";
 
@@ -6,6 +7,8 @@ import { ShardInput } from "../../components/shard-input";
 import { EmptyState } from "../../components/ui/empty-state";
 import { useT } from "../../i18n/i18n-context";
 import type { TableInfo } from "../../lib/admin";
+import { ADMIN_FUNCTIONS } from "../../lib/admin";
+import { adminRef, callOptions } from "../../lib/internal";
 import type { MaskView } from "../../lib/mask-preview";
 import { maskColumnsForTable, maskRows } from "../../lib/mask-preview";
 import type { GridEdit, GridReferences, TableRow } from "./data-browser-grid";
@@ -13,12 +16,15 @@ import { DataBrowserTableView } from "./data-browser-grid";
 import type { EditableFilter } from "./data-filters";
 import { DataFilters } from "./data-filters";
 import { TransposedTable } from "./data-grid";
+import { GenerateRowsDialog } from "./generate-rows-dialog";
 import { CellDetailDialog, GridActionsBar } from "./grid-features";
 import GridPagination from "./grid-pagination";
 import { useDataBrowser } from "./hooks/use-data-browser";
+import { useGenerateRows } from "./hooks/use-generate-rows";
 import { useMaskPolicies } from "./hooks/use-mask-policies";
 import { RowDetailDrawer } from "./row-detail";
 import RowFormEditor from "./row-form";
+import { ShardExplorer } from "./shard-explorer";
 import { StagedDiffPanel } from "./staged-edits";
 import { TableListSidebar } from "./table-list-sidebar";
 
@@ -79,6 +85,8 @@ const NO_TABLES: ReadonlyArray<TableInfo> = [];
 const CONTROL_BTN =
     "inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-50 aria-pressed:bg-accent aria-pressed:text-accent-foreground";
 
+const LIST_TABLES = adminRef(ADMIN_FUNCTIONS.listTables);
+
 /**
  * The table-list sidebar header: the schema/source switch (when the browser is
  * composed into the Table editor) and the shard-key picker, stacked for the
@@ -87,10 +95,12 @@ const CONTROL_BTN =
  * on-demand re-fetch. Presentational: the parent owns the shard-key state.
  */
 const DataBrowserSidebarHeader = ({
+    onFetchShardTables,
     onShardChange,
     schemaSwitch,
     shardKey,
 }: {
+    onFetchShardTables: (shardKey: string) => Promise<ReadonlyArray<TableInfo> | undefined>;
     onShardChange: (value: string) => void;
     schemaSwitch?: ReactNode;
     shardKey: string;
@@ -98,6 +108,7 @@ const DataBrowserSidebarHeader = ({
     <div className="flex shrink-0 flex-col items-stretch gap-2 border-b border-border p-3">
         {schemaSwitch}
         <ShardInput onChange={onShardChange} testId="db-shard-input" value={shardKey} />
+        <ShardExplorer onFetchTables={onFetchShardTables} onSelect={onShardChange} />
     </div>
 );
 
@@ -121,6 +132,7 @@ const DataBrowserViewControls = ({
     onClearTable,
     onFilterChange,
     onFiltersChange,
+    onGenerateRows,
     onShowJson,
     onShowTable,
     onToggleMask,
@@ -141,6 +153,7 @@ const DataBrowserViewControls = ({
     onClearTable: () => void;
     onFilterChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
     onFiltersChange: (filters: EditableFilter[]) => void;
+    onGenerateRows: () => void;
     onShowJson: () => void;
     onShowTable: () => void;
     onToggleMask: () => void;
@@ -175,6 +188,11 @@ const DataBrowserViewControls = ({
                 {editable && (
                     <button className={CONTROL_BTN} data-testid="db-add-row" onClick={onAddRow} type="button">
                         Add row
+                    </button>
+                )}
+                {editable && (
+                    <button className={CONTROL_BTN} data-testid="db-generate-rows" onClick={onGenerateRows} type="button">
+                        {t("Generate rows")}
                     </button>
                 )}
                 {editable && total > 0 && (filter !== "" || filters.length > 0) && (
@@ -275,6 +293,46 @@ export const DataBrowser = ({
         writeError,
     } = useDataBrowser({ initialShardKey, onSelectTable, pageSize: initialPageSize, tableParam });
 
+    const client = useCirrus();
+
+    // Fetch the table list for a given shard key — used by the ShardExplorer to
+    // show a live table/row-count summary when the operator picks a recent shard.
+    const onFetchShardTables = useCallback(
+        async (targetShard: string): Promise<ReadonlyArray<TableInfo> | undefined> => {
+            const result = (await client.query(LIST_TABLES, {}, callOptions(targetShard))) as ReadonlyArray<TableInfo>;
+
+            return result;
+        },
+        [client],
+    );
+
+    // Generate & insert dummy rows via @faker-js/faker.
+    const onRefreshAfterGenerate = useCallback((): void => {
+        if (selectedTable !== null) {
+            selectTable(selectedTable);
+        }
+    }, [selectedTable, selectTable]);
+
+    const {
+        closeDialog: closeGenerateDialog,
+        columnMeta,
+        fkPools,
+        insertBatch,
+        open: generateOpen,
+        openDialog: openGenerateDialog,
+    } = useGenerateRows(onRefreshAfterGenerate);
+
+    const onOpenGenerateRows = useCallback((): void => {
+        if (selectedTable !== null) {
+            openGenerateDialog(selectedTable, shardKey);
+        }
+    }, [openGenerateDialog, selectedTable, shardKey]);
+
+    const onInsertGeneratedRows = useCallback(
+        (rows: ReadonlyArray<Record<string, unknown>>): Promise<string | undefined> => insertBatch(rows, closeGenerateDialog),
+        [insertBatch, closeGenerateDialog],
+    );
+
     // The row whose full document the detail drawer is showing, if any. Pure
     // view state — kept out of the data hook since it touches no fetch logic.
     const [inspecting, setInspecting] = useState<TableRow | null>(null);
@@ -305,7 +363,7 @@ export const DataBrowser = ({
     // the grid/JSON/transposed renderers read. The chips show whenever a column is
     // covered; cell values are only rewritten when the toggle is on.
     const maskColumns = useMemo(() => maskColumnsForTable(maskPolicies, selectedTable ?? ""), [maskPolicies, selectedTable]);
-    const maskView = useMemo<MaskView>(() => ({ columns: maskColumns, enabled: maskOn }), [maskColumns, maskOn]);
+    const maskView = useMemo<MaskView>(() => {return { columns: maskColumns, enabled: maskOn }}, [maskColumns, maskOn]);
 
     // The cell whose full value the expand dialog is showing, if any. Opened from
     // the per-cell expand affordance; pure view state like `inspecting`.
@@ -356,7 +414,14 @@ export const DataBrowser = ({
     return (
         <div className="flex h-full min-w-0" data-testid="cirrus-data-browser">
             <TableListSidebar
-                header={<DataBrowserSidebarHeader onShardChange={setShardKey} schemaSwitch={schemaSwitch} shardKey={shardKey} />}
+                header={
+                    <DataBrowserSidebarHeader
+                        onFetchShardTables={onFetchShardTables}
+                        onShardChange={setShardKey}
+                        schemaSwitch={schemaSwitch}
+                        shardKey={shardKey}
+                    />
+                }
                 onReload={loadTables}
                 onSelect={selectTable}
                 prefix="db"
@@ -399,6 +464,7 @@ export const DataBrowser = ({
                                 onClearTable={clearTable}
                                 onFilterChange={onFilterChange}
                                 onFiltersChange={onFiltersChange}
+                                onGenerateRows={onOpenGenerateRows}
                                 onShowJson={showJson}
                                 onShowTable={showTable}
                                 onToggleMask={onToggleMask}
@@ -515,6 +581,16 @@ export const DataBrowser = ({
             )}
 
             {expandedCell !== null && <CellDetailDialog column={expandedCell.column} onClose={closeExpandedCell} value={expandedCell.value} />}
+
+            {generateOpen && selectedTable !== null && columnMeta !== undefined && (
+                <GenerateRowsDialog
+                    columns={columnMeta}
+                    fkPools={fkPools}
+                    onClose={closeGenerateDialog}
+                    onInsertRows={onInsertGeneratedRows}
+                    table={selectedTable}
+                />
+            )}
         </div>
     );
 };
