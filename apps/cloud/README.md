@@ -39,7 +39,8 @@ cirrus/
   secrets.ts         tenant env secrets: store / list / listEncrypted / remove (§7)
   usage.ts           platform metering: record / ingest / rollup (cron) / summary
   audit-log.ts       record + list (the studio Activity tab)
-  crons.ts           code-first crons (preview cleanup + usage rollup)
+  fanout.ts          every-minute heartbeat that emits the tenant cron-tick trigger (§2.4)
+  crons.ts           code-first crons (preview cleanup + usage rollup + cron-tick)
 src/
   server.ts          control-plane Worker entry (D1 global tables + deploy router
                      + crons + better-auth `/api/auth/*` + studio identity)
@@ -68,6 +69,8 @@ src/
     crypto.ts        AES-256-GCM envelope encryption for tenant secrets (§7)
   metering/
     analytics.ts     Analytics Engine writer (dispatcher) + reader port (rollup, §4)
+  fanout/
+    cron.ts          tenant cron fan-out: cron-expression matching + due ticks (§2.4)
   deploy/
     token-bucket.ts  per-cell API budget (CF 1,200/5min, §2.5)
     scheduler.ts     CellScheduler — paces provisioner work, priority + concurrency
