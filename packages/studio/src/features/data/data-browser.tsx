@@ -1,3 +1,4 @@
+import { useCirrus } from "@cirrus/react";
 import type { ReactElement, ReactNode } from "react";
 import { useCallback, useMemo, useState } from "react";
 
@@ -6,6 +7,8 @@ import { ShardInput } from "../../components/shard-input";
 import { EmptyState } from "../../components/ui/empty-state";
 import { useT } from "../../i18n/i18n-context";
 import type { TableInfo } from "../../lib/admin";
+import { ADMIN_FUNCTIONS } from "../../lib/admin";
+import { adminRef, callOptions } from "../../lib/internal";
 import type { GridEdit, GridReferences, TableRow } from "./data-browser-grid";
 import { DataBrowserTableView } from "./data-browser-grid";
 import type { EditableFilter } from "./data-filters";
@@ -18,6 +21,7 @@ import { useDataBrowser } from "./hooks/use-data-browser";
 import { useGenerateRows } from "./hooks/use-generate-rows";
 import { RowDetailDrawer } from "./row-detail";
 import RowFormEditor from "./row-form";
+import { ShardExplorer } from "./shard-explorer";
 import { StagedDiffPanel } from "./staged-edits";
 import { TableListSidebar } from "./table-list-sidebar";
 
@@ -78,6 +82,8 @@ const NO_TABLES: ReadonlyArray<TableInfo> = [];
 const CONTROL_BTN =
     "inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-xs font-medium text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent disabled:pointer-events-none disabled:opacity-50 aria-pressed:bg-accent aria-pressed:text-accent-foreground";
 
+const LIST_TABLES = adminRef(ADMIN_FUNCTIONS.listTables);
+
 /**
  * The table-list sidebar header: the schema/source switch (when the browser is
  * composed into the Table editor) and the shard-key picker, stacked for the
@@ -86,10 +92,12 @@ const CONTROL_BTN =
  * on-demand re-fetch. Presentational: the parent owns the shard-key state.
  */
 const DataBrowserSidebarHeader = ({
+    onFetchShardTables,
     onShardChange,
     schemaSwitch,
     shardKey,
 }: {
+    onFetchShardTables: (shardKey: string) => Promise<ReadonlyArray<TableInfo> | undefined>;
     onShardChange: (value: string) => void;
     schemaSwitch?: ReactNode;
     shardKey: string;
@@ -97,6 +105,7 @@ const DataBrowserSidebarHeader = ({
     <div className="flex shrink-0 flex-col items-stretch gap-2 border-b border-border p-3">
         {schemaSwitch}
         <ShardInput onChange={onShardChange} testId="db-shard-input" value={shardKey} />
+        <ShardExplorer onFetchTables={onFetchShardTables} onSelect={onShardChange} />
     </div>
 );
 
@@ -268,6 +277,19 @@ export const DataBrowser = ({
         writeError,
     } = useDataBrowser({ initialShardKey, onSelectTable, pageSize: initialPageSize, tableParam });
 
+    const client = useCirrus();
+
+    // Fetch the table list for a given shard key — used by the ShardExplorer to
+    // show a live table/row-count summary when the operator picks a recent shard.
+    const onFetchShardTables = useCallback(
+        async (targetShard: string): Promise<ReadonlyArray<TableInfo> | undefined> => {
+            const result = (await client.query(LIST_TABLES, {}, callOptions(targetShard))) as ReadonlyArray<TableInfo>;
+
+            return result;
+        },
+        [client],
+    );
+
     // Generate & insert dummy rows via @faker-js/faker.
     const onRefreshAfterGenerate = useCallback((): void => {
         if (selectedTable !== null) {
@@ -359,7 +381,14 @@ export const DataBrowser = ({
     return (
         <div className="flex h-full min-w-0" data-testid="cirrus-data-browser">
             <TableListSidebar
-                header={<DataBrowserSidebarHeader onShardChange={setShardKey} schemaSwitch={schemaSwitch} shardKey={shardKey} />}
+                header={
+                    <DataBrowserSidebarHeader
+                        onFetchShardTables={onFetchShardTables}
+                        onShardChange={setShardKey}
+                        schemaSwitch={schemaSwitch}
+                        shardKey={shardKey}
+                    />
+                }
                 onReload={loadTables}
                 onSelect={selectTable}
                 prefix="db"
