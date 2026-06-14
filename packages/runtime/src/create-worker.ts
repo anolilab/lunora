@@ -849,6 +849,11 @@ const WS_PATH = "/_lunora/ws";
 const SCHEDULER_DISPATCH_PATH = "/_lunora/scheduler/dispatch";
 /** Admin-gated POST that manually fires one code-defined cron job by name (studio "Run now"). */
 const CRON_JOBS_RUN_PATH = "/_lunora/admin/cron-jobs/run";
+// Admin-gated HTTP entrypoint that runs a cron expression's jobs exactly as the
+// native `scheduled()` trigger would. Cloudflare silently drops `triggers.crons`
+// for Workers uploaded into a Workers-for-Platforms dispatch namespace, so a
+// platform fans cron ticks out to its tenants by POSTing here (CLOUD-PLAN §2.4).
+const SCHEDULED_TICK_PATH = "/_lunora/scheduled";
 // The cross-shard orchestration (`migrate` / `rank` / `rankpage` / `shard-traffic`)
 // + `pitr`, data-movement (`export` / `import` / `sync` / `connector/sync` /
 // `apply`), static-introspection (`functions` / `cron-jobs` / `openapi` /
@@ -2328,6 +2333,33 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
     };
 
+    /**
+     * `POST /_lunora/scheduled` — run a cron expression's jobs over HTTP, the
+     * Workers-for-Platforms workaround for dropped `triggers.crons` (a platform
+     * fans ticks out to its namespaced tenants). Admin-gated; the body carries
+     * the cron expression to run as `{ "cron": "0 9 * * *" }`, and dispatch goes through the SAME
+     * `handleScheduled` path the native trigger uses (user crons + code crons +
+     * scheduled backup), so behaviour is identical to a real firing.
+     */
+    const handleScheduledTick = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<Response> => {
+        assertAdminAuthorized(request);
+
+        if (request.method !== "POST") {
+            throw new CirrusError("scheduled tick endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        const body = (await request.json().catch(() => undefined)) as { cron?: unknown } | undefined;
+        const cron = typeof body?.cron === "string" ? body.cron : "";
+
+        if (cron === "") {
+            throw new CirrusError("scheduled tick requires a `cron` expression", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        await handleScheduled({ cron, noRetry: () => {}, scheduledTime: Date.now() }, env, context);
+
+        return Response.json({ cron, ok: true });
+    };
+
     // Internal endpoint dispatch table. Keyed by pathname; each handler takes
     // the request (and, where needed, env/url) and returns the response.
     type InternalRoute = (request: Request, env: unknown, url: URL, context: ExecutionContextLike) => Promise<Response> | Response;
@@ -2482,6 +2514,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         if (route) {
             return route(request, env, context);
+        }
+
+        // The cron-tick entrypoint needs the execution `context` (for user-cron
+        // `waitUntil`), which the table-shaped routes don't receive — dispatch it
+        // here while `context` is in scope.
+        if (url.pathname === SCHEDULED_TICK_PATH) {
+            return handleScheduledTick(request, env, context);
         }
 
         // Internal `/_lunora/*` endpoints, keyed by pathname. Each entry adapts

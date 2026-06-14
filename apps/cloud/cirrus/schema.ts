@@ -90,6 +90,10 @@ export default defineSchema({
         adminToken: v.optional(v.string()),
         // Preview deployments carry the originating git branch (§2.3).
         branch: v.optional(v.string()),
+        // The tenant's compiled cron expressions (wrangler `triggers.crons`). WfP
+        // drops cron triggers for namespaced workers, so the control plane fans
+        // ticks out to these from its own `scheduled()` (§2.4 / src/fanout).
+        cronSpecs: v.optional(v.array(v.string())),
         // Content hash of the uploaded worker bundle; rollback re-converges to a
         // prior hash retained in R2 (§2.2).
         bundleHash: v.optional(v.string()),
