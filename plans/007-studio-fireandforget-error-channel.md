@@ -37,6 +37,7 @@ export const fireAndForget = (promise: Promise<unknown>): void => {
 ```
 
 Before writing code, discover:
+
 1. The studio's existing user-facing error surface (toast / notification / error
    state). Run `grep -rn "toast\|notify\|setError\|ErrorBanner" packages/studio/src | head`
    to find the convention. Use whatever already exists — do not introduce a new
@@ -48,21 +49,23 @@ Before writing code, discover:
 
 ## Commands
 
-| Purpose | Command | Expected |
-|---|---|---|
-| Build deps (once) | `pnpm run build:packages` | exit 0 |
-| Typecheck | `pnpm --filter "@cirrus/studio" run lint:types` | exit 0 |
-| Tests | `pnpm --filter "@cirrus/studio" run test` | all pass |
+| Purpose           | Command                                         | Expected |
+| ----------------- | ----------------------------------------------- | -------- |
+| Build deps (once) | `pnpm run build:packages`                       | exit 0   |
+| Typecheck         | `pnpm --filter "@cirrus/studio" run lint:types` | exit 0   |
+| Tests             | `pnpm --filter "@cirrus/studio" run test`       | all pass |
 
 ## Scope
 
 **In scope**:
+
 - `packages/studio/src/lib/internal.ts` (add the optional sink)
 - The handful of critical call sites you identify in discovery (mutations/
   migrations/imports/deletes) — pass an `onError`.
 - The studio test file covering `internal.ts` (or a new one).
 
 **Out of scope**:
+
 - Navigation / panel-refresh `fireAndForget` sites that already surface errors in
   panel state — leave them.
 - Building a new toast/notification system — reuse the existing one.

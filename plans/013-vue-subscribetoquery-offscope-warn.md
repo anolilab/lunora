@@ -31,7 +31,14 @@ non-throwing behavior or breaking the in-scope happy path.
 ```ts
 export const subscribeToQuery = <F, T>(client, function_, args, options = {}) => {
     const data = shallowRef<T | undefined>(options.seed) as Ref<T | undefined>;
-    const unsubscribe = client.subscribe(function_, args, (value) => { data.value = value as T; }, { shardKey: options.shardKey });
+    const unsubscribe = client.subscribe(
+        function_,
+        args,
+        (value) => {
+            data.value = value as T;
+        },
+        { shardKey: options.shardKey },
+    );
     if (getCurrentScope()) {
         onScopeDispose(unsubscribe);
     }
@@ -43,11 +50,11 @@ The leak is documented in the JSDoc just above (`:20-25`).
 
 ## Commands
 
-| Purpose | Command | Expected |
-|---|---|---|
-| Build deps (once) | `pnpm run build:packages` | exit 0 |
-| Typecheck | `pnpm --filter "@cirrus/vue" run lint:types` | exit 0 |
-| Tests | `pnpm --filter "@cirrus/vue" run test` | all pass |
+| Purpose           | Command                                      | Expected |
+| ----------------- | -------------------------------------------- | -------- |
+| Build deps (once) | `pnpm run build:packages`                    | exit 0   |
+| Typecheck         | `pnpm --filter "@cirrus/vue" run lint:types` | exit 0   |
+| Tests             | `pnpm --filter "@cirrus/vue" run test`       | all pass |
 
 ## Scope
 
@@ -68,7 +75,7 @@ if (getCurrentScope()) {
 } else if (process.env.NODE_ENV !== "production") {
     console.warn(
         "[@cirrus/vue] subscribeToQuery called with no active effect scope — its subscription will not be cleaned up automatically. " +
-        "Call it inside setup()/an effect scope, or call the returned teardown yourself.",
+            "Call it inside setup()/an effect scope, or call the returned teardown yourself.",
     );
 }
 ```
@@ -101,7 +108,7 @@ non-throwing contract.
 ## STOP conditions
 
 - `subscribeToQuery` no longer matches the excerpt.
-- Existing tests/usages rely on a *silent* off-scope call (report).
+- Existing tests/usages rely on a _silent_ off-scope call (report).
 
 ## Maintenance notes
 

@@ -31,8 +31,7 @@ removes the quadratic factor, with zero behavior change.
 export const SYSTEM_FIELDS: ReadonlySet<string> = new Set(["_creationTime", "_id"]);
 
 /** True when `column` is a declared or system column of `table`. */
-export const hasColumn = (table: AdvisorTable, column: string): boolean =>
-    SYSTEM_FIELDS.has(column) || table.fields.includes(column);
+export const hasColumn = (table: AdvisorTable, column: string): boolean => SYSTEM_FIELDS.has(column) || table.fields.includes(column);
 ```
 
 Callers (for context — find them with `grep -rn "hasColumn(" packages/advisor/src`):
@@ -40,17 +39,17 @@ the index/relation "unknown field" lints call it per field within their loops.
 
 ## Commands
 
-| Purpose | Command | Expected |
-|---|---|---|
-| Build deps (once) | `pnpm run build:packages` | exit 0 |
-| Typecheck | `pnpm --filter "@cirrus/advisor" run lint:types` | exit 0 |
-| Tests | `pnpm --filter "@cirrus/advisor" run test` | all pass |
+| Purpose           | Command                                          | Expected |
+| ----------------- | ------------------------------------------------ | -------- |
+| Build deps (once) | `pnpm run build:packages`                        | exit 0   |
+| Typecheck         | `pnpm --filter "@cirrus/advisor" run lint:types` | exit 0   |
+| Tests             | `pnpm --filter "@cirrus/advisor" run test`       | all pass |
 
 ## Scope
 
 **In scope**: `packages/advisor/src/lints/helpers.ts` and, if you choose the
 per-table-Set approach, the lint files that call `hasColumn` in hot loops.
-**Out of scope**: lint *semantics* — output must be byte-for-byte identical.
+**Out of scope**: lint _semantics_ — output must be byte-for-byte identical.
 
 ## Steps
 
@@ -62,8 +61,7 @@ Pick the lower-churn of these two equivalent approaches:
 `Set<string>` of a table's columns (declared + system) once and reuse it:
 
 ```ts
-export const tableColumnSet = (table: AdvisorTable): ReadonlySet<string> =>
-    new Set<string>([...SYSTEM_FIELDS, ...table.fields]);
+export const tableColumnSet = (table: AdvisorTable): ReadonlySet<string> => new Set<string>([...SYSTEM_FIELDS, ...table.fields]);
 
 export const hasColumnIn = (columns: ReadonlySet<string>, column: string): boolean => columns.has(column);
 ```

@@ -35,28 +35,28 @@ fully release client-held references.
 
 - `packages/client/src/cirrus-client.ts:424` and `:427` — the registries:
 
-  ```ts
-  private readonly authTokenListeners = new Set<(token: string | null) => void>();
-  // ...
-  private readonly statusListeners = new Set<(status: ConnectionStatus) => void>();
-  ```
+    ```ts
+    private readonly authTokenListeners = new Set<(token: string | null) => void>();
+    // ...
+    private readonly statusListeners = new Set<(status: ConnectionStatus) => void>();
+    ```
 
-  Added via `onAuthTokenChange` (`:514`) and `onConnectionStatus` (`:613`), each
-  returning an unsubscribe that `.delete()`s the listener. Fired at `:495` and
-  `:1613`.
+    Added via `onAuthTokenChange` (`:514`) and `onConnectionStatus` (`:613`), each
+    returning an unsubscribe that `.delete()`s the listener. Fired at `:495` and
+    `:1613`.
 
 - `packages/client/src/cirrus-client.ts:1526-1561` — `close()` as it stands
   (clears streams, connection timers/heartbeats/sockets, `offlineQueue`,
   `queuedIdentities`) **but not** the two Sets:
 
-  ```ts
-  public close(): void {
-      this.closed = true;
-      // ... clears streams, connections, sockets ...
-      this.offlineQueue.clear();
-      this.queuedIdentities.clear();
-  }
-  ```
+    ```ts
+    public close(): void {
+        this.closed = true;
+        // ... clears streams, connections, sockets ...
+        this.offlineQueue.clear();
+        this.queuedIdentities.clear();
+    }
+    ```
 
 - `packages/client/src/cirrus-client.ts:848-887` — `subscribeScheduledJobs`'
   inner `connect()` adds `open`/`message`/`close`/`error` listeners to a fresh
@@ -67,21 +67,23 @@ fully release client-held references.
 
 ## Commands you will need
 
-| Purpose   | Command                                            | Expected |
-|-----------|----------------------------------------------------|----------|
-| Build deps (once) | `pnpm run build:packages`                  | exit 0 (dist gitignored/on-demand) |
-| Typecheck | `pnpm --filter "@cirrus/client" run lint:types`    | exit 0   |
-| Tests     | `pnpm --filter "@cirrus/client" run test`          | all pass |
+| Purpose           | Command                                         | Expected                           |
+| ----------------- | ----------------------------------------------- | ---------------------------------- |
+| Build deps (once) | `pnpm run build:packages`                       | exit 0 (dist gitignored/on-demand) |
+| Typecheck         | `pnpm --filter "@cirrus/client" run lint:types` | exit 0                             |
+| Tests             | `pnpm --filter "@cirrus/client" run test`       | all pass                           |
 
 ## Scope
 
 **In scope**:
+
 - `packages/client/src/cirrus-client.ts` — only `close()` (and, for the
   optional hardening in Step 2, the `subscribeScheduledJobs` teardown).
 - `packages/client/__tests__/` — the existing client test file covering
   `close()` / lifecycle; extend it.
 
 **Out of scope**:
+
 - The firing logic at `:495` / `:1613` and the subscribe methods at `:514` /
   `:613` — leave the add/remove/fire semantics unchanged.
 - Stream/connection teardown already in `close()` — do not refactor it.
@@ -122,6 +124,7 @@ is the load-bearing fix. Do not change reconnect behavior.
 ### Step 3: Regression test
 
 Add a test that:
+
 1. Creates a `CirrusClient` (using the existing test harness/mock WebSocket).
 2. Registers an `onAuthTokenChange` and an `onConnectionStatus` listener.
 3. Calls `close()`.

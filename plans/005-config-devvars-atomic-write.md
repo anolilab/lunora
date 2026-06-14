@@ -33,9 +33,13 @@ the create-or-skip decision and the write a single observable step.
 ```ts
 if (!existsSync(devVariablesPath)) {
     const plan = planDevVariablesScaffold({ devVarsExists: false, exampleContent, randomHex: deps.randomHex });
-    if (plan.status !== "generate") { return { addedKeys: [], generatedKeys: [], status: "no-example" }; }
+    if (plan.status !== "generate") {
+        return { addedKeys: [], generatedKeys: [], status: "no-example" };
+    }
     const proceed = deps.yes === true || (await deps.confirm(`No ${DEV_VARS_FILE} found. Generate it ...?`));
-    if (!proceed) { /* ... */ return { addedKeys: [], generatedKeys: [], status: "declined" }; }
+    if (!proceed) {
+        /* ... */ return { addedKeys: [], generatedKeys: [], status: "declined" };
+    }
     writeFileSync(devVariablesPath, plan.content, "utf8");
     deps.info(`Created ${DEV_VARS_FILE}${generatedSuffix(plan.generatedKeys)}.`);
     return { addedKeys: [], generatedKeys: plan.generatedKeys, status: "generated" };
@@ -49,11 +53,11 @@ branch. Focus there.
 
 ## Commands
 
-| Purpose | Command | Expected |
-|---|---|---|
-| Build deps (once) | `pnpm run build:packages` | exit 0 |
-| Typecheck | `pnpm --filter "@cirrus/config" run lint:types` | exit 0 |
-| Tests | `pnpm --filter "@cirrus/config" run test` | all pass |
+| Purpose           | Command                                         | Expected |
+| ----------------- | ----------------------------------------------- | -------- |
+| Build deps (once) | `pnpm run build:packages`                       | exit 0   |
+| Typecheck         | `pnpm --filter "@cirrus/config" run lint:types` | exit 0   |
+| Tests             | `pnpm --filter "@cirrus/config" run test`       | all pass |
 
 ## Scope
 

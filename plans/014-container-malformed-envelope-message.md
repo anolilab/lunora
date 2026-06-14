@@ -44,18 +44,19 @@ if (typeof body === "object" && body !== null && "error" in body) {
 
 ## Commands
 
-| Purpose | Command | Expected |
-|---|---|---|
-| Build deps (once) | `pnpm run build:packages` | exit 0 |
-| Typecheck | `pnpm --filter "@cirrus/container" run lint:types` | exit 0 |
-| Tests | `pnpm --filter "@cirrus/container" run test` | all pass |
+| Purpose           | Command                                            | Expected |
+| ----------------- | -------------------------------------------------- | -------- |
+| Build deps (once) | `pnpm run build:packages`                          | exit 0   |
+| Typecheck         | `pnpm --filter "@cirrus/container" run lint:types` | exit 0   |
+| Tests             | `pnpm --filter "@cirrus/container" run test`       | all pass |
 
 ## Scope
 
 **In scope**: `packages/container/src/bridge.ts` (the malformed-envelope throw)
-+ the bridge test file.
-**Out of scope**: the well-formed `ContainerBridgeError` path, response parsing,
-auth/token handling.
+
+- the bridge test file.
+  **Out of scope**: the well-formed `ContainerBridgeError` path, response parsing,
+  auth/token handling.
 
 ## Steps
 
@@ -71,10 +72,7 @@ try {
 } catch {
     detail = String(error);
 }
-throw new Error(
-    `createContainerBridge: request to "${functionPath}" returned a malformed error envelope ` +
-    `(status ${String(response.status)}): ${detail}`,
-);
+throw new Error(`createContainerBridge: request to "${functionPath}" returned a malformed error envelope ` + `(status ${String(response.status)}): ${detail}`);
 ```
 
 Do not weaken the strictness — it must still throw; this only enriches the

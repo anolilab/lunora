@@ -23,10 +23,10 @@ The scaffold wires better-auth's `sendVerificationEmail` and `sendResetPassword`
 
 ## Configure env vars
 
-| Var                  | Secret | Notes                                                                      |
-| -------------------- | ------ | -------------------------------------------------------------------------- |
-| `BETTER_AUTH_SECRET` | yes    | Encryption secret, min 32 chars. Generate with `openssl rand -base64 32`.  |
-| `BETTER_AUTH_URL`    | no     | Public base URL, e.g. `http://localhost:8787` in dev, your domain in prod. |
+| Var                  | Secret | Notes                                                                                   |
+| -------------------- | ------ | --------------------------------------------------------------------------------------- |
+| `BETTER_AUTH_SECRET` | yes    | Encryption secret, min 32 chars. Generate with `openssl rand -base64 32`.               |
+| `BETTER_AUTH_URL`    | no     | Public base URL, e.g. `http://localhost:8787` in dev, your domain in prod.              |
 | `MAIL_FROM`          | no     | Sender for verification / reset mail. Captured in dev; needs a verified domain in prod. |
 
 In dev these live in `.dev.vars`. For production set the secret with Wrangler:

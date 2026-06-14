@@ -40,8 +40,8 @@ with no mention that a build of dependencies may be required first.
 
 ## Commands
 
-| Purpose | Command | Expected |
-|---|---|---|
+| Purpose                       | Command                               | Expected               |
+| ----------------------------- | ------------------------------------- | ---------------------- |
 | Markdown lint (if configured) | `pnpm run lint:prettier` (check mode) | exit 0 (or unaffected) |
 
 (There is no code to typecheck for a docs change.)
@@ -63,10 +63,10 @@ In `CLAUDE.md`'s "Build & Test Commands", right after the
 
 ```markdown
 > Note: `dist/` is gitignored and built on demand. A raw `pnpm --filter … run
-> test` / `lint:types` does NOT rebuild workspace dependencies, so if an upstream
+test` / `lint:types` does NOT rebuild workspace dependencies, so if an upstream
 > `@cirrus/*` package's source changed you may hit stale-`dist` errors
 > (`X is not a function`, "missing export"). Build first — `pnpm run
-> build:packages` once, or `pnpm --filter "@cirrus/<pkg>..." run build` (the
+build:packages` once, or `pnpm --filter "@cirrus/<pkg>..." run build` (the
 > trailing `...` includes dependencies) — or use `pnpm run test:affected` /
 > `pnpm run lint:affected:types`, which build dependencies for you.
 ```

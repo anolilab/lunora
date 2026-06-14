@@ -75,6 +75,32 @@ see the package README for the full per-tab configuration. The auth dashboard is
 capability-driven — it shows only the surfaces whose better-auth plugin is enabled.
 Tabs whose data source isn't configured are omitted from the `<Studio>` shell.
 
+## Optional-package nav gating
+
+The studio also hides the nav pages for optional `@cirrus/*` packages your app
+doesn't use — Payments, Mail, Files + Access Rules, Vectors, and Scheduler — so
+you never land on a page that errors with "unknown table". This is automatic:
+codegen statically detects which features a deployment wires up and emits the
+result into the generated `ShardDO`, which the studio reads once over the
+`__cirrus_admin__:studioFeatures` RPC.
+
+A feature's page shows when **any** of these is true:
+
+- a `cirrus/` source imports its package (e.g. `@cirrus/mail`) or reads its
+  context helper (`ctx.payments`, `ctx.storage`, `ctx.vectors`, `ctx.scheduler`);
+- a schema signal implies it — a `v.storage()` column or storage access rule
+  (Files), a declared cron (Scheduler), or a vector index (Vectors);
+- the package is a declared dependency in your `package.json` — so a package
+  wired only in your worker entry (outside `cirrus/`), like `@cirrus/mail`, still
+  shows its page.
+
+The gating **fails open**: every page stays visible until the RPC resolves, and a
+worker predating the RPC (or one that errors) keeps showing everything. A page is
+only ever hidden once the worker positively reports its feature as unused — so the
+worst case is an extra empty page, never a missing working one. No configuration
+is required; re-run codegen (`cirrus dev` does this on save) after adding or
+removing a package and the nav updates itself.
+
 ## See also
 
 - [@cirrus/vite](/docs/api/vite) — the `studio` plugin option

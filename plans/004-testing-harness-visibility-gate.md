@@ -31,11 +31,11 @@ if (!registered || (registered.visibility === "internal" && !this.isSystemDispat
 The in-memory test harness (`cirrusTest`) has **no** such gate: its top-level
 `query` / `mutation` / `action` entry points run any registered function,
 internal or public, identically. A test can therefore call an `internalMutation`
-through the harness's *external* surface, pass green, and give false confidence —
+through the harness's _external_ surface, pass green, and give false confidence —
 the same call fails in production. This plan makes the harness's external surface
 reject internal functions while still allowing internal calls through the
 `ctx.run*` path (which models trusted server-to-server dispatch, where internals
-*are* legitimately reachable — mirroring prod's `isSystemDispatch()` branch).
+_are_ legitimately reachable — mirroring prod's `isSystemDispatch()` branch).
 
 ## Current state
 
@@ -43,20 +43,20 @@ reject internal functions while still allowing internal calls through the
   the function kind or `undefined`. There is **no** visibility reader.
 - `packages/testing/src/harness.ts:196-208` — `runRegistered` checks only kind:
 
-  ```ts
-  const runRegistered = (expected, reference, context, args) => {
-      const kind = registeredFunctionKind(reference);
-      if (kind !== expected) {
-          throw new Error(`expected a registered ${expected}, received a ${kind ?? "non-function"} reference`);
-      }
-      return Promise.resolve(reference.handler(context, (args ?? {}) as never));
-  };
-  ```
+    ```ts
+    const runRegistered = (expected, reference, context, args) => {
+        const kind = registeredFunctionKind(reference);
+        if (kind !== expected) {
+            throw new Error(`expected a registered ${expected}, received a ${kind ?? "non-function"} reference`);
+        }
+        return Promise.resolve(reference.handler(context, (args ?? {}) as never));
+    };
+    ```
 
 - `packages/testing/src/harness.ts:211-230` — the public `query`/`mutation`/
   `action` delegate to `runRegistered(...)`.
 - `packages/testing/src/harness.ts:~186-191` — `ctx.runAction/runMutation/
-  runQuery` currently delegate straight back to the **same** public
+runQuery` currently delegate straight back to the **same** public
   `harness.action/mutation/query`. So today there is no distinction between the
   external surface and the internal (`ctx.run*`) surface.
 - How visibility is stamped (for the reader you will add) —
@@ -67,20 +67,22 @@ reject internal functions while still allowing internal calls through the
 
 ## Commands you will need
 
-| Purpose   | Command                                             | Expected |
-|-----------|-----------------------------------------------------|----------|
-| Build deps (once) | `pnpm run build:packages`                   | exit 0 (dist gitignored/on-demand) |
-| Typecheck | `pnpm --filter "@cirrus/testing" run lint:types`    | exit 0   |
-| Tests     | `pnpm --filter "@cirrus/testing" run test`          | all pass |
-| Find callers (discovery) | `grep -rn "internal" packages/*/__tests__ apps/*/__tests__ \| grep -i "cirrusTest\|harness\|\.mutation(\|\.query(\|\.action("` | a list to inspect |
+| Purpose                  | Command                                                                                                                        | Expected                           |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------- |
+| Build deps (once)        | `pnpm run build:packages`                                                                                                      | exit 0 (dist gitignored/on-demand) |
+| Typecheck                | `pnpm --filter "@cirrus/testing" run lint:types`                                                                               | exit 0                             |
+| Tests                    | `pnpm --filter "@cirrus/testing" run test`                                                                                     | all pass                           |
+| Find callers (discovery) | `grep -rn "internal" packages/*/__tests__ apps/*/__tests__ \| grep -i "cirrusTest\|harness\|\.mutation(\|\.query(\|\.action("` | a list to inspect                  |
 
 ## Scope
 
 **In scope**:
+
 - `packages/testing/src/harness.ts`
 - `packages/testing/__tests__/` — the harness test file; extend it.
 
 **Out of scope**:
+
 - `packages/codegen/**`, `packages/server/**`, `packages/runtime/**`,
   `packages/do/**` — the production gate is already correct; do not touch it.
 - Inline (non-registered) function support in the harness — unchanged.
@@ -112,9 +114,7 @@ Next to `registeredFunctionKind`, add:
 
 ```ts
 const registeredFunctionVisibility = (value: unknown): "internal" | "public" =>
-    typeof value === "object" && value !== null && (value as { visibility?: unknown }).visibility === "internal"
-        ? "internal"
-        : "public";
+    typeof value === "object" && value !== null && (value as { visibility?: unknown }).visibility === "internal" ? "internal" : "public";
 ```
 
 ### Step 2: Gate the external surface; keep `ctx.run*` permissive
@@ -130,7 +130,7 @@ const runRegistered = (expected, reference, context, args, allowInternal: boolea
     if (!allowInternal && registeredFunctionVisibility(reference) === "internal") {
         throw new Error(
             `"${expected}" is an internal function — it is unreachable from the external RPC boundary in production. ` +
-            `Call it through ctx.run${expected[0].toUpperCase()}${expected.slice(1)} from another function instead.`,
+                `Call it through ctx.run${expected[0].toUpperCase()}${expected.slice(1)} from another function instead.`,
         );
     }
     return Promise.resolve(reference.handler(context, (args ?? {}) as never));
@@ -152,11 +152,11 @@ const runRegistered = (expected, reference, context, args, allowInternal: boolea
 - Update any in-repo tests flagged in Step 0 to call internals through
   `ctx.run*` (or to assert the new rejection, if that is what they meant).
 - Add harness tests:
-  - calling an `internalMutation` via `harness.mutation(...)` **throws** with the
-    new message;
-  - calling the same internal function via a wrapping function's `ctx.runMutation`
-    **succeeds**;
-  - calling a public function via `harness.mutation(...)` still succeeds.
+    - calling an `internalMutation` via `harness.mutation(...)` **throws** with the
+      new message;
+    - calling the same internal function via a wrapping function's `ctx.runMutation`
+      **succeeds**;
+    - calling a public function via `harness.mutation(...)` still succeeds.
 
 **Verify**: `pnpm --filter "@cirrus/testing" run test` → all pass.
 

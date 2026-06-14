@@ -43,11 +43,11 @@ shared, unscoped index.
 
 ## Commands
 
-| Purpose | Command | Expected |
-|---|---|---|
-| Build deps (once) | `pnpm run build:packages` | exit 0 |
-| Typecheck | `pnpm --filter "@cirrus/vectors" run lint:types` | exit 0 |
-| Tests | `pnpm --filter "@cirrus/vectors" run test` | all pass |
+| Purpose           | Command                                          | Expected |
+| ----------------- | ------------------------------------------------ | -------- |
+| Build deps (once) | `pnpm run build:packages`                        | exit 0   |
+| Typecheck         | `pnpm --filter "@cirrus/vectors" run lint:types` | exit 0   |
+| Tests             | `pnpm --filter "@cirrus/vectors" run test`       | all pass |
 
 ## Scope
 

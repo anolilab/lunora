@@ -39,11 +39,11 @@ as the close handler, so the handler can clear it.
 
 ## Commands
 
-| Purpose | Command | Expected |
-|---|---|---|
-| Build deps (once) | `pnpm run build:packages` | exit 0 |
-| Typecheck | `pnpm --filter "@cirrus/vite" run lint:types` | exit 0 |
-| Tests | `pnpm --filter "@cirrus/vite" run test` | all pass |
+| Purpose           | Command                                       | Expected |
+| ----------------- | --------------------------------------------- | -------- |
+| Build deps (once) | `pnpm run build:packages`                     | exit 0   |
+| Typecheck         | `pnpm --filter "@cirrus/vite" run lint:types` | exit 0   |
+| Tests             | `pnpm --filter "@cirrus/vite" run test`       | all pass |
 
 ## Scope
 

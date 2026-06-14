@@ -57,10 +57,10 @@ explicit follow-ups.
 
 ## Commands
 
-| Purpose | Command | Expected |
-|---|---|---|
-| Markdown format | `pnpm run lint:prettier` | exit 0 / unaffected |
-| Verify API claims | read `packages/<pkg>/src/index.ts` and exported types | — |
+| Purpose           | Command                                               | Expected            |
+| ----------------- | ----------------------------------------------------- | ------------------- |
+| Markdown format   | `pnpm run lint:prettier`                              | exit 0 / unaffected |
+| Verify API claims | read `packages/<pkg>/src/index.ts` and exported types | —                   |
 
 ## Scope
 
@@ -84,6 +84,7 @@ STOP and report rather than guessing** — a wrong skill is worse than no skill.
 ### Step 2: Write each SKILL.md modeled on `cirrus-setup-auth`
 
 For each capability, create `packages/cli/skills/<name>/SKILL.md` with:
+
 - YAML frontmatter: `name: <name>` and a `description` that says when to use it
   (this string drives skill selection — make it specific, mirror the style of
   existing descriptions).

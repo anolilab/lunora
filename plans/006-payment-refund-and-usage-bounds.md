@@ -33,41 +33,43 @@ Both are cheap to guard and both protect billing integrity.
 
 - `packages/payment/src/sync.ts:83-85` — refund application, unbounded:
 
-  ```ts
-  if ((resolvedAction === "partial_refund" || resolvedAction === "refund") && action.amount) {
-      refundedAmount = addMoney(base.refundedAmount, action.amount);
-  }
-  ```
+    ```ts
+    if ((resolvedAction === "partial_refund" || resolvedAction === "refund") && action.amount) {
+        refundedAmount = addMoney(base.refundedAmount, action.amount);
+    }
+    ```
 
-  Context: `base.capturedAmount` and `base.refundedAmount` are `Money`; helpers
-  `addMoney`, `compareMoney`, `zeroMoney` exist in the same module's imports.
-  The partial-vs-full decision is at `:79-85` (read `:40-96` for full context).
+    Context: `base.capturedAmount` and `base.refundedAmount` are `Money`; helpers
+    `addMoney`, `compareMoney`, `zeroMoney` exist in the same module's imports.
+    The partial-vs-full decision is at `:79-85` (read `:40-96` for full context).
 
 - `packages/payment/src/create-payment.ts:263-284` — `track`:
 
-  ```ts
-  let delta = target;
-  if (input.mode === "set") {
-      const subscriptions = await store.listSubscriptionsByReference(input.referenceId);
-      const current = await store.sumUsage(input.referenceId, input.featureId, usagePeriodStart(subscriptions));
-      delta = target - current;
-  }
-  if (delta === 0) { return { recorded: false, reportedToProvider: false }; }
-  // ... store.recordUsage({ quantity: delta, ... })
-  ```
+    ```ts
+    let delta = target;
+    if (input.mode === "set") {
+        const subscriptions = await store.listSubscriptionsByReference(input.referenceId);
+        const current = await store.sumUsage(input.referenceId, input.featureId, usagePeriodStart(subscriptions));
+        delta = target - current;
+    }
+    if (delta === 0) {
+        return { recorded: false, reportedToProvider: false };
+    }
+    // ... store.recordUsage({ quantity: delta, ... })
+    ```
 
-  Errors elsewhere in this file are thrown via `CirrusPaymentError(code, message)`
-  (grep the file for `CirrusPaymentError` to copy the exact constructor + a valid
-  code; reuse an existing code such as `CONFIG_INVALID` if a more specific one
-  doesn't exist).
+    Errors elsewhere in this file are thrown via `CirrusPaymentError(code, message)`
+    (grep the file for `CirrusPaymentError` to copy the exact constructor + a valid
+    code; reuse an existing code such as `CONFIG_INVALID` if a more specific one
+    doesn't exist).
 
 ## Commands
 
-| Purpose | Command | Expected |
-|---|---|---|
-| Build deps (once) | `pnpm run build:packages` | exit 0 |
-| Typecheck | `pnpm --filter "@cirrus/payment" run lint:types` | exit 0 |
-| Tests | `pnpm --filter "@cirrus/payment" run test` | all pass |
+| Purpose           | Command                                          | Expected |
+| ----------------- | ------------------------------------------------ | -------- |
+| Build deps (once) | `pnpm run build:packages`                        | exit 0   |
+| Typecheck         | `pnpm --filter "@cirrus/payment" run lint:types` | exit 0   |
+| Tests             | `pnpm --filter "@cirrus/payment" run test`       | all pass |
 
 ## Scope
 
@@ -147,7 +149,7 @@ Model on existing `sync.test.ts` and the usage test (find it via
 - `applyPayment` or `track` no longer match the excerpts.
 - `ApplyResult.reason` cannot accept the new literal without touching
   out-of-scope public types — report.
-- Existing tests assert over-refunds or negative usage are *accepted* (would mean
+- Existing tests assert over-refunds or negative usage are _accepted_ (would mean
   the behavior is intentional) — report rather than overriding.
 
 ## Maintenance notes

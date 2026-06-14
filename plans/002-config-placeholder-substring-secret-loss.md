@@ -37,21 +37,21 @@ placeholders.
 
 - `packages/config/src/scaffold-dev-variables.ts:70-82` — the matcher:
 
-  ```ts
-  const isPlaceholderValue = (value: string): boolean => {
-      const normalised = value.trim().toLowerCase();
+    ```ts
+    const isPlaceholderValue = (value: string): boolean => {
+        const normalised = value.trim().toLowerCase();
 
-      if (normalised === "") {
-          return true;
-      }
+        if (normalised === "") {
+            return true;
+        }
 
-      if (normalised.startsWith("<") && normalised.endsWith(">")) {
-          return true;
-      }
+        if (normalised.startsWith("<") && normalised.endsWith(">")) {
+            return true;
+        }
 
-      return PLACEHOLDER_MARKERS.some((marker) => normalised.includes(marker));
-  };
-  ```
+        return PLACEHOLDER_MARKERS.some((marker) => normalised.includes(marker));
+    };
+    ```
 
 - `PLACEHOLDER_MARKERS` ends (lines ~60-62) with entries like `"fill_in"`,
   `"xxx"`, and earlier includes markers such as `todo`, `change-me`, `example`,
@@ -59,37 +59,38 @@ placeholders.
   exact list — do not guess it).
 - The overwrite path — `:95-96`:
 
-  ```ts
-  const generatedSecretFor = (key, rawValue, randomHex) =>
-      SECRET_KEY.test(key) && isPlaceholder(rawValue) ? randomHex(SECRET_BYTES) : undefined;
-  ```
+    ```ts
+    const generatedSecretFor = (key, rawValue, randomHex) => (SECRET_KEY.test(key) && isPlaceholder(rawValue) ? randomHex(SECRET_BYTES) : undefined);
+    ```
 
-  i.e. a secret-looking key + a value `isPlaceholder` returns `true` for ⇒ a new
-  random secret replaces it.
+    i.e. a secret-looking key + a value `isPlaceholder` returns `true` for ⇒ a new
+    random secret replaces it.
 
 ## Commands you will need
 
-| Purpose   | Command                                            | Expected |
-|-----------|----------------------------------------------------|----------|
-| Build deps (once) | `pnpm run build:packages`                  | exit 0 (dist is gitignored/built on demand) |
-| Typecheck | `pnpm --filter "@cirrus/config" run lint:types`    | exit 0   |
-| Tests     | `pnpm --filter "@cirrus/config" run test`          | all pass |
+| Purpose           | Command                                         | Expected                                    |
+| ----------------- | ----------------------------------------------- | ------------------------------------------- |
+| Build deps (once) | `pnpm run build:packages`                       | exit 0 (dist is gitignored/built on demand) |
+| Typecheck         | `pnpm --filter "@cirrus/config" run lint:types` | exit 0                                      |
+| Tests             | `pnpm --filter "@cirrus/config" run test`       | all pass                                    |
 
 ## Scope
 
 **In scope**:
+
 - `packages/config/src/scaffold-dev-variables.ts` (only `isPlaceholderValue`
   and, if needed, how `PLACEHOLDER_MARKERS` is shaped)
 - `packages/config/__tests__/scaffold-dev-variables.test.ts` (or the existing
   test file covering this module — find it and extend it)
 
 **Out of scope**:
+
 - The `<...>` angle-bracket branch and the empty-string branch — both correct,
   leave them.
 - `SECRET_KEY` / `SECRET_BYTES` / the random generator — unrelated.
 - Any change that would make a genuine placeholder (`TODO`, `change-me`,
   `<your-key>`) start being treated as real — that would reintroduce committed
-  placeholders. The change must *only narrow* false positives.
+  placeholders. The change must _only narrow_ false positives.
 
 ## Git workflow
 
@@ -119,7 +120,7 @@ This keeps `todo`, `change-me`, `example` matching when they are the value (or a
 standalone token in it) but stops `todoist`, `examples-of-life`, etc. from
 matching.
 
-If `PLACEHOLDER_MARKERS` contains a marker that is *meant* to match as a prefix
+If `PLACEHOLDER_MARKERS` contains a marker that is _meant_ to match as a prefix
 (e.g. `your-`), preserve that intent — read each marker and decide; do not blanket
 word-boundary a prefix marker into uselessness. If unsure about a specific
 marker's intent, that is a STOP condition (ask).
@@ -131,6 +132,7 @@ marker's intent, that is a STOP condition (ask).
 In the test file, add cases asserting `isPlaceholderValue` (or the public
 `isPlaceholder`/scaffold behavior — match what the existing tests exercise)
 returns:
+
 - `true` for genuine placeholders: `"TODO"`, `"change-me"`, `"<your-key>"`,
   `""`, `"xxx"`.
 - `false` for real values that contain a marker as a substring:

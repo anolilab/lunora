@@ -18,8 +18,8 @@
 ## Why this matters
 
 The RPC authorization gate (`authorizeShard` / `authorizeFanOut`) is
-security-critical, but the test suite exercises mainly the *allow* paths. The
-*deny* branches — `authorizeShard` returning `false` → `403 FORBIDDEN_SHARD`,
+security-critical, but the test suite exercises mainly the _allow_ paths. The
+_deny_ branches — `authorizeShard` returning `false` → `403 FORBIDDEN_SHARD`,
 and the fan-out default-deny → `403 FORBIDDEN_FANOUT` — have no direct coverage.
 A regression that swallowed the 403 or let a denied request through would not be
 caught. These are the highest-value tests to add per unit of effort.
@@ -50,11 +50,11 @@ issued, and how the response status/error body is asserted.
 
 ## Commands
 
-| Purpose | Command | Expected |
-|---|---|---|
-| Build deps (once) | `pnpm run build:packages` | exit 0 |
-| Typecheck | `pnpm --filter "@cirrus/runtime" run lint:types` | exit 0 |
-| Tests | `pnpm --filter "@cirrus/runtime" run test` | all pass |
+| Purpose            | Command                                                  | Expected       |
+| ------------------ | -------------------------------------------------------- | -------------- |
+| Build deps (once)  | `pnpm run build:packages`                                | exit 0         |
+| Typecheck          | `pnpm --filter "@cirrus/runtime" run lint:types`         | exit 0         |
+| Tests              | `pnpm --filter "@cirrus/runtime" run test`               | all pass       |
 | Run just this file | `pnpm --filter "@cirrus/runtime" run test create-worker` | new tests pass |
 
 ## Scope
@@ -72,6 +72,7 @@ fix here).
 
 Construct a worker with `authorizeShard: async () => false`. Issue a single-shard
 RPC. Assert:
+
 - response status is `403`;
 - the error code is `FORBIDDEN_SHARD`;
 - no shard call was made (assert via the shard DO stub/mock the test harness
@@ -111,12 +112,12 @@ complicates the test.
 ## STOP conditions
 
 - The gate code no longer matches the excerpt (codes/statuses changed).
-- A denial test *fails* (i.e. a denied request is allowed or returns the wrong
+- A denial test _fails_ (i.e. a denied request is allowed or returns the wrong
   status) — that's a real bug; STOP and report, do not modify `create-worker.ts`.
 
 ## Maintenance notes
 
 - If new authorization gates are added (e.g. per-function), add matching deny
   tests.
-- Reviewer: confirm the tests assert *no shard dispatch happened*, not just the
+- Reviewer: confirm the tests assert _no shard dispatch happened_, not just the
   status code.

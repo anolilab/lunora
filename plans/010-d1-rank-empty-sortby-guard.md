@@ -31,35 +31,35 @@ constructible; Step 0 determines that.
 
 - `rankPageColumns` (`:775-785`):
 
-  ```ts
-  const rankPageColumns = (index, sortColumns) => {
-      const columns = [{ column: "__partition__", direction: "asc" }];
-      for (const [i, sortKey] of index.sortBy.entries()) {
-          columns.push({ column: sortColumns[i] ?? sortColumnName(i), direction: sortKey.direction });
-      }
-      columns.push({ column: RANK_TIEBREAK, direction: "asc" });
-      return columns;
-  };
-  ```
+    ```ts
+    const rankPageColumns = (index, sortColumns) => {
+        const columns = [{ column: "__partition__", direction: "asc" }];
+        for (const [i, sortKey] of index.sortBy.entries()) {
+            columns.push({ column: sortColumns[i] ?? sortColumnName(i), direction: sortKey.direction });
+        }
+        columns.push({ column: RANK_TIEBREAK, direction: "asc" });
+        return columns;
+    };
+    ```
 
 - `buildRankCursorSeek` (`:738-746`):
 
-  ```ts
-  const buildRankCursorSeek = (columns, decoded, params) => {
-      if (decoded.length !== columns.length) {
-          return undefined; // ← silent: a length mismatch produces no seek
-      }
-      // ...
-  };
-  ```
+    ```ts
+    const buildRankCursorSeek = (columns, decoded, params) => {
+        if (decoded.length !== columns.length) {
+            return undefined; // ← silent: a length mismatch produces no seek
+        }
+        // ...
+    };
+    ```
 
 ## Commands
 
-| Purpose | Command | Expected |
-|---|---|---|
-| Build deps (once) | `pnpm run build:packages` | exit 0 |
-| Typecheck | `pnpm --filter "@cirrus/d1" run lint:types` | exit 0 |
-| Tests | `pnpm --filter "@cirrus/d1" run test` | all pass |
+| Purpose           | Command                                     | Expected |
+| ----------------- | ------------------------------------------- | -------- |
+| Build deps (once) | `pnpm run build:packages`                   | exit 0   |
+| Typecheck         | `pnpm --filter "@cirrus/d1" run lint:types` | exit 0   |
+| Tests             | `pnpm --filter "@cirrus/d1" run test`       | all pass |
 
 ## Scope
 

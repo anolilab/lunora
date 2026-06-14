@@ -41,8 +41,8 @@ high-leverage navigation fixes.
 
 ## Commands
 
-| Purpose | Command | Expected |
-|---|---|---|
+| Purpose               | Command                  | Expected            |
+| --------------------- | ------------------------ | ------------------- |
 | Markdown format check | `pnpm run lint:prettier` | exit 0 / unaffected |
 
 ## Scope
@@ -85,10 +85,11 @@ Add a short, factual comparison block (pick `cirrus-performance-audit` or
 
 ```markdown
 ### `.shardBy(key)` vs `.global()` — choose one per table
+
 - `.shardBy(key)`: partitions a table across Durable Objects by key — scales
-  *writes* (e.g. messages per room). Reads are per-shard.
-- `.global()`: replicates a table to D1 — scales *cross-region reads* with
-  read-your-writes (e.g. a mostly-read catalog). 
+  _writes_ (e.g. messages per room). Reads are per-shard.
+- `.global()`: replicates a table to D1 — scales _cross-region reads_ with
+  read-your-writes (e.g. a mostly-read catalog).
 - They are not combined on the same table; default (neither) is a single
   root-scoped ShardDO.
 ```

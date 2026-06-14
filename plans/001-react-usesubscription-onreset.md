@@ -37,38 +37,38 @@ from the other adapters.
   `createQuerySubscription` call (lines 53–76) passes only `onData` and
   `onError`, no `onReset`:
 
-  ```ts
-  const unsubscribe = createQuerySubscription(
-      client,
-      currentFunction,
-      currentArgs as ArgsOf<F>,
-      {
-          onData: (value: ReturnOf<F>) => {
-              if (cancelled) {
-                  return;
-              }
-              setState({ data: value, error: undefined });
-          },
-          onError: (error) => {
-              const normalized = new Error(error.message);
-              queueMicrotask(() => {
-                  if (!cancelled) {
-                      setState({ data: undefined, error: normalized });
-                  }
-              });
-          },
-      },
-      { shardKey: options.shardKey },
-  );
-  ```
+    ```ts
+    const unsubscribe = createQuerySubscription(
+        client,
+        currentFunction,
+        currentArgs as ArgsOf<F>,
+        {
+            onData: (value: ReturnOf<F>) => {
+                if (cancelled) {
+                    return;
+                }
+                setState({ data: value, error: undefined });
+            },
+            onError: (error) => {
+                const normalized = new Error(error.message);
+                queueMicrotask(() => {
+                    if (!cancelled) {
+                        setState({ data: undefined, error: normalized });
+                    }
+                });
+            },
+        },
+        { shardKey: options.shardKey },
+    );
+    ```
 
-  Note: the subscribe effect already early-returns when `skipped` is true
-  (lines 40–42), so today `createQuerySubscription` is never even *called* in the
-  skip case from this hook. The stale-data bug shows when args transition
-  **from a real value to `"skip"`**: the effect re-runs (its dep array includes
-  `skipped`), the previous subscription's cleanup runs, but `state` is never
-  reset, so the last `data` lingers. The fix is to clear `state` on the skip
-  branch.
+    Note: the subscribe effect already early-returns when `skipped` is true
+    (lines 40–42), so today `createQuerySubscription` is never even _called_ in the
+    skip case from this hook. The stale-data bug shows when args transition
+    **from a real value to `"skip"`**: the effect re-runs (its dep array includes
+    `skipped`), the previous subscription's cleanup runs, but `state` is never
+    reset, so the last `data` lingers. The fix is to clear `state` on the skip
+    branch.
 
 - The contract being honored — `packages/client/src/query/query-subscription.ts:23`
   and `:79`: "`onReset` fires when the resolved args are `"skip"`: clear any
@@ -76,31 +76,33 @@ from the other adapters.
 
 - The exemplar to match — `packages/solid/src/create-query.ts:60-62`:
 
-  ```ts
-  onReset: () => {
-      setValue(() => undefined as ReturnOf<F> | undefined);
-  },
-  ```
+    ```ts
+    onReset: () => {
+        setValue(() => undefined as ReturnOf<F> | undefined);
+    },
+    ```
 
-  and `packages/vue/src/use-query.ts:94` (`onReset: () => { ... }`).
+    and `packages/vue/src/use-query.ts:94` (`onReset: () => { ... }`).
 
 ## Commands you will need
 
-| Purpose   | Command                                              | Expected on success |
-|-----------|------------------------------------------------------|---------------------|
-| Build deps (once) | `pnpm run build:packages`                    | exit 0 (avoids stale-dist `X is not a function` errors — `dist/` is gitignored and built on demand) |
-| Typecheck | `pnpm --filter "@cirrus/react" run lint:types`       | exit 0, no errors   |
-| Tests     | `pnpm --filter "@cirrus/react" run test`             | all pass            |
+| Purpose           | Command                                        | Expected on success                                                                                 |
+| ----------------- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| Build deps (once) | `pnpm run build:packages`                      | exit 0 (avoids stale-dist `X is not a function` errors — `dist/` is gitignored and built on demand) |
+| Typecheck         | `pnpm --filter "@cirrus/react" run lint:types` | exit 0, no errors                                                                                   |
+| Tests             | `pnpm --filter "@cirrus/react" run test`       | all pass                                                                                            |
 
 ## Scope
 
 **In scope** (the only files you should modify):
+
 - `packages/react/src/use-subscription.ts`
 - `packages/react/__tests__/use-subscription.test.tsx` (the existing
   `useSubscription` test file — extend it; if it does not exist, create it
   modeled on the nearest existing React test)
 
 **Out of scope** (do NOT touch):
+
 - `packages/react/src/use-query.ts` — `useQuery` uses TanStack Query with
   `enabled: !skipped`, a different mechanism; its skip behavior is intentional
   and not part of this bug.
@@ -143,6 +145,7 @@ fix because this hook never invokes `createQuerySubscription` in the skip case.)
 ### Step 2: Add a regression test
 
 In the React test suite for `useSubscription`, add a test that:
+
 1. Renders the hook with real args and pushes a value so `data` is defined.
 2. Re-renders with `args = "skip"`.
 3. Asserts `data` is now `undefined`.
@@ -175,6 +178,7 @@ ALL must hold:
 ## STOP conditions
 
 Stop and report (do not improvise) if:
+
 - `use-subscription.ts` no longer matches the "Current state" excerpt.
 - The existing `useSubscription` tests use a harness so different from the
   excerpt that you cannot extend it without inventing new infrastructure.
