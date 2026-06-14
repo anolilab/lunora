@@ -115,6 +115,15 @@ cross-region reads (with read-your-writes via the Sessions API). Reserve it for
 read-mostly tables — `.global()` adds the D1 migration flow (see the
 `cirrus-migration-helper` skill) and write-path cost.
 
+### `.shardBy(key)` vs `.global()` — choose one per table
+
+- `.shardBy(key)`: partitions a table across Durable Objects by key — scales
+  _writes_ (e.g. messages per room). Reads are per-shard.
+- `.global()`: replicates a table to D1 — scales _cross-region reads_ with
+  read-your-writes (e.g. a mostly-read catalog).
+- They are not combined on the same table; the default (neither) is a single
+  root-scoped ShardDO.
+
 ## Guardrails
 
 - Prefer simpler code when scale is small or the signal is weak.

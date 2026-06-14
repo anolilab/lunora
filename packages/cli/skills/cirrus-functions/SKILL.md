@@ -52,7 +52,9 @@ export default defineSchema({
   first, then the range/sort column.
 - `.shardBy("ownerId")` partitions the table across Durable Objects by key;
   `.global()` replicates it to D1 for cross-region reads. Default (neither) is a
-  single root-scoped ShardDO.
+  single root-scoped ShardDO. They are not combined on one table — for choosing
+  between them, see the side-by-side comparison in the `cirrus-performance-audit`
+  skill.
 
 ### Validators (`v.*`)
 

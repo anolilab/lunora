@@ -16,6 +16,9 @@ own directory:
 | `cirrus-functions`         | Core authoring rules — schema, validators, query/mutation/action, `ctx.db`. |
 | `cirrus-realtime`          | Client reactivity — live hooks, optimistic updates, `@cirrus/db`.           |
 | `cirrus-setup-auth`        | Authentication via `cirrus registry add auth` (+ providers).                |
+| `cirrus-setup-mail`        | Transactional email via `cirrus registry add mail` — `sendEmail` actions.   |
+| `cirrus-setup-storage`     | R2 file storage via `cirrus registry add storage` — signed upload/download. |
+| `cirrus-setup-scheduler`   | Deferred (`ctx.scheduler`) + cron jobs (`cirrus registry add crons`).       |
 | `cirrus-create-package`    | Building a reusable registry item or `@cirrus/*` package.                   |
 | `cirrus-migration-helper`  | Schema/data migrations, `.global()` D1 flow, the drift gate.                |
 | `cirrus-deploy`            | Deploying to Cloudflare — wrangler bindings, secrets, the gate.             |

@@ -47,6 +47,12 @@ After codegen is green, use the most specific Cirrus skill for the task:
 - Wiring live data into a client (hooks, optimistic updates): `cirrus-realtime`
 - Authentication setup (email/password, OAuth, magic link, OTP):
   `cirrus-setup-auth`
+- Wiring a prebuilt capability (mail, file storage, scheduled jobs, rate
+  limiting, vectors, AI, containers, payments, MCP): install it with
+  `cirrus registry add <item>` (see `cirrus registry list`). Capabilities with a
+  dedicated skill: `cirrus-setup-mail` (mail), `cirrus-setup-storage` (R2 file
+  storage), `cirrus-setup-scheduler` (deferred `ctx.scheduler` + cron jobs). For
+  the rest, read the item's README after installing.
 - Building a reusable capability — a registry item or an `@cirrus/*` package:
   `cirrus-create-package`
 - Planning or running a schema/data migration: `cirrus-migration-helper`

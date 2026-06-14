@@ -224,7 +224,10 @@ ids, `.dev.vars` secrets, and container exports.
 
 - Add authentication: use the `cirrus-setup-auth` skill.
 - Add a prebuilt capability (mail, presence, storage, rate limit, crons):
-  `cirrus registry add <item>`.
+  `cirrus registry add <item>` (see `cirrus registry list`). For capabilities
+  with a dedicated skill, use it: `cirrus-setup-mail`, `cirrus-setup-storage`,
+  `cirrus-setup-scheduler`. See the `cirrus` router's capability entry for the
+  full routing.
 - Build your own reusable capability: use the `cirrus-create-package` skill.
 - Plan a schema change: use the `cirrus-migration-helper` skill.
 - Scaffold more functions: `vis generate cirrus-query --name=listMessages`,
