@@ -1,7 +1,9 @@
 import { CirrusProvider } from "@cirrus/react";
 import { fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
+import type { DiagramJsonExport } from "../../../src/features/schema/diagram-export";
+import { exportDiagramAsJson, viewportForExport } from "../../../src/features/schema/diagram-export";
 import type { SchemaEdge } from "../../../src/features/schema/layout";
 import { buildEdges, buildNodes, SchemaDiagram } from "../../../src/features/schema/schema-diagram";
 import { SchemaViewer } from "../../../src/features/schema/schema-viewer";
@@ -214,5 +216,111 @@ describe("schemaDiagram (viewer integration)", () => {
         const hint = await screen.findByTestId("sd-node-messages-error");
 
         expect(hint.textContent).toContain("Columns unavailable");
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Export utilities
+// ---------------------------------------------------------------------------
+
+describe("exportDiagramAsJson (JSON serialiser)", () => {
+    it("triggers a download link and revokes the object URL", () => {
+        expect.assertions(3);
+
+        // Stub URL.createObjectURL / URL.revokeObjectURL so no real Blob API is needed.
+        const fakeUrl = "blob:fake-url";
+        // The implementation uses globalThis.URL, so spy on that.
+        const createObjectURL = vi.spyOn(globalThis.URL, "createObjectURL").mockReturnValue(fakeUrl);
+        const revokeObjectURL = vi.spyOn(globalThis.URL, "revokeObjectURL").mockReturnValue(undefined);
+
+        try {
+            const sampleNodes = buildNodes(TABLES, REF_EDGES, COLUMNS_BY_TABLE, "shard", false);
+            const sampleEdges = buildEdges(REF_EDGES, COLUMNS_BY_TABLE);
+
+            exportDiagramAsJson(sampleNodes, sampleEdges, "test-export.json");
+
+            // Verify that a Blob was created and a download link was triggered.
+            expect(createObjectURL).toHaveBeenCalledTimes(1);
+            expect(revokeObjectURL).toHaveBeenCalledWith(fakeUrl);
+            // Verify the download link was attached: document.body should have a child added.
+            expect(createObjectURL.mock.calls[0]?.[0]).toBeInstanceOf(globalThis.Blob);
+        } finally {
+            createObjectURL.mockRestore();
+            revokeObjectURL.mockRestore();
+        }
+    });
+
+    it("serialises nodes and edges into a downloadable JSON structure", () => {
+        expect.assertions(3);
+
+        const sampleNodes = buildNodes(TABLES, REF_EDGES, COLUMNS_BY_TABLE, "shard", false);
+        const sampleEdges = buildEdges(REF_EDGES, COLUMNS_BY_TABLE);
+
+        vi.spyOn(globalThis.URL, "createObjectURL").mockReturnValue("blob:fake");
+        vi.spyOn(globalThis.URL, "revokeObjectURL").mockReturnValue(undefined);
+
+        try {
+            // Capture what gets passed to the Blob constructor via a subclass.
+            let capturedPayload: DiagramJsonExport | undefined;
+            const OriginalBlob = globalThis.Blob;
+
+            // Replace global Blob with a spy class that captures the first text part.
+            globalThis.Blob = class SpyBlob extends OriginalBlob {
+                public constructor(parts?: BlobPart[], options?: BlobPropertyBag) {
+                    super(parts, options);
+
+                    try {
+                        capturedPayload = JSON.parse((parts as string[])[0] ?? "") as DiagramJsonExport;
+                    } catch {
+                        // not JSON — ignore
+                    }
+                }
+            };
+
+            exportDiagramAsJson(sampleNodes, sampleEdges, "test.json");
+
+            globalThis.Blob = OriginalBlob;
+
+            expect(capturedPayload).toBeDefined();
+            expect(capturedPayload?.nodes).toHaveLength(sampleNodes.length);
+            expect(capturedPayload?.edges).toHaveLength(sampleEdges.length);
+        } finally {
+            vi.restoreAllMocks();
+        }
+    });
+});
+
+describe("viewportForExport", () => {
+    it("returns a zoom value within [0.1, 2]", () => {
+        expect.assertions(2);
+
+        const nodes = buildNodes(TABLES, REF_EDGES, COLUMNS_BY_TABLE, "shard", false);
+        const { zoom } = viewportForExport(nodes, 1920, 1080, 32);
+
+        expect(zoom).toBeGreaterThanOrEqual(0.1);
+        expect(zoom).toBeLessThanOrEqual(2);
+    });
+});
+
+describe("schemaDiagram export control (component)", () => {
+    it("renders the export trigger button when there are tables", () => {
+        expect.assertions(1);
+
+        render(<SchemaDiagram columnsByTable={COLUMNS_BY_TABLE} edges={REF_EDGES} tables={TABLES} testIdPrefix="sd" tier="shard" />);
+
+        // The export trigger should be present in the canvas (jsdom renders it even without real geometry).
+        expect(screen.getByTestId("sd-export-trigger")).toBeDefined();
+    });
+
+    it("renders export menu items for JSON when the trigger is activated", () => {
+        expect.assertions(1);
+
+        render(<SchemaDiagram columnsByTable={COLUMNS_BY_TABLE} edges={REF_EDGES} tables={TABLES} testIdPrefix="sd2" tier="shard" />);
+
+        const trigger = screen.getByTestId("sd2-export-trigger");
+        fireEvent.click(trigger);
+
+        // JSON item is in the dropdown — PNG/SVG rasterisation isn't testable in jsdom.
+        expect(screen.getByTestId("sd2-export-json")).toBeDefined();
     });
 });
