@@ -46,3 +46,59 @@ export const resolveTenant = async (hostname: string, options: ResolveTenantOpti
 
     return { plan, scriptName };
 };
+
+export interface PlanResolverOptions {
+    /** Bearer for the control-plane plan endpoint. */
+    controlPlaneToken: string;
+    /** Control-plane base URL exposing `GET /v1/tenants/plan`. */
+    controlPlaneUrl: string;
+    /** Injectable fetch (defaults to the global). */
+    fetch?: typeof fetch;
+    /** Injectable clock (tests). */
+    now?: () => number;
+    /** Cache TTL in ms. Defaults to 60s. */
+    ttlMs?: number;
+}
+
+/**
+ * Build a cached `resolvePlan` that asks the control plane for a script's plan
+ * tier (`GET /v1/tenants/plan`). Per-isolate TTL cache keeps the hot path off a
+ * round-trip on every request; failures resolve to `undefined` (→ free tier),
+ * so a control-plane blip never takes the data plane down.
+ */
+export const createPlanResolver = (options: PlanResolverOptions): ((scriptName: string) => Promise<string | undefined>) => {
+    const fetchImpl = options.fetch ?? fetch;
+    const now = options.now ?? Date.now;
+    const ttl = options.ttlMs ?? 60_000;
+    const cache = new Map<string, { expires: number; plan: string }>();
+
+    return async (scriptName: string): Promise<string | undefined> => {
+        const cached = cache.get(scriptName);
+
+        if (cached && cached.expires > now()) {
+            return cached.plan;
+        }
+
+        try {
+            const url = `${options.controlPlaneUrl}/v1/tenants/plan?script=${encodeURIComponent(scriptName)}`;
+            const response = await fetchImpl(url, { headers: { authorization: `Bearer ${options.controlPlaneToken}` } });
+
+            if (!response.ok) {
+                return undefined;
+            }
+
+            // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- Response.json() is `unknown` under workers-types; tsc requires the assertion
+            const { plan } = (await response.json()) as { plan?: string };
+
+            if (typeof plan === "string") {
+                cache.set(scriptName, { expires: now() + ttl, plan });
+
+                return plan;
+            }
+
+            return undefined;
+        } catch {
+            return undefined;
+        }
+    };
+};

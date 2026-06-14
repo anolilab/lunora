@@ -7,6 +7,7 @@ import { createHttpCloudflareApi } from "../cloudflare/api";
 import { handleGitHubWebhook } from "../github/webhook";
 import { sendInvitationEmail } from "../mail/notify";
 import { createCloudflareProvisioner } from "../provision";
+import { decryptSecret, encryptSecret } from "../secrets/crypto";
 import type { DeployBackend, DeployTarget } from "./handler";
 import { handleDeployRequest } from "./handler";
 import { CellScheduler } from "./scheduler";
@@ -16,10 +17,13 @@ import { cloudflareAccountBudget } from "./token-bucket";
 interface CirrusActionContext {
     runAction: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     runMutation: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
+    runQuery: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
 }
 
 interface RouterEnv {
     __cirrusCtx?: CirrusActionContext;
+    /** Bearer gating the dispatcher's plan-lookup endpoint (`GET /v1/tenants/plan`). */
+    CIRRUS_ADMIN_TOKEN?: string;
     CIRRUS_APP_DOMAIN?: string;
     CIRRUS_CELL?: string;
     CLOUDFLARE_ACCOUNT_ID?: string;
@@ -27,6 +31,8 @@ interface RouterEnv {
     GITHUB_WEBHOOK_SECRET?: string;
     /** Sender address for invitation email; the mailer reads the rest of env too. */
     MAIL_FROM?: string;
+    /** 32-byte hex master key for tenant-secret envelope encryption (§7). */
+    SECRET_ENCRYPTION_KEY?: string;
 }
 
 interface HttpRouterLike {
@@ -57,6 +63,19 @@ interface UsageBody {
 interface InviteBody {
     email?: string;
     organizationId?: string;
+}
+
+interface SecretBody {
+    name?: string;
+    organizationId?: string;
+    projectId?: string;
+    value?: string;
+}
+
+interface EncryptedSecretRow {
+    ciphertext: string;
+    iv: string;
+    name: string;
 }
 
 const jsonError = (status: number, error: string): Response => Response.json({ error }, { headers: { "content-type": "application/json" }, status });
@@ -204,6 +223,76 @@ const handleInviteRoute = async (request: Request, environment: RouterEnv): Prom
 };
 
 /**
+ * `POST /v1/secrets` — set a tenant env secret (§7). Encrypts the value at the
+ * edge (the master key never reaches the browser or the database in plaintext),
+ * then stores ciphertext via `secrets.store` under the caller's session (so its
+ * owner/admin `assertMember` gate applies).
+ */
+const handleSecretRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
+    const context = environment.__cirrusCtx;
+
+    if (!context) {
+        return jsonError(500, "cirrus context unavailable");
+    }
+
+    if (!environment.SECRET_ENCRYPTION_KEY) {
+        return jsonError(500, "SECRET_ENCRYPTION_KEY not configured");
+    }
+
+    const secret = (await request.json().catch(() => null)) as SecretBody | null;
+
+    if (!secret?.organizationId || !secret.projectId || !secret.name || typeof secret.value !== "string") {
+        return jsonError(400, "organizationId, projectId, name and value are required");
+    }
+
+    try {
+        const { ciphertext, iv } = await encryptSecret(environment.SECRET_ENCRYPTION_KEY, secret.value);
+
+        await context.runMutation(api.secrets.store, {
+            ciphertext,
+            iv,
+            name: secret.name,
+            organizationId: secret.organizationId,
+            projectId: secret.projectId, // secret-scanner:allow -- domain field name
+        });
+
+        return Response.json({ ok: true });
+    } catch (error) {
+        return jsonError(403, error instanceof Error ? error.message : "set secret failed");
+    }
+};
+
+/**
+ * `GET /v1/tenants/plan?script=&lt;id>` — resolve a tenant script's plan tier for
+ * the dispatcher's per-plan runtime limits (§4). Bearer-gated with
+ * `CIRRUS_ADMIN_TOKEN` (the dispatcher is a trusted account-level Worker).
+ */
+const handleTenantPlanRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
+    const context = environment.__cirrusCtx;
+
+    if (!context) {
+        return jsonError(500, "cirrus context unavailable");
+    }
+
+    const authorization = request.headers.get("authorization") ?? "";
+    const token = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : "";
+
+    if (!environment.CIRRUS_ADMIN_TOKEN || token !== environment.CIRRUS_ADMIN_TOKEN) {
+        return jsonError(401, "unauthorized");
+    }
+
+    const scriptName = new URL(request.url).searchParams.get("script");
+
+    if (!scriptName) {
+        return jsonError(400, "script is required");
+    }
+
+    const result = await context.runQuery<{ plan: string }>(api.deployments.planForScript, { scriptName });
+
+    return Response.json(result);
+};
+
+/**
  * The control-plane HTTP API, mounted as the worker's `httpRouter` (lowest-
  * priority matcher). Routes `POST /v1/{deploy,github/webhook,admin,usage,
  * billing/webhook,invitations/send}` and 404s the rest. The worker injects the
@@ -251,6 +340,25 @@ export const createDeployRouter = (): HttpRouterLike => {
                 await context.runMutation(api.deployments.updateStatus, { bundleHash, deployKey: key, id: deploymentId, status, url: deployedUrl });
             },
             verifyKey: (key) => context.runMutation<DeployTarget | null>(api.deploy_keys.verify, { key }),
+            // Decrypt the project's stored secrets at the edge and hand them to the
+            // deploy spec. No-op when the master key isn't configured.
+            resolveSecrets: async ({ key, organizationId, projectId }) => {
+                if (!environment.SECRET_ENCRYPTION_KEY) {
+                    return {};
+                }
+
+                const rows = await context.runQuery<EncryptedSecretRow[]>(api.secrets.listEncrypted, { deployKey: key, organizationId, projectId });
+                const entries = await Promise.all(
+                    rows.map(
+                        async (row): Promise<[string, string]> => [
+                            row.name,
+                            await decryptSecret(environment.SECRET_ENCRYPTION_KEY as string, { ciphertext: row.ciphertext, iv: row.iv }),
+                        ],
+                    ),
+                );
+
+                return Object.fromEntries(entries);
+            },
         };
 
         return handleDeployRequest(request, { backend, cell, dispatchNamespace: (kind) => `cirrus-${kind}`, provisioner, scheduler });
@@ -264,6 +372,7 @@ export const createDeployRouter = (): HttpRouterLike => {
         "/v1/deploy": handleDeployRoute,
         "/v1/github/webhook": handleWebhookRoute,
         "/v1/invitations/send": handleInviteRoute,
+        "/v1/secrets": handleSecretRoute,
         "/v1/usage": handleUsageRoute,
     };
 
@@ -296,8 +405,13 @@ export const createDeployRouter = (): HttpRouterLike => {
                 return throttled;
             }
 
-            const handler = request.method === "POST" ? postRoutes[url.pathname] : undefined;
             const routerEnv = (environment as RouterEnv | undefined) ?? {};
+
+            if (request.method === "GET" && url.pathname === "/v1/tenants/plan") {
+                return handleTenantPlanRoute(request, routerEnv);
+            }
+
+            const handler = request.method === "POST" ? postRoutes[url.pathname] : undefined;
 
             return handler ? handler(request, routerEnv) : jsonError(404, "not found");
         },
