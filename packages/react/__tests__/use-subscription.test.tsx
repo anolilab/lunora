@@ -68,6 +68,39 @@ describe("useSubscription", () => {
         expect(screen.getByTestId("display").textContent).toBe("pending");
     });
 
+    it("clears data when args transition to skip", async () => {
+        expect.hasAssertions();
+
+        const mock = createMockClient();
+
+        const view = render(
+            <CirrusProvider client={mock.asClient}>
+                <Display />
+            </CirrusProvider>,
+        );
+
+        await waitFor(() => {
+            expect(mock.subscribe).toHaveBeenCalledTimes(1);
+        });
+
+        await act(async () => {
+            mock.emit("messages:list", { count: 7 });
+        });
+
+        expect(screen.getByTestId("display").textContent).toBe(JSON.stringify({ count: 7 }));
+
+        // Flip args to "skip": the subscription is torn down and prior data cleared.
+        view.rerender(
+            <CirrusProvider client={mock.asClient}>
+                <Display args="skip" />
+            </CirrusProvider>,
+        );
+
+        await waitFor(() => {
+            expect(screen.getByTestId("display").textContent).toBe("pending");
+        });
+    });
+
     it("unmount releases the subscription", async () => {
         expect.hasAssertions();
 

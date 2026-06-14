@@ -38,6 +38,11 @@ const useSubscription = <F extends FunctionReference>(
 
     useEffect(() => {
         if (skipped) {
+            // Args transitioned to "skip" — tear down any prior subscription
+            // (handled by the previous effect's cleanup) and clear stale data so
+            // the UI reflects "no subscription, no data", matching Solid/Vue.
+            setState({ data: undefined, error: undefined });
+
             return undefined;
         }
 
