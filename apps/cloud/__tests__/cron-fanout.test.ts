@@ -26,7 +26,7 @@ describe(cronDue, () => {
         expect(cronDue("0 0 1,15 * *", at("2026-06-15T00:00:00Z"))).toBe(true);
     });
 
-    it("ORs day-of-month and day-of-week when both are restricted", () => {
+    it("oRs day-of-month and day-of-week when both are restricted", () => {
         // dom=1 OR dow=1(Mon): the 15th is a Monday, so the dow side matches.
         expect(cronDue("0 0 1 * 1", at("2026-06-15T00:00:00Z"))).toBe(true);
         // Neither the 2nd-of-month nor Monday: a Tuesday that isn't the 1st.
