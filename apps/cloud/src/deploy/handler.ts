@@ -142,7 +142,23 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
 
             // Tenant env secrets are decrypted and merged in; CIRRUS_ADMIN_TOKEN
             // is platform-owned and always wins over a same-named tenant secret.
-            const tenantSecrets = (await deps.backend.resolveSecrets?.({ key, organizationId: target.organizationId, projectId })) ?? {};
+            // A decrypt failure (e.g. a corrupt secret or a rotated master key)
+            // must surface as a failed deployment, not leave the row stuck in
+            // `accepted` — so transition to `failed` and close the stream.
+            let tenantSecrets: Record<string, string>;
+
+            try {
+                tenantSecrets = (await deps.backend.resolveSecrets?.({ key, organizationId: target.organizationId, projectId })) ?? {};
+            } catch (error) {
+                const message = error instanceof Error ? error.message : "failed to resolve tenant secrets";
+
+                write({ deploymentId, error: message, phase: "failed" });
+                await deps.backend.updateStatus({ deploymentId, key, status: "failed" });
+                write({ deploymentId, done: true, status: "failed" });
+                controller.close();
+
+                return;
+            }
 
             const spec: TenantDeploymentSpec = {
                 bindings: {},

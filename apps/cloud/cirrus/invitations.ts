@@ -3,7 +3,7 @@ import { CirrusError } from "@cirrus/server";
 import { randomSecret, sha256Hex } from "../src/deploy/keys";
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
-import { assertMember } from "./authz";
+import { assertMember, assertRowInOrg } from "./authz";
 
 /**
  * Team invitations (CLOUD-PLAN.md §3 / Phase 3). An owner/admin invites an email
@@ -74,6 +74,7 @@ export const revoke = mutation({
     args: { id: v.id("invitations"), organizationId: v.id("organizations") },
     handler: async (context, { id, organizationId }): Promise<void> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
+        await assertRowInOrg(context, id, organizationId, "invitation");
 
         await context.db.patch(id, { status: "revoked" });
     },

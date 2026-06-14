@@ -1,23 +1,11 @@
 import { CirrusError } from "@cirrus/server";
 
+import { highestPlan } from "../src/billing/plans";
 import { previewExpiry } from "../src/deploy/preview";
 import type { Id } from "./_generated/dataModel.js";
 import { internalMutation, mutation, query, v } from "./_generated/server.js";
 import { assertMember, authorizeDeployKey } from "./authz";
 import { orgEntitlements } from "./entitlements";
-
-/** The most generous active plan name (drives the dispatcher's runtime limits). */
-const bestPlan = (plans: ReadonlyArray<string>): string => {
-    if (plans.includes("enterprise")) {
-        return "enterprise";
-    }
-
-    if (plans.includes("pro")) {
-        return "pro";
-    }
-
-    return "free";
-};
 
 interface DeploymentRow {
     _id: Id<"deployments">;
@@ -78,7 +66,7 @@ export const planForScript = query({
 
         const entitlements = await orgEntitlements(context, deployment.organizationId);
 
-        return { plan: bestPlan(entitlements.plans) };
+        return { plan: highestPlan(entitlements.plans) };
     },
 });
 
