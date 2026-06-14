@@ -1,9 +1,7 @@
-import { CirrusError } from "@cirrus/server";
-
-import { withinPlanQuota } from "../src/billing/plans";
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
+import { assertWithinQuota } from "./entitlements";
 
 interface ProjectRow {
     _id: Id<"projects">;
@@ -40,7 +38,9 @@ export const byGithubRepo = query({
 
 /**
  * Create a project in an organization. Per-org slug uniqueness is enforced by
- * the composite `by_org_slug` unique index; the org's plan caps project count.
+ * the composite `by_org_slug` unique index; the org's live entitlements cap
+ * project count (resolved from its synced subscription state, not the static
+ * `plan` column — see `cirrus/entitlements.ts`).
  */
 export const create = mutation({
     args: {
@@ -53,12 +53,9 @@ export const create = mutation({
     handler: async (context, arguments_): Promise<Id<"projects">> => {
         await assertMember(context, arguments_.organizationId, ["owner", "admin", "member"]);
 
-        const organization = (await context.db.get(arguments_.organizationId)) as { plan?: string } | null;
         const { page } = await context.db.projects.findMany({ where: { organizationId: arguments_.organizationId } });
 
-        if (!withinPlanQuota(organization?.plan ?? "free", "projects", (page as unknown as ProjectRow[]).length)) {
-            throw new CirrusError("FORBIDDEN", "project quota reached for this plan");
-        }
+        await assertWithinQuota(context, arguments_.organizationId, "projects", (page as unknown as ProjectRow[]).length);
 
         return context.db.insert("projects", {
             createdAt: Date.now(),
