@@ -14,6 +14,7 @@ const rulesCommand: Command = {
         ["cirrus rules install", "Copy the Cirrus agent skills into .agents/skills/"],
         ["cirrus rules install --overwrite", "Reinstall, replacing edited skill files"],
         ["cirrus rules check", "Report which Cirrus skills are installed"],
+        ["cirrus rules check --strict", "Exit non-zero when rules are missing (CI gate)"],
     ],
     group: "Project",
     loader: () =>
@@ -21,9 +22,12 @@ const rulesCommand: Command = {
             return { default: m.execute as CommandExecute<Toolbox> };
         }),
     name: "rules",
-    options: [{ description: "Overwrite skill files that already exist (default: skip them)", name: "overwrite", type: Boolean }],
+    options: [
+        { description: "install: overwrite skill files that already exist (default: skip them)", name: "overwrite", type: Boolean },
+        { description: "check: exit non-zero when the rules are missing (for CI gating)", name: "strict", type: Boolean },
+    ],
 };
 
 export { rulesCommand };
 
-export type RulesOptions = CreateOptions<{ overwrite: boolean | undefined }>;
+export type RulesOptions = CreateOptions<{ overwrite: boolean | undefined; strict: boolean | undefined }>;

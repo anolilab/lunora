@@ -16,6 +16,7 @@ import type { Messages } from "@lingui/core";
 const MESSAGE_IDS = [
     "Cirrus AI rules aren't installed.",
     "lets your coding agent use Cirrus correctly.",
+    "Dismiss",
     ", changed",
     "(no subject)",
     "(root)",

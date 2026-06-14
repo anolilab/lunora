@@ -2,6 +2,8 @@ import type { ChildProcess } from "node:child_process";
 import { spawn as nodeSpawn } from "node:child_process";
 
 import {
+    AGENT_RULES_HINT,
+    claimAgentRulesHint,
     createConfirm,
     detectAgentRules,
     ensureDevVariables,
@@ -285,11 +287,11 @@ const printBanner = (logger: Logger, plan: DevCommandPlan, studioUrl: string | u
  * them so the AI knows how to use Cirrus. Non-blocking — just one info line.
  */
 const printAgentRulesHint = (logger: Logger, cwd: string): void => {
-    if (detectAgentRules(cwd).installed) {
+    if (detectAgentRules(cwd).installed || !claimAgentRulesHint()) {
         return;
     }
 
-    logger.info("  ⓘ  AI rules not installed — run `cirrus rules install` so your coding agent knows Cirrus.");
+    logger.info(`  ⓘ  ${AGENT_RULES_HINT}`);
     logger.info("");
 };
 

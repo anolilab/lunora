@@ -8,6 +8,7 @@ const TOKEN_KEY = "cirrus-studio-admin-token";
 describe("studioApp", () => {
     afterEach(() => {
         sessionStorage.clear();
+        localStorage.clear();
     });
 
     it("renders the header and token input", () => {
@@ -50,6 +51,34 @@ describe("studioApp", () => {
         render(<StudioApp baseUrl="https://app.example" />);
 
         expect(screen.getByTestId<HTMLInputElement>("dash-app-token").value).toBe("s3cret");
+    });
+
+    it("shows the rules banner only when rulesInstalled is false", () => {
+        expect.assertions(2);
+
+        const { unmount } = render(<StudioApp baseUrl="https://app.example" />);
+
+        expect(screen.queryByTestId("dash-app-rules-banner")).toBeNull();
+
+        unmount();
+        render(<StudioApp baseUrl="https://app.example" rulesInstalled={false} />);
+
+        expect(screen.getByTestId("dash-app-rules-banner")).toBeDefined();
+    });
+
+    it("dismisses the rules banner and remembers it across remounts", () => {
+        expect.assertions(2);
+
+        const { unmount } = render(<StudioApp baseUrl="https://app.example" rulesInstalled={false} />);
+
+        fireEvent.click(screen.getByTestId("dash-app-rules-banner-dismiss"));
+
+        expect(screen.queryByTestId("dash-app-rules-banner")).toBeNull();
+
+        unmount();
+        render(<StudioApp baseUrl="https://app.example" rulesInstalled={false} />);
+
+        expect(screen.queryByTestId("dash-app-rules-banner")).toBeNull();
     });
 
     it("clear removes the persisted token", () => {

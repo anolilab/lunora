@@ -89,6 +89,27 @@ interface StudioAppBodyProps {
     readonly token: string;
 }
 
+/** `localStorage` key remembering that the developer dismissed the rules banner. */
+const RULES_BANNER_DISMISSED_KEY = "cirrus.studio.rulesBannerDismissed";
+
+/** Read the persisted "rules banner dismissed" flag, tolerating storage being unavailable. */
+const readBannerDismissed = (): boolean => {
+    try {
+        return globalThis.localStorage.getItem(RULES_BANNER_DISMISSED_KEY) === "1";
+    } catch {
+        return false;
+    }
+};
+
+/** Persist the "rules banner dismissed" flag, swallowing storage failures (private mode / disabled). */
+const writeBannerDismissed = (): void => {
+    try {
+        globalThis.localStorage.setItem(RULES_BANNER_DISMISSED_KEY, "1");
+    } catch {
+        // ignore — dismissal just won't survive a reload
+    }
+};
+
 /**
  * The header + composed studio. Kept separate from {@link StudioApp}
  * because its `useT` (for the top-bar strings and the error-boundary label) must
@@ -97,6 +118,16 @@ interface StudioAppBodyProps {
  */
 const StudioAppBody = ({ basePath, clearToken, studio, onToggleTheme, onTokenChange, rulesInstalled, theme, token }: StudioAppBodyProps): ReactElement => {
     const t = useT();
+
+    // The "rules not installed" banner is a one-time nudge — let the developer
+    // dismiss it, persisted so it stays gone across reloads. Reads lazily and
+    // tolerates storage being unavailable (private mode / embeddings).
+    const [rulesBannerDismissed, setRulesBannerDismissed] = useState<boolean>(() => readBannerDismissed());
+
+    const dismissRulesBanner = useCallback((): void => {
+        setRulesBannerDismissed(true);
+        writeBannerDismissed();
+    }, []);
 
     return (
         <>
@@ -238,7 +269,7 @@ const StudioAppBody = ({ basePath, clearToken, studio, onToggleTheme, onTokenCha
                 </div>
             </header>
 
-            {rulesInstalled === false && (
+            {rulesInstalled === false && !rulesBannerDismissed && (
                 <div
                     className="flex shrink-0 items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-[12px] text-foreground"
                     data-testid="dash-app-rules-banner"
@@ -252,6 +283,25 @@ const StudioAppBody = ({ basePath, clearToken, studio, onToggleTheme, onTokenCha
                         <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">cirrus rules install</code>{" "}
                         {t("lets your coding agent use Cirrus correctly.")}
                     </span>
+                    <button
+                        aria-label={t("Dismiss")}
+                        className="ms-auto flex size-5 items-center justify-center rounded text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent"
+                        data-testid="dash-app-rules-banner-dismiss"
+                        onClick={dismissRulesBanner}
+                        type="button"
+                    >
+                        <svg
+                            aria-hidden="true"
+                            className="size-3.5"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeLinecap="round"
+                            strokeWidth={1.8}
+                            viewBox="0 0 24 24"
+                        >
+                            <path d="M18 6 6 18M6 6l12 12" />
+                        </svg>
+                    </button>
                 </div>
             )}
 

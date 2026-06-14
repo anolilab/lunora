@@ -215,6 +215,7 @@ you to run this when the rules are missing.
 cirrus rules install              # copy the skills into .agents/skills/ (skips edited files)
 cirrus rules install --overwrite  # reinstall, replacing local edits
 cirrus rules check                # report which skills are present
+cirrus rules check --strict       # exit non-zero when missing (CI gate)
 ```
 
 ### `cirrus analyze`

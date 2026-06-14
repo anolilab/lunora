@@ -14,6 +14,8 @@ interface RunRulesOptions {
     logger: Logger;
     /** Overwrite skill files that already exist in the project (default: skip them). */
     overwrite?: boolean;
+    /** `check` only: exit non-zero when the rules are missing, so CI can gate on it. */
+    strict?: boolean;
 }
 
 interface RunRulesResult {
@@ -25,12 +27,14 @@ interface RunRulesResult {
 }
 
 /**
- * Resolve the `skills/` directory bundled with `@cirrus/cli`. Walks up from this
- * module (works from both `dist/*.mjs` and `src/`) to the package root, then
- * appends `skills`. Returns `undefined` when it can't be located.
+ * Resolve the `skills/` directory bundled with `@cirrus/cli`. Walks up from
+ * `startDirectory` (this module by default — works from both `dist/*.mjs` and
+ * `src/`, and from the published `node_modules/@cirrus/cli/dist/...` layout) to
+ * the package root, then appends `skills`. Returns `undefined` when it can't be
+ * located. `startDirectory` is injectable so the walk is unit-testable.
  */
-const resolveBundledSkillsDirectory = (): string | undefined => {
-    let directory = dirname(fileURLToPath(import.meta.url));
+const resolveBundledSkillsDirectory = (startDirectory: string = dirname(fileURLToPath(import.meta.url))): string | undefined => {
+    let directory = startDirectory;
 
     for (let index = 0; index < 6; index += 1) {
         const packageJson = join(directory, "package.json");
@@ -152,11 +156,14 @@ const runRulesCheck = (options: RunRulesOptions): RunRulesResult => {
         if (status.missing.length > 0) {
             options.logger.info(`Missing: ${status.missing.join(", ")}. Run \`cirrus rules install\` to add them.`);
         }
-    } else {
-        options.logger.warn("Cirrus agent rules are not installed. Run `cirrus rules install` so your AI agent knows how to use Cirrus.");
+
+        return { code: 0, installed: status.present, skipped: [] };
     }
 
-    return { code: 0, installed: status.present, skipped: [] };
+    options.logger.warn("Cirrus agent rules are not installed. Run `cirrus rules install` so your AI agent knows how to use Cirrus.");
+
+    // `--strict` turns a missing rule set into a non-zero exit so CI can gate on it.
+    return { code: options.strict === true ? 1 : 0, installed: status.present, skipped: [] };
 };
 
 /** `cirrus rules &lt;install|check>` handler (lazy-loaded via the command's `loader`). */
@@ -168,7 +175,7 @@ const execute: CommandHandler<RulesOptions> = defineHandler<RulesOptions>(({ arg
     }
 
     if (subcommand === "check") {
-        return runRulesCheck({ cwd, logger });
+        return runRulesCheck({ cwd, logger, strict: options.strict === true });
     }
 
     logger.error("rules: unknown subcommand. Usage: cirrus rules <install|check>");
@@ -176,5 +183,5 @@ const execute: CommandHandler<RulesOptions> = defineHandler<RulesOptions>(({ arg
     return { code: 1 };
 });
 
-export { execute, runRulesCheck, runRulesInstall };
+export { execute, resolveBundledSkillsDirectory, runRulesCheck, runRulesInstall };
 export type { RunRulesOptions, RunRulesResult };

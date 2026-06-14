@@ -8,6 +8,9 @@ import { join } from "node:path";
  */
 const AGENT_RULES_DIR = ".agents/skills";
 
+/** Env var the once-per-process-tree hint guard ({@link claimAgentRulesHint}) sets. */
+const AGENT_RULES_HINT_ENV = "CIRRUS_RULES_HINT_SHOWN";
+
 /**
  * The Cirrus agent skills shipped by `@cirrus/cli`. The first entry (`cirrus`)
  * is the router skill — its presence is what {@link detectAgentRules} treats as
@@ -27,6 +30,29 @@ const CIRRUS_SKILL_NAMES: ReadonlyArray<string> = [
 
 /** The router skill whose presence marks the rule set as installed. */
 const ROOT_SKILL_NAME = "cirrus";
+
+/**
+ * The single "rules not installed" message shared by every surface (the CLI
+ * `cirrus dev` summary and the Vite dev plugin), so the wording and the
+ * pointer at `cirrus rules install` stay identical wherever it appears.
+ */
+const AGENT_RULES_HINT = "Cirrus AI rules not installed — run `cirrus rules install` so your coding agent knows how to use Cirrus.";
+
+/**
+ * Process-tree guard so the hint is emitted at most once. The first surface to
+ * print it sets {@link AGENT_RULES_HINT_ENV} on `process.env`; later surfaces (a
+ * Vite dev-server restart, or a child process that inherited the env) read it
+ * and stay quiet. Returns `true` the first time, `false` afterwards.
+ */
+const claimAgentRulesHint = (): boolean => {
+    if (process.env[AGENT_RULES_HINT_ENV] === "1") {
+        return false;
+    }
+
+    process.env[AGENT_RULES_HINT_ENV] = "1";
+
+    return true;
+};
 
 interface AgentRulesStatus {
     /**
@@ -68,4 +94,4 @@ const detectAgentRules = (projectRoot: string): AgentRulesStatus => {
 };
 
 export type { AgentRulesStatus };
-export { AGENT_RULES_DIR, CIRRUS_SKILL_NAMES, detectAgentRules, ROOT_SKILL_NAME };
+export { AGENT_RULES_DIR, AGENT_RULES_HINT, AGENT_RULES_HINT_ENV, CIRRUS_SKILL_NAMES, claimAgentRulesHint, detectAgentRules, ROOT_SKILL_NAME };

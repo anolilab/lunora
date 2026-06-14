@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { runRulesCheck, runRulesInstall } from "../../src/commands/rules/handler";
+import { resolveBundledSkillsDirectory, runRulesCheck, runRulesInstall } from "../../src/commands/rules/handler";
 import type { Logger } from "../../src/util/logger";
 
 const captureLogger = (): { logger: Logger; messages: string[] } => {
@@ -74,5 +74,34 @@ describe("cirrus rules", () => {
         const after = runRulesCheck({ cwd: workdir, logger });
 
         expect(after.installed.length).toBeGreaterThan(before.installed.length);
+    });
+
+    it("check --strict exits non-zero only when rules are missing", () => {
+        expect.assertions(2);
+
+        const { logger } = captureLogger();
+
+        expect(runRulesCheck({ cwd: workdir, logger, strict: true }).code).toBe(1);
+
+        runRulesInstall({ cwd: workdir, logger });
+
+        expect(runRulesCheck({ cwd: workdir, logger, strict: true }).code).toBe(0);
+    });
+
+    it("resolveBundledSkillsDirectory walks up a dist layout to the package skills/", () => {
+        expect.assertions(2);
+
+        // Simulate `node_modules/@cirrus/cli/dist/chunks/handler.mjs` next to a
+        // sibling `skills/` — the resolver should walk up to the package root.
+        const pkgRoot = join(workdir, "node_modules", "@cirrus", "cli");
+        const start = join(pkgRoot, "dist", "chunks");
+
+        mkdirSync(start, { recursive: true });
+        mkdirSync(join(pkgRoot, "skills"), { recursive: true });
+        writeFileSync(join(pkgRoot, "package.json"), JSON.stringify({ name: "@cirrus/cli" }), "utf8");
+
+        expect(resolveBundledSkillsDirectory(start)).toBe(join(pkgRoot, "skills"));
+        // No @cirrus/cli package.json above an unrelated dir → undefined.
+        expect(resolveBundledSkillsDirectory(mkdtempSync(join(tmpdir(), "cirrus-no-pkg-")))).toBeUndefined();
     });
 });

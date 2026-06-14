@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { AGENT_RULES_DIR, CIRRUS_SKILL_NAMES, detectAgentRules } from "../src/agent-rules";
+import { AGENT_RULES_DIR, AGENT_RULES_HINT_ENV, CIRRUS_SKILL_NAMES, claimAgentRulesHint, detectAgentRules } from "../src/agent-rules";
 
 let workdir: string;
 
@@ -58,5 +58,27 @@ describe("detectAgentRules", () => {
 
         expect(status.installed).toBe(true);
         expect(status.present).toStrictEqual([...CIRRUS_SKILL_NAMES]);
+    });
+});
+
+describe("claimAgentRulesHint", () => {
+    const previous = process.env[AGENT_RULES_HINT_ENV];
+
+    afterEach(() => {
+        if (previous === undefined) {
+            Reflect.deleteProperty(process.env, AGENT_RULES_HINT_ENV);
+        } else {
+            process.env[AGENT_RULES_HINT_ENV] = previous;
+        }
+    });
+
+    it("returns true once, then false for the rest of the process", () => {
+        expect.assertions(3);
+
+        Reflect.deleteProperty(process.env, AGENT_RULES_HINT_ENV);
+
+        expect(claimAgentRulesHint()).toBe(true);
+        expect(claimAgentRulesHint()).toBe(false);
+        expect(process.env[AGENT_RULES_HINT_ENV]).toBe("1");
     });
 });
