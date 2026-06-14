@@ -10,8 +10,14 @@
     // Bind the production dispatch namespace holding tenant Worker scripts.
     // (Requires the Workers-for-Platforms paid add-on.)
     "dispatch_namespaces": [{ "binding": "DISPATCHER", "namespace": "cirrus-production" }],
+    // Per-request metering source (§4): the dispatcher writes one data point per
+    // tenant request; the control-plane rollup reads it back via the AE SQL API.
+    "analytics_engine_datasets": [{ "binding": "USAGE_ANALYTICS", "dataset": "cirrus_tenant_usage" }],
     "vars": {
         "CIRRUS_APP_DOMAIN": "cirrus.app",
+        // Control-plane base URL — enables per-plan runtime limits (GET /v1/tenants/plan).
+        // Set CONTROL_PLANE_TOKEN as a secret: `wrangler secret put CONTROL_PLANE_TOKEN -c dispatcher.wrangler.jsonc`.
+        "CONTROL_PLANE_URL": "https://cirrus-cloud.example.workers.dev",
     },
     // Route all hostnames through the dispatcher (subdomains + custom hostnames).
     "routes": [{ "pattern": "*/*", "zone_name": "cirrus.app" }],
