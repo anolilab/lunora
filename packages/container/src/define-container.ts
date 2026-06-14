@@ -166,7 +166,9 @@ const assertValidEnvAndSecrets = (config: ContainerConfig): void => {
         }
 
         if (envNames.has(secret)) {
-            throw new TypeError(`defineContainer: "${secret}" is declared in both \`env\` and \`secrets\` — a secret would silently overwrite the static env value; pick one`);
+            throw new TypeError(
+                `defineContainer: "${secret}" is declared in both \`env\` and \`secrets\` — a secret would silently overwrite the static env value; pick one`,
+            );
         }
     }
 };
@@ -195,7 +197,9 @@ const defineContainer = (config: ContainerConfig): ContainerDefinition => {
     }
 
     if (typeof config.sleepAfter === "string" && !SLEEP_AFTER_PATTERN.test(config.sleepAfter)) {
-        throw new TypeError(`defineContainer: \`sleepAfter\` string "${config.sleepAfter}" must be a number of seconds followed by a unit, e.g. "30s", "5m", or "1h"`);
+        throw new TypeError(
+            `defineContainer: \`sleepAfter\` string "${config.sleepAfter}" must be a number of seconds followed by a unit, e.g. "30s", "5m", or "1h"`,
+        );
     }
 
     assertValidEnvAndSecrets(config);

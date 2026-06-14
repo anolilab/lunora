@@ -25,7 +25,12 @@ import type { QueryArgs } from "./query-args";
  * @param args The fan-out args: `{ table, where?, orderBy?, with? }`.
  */
 // eslint-disable-next-line import/prefer-default-export -- named export: import sites stay uniform (`import { serveRelationFanout }`), per the repo's no-default-mixing convention
-export const serveRelationFanout = async (schema: SchemaLike, database: DatabaseWriterLike, functionPath: string, args: Record<string, unknown>): Promise<unknown> => {
+export const serveRelationFanout = async (
+    schema: SchemaLike,
+    database: DatabaseWriterLike,
+    functionPath: string,
+    args: Record<string, unknown>,
+): Promise<unknown> => {
     const table = typeof args["table"] === "string" ? args["table"] : "";
     const definition = schema.tables[table];
 
@@ -36,7 +41,11 @@ export const serveRelationFanout = async (schema: SchemaLike, database: Database
     // Only shard-local tables live in a shard's SQLite; a `.global()` table lives
     // in D1 and must never be fanned out across shards.
     if (definition.shardMode?.kind === "global") {
-        throw Object.assign(new Error(`${RELATION_FUNCTION_PREFIX} table "${table}" is global, not shard-local`), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+        throw Object.assign(new Error(`${RELATION_FUNCTION_PREFIX} table "${table}" is global, not shard-local`), {
+            code: "BAD_REQUEST",
+            name: "CirrusError",
+            status: 400,
+        });
     }
 
     const where = (args["where"] ?? undefined) as QueryArgs["where"];

@@ -121,7 +121,9 @@ const fanOutRelation = async (options: CrossShardRelationOptions, body: Record<s
     if (typeof result.failed === "number" && result.failed > 0) {
         const reached = (typeof result.ok === "number" ? result.ok : 0) + result.failed;
 
-        throw new Error(`cross-shard relation ${label} failed on ${String(result.failed)} of ${String(reached)} shard(s) — refusing to return a partial result`);
+        throw new Error(
+            `cross-shard relation ${label} failed on ${String(result.failed)} of ${String(reached)} shard(s) — refusing to return a partial result`,
+        );
     }
 
     return result.data;

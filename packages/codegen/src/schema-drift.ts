@@ -455,4 +455,12 @@ const evaluateSchemaDrift = (options: { allowDrift?: boolean; baseline: SchemaSn
 };
 
 export type { DriftChange, FieldSnapshot, IndexSnapshot, RelationSnapshot, SchemaDrift, SchemaDriftDecision, SchemaSnapshot, TableSnapshot };
-export { buildSchemaSnapshot, diffSchemaSnapshots, evaluateSchemaDrift, parseSchemaSnapshot, SCHEMA_SNAPSHOT_VERSION, SchemaSnapshotParseError, serializeSchemaSnapshot };
+export {
+    buildSchemaSnapshot,
+    diffSchemaSnapshots,
+    evaluateSchemaDrift,
+    parseSchemaSnapshot,
+    SCHEMA_SNAPSHOT_VERSION,
+    SchemaSnapshotParseError,
+    serializeSchemaSnapshot,
+};

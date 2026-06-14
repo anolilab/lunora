@@ -221,12 +221,8 @@ const cirrusTest = (schema: TestSchema): TestHarness => {
 
         // Internal (server-to-server) dispatch surface used by ctx.run*. Mirrors
         // prod's `isSystemDispatch()` branch: internal functions are reachable here.
-        const runInternal = (
-            expected: "action" | "mutation" | "query",
-            reference: unknown,
-            context: unknown,
-            args: unknown,
-        ): Promise<unknown> => runRegistered(expected, reference as never, context, args, true);
+        const runInternal = (expected: "action" | "mutation" | "query", reference: unknown, context: unknown, args: unknown): Promise<unknown> =>
+            runRegistered(expected, reference as never, context, args, true);
 
         const query = ((referenceOrInline: unknown, args?: unknown): Promise<unknown> => {
             if (registeredFunctionKind(referenceOrInline)) {

@@ -227,15 +227,14 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
     // below depend on `storageApi` (which re-identifies on bucket change) instead
     // of re-listing `bucket` at each site — closing the stale-bucket dep-array
     // footgun by construction.
-    const storageApi = useMemo(
-        () => {return {
+    const storageApi = useMemo(() => {
+        return {
             list: (options: { cursor?: string; limit?: number; prefix?: string }) => client.listStorageObjects({ ...options, bucket }),
             remove: (key: string) => client.deleteStorageObject(key, { bucket }),
             signedUrl: (key: string, options?: { expiresInSeconds?: number }) => client.signedStorageUrl(key, { ...options, bucket }),
             upload: (options: { body: ArrayBuffer | Blob; contentType?: string; key: string }) => client.uploadStorageObject({ ...options, bucket }),
-        }},
-        [bucket, client],
-    );
+        };
+    }, [bucket, client]);
 
     const list = useCallback(
         async (searchPrefix: string, cursor: string | undefined, append: boolean): Promise<void> => {

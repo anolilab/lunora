@@ -324,11 +324,7 @@ describe("runDataMigration", () => {
             // Re-stamp it as a still-held (in_progress, non-zero updated_at)
             // claim, then age it past the timeout — the back-date overrides the
             // release-on-return marker, reproducing an orphaned in-flight claim.
-            harness.raw(
-                `UPDATE "${DATA_MIGRATION_STATE_TABLE}" SET status = 'in_progress', updated_at = ? WHERE id = ?`,
-                crashedAt - 60_000,
-                "bump-version",
-            );
+            harness.raw(`UPDATE "${DATA_MIGRATION_STATE_TABLE}" SET status = 'in_progress', updated_at = ? WHERE id = ?`, crashedAt - 60_000, "bump-version");
 
             expect(stateRow("bump-version")).toMatchObject({ processed: 2, status: "in_progress" });
 

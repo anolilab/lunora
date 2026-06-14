@@ -45,7 +45,10 @@ describe("serveRelationFanout", () => {
         });
 
         expect(result).toEqual([{ _id: "l1" }, { _id: "l2" }]);
-        expect(findMany).toHaveBeenCalledWith("local", expect.objectContaining({ orderBy: [{ direction: "asc", field: "name" }], where: { globalId: { in: ["g1"] } }, with: { owner: true } }));
+        expect(findMany).toHaveBeenCalledWith(
+            "local",
+            expect.objectContaining({ orderBy: [{ direction: "asc", field: "name" }], where: { globalId: { in: ["g1"] } }, with: { owner: true } }),
+        );
         // The page envelope is unwrapped — callers fan out bare arrays for `concat`.
         expect(Array.isArray(result)).toBe(true);
     });

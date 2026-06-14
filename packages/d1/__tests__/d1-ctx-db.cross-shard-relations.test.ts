@@ -12,7 +12,9 @@ import createD1Exec from "./_helpers/node-sqlite-d1";
  * Coordinator's RLS-correct fan-out). Here those capabilities are faked so the
  * routing + grouping is exercised without a real coordinator.
  */
-const col = (kind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike => ({ _meta: { column: { notNull: true, ...column } }, kind });
+const col = (kind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike => {
+    return { _meta: { column: { notNull: true, ...column } }, kind };
+};
 
 // `globals` (global, D1) → `local` (shard-local, root): a `one` (owner) + a
 // `many` (items) relation, both pointing at the cross-backend child.
@@ -72,14 +74,16 @@ describe("d1 reverse cross-backend relation loading", () => {
         expect.assertions(1);
 
         const writer = createD1ContextDatabase({
-            crossShardReader: async () => ({
-                continueCursor: null,
-                isDone: true,
-                page: [
-                    { _id: "l2", globalId: "g1", name: "A" },
-                    { _id: "l3", globalId: "g1", name: "B" },
-                ],
-            }),
+            crossShardReader: async () => {
+                return {
+                    continueCursor: null,
+                    isDone: true,
+                    page: [
+                        { _id: "l2", globalId: "g1", name: "A" },
+                        { _id: "l3", globalId: "g1", name: "B" },
+                    ],
+                };
+            },
             exec: harness.exec,
             schema: reverseSchema,
         });
@@ -94,15 +98,17 @@ describe("d1 reverse cross-backend relation loading", () => {
         expect.assertions(1);
 
         const writer = createD1ContextDatabase({
-            crossShardReader: async () => ({
-                continueCursor: null,
-                isDone: true,
-                page: [
-                    { _id: "l2", globalId: "g1", name: "A" },
-                    { _id: "l3", globalId: "g1", name: "B" },
-                    { _id: "l4", globalId: "g1", name: "C" },
-                ],
-            }),
+            crossShardReader: async () => {
+                return {
+                    continueCursor: null,
+                    isDone: true,
+                    page: [
+                        { _id: "l2", globalId: "g1", name: "A" },
+                        { _id: "l3", globalId: "g1", name: "B" },
+                        { _id: "l4", globalId: "g1", name: "C" },
+                    ],
+                };
+            },
             exec: harness.exec,
             schema: reverseSchema,
         });

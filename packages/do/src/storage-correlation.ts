@@ -138,7 +138,10 @@ const scanColumnForDangling = (
     // bound path params are supplied three times, ahead of the LIMIT param —
     // matching the SQL textual order.
     const rows = sql
-        .exec<{ id: string; ref: string }>(
+        .exec<{
+            id: string;
+            ref: string;
+        }>(
             `SELECT id, ${resolved.expression} AS ref FROM ${quoted} WHERE ${resolved.expression} IS NOT NULL AND ${resolved.expression} <> '' LIMIT ?`,
             ...resolved.params,
             ...resolved.params,

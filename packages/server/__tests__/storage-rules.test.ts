@@ -239,7 +239,11 @@ describe("storageRules — bucket scoping", () => {
         expect.assertions(2);
 
         // A read rule on `avatars` only. The `default` bucket has no rule → open.
-        const rule = defineStorageRule<BucketedContext>({ bucket: "avatars", on: "read", when: ({ auth, key }) => key.startsWith(`user/${auth.userId ?? ""}/`) });
+        const rule = defineStorageRule<BucketedContext>({
+            bucket: "avatars",
+            on: "read",
+            when: ({ auth, key }) => key.startsWith(`user/${auth.userId ?? ""}/`),
+        });
 
         const fake = createBucketedFakeStorage();
         const handler = cirrus.action.use(rulesForTest<BucketedContext>([rule])).action(async ({ ctx }) => {
@@ -258,7 +262,11 @@ describe("storageRules — bucket scoping", () => {
     it("denies a read on the targeted bucket when its rule rejects the key", async () => {
         expect.assertions(1);
 
-        const rule = defineStorageRule<BucketedContext>({ bucket: "avatars", on: "read", when: ({ auth, key }) => key.startsWith(`user/${auth.userId ?? ""}/`) });
+        const rule = defineStorageRule<BucketedContext>({
+            bucket: "avatars",
+            on: "read",
+            when: ({ auth, key }) => key.startsWith(`user/${auth.userId ?? ""}/`),
+        });
 
         const fake = createBucketedFakeStorage();
         const handler = cirrus.action
@@ -279,12 +287,22 @@ describe("storageRules — allowlist (privileged methods dropped)", () => {
         // A backing storage carrying the privileged R2 escape hatches alongside `store`.
         const backing = {
             bucketName: "avatars",
-            createMultipartUpload: () => {return {}},
+            createMultipartUpload: () => {
+                return {};
+            },
             getPresignedUrl: async () => "https://r2.example/presigned",
-            list: async () => {return { objects: [] }},
-            resumeMultipartUpload: () => {return {}},
-            store: async (key: string) => {return { etag: "e", key }},
-            upload: async (key: string) => {return { etag: "e", key }},
+            list: async () => {
+                return { objects: [] };
+            },
+            resumeMultipartUpload: () => {
+                return {};
+            },
+            store: async (key: string) => {
+                return { etag: "e", key };
+            },
+            upload: async (key: string) => {
+                return { etag: "e", key };
+            },
         };
 
         let exposed: Record<string, unknown> = {};

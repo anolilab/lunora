@@ -111,7 +111,9 @@ const corruptBaselineResult = (context: GateContext): SchemaDriftGateResult => {
         `Fix it (e.g. resolve a merge conflict in cirrus/.cirrus-schema.json), or pass --update-schema-baseline to regenerate it from the current schema.`;
 
     if (context.updateBaseline && !context.readOnly) {
-        context.logger.warn(`schema baseline was unreadable; regenerating from the current schema on success (--update-schema-baseline): ${context.snapshotPath}`);
+        context.logger.warn(
+            `schema baseline was unreadable; regenerating from the current schema on success (--update-schema-baseline): ${context.snapshotPath}`,
+        );
 
         return { blocked: false, changes: [], reason, rebless: context.rebless };
     }

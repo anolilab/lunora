@@ -562,7 +562,10 @@ describe("shardDO: mutation → subscription-refresh pipeline", () => {
 
         // One write touching "messages" — every socket's memo intersects "messages".
         shard.outcomes.set("messages:list", {
-            result: [{ _id: "m1", text: "hello" }, { _id: "m2", text: "world" }],
+            result: [
+                { _id: "m1", text: "hello" },
+                { _id: "m2", text: "world" },
+            ],
             tables: new Set(["messages"]),
         });
         shard.changedTableOnRpc = "messages";
