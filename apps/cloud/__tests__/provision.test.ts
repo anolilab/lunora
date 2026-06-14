@@ -21,6 +21,9 @@ const fakeApi = (): { api: CloudflareApi; deletes: string[]; puts: PutScriptInpu
 
     return {
         api: {
+            createCustomHostname: vi.fn(async () => {
+                return { id: "ch-1" };
+            }),
             createD1Database: vi.fn(async () => {
                 return { uuid: "d1-uuid-123" };
             }),

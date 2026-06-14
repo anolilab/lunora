@@ -84,6 +84,10 @@ export default defineSchema({
         .index("by_org_slug", ["organizationId", "slug"], { unique: true }),
 
     deployments: defineTable({
+        // Tenant admin bearer the platform set on the deployed worker; lets the
+        // hosted-studio admin proxy (§3) call its /_cirrus/admin/*. Should be
+        // envelope-encrypted at rest (§7) — stored plain here for the scaffold.
+        adminToken: v.optional(v.string()),
         // Preview deployments carry the originating git branch (§2.3).
         branch: v.optional(v.string()),
         // Content hash of the uploaded worker bundle; rollback re-converges to a
@@ -146,4 +150,17 @@ export default defineSchema({
         .global()
         .index("by_org", ["organizationId"])
         .index("by_token", ["tokenHash"], { unique: true }),
+
+    // Metered usage events (§4), summed per org per billing period for quota +
+    // overage billing. Written by the platform from the Analytics-Engine stream.
+    usageEvents: defineTable({
+        createdAt: v.number(),
+        deploymentId: v.optional(v.id("deployments")),
+        kind: v.union(v.literal("requests"), v.literal("cpuMs"), v.literal("storageBytes")),
+        organizationId: v.id("organizations"),
+        periodStart: v.number(),
+        quantity: v.number(),
+    })
+        .global()
+        .index("by_org", ["organizationId"]),
 });

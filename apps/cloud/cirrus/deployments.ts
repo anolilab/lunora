@@ -7,6 +7,7 @@ import { assertMember, authorizeDeployKey } from "./authz";
 
 interface DeploymentRow {
     _id: Id<"deployments">;
+    adminToken?: string;
     branch?: string;
     bundleHash?: string;
     createdAt: number;
@@ -24,6 +25,26 @@ interface DeploymentRow {
 interface ProjectRow {
     _id: Id<"projects">;
 }
+
+/**
+ * Resolve a deployment's tenant URL + admin token for the hosted-studio admin
+ * proxy (§3). Asserts the caller is a member of the deployment's org. Returns
+ * `null` when the deployment is missing, in another org, or not yet live.
+ */
+export const adminTarget = query({
+    args: { deploymentId: v.id("deployments"), organizationId: v.id("organizations") },
+    handler: async (context, { deploymentId, organizationId }): Promise<null | { adminToken: string; url: string }> => {
+        await assertMember(context, organizationId);
+
+        const deployment = (await context.db.get(deploymentId)) as DeploymentRow | null;
+
+        if (deployment?.organizationId !== organizationId || !deployment.adminToken || !deployment.url) {
+            return null;
+        }
+
+        return { adminToken: deployment.adminToken, url: deployment.url };
+    },
+});
 
 /** A project's deployments, newest first. Caller must be a member of the org. */
 export const listByProject = query({
@@ -46,6 +67,8 @@ export const listByProject = query({
  */
 export const create = mutation({
     args: {
+        // Tenant admin token the platform set on the worker (for the admin proxy).
+        adminToken: v.optional(v.string()),
         branch: v.optional(v.string()),
         // CI deploy path: a valid deploy key authorizes in lieu of a member session.
         deployKey: v.optional(v.string()),
@@ -77,6 +100,7 @@ export const create = mutation({
         const now = Date.now();
 
         return context.db.insert("deployments", {
+            ...(arguments_.adminToken ? { adminToken: arguments_.adminToken } : {}),
             branch: arguments_.branch,
             createdAt: now,
             createdBy,
