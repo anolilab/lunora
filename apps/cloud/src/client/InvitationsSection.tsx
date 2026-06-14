@@ -11,18 +11,19 @@ interface InvitationsSectionProps {
 }
 
 /**
- * Invitations tab. `invitations.invite` returns a one-time token that the
- * invitee redeems via `invitations.accept`; it's surfaced once here so the
- * inviter can share the join link. Pending/accepted/revoked status comes from
- * the live list.
+ * Invitations tab. Inviting POSTs to the control plane's `/v1/invitations/send`
+ * edge route, which runs `invitations.invite` under the session and emails the
+ * one-time accept link via `@cirrus/mail` — so the token is mailed to the
+ * invitee, never shown in the browser. Pending/accepted/revoked status comes
+ * from the live `invitations.list` query; revoking stays a direct mutation.
  */
 export const InvitationsSection = ({ organizationId }: InvitationsSectionProps): ReactElement => {
     const invitations = useQuery(api.invitations.list, { organizationId });
-    const invite = useMutation(api.invitations.invite);
     const revoke = useMutation(api.invitations.revoke);
 
     const [email, setEmail] = useState("");
-    const [token, setToken] = useState<string | null>(null);
+    const [sentTo, setSentTo] = useState<string | null>(null);
+    const [pending, setPending] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
     return (
@@ -59,14 +60,13 @@ export const InvitationsSection = ({ organizationId }: InvitationsSectionProps):
 
             <section className="card">
                 <h3>Invite member</h3>
-                {token ? (
+                {sentTo ? (
                     <div className="callout">
-                        <p>Share this invite token with the new member:</p>
-                        <code className="secret">{token}</code>
+                        <p>Invitation emailed to {sentTo}.</p>
                         <button
                             className="link"
                             onClick={() => {
-                                setToken(null);
+                                setSentTo(null);
                             }}
                             type="button"
                         >
@@ -79,14 +79,29 @@ export const InvitationsSection = ({ organizationId }: InvitationsSectionProps):
                     onSubmit={(event) => {
                         event.preventDefault();
                         setError(null);
+                        setPending(true);
 
                         void (async () => {
                             try {
-                                const result = await invite.mutate({ email, organizationId });
-                                setToken(result.token);
+                                const response = await fetch("/v1/invitations/send", {
+                                    body: JSON.stringify({ email, organizationId }),
+                                    credentials: "include",
+                                    headers: { "content-type": "application/json" },
+                                    method: "POST",
+                                });
+
+                                if (!response.ok) {
+                                    const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+
+                                    throw new Error(payload?.error ?? `invite failed (${String(response.status)})`);
+                                }
+
+                                setSentTo(email);
                                 setEmail("");
                             } catch (error_: unknown) {
                                 setError(error_ instanceof Error ? error_.message : "invite failed");
+                            } finally {
+                                setPending(false);
                             }
                         })();
                     }}
@@ -101,8 +116,8 @@ export const InvitationsSection = ({ organizationId }: InvitationsSectionProps):
                         type="email"
                         value={email}
                     />
-                    <button className="primary" disabled={invite.pending} type="submit">
-                        Invite
+                    <button className="primary" disabled={pending} type="submit">
+                        {pending ? "Sending…" : "Invite"}
                     </button>
                     {error ? (
                         <p className="error" role="alert">

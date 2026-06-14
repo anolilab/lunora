@@ -151,9 +151,12 @@ export default defineSchema({
         .index("by_org", ["organizationId"])
         .index("by_token", ["tokenHash"], { unique: true }),
 
-    // Metered usage events (§4), summed per org per billing period for quota +
-    // overage billing. Written by the platform from the Analytics-Engine stream.
-    usageEvents: defineTable({
+    // Platform resource-metering events (§4), summed per org per billing period
+    // for quota + overage billing. Written by the platform metering ingestion
+    // endpoint (`POST /v1/usage`) and the Analytics-Engine stream. Distinct from
+    // the `@cirrus/payment` `usageEvents` ledger below (which meters *billing*
+    // features); this one meters platform resources (requests/CPU/storage).
+    platformUsage: defineTable({
         createdAt: v.number(),
         deploymentId: v.optional(v.id("deployments")),
         kind: v.union(v.literal("requests"), v.literal("cpuMs"), v.literal("storageBytes")),
@@ -163,4 +166,79 @@ export default defineSchema({
     })
         .global()
         .index("by_org", ["organizationId"]),
+
+    // ── @cirrus/payment tables (§4 billing) ───────────────────────────────────
+    // Declared inline (codegen parses this file's AST and can't resolve a cross-
+    // package `...paymentTables` spread). `@cirrus/payment`'s exported
+    // `paymentTables` is the canonical column reference these mirror; the payment
+    // store reads/writes them via `ctx.payments`. All `.global()` so billing state
+    // lives in the control-plane D1 alongside the org metadata it keys on
+    // (referenceId === organizations._id).
+    customers: defineTable({
+        createdAt: v.number(),
+        email: v.optional(v.string()),
+        provider: v.string(),
+        providerCustomerId: v.string(),
+        referenceId: v.string(),
+    })
+        .global()
+        .index("by_provider_customer", ["provider", "providerCustomerId"], { unique: true })
+        .index("by_reference", ["referenceId"]),
+
+    events: defineTable({
+        processedAt: v.number(),
+        provider: v.string(),
+        providerEventId: v.string(),
+        type: v.string(),
+    })
+        .global()
+        .index("by_provider_event", ["provider", "providerEventId"], { unique: true }),
+
+    paymentSessions: defineTable({
+        amountMinor: v.bigint(),
+        capturedMinor: v.bigint(),
+        createdAt: v.number(),
+        currency: v.string(),
+        provider: v.string(),
+        providerSessionId: v.string(),
+        referenceId: v.string(),
+        refundedMinor: v.bigint(),
+        state: v.string(),
+        updatedAt: v.number(),
+    })
+        .global()
+        .index("by_provider_session", ["provider", "providerSessionId"], { unique: true })
+        .index("by_reference", ["referenceId"]),
+
+    subscriptions: defineTable({
+        cancelAtPeriodEnd: v.boolean(),
+        createdAt: v.number(),
+        currentPeriodEnd: v.optional(v.number()),
+        currentPeriodStart: v.optional(v.number()),
+        priceId: v.string(),
+        provider: v.string(),
+        providerSubscriptionId: v.string(),
+        quantity: v.number(),
+        referenceId: v.string(),
+        state: v.string(),
+        updatedAt: v.number(),
+    })
+        .global()
+        .index("by_provider_subscription", ["provider", "providerSubscriptionId"], { unique: true })
+        .index("by_reference", ["referenceId"]),
+
+    // Metered-usage ledger backing `ctx.payments.track` / `check` (billing
+    // features). Separate from `platformUsage` above (platform resources).
+    usageEvents: defineTable({
+        createdAt: v.number(),
+        featureId: v.string(),
+        idempotencyKey: v.string(),
+        provider: v.string(),
+        quantity: v.number(),
+        referenceId: v.string(),
+        reportedToProvider: v.boolean(),
+    })
+        .global()
+        .index("by_idempotency", ["provider", "idempotencyKey"], { unique: true })
+        .index("by_reference_feature", ["referenceId", "featureId"]),
 });
