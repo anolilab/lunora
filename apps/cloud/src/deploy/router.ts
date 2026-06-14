@@ -1,6 +1,7 @@
 import type { ExecutionContextLike } from "@cirrus/runtime";
 
 import { api } from "../../cirrus/_generated/api.js";
+import { proxyAdminRequest } from "../admin/proxy";
 import { createHttpCloudflareApi } from "../cloudflare/api";
 import { handleGitHubWebhook } from "../github/webhook";
 import { createCloudflareProvisioner } from "../provision";
@@ -29,90 +30,135 @@ interface HttpRouterLike {
 
 type ProjectResolution = { organizationId: string; projectId: string; slug: string }; // secret-scanner:allow -- domain field name
 
+interface AdminBody {
+    body?: unknown;
+    deploymentId?: string;
+    method?: string;
+    organizationId?: string;
+    path?: string;
+}
+
 const jsonError = (status: number, error: string): Response => Response.json({ error }, { headers: { "content-type": "application/json" }, status });
 
+/** `POST /v1/github/webhook` — verify + resolve the connected project (§2.3). */
+const handleWebhookRoute = (request: Request, environment: RouterEnv): Promise<Response> => {
+    if (!environment.GITHUB_WEBHOOK_SECRET) {
+        return Promise.resolve(jsonError(500, "github webhook secret not configured"));
+    }
+
+    const context = environment.__cirrusCtx;
+
+    if (!context) {
+        return Promise.resolve(jsonError(500, "cirrus context unavailable"));
+    }
+
+    return handleGitHubWebhook(request, {
+        resolveProject: (repository) => context.runMutation<null | ProjectResolution>(api.projects.byGithubRepo, { repository }),
+        secret: environment.GITHUB_WEBHOOK_SECRET,
+    });
+};
+
+/** `POST /v1/admin` — hosted-studio admin proxy to a tenant deployment (§3). */
+const handleAdminRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
+    const context = environment.__cirrusCtx;
+
+    if (!context) {
+        return jsonError(500, "cirrus context unavailable");
+    }
+
+    const adminBody = (await request.json().catch(() => null)) as AdminBody | null;
+
+    if (!adminBody?.organizationId || !adminBody.deploymentId || !adminBody.path) {
+        return jsonError(400, "organizationId, deploymentId and path are required");
+    }
+
+    try {
+        return await proxyAdminRequest(
+            {
+                body: adminBody.body,
+                deploymentId: adminBody.deploymentId,
+                method: adminBody.method ?? "GET",
+                organizationId: adminBody.organizationId,
+                path: adminBody.path,
+            },
+            {
+                authorize: () => Promise.resolve(), // membership is asserted by `adminTarget`
+                recordAudit: async (entry) => {
+                    await context.runMutation(api.audit_log.record, { action: entry.action, organizationId: entry.organizationId });
+                },
+                resolveTarget: (organizationId, deploymentId) =>
+                    context.runMutation<null | { adminToken: string; url: string }>(api.deployments.adminTarget, { deploymentId, organizationId }),
+            },
+        );
+    } catch (error) {
+        return jsonError(403, error instanceof Error ? error.message : "admin request denied");
+    }
+};
+
 /**
- * The control-plane deploy API, mounted as the worker's `httpRouter` (the
- * lowest-priority matcher, after auth + reserved `/_cirrus/*` routes). It owns
- * `POST /v1/deploy` and 404s everything else (the control plane serves no SSR).
- *
- * The worker injects the per-request Cirrus action context on `env.__cirrusCtx`;
- * the deploy backend uses its `runMutation` to reach the control-plane mutations
- * (`deploy_keys:verify`, `deployments:create`/`updateStatus`) — all authorized
- * by the deploy key, so no user session is required (CLOUD-PLAN.md §2.2).
+ * The control-plane HTTP API, mounted as the worker's `httpRouter` (lowest-
+ * priority matcher). Routes `POST /v1/{deploy,github/webhook,admin}` and 404s
+ * the rest. The worker injects the per-request Cirrus action context on
+ * `env.__cirrusCtx`; handlers reach the control-plane functions through it.
  */
 export const createDeployRouter = (): HttpRouterLike => {
     // One scheduler per worker instance (≈ per cell): paces all Cloudflare API
     // work against the account's 1,200-req/5-min budget (§2.5).
     const scheduler = new CellScheduler({ bucket: cloudflareAccountBudget() });
 
+    const handleDeployRoute = (request: Request, environment: RouterEnv): Promise<Response> => {
+        const context = environment.__cirrusCtx;
+
+        if (!context) {
+            return Promise.resolve(jsonError(500, "cirrus context unavailable"));
+        }
+
+        const cell = environment.CIRRUS_CELL ?? "default";
+        const appDomain = environment.CIRRUS_APP_DOMAIN ?? "cirrus.app";
+        const cloudflareApi = createHttpCloudflareApi({ accountId: environment.CLOUDFLARE_ACCOUNT_ID ?? "", apiToken: environment.CLOUDFLARE_API_TOKEN ?? "" });
+        const provisioner = createCloudflareProvisioner({ api: cloudflareApi, urlForScript: (scriptName) => `https://${scriptName}.${appDomain}` });
+
+        const backend: DeployBackend = {
+            createDeployment: async ({ adminToken, branch, key, kind, organizationId, projectId, scriptName }) => {
+                const deploymentId = await context.runMutation<string>(api.deployments.create, {
+                    adminToken,
+                    branch,
+                    deployKey: key,
+                    kind,
+                    organizationId,
+                    projectId,
+                    scriptName,
+                });
+
+                return { deploymentId };
+            },
+            updateStatus: async ({ bundleHash, deploymentId, key, status, url: deployedUrl }) => {
+                await context.runMutation(api.deployments.updateStatus, { bundleHash, deployKey: key, id: deploymentId, status, url: deployedUrl });
+            },
+            verifyKey: (key) => context.runMutation<DeployTarget | null>(api.deploy_keys.verify, { key }),
+        };
+
+        return handleDeployRequest(request, { backend, cell, dispatchNamespace: (kind) => `cirrus-${kind}`, provisioner, scheduler });
+    };
+
     return {
-        async fetch(request, environment) {
+        fetch(request, environment) {
             const url = new URL(request.url);
             const routerEnv = (environment ?? {}) as RouterEnv;
 
-            // GitHub webhook → preview automation (§2.3). Self-authenticating via
-            // its HMAC signature; resolves the connected project via the Cirrus ctx.
             if (request.method === "POST" && url.pathname === "/v1/github/webhook") {
-                if (!routerEnv.GITHUB_WEBHOOK_SECRET) {
-                    return jsonError(500, "github webhook secret not configured");
-                }
-
-                const webhookContext = routerEnv.__cirrusCtx;
-
-                if (!webhookContext) {
-                    return jsonError(500, "cirrus context unavailable");
-                }
-
-                return handleGitHubWebhook(request, {
-                    resolveProject: (repository) => webhookContext.runMutation<null | ProjectResolution>(api.projects.byGithubRepo, { repository }),
-                    secret: routerEnv.GITHUB_WEBHOOK_SECRET,
-                });
+                return handleWebhookRoute(request, routerEnv);
             }
 
-            if (request.method !== "POST" || url.pathname !== "/v1/deploy") {
-                return jsonError(404, "not found");
+            if (request.method === "POST" && url.pathname === "/v1/admin") {
+                return handleAdminRoute(request, routerEnv);
             }
 
-            const context = routerEnv.__cirrusCtx;
-
-            if (!context) {
-                return jsonError(500, "cirrus context unavailable");
+            if (request.method === "POST" && url.pathname === "/v1/deploy") {
+                return handleDeployRoute(request, routerEnv);
             }
 
-            const cell = routerEnv.CIRRUS_CELL ?? "default";
-            const appDomain = routerEnv.CIRRUS_APP_DOMAIN ?? "cirrus.app";
-            const cloudflareApi = createHttpCloudflareApi({
-                accountId: routerEnv.CLOUDFLARE_ACCOUNT_ID ?? "",
-                apiToken: routerEnv.CLOUDFLARE_API_TOKEN ?? "",
-            });
-            const provisioner = createCloudflareProvisioner({ api: cloudflareApi, urlForScript: (scriptName) => `https://${scriptName}.${appDomain}` });
-            const backend: DeployBackend = {
-                createDeployment: async ({ branch, key, kind, organizationId, projectId, scriptName }) => {
-                    const deploymentId = await context.runMutation<string>(api.deployments.create, {
-                        branch,
-                        deployKey: key,
-                        kind,
-                        organizationId,
-                        projectId,
-                        scriptName,
-                    });
-
-                    return { deploymentId };
-                },
-                updateStatus: async ({ bundleHash, deploymentId, key, status, url: deployedUrl }) => {
-                    await context.runMutation(api.deployments.updateStatus, { bundleHash, deployKey: key, id: deploymentId, status, url: deployedUrl });
-                },
-                verifyKey: (key) => context.runMutation<DeployTarget | null>(api.deploy_keys.verify, { key }),
-            };
-
-            return handleDeployRequest(request, {
-                backend,
-                cell,
-                dispatchNamespace: (kind) => `cirrus-${kind}`,
-                provisioner,
-                scheduler,
-            });
+            return Promise.resolve(jsonError(404, "not found"));
         },
     };
 };
