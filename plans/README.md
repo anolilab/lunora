@@ -9,7 +9,7 @@ What survives in this directory:
 | Plan | Title                                                     | Pkg                       | Status      |
 | ---- | --------------------------------------------------------- | ------------------------- | ----------- |
 | 022  | Borrow from localflare + d1-manager into Studio (7 items) | studio, do, advisor       | IN PROGRESS |
-| 024  | Visual schema editor (local-dev `schema.ts` + codegen)    | config, vite, cli, studio | TODO        |
+| 024  | Visual schema editor (local-dev `schema.ts` + codegen)    | config, vite, cli, studio | DONE        |
 | 025  | Access-rule editor + permissions playground               | studio (+config)          | TODO        |
 | 026  | Datasette faceting + shareable canned queries             | do, studio                | TODO        |
 
