@@ -94,6 +94,8 @@ export const create = mutation({
         // Tenant admin token the platform set on the worker (for the admin proxy).
         adminToken: v.optional(v.string()),
         branch: v.optional(v.string()),
+        // The tenant's compiled cron expressions (for the WfP cron fan-out, §2.4).
+        cronSpecs: v.optional(v.array(v.string())),
         // CI deploy path: a valid deploy key authorizes in lieu of a member session.
         deployKey: v.optional(v.string()),
         kind: v.union(v.literal("production"), v.literal("preview"), v.literal("dev")),
@@ -126,6 +128,7 @@ export const create = mutation({
         return context.db.insert("deployments", {
             ...(arguments_.adminToken ? { adminToken: arguments_.adminToken } : {}),
             branch: arguments_.branch,
+            ...(arguments_.cronSpecs && arguments_.cronSpecs.length > 0 ? { cronSpecs: arguments_.cronSpecs } : {}),
             createdAt: now,
             createdBy,
             // Previews are TTL'd; the cleanup cron tears down expired ones (§2.3).
