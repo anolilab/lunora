@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -34,12 +34,20 @@ const SECRET_BYTES = 32;
 const SECRET_KEY = /(?:KEY|PASSWORD|SECRET|TOKEN)$/u;
 
 /**
- * Substrings that mark a value as a fill-me-in placeholder rather than a usable
+ * Markers that flag a value as a fill-me-in placeholder rather than a usable
  * default. We only replace these — a secret-like key the example already pins to
  * a real value (rare, but e.g. a shared dev token) is left untouched. The list
  * leans toward catching the common placeholder conventions: missing one means a
  * `*_SECRET` ships verbatim (a worthless secret the user might even push to
  * prod), which is worse than the bounded, locally-recoverable cost of a false hit.
+ *
+ * Matching is **whole-token**, not raw substring (see {@link isPlaceholderValue}):
+ * a marker matches only when it stands alone — bounded by the string edges or a
+ * non-alphanumeric neighbour — so `todoist.com` / `examples-of-x` are NOT hits.
+ * Markers ending in `-`/`_` (e.g. `your-`, `your_`) are **prefix** markers: their
+ * trailing `-`/`_` is itself the boundary, so they match `your-key`, `your_token`, …
+ * When adding a marker, keep this in mind: a plain word matches only as a whole
+ * token, a `-`/`_`-terminated one matches as a prefix.
  */
 const PLACEHOLDER_MARKERS = [
     "replace",
@@ -78,7 +86,19 @@ const isPlaceholderValue = (value: string): boolean => {
         return true;
     }
 
-    return PLACEHOLDER_MARKERS.some((marker) => normalised.includes(marker));
+    return PLACEHOLDER_MARKERS.some((marker) => {
+        const escaped = marker.replaceAll(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+        // A marker must stand alone: bounded on the left by a string edge or a
+        // non-alphanumeric char. On the right we require the same boundary *unless*
+        // the marker already ends in a non-alphanumeric char (a `-`/`_` prefix
+        // marker like `your-`), whose own terminator is the boundary. This stops
+        // `todoist` / `examples-of-x` matching while keeping `todo`, `change-me`,
+        // and the `your-`/`your_` prefixes working.
+        const needsTrailingBoundary = /[a-z0-9]$/u.test(marker);
+        const pattern = needsTrailingBoundary ? `(^|[^a-z0-9])${escaped}([^a-z0-9]|$)` : `(^|[^a-z0-9])${escaped}`;
+
+        return new RegExp(pattern, "u").test(normalised);
+    });
 };
 
 const isPlaceholder = (rawValue: string): boolean => isPlaceholderValue(unquoteDevVariable(rawValue.trim()));
@@ -208,7 +228,9 @@ interface EnsureDevVariablesDeps {
 // Distinct from `ScaffoldPlan["status"]` on purpose: the plan is pre-prompt,
 // the result is post-prompt. `generated` = wrote a fresh file, `augmented` =
 // topped up an existing one, `declined` = user said no.
-type EnsureDevVariablesStatus = "augmented" | "declined" | "exists" | "generated" | "no-example";
+// `skipped-exists` = another process created `.dev.vars` between our existence
+// check and the atomic rename (a create-race), so we left its file untouched.
+type EnsureDevVariablesStatus = "augmented" | "declined" | "exists" | "generated" | "no-example" | "skipped-exists";
 
 interface EnsureDevVariablesResult {
     /** Keys appended to an existing file, when `status` is `"augmented"`. */
@@ -220,6 +242,27 @@ interface EnsureDevVariablesResult {
 
 /** `" (generated A, B)"` for a log line, or `""` when nothing was generated. */
 const generatedSuffix = (keys: string[]): string => (keys.length > 0 ? ` (generated ${keys.join(", ")})` : "");
+
+/**
+ * Atomically create `.dev.vars`: write the content to a sibling temp file with
+ * exclusive-create (`wx`), then `rename` it over the target. The rename is atomic
+ * within one filesystem, so a concurrent `cirrus dev` / Vite dev server can never
+ * observe a half-written file or clobber a peer's freshly generated secrets. The
+ * temp lives in the same directory so the rename never crosses devices (`EXDEV`).
+ * On any failure the temp file is removed before the error propagates.
+ */
+const atomicCreateDevVariables = (path: string, content: string): void => {
+    const temporaryPath = `${path}.tmp-${String(process.pid)}`;
+
+    try {
+        writeFileSync(temporaryPath, content, { encoding: "utf8", flag: "wx" });
+        renameSync(temporaryPath, path);
+    } catch (error) {
+        rmSync(temporaryPath, { force: true });
+
+        throw error;
+    }
+};
 
 /** Append lines to an existing `.dev.vars`, inserting a separating newline only if needed. */
 const appendDevVariables = (path: string, additions: string[]): void => {
@@ -268,7 +311,14 @@ const ensureDevVariables = async (deps: EnsureDevVariablesDeps): Promise<EnsureD
             return { addedKeys: [], generatedKeys: [], status: "declined" };
         }
 
-        writeFileSync(devVariablesPath, plan.content, "utf8");
+        // Re-check right before the write: another process may have created the
+        // file since the `existsSync` above. If so, bail rather than overwrite the
+        // peer's (possibly secret-bearing) file.
+        if (existsSync(devVariablesPath)) {
+            return { addedKeys: [], generatedKeys: [], status: "skipped-exists" };
+        }
+
+        atomicCreateDevVariables(devVariablesPath, plan.content);
         deps.info(`Created ${DEV_VARS_FILE}${generatedSuffix(plan.generatedKeys)}.`);
 
         return { addedKeys: [], generatedKeys: plan.generatedKeys, status: "generated" };

@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ScaffoldPlan } from "../src/scaffold-dev-variables";
-import { ensureDevVariables, planDevVariablesAugment, planDevVariablesScaffold } from "../src/scaffold-dev-variables";
+import { ensureDevVariables, isPlaceholderValue, planDevVariablesAugment, planDevVariablesScaffold } from "../src/scaffold-dev-variables";
 
 /** Deterministic stand-in for `crypto.randomBytes(n).toString("hex")`. */
 const fixedHex = (bytes: number): string => "a".repeat(bytes * 2);
@@ -36,6 +36,44 @@ AUTH_URL="http://localhost:5173"
 STORAGE_SECRET="replace-with-openssl-rand-hex-32"
 CIRRUS_ADMIN_TOKEN="replace-with-openssl-rand-hex-32"
 `;
+
+describe("isPlaceholderValue", () => {
+    it("detects genuine placeholders (empty, angle-bracketed, and standalone markers)", () => {
+        expect.assertions(8);
+
+        expect(isPlaceholderValue("")).toBe(true);
+        expect(isPlaceholderValue("   ")).toBe(true);
+        expect(isPlaceholderValue("<your-key>")).toBe(true);
+        expect(isPlaceholderValue("TODO")).toBe(true);
+        expect(isPlaceholderValue("change-me")).toBe(true);
+        expect(isPlaceholderValue("xxx")).toBe(true);
+        // Marker as a token bounded by separators within a larger value.
+        expect(isPlaceholderValue("replace-with-openssl-rand-hex-32")).toBe(true);
+        expect(isPlaceholderValue("CHANGE_THIS")).toBe(true);
+    });
+
+    it("preserves prefix markers (`your-` / `your_`)", () => {
+        expect.assertions(2);
+
+        expect(isPlaceholderValue("your-api-key")).toBe(true);
+        expect(isPlaceholderValue("your_secret_token")).toBe(true);
+    });
+
+    it("does not match a real value that merely contains a marker as a substring", () => {
+        expect.assertions(5);
+
+        // `todo` ⊂ `todoist`, but it is not a standalone token here.
+        expect(isPlaceholderValue("https://todoist.com/hooks/abc")).toBe(false);
+        // `example` ⊂ `examples`, glued to the rest of the word.
+        expect(isPlaceholderValue("examplesoflife")).toBe(false);
+        // `xxx` ⊂ a real-looking token with no boundary around it.
+        expect(isPlaceholderValue("axxxk3yliteral")).toBe(false);
+        // A 64-hex-char generated secret must never read as a placeholder.
+        expect(isPlaceholderValue("a".repeat(64))).toBe(false);
+        // `your` without the trailing separator is not the `your-`/`your_` prefix.
+        expect(isPlaceholderValue("yourealthing")).toBe(false);
+    });
+});
 
 describe("planDevVariablesScaffold", () => {
     it("reports `exists` when .dev.vars is already present", () => {
@@ -95,6 +133,24 @@ describe("planDevVariablesScaffold", () => {
 
         expect(plan.generatedKeys).toStrictEqual([]);
         expect(plan.content).toContain('SHARED_TOKEN="abc123def456"');
+    });
+
+    it("does not regenerate a real secret whose value merely contains a marker substring", () => {
+        expect.assertions(4);
+
+        const plan = generatePlan(
+            planDevVariablesScaffold({
+                devVarsExists: false,
+                // `todo` ⊂ `todoist`, `example` ⊂ the URL — but neither is a standalone token.
+                exampleContent: 'WEBHOOK_SECRET="https://todoist.com/hooks/abc"\nDEPLOY_TOKEN="prodexamplesecret"\n',
+                randomHex: fixedHex,
+            }),
+        );
+
+        // Substring-collision values are real → kept verbatim, never overwritten.
+        expect(plan.generatedKeys).toStrictEqual([]);
+        expect(plan.content).toContain('WEBHOOK_SECRET="https://todoist.com/hooks/abc"');
+        expect(plan.content).toContain('DEPLOY_TOKEN="prodexamplesecret"');
     });
 });
 
@@ -229,5 +285,54 @@ describe("ensureDevVariables", () => {
 
         expect(result.status).toBe("declined");
         expect(existsSync(join(dir, ".dev.vars"))).toBe(false);
+    });
+
+    it("leaves no temp file behind after generating atomically", async () => {
+        expect.assertions(3);
+
+        writeFileSync(join(dir, ".dev.vars.example"), EXAMPLE, "utf8");
+
+        const result = await ensureDevVariables({ confirm: async () => true, cwd: dir, info: () => undefined, randomHex: fixedHex });
+
+        expect(result.status).toBe("generated");
+        // The file exists with the generated content...
+        expect(readFileSync(join(dir, ".dev.vars"), "utf8")).toContain(`AUTH_SECRET="${"a".repeat(64)}"`);
+        // ...and the sibling temp path used for the atomic rename is gone.
+        expect(existsSync(join(dir, `.dev.vars.tmp-${String(process.pid)}`))).toBe(false);
+    });
+
+    it("cleans up the temp file and rethrows when the atomic write fails", async () => {
+        expect.assertions(3);
+
+        writeFileSync(join(dir, ".dev.vars.example"), EXAMPLE, "utf8");
+        // Pre-create the exclusive-create temp path so `writeFileSync(..., { flag: "wx" })` fails.
+        const temporaryPath = join(dir, `.dev.vars.tmp-${String(process.pid)}`);
+
+        writeFileSync(temporaryPath, "stale", "utf8");
+
+        await expect(ensureDevVariables({ confirm: async () => true, cwd: dir, info: () => undefined, randomHex: fixedHex })).rejects.toThrow();
+
+        // The stale temp is removed by the cleanup path, and no .dev.vars was produced.
+        expect(existsSync(temporaryPath)).toBe(false);
+        expect(existsSync(join(dir, ".dev.vars"))).toBe(false);
+    });
+
+    it("skips the write when another process creates .dev.vars after the existence check", async () => {
+        expect.assertions(2);
+
+        writeFileSync(join(dir, ".dev.vars.example"), EXAMPLE, "utf8");
+
+        // Simulate the create-race: a peer drops the file in during the `confirm`
+        // prompt, between the initial existsSync and the atomic rename.
+        const confirm = vi.fn<Confirm>(async () => {
+            writeFileSync(join(dir, ".dev.vars"), 'AUTH_SECRET="peer-secret"\n', "utf8");
+
+            return true;
+        });
+        const result = await ensureDevVariables({ confirm, cwd: dir, info: () => undefined, randomHex: fixedHex });
+
+        expect(result.status).toBe("skipped-exists");
+        // The peer's file is left untouched.
+        expect(readFileSync(join(dir, ".dev.vars"), "utf8")).toBe('AUTH_SECRET="peer-secret"\n');
     });
 });
