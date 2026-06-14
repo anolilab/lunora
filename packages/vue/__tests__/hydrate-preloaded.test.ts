@@ -1,9 +1,9 @@
 import type { FunctionReference, Preloaded } from "@cirrus/client";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { effectScope } from "vue";
 
 import { hydratePreloaded } from "../src/hydrate-preloaded";
-import { useQuery } from "../src/use-query";
+import { subscribeToQuery, useQuery } from "../src/use-query";
 import { createFakeClient } from "./fake-client";
 
 const listMessages: FunctionReference = { __cirrusRef: "messages:list" };
@@ -82,6 +82,40 @@ describe(hydratePreloaded, () => {
         expect(fake.subscribeCalls[0]?.options.shardKey).toBe("channel:demo");
 
         scope.stop();
+    });
+});
+
+describe(subscribeToQuery, () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it("warns when called with no active effect scope", () => {
+        const fake = createFakeClient();
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        // Called bare — no effectScope().run(...) wrapping it.
+        subscribeToQuery(fake.client, listMessages, { channelId: "c1" });
+
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn.mock.calls[0]?.[0]).toContain("no active effect scope");
+    });
+
+    it("does not warn inside an effect scope and auto-cleans on scope.stop()", () => {
+        const fake = createFakeClient();
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        const scope = effectScope();
+        scope.run(() => {
+            subscribeToQuery(fake.client, listMessages, { channelId: "c1" });
+        });
+
+        expect(warn).not.toHaveBeenCalled();
+        expect(fake.unsubscribeSpy).not.toHaveBeenCalled();
+
+        scope.stop();
+
+        expect(fake.unsubscribeSpy).toHaveBeenCalledTimes(1);
     });
 });
 

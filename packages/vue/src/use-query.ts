@@ -45,6 +45,11 @@ export const subscribeToQuery = <F extends FunctionReference, T = ReturnOf<F>>(
 
     if (getCurrentScope()) {
         onScopeDispose(unsubscribe);
+    } else if (process.env.NODE_ENV !== "production") {
+        console.warn(
+            "[@cirrus/vue] subscribeToQuery called with no active effect scope — its subscription will not be cleaned up automatically. " +
+                "Call it inside setup()/an effect scope, or call the returned teardown yourself.",
+        );
     }
 
     return data;
