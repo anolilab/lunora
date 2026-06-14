@@ -61,7 +61,7 @@ export const runDeployment = async (spec: TenantDeploymentSpec, options: RunDepl
  * project deletion). Lower default priority than a deploy.
  */
 export const destroyDeployment = async (
-    reference: { cell: string; scriptName: string },
+    reference: { dispatchNamespace: string; scriptName: string },
     options: { priority?: number; provisioner: Provisioner; scheduler: CellScheduler },
 ): Promise<void> => {
     await options.scheduler.run(() => options.provisioner.destroy(reference), { priority: options.priority ?? -1 });

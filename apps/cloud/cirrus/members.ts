@@ -1,5 +1,6 @@
 import { CirrusError } from "@cirrus/server";
 
+import { withinPlanQuota } from "../src/billing/plans";
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
@@ -42,6 +43,13 @@ export const add = mutation({
 
         if (existing) {
             throw new CirrusError("CONFLICT", "user is already a member");
+        }
+
+        const organization = (await context.db.get(arguments_.organizationId)) as { plan?: string } | null;
+        const all = await context.db.members.findMany({ where: { organizationId: arguments_.organizationId } });
+
+        if (!withinPlanQuota(organization?.plan ?? "free", "members", (all.page as unknown as MemberRow[]).length)) {
+            throw new CirrusError("FORBIDDEN", "member quota reached for this plan");
         }
 
         return context.db.insert("members", {

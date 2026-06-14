@@ -4,6 +4,8 @@
  * preview down. Signatures are verified with the webhook secret (HMAC-SHA256).
  */
 
+import { previewScriptName } from "../deploy/preview";
+
 const encoder = new TextEncoder();
 
 const toHex = (buffer: ArrayBuffer): string => [...new Uint8Array(buffer)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
@@ -83,17 +85,20 @@ export const parsePullRequestEvent = (payload: unknown): null | PreviewIntent =>
     return null;
 };
 
+/** Resolves a connected GitHub repository to its Cirrus project. */
+export type ResolveProject = (repository: string) => Promise<null | { organizationId: string; projectId: string; slug: string }>; // secret-scanner:allow -- domain field name
+
 /**
  * HTTP handler for the GitHub webhook endpoint (`POST /v1/github/webhook`).
- * Verifies the signature, parses the PR event, and acknowledges the resulting
- * preview intent.
+ * Verifies the signature, parses the PR event, resolves the connected project,
+ * and returns the preview intent enriched with the resolved project + the
+ * deterministic preview script id.
  *
- * Triggering the preview deploy/teardown from here additionally needs a
- * repository→project link and a stored automation credential (the deploy
- * request has no user session) — a bounded follow-up; the verified, parsed
- * intent is returned so that wiring has a tested entry point.
+ * The deploy itself runs from CI via `POST /v1/deploy` with a preview deploy key
+ * (CI holds it); previews tear down via their TTL cron (§2.3). So this endpoint's
+ * job is project resolution + acknowledgement, not minting cross-org deploys.
  */
-export const handleGitHubWebhook = async (request: Request, options: { secret: string }): Promise<Response> => {
+export const handleGitHubWebhook = async (request: Request, options: { resolveProject: ResolveProject; secret: string }): Promise<Response> => {
     const body = await request.text();
 
     if (!(await verifyGitHubSignature(options.secret, body, request.headers.get("x-hub-signature-256")))) {
@@ -114,5 +119,19 @@ export const handleGitHubWebhook = async (request: Request, options: { secret: s
         return Response.json({ ignored: true }, { status: 202 });
     }
 
-    return Response.json({ accepted: true, intent }, { status: 200 });
+    const project = await options.resolveProject(intent.repository);
+
+    if (!project) {
+        return Response.json({ ignored: true, reason: "repository not connected to a project" }, { status: 202 });
+    }
+
+    return Response.json(
+        {
+            accepted: true,
+            intent,
+            previewScriptName: previewScriptName(project.slug, intent.branch),
+            projectId: project.projectId, // secret-scanner:allow -- domain field name
+        },
+        { status: 200 },
+    );
 };
