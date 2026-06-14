@@ -7,6 +7,8 @@
  */
 
 export interface TenantRoute {
+    /** Plan name (free/pro/enterprise) the tenant is on, for runtime limits. */
+    plan?: string;
     scriptName: string;
 }
 
@@ -15,20 +17,32 @@ export interface ResolveTenantOptions {
     appDomain: string;
     /** Resolve a custom (non-apex) hostname to a script id, or null if unknown. */
     resolveCustomDomain?: (hostname: string) => Promise<null | string>;
+    /** Resolve a script id to its org's plan name (for per-plan runtime limits). */
+    resolvePlan?: (scriptName: string) => Promise<string | undefined>;
 }
 
 export const resolveTenant = async (hostname: string, options: ResolveTenantOptions): Promise<null | TenantRoute> => {
     const host = hostname.toLowerCase();
     const suffix = `.${options.appDomain.toLowerCase()}`;
 
-    if (host.endsWith(suffix)) {
-        const label = host.slice(0, -suffix.length);
+    const resolveScript = async (): Promise<null | string> => {
+        if (host.endsWith(suffix)) {
+            const label = host.slice(0, -suffix.length);
 
-        // Single-label subdomains only (`proj.cirrus.app`, not `a.b.cirrus.app`).
-        return label !== "" && !label.includes(".") ? { scriptName: label } : null;
+            // Single-label subdomains only (`proj.cirrus.app`, not `a.b.cirrus.app`).
+            return label !== "" && !label.includes(".") ? label : null;
+        }
+
+        return (await options.resolveCustomDomain?.(host)) ?? null;
+    };
+
+    const scriptName = await resolveScript();
+
+    if (!scriptName) {
+        return null;
     }
 
-    const custom = await options.resolveCustomDomain?.(host);
+    const plan = await options.resolvePlan?.(scriptName);
 
-    return custom ? { scriptName: custom } : null;
+    return { plan, scriptName };
 };

@@ -5,19 +5,27 @@ The managed-platform control plane from [`CLOUD-PLAN.md`](../../CLOUD-PLAN.md),
 app. This is the service that provisions and tracks tenant deployments on
 Cloudflare Workers for Platforms; it is **not** a tenant worker.
 
-> Status: **Phase 1, in progress.** In place: the data model, CRUD functions,
-> org/deploy-key authorization, the deploy-orchestration core (token bucket +
-> per-cell scheduler + state machine), and the `POST /v1/deploy` streaming
-> endpoint. Still to come: the Alchemy-backed provisioner body (currently a
-> rejecting stub — deploys terminate at `failed`), the dispatcher, billing, and
-> the rest of the roadmap / "Forgotten must-haves" in `CLOUD-PLAN.md`.
+> Status: **Phases 1–4 implemented as code**, verified by codegen, tsc, eslint,
+> and unit tests; end-to-end runs need live Cloudflare and provider keys. In
+> place: the data model, CRUD functions, org/deploy-key authorization, the deploy
+> orchestration core (token bucket, per-cell scheduler, state machine) and the
+> `POST /v1/deploy` streaming endpoint, a **real Cloudflare REST provisioner**
+> (`src/cloudflare/api.ts` — D1/R2 create, dispatch-script upload, secrets), the
+> dispatcher Worker with **per-plan runtime limits**, the hosted-studio React SPA
+> (`src/client`), **billing on `@cirrus/payment`** (Stripe checkout/portal/webhook,
+> entitlements, metering ingestion), and **hardened better-auth** (mail-backed
+> verification/reset, optional OAuth, 2FA/passkeys, rate limiting). Still open
+> (needs live infra/services): end-to-end deploy validation, the billing-provider
+> charge wiring against a real Stripe account, cell bring-up IaC, custom domains,
+> and the remaining "Forgotten must-haves" in `CLOUD-PLAN.md`.
 
 ## Layout
 
 ```
 cirrus/
   schema.ts          control-plane data model (cells, organizations, members,
-                     projects, deployments, deployKeys, auditLog, invitations)
+                     projects, deployments, deployKeys, auditLog, invitations,
+                     platformUsage + the @cirrus/payment billing tables)
   authz.ts           assertMember (session) + authorizeDeployKey (CI) — the ACL gate
   cells.ts           list / register cells (CF accounts, §2.5)
   organizations.ts   create / list / getBySlug  (+ seeds owner member + audit)
@@ -26,6 +34,8 @@ cirrus/
   projects.ts        create / listByOrg
   deployments.ts     create / listByProject / updateStatus / cleanupExpiredPreviews
   deploy-keys.ts     issue / list / revoke / verify (SHA-256 hashed)
+  billing.ts         checkout / portal / entitlements / subscription / webhook (§4)
+  usage.ts           platform metering: record / ingest (deploy-key) / summary
   crons.ts           code-first crons (hourly preview cleanup)
 src/
   server.ts          control-plane Worker entry (D1 global tables + deploy router
@@ -41,11 +51,14 @@ src/
     DeploymentsSection.tsx     a project's deployments (read-only; live status)
     MembersSection.tsx         members + add/remove
     DeployKeysSection.tsx      issue (show-once) / revoke deploy keys
-    InvitationsSection.tsx     invite (token shown once) / revoke
+    InvitationsSection.tsx     invite via /v1/invitations/send (token emailed) / revoke
     UsageSection.tsx           current-month usage summary
+    BillingSection.tsx         entitlements + subscriptions + checkout / portal
     AsyncList.tsx              loading/empty/populated helper for live lists
     styles.css                 studio styling
-  provision.ts       @cirrus/provision seam — the ONLY coupling to Alchemy v2
+  provision.ts       @cirrus/provision seam over the Cloudflare REST port
+  cloudflare/
+    api.ts           Cloudflare REST port: D1/R2 create, dispatch-script upload, secrets
   deploy/
     token-bucket.ts  per-cell API budget (CF 1,200/5min, §2.5)
     scheduler.ts     CellScheduler — paces provisioner work, priority + concurrency
@@ -54,11 +67,21 @@ src/
     preview.ts       preview script-name + TTL helpers (§2.3)
     handler.ts       POST /v1/deploy handler (auth → orchestrate → stream NDJSON)
     client.ts        cirrus-deploy client (POST + consume NDJSON stream)
-    router.ts        httpRouter mount (/v1/deploy + /v1/github/webhook)
+    router.ts        httpRouter: /v1/{deploy,github/webhook,billing/webhook,
+                     usage,invitations/send,admin} + per-IP rate limiting
+  dispatcher/
+    route.ts         hostname → tenant script (+ plan) resolution
+    worker.ts        WfP dispatcher Worker — env.DISPATCHER.get with per-plan limits
   github/
     webhook.ts       GitHub webhook: HMAC verify + PR→preview-intent parse (§2.3)
+  mail/
+    notify.ts        transactional email (invitations) on @cirrus/mail
   billing/
-    plans.ts         plans + quota entitlements on @cirrus/payment (§4)
+    plans.ts         plans + quota entitlements + per-plan runtime limits (§4)
+    usage.ts         pure usage roll-up (aggregateUsage)
+  admin/
+    proxy.ts         hosted-studio admin proxy to a tenant deployment (§3)
+  cli/               cirrus login / link / deploy
 ```
 
 > **Moving to a private repo:** the control plane is the proprietary layer and is
@@ -97,13 +120,42 @@ inside each mutation (deploy key or membership).
 
 ### The provisioning seam (`src/provision.ts`)
 
-Per `CLOUD-PLAN.md` §2.2, the control plane's only coupling to the provisioning
-engine (Alchemy v2 / `alchemy@next`, Effect-based) lives behind the `Provisioner`
-interface. It is currently a **stub that rejects loudly** — so a deploy today runs
-the full pipeline and terminates at `failed` with a clear "not wired" message.
-Wiring it over `alchemy@next` (and confirming v2 exposes the `DispatchNamespace`
-resource + a control-plane-D1-backed state store) is the first Phase 1 spike
-deliverable (risk #7).
+Per `CLOUD-PLAN.md` §2.2, the control plane's only coupling to the deploy
+substrate lives behind the `Provisioner` interface. The shipped implementation
+(`createCloudflareProvisioner`) talks to Cloudflare through the injected
+`CloudflareApi` port (`src/cloudflare/api.ts`) over the **documented REST API**:
+`deploy` provisions per-tenant D1/R2, uploads the user Worker into the dispatch
+namespace with binding + DO-migration metadata, applies secrets, and returns the
+content hash + routed URL; `destroy` removes the script. The port boundary keeps
+orchestration unit-testable with a fake, and means an `alchemy@next`-backed
+implementation could replace `createHttpCloudflareApi` later with no change above
+this module. (What still needs a live account is end-to-end validation against
+real Cloudflare — the wire calls themselves are implemented, not stubbed.)
+
+### Billing & metering (`cirrus/billing.ts`, `src/billing/`, §4)
+
+Billing rides `@cirrus/payment` with the **organization id as the payment
+`referenceId`**. `src/server.ts` wires a Stripe adapter into `createShardDO({
+payment })`, so the billing functions get `ctx.payments`: `checkout` / `portal`
+(owner/admin actions that redirect to Stripe), `entitlements` / `subscription`
+(member reads that resolve plan → features/limits through `CIRRUS_CLOUD_PLANS`,
+falling back to the free baseline), and `processWebhook` (signature-verified,
+mounted at `POST /v1/billing/webhook`). Entitlement reads work without Stripe
+keys; only live calls need them. Platform **metering** is separate: `usage.ingest`
+(`POST /v1/usage`, deploy-key authenticated) records resource events into the
+`platformUsage` table, `usage.summary` rolls a period up, and the dispatcher
+applies **per-plan runtime limits** (`limitsForPlan`) to `env.DISPATCHER.get`.
+
+### Auth (`src/server.ts`, §3)
+
+The hosted studio runs on hardened better-auth (`@cirrus/auth`): email/password
+with **mail-backed verification + password reset** (`@cirrus/mail`, captured into
+the studio Mail tab in dev), optional GitHub/Google OAuth (enabled only when the
+env creds are present), the `admin` / `twoFactor` / `passkey` plugins, and
+better-auth's built-in request rate limiting. The `/v1/*` control-plane surface
+adds a per-IP `@cirrus/ratelimit` cap. Org membership stays the Cirrus
+`organizations`/`members` model — the better-auth `organization` plugin is
+deliberately omitted to avoid two parallel org models.
 
 ## Develop
 
