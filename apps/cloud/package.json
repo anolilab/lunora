@@ -23,14 +23,17 @@
         "@cirrus/client": "workspace:*",
         "@cirrus/d1": "workspace:*",
         "@cirrus/do": "workspace:*",
+        "@cirrus/mail": "workspace:*",
         "@cirrus/payment": "workspace:*",
+        "@cirrus/ratelimit": "workspace:*",
         "@cirrus/react": "workspace:*",
         "@cirrus/runtime": "workspace:*",
         "@cirrus/scheduler": "workspace:*",
         "@cirrus/server": "workspace:*",
         "better-auth": "catalog:auth",
         "react": "catalog:frontend",
-        "react-dom": "catalog:frontend"
+        "react-dom": "catalog:frontend",
+        "stripe": "^19.0.0"
     },
     "devDependencies": {
         "@cirrus/cli": "workspace:*",

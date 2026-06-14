@@ -1,3 +1,4 @@
+import { limitsForPlan } from "../billing/plans";
 import { resolveTenant } from "./route";
 
 /**
@@ -35,8 +36,10 @@ export default {
         }
 
         try {
-            // Per-plan limits would be looked up per tenant; a conservative default here.
-            const userWorker = env.DISPATCHER.get(route.scriptName, undefined, { limits: { cpuMs: 100, subRequests: 50 } });
+            // Per-plan runtime caps (§4): CPU + subrequests scale with the tenant's
+            // plan, falling back to the free tier when the plan is unknown.
+            const limits = limitsForPlan(route.plan);
+            const userWorker = env.DISPATCHER.get(route.scriptName, undefined, { limits });
 
             return await userWorker.fetch(request);
         } catch (error) {
