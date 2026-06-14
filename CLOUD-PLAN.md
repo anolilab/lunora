@@ -523,6 +523,11 @@ Ordered so every phase ships standalone DX value even if we stop there.
 3. **WebSockets + dispatch.** Validate early (Phase 1 spike) that the hibernated-WS
    subscription path and per-invocation limits behave correctly through
    `env.DISPATCHER.get()` — this is our hottest path and the least-documented WfP case.
+   _Spike harness shipped:_ `apps/cloud/spikes/ws-dispatch/` (a hibernatable-WS DO
+   tenant + a Node probe that drives it through the dispatcher, asserting the
+   upgrade, hibernated push, and cpuMs-limit behaviour); the dispatcher's
+   forwarding contract is unit-pinned in `__tests__/dispatcher-ws.test.ts`. Run
+   the harness on a real dispatch namespace and record the result here.
 4. **Untrusted-mode constraints** (no `request.cf`, isolated cache) — audit the runtime
    for any dependence.
 5. **Migration handshake.** void's deploy-then-migrate-then-switch-traffic protocol
