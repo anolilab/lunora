@@ -119,6 +119,10 @@
         },
         "deployments": {
             "fields": {
+                "adminToken": {
+                    "kind": "string",
+                    "optional": true
+                },
                 "branch": {
                     "kind": "string",
                     "optional": true
@@ -319,6 +323,42 @@
                 },
                 "by_github_repo": {
                     "fields": ["githubRepo"],
+                    "unique": false
+                }
+            },
+            "relations": {},
+            "shardMode": "global"
+        },
+        "usageEvents": {
+            "fields": {
+                "createdAt": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "deploymentId": {
+                    "kind": "id",
+                    "optional": true
+                },
+                "kind": {
+                    "kind": "union",
+                    "optional": false
+                },
+                "organizationId": {
+                    "kind": "id",
+                    "optional": false
+                },
+                "periodStart": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "quantity": {
+                    "kind": "number",
+                    "optional": false
+                }
+            },
+            "indexes": {
+                "by_org": {
+                    "fields": ["organizationId"],
                     "unique": false
                 }
             },
