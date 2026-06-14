@@ -34,6 +34,7 @@ export const ADMIN_FUNCTIONS = {
     describeTable: "__cirrus_admin__:describeTable",
     describeTables: "__cirrus_admin__:describeTables",
     exportShard: "__cirrus_admin__:exportShard",
+    facetColumn: "__cirrus_admin__:facetColumn",
     getAdvisories: "__cirrus_admin__:getAdvisories",
     getAuditLog: "__cirrus_admin__:getAuditLog",
     getAuthMetrics: "__cirrus_admin__:getAuthMetrics",
@@ -80,6 +81,38 @@ export interface FilterClause {
     column: string;
     operator: FilterOperator;
     value?: unknown;
+}
+
+/**
+ * Arguments for the `__cirrus_admin__:facetColumn` admin op — the read-only,
+ * Datasette-style per-column value/count summary. `filters`/`search` mirror
+ * {@link TablePage}'s predicate args so the facet reflects exactly the previewed
+ * rows; `column` is validated + bound server-side, never interpolated. `limit`
+ * caps the distinct values returned (clamped server-side).
+ */
+export interface FacetColumnArgs {
+    column: string;
+    filters?: FilterClause[];
+    limit?: number;
+    search?: string;
+    table: string;
+}
+
+/** One distinct value of a faceted column with its row count, mirroring `@cirrus/do`'s `FacetValue`. */
+export interface FacetValue {
+    count: number;
+    value: unknown;
+}
+
+/**
+ * Payload of a `__cirrus_admin__:facetColumn` call, mirroring `@cirrus/do`'s
+ * `FacetColumnResult`: the top-N distinct `values` (each with a `count`) ordered by
+ * frequency, plus `truncated` — `true` when more distinct values existed beyond the
+ * cap, so the UI can say so rather than imply the list is exhaustive.
+ */
+export interface FacetResult {
+    truncated: boolean;
+    values: FacetValue[];
 }
 
 /** Which single-row mutation a {@link WriteRowArgs} performs. */

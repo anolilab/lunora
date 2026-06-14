@@ -10,6 +10,7 @@ import type { MaskView } from "../../lib/mask-preview";
 import { maskColumnsForTable, maskRows } from "../../lib/mask-preview";
 import type { GridEdit, GridReferences, TableRow } from "./data-browser-grid";
 import { DataBrowserTableView } from "./data-browser-grid";
+import DataFacets from "./data-facets";
 import type { EditableFilter } from "./data-filters";
 import { DataFilters } from "./data-filters";
 import { TransposedTable } from "./data-grid";
@@ -233,6 +234,8 @@ export const DataBrowser = ({
         editableColumn,
         editing,
         editingCell,
+        facetFilter,
+        facets,
         filter,
         filters,
         goNext,
@@ -270,6 +273,7 @@ export const DataBrowser = ({
         table,
         tables,
         tablesError,
+        toggleFacet,
         total,
         viewMode,
         writeError,
@@ -305,7 +309,9 @@ export const DataBrowser = ({
     // the grid/JSON/transposed renderers read. The chips show whenever a column is
     // covered; cell values are only rewritten when the toggle is on.
     const maskColumns = useMemo(() => maskColumnsForTable(maskPolicies, selectedTable ?? ""), [maskPolicies, selectedTable]);
-    const maskView = useMemo<MaskView>(() => ({ columns: maskColumns, enabled: maskOn }), [maskColumns, maskOn]);
+    const maskView = useMemo<MaskView>(() => {
+        return { columns: maskColumns, enabled: maskOn };
+    }, [maskColumns, maskOn]);
 
     // The cell whose full value the expand dialog is showing, if any. Opened from
     // the per-cell expand affordance; pure view state like `inspecting`.
@@ -509,6 +515,8 @@ export const DataBrowser = ({
                     </div>
                 )}
             </div>
+
+            {page !== null && <DataFacets columns={columns} facets={facets} onFacetFilter={facetFilter} onToggleFacet={toggleFacet} />}
 
             {inspecting !== null && page !== null && (
                 <RowDetailDrawer columns={page.columns} onClose={closeInspect} onNavigate={handleNavigateRef} refs={page.refs} row={inspecting} />

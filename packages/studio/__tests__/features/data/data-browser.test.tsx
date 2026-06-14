@@ -1292,3 +1292,111 @@ describe("dataBrowser — structured filters and bulk delete", () => {
         expect(screen.queryByTestId("db-sort-text")).toBeNull();
     });
 });
+
+/**
+ * A client that serves a fixed `messages` page plus a `facetColumn` summary for
+ * the `status` column, honouring the active `eq` filters so the facet reflects the
+ * previewed view. The `status` value distribution is skewed (active=2, archived=1)
+ * so the ORDER-BY-count ordering and the value/count rows are observable.
+ */
+const createFacetableClient = (): MockClientHooks => {
+    const rows = [
+        { __id__: "m1", status: "active", text: "hello" },
+        { __id__: "m2", status: "active", text: "world" },
+        { __id__: "m3", status: "archived", text: "again" },
+    ];
+
+    const matchesFilters = (row: Record<string, unknown>, filters: FilterArg[]): boolean =>
+        filters.every((clause) => clause.operator !== "eq" || String(row[clause.column]) === String(clause.value));
+
+    return createMockClient({
+        query: (reference, args): unknown => {
+            if (reference === ADMIN_FUNCTIONS.listTables) {
+                return [{ name: "messages", rowCount: rows.length }];
+            }
+
+            if (reference === ADMIN_FUNCTIONS.facetColumn) {
+                const { column, filters = [] } = args as { column: string; filters?: FilterArg[] };
+                const scoped = rows.filter((row) => matchesFilters(row, filters));
+                const counts = new Map<unknown, number>();
+
+                for (const row of scoped) {
+                    const value = row[column as keyof typeof row];
+
+                    counts.set(value, (counts.get(value) ?? 0) + 1);
+                }
+
+                const values = [...counts.entries()]
+                    .map(([value, count]) => {
+                        return { count, value };
+                    })
+                    .toSorted((a, b) => b.count - a.count);
+
+                return { truncated: false, values };
+            }
+
+            const { filters = [], limit = 50, offset = 0, table } = args as { filters?: FilterArg[]; limit?: number; offset?: number; table: string };
+
+            if (table !== "messages") {
+                throw new Error(`unknown table: ${table}`);
+            }
+
+            const matched = rows.filter((row) => matchesFilters(row, filters));
+
+            return { columns: ["__id__", "status", "text"], rows: matched.slice(offset, offset + limit), total: matched.length };
+        },
+    });
+};
+
+describe("dataBrowser — facets", () => {
+    it("toggles a column on and renders its value/count rows", async () => {
+        expect.assertions(2);
+
+        const mock = createFacetableClient();
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+
+        // Toggle the `status` column into the facet sidebar.
+        fireEvent.click(screen.getByTestId("db-facet-toggle-status"));
+
+        const facet = await screen.findByTestId("db-facet-status");
+        const values = within(facet).getAllByTestId("db-facet-value-status");
+
+        // active=2, archived=1 → ordered by count, active leads.
+        expect(values[0]?.textContent).toBe("active2");
+        expect(values[1]?.textContent).toBe("archived1");
+    });
+
+    it("adds an `eq` filter when a facet value is clicked", async () => {
+        expect.assertions(2);
+
+        const mock = createFacetableClient();
+
+        render(renderBrowser(mock, { pageSize: 10 }));
+
+        fireEvent.click(await screen.findByTestId("db-table-messages"));
+        await screen.findByTestId("db-page");
+
+        fireEvent.click(screen.getByTestId("db-facet-toggle-status"));
+        await screen.findByTestId("db-facet-status");
+
+        // Click the `archived` facet value → adds `status = archived`, narrowing to m3.
+        const facet = screen.getByTestId("db-facet-status");
+
+        fireEvent.click(within(facet).getAllByTestId("db-facet-value-status")[1] as HTMLElement);
+
+        await waitFor(() => {
+            if (screen.getAllByTestId("db-row").length !== 1) {
+                throw new Error("facet filter not applied yet");
+            }
+        });
+
+        const lastRead = mock.query.mock.calls.findLast((call) => call[0].__cirrusRef === ADMIN_FUNCTIONS.readTablePage);
+
+        expect((lastRead?.[1] as { filters?: FilterArg[] }).filters).toStrictEqual([{ column: "status", operator: "eq", value: "archived" }]);
+        expect(screen.getByTestId("db-row").textContent).toContain("again");
+    });
+});
