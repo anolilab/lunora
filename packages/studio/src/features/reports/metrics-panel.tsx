@@ -9,14 +9,15 @@ import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/ca
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import useLiveAdmin from "../../hooks/use-live-admin";
 import { useT } from "../../i18n/i18n-context";
-import type { ShardMetrics } from "../../lib/admin";
+import type { MetricsSnapshot, ShardMetrics } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { CLOUDFLARE_DURABLE_OBJECTS_URL } from "../../lib/cf-links";
 import { adminRef, callOptions, errorMessage, fireAndForget, formatBytes } from "../../lib/internal";
 import { loadRecentShards, recordShard } from "../../lib/shard-history";
 import useLiveShardSeed from "../data/hooks/use-live-shard-seed";
 import type { ShardMetricsResult } from "./metrics-aggregate";
-import { aggregateMetrics, shardsToAggregate } from "./metrics-aggregate";
+import { aggregateMetrics, computeLatencyPercentiles, enrichQueryStats, shardsToAggregate } from "./metrics-aggregate";
+import { QueryInsights } from "./query-insights";
 import { SPARK_HEIGHT, SPARK_WIDTH, sparklinePoints } from "./sparkline";
 
 interface MetricsPanelProps {
@@ -92,6 +93,8 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
     const [metrics, setMetrics] = useState<ShardMetrics | null>(null);
     const [error, setError] = useState<null | string>(null);
+    /** Active panel tab: "overview" (default) or "query-insights" (shown when queryStats present). */
+    const [activeTab, setActiveTab] = useState<"overview" | "query-insights">("overview");
     // The live channel is always on once a shard is committed; this only holds a
     // rejection message (e.g. missing admin token) so the panel can say why it
     // stopped updating. The one-shot seed remains the source of truth.
@@ -233,12 +236,60 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
     // don't recompute Math.max/min over the history on every render.
     const sparkline = useMemo(() => sparklinePoints(history), [history]);
 
+    // P90/P95 latency computed from per-function stats in the snapshot.
+    // `computeLatencyPercentiles` reads `snapshot.functions` via a cast inside;
+    // pre-feature workers return a snapshot without that field → both return 0.
+    const latencyPercentiles = useMemo(() => (metrics ? computeLatencyPercentiles(metrics) : { p90: 0, p95: 0 }), [metrics]);
+
+    // Format a millisecond duration for the P90/P95 stat cards.
+    const formatMs = (ms: number): string => {
+        if (ms <= 0) {
+            return "—";
+        }
+
+        if (ms < 1) {
+            return `${(ms * 1000).toFixed(0)}μs`;
+        }
+
+        if (ms < 1000) {
+            return `${ms.toFixed(1)}ms`;
+        }
+
+        return `${(ms / 1000).toFixed(2)}s`;
+    };
+
+    // Enriched query stats — derived when the snapshot contains `queryStats`.
+    // `MetricsSnapshot` extends `ShardMetrics` with the optional `queryStats`
+    // field surfaced by post-feature workers. Use an `in` guard to narrow safely
+    // without a cast that the type-assertion lint flags.
+    const queryStats = useMemo((): ReturnType<typeof enrichQueryStats> | undefined => {
+        if (!metrics || !("queryStats" in metrics)) {
+            return undefined;
+        }
+
+        const snapQs = (metrics as MetricsSnapshot).queryStats;
+
+        if (!snapQs || !Array.isArray(snapQs)) {
+            return undefined;
+        }
+
+        return enrichQueryStats(snapQs);
+    }, [metrics]);
+
     const runAggregate = useCallback((): void => {
         fireAndForget(aggregateAll());
     }, [aggregateAll]);
 
     const clearAggregate = useCallback((): void => {
         setShardResults(null);
+    }, []);
+
+    const switchToOverview = useCallback((): void => {
+        setActiveTab("overview");
+    }, []);
+
+    const switchToQueryInsights = useCallback((): void => {
+        setActiveTab("query-insights");
     }, []);
 
     return (
@@ -295,7 +346,35 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
                 </p>
             )}
 
-            {metrics !== null && (
+            {/* Tab selector — shown only when query insights are available. */}
+            {queryStats !== undefined && (
+                <div className="flex gap-2 border-b" data-testid="mt-tabs">
+                    <button
+                        className={`pb-2 text-sm font-medium transition-colors ${activeTab === "overview" ? "border-b-2 border-primary text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                        data-testid="mt-tab-overview"
+                        onClick={switchToOverview}
+                        type="button"
+                    >
+                        {t("Overview")}
+                    </button>
+                    <button
+                        className={`pb-2 text-sm font-medium transition-colors ${activeTab === "query-insights" ? "border-b-2 border-primary text-foreground" : "text-muted-foreground hover:text-foreground"}`}
+                        data-testid="mt-tab-query-insights"
+                        onClick={switchToQueryInsights}
+                        type="button"
+                    >
+                        {t("Query insights")}
+                        {queryStats.length > 0 && (
+                            <span className="ml-1.5 rounded-full bg-primary/10 px-1.5 py-0.5 text-xs text-primary">{queryStats.length}</span>
+                        )}
+                    </button>
+                </div>
+            )}
+
+            {/* Query Insights tab — rendered only when present and selected. */}
+            {activeTab === "query-insights" && queryStats !== undefined && <QueryInsights queryStats={queryStats} />}
+
+            {activeTab === "overview" && metrics !== null && (
                 <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" data-testid="mt-stats">
                     <StatCard label={t("Shard")} testId="mt-shard" value={metrics.shard} />
                     <StatCard label={t("Requests")} testId="mt-requests" value={metrics.requests} valueSize="xl" />
@@ -320,10 +399,14 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
                                 : t("{rate} ({count} entries)", { count: metrics.cache.entries, rate: hitRate(metrics.cache.hits, metrics.cache.misses) })
                         }
                     />
+                    {latencyPercentiles.p90 > 0 && <StatCard label={t("P90 latency")} testId="mt-p90" value={formatMs(latencyPercentiles.p90)} />}
+                    {latencyPercentiles.p95 > 0 && <StatCard label={t("P95 latency")} testId="mt-p95" value={formatMs(latencyPercentiles.p95)} />}
                 </dl>
             )}
 
-            {aggregate !== null && shardResults !== null && (
+            {activeTab === "overview" && metrics === null && null}
+
+            {activeTab === "overview" && aggregate !== null && shardResults !== null && (
                 <div className="flex flex-col gap-4" data-testid="mt-aggregate-view">
                     <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" data-testid="mt-aggregate-stats">
                         <StatCard

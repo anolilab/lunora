@@ -211,6 +211,27 @@ export interface MetricsIndexHit {
 }
 
 /**
+ * One per-statement SQL aggregate returned in the `queryStats` field of a
+ * {@link MetricsSnapshot}. Mirrors `@cirrus/do`'s `QueryStatEntry`.
+ *
+ * `normalizedSql` is the SQL text with literal values stripped and truncated
+ * to at most 512 characters. `execCount` is how many times the statement was
+ * executed. `totalDurationMs` is the sum of wall-clock milliseconds across
+ * all executions. `rowsRead` is the total SELECT result rows observed.
+ * `rowsWritten` is always 0 in the current implementation, surfaced for
+ * future extension. Derived fields such as `avgDurationMs` are computed
+ * client-side by the studio's `metrics-aggregate.ts` rather than emitted by
+ * the DO to keep the wire shape stable across DO restarts.
+ */
+export interface QueryStatEntry {
+    execCount: number;
+    normalizedSql: string;
+    rowsRead: number;
+    rowsWritten: number;
+    totalDurationMs: number;
+}
+
+/**
  * The full `__cirrus_admin__:getMetrics` payload. The wire response carries the
  * per-function lifetime stats (`functions`), the durable time buckets
  * (`history`), and the per-`(table, index)` hit counts (`indexHits`) alongside
@@ -222,6 +243,15 @@ export interface MetricsSnapshot extends ShardMetrics {
     history?: MetricsHistoryBucket[];
     /** Per-declared-index recorded reads; absent on a worker predating the dead-index feed. */
     indexHits?: MetricsIndexHit[];
+
+    /**
+     * Per-statement SQL aggregates for the slow-query leaderboard. Absent on a
+     * worker predating the query-metrics feature. Each entry carries the
+     * normalised statement text, execution count, cumulative duration, and
+     * observed row counts. The studio renders this as a sortable leaderboard
+     * with performance badges, gated behind the presence of this field.
+     */
+    queryStats?: QueryStatEntry[];
 }
 
 /**
