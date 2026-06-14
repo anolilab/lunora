@@ -31,6 +31,18 @@ MAIL_FROM=Cirrus Cloud <noreply@example.com>
 # RESEND_API_KEY=re_replace-me
 # Force-capture mail even outside dev: CIRRUS_MAIL_CAPTURE=true
 
+# ── Tenant secrets (§7) — AES-256-GCM envelope encryption ────────────────────
+# 32-byte master key (64 hex chars) for encrypting tenant env secrets at rest.
+# Generate with: openssl rand -hex 32
+SECRET_ENCRYPTION_KEY=replace-with-openssl-rand-hex-32
+
+# ── Dispatcher worker (dispatcher.wrangler.jsonc) ────────────────────────────
+# The dispatcher resolves per-tenant plan limits via the control plane and emits
+# per-request usage to an Analytics Engine dataset. Set these on the dispatcher:
+#   CONTROL_PLANE_URL   = https://<control-plane-host>   (enables per-plan limits)
+#   CONTROL_PLANE_TOKEN = <CIRRUS_ADMIN_TOKEN>           (bearer for the lookup)
+#   USAGE_ANALYTICS     = an Analytics Engine dataset binding (metering source)
+
 # ── Studio social sign-in (optional) — enabled only when both halves are set ──
 # GITHUB_CLIENT_ID=replace-me
 # GITHUB_CLIENT_SECRET=replace-me
