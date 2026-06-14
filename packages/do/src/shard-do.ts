@@ -57,6 +57,8 @@ import { LogBuffer } from "./log-buffer";
 import type { RecordMailInput } from "./mail-catcher";
 import { clearCapturedMail, MAIL_TABLE, readCapturedMail, recordCapturedMail } from "./mail-catcher";
 import { armRestore, readBookmark } from "./pitr";
+import type { QueryStatEntry } from "./query-metrics";
+import { readQueryMetrics, recordQueryMetric } from "./query-metrics";
 import type { ShardRankPageResult } from "./rank";
 import type { ReactiveCacheOptions } from "./reactive-cache";
 import { ReactiveCache, reactiveCacheKey } from "./reactive-cache";
@@ -1673,6 +1675,21 @@ abstract class ShardDO {
      */
     private currentRequestReadTables: Set<string> | undefined;
 
+    /**
+     * Per-statement SQL samples collected during the current `/rpc` dispatch by
+     * the instrumented `sql` getter. Drained into the durable
+     * `__cirrus_metrics_queries` table after the handler returns (same pattern as
+     * `currentScannedTables` / `currentIndexHits`). `undefined` when no dispatch
+     * is in flight; allocated fresh per dispatch so a previous request's samples
+     * never leak into the next one.
+     *
+     * Each entry is `[rawSql, durationMs, rowsRead, rowsWritten]`. DML rows
+     * written is always 0 here — the ctx-db adapter doesn't expose a
+     * `changes()` count through the structural `SqlExec` surface, so we
+     * attribute only SELECT result sizes as `rowsRead`.
+     */
+    private currentStmtSamples: [string, number, number, number][] | undefined;
+
     /** Whether the current dispatch's cached query was served from cache; `undefined` until `runCachedQuery` resolves one. */
     private currentRequestCacheHit: boolean | undefined;
 
@@ -1744,6 +1761,13 @@ abstract class ShardDO {
             // request; drained below.
             this.currentIndexHits = new Set<string>();
 
+            // Collect per-statement SQL samples from the instrumented `sql`
+            // getter so `flushStmtSamples` can persist them to the durable
+            // `__cirrus_metrics_queries` table after the handler resolves.
+            // Allocating a fresh array here activates the instrumentation (the
+            // `sql` getter only wraps when this field is defined).
+            this.currentStmtSamples = [];
+
             try {
                 // Reserved cross-shard relation read/count (reverse cross-backend
                 // relations). Served BEFORE user dispatch and returned BARE (row
@@ -1765,6 +1789,12 @@ abstract class ShardDO {
                 // write-flush below) against the per-function counters, along
                 // with any tables it full-scanned (causal attribution).
                 this.recordFunctionCall(payload.functionPath, durationMs, undefined, this.currentScannedTables, this.currentIndexHits);
+
+                // Flush per-statement SQL samples accumulated during dispatch to
+                // the durable `__cirrus_metrics_queries` table. Best-effort:
+                // a flush failure (e.g. no sql handle in tests) must never fail
+                // the response.
+                this.flushStmtSamples();
 
                 // Snapshot the written-table set BEFORE `flushChangedTables`
                 // drains it — afterwards `pendingChangedTables` is `undefined`,
@@ -1791,6 +1821,9 @@ abstract class ShardDO {
                 const message = error instanceof Error ? error.message : String(error);
 
                 this.recordFunctionCall(payload.functionPath, durationMs, message, this.currentScannedTables, this.currentIndexHits);
+                // Flush statement samples even on error paths — partial sampling
+                // is better than losing the timing signal entirely.
+                this.flushStmtSamples();
                 this.recordRequestLog(payload.functionPath, payload.args ?? {}, durationMs, "error", [...(this.pendingChangedTables ?? [])], message);
                 this.logs.push({
                     functionPath: payload.functionPath,
@@ -1810,6 +1843,7 @@ abstract class ShardDO {
                 this.currentIndexHits = undefined;
                 this.currentRequestReadTables = undefined;
                 this.currentRequestCacheHit = undefined;
+                this.currentStmtSamples = undefined;
             }
         }
 
@@ -1990,8 +2024,111 @@ abstract class ShardDO {
         });
     }
 
+    /**
+     * Instrumented SQL handle. Wraps `state.storage.sql` so that every `exec`
+     * call during a user RPC dispatch is timed and its result size captured into
+     * `currentStmtSamples`. The samples are flushed to the durable
+     * `__cirrus_metrics_queries` table after the handler returns (same lifecycle
+     * as `currentScannedTables`/`currentIndexHits`).
+     *
+     * The wrapper is only active when `currentStmtSamples` is defined (i.e.
+     * during a live user RPC dispatch). Admin ops, subscription re-runs, and
+     * any other path that doesn't allocate `currentStmtSamples` pass through to
+     * the raw handle unchanged — recording there would skew leaderboard totals
+     * with internal housekeeping queries.
+     *
+     * IMPORTANT: the instrumented wrapper must NOT call any SQL itself (e.g. to
+     * flush metrics) — it is invoked synchronously inside an `exec` call and
+     * the SQLite connection is not re-entrant in workerd. Samples are flushed
+     * after the handler fully resolves.
+     */
     protected get sql(): unknown {
-        return this.state.storage.sql;
+        const rawSql = this.state.storage.sql;
+        const samples = this.currentStmtSamples;
+
+        // Only instrument during a live user dispatch.
+        if (samples === undefined) {
+            return rawSql;
+        }
+
+        const rawExec = (rawSql as { exec?: unknown }).exec;
+
+        if (typeof rawExec !== "function") {
+            return rawSql;
+        }
+
+        const instrumentedExec = (query: string, ...params: unknown[]): unknown => {
+            const start = Date.now();
+            const cursor = (rawExec as (...args: unknown[]) => unknown).call(rawSql, query, ...params);
+            // We wrap `.toArray()` and `.one()` on the cursor to capture result
+            // sizes synchronously without buffering the rows ourselves.
+
+            if (cursor !== null && typeof cursor === "object") {
+                const c = cursor as Record<string, unknown>;
+
+                if (typeof c["toArray"] === "function") {
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- intentional: binding a dynamic method from a cast cursor object
+                    const originalToArray = c["toArray"].bind(c);
+
+                    c["toArray"] = () => {
+                        const rows = (originalToArray as () => unknown[])();
+                        const durationMs = Date.now() - start;
+
+                        samples.push([query, durationMs, rows.length, 0]);
+
+                        return rows;
+                    };
+                }
+
+                if (typeof c["one"] === "function") {
+                    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment -- intentional: binding a dynamic method from a cast cursor object
+                    const originalOne = c["one"].bind(c);
+
+                    c["one"] = () => {
+                        const row = (originalOne as () => unknown)();
+                        const durationMs = Date.now() - start;
+
+                        samples.push([query, durationMs, 1, 0]);
+
+                        return row;
+                    };
+                }
+
+                // When neither `.toArray()` nor `.one()` will be called (e.g.
+                // DDL / DML that the caller discards without iterating), record
+                // a zero-rows sample immediately so the statement still appears
+                // in the leaderboard. The `toArray`/`one` overrides above take
+                // priority when they are used — they push their own samples and
+                // the caller never reaches a point where this fallback fires
+                // again for the same execution.
+                if (typeof c["toArray"] !== "function" && typeof c["one"] !== "function") {
+                    const durationMs = Date.now() - start;
+
+                    samples.push([query, durationMs, 0, 0]);
+                }
+            } else {
+                // Non-object return (shouldn't happen with workerd's SqlStorage
+                // but guard defensively).
+                const durationMs = Date.now() - start;
+
+                samples.push([query, durationMs, 0, 0]);
+            }
+
+            return cursor;
+        };
+
+        // Return a structural proxy that looks like the real sql handle to the
+        // callers that cast it to `SqlExec`, with our instrumented `exec`.
+        return new Proxy(rawSql, {
+            get(target, prop) {
+                if (prop === "exec") {
+                    return instrumentedExec;
+                }
+
+                // eslint-disable-next-line @typescript-eslint/no-unsafe-return -- Reflect.get returns any; this is the standard proxy passthrough pattern
+                return Reflect.get(target, prop, target);
+            },
+        });
     }
 
     /**
@@ -2928,6 +3065,7 @@ abstract class ShardDO {
         functions: FunctionCallStat[];
         history: (FunctionMetricBucket & { path: string })[];
         indexHits: FunctionMetricIndexHit[];
+        queryStats: QueryStatEntry[];
         requests: number;
         shard: string;
         sinceMs: number;
@@ -2961,6 +3099,17 @@ abstract class ShardDO {
             // No durable index-hit table yet — report an empty feed.
         }
 
+        // Per-statement query aggregates for the slow-query leaderboard.
+        // Best-effort: a missing/unmigrated sql handle yields an empty feed
+        // rather than failing the metrics read.
+        let queryStats: QueryStatEntry[] = [];
+
+        try {
+            queryStats = readQueryMetrics(this.state.storage.sql as unknown as SqlExec);
+        } catch {
+            // No durable query-metrics table yet — report an empty feed.
+        }
+
         return {
             // eslint-disable-next-line unicorn/no-null -- metrics wire shape: `cache` is `null | {...}`, null reported when the reactive cache is disabled
             cache: this.reactiveCache ? this.reactiveCache.stats() : null,
@@ -2970,6 +3119,7 @@ abstract class ShardDO {
             functions: this.collectFunctionStats().functions,
             history: this.collectFunctionMetricBuckets(),
             indexHits,
+            queryStats,
             requests,
             shard: this.state.id?.name ?? ROOT_SHARD_NAME,
             sinceMs: this.metrics.sinceMs,
@@ -3066,6 +3216,40 @@ abstract class ShardDO {
 
         if (existing === undefined) {
             this.functionStats.set(functionPath, stat);
+        }
+    }
+
+    /**
+     * Flush per-statement SQL samples accumulated during the current dispatch
+     * into the durable `__cirrus_metrics_queries` table. Called after
+     * `recordFunctionCall` on both the success and error paths.
+     *
+     * Best-effort: a SQL failure (e.g. a test double without a usable `sql`
+     * handle) must never fail the response, so every call is swallowed.
+     * Clearing `currentStmtSamples` happens in the `finally` block of the
+     * dispatch path, not here, so a partial flush (partial error) still
+     * drains the correct slice.
+     */
+    private flushStmtSamples(): void {
+        const samples = this.currentStmtSamples;
+
+        if (!samples || samples.length === 0) {
+            return;
+        }
+
+        try {
+            const sqlHandle = this.state.storage.sql as unknown as SqlExec;
+
+            for (const [rawSql, durationMs, rowsRead, rowsWritten] of samples) {
+                try {
+                    recordQueryMetric(sqlHandle, rawSql, durationMs, rowsRead, rowsWritten);
+                } catch {
+                    // Per-statement failures are swallowed so a bad statement
+                    // never breaks the whole flush.
+                }
+            }
+        } catch {
+            // Best-effort: never let metrics persistence fail the request.
         }
     }
 
