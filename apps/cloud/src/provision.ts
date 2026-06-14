@@ -1,15 +1,17 @@
 /**
- * `@cirrus/provision` — the control plane's ONLY coupling to the provisioning
- * engine (Alchemy v2 / `alchemy@next`, Effect-based; see CLOUD-PLAN.md §2.2 and
- * risk #7). Everything Alchemy- or Effect-shaped lives behind this interface;
- * nothing above it imports `alchemy` or `effect`. This keeps a beta dependency
- * on the revenue path contained to one module, and lets the per-cell rate-limit
- * scheduler (§2.5) drive provisioning without knowing how it's implemented.
+ * `@cirrus/provision` — the control plane's coupling to the deploy substrate
+ * (CLOUD-PLAN.md §2.2). The provisioner converges a tenant deployment into a
+ * Workers-for-Platforms dispatch namespace. It talks to Cloudflare only through
+ * the injected {@link CloudflareApi} port, so the orchestration is unit-testable
+ * with a fake and the live wire protocol lives in `src/cloudflare/api.ts`.
  *
- * It is intentionally a stub: the real implementation is a Phase 1 spike
- * deliverable (stand it up against one cell, confirm v2 exposes the
- * `DispatchNamespace` resource + a control-plane-D1-backed state store).
+ * (We provision via the documented Cloudflare REST API rather than the
+ * unverified `alchemy@next` beta — see the note in §2.2. The port boundary means
+ * an Alchemy-backed implementation can replace `createHttpCloudflareApi` later
+ * with no change above this module.)
  */
+import type { CloudflareApi, ScriptBinding } from "./cloudflare/api";
+import { sha256HexBytes } from "./deploy/keys";
 
 /** Per-tenant bindings to provision alongside a tenant Worker (§2.1). */
 export interface TenantBindingSpec {
@@ -46,45 +48,77 @@ export interface ProvisionResult {
 }
 
 export interface DestroyRef {
-    cell: string;
+    dispatchNamespace: string;
     scriptName: string;
 }
 
-/**
- * The provisioning contract. One scope per `{cell, project, deployment}`; the
- * adapter backs Alchemy state with the control-plane D1 so there is a single
- * source of truth (§2.2).
- */
 export interface Provisioner {
-    /** Converge a tenant deployment (create/update). Idempotent — safe to retry. */
+    /** Converge a tenant deployment (create/update). Safe to retry. */
     deploy: (spec: TenantDeploymentSpec) => Promise<ProvisionResult>;
     /** Tear a deployment down (preview TTL cleanup, project deletion). */
     destroy: (reference: DestroyRef) => Promise<void>;
 }
 
-export interface AlchemyProvisionerOptions {
-    /** Cell identifier this provisioner operates within. */
-    cell: string;
-    /** Cloudflare API token for the cell's account. */
-    cloudflareApiToken: string;
+export interface CloudflareProvisionerOptions {
+    /** The Cloudflare API port (HTTP impl in `src/cloudflare/api.ts`). */
+    api: CloudflareApi;
+    /** Entry module name inside the uploaded bundle. Defaults to `index.js`. */
+    mainModule?: string;
+    /** Maps a script id to its public URL (routed via the dispatcher). */
+    urlForScript: (scriptName: string) => string;
 }
 
-const NOT_WIRED = "provisioner not wired yet — Phase 1 spike: implement over alchemy@next (CLOUD-PLAN.md §2.2, risk #7)";
-
 /**
- * Construct the Alchemy-backed provisioner for a cell.
- *
- * STUB. The real body runs Alchemy v2 in-process against the cell's account
- * (`const app = await alchemy(scope)` → declare `DispatchNamespace` / `Worker`
- * / `D1Database` / `R2Bucket` → `await app.finalize()`), with state in a
- * control-plane-D1-backed store. Left unimplemented on purpose so the boundary
- * exists without faking calls to an unverified beta API.
+ * Provisioner backed by the Cloudflare REST API. `deploy` provisions the per-
+ * tenant resources the bindings call for (D1, R2), uploads the user Worker into
+ * the dispatch namespace with the binding + DO-migration metadata, applies
+ * secrets, and returns the content hash + routed URL. `destroy` removes the
+ * script.
  */
-export const createAlchemyProvisioner = (options: AlchemyProvisionerOptions): Provisioner => {
-    const notWired = (): Error => new Error(`${NOT_WIRED} (cell ${options.cell})`);
+export const createCloudflareProvisioner = (options: CloudflareProvisionerOptions): Provisioner => {
+    const { api, urlForScript } = options;
+    const mainModule = options.mainModule ?? "index.js";
 
     return {
-        deploy: () => Promise.reject(notWired()),
-        destroy: () => Promise.reject(notWired()),
+        deploy: async (spec) => {
+            const bindings: ScriptBinding[] = [];
+
+            if (spec.bindings.d1) {
+                const { uuid } = await api.createD1Database(`${spec.scriptName}-db`);
+
+                bindings.push({ id: uuid, name: spec.bindings.d1.binding, type: "d1" });
+            }
+
+            if (spec.bindings.r2) {
+                const bucketName = `${spec.scriptName}-files`;
+
+                await api.createR2Bucket(bucketName);
+                bindings.push({ bucket_name: bucketName, name: spec.bindings.r2.binding, type: "r2_bucket" });
+            }
+
+            const durableObjects = spec.bindings.durableObjects ?? [];
+
+            for (const durableObject of durableObjects) {
+                bindings.push({ class_name: durableObject.className, name: durableObject.binding, type: "durable_object_namespace" });
+            }
+
+            await api.putDispatchScript({
+                bindings,
+                bundle: spec.bundle,
+                mainModule,
+                namespace: spec.dispatchNamespace,
+                newSqliteClasses: durableObjects.map((durableObject) => durableObject.className),
+                scriptName: spec.scriptName,
+                tags: spec.tags,
+            });
+
+            for (const [name, text] of Object.entries(spec.secrets)) {
+                // eslint-disable-next-line no-await-in-loop -- secrets applied sequentially; the set is small
+                await api.putSecret({ name, namespace: spec.dispatchNamespace, scriptName: spec.scriptName, text });
+            }
+
+            return { bundleHash: await sha256HexBytes(spec.bundle), scriptName: spec.scriptName, url: urlForScript(spec.scriptName) };
+        },
+        destroy: (reference) => api.deleteDispatchScript({ namespace: reference.dispatchNamespace, scriptName: reference.scriptName }),
     };
 };
