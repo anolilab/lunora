@@ -49,14 +49,20 @@ export const formatCell = (value: unknown): string => {
 };
 
 /**
- * Fire a promise without awaiting it, swallowing rejection. The studio's
- * async loaders already surface their own errors into panel state via internal
- * try/catch, so an event handler or effect can kick one off and return `void`
- * without leaving a floating promise.
+ * Fire a promise without awaiting it, so an event handler or effect can kick one
+ * off and return `void` without leaving a floating promise.
+ *
+ * By default the studio's async loaders already surface their own errors into
+ * panel state via internal try/catch, so the rejection is swallowed here. For a
+ * promise that does *not* self-handle (a bare mutation/migration/import/delete),
+ * pass `onError` to route the failure into the calling panel's error surface —
+ * otherwise it would silently no-op. New state-changing call sites should pass
+ * `onError`; navigation and self-handling loaders intentionally stay silent.
  */
-export const fireAndForget = (promise: Promise<unknown>): void => {
-    promise.catch(() => {
-        /* loaders surface their own errors into panel state */
+export const fireAndForget = (promise: Promise<unknown>, onError?: (error: unknown) => void): void => {
+    promise.catch((error: unknown) => {
+        onError?.(error);
+        /* default: loaders surface their own errors into panel state */
     });
 };
 
