@@ -356,7 +356,7 @@ describe("createWorker", () => {
     });
 
     it("denies fan-out by default when authorizeShard is set without authorizeFanOut", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const fanOut = vi.fn<() => never>();
         const worker = createWorker({
@@ -388,6 +388,8 @@ describe("createWorker", () => {
         expect(res.status).toBe(403);
         await expect(res.json()).resolves.toMatchObject({ error: { code: "FORBIDDEN_FANOUT" } });
         expect(fanOut).not.toHaveBeenCalled();
+        // No per-shard dispatch either: the default-deny fires before any forward.
+        expect(shard.calls).toHaveLength(0);
     });
 
     it("invokes authorizeFanOut with identity, table, and functionPath", async () => {
@@ -432,7 +434,7 @@ describe("createWorker", () => {
     });
 
     it("rejects fan-out when authorizeFanOut returns false", async () => {
-        expect.assertions(3);
+        expect.assertions(4);
 
         const fanOut = vi.fn<() => never>();
         const worker = createWorker({
@@ -464,6 +466,32 @@ describe("createWorker", () => {
         expect(res.status).toBe(403);
         await expect(res.json()).resolves.toMatchObject({ error: { code: "FORBIDDEN_FANOUT" } });
         expect(fanOut).not.toHaveBeenCalled();
+        // No per-shard dispatch either: the deny fires before any forward.
+        expect(shard.calls).toHaveLength(0);
+    });
+
+    it("denies a single-shard RPC with 403 FORBIDDEN_SHARD when authorizeShard returns false", async () => {
+        expect.assertions(3);
+
+        const authorizeShard = vi.fn<() => boolean>(() => false);
+        const worker = createWorker({
+            authorizeShard,
+            shardDO: shard.namespace,
+        });
+
+        const res = await worker.fetch(
+            new Request("https://app.example/_cirrus/rpc", {
+                body: JSON.stringify({ args: {}, functionPath: "messages:list", shardKey: "channel-42" }),
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(res.status).toBe(403);
+        await expect(res.json()).resolves.toMatchObject({ error: { code: "FORBIDDEN_SHARD" } });
+        // The gate must short-circuit before any shard dispatch happens.
+        expect(shard.calls).toHaveLength(0);
     });
 
     it.each([
