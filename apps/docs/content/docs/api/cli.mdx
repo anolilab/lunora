@@ -19,6 +19,7 @@ cirrus view [--remote]                  # open the Cirrus studio in your browser
 cirrus docs [section]                   # open the docs site in your browser
 cirrus info [--json]                    # print versions, wrangler summary, schema overview
 cirrus registry <add|list|view|build>   # component registry
+cirrus rules <install|check>            # install the AI agent skills into .agents/skills/
 
 # Develop
 cirrus dev [--port n] [--worker-port n] # wrangler worker + studio + codegen watch
@@ -82,10 +83,10 @@ cirrus add auth --yes           # default provider (email & password), no prompt
 cirrus add email                # transactional email (Cloudflare Email Workers + dev mail catcher)
 ```
 
-| Feature | Installs | Notes |
-| ------- | -------- | ----- |
+| Feature | Installs                                                  | Notes                                                                                                              |
+| ------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
 | `auth`  | the `auth` registry item (or `auth-clerk` / `auth-auth0`) | Adds `@cirrus/auth` + a D1 `DB` binding; verification / reset mail is captured into the studio **Mail** tab in dev |
-| `email` | the `mail` registry item | Cloudflare Email Workers transport (`SEND_EMAIL` binding) + the dev mail catcher |
+| `email` | the `mail` registry item                                  | Cloudflare Email Workers transport (`SEND_EMAIL` binding) + the dev mail catcher                                   |
 
 Flags: `--provider <auth\|clerk\|auth0>`, `--yes`, `--from <dir>` (local registry root), `--source <ref>`, `--allow-unsafe-source`.
 
@@ -201,6 +202,19 @@ cirrus registry list
 cirrus registry view auth/session-token
 cirrus registry add auth/session-token
 cirrus registry build   # regenerate the local catalog index.json
+```
+
+### `cirrus rules`
+
+Installs the Cirrus **agent skills** — portable instructions that teach AI
+coding agents (Claude Code, Cursor, Copilot) how to use Cirrus — into the
+project's `.agents/skills/`. `cirrus dev`, the Vite plugin, and the studio nudge
+you to run this when the rules are missing.
+
+```bash
+cirrus rules install              # copy the skills into .agents/skills/ (skips edited files)
+cirrus rules install --overwrite  # reinstall, replacing local edits
+cirrus rules check                # report which skills are present
 ```
 
 ### `cirrus analyze`

@@ -53,6 +53,14 @@ interface StudioAppProps {
     /** UI language for the studio's own strings. Defaults to `en`. */
     readonly locale?: string;
 
+    /**
+     * Whether the project's Cirrus agent skills ("rules") are installed. When
+     * explicitly `false`, the studio shows a one-line banner pointing at
+     * `cirrus rules install`. The loopback dev hosts inject this; a static deploy
+     * leaves it unset (no banner).
+     */
+    readonly rulesInstalled?: boolean;
+
     /** Forwarded to the composed {@link Studio} (functions, initialShardKey, scheduled overrides). */
     readonly studio?: Omit<StudioProps, "children" | "i18n" | "locale">;
 }
@@ -75,6 +83,7 @@ interface StudioAppBodyProps {
     readonly clearToken: () => void;
     readonly onToggleTheme: () => void;
     readonly onTokenChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
+    readonly rulesInstalled?: boolean;
     readonly studio?: StudioAppProps["studio"];
     readonly theme: "dark" | "light";
     readonly token: string;
@@ -86,7 +95,7 @@ interface StudioAppBodyProps {
  * read the `StudioI18nProvider` the app renders above it. The composed
  * `&lt;Studio>` inherits that same provider, so it isn't handed an instance here.
  */
-const StudioAppBody = ({ basePath, clearToken, studio, onToggleTheme, onTokenChange, theme, token }: StudioAppBodyProps): ReactElement => {
+const StudioAppBody = ({ basePath, clearToken, studio, onToggleTheme, onTokenChange, rulesInstalled, theme, token }: StudioAppBodyProps): ReactElement => {
     const t = useT();
 
     return (
@@ -229,6 +238,23 @@ const StudioAppBody = ({ basePath, clearToken, studio, onToggleTheme, onTokenCha
                 </div>
             </header>
 
+            {rulesInstalled === false && (
+                <div
+                    className="flex shrink-0 items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-[12px] text-foreground"
+                    data-testid="dash-app-rules-banner"
+                    role="note"
+                >
+                    <span aria-hidden="true" className="text-amber-500">
+                        ⚠
+                    </span>
+                    <span>
+                        {t("Cirrus AI rules aren't installed.")}{" "}
+                        <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">cirrus rules install</code>{" "}
+                        {t("lets your coding agent use Cirrus correctly.")}
+                    </span>
+                </div>
+            )}
+
             <ErrorBoundary fallbackTitle={t("Studio failed")} label={t("Studio")} retryLabel={t("Try again")}>
                 <Studio
                     basePath={basePath}
@@ -270,7 +296,7 @@ const resolveBaseUrl = (explicit: string | undefined): string => {
  * yourself. For embedding into an existing admin UI, use the individual panels
  * or `&lt;Studio>` under your own provider instead.
  */
-export const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClient, studio, locale }: StudioAppProps = {}): ReactElement => {
+export const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClient, rulesInstalled, studio, locale }: StudioAppProps = {}): ReactElement => {
     // Seed from the prop, else a token persisted in a prior session (so a reload
     // doesn't force a re-paste). The prop wins when explicitly provided.
     const [token, setToken] = useState<string>(() => adminToken ?? loadToken());
@@ -353,6 +379,7 @@ export const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClien
                             clearToken={clearToken}
                             onToggleTheme={onToggleTheme}
                             onTokenChange={onTokenChange}
+                            rulesInstalled={rulesInstalled}
                             studio={studio}
                             theme={theme}
                             token={token}

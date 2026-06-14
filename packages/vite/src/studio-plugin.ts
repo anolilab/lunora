@@ -6,6 +6,7 @@ import type { AddressInfo } from "node:net";
 // the CLI server render an identical studio. The heavy `@cirrus/studio` SPA it
 // hosts stays an optional peer — these helpers resolve its prebuilt assets
 // lazily (and degrade gracefully when it isn't installed).
+import { detectAgentRules } from "@cirrus/config";
 import type { StudioAssets } from "@cirrus/config/studio-host";
 import { loadStudioAssets, renderStudioHtml, resolveAdminToken, studioAssetsStamp } from "@cirrus/config/studio-host";
 import type { Plugin, ViteDevServer } from "vite";
@@ -130,17 +131,18 @@ const createStudioHandler = (
         }
 
         // Built once per dev session: the basepath is fixed, and the admin token
-        // is read from `.dev.vars` at startup. `config.root` is absent on mocked
-        // test servers — fall back to cwd.
+        // is read from `.dev.vars` at startup. `config.root` is typed as a
+        // required string but is absent on mocked test servers — fall back to cwd.
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime value can be undefined on a mocked server even though the type says string
+        const projectRoot = server.config.root ?? process.cwd();
+
         html ??= renderStudioHtml({
-            // `config.root` is typed as a required string but is absent on mocked
-            // test servers, so the cwd fallback is real despite the type.
-            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime value can be undefined on a mocked server even though the type says string
-            adminToken: resolveAdminToken(server.config.root ?? process.cwd()),
+            adminToken: resolveAdminToken(projectRoot),
             basePath: STUDIO_PATH,
             // Loopback-only dev route (it 403s on a non-loopback bind), so the
             // developer owns the data — let them edit rows and run-as a user by default.
             dataEditable: true,
+            rulesInstalled: detectAgentRules(projectRoot).installed,
             runAsIdentity: true,
             scriptSrc: STUDIO_SCRIPT_PATH,
             styleHref: STUDIO_STYLE_PATH,

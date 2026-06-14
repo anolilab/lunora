@@ -14,6 +14,8 @@ import type { Messages } from "@lingui/core";
  * register it via `createStudioI18n(locale, { en: enMessages, de: deMessages })`.
  */
 const MESSAGE_IDS = [
+    "Cirrus AI rules aren't installed.",
+    "lets your coding agent use Cirrus correctly.",
     ", changed",
     "(no subject)",
     "(root)",

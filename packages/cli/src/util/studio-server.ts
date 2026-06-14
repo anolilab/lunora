@@ -17,6 +17,7 @@ import { createServer, request as httpRequest } from "node:http";
 import { connect } from "node:net";
 import type { Duplex } from "node:stream";
 
+import { detectAgentRules } from "@cirrus/config";
 import { loadStudioAssets, renderStudioHtml, resolveAdminToken, studioAssetsStamp } from "@cirrus/config/studio-host";
 
 /** Request paths the studio server reverse-proxies to the worker (admin RPC, RPC, WS). */
@@ -122,6 +123,7 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
         adminToken: resolveAdminToken(options.cwd),
         basePath: "/",
         dataEditable: isLoopback,
+        rulesInstalled: detectAgentRules(options.cwd).installed,
         runAsIdentity: isLoopback,
         scriptSrc: "/studio.js",
         styleHref: "/styles.css",
