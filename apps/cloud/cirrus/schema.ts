@@ -72,11 +72,14 @@ export default defineSchema({
         createdAt: v.number(),
         // Optional meta-framework hint (tanstack-start, astro, …) for the build step.
         framework: v.optional(v.string()),
+        // Connected GitHub repository (`owner/name`) for preview automation (§2.3).
+        githubRepo: v.optional(v.string()),
         name: v.string(),
         organizationId: v.id("organizations"),
         slug: v.string(),
     })
         .global()
+        .index("by_github_repo", ["githubRepo"])
         // Per-org slug uniqueness, enforced by the composite unique index.
         .index("by_org_slug", ["organizationId", "slug"], { unique: true }),
 

@@ -21,4 +21,11 @@
     // Kept in sync with cirrus/_generated/crons.ts (CIRRUS_CRON_TRIGGERS) — the
     // hourly preview-cleanup job. Account-level worker, so triggers fire (§2.4).
     "triggers": { "crons": ["0 */1 * * *"] },
+    "vars": {
+        // The Cloudflare account this cell provisions into.
+        "CLOUDFLARE_ACCOUNT_ID": "<replace-with-cf-account-id>",
+        // Cell id + the apex the dispatcher routes tenant scripts under.
+        "CIRRUS_CELL": "default",
+        "CIRRUS_APP_DOMAIN": "cirrus.app",
+    },
 }

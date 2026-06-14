@@ -1,8 +1,9 @@
 import type { ExecutionContextLike } from "@cirrus/runtime";
 
 import { api } from "../../cirrus/_generated/api.js";
+import { createHttpCloudflareApi } from "../cloudflare/api";
 import { handleGitHubWebhook } from "../github/webhook";
-import { createAlchemyProvisioner } from "../provision";
+import { createCloudflareProvisioner } from "../provision";
 import type { DeployBackend, DeployTarget } from "./handler";
 import { handleDeployRequest } from "./handler";
 import { CellScheduler } from "./scheduler";
@@ -15,7 +16,9 @@ interface CirrusActionContext {
 
 interface RouterEnv {
     __cirrusCtx?: CirrusActionContext;
+    CIRRUS_APP_DOMAIN?: string;
     CIRRUS_CELL?: string;
+    CLOUDFLARE_ACCOUNT_ID?: string;
     CLOUDFLARE_API_TOKEN?: string;
     GITHUB_WEBHOOK_SECRET?: string;
 }
@@ -23,6 +26,8 @@ interface RouterEnv {
 interface HttpRouterLike {
     fetch: (request: Request, environment?: unknown, context?: ExecutionContextLike) => Promise<Response>;
 }
+
+type ProjectResolution = { organizationId: string; projectId: string; slug: string }; // secret-scanner:allow -- domain field name
 
 const jsonError = (status: number, error: string): Response => Response.json({ error }, { headers: { "content-type": "application/json" }, status });
 
@@ -47,13 +52,22 @@ export const createDeployRouter = (): HttpRouterLike => {
             const routerEnv = (environment ?? {}) as RouterEnv;
 
             // GitHub webhook → preview automation (§2.3). Self-authenticating via
-            // its HMAC signature; needs no Cirrus context.
+            // its HMAC signature; resolves the connected project via the Cirrus ctx.
             if (request.method === "POST" && url.pathname === "/v1/github/webhook") {
                 if (!routerEnv.GITHUB_WEBHOOK_SECRET) {
                     return jsonError(500, "github webhook secret not configured");
                 }
 
-                return handleGitHubWebhook(request, { secret: routerEnv.GITHUB_WEBHOOK_SECRET });
+                const webhookContext = routerEnv.__cirrusCtx;
+
+                if (!webhookContext) {
+                    return jsonError(500, "cirrus context unavailable");
+                }
+
+                return handleGitHubWebhook(request, {
+                    resolveProject: (repository) => webhookContext.runMutation<null | ProjectResolution>(api.projects.byGithubRepo, { repository }),
+                    secret: routerEnv.GITHUB_WEBHOOK_SECRET,
+                });
             }
 
             if (request.method !== "POST" || url.pathname !== "/v1/deploy") {
@@ -67,6 +81,12 @@ export const createDeployRouter = (): HttpRouterLike => {
             }
 
             const cell = routerEnv.CIRRUS_CELL ?? "default";
+            const appDomain = routerEnv.CIRRUS_APP_DOMAIN ?? "cirrus.app";
+            const cloudflareApi = createHttpCloudflareApi({
+                accountId: routerEnv.CLOUDFLARE_ACCOUNT_ID ?? "",
+                apiToken: routerEnv.CLOUDFLARE_API_TOKEN ?? "",
+            });
+            const provisioner = createCloudflareProvisioner({ api: cloudflareApi, urlForScript: (scriptName) => `https://${scriptName}.${appDomain}` });
             const backend: DeployBackend = {
                 createDeployment: async ({ branch, key, kind, organizationId, projectId, scriptName }) => {
                     const deploymentId = await context.runMutation<string>(api.deployments.create, {
@@ -90,7 +110,7 @@ export const createDeployRouter = (): HttpRouterLike => {
                 backend,
                 cell,
                 dispatchNamespace: (kind) => `cirrus-${kind}`,
-                provisioner: createAlchemyProvisioner({ cell, cloudflareApiToken: routerEnv.CLOUDFLARE_API_TOKEN ?? "" }),
+                provisioner,
                 scheduler,
             });
         },
