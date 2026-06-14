@@ -108,7 +108,9 @@ export default defineSchema({
     })
         .global()
         .index("by_kind", ["kind"])
-        .index("by_project", ["projectId"]),
+        .index("by_project", ["projectId"])
+        // Dispatcher resolves a request's script id → org plan via this index.
+        .index("by_script", ["scriptName"]),
 
     deployKeys: defineTable({
         createdAt: v.number(),
@@ -166,6 +168,22 @@ export default defineSchema({
     })
         .global()
         .index("by_org", ["organizationId"]),
+
+    // Tenant environment secrets (§7). Stored AES-256-GCM encrypted at the edge
+    // (`src/secrets/crypto.ts`) — only ciphertext + IV live here. Materialized +
+    // decrypted at deploy time into the tenant Worker's script secrets.
+    secrets: defineTable({
+        ciphertext: v.string(),
+        createdAt: v.number(),
+        iv: v.string(),
+        name: v.string(),
+        organizationId: v.id("organizations"),
+        projectId: v.id("projects"),
+        updatedAt: v.number(),
+    })
+        .global()
+        .index("by_project", ["projectId"])
+        .index("by_project_name", ["projectId", "name"], { unique: true }),
 
     // ── @cirrus/payment tables (§4 billing) ───────────────────────────────────
     // Declared inline (codegen parses this file's AST and can't resolve a cross-
