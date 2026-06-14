@@ -43,7 +43,8 @@ cirrus/
   crons.ts           code-first crons (preview cleanup + usage rollup + cron-tick)
 src/
   server.ts          control-plane Worker entry (D1 global tables + deploy router
-                     + crons + better-auth `/api/auth/*` + studio identity)
+                     + crons + better-auth `/api/auth/*` + studio identity; also the
+                     tenant cron/queue fan-out scheduled()/queue() handlers, §2.4)
   client/            hosted studio — React SPA served alongside the Worker by @cirrus/vite
     main.tsx         CirrusProvider + StrictMode mount
     auth-client.ts   better-auth React client (relative /api/auth basePath)
@@ -71,6 +72,7 @@ src/
     analytics.ts     Analytics Engine writer (dispatcher) + reader port (rollup, §4)
   fanout/
     cron.ts          tenant cron fan-out: cron-expression matching + due ticks (§2.4)
+    queue.ts         tenant queue fan-out: group a shared-queue batch by tenant (§2.4)
   deploy/
     token-bucket.ts  per-cell API budget (CF 1,200/5min, §2.5)
     scheduler.ts     CellScheduler — paces provisioner work, priority + concurrency

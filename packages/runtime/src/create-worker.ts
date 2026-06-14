@@ -480,6 +480,35 @@ interface ScheduledControllerLike {
  */
 type CronHandler = (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike) => Promise<void> | void;
 
+/** One forwarded queue message: the platform's opaque `body` plus its id. */
+interface QueueForwardMessage {
+    body: unknown;
+    id: string;
+}
+
+/** A batch of queue messages forwarded to a tenant via `POST /_lunora/queue`. */
+interface QueueForwardBatch {
+    messages: ReadonlyArray<QueueForwardMessage>;
+    queue: string;
+}
+
+/** Outcome of a forwarded batch: the ids to retry (everything else is acked). */
+interface QueueForwardResult {
+    retry?: ReadonlyArray<string>;
+}
+
+/**
+ * Process a batch of queue messages forwarded by the platform. WfP namespaced
+ * Workers can't be queue consumers, so a platform-owned consumer fans batches in
+ * here (CLOUD-PLAN §2.4); return the ids to retry. Env-driven side effects
+ * (sending mail, etc.) belong in the app's handler.
+ */
+type QueueForwardHandler = (
+    batch: QueueForwardBatch,
+    env: unknown,
+    context: ExecutionContextLike,
+) => Promise<QueueForwardResult | undefined> | QueueForwardResult | undefined;
+
 /**
  * A Cloudflare Queues push-consumer handler — the worker's `queue()` entry
  * forwards each delivered `MessageBatch` (typed `unknown` here to keep the
@@ -1075,6 +1104,14 @@ interface WorkerOptions {
     queue?: QueueConsumerHandler;
 
     /**
+     * Queue-batch handler (CLOUD-PLAN §2.4). WfP namespaced Workers can't be
+     * queue consumers, so a platform-owned consumer forwards batches to the
+     * admin-gated `POST /_lunora/queue` endpoint, which invokes this. Return the
+     * message ids to retry; the rest are acked. Omit if the app has no queues.
+     */
+    queueHandler?: QueueForwardHandler;
+
+    /**
      * Enforce the ephemeral WS admin token: when `true`,
      * the worker's WS admin gate rejects the raw master admin token in the
      * `?token=` query parameter — only a short-lived sub-token minted by
@@ -1454,6 +1491,11 @@ const isAdminPath = (pathname: string): boolean => pathname.startsWith(ADMIN_PAT
 // for Workers uploaded into a Workers-for-Platforms dispatch namespace, so a
 // platform fans cron ticks out to its tenants by POSTing here (CLOUD-PLAN §2.4).
 const SCHEDULED_TICK_PATH = "/_lunora/scheduled";
+
+// Admin-gated HTTP entrypoint that processes a forwarded queue batch. Namespaced
+// WfP Workers can't be queue consumers, so a platform-owned consumer forwards
+// batches here, where the app's `queueHandler` runs (CLOUD-PLAN §2.4).
+const QUEUE_DISPATCH_PATH = "/_lunora/queue";
 
 /**
  * Env values that read as "on" for `LUNORA_REQUIRE_EPHEMERAL_WS_TOKEN`. Mirrors
@@ -4269,6 +4311,40 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         return Response.json({ cron, ok: true });
     };
 
+    /**
+     * `POST /_lunora/queue` — process a forwarded queue batch (the WfP workaround
+     * for queue consumers, CLOUD-PLAN §2.4). Admin-gated; the body is
+     * `{ "queue": "name", "messages": [{ "id": "...", "body": ... }] }`. Returns
+     * `{ "retry": [ids] }` so the platform consumer can retry only the failures.
+     */
+    const handleQueueDispatch = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<Response> => {
+        assertAdminAuthorized(request);
+
+        if (request.method !== "POST") {
+            throw new CirrusError("queue dispatch endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        if (!options.queueHandler) {
+            throw new CirrusError("no queueHandler configured", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const body = (await request.json().catch(() => undefined)) as { messages?: unknown; queue?: unknown } | undefined;
+        const queue = typeof body?.queue === "string" ? body.queue : "";
+        const rawMessages = Array.isArray(body?.messages) ? body.messages : [];
+        const messages = rawMessages
+            .filter(
+                (message): message is { body: unknown; id: string } =>
+                    typeof message === "object" && message !== null && typeof (message as { id?: unknown }).id === "string",
+            )
+            .map((message) => {
+                return { body: (message as { body?: unknown }).body, id: (message as { id: string }).id };
+            });
+
+        const result = await options.queueHandler({ messages, queue }, env, context);
+
+        return Response.json({ retry: result?.retry ?? [] });
+    };
+
     // Internal endpoint dispatch table. Keyed by pathname; each handler takes
     // the request (and, where needed, env/url) and returns the response.
     type InternalRoute = (request: Request, env: unknown, url: URL, context: ExecutionContextLike) => Promise<Response> | Response;
@@ -4554,6 +4630,10 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         // here while `context` is in scope.
         if (url.pathname === SCHEDULED_TICK_PATH) {
             return handleScheduledTick(request, env, context);
+        }
+
+        if (url.pathname === QUEUE_DISPATCH_PATH) {
+            return handleQueueDispatch(request, env, context);
         }
 
         // Internal `/_lunora/*` endpoints, keyed by pathname. Each entry adapts
