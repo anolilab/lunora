@@ -18,9 +18,15 @@
             "database_id": "<replace-with-d1-create-id>",
         },
     ],
-    // Kept in sync with cirrus/_generated/crons.ts (CIRRUS_CRON_TRIGGERS) — the
-    // hourly preview-cleanup job. Account-level worker, so triggers fire (§2.4).
-    "triggers": { "crons": ["0 */1 * * *"] },
+    // Bind the dispatch namespace so the every-minute tick can fan tenant cron
+    // jobs out to namespaced workers (WfP drops their own triggers.crons; §2.4).
+    "dispatch_namespaces": [{ "binding": "DISPATCHER", "namespace": "cirrus-production" }],
+    "triggers": {
+        // `0 */1 * * *` fires the control plane's own code crons (preview cleanup,
+        // usage rollup). `* * * * *` drives the tenant cron fan-out — the fan-out
+        // matches each tenant's expression against the current minute (src/fanout).
+        "crons": ["0 */1 * * *", "*/1 * * * *"],
+    },
     "vars": {
         // The Cloudflare account this cell provisions into.
         "CLOUDFLARE_ACCOUNT_ID": "<replace-with-cf-account-id>",

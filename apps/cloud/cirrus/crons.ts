@@ -16,4 +16,8 @@ crons.interval("cleanup expired previews", { hours: 1 }, internal.deployments.cl
 // Compact closed-period platform-usage events once an hour (§4 metering rollup).
 crons.interval("rollup platform usage", { hours: 1 }, internal.usage.rollup, {});
 
+// Every-minute heartbeat that emits the `*/1 * * * *` trigger the edge cron
+// fan-out rides on (§2.4) — the job itself is a no-op; see cirrus/fanout.ts.
+crons.interval("tenant cron fan-out tick", { minutes: 1 }, internal.fanout.tick, {});
+
 export default crons;
