@@ -71,23 +71,39 @@ interface ShardEnv {
  * gated by the `cirrus/billing.ts` functions (which `assertMember` before
  * touching `ctx.payments`), so the per-caller `authorize` here is allow-all.
  */
+// Memoized per isolate: the Stripe client + adapter are pure functions of env
+// (stable within an isolate), so build them once instead of on every shard
+// request that touches `ctx.payments`.
+let cachedPayment: { config: PaymentsFromContextOptions; key: string } | null = null;
+
 const paymentConfig = (env: ShardEnv): PaymentsFromContextOptions => {
-    return {
-        adapter: createStripeAdapter({
-            // A real `Stripe` instance satisfies the structural client; the cast keeps
-            // the package free of a hard `stripe` type dependency. A placeholder key
-            // keeps construction from throwing when billing isn't configured — live
-            // calls then fail with a clear Stripe auth error.
-            client: new Stripe(env.STRIPE_SECRET_KEY ?? "sk_unconfigured", { httpClient: Stripe.createFetchHttpClient() }) as unknown as StripeClientLike,
-            webhookSecret: env.STRIPE_WEBHOOK_SECRET ?? "",
-        }),
-        authorize: () => true,
-        entitlements: CIRRUS_CLOUD_PLANS,
-        observability: (event) => {
-            // eslint-disable-next-line no-console -- route billing telemetry to logs/metrics/alerts
-            console.log("[payment]", event.type, event);
-        },
-    };
+    const key = `${env.STRIPE_SECRET_KEY ?? ""}|${env.STRIPE_WEBHOOK_SECRET ?? ""}`;
+
+    if (cachedPayment?.key !== key) {
+        cachedPayment = {
+            config: {
+                adapter: createStripeAdapter({
+                    // A real `Stripe` instance satisfies the structural client; the cast
+                    // keeps the package free of a hard `stripe` type dependency. A
+                    // placeholder key keeps construction from throwing when billing isn't
+                    // configured — live calls then fail with a clear Stripe auth error.
+                    client: new Stripe(env.STRIPE_SECRET_KEY ?? "sk_unconfigured", {
+                        httpClient: Stripe.createFetchHttpClient(),
+                    }) as unknown as StripeClientLike,
+                    webhookSecret: env.STRIPE_WEBHOOK_SECRET ?? "",
+                }),
+                authorize: () => true,
+                entitlements: CIRRUS_CLOUD_PLANS,
+                observability: (event) => {
+                    // eslint-disable-next-line no-console -- route billing telemetry to logs/metrics/alerts
+                    console.log("[payment]", event.type, event);
+                },
+            },
+            key,
+        };
+    }
+
+    return cachedPayment.config;
 };
 
 /**

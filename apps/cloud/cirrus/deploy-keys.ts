@@ -1,7 +1,7 @@
 import { formatDeployKey, hashDeployKey, parseDeployKey, randomSecret } from "../src/deploy/keys";
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
-import { assertMember } from "./authz";
+import { assertMember, assertRowInOrg } from "./authz";
 
 /** Public view of a deploy key — never exposes the stored hash. */
 interface DeployKeyView {
@@ -62,7 +62,7 @@ export const issue = mutation({
 
         const key = formatDeployKey({
             organizationId: arguments_.organizationId,
-            ...(arguments_.projectId ? { projectId: arguments_.projectId } : {}),
+            ...(arguments_.projectId ? { projectId: arguments_.projectId } : {}), // secret-scanner:allow -- domain field name
             secret: randomSecret(),
             type: arguments_.type,
         });
@@ -73,7 +73,7 @@ export const issue = mutation({
             hashedKey,
             name: arguments_.name,
             organizationId: arguments_.organizationId,
-            projectId: arguments_.projectId,
+            projectId: arguments_.projectId, // secret-scanner:allow -- domain field name
             type: arguments_.type,
         });
 
@@ -86,6 +86,7 @@ export const revoke = mutation({
     args: { id: v.id("deployKeys"), organizationId: v.id("organizations") },
     handler: async (context, { id, organizationId }): Promise<void> => {
         await assertMember(context, organizationId, ["owner", "admin"]);
+        await assertRowInOrg(context, id, organizationId, "deploy key");
 
         await context.db.patch(id, { revokedAt: Date.now() });
     },
