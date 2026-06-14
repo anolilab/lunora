@@ -773,6 +773,15 @@ const buildRankCursorSeek = (
  * Partition and id sort ascending; each sort column follows its index direction.
  */
 const rankPageColumns = (index: RankIndexDefinitionLike, sortColumns: ReadonlyArray<string>): { column: string; direction: "asc" | "desc" }[] => {
+    // A rank index with no sort columns degenerates the cursor tuple to
+    // `[__partition__, RANK_TIEBREAK]`, which lets `buildRankCursorSeek` silently
+    // mismatch and return a wrong/empty page. The schema builder already requires
+    // a non-empty `sortBy` (packages/server/src/schema.ts), so this is a
+    // belt-and-suspenders guard that fails loudly instead of paginating wrong.
+    if (index.sortBy.length === 0) {
+        throw new Error(`rankIndex "${index.name}" requires at least one "sortBy" column for stable pagination`);
+    }
+
     const columns: { column: string; direction: "asc" | "desc" }[] = [{ column: "__partition__", direction: "asc" }];
 
     for (const [i, sortKey] of index.sortBy.entries()) {

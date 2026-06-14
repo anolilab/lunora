@@ -180,4 +180,24 @@ describe("d1 rankIndex parity", () => {
 
         await expect(writer.rank("messages", "byChannel", { row: "m1" })).resolves.toEqual({ position: 1, total: 1 });
     });
+
+    it("rankPage throws on a rank index with an empty sortBy", async () => {
+        expect.assertions(1);
+
+        // The schema builder already rejects an empty `sortBy`, so this degenerate
+        // index is unreachable in normal use. The d1 reader still guards it so a
+        // hand-built / malformed definition fails loudly rather than paginating a
+        // silently wrong/empty page (buildRankCursorSeek returning undefined).
+        const emptySortBy: RankIndexDefinitionLike = {
+            name: "degenerate",
+            on: "messages",
+            sortBy: [],
+        };
+
+        const writer = await setupWriter(makeSchema(emptySortBy));
+
+        await writer.insert("messages", { _id: "m1", archived: false, channelId: "c1", score: 10 }, { allowExplicitId: true });
+
+        await expect(writer.rankPage("messages", "degenerate", { take: 10 })).rejects.toThrow(/at least one "sortBy" column/);
+    });
 });
