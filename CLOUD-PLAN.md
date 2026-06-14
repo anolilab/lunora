@@ -221,7 +221,14 @@ pages, WfP isolation + gotcha notes). These go into the Phase 1 spike checklist 
   alarms, which work fine in namespaced Workers** (`runAfter`/`runAt` unaffected): the
   platform runs one account-level cron ticker Worker that fans tick events out through
   the dispatcher to each tenant's `scheduled()` path (tenants' cron specs are known to
-  the control plane from codegen output).
+  the control plane from codegen output). _Built:_ the runtime exposes an admin-gated
+  `POST /_cirrus/scheduled` tick endpoint (`@cirrus/runtime`, reuses the native
+  `scheduled()` dispatch); the control plane runs an every-minute trigger and fans due
+  ticks out through `env.DISPATCHER.get(script).fetch(...)` (`src/fanout/cron.ts` —
+  pure cron-expression matching + due computation; wired in `src/server.ts`'s
+  `scheduled()`). Tenant cron specs are captured on the `deployments` row at deploy
+  (`cronSpecs`). _Remaining:_ live validation on a dispatch namespace, and threading
+  `cronSpecs` through the deploy request (tied to the deploy-bundle transport gap).
 - **No gradual deployments for user Workers** (the one limitation the official WfP
   limits page _does_ state): every upload deploys all-at-once to 100% of traffic.
   So the deploy API's `rollback` is platform-side — the control plane retains
