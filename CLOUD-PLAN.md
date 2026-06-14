@@ -411,7 +411,7 @@ with a named contact is the real insurance against surprise enforcement.
 Ordered so every phase ships standalone DX value even if we stop there.
 
 > **Status (2026-06-14).** Phase 0 shipped in the framework. The control-plane
-> **backend is feature-complete as code** in `apps/cloud` (69 unit tests; codegen
+> **backend is feature-complete as code** in `apps/cloud` (83 unit tests; codegen
 > /eslint/tsc clean; the studio SPA compiles via `vite build`) across all phases,
 > with the **hosted studio React UI** (`src/client`, served with the Worker by
 > `@cirrus/vite`):
@@ -428,17 +428,22 @@ Ordered so every phase ships standalone DX value even if we stop there.
 >   better-auth** (mail-backed verification/reset, optional OAuth, 2FA/passkeys,
 >   rate limiting + a per-IP `/v1/*` cap).
 > - **Phase 4:** **billing on `@cirrus/payment`** (Stripe checkout/portal/webhook
->   keyed on the org id + entitlements from synced subscriptions), plan/quota
->   enforcement (projects/members), and **metering** (`platformUsage` +
->   `usage.ingest` deploy-key endpoint + `aggregateUsage` + per-plan dispatch
->   limits).
+>   keyed on the org id + entitlements from synced subscriptions); **quota
+>   enforced against live subscription state** (`cirrus/entitlements.ts` — a Stripe
+>   upgrade raises limits with no column to sync); **metering source** (dispatcher
+>   emits per-request Analytics Engine data points) + `usage.ingest` ledger +
+>   hourly `usage.rollup` compaction + per-plan dispatch limits wired through a
+>   cached `GET /v1/tenants/plan` lookup; **tenant secrets** (AES-256-GCM envelope
+>   encryption, materialized at deploy); and the studio **Activity** (audit-log)
+>   view.
 >
 > **Remaining — genuinely needs live infra / external services, to be done by
 > whoever has a Cloudflare account + provider keys:** end-to-end deploy validation
 > against real Cloudflare; browser/e2e testing of the studio UI (it compiles and
 > wires to the live queries, but has not been exercised against a running backend
-> here); the billing-provider _charge_ call (Stripe/Polar via `@cirrus/payment`) +
-> the Analytics-Engine metering _source_; managed backups/PITR; and the cell
+> here); the billing-provider _charge_ call against a real Stripe account; the
+> Analytics-Engine→ledger rollup edge wiring (the writer, reader port, and
+> compaction cron exist); custom domains; managed backups/PITR; and the cell
 > bring-up IaC. The code seams for all of these exist.
 
 - **Phase 0 — Remote-binding dev (no cloud required). ✅ SHIPPED.** Implemented in the

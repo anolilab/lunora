@@ -1,7 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { limitsForPlan } from "../src/billing/plans";
-import { resolveTenant } from "../src/dispatcher/route";
+import { createPlanResolver, resolveTenant } from "../src/dispatcher/route";
 
 describe(resolveTenant, () => {
     it("maps a single-label subdomain to its script", async () => {
@@ -43,5 +43,26 @@ describe(limitsForPlan, () => {
         expect(limitsForPlan("pro").cpuMs).toBeGreaterThan(limitsForPlan("free").cpuMs);
         expect(limitsForPlan(undefined)).toStrictEqual(limitsForPlan("free"));
         expect(limitsForPlan("nonexistent")).toStrictEqual(limitsForPlan("free"));
+    });
+});
+
+describe(createPlanResolver, () => {
+    it("resolves a plan and caches it within the TTL", async () => {
+        const fetchMock = vi.fn().mockResolvedValue(Response.json({ plan: "pro" }, { status: 200 }));
+        const resolve = createPlanResolver({ controlPlaneToken: "t", controlPlaneUrl: "https://cp", fetch: fetchMock });
+
+        await expect(resolve("acme-app")).resolves.toBe("pro");
+        await expect(resolve("acme-app")).resolves.toBe("pro");
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("falls back to undefined on a failed lookup", async () => {
+        const resolve = createPlanResolver({
+            controlPlaneToken: "t",
+            controlPlaneUrl: "https://cp",
+            fetch: async () => new Response("nope", { status: 500 }),
+        });
+
+        await expect(resolve("acme-app")).resolves.toBeUndefined();
     });
 });

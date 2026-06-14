@@ -35,8 +35,11 @@ cirrus/
   deployments.ts     create / listByProject / updateStatus / cleanupExpiredPreviews
   deploy-keys.ts     issue / list / revoke / verify (SHA-256 hashed)
   billing.ts         checkout / portal / entitlements / subscription / webhook (§4)
-  usage.ts           platform metering: record / ingest (deploy-key) / summary
-  crons.ts           code-first crons (hourly preview cleanup)
+  entitlements.ts    live quota resolution from synced subscription state (§4)
+  secrets.ts         tenant env secrets: store / list / listEncrypted / remove (§7)
+  usage.ts           platform metering: record / ingest / rollup (cron) / summary
+  audit-log.ts       record + list (the studio Activity tab)
+  crons.ts           code-first crons (preview cleanup + usage rollup)
 src/
   server.ts          control-plane Worker entry (D1 global tables + deploy router
                      + crons + better-auth `/api/auth/*` + studio identity)
@@ -52,13 +55,19 @@ src/
     MembersSection.tsx         members + add/remove
     DeployKeysSection.tsx      issue (show-once) / revoke deploy keys
     InvitationsSection.tsx     invite via /v1/invitations/send (token emailed) / revoke
+    SecretsSection.tsx         per-project tenant secrets (set via /v1/secrets) / delete
     UsageSection.tsx           current-month usage summary
     BillingSection.tsx         entitlements + subscriptions + checkout / portal
+    ActivitySection.tsx        the org's audit log (who did what)
     AsyncList.tsx              loading/empty/populated helper for live lists
     styles.css                 studio styling
   provision.ts       @cirrus/provision seam over the Cloudflare REST port
   cloudflare/
     api.ts           Cloudflare REST port: D1/R2 create, dispatch-script upload, secrets
+  secrets/
+    crypto.ts        AES-256-GCM envelope encryption for tenant secrets (§7)
+  metering/
+    analytics.ts     Analytics Engine writer (dispatcher) + reader port (rollup, §4)
   deploy/
     token-bucket.ts  per-cell API budget (CF 1,200/5min, §2.5)
     scheduler.ts     CellScheduler — paces provisioner work, priority + concurrency
@@ -67,11 +76,11 @@ src/
     preview.ts       preview script-name + TTL helpers (§2.3)
     handler.ts       POST /v1/deploy handler (auth → orchestrate → stream NDJSON)
     client.ts        cirrus-deploy client (POST + consume NDJSON stream)
-    router.ts        httpRouter: /v1/{deploy,github/webhook,billing/webhook,
-                     usage,invitations/send,admin} + per-IP rate limiting
+    router.ts        httpRouter: /v1/{deploy,github/webhook,billing/webhook,usage,
+                     invitations/send,secrets,admin,tenants/plan} + per-IP rate limiting
   dispatcher/
-    route.ts         hostname → tenant script (+ plan) resolution
-    worker.ts        WfP dispatcher Worker — env.DISPATCHER.get with per-plan limits
+    route.ts         hostname → tenant script (+ plan) resolution; cached plan resolver
+    worker.ts        WfP dispatcher Worker — per-plan limits + per-request usage emit
   github/
     webhook.ts       GitHub webhook: HMAC verify + PR→preview-intent parse (§2.3)
   mail/
@@ -141,10 +150,31 @@ payment })`, so the billing functions get `ctx.payments`: `checkout` / `portal`
 (member reads that resolve plan → features/limits through `CIRRUS_CLOUD_PLANS`,
 falling back to the free baseline), and `processWebhook` (signature-verified,
 mounted at `POST /v1/billing/webhook`). Entitlement reads work without Stripe
-keys; only live calls need them. Platform **metering** is separate: `usage.ingest`
-(`POST /v1/usage`, deploy-key authenticated) records resource events into the
-`platformUsage` table, `usage.summary` rolls a period up, and the dispatcher
-applies **per-plan runtime limits** (`limitsForPlan`) to `env.DISPATCHER.get`.
+keys; only live calls need them.
+
+**Quota is enforced against live subscription state**, not the static
+`organizations.plan` column: `cirrus/entitlements.ts` resolves the org's
+entitlements from its synced `subscriptions` (the single source of truth), and
+`projects`/`members` creation call `assertWithinQuota` — so a Stripe upgrade
+raises the limits immediately, with no column to keep in sync.
+
+Platform **metering** is end-to-end: the dispatcher emits one Analytics Engine
+data point per tenant request (`src/metering/analytics.ts`, the source) and
+applies **per-plan runtime limits** (`limitsForPlan` → `env.DISPATCHER.get`,
+resolved via the cached `GET /v1/tenants/plan` lookup). Events also land in the
+`platformUsage` ledger via `usage.ingest` (`POST /v1/usage`, deploy-key auth);
+an hourly `usage.rollup` cron compacts closed periods, and `usage.summary` reads
+the total. The AE→ledger reader (`createHttpAnalyticsReader`) is the prod rollup
+seam (runs at the edge with the account token).
+
+### Tenant secrets (`cirrus/secrets.ts`, `src/secrets/crypto.ts`, §7)
+
+Tenant env secrets are **AES-256-GCM encrypted at the edge** before storage:
+`POST /v1/secrets` encrypts with the `SECRET_ENCRYPTION_KEY` master key, so the
+control-plane D1 only ever holds ciphertext + a per-secret IV. `list` returns
+names only; at deploy time the handler fetches `listEncrypted` and decrypts the
+values into the tenant Worker's script secrets (alongside the platform-owned
+`CIRRUS_ADMIN_TOKEN`). The plaintext never reaches a browser.
 
 ### Auth (`src/server.ts`, §3)
 
