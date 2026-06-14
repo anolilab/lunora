@@ -34,6 +34,19 @@ export {
 } from "./remote-bindings";
 export type { AugmentPlan, EnsureDevVariablesDeps, EnsureDevVariablesResult, EnsureDevVariablesStatus, ScaffoldPlan } from "./scaffold-dev-variables";
 export { ensureDevVariables, isPlaceholderValue, planDevVariablesAugment, planDevVariablesScaffold } from "./scaffold-dev-variables";
+export type {
+    AddIndexEdit,
+    AdditiveEdit,
+    AddOptionalColumnEdit,
+    AddTableEdit,
+    ApplyEditResult,
+    ApplyFailureReason,
+    DestructiveEdit,
+    SchemaEdit,
+} from "./schema-edit/mutate";
+export { applyAdditiveEdit, classifyEdit } from "./schema-edit/mutate";
+export type { ParseSchemaResult, SchemaColumn, SchemaIndex, SchemaTable } from "./schema-edit/parse";
+export { parseSchema } from "./schema-edit/parse";
 export type { DiscoverSchemaInfoResult, SchemaInfo } from "./schema-info";
 export { discoverSchemaInfo } from "./schema-info";
 export type { DiscoverWorkflowInfoResult, WorkflowIR } from "./workflow-info";
