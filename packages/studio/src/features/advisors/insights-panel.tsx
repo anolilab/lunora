@@ -24,6 +24,8 @@ import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/in
 import { recordShard } from "../../lib/shard-history";
 import type { AdvisorRow } from "./advisor-view";
 import { AdvisorView, advisoryRow } from "./advisor-view";
+import { ApplyIndexButton } from "./apply-index-button";
+import { hasIndexMetadata } from "./compose-index-sql";
 import type { Insight } from "./derive-insights";
 import { deriveInsights } from "./derive-insights";
 import type { DeclaredIndex } from "./derive-runtime-advisories";
@@ -320,7 +322,29 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
         // Static schema advisories (codegen-time lints) first, then the runtime
         // advisor lints (dead index / hot scan), then the derived insights. The
         // severity tabs in AdvisorView regroup them all by level.
-        return [...(advisories ?? []).map((finding) => advisoryRow(finding)), ...runtimeRows, ...insightRows];
+        //
+        // For `unindexed_foreign_key` findings (and any other finding that carries
+        // `suggestedIndex` metadata), attach an "Apply index" action that composes
+        // the `CREATE INDEX` SQL and copies it to the operator's clipboard on
+        // confirm. This is the Item 5 "create all missing indexes" apply control —
+        // per-finding rather than bulk, guarded by ConfirmButton.
+        const staticRows: AdvisorRow[] = (advisories ?? []).map((finding) => {
+            const base = advisoryRow(finding);
+
+            if (finding.name === "unindexed_foreign_key" && hasIndexMetadata(finding.metadata)) {
+                const { table, suggestedIndex } = finding.metadata;
+                const testId = `in-apply-index-${table}-${suggestedIndex.name}`;
+
+                return {
+                    ...base,
+                    action: <ApplyIndexButton fields={suggestedIndex.fields} indexName={suggestedIndex.name} table={table} testId={testId} />,
+                };
+            }
+
+            return base;
+        });
+
+        return [...staticRows, ...runtimeRows, ...insightRows];
     }, [advisories, insights, jumpToSchemaIndex, runtimeRows, t]);
 
     const toolbar = <ShardInput onChange={setShardKey} testId="in-shard-input" value={shardKey} />;

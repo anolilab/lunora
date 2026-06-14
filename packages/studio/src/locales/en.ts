@@ -465,6 +465,11 @@ const MESSAGE_IDS = [
     "Live admin subscriptions are ungated",
     "Request log keeps un-redacted args",
     "Your admin token is {length} characters — use at least {min} for a brute-force-resistant secret.",
+    // Advisors — missing-index apply action.
+    "Apply index",
+    "Apply index on {table}",
+    "Apply?",
+    "CREATE INDEX SQL copied to clipboard.",
     "CIRRUS_WS_BEARER is unset, so the WebSocket upgrade gate is open: live admin subscriptions need no credential. Set it to gate them like the HTTP admin RPCs.",
     "This worker reports a development environment, so the request log stores raw args and identity. Confirm it isn't a mislabeled production deploy.",
     // Audit panel.
