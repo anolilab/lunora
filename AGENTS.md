@@ -35,6 +35,14 @@ pnpm run lint:affected:eslint     # Only changed
 pnpm run lint:affected:types      # Only changed
 ```
 
+> Note: `dist/` is gitignored and built on demand. A raw `pnpm --filter … run
+> test` / `lint:types` does NOT rebuild workspace dependencies, so if an upstream
+> `@cirrus/*` package's source changed you may hit stale-`dist` errors
+> (`X is not a function`, "missing export"). Build first — `pnpm run
+> build:packages` once, or `pnpm --filter "@cirrus/<pkg>..." run build` (the
+> trailing `...` includes dependencies) — or use `pnpm run test:affected` /
+> `pnpm run lint:affected:types`, which build dependencies for you.
+
 ## Commit Convention
 
 Angular-style conventional commits, enforced by hooks:
