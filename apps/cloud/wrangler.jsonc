@@ -21,6 +21,12 @@
     // Bind the dispatch namespace so the every-minute tick can fan tenant cron
     // jobs out to namespaced workers (WfP drops their own triggers.crons; §2.4).
     "dispatch_namespaces": [{ "binding": "DISPATCHER", "namespace": "cirrus-production" }],
+    // Platform-owned queue consumer (§2.4): tenants can't be queue consumers under
+    // WfP, so the control plane drains a shared queue and forwards each message to
+    // its tenant's /_cirrus/queue. Tenant producers tag messages with their script.
+    "queues": {
+        "consumers": [{ "queue": "cirrus-tenant-queue", "max_batch_size": 100, "max_batch_timeout": 5 }],
+    },
     "triggers": {
         // `0 */1 * * *` fires the control plane's own code crons (preview cleanup,
         // usage rollup). `* * * * *` drives the tenant cron fan-out — the fan-out
