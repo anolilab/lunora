@@ -410,15 +410,27 @@ with a named contact is the real insurance against surprise enforcement.
 
 Ordered so every phase ships standalone DX value even if we stop there.
 
-> **Status (2026-06-13).** Phase 0 is **already shipped in the framework**. Phases 1–2
-> are **substantially built** in `apps/cloud` (control plane + deploy API + auth +
-> deploy-key lifecycle + preview lifecycle + GitHub webhook + deploy client), all
-> compiling and unit-tested; the remaining work is the parts that genuinely require a
-> live Cloudflare account: the **Alchemy v2 provisioner body** (the `Provisioner` is a
-> rejecting stub today, so deploys terminate at `failed`), the **dispatcher Worker** +
-> `{project}.cirrus.app` routing, and any end-to-end "it actually deploys" validation.
-> Phases 3–4 have their pure, no-CF slivers built (team invitations; plans + quota
-> entitlements on `@cirrus/payment`); the CF/UI/external-service halves remain.
+> **Status (2026-06-14).** Phase 0 shipped in the framework. The control-plane
+> **backend is feature-complete as code** in `apps/cloud` (60 unit tests; codegen
+> /eslint/tsc clean) across all phases:
+>
+> - **Phase 1:** control plane + deploy API (NDJSON) + deploy-key lifecycle + a
+>   **real provisioner** over the Cloudflare REST API (`src/cloudflare/api.ts`;
+>   creates D1/R2, uploads the dispatch-namespace script, applies secrets) + the
+>   **dispatcher Worker** (`src/dispatcher/`) + the **`cirrus login/link/deploy`**
+>   CLI (`src/cli/`).
+> - **Phase 2:** preview TTL lifecycle + cleanup cron + GitHub webhook (HMAC +
+>   project resolution).
+> - **Phase 3:** team invitations + the **admin-RPC proxy** (`src/admin/proxy.ts`).
+> - **Phase 4:** plans + **quota enforcement** (projects/members) on
+>   `@cirrus/payment`.
+>
+> **Remaining — genuinely needs live infra / external services / a frontend, to be
+> done by whoever has a Cloudflare account + provider keys:** end-to-end deploy
+> validation against real Cloudflare; per-deployment admin-token storage to wire the
+> admin proxy + the webhook→deploy trigger to live tenants; the **studio React UI**;
+> billing-provider charge wiring + custom hostnames (CF for SaaS) + managed
+> backups/PITR; and the cell bring-up IaC. The code seams for all of these exist.
 
 - **Phase 0 — Remote-binding dev (no cloud required). ✅ SHIPPED.** Implemented in the
   framework, not the cloud app: `@cirrus/config/remote-bindings.ts` tags eligible
