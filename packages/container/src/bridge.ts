@@ -175,7 +175,18 @@ const createContainerBridge = (options: ContainerBridgeOptions): ContainerBridge
                 }
             }
 
-            throw new Error(`createContainerBridge: request to "${functionPath}" returned a malformed error envelope (status ${String(response.status)})`);
+            let detail: string;
+
+            try {
+                detail = JSON.stringify(error);
+            } catch {
+                detail = String(error);
+            }
+
+            throw new Error(
+                `createContainerBridge: request to "${functionPath}" returned a malformed error envelope ` +
+                    `(status ${String(response.status)}): ${detail}`,
+            );
         }
 
         if (!response.ok) {

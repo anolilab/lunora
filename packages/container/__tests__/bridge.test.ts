@@ -116,6 +116,18 @@ describe(createContainerBridge, () => {
         expect((error as Error).message).toContain("malformed error envelope");
     });
 
+    it("surfaces the partial error payload on a malformed error envelope", async () => {
+        expect.assertions(2);
+
+        const { fetch } = stubFetch({ error: { code: "NOT_FOUND" } }, { ok: false, status: 404 });
+        const cirrus = createContainerBridge({ baseUrl: "https://app.example.com", fetch });
+
+        const error = await cirrus.query("nope:nope").catch((error_: unknown) => error_);
+
+        expect(error).not.toBeInstanceOf(ContainerBridgeError);
+        expect((error as Error).message).toContain("NOT_FOUND");
+    });
+
     it("query/mutation/action are aliases of the same call", () => {
         expect.assertions(1);
 
