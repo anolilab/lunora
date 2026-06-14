@@ -411,22 +411,27 @@ with a named contact is the real insurance against surprise enforcement.
 Ordered so every phase ships standalone DX value even if we stop there.
 
 > **Status (2026-06-14).** Phase 0 shipped in the framework. The control-plane
-> **backend is feature-complete as code** in `apps/cloud` (62 unit tests; codegen
-> /eslint/tsc clean; the studio SPA compiles via `vite build`) across all phases —
-> and the **hosted studio React UI now exists** (`src/client`, served with the
-> Worker by `@cirrus/vite`):
+> **backend is feature-complete as code** in `apps/cloud` (69 unit tests; codegen
+> /eslint/tsc clean; the studio SPA compiles via `vite build`) across all phases,
+> with the **hosted studio React UI** (`src/client`, served with the Worker by
+> `@cirrus/vite`):
 >
 > - **Phase 1:** control plane + deploy API (NDJSON) + deploy-key lifecycle + a
 >   **real provisioner** over the Cloudflare REST API (`src/cloudflare/api.ts`;
 >   creates D1/R2, uploads the dispatch-namespace script, applies secrets) + the
->   **dispatcher Worker** (`src/dispatcher/`) + the **`cirrus login/link/deploy`**
->   CLI (`src/cli/`).
+>   **dispatcher Worker** (`src/dispatcher/`, per-plan runtime limits) + the
+>   **`cirrus login/link/deploy`** CLI (`src/cli/`).
 > - **Phase 2:** preview TTL lifecycle + cleanup cron + GitHub webhook (HMAC +
 >   project resolution).
-> - **Phase 3:** team invitations + the **admin-RPC proxy mounted** at `POST
-/v1/admin` (per-deployment admin token stored on deploy + `deployments.adminTarget` - audit).
-> - **Phase 4:** plans + **quota enforcement** (projects/members), **usage metering**
->   (`usageEvents` + `aggregateUsage`), and the **custom-hostname** REST port.
+> - **Phase 3:** team invitations (token **emailed** via `@cirrus/mail`) + the
+>   **admin-RPC proxy** at `POST /v1/admin`; the studio SPA; and **hardened
+>   better-auth** (mail-backed verification/reset, optional OAuth, 2FA/passkeys,
+>   rate limiting + a per-IP `/v1/*` cap).
+> - **Phase 4:** **billing on `@cirrus/payment`** (Stripe checkout/portal/webhook
+>   keyed on the org id + entitlements from synced subscriptions), plan/quota
+>   enforcement (projects/members), and **metering** (`platformUsage` +
+>   `usage.ingest` deploy-key endpoint + `aggregateUsage` + per-plan dispatch
+>   limits).
 >
 > **Remaining — genuinely needs live infra / external services, to be done by
 > whoever has a Cloudflare account + provider keys:** end-to-end deploy validation
@@ -470,21 +475,32 @@ Ordered so every phase ships standalone DX value even if we stop there.
   D1 Time Travel — needs a spike; neither Supabase nor Convex offers it.
 - **Phase 3 — Hosted studio.** _Built:_ **team invitations** (`cirrus/invitations.ts` —
   invite/list/revoke/accept, single-use SHA-256-hashed tokens, owner-admin gated,
-  accept-by-token adds the member); the **admin-RPC proxy** (`src/admin/proxy.ts`,
-  mounted at `POST /v1/admin` — ACL + per-deployment admin token + audit); and the
-  **hosted studio React SPA** (`src/client`): better-auth-gated, org picker + per-org
-  dashboard tabs for projects, deployments, members, deploy keys, invitations, and
-  usage, served on one origin with the Worker via `@cirrus/vite`. _Remaining:_
-  browser/e2e validation against a live backend, deeper integration with
-  `packages/studio` (schema/data/logs/advisors views), and guided secret setup
-  (reuses `@cirrus/config`).
-- **Phase 4 — Domains, billing, ops.** _Built:_ **plans + quota entitlements**
-  (`src/billing/plans.ts` on `@cirrus/payment`'s entitlements model — free/pro/enterprise
-  with per-resource limits + feature flags; `effectiveLimit`/`withinQuota` with a
-  free-tier fallback). _Remaining:_ custom hostnames (CF for SaaS), usage metering →
-  payment provider via `@cirrus/payment` (Stripe/Polar adapters), enforcing quota in the
-  mutations once subscription state is wired, rollback UI, log-stream egress (reuse
-  `@cirrus/runtime` sinks), alerting, **managed backups/PITR** (the self-managing PITR
+  accept-by-token adds the member; the token is **emailed** via `@cirrus/mail` from
+  the `POST /v1/invitations/send` edge route, never shown in the browser); the
+  **admin-RPC proxy** (`src/admin/proxy.ts`, mounted at `POST /v1/admin` — ACL +
+  per-deployment admin token + audit); the **hosted studio React SPA**
+  (`src/client`): better-auth-gated, org picker + per-org dashboard tabs for
+  projects, deployments, members, deploy keys, invitations, usage, and billing,
+  served on one origin with the Worker via `@cirrus/vite`; and **hardened auth**
+  (`@cirrus/auth`/better-auth: mail-backed email verification + password reset,
+  optional GitHub/Google OAuth, `admin`/`twoFactor`/`passkey` plugins, built-in
+  auth rate limiting, plus a per-IP `@cirrus/ratelimit` cap on `/v1/*`).
+  _Remaining:_ browser/e2e validation against a live backend, deeper integration
+  with `packages/studio` (schema/data/logs/advisors views), and guided secret
+  setup (reuses `@cirrus/config`).
+- **Phase 4 — Domains, billing, ops.** _Built:_ **billing on `@cirrus/payment`**
+  (`cirrus/billing.ts` + the `payment` hook in `src/server.ts`): Stripe
+  checkout/portal/webhook keyed on the org id, entitlements resolved from synced
+  subscription state through `CIRRUS_CLOUD_PLANS` (free/pro/enterprise limits +
+  features, free-tier fallback), and **plan/quota entitlements**
+  (`src/billing/plans.ts`). **Metering**: `usage.ingest` (`POST /v1/usage`,
+  deploy-key authenticated) writes the `platformUsage` ledger, `usage.summary`
+  rolls it up, and the dispatcher enforces **per-plan runtime limits**
+  (`limitsForPlan` → `env.DISPATCHER.get(..., { limits })`). _Remaining:_ custom
+  hostnames (CF for SaaS), the metering _source_ wiring (Analytics-Engine →
+  ingest) and the provider _charge_ path against a real Stripe account, rollback
+  UI, log-stream egress (reuse `@cirrus/runtime` sinks), alerting, **managed
+  backups/PITR** (the self-managing PITR
   loop + D1 Time Travel already exist; the platform adds scheduling, retention, off-account
   copies), abuse controls (per-tenant dispatcher limits, egress policy, signup throttling).
 

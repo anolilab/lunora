@@ -55,3 +55,22 @@ export const planLimit = (plan: string, resource: QuotaResource): number => CIRR
 
 /** Whether the plan has room for one more `resource` given the current count. */
 export const withinPlanQuota = (plan: string, resource: QuotaResource, current: number): boolean => current < planLimit(plan, resource);
+
+/** Per-request runtime caps applied by the dispatcher via `env.DISPATCHER.get(..., { limits })`. */
+export interface RuntimeLimits {
+    cpuMs: number;
+    subRequests: number;
+}
+
+const RUNTIME_LIMITS: Record<string, RuntimeLimits> = {
+    enterprise: { cpuMs: 1000, subRequests: 1000 },
+    free: { cpuMs: 50, subRequests: 50 },
+    pro: { cpuMs: 200, subRequests: 200 },
+};
+
+/**
+ * Runtime limits for a plan name, used by the dispatcher to cap per-tenant CPU
+ * and subrequests (§4 quota enforcement on the request path). Falls back to the
+ * free tier for an unknown/absent plan, so a tenant is always bounded.
+ */
+export const limitsForPlan = (plan: string | undefined): RuntimeLimits => RUNTIME_LIMITS[plan ?? "free"] ?? RUNTIME_LIMITS.free;
