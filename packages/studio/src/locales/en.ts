@@ -746,6 +746,7 @@ const MESSAGE_IDS = [
     "Add table",
     "Add column",
     "Add index",
+    "Rename / drop / change type…",
     "Table name",
     "Column name",
     "Column type",

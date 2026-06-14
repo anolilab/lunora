@@ -132,6 +132,22 @@ describe("schemaEditorOverlay", () => {
         expect(error.textContent).toContain("duplicate-table");
     });
 
+    it("routes a destructive change to the migration handoff without posting (item 5)", () => {
+        expect.assertions(3);
+
+        const mock = stubFetch(200, { diagnostics: [], ok: true, tables: [TABLE("todos")] });
+
+        render(<SchemaEditorOverlay onApplied={vi.fn<(tables: ReadonlyArray<SchemaEditTable>) => void>()} tableNames={TODOS_ONLY} />);
+
+        // A rename/drop/type-change never POSTs to the additive endpoint; it
+        // surfaces the migration handoff locally and links to Migrations.
+        fireEvent.click(screen.getByTestId("sc-editor-destructive"));
+
+        expect(screen.getByTestId("sc-editor-needs-migration")).toBeDefined();
+        expect(screen.getByTestId("sc-editor-open-migrations")).toBeDefined();
+        expect(mock).not.toHaveBeenCalled();
+    });
+
     it("posts an addOptionalColumn edit with the selected validator", async () => {
         expect.assertions(2);
 

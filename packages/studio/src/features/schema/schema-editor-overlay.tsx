@@ -24,8 +24,8 @@ const COLUMN_TYPES: ReadonlyArray<{ label: string; validator: string }> = [
 /** Default validator for a new column (the first palette entry). */
 const DEFAULT_VALIDATOR = "v.string()";
 
-/** Which add form is open, if any. */
-type Mode = "addColumn" | "addIndex" | "addTable" | null;
+/** Which form is open, if any. `destructive` is the migration-handoff notice. */
+type Mode = "addColumn" | "addIndex" | "addTable" | "destructive" | null;
 
 /** Split a comma-separated field list into trimmed, non-empty field names. */
 const splitFields = (raw: string): string[] =>
@@ -133,6 +133,14 @@ export const SchemaEditorOverlay = ({ onApplied, tableNames }: SchemaEditorOverl
         setResult(null);
         setMode("addIndex");
     }, []);
+    const openDestructive = useCallback((): void => {
+        // A rename / drop / type-change / required edit changes the persisted
+        // SQLite shape, so it is NEVER POSTed to the additive endpoint. We
+        // surface the migration handoff locally (plan 024 Item 5) — same UI the
+        // host's `needsMigration` response drives — and route to Migrations.
+        setMode("destructive");
+        setResult({ kind: "needs-migration", message: t("This edit changes stored data and must go through a migration. Review the migration before applying.") });
+    }, [t]);
 
     const onTableNameChange = useCallback((event: ChangeEvent<HTMLInputElement>): void => {
         setTableName(event.target.value);
@@ -189,6 +197,16 @@ export const SchemaEditorOverlay = ({ onApplied, tableNames }: SchemaEditorOverl
                         variant={mode === "addIndex" ? "default" : "outline"}
                     >
                         {t("Add index")}
+                    </Button>
+                    <Button
+                        data-testid="sc-editor-destructive"
+                        disabled={tableNames.length === 0}
+                        onClick={openDestructive}
+                        size="xs"
+                        type="button"
+                        variant={mode === "destructive" ? "default" : "ghost"}
+                    >
+                        {t("Rename / drop / change type…")}
                     </Button>
                 </div>
 
