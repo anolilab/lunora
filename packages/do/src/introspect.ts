@@ -50,9 +50,12 @@ const ADMIN_FUNCTIONS = {
     getRequestLog: "__cirrus_admin__:getRequestLog",
     getSecurityAudit: "__cirrus_admin__:getSecurityAudit",
     getSettings: "__cirrus_admin__:getSettings",
+    // eslint-disable-next-line no-secrets/no-secrets -- reserved admin RPC path constant, not a credential
+    getWorkflowInstanceStatus: "__cirrus_admin__:getWorkflowInstanceStatus",
     importShard: "__cirrus_admin__:importShard",
     listTables: "__cirrus_admin__:listTables",
     listWorkflows: "__cirrus_admin__:listWorkflows",
+    maskPolicies: "__cirrus_admin__:maskPolicies",
     migrationStatus: "__cirrus_admin__:migrationStatus",
     pitrRestore: "__cirrus_admin__:pitrRestore",
     rankBefore: "__cirrus_admin__:rankBefore",
@@ -326,6 +329,28 @@ interface RlsRoleMetadata {
 interface RlsPoliciesResult {
     policies: RlsPolicyMetadata[];
     roles: RlsRoleMetadata[];
+}
+
+/**
+ * One masked column entry, surfaced by `__cirrus_admin__:maskPolicies` to the
+ * studio's data-browser mask preview. Mirrors `@cirrus/codegen`'s
+ * `MaskColumnMetadataIR`: the `(table, column)` pair plus the declared masking
+ * `strategy`. `"custom"` stands in for any non-string `(value, ctx) => …`
+ * strategy — its closure is opaque, so the preview renders a fixed sentinel. The
+ * codegen subclass overrides the `maskMetadata()` hook with these.
+ */
+interface MaskColumnMetadata {
+    /** Column the mask policy redacts. */
+    column: string;
+    /** Declared strategy: `"redact"`/`"hash"` string literals, else `"custom"` for a `MaskFn`. */
+    strategy: "custom" | "hash" | "redact";
+    /** Logical table the masked column belongs to. */
+    table: string;
+}
+
+/** Payload of a `__cirrus_admin__:maskPolicies` call: the schema's masked columns for the studio's data-browser mask preview. */
+interface MaskPoliciesResult {
+    columns: MaskColumnMetadata[];
 }
 
 /**
@@ -1021,12 +1046,15 @@ export type {
     AuditEntry,
     AuditLogResult,
     ColumnMeta,
+    CreateWorkflowInstanceResult,
     DeployInfo,
     FilterClause,
     FilterOperator,
     FunctionCallStat,
     FunctionScanAttribution,
     FunctionStatsResult,
+    MaskColumnMetadata,
+    MaskPoliciesResult,
     OrderByClause,
     ReadTablePageOptions,
     RlsPoliciesResult,

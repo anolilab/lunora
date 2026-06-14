@@ -40,14 +40,18 @@ export const ADMIN_FUNCTIONS = {
     getFunctionStats: "__cirrus_admin__:getFunctionStats",
     listSubscriptions: "__cirrus_admin__:listSubscriptions",
     listTableIndexes: "__cirrus_admin__:listTableIndexes",
+    listWorkflows: "__cirrus_admin__:listWorkflows",
     getLogs: "__cirrus_admin__:getLogs",
     getMetrics: "__cirrus_admin__:getMetrics",
     getPitrBookmark: "__cirrus_admin__:getPitrBookmark",
     getRequestLog: "__cirrus_admin__:getRequestLog",
     getSecurityAudit: "__cirrus_admin__:getSecurityAudit",
     getSettings: "__cirrus_admin__:getSettings",
+    // eslint-disable-next-line no-secrets/no-secrets -- reserved admin RPC path constant, not a credential
+    getWorkflowInstanceStatus: "__cirrus_admin__:getWorkflowInstanceStatus",
     importShard: "__cirrus_admin__:importShard",
     listTables: "__cirrus_admin__:listTables",
+    maskPolicies: "__cirrus_admin__:maskPolicies",
     migrationStatus: "__cirrus_admin__:migrationStatus",
     pitrRestore: "__cirrus_admin__:pitrRestore",
     readTablePage: "__cirrus_admin__:readTablePage",
@@ -403,6 +407,29 @@ export interface RlsRoleMetadata {
 export interface RlsPoliciesResult {
     policies: RlsPolicyMetadata[];
     roles: RlsRoleMetadata[];
+}
+
+/** The strategy a mask policy applies, mirroring `@cirrus/do`'s `MaskColumnMetadata["strategy"]`. `custom` stands in for an opaque `(value, ctx) => …` closure. */
+export type MaskStrategy = "custom" | "hash" | "redact";
+
+/**
+ * One masked column entry, mirroring `@cirrus/do`'s `MaskColumnMetadata`.
+ * Read-only metadata for the data-browser mask preview: the `(table, column)`
+ * pair plus the declared `strategy`. The masking closure itself is never sent —
+ * a `custom` strategy renders a fixed sentinel in the preview.
+ */
+export interface MaskColumnMetadata {
+    /** Column the mask policy redacts. */
+    column: string;
+    /** Declared masking strategy. */
+    strategy: MaskStrategy;
+    /** Logical table the masked column belongs to. */
+    table: string;
+}
+
+/** Payload of a `__cirrus_admin__:maskPolicies` call, mirroring `@cirrus/do`'s `MaskPoliciesResult`. */
+export interface MaskPoliciesResult {
+    columns: MaskColumnMetadata[];
 }
 
 /** The operation a storage access rule gates, mirroring `@cirrus/do`'s `StorageRuleMetadata["on"]`. */

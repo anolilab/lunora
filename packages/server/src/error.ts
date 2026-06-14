@@ -21,6 +21,17 @@ const CODE_STATUS = {
     COUNT_RLS_UNSUPPORTED: 422,
     FORBIDDEN: 403,
     INTERNAL_SERVER_ERROR: 500,
+
+    /**
+     * An analytical reduction (`aggregate` / `groupBy`) was invoked over a
+     * column that the procedure's `mask()` middleware redacts. A masked column
+     * can't be summed, averaged, or grouped without leaking the very values the
+     * mask hides (a group key *is* the raw value; an aggregate is computed from
+     * it), so the operation fails closed. The request is well-formed and the
+     * caller is authorized — this is a 422 (semantic conflict), mirroring
+     * `COUNT_RLS_UNSUPPORTED`.
+     */
+    MASK_UNSUPPORTED: 422,
     NOT_FOUND: 404,
     NOT_IMPLEMENTED: 501,
     TOO_MANY_REQUESTS: 429,

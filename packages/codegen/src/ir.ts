@@ -313,6 +313,65 @@ export interface RlsProcedureIR {
 }
 
 /**
+ * One procedure reduced to the facts the `mask_uncovered_pii_column` lint needs:
+ * whether its builder chain includes `.use(mask(...))`, which `(table, column)`
+ * pairs that mask declares, and which tables the procedure reads/writes. The
+ * column-level analogue of {@link RlsProcedureIR}. Structurally identical to
+ * `AdvisorMaskProcedure` so values pass straight through without conversion.
+ */
+export interface MaskProcedureIR {
+    /** Export binding name of the procedure (e.g. `listUsers`). */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/cirrus/`, without extension. */
+    file: string;
+
+    /**
+     * `(table, column)` pairs this procedure's `mask(policies)` object literal
+     * declares. Empty when the policies argument is not a statically-readable
+     * object literal (conservative: `usesMask` is still `true`).
+     */
+    maskColumns: { column: string; table: string }[];
+    /** Tables read by the procedure via `ctx.db.query/findMany/findFirst/get`. */
+    tablesRead: string[];
+    /** Tables written by the procedure via `ctx.db.insert/patch/replace/delete`. */
+    tablesWritten: string[];
+    /** `true` when the procedure's builder chain includes `.use(mask(...))`. */
+    usesMask: boolean;
+    /** `"internal"` for `internalQuery` / `internalMutation` / `internalAction`. */
+    visibility: "internal" | "public";
+}
+
+/**
+ * One masked column surfaced to the studio's data-browser mask preview: a
+ * `(table, column)` pair plus the declared {@link MaskProcedureIR} strategy so
+ * the preview can pick redact-vs-hash-vs-custom rendering. Aggregated across the
+ * project's `.use(mask(...))` chains by `discoverMaskMetadata`; the descriptive
+ * twin of {@link RlsPolicyIR}. `"custom"` covers any non-string strategy (a
+ * `(value, ctx) => …` function) — its logic is an opaque closure, never read by
+ * the UI; the preview renders a fixed sentinel for it.
+ */
+export interface MaskColumnMetadataIR {
+    /** Column the mask policy redacts. */
+    column: string;
+    /** Declared masking strategy: `"redact"`/`"hash"` string literals, else `"custom"` for a `MaskFn`. */
+    strategy: "custom" | "hash" | "redact";
+    /** Logical table the masked column belongs to. */
+    table: string;
+}
+
+/**
+ * Schema-wide masking metadata the codegen emits into the generated ShardDO so
+ * the studio's data-browser mask toggle can preview what a non-privileged caller
+ * would see. Aggregated across every `.use(mask(...))` chain in the project —
+ * purely descriptive (table + column + strategy), never the masking closure. The
+ * column-level analogue of {@link RlsMetadataIR}.
+ */
+export interface MaskMetadataIR {
+    /** Every statically-discovered masked column, deduped by `(table, column)` (first declaration wins). */
+    columns: MaskColumnMetadataIR[];
+}
+
+/**
  * One statically-readable policy entry from an `rls([...])` array literal,
  * surfaced to the studio's read-only RLS inspector via the generated
  * `rlsPolicies()` hook. Captures the policy's `table` + `on` operation and the

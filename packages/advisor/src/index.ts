@@ -16,11 +16,14 @@ import duplicateIndex from "./lints/static/duplicate-index";
 import emptyIndex from "./lints/static/empty-index";
 import filterWithoutIndex from "./lints/static/filter-without-index";
 import indexReferencesUnknownField from "./lints/static/index-references-unknown-field";
+import maskUncoveredPiiColumn from "./lints/static/mask-uncovered-pii-column";
 import relationReferencesUnknownField from "./lints/static/relation-references-unknown-field";
 import relationReferencesUnknownTable from "./lints/static/relation-references-unknown-table";
 import rlsUncoveredTable from "./lints/static/rls-uncovered-table";
 import tableWithoutInsert from "./lints/static/table-without-insert";
 import unindexedForeignKey from "./lints/static/unindexed-foreign-key";
+import workflowUnknownTarget from "./lints/static/workflow-unknown-target";
+import workflowUnused from "./lints/static/workflow-unused";
 import type { Finding, Lint, LintContext, LintSource } from "./types";
 
 export type { AdvisorAuthApiCall } from "./authapi-calls";
@@ -36,17 +39,22 @@ export { default as duplicateIndex } from "./lints/static/duplicate-index";
 export { default as emptyIndex } from "./lints/static/empty-index";
 export { default as filterWithoutIndex } from "./lints/static/filter-without-index";
 export { default as indexReferencesUnknownField } from "./lints/static/index-references-unknown-field";
+export { default as maskUncoveredPiiColumn } from "./lints/static/mask-uncovered-pii-column";
 export { default as relationReferencesUnknownField } from "./lints/static/relation-references-unknown-field";
 export { default as relationReferencesUnknownTable } from "./lints/static/relation-references-unknown-table";
 export { default as rlsUncoveredTable } from "./lints/static/rls-uncovered-table";
 export { default as tableWithoutInsert } from "./lints/static/table-without-insert";
 export { default as unindexedForeignKey } from "./lints/static/unindexed-foreign-key";
+export { default as workflowUnknownTarget } from "./lints/static/workflow-unknown-target";
+export { default as workflowUnused } from "./lints/static/workflow-unused";
+export type { AdvisorMaskProcedure } from "./mask-procedures";
 export type { AdvisorQueryRead } from "./queries";
 export type { AdvisorRlsProcedure } from "./rls-procedures";
 export type { AdvisorIndex, AdvisorRelation, AdvisorSchema, AdvisorTable } from "./schema";
 export { fromServerSchema } from "./schema";
 export type { AdvisorShardTraffic } from "./shard-traffic";
 export type { Category, Facing, Finding, Level, Lint, LintContext, LintSource } from "./types";
+export type { AdvisorWorkflow, AdvisorWorkflowCall } from "./workflows";
 
 /**
  * Every lint that runs against the declared schema (and, for
@@ -58,13 +66,16 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     indexReferencesUnknownField,
     relationReferencesUnknownTable,
     relationReferencesUnknownField,
+    workflowUnknownTarget,
     emptyIndex,
     unindexedForeignKey,
     duplicateIndex,
     tableWithoutInsert,
+    workflowUnused,
     filterWithoutIndex,
     authApiCallWithoutHeaders,
     rlsUncoveredTable,
+    maskUncoveredPiiColumn,
     containerOversizedInstance,
     containerPublicInternet,
 ];

@@ -9,6 +9,8 @@ import { Checkbox } from "../../components/ui/checkbox";
 import { useT } from "../../i18n/i18n-context";
 import type { TablePage } from "../../lib/admin";
 import { fireAndForget, formatCell } from "../../lib/internal";
+import type { MaskView } from "../../lib/mask-preview";
+import { maskCell } from "../../lib/mask-preview";
 import { cn } from "../../lib/utils";
 import flooredRectObserver from "../../lib/virtual-rect";
 import { CellValue, GridContainer } from "./data-grid";
@@ -390,11 +392,24 @@ const CellEditor = ({
  * editable and the column isn't a meta column — double-click opens an inline
  * {@link CellEditor} that stages the change.
  */
-const EditableCell = memo(({ cell, edit, refs }: { cell: Cell<TableRow, unknown>; edit: GridEdit; refs: GridReferences }): ReactElement => {
+const EditableCell = memo(({ cell, edit, mask, refs }: { cell: Cell<TableRow, unknown>; edit: GridEdit; mask: MaskView; refs: GridReferences }): ReactElement => {
     const column = cell.column.id;
     const rawValue = cell.getValue();
     const id = rowId(cell.row.original);
     const target = refs.columns?.[column];
+
+    // Mask preview takes precedence over every other branch: when the toggle is on
+    // and this column is mask-covered, render only the masked value — no
+    // foreign-key link, no inline editor, no expand-to-raw affordance. This is a
+    // render-only preview of what a `.use(mask(...))` caller would see; the stored
+    // row is untouched and the operator can toggle the preview off to edit.
+    if (mask.enabled && mask.columns.has(column)) {
+        return (
+            <span className="text-muted-foreground italic" data-testid={`db-masked-${column}`} title="Masked (preview)">
+                <CellValue value={maskCell(rawValue, column, mask)} />
+            </span>
+        );
+    }
 
     if (target !== undefined && (typeof rawValue === "string" || typeof rawValue === "number") && String(rawValue) !== "") {
         // Keyed on target:id so a reused cell instance (an idless row at the same
@@ -476,11 +491,14 @@ const EditableCell = memo(({ cell, edit, refs }: { cell: Cell<TableRow, unknown>
 const GridHeaderCell = ({
     draggedRef,
     header,
+    masked = false,
     pinned = false,
     table,
 }: {
     draggedRef: React.RefObject<null | string>;
     header: Header<TableRow, unknown>;
+    /** Show a "masked" chip: this column is covered by a `.use(mask(...))` policy (static annotation, independent of the toggle). */
+    masked?: boolean;
     /** Freeze this header at the left edge (the primary-key column) during horizontal scroll. */
     pinned?: boolean;
     table: Table<TableRow>;
@@ -534,6 +552,15 @@ const GridHeaderCell = ({
                 {flexRender(header.column.columnDef.header, header.getContext())}
                 {sortIndicator(header.column.getIsSorted())}
             </button>
+            {masked && (
+                <span
+                    className="ms-1 inline-flex items-center rounded-sm bg-amber-500/15 px-1 text-[0.625rem] font-medium text-amber-700 dark:text-amber-400"
+                    data-testid={`db-mask-chip-${header.column.id}`}
+                    title="This column is masked by a mask() policy"
+                >
+                    masked
+                </span>
+            )}
             <span
                 aria-hidden="true"
                 className="absolute inset-y-0 end-0 w-1 cursor-col-resize touch-none select-none hover:bg-ring/60 data-[resizing=true]:bg-ring"
@@ -613,6 +640,7 @@ const RowSelectCell = ({ row }: { row: Row<TableRow> }): ReactElement => {
 const DataBrowserTableView = ({
     edit,
     editable,
+    mask,
     onDelete,
     onEdit,
     onInspect,
@@ -626,6 +654,8 @@ const DataBrowserTableView = ({
 }: {
     edit: GridEdit;
     editable: boolean;
+    /** Mask preview state: the active table's masked columns + whether the toggle is on. Drives the header chips and per-cell redaction. */
+    mask: MaskView;
     onDelete: (id: null | string) => void;
     onEdit: (id: null | string, original: TableRow) => void;
     onInspect: (original: TableRow) => void;
@@ -740,7 +770,7 @@ const DataBrowserTableView = ({
                             key={cell.id}
                             style={pinned ? pinnedDataCellStyle(cell.column.getSize()) : sizedCellStyle(cell.column.getSize())}
                         >
-                            <EditableCell cell={cell} edit={edit} refs={refs} />
+                            <EditableCell cell={cell} edit={edit} mask={mask} refs={refs} />
                         </td>
                     );
                 })}
@@ -796,7 +826,14 @@ const DataBrowserTableView = ({
                         <tr className="border-b border-border" style={HEAD_ROW_STYLE}>
                             <SelectAllHeaderCell table={table} />
                             {table.getFlatHeaders().map((header, index) => (
-                                <GridHeaderCell draggedRef={draggedColumn} header={header} key={header.id} pinned={index === 0} table={table} />
+                                <GridHeaderCell
+                                    draggedRef={draggedColumn}
+                                    header={header}
+                                    key={header.id}
+                                    masked={mask.columns.has(header.column.id)}
+                                    pinned={index === 0}
+                                    table={table}
+                                />
                             ))}
                             <th aria-label="Row actions" style={ACTION_CELL_STYLE} />
                         </tr>

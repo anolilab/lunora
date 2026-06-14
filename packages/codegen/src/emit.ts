@@ -1,11 +1,12 @@
 import type { Finding } from "@cirrus/advisor";
-import type { AdvisoryFinding, RlsPoliciesResult, StorageRulesResult, StudioFeaturesResult } from "@cirrus/do";
+import type { AdvisoryFinding, MaskPoliciesResult, RlsPoliciesResult, StorageRulesResult, StudioFeaturesResult, WorkflowsResult } from "@cirrus/do";
 
 import type {
     ContainerIR,
     CronJobIR,
     FunctionIR,
     IndexIR,
+    MaskMetadataIR,
     MigrationIR,
     RlsMetadataIR,
     SchemaIR,
@@ -1404,16 +1405,64 @@ const paymentStub: CirrusPayment = {
     };
 };
 
-const emitShard = (
-    schema: SchemaIR,
-    advisories: ReadonlyArray<Finding> = [],
-    rlsMetadata?: RlsMetadataIR,
+/**
+ * The `@cirrus/do` type names the generated shard imports. The base set is always
+ * present; `WorkflowsResult` is added only when the project declares workflows
+ * (its `workflowsMetadata()` override references it) and `WriteHook` only when it
+ * has vector indexes (the auto-sync write hook), so a workflow-/vector-free app's
+ * import line stays minimal.
+ */
+const buildDoTypeImports = (hasVectors: boolean, hasWorkflows: boolean): string[] => [
+    "AdvisoryFinding",
+    "DatabaseWriterLike",
+    "DataMigrationLike",
+    "LogSink",
+    "MaskPoliciesResult",
+    "MigrationRunResult",
+    "RunShardApplyCdcArgs",
+    "RunShardMigrationArgs",
+    "RlsPoliciesResult",
+    "RunShardRankBeforeArgs",
+    "RunShardRankPageArgs",
+    "RunShardWriteArgs",
+    "RunShardWriteResult",
+    "SchedulerLike",
+    "SchemaLike",
+    "ShardDOState",
+    "ShardRankPageResult",
+    "SqlExec",
+    "StorageRulesResult",
+    "StudioFeaturesResult",
+    "SystemReaderStorageLike",
+    ...(hasWorkflows ? ["WorkflowsResult"] : []),
+    ...(hasVectors ? ["WriteHook"] : []),
+];
+
+interface EmitShardOptions {
+    advisories?: ReadonlyArray<Finding>;
+    containers?: ReadonlyArray<ContainerIR>;
+    hasAi?: boolean;
+    hasPayments?: boolean;
+    maskMetadata?: MaskMetadataIR;
+    rlsMetadata?: RlsMetadataIR;
+    schema: SchemaIR;
+    storageRules?: StorageRulesMetadataIR;
+    studioFeatures?: StudioFeaturesResult;
+    workflows?: ReadonlyArray<WorkflowIR>;
+}
+
+const emitShard = ({
+    advisories = [],
+    containers = [],
     hasAi = false,
     hasPayments = false,
-    storageRules?: StorageRulesMetadataIR,
-    containers: ReadonlyArray<ContainerIR> = [],
-    studioFeatures?: StudioFeaturesResult,
-): string => {
+    maskMetadata,
+    rlsMetadata,
+    schema,
+    storageRules,
+    studioFeatures,
+    workflows = [],
+}: EmitShardOptions): string => {
     const { build: aiBuild, configField: aiConfigField, contextField: aiContextField, stub: aiStub } = emitAiFragments(hasAi);
     const {
         build: containersBuild,
@@ -1440,6 +1489,12 @@ const emitShard = (
     // `rlsMetadata()` override). `@cirrus/do` hand-mirrors the shape to avoid
     // depending on `@cirrus/codegen`.
     const rlsData: RlsPoliciesResult = rlsMetadata ?? { policies: [], roles: [] };
+    // Same drift guard for the data-browser mask preview: codegen's
+    // `MaskMetadataIR` must stay assignable to the DO's `MaskPoliciesResult` (the
+    // generated `CIRRUS_MASK_METADATA` is typed against it and fed straight to the
+    // `maskMetadata()` override). `@cirrus/do` hand-mirrors the shape to avoid
+    // depending on `@cirrus/codegen`.
+    const maskData: MaskPoliciesResult = maskMetadata ?? { columns: [] };
     // Same drift guard for the storage access-rules view: codegen's
     // `StorageRulesMetadataIR` must stay assignable to the DO's
     // `StorageRulesResult` (the generated `CIRRUS_STORAGE_RULES` is typed against
@@ -1729,12 +1784,15 @@ const CIRRUS_ADVISORIES: AdvisoryFinding[] = ${JSON.stringify(advisoryData, unde
 /** Read-only RLS metadata (policies + roles discovered from \`.use(rls(...))\` chains) served via \`__cirrus_admin__:rlsPolicies\` for the studio's RLS inspector. */
 const CIRRUS_RLS_METADATA: RlsPoliciesResult = ${JSON.stringify(rlsData, undefined, 4)};
 
+/** Read-only masking metadata (table + column + strategy discovered from \`.use(mask(...))\` chains) served via \`__cirrus_admin__:maskPolicies\` for the studio's data-browser mask preview. */
+const CIRRUS_MASK_METADATA: MaskPoliciesResult = ${JSON.stringify(maskData, undefined, 4)};
+
 /** Read-only storage access-rule metadata (discovered from \`.use(storageRules(...))\` chains) served via \`__cirrus_admin__:storageRules\` for the studio's access-rules view. */
 const CIRRUS_STORAGE_RULES: StorageRulesResult = ${JSON.stringify(storageRulesData, undefined, 4)};
 
 /** Which optional package-backed features this app wires up (discovered from imports / \`ctx.*\` reads / schema signals) served via \`__cirrus_admin__:studioFeatures\` so the studio hides nav pages whose package isn't enabled. */
 const CIRRUS_STUDIO_FEATURES: StudioFeaturesResult = ${JSON.stringify(studioFeaturesData, undefined, 4)};
-${containerSpecs}
+${workflowsMetadataConst}${containerSpecs}${workflowSpecs}
 export interface ShardDOConfig {
     /** Opt into change-data-capture: records a post-image to \`__cdc_log\` on every write (backs streaming export + replay-PITR). */
     cdc?: boolean;
@@ -1891,6 +1949,10 @@ ${relationFanout.override}
 
         protected override rlsMetadata(): RlsPoliciesResult {
             return CIRRUS_RLS_METADATA;
+        }
+
+        protected override maskMetadata(): MaskPoliciesResult {
+            return CIRRUS_MASK_METADATA;
         }
 
         protected override storageRulesMetadata(): StorageRulesResult {

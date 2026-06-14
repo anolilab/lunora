@@ -2,10 +2,12 @@ import type { AdvisorAuthApiCall } from "./authapi-calls";
 import type { AdvisorContainer } from "./containers";
 import type { AdvisorIndexHit, AdvisorTableScan } from "./index-usage";
 import type { AdvisorInsertWrite } from "./inserts";
+import type { AdvisorMaskProcedure } from "./mask-procedures";
 import type { AdvisorQueryRead } from "./queries";
 import type { AdvisorRlsProcedure } from "./rls-procedures";
 import type { AdvisorSchema } from "./schema";
 import type { AdvisorShardTraffic } from "./shard-traffic";
+import type { AdvisorWorkflow, AdvisorWorkflowCall } from "./workflows";
 
 /**
  * Severity of a finding, mirroring splinter's `level`. `ERROR` is a definite
@@ -105,6 +107,16 @@ export interface LintContext {
      * the write-shaped lints simply find nothing.
      */
     inserts?: ReadonlyArray<AdvisorInsertWrite>;
+
+    /**
+     * Per-procedure column-masking usage discovered in function bodies (the
+     * `mask_uncovered_pii_column` input). Carries whether each procedure's builder
+     * chain includes `.use(mask(...))`, which `(table, column)` pairs its mask
+     * policy declares, and which tables the procedure reads/writes. Supplied by
+     * the codegen feeder; absent for runtime callers, where the lint finds
+     * nothing.
+     */
+    maskProcedures?: ReadonlyArray<AdvisorMaskProcedure>;
 
     /**
      * Query reads discovered in function bodies (the `filter_without_index`

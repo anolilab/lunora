@@ -167,6 +167,7 @@ const MESSAGE_IDS = [
     "Logic",
     "Logs",
     "Mail",
+    "Mask sensitive columns",
     "Metrics",
     "migration id",
     "Migration id",

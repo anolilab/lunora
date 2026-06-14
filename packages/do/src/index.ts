@@ -111,6 +111,8 @@ export type {
     DeployInfo,
     FunctionCallStat,
     FunctionStatsResult,
+    MaskColumnMetadata,
+    MaskPoliciesResult,
     ReadTablePageOptions,
     RlsPoliciesResult,
     RlsPolicyMetadata,

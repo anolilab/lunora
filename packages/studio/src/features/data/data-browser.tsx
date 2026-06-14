@@ -6,6 +6,8 @@ import { ShardInput } from "../../components/shard-input";
 import { EmptyState } from "../../components/ui/empty-state";
 import { useT } from "../../i18n/i18n-context";
 import type { TableInfo } from "../../lib/admin";
+import type { MaskView } from "../../lib/mask-preview";
+import { maskColumnsForTable, maskRows } from "../../lib/mask-preview";
 import type { GridEdit, GridReferences, TableRow } from "./data-browser-grid";
 import { DataBrowserTableView } from "./data-browser-grid";
 import type { EditableFilter } from "./data-filters";
@@ -14,6 +16,7 @@ import { TransposedTable } from "./data-grid";
 import { CellDetailDialog, GridActionsBar } from "./grid-features";
 import GridPagination from "./grid-pagination";
 import { useDataBrowser } from "./hooks/use-data-browser";
+import { useMaskPolicies } from "./hooks/use-mask-policies";
 import { RowDetailDrawer } from "./row-detail";
 import RowFormEditor from "./row-form";
 import { StagedDiffPanel } from "./staged-edits";
@@ -110,7 +113,9 @@ const DataBrowserViewControls = ({
     editable,
     filter,
     filters,
+    hasMaskedColumns,
     liveError,
+    maskOn,
     onAddRow,
     onBulkDelete,
     onClearTable,
@@ -118,6 +123,7 @@ const DataBrowserViewControls = ({
     onFiltersChange,
     onShowJson,
     onShowTable,
+    onToggleMask,
     total,
     viewMode,
 }: {
@@ -125,7 +131,11 @@ const DataBrowserViewControls = ({
     editable: boolean;
     filter: string;
     filters: EditableFilter[];
+    /** Whether the selected table has any mask-covered columns — gates the toggle's visibility. */
+    hasMaskedColumns: boolean;
     liveError: string | undefined;
+    /** Whether the "Mask sensitive columns" preview is on. */
+    maskOn: boolean;
     onAddRow: () => void;
     onBulkDelete: () => void;
     onClearTable: () => void;
@@ -133,6 +143,7 @@ const DataBrowserViewControls = ({
     onFiltersChange: (filters: EditableFilter[]) => void;
     onShowJson: () => void;
     onShowTable: () => void;
+    onToggleMask: () => void;
     total: number;
     viewMode: "json" | "table";
 }): ReactElement => {
@@ -156,6 +167,11 @@ const DataBrowserViewControls = ({
                     <span aria-hidden="true" className={`size-1.5 rounded-full ${liveError === undefined ? "bg-emerald-500" : "bg-muted-foreground/50"}`} />
                     {liveError === undefined ? t("Live") : t("Live unavailable")}
                 </span>
+                {hasMaskedColumns && (
+                    <button aria-pressed={maskOn} className={CONTROL_BTN} data-testid="db-mask-toggle" onClick={onToggleMask} type="button">
+                        {t("Mask sensitive columns")}
+                    </button>
+                )}
                 {editable && (
                     <button className={CONTROL_BTN} data-testid="db-add-row" onClick={onAddRow} type="button">
                         Add row
@@ -274,6 +290,23 @@ export const DataBrowser = ({
         setTransposed((current) => !current);
     }, []);
 
+    // The deployment's codegen-discovered mask policies (table + column + strategy),
+    // loaded once. Drives the "Mask sensitive columns" preview: a render-only
+    // redaction of what a `.use(mask(...))` caller would see, plus the per-column
+    // "masked" header chips. The operator keeps full DB access — this is a preview,
+    // not enforcement.
+    const maskPolicies = useMaskPolicies();
+    const [maskOn, setMaskOn] = useState<boolean>(false);
+    const onToggleMask = useCallback((): void => {
+        setMaskOn((current) => !current);
+    }, []);
+
+    // The active table's masked columns (column → strategy) and the threaded view
+    // the grid/JSON/transposed renderers read. The chips show whenever a column is
+    // covered; cell values are only rewritten when the toggle is on.
+    const maskColumns = useMemo(() => maskColumnsForTable(maskPolicies, selectedTable ?? ""), [maskPolicies, selectedTable]);
+    const maskView = useMemo<MaskView>(() => ({ columns: maskColumns, enabled: maskOn }), [maskColumns, maskOn]);
+
     // The cell whose full value the expand dialog is showing, if any. Opened from
     // the per-cell expand affordance; pure view state like `inspecting`.
     const [expandedCell, setExpandedCell] = useState<null | { column: string; value: unknown }>(null);
@@ -358,7 +391,9 @@ export const DataBrowser = ({
                                 editable={editable}
                                 filter={filter}
                                 filters={filters}
+                                hasMaskedColumns={maskColumns.size > 0}
                                 liveError={liveError}
+                                maskOn={maskOn}
                                 onAddRow={addRow}
                                 onBulkDelete={bulkDelete}
                                 onClearTable={clearTable}
@@ -366,6 +401,7 @@ export const DataBrowser = ({
                                 onFiltersChange={onFiltersChange}
                                 onShowJson={showJson}
                                 onShowTable={showTable}
+                                onToggleMask={onToggleMask}
                                 total={total}
                                 viewMode={viewMode}
                             />
@@ -427,12 +463,15 @@ export const DataBrowser = ({
                             </div>
                         )}
 
-                        {viewMode === "table" && page.rows.length > 0 && transposed && <TransposedTable columns={page.columns} rows={page.rows} />}
+                        {viewMode === "table" && page.rows.length > 0 && transposed && (
+                            <TransposedTable columns={page.columns} rows={maskRows(page.rows, maskView)} />
+                        )}
 
                         {viewMode === "table" && page.rows.length > 0 && !transposed && (
                             <DataBrowserTableView
                                 edit={edit}
                                 editable={editable}
+                                mask={maskView}
                                 onDelete={onRowDelete}
                                 onEdit={onRowEdit}
                                 onInspect={setInspecting}
@@ -448,7 +487,7 @@ export const DataBrowser = ({
 
                         {viewMode === "json" && (
                             <pre className="min-h-0 flex-1 overflow-auto border-t border-border bg-muted/30 p-3 text-xs" data-testid="db-json">
-                                {JSON.stringify(page.rows, null, 2)}
+                                {JSON.stringify(maskRows(page.rows, maskView), null, 2)}
                             </pre>
                         )}
 

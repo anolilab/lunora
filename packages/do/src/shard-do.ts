@@ -26,16 +26,20 @@ import type {
     AdvisoryFinding,
     AuditLogResult,
     ColumnMeta,
+    CreateWorkflowInstanceResult,
     FilterClause,
     FilterOperator,
     FunctionCallStat,
     FunctionStatsResult,
+    MaskPoliciesResult,
     OrderByClause,
     RlsPoliciesResult,
     StorageRulesResult,
     StudioFeaturesResult,
     SubscriptionsResult,
     TableIndexInfo,
+    WorkflowInstanceStatusResult,
+    WorkflowsResult,
 } from "./introspect";
 import {
     ADMIN_FUNCTION_PREFIX,
@@ -2173,6 +2177,21 @@ abstract class ShardDO {
     }
 
     /**
+     * Masking metadata for this deployment, surfaced via
+     * `__cirrus_admin__:maskPolicies` to the studio's data-browser mask preview:
+     * which `(table, column)` pairs a `.use(mask(...))` chain redacts and the
+     * declared strategy. Statically discovered by `@cirrus/codegen` (the only
+     * place every `.use(mask(...))` chain is visible) and emitted into the
+     * generated subclass, which overrides this. The base class can't see the
+     * user's `cirrus/` sources, so it reports none. Never includes the masking
+     * closure — only the column + strategy descriptor.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this with the generated mask column metadata
+    protected maskMetadata(): MaskPoliciesResult {
+        return { columns: [] };
+    }
+
+    /**
      * Storage access-rule metadata for this deployment, surfaced via
      * `__cirrus_admin__:storageRules` to the studio's read-only access-rules
      * view: which `defineStorageRule`s gate which `(bucket, on, prefix)`.
@@ -3763,6 +3782,13 @@ abstract class ShardDO {
             // policies + roles the studio's inspector lists. Schema-wide, so it
             // carries the wildcard like the other static-introspection reads.
             return this.rlsMetadata();
+        }
+
+        if (functionPath === ADMIN_FUNCTIONS.maskPolicies) {
+            // Read-only masking metadata (codegen-emitted, via `maskMetadata()`):
+            // the (table, column, strategy) entries the studio's data-browser mask
+            // preview reads. Schema-wide, like the other static-introspection reads.
+            return this.maskMetadata();
         }
 
         if (functionPath === ADMIN_FUNCTIONS.storageRules) {

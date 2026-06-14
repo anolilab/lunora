@@ -1,7 +1,18 @@
 import type { AdvisorIndex, AdvisorSchema, Finding } from "@cirrus/advisor";
 import { runAdvisor } from "@cirrus/advisor";
 
-import type { AuthApiCallIR, ContainerIR, InsertWriteIR, QueryReadIR, RlsProcedureIR, SchemaIR, TableIR } from "./ir";
+import type {
+    AuthApiCallIR,
+    ContainerIR,
+    InsertWriteIR,
+    MaskProcedureIR,
+    QueryReadIR,
+    RlsProcedureIR,
+    SchemaIR,
+    TableIR,
+    WorkflowCallIR,
+    WorkflowIR,
+} from "./ir";
 
 /**
  * Flatten a table's per-kind index declarations into the advisor's unified
@@ -61,9 +72,11 @@ const toAdvisorSchema = (schema: SchemaIR): AdvisorSchema => {
  * Run the static lints against a discovered {@link SchemaIR} and the reads/writes/calls
  * found in function bodies: query reads feed `filter_without_index`, insert writes
  * feed `table_without_insert`, authApi calls feed `auth_api_call_without_headers`,
- * and rls procedure snapshots feed `rls_uncovered_table`; declared containers
- * feed the `container_*` lints
- * (all default empty for callers that don't analyze functions/containers).
+ * rls procedure snapshots feed `rls_uncovered_table`, and mask procedure
+ * snapshots feed `mask_uncovered_pii_column`; declared containers
+ * feed the `container_*` lints; declared workflows + `ctx.workflows.get(...)` call
+ * sites feed the `workflow_unused` / `workflow_unknown_target` lints
+ * (all default empty for callers that don't analyze functions/containers/workflows).
  * The IR types are structurally identical to the advisor's evidence types so they
  * pass straight through without conversion. Returns the findings; surfacing them
  * (console, error overlay, studio Advisors table) is the caller's choice.
@@ -75,7 +88,14 @@ export const lintSchema = (
     authApiCalls?: ReadonlyArray<AuthApiCallIR>,
     rlsProcedures?: ReadonlyArray<RlsProcedureIR>,
     containers?: ReadonlyArray<ContainerIR>,
-): Finding[] => runAdvisor({ authApiCalls, containers, inserts, queries, rlsProcedures, schema: toAdvisorSchema(schema) }, { source: "static" });
+    workflows?: ReadonlyArray<WorkflowIR>,
+    workflowCalls?: ReadonlyArray<WorkflowCallIR>,
+    maskProcedures?: ReadonlyArray<MaskProcedureIR>,
+): Finding[] =>
+    runAdvisor(
+        { authApiCalls, containers, inserts, maskProcedures, queries, rlsProcedures, schema: toAdvisorSchema(schema), workflowCalls, workflows },
+        { source: "static" },
+    );
 
 /**
  * Render advisor findings as a single multi-line string for console surfacing:

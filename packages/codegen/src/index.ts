@@ -6,11 +6,13 @@ export { default as discoverCrons } from "./discover-crons";
 export { discoverFunctions } from "./discover-functions";
 export { default as discoverHttpRoutes } from "./discover-http-routes";
 export { default as discoverInserts } from "./discover-inserts";
+export { default as discoverMaskProcedures } from "./discover-mask-procedures";
 export { default as discoverMigrations } from "./discover-migrations";
 export { default as discoverQueries } from "./discover-queries";
 export { discoverRlsMetadata, default as discoverRlsProcedures } from "./discover-rls-procedures";
 export { default as discoverSchema } from "./discover-schema";
 export { default as discoverStorageRulesMetadata } from "./discover-storage-rules";
+export { discoverWorkflows, WORKFLOWS_FILENAME } from "./discover-workflows";
 export {
     emitApi,
     emitContainers,
@@ -32,6 +34,7 @@ export type {
     HttpRouteIR,
     IndexIR,
     InsertWriteIR,
+    MaskProcedureIR,
     MigrationIR,
     ProjectIR,
     QueryReadIR,

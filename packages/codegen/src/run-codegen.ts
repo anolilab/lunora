@@ -12,12 +12,15 @@ import { buildStudioFeatures, discoverFeatureUsage } from "./discover-feature-us
 import { discoverFunctions, listCirrusSourceFiles } from "./discover-functions";
 import discoverHttpRoutes from "./discover-http-routes";
 import discoverInserts from "./discover-inserts";
+import discoverMaskProcedures, { discoverMaskMetadata } from "./discover-mask-procedures";
 import discoverMigrations from "./discover-migrations";
 import discoverPackageDependencies from "./discover-package-dependencies";
 import discoverQueries from "./discover-queries";
 import discoverRlsProcedures, { discoverRlsMetadata } from "./discover-rls-procedures";
 import discoverSchema from "./discover-schema";
 import discoverStorageRulesMetadata from "./discover-storage-rules";
+import discoverWorkflowCalls from "./discover-workflow-calls";
+import { discoverWorkflows } from "./discover-workflows";
 import {
     buildStorageColumns,
     emitApi,
@@ -206,12 +209,21 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   discoverAuthApiCalls(project, cirrusDirectory),
                   discoverRlsProcedures(project, cirrusDirectory),
                   containers,
+                  workflows,
+                  discoverWorkflowCalls(project, cirrusDirectory),
+                  discoverMaskProcedures(project, cirrusDirectory),
               );
 
     // Read-only RLS metadata (policies + roles) the studio's RLS inspector lists,
     // emitted into the generated ShardDO's `rlsMetadata()` override. Statically
     // discovered from every `.use(rls(...))` chain — never the `when` predicate.
     const rlsMetadata = discoverRlsMetadata(project, cirrusDirectory);
+
+    // Read-only masking metadata (table + column + strategy) the studio's
+    // data-browser mask toggle previews, emitted into the generated ShardDO's
+    // `maskMetadata()` override. Statically discovered from every
+    // `.use(mask(...))` chain — never the masking closure.
+    const maskMetadata = discoverMaskMetadata(project, cirrusDirectory);
 
     // Read-only storage access-rule metadata (the studio's access-rules view),
     // statically discovered from every `.use(storageRules(...))` chain and
@@ -242,20 +254,34 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         storageColumnCount: Object.keys(buildStorageColumns(schema)).length,
         storageRuleCount: storageRulesMetadata.rules.length,
         vectorIndexCount: schema.vectorIndexes.length,
+        workflowCount: workflows.length,
     });
 
     const dataModelContent = emitDataModel(schema);
     const apiContent = emitApi(functions);
-    const serverContent = emitServer(
+    const serverContent = emitServer({
+        containers,
         hasAi,
         hasPayments,
         schema,
-        storageRulesMetadata.rules.map((rule) => rule.bucket),
-        containers,
-    );
+        storageRuleBuckets: storageRulesMetadata.rules.map((rule) => rule.bucket),
+        workflows,
+    });
     const functionsContent = emitFunctions(functions, migrations);
-    const shardContent = emitShard(schema, advisories, rlsMetadata, hasAi, hasPayments, storageRulesMetadata, containers, studioFeatures);
+    const shardContent = emitShard({
+        advisories,
+        containers,
+        hasAi,
+        hasPayments,
+        maskMetadata,
+        rlsMetadata,
+        schema,
+        storageRules: storageRulesMetadata,
+        studioFeatures,
+        workflows,
+    });
     const containersContent = emitContainers(containers);
+    const workflowsContent = emitWorkflows(workflows);
     const cronsContent = emitCrons(crons);
     const vectorsContent = emitVectors(schema.vectorIndexes);
     const drizzleFiles = emitDrizzleSchema(schema);
