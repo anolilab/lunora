@@ -481,6 +481,11 @@ const MESSAGE_IDS = [
     "Environment",
     "Version",
     "value",
+    // Cascade-impact simulator (delete preview).
+    "Cascade impact",
+    "Delete preview — rows that would cascade or be blocked",
+    "No related rows found.",
+    "Restrict relations will block this delete.",
     // Time Travel (PITR) panel.
     "Time Travel",
     "Restore a shard to a point in the last 30 days.",
