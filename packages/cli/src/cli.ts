@@ -21,6 +21,7 @@ import { migrateCommand } from "./commands/migrate";
 import { prepareCommand } from "./commands/prepare";
 import { registryCommand } from "./commands/registry/command";
 import { resetCommand } from "./commands/reset";
+import { rulesCommand } from "./commands/rules";
 import { runCommand } from "./commands/run";
 import { verifyCommand } from "./commands/verify";
 import { viewCommand } from "./commands/view";
@@ -50,6 +51,7 @@ const COMMANDS = [
     "view",
     "docs",
     "registry",
+    "rules",
 ] as const;
 
 type CommandName = (typeof COMMANDS)[number];
@@ -80,6 +82,7 @@ const CLI_COMMANDS = [
     viewCommand,
     documentationCommand,
     registryCommand,
+    rulesCommand,
 ];
 
 interface RunCliOptions {

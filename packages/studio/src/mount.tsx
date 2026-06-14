@@ -36,6 +36,7 @@ export const mountStudio = (options: MountStudioOptions = {}): Root => {
             basePath={appProps.basePath}
             baseUrl={appProps.baseUrl}
             locale={appProps.locale}
+            rulesInstalled={appProps.rulesInstalled}
             studio={appProps.studio}
         />,
     );

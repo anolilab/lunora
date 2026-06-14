@@ -14,6 +14,14 @@ export interface StudioHtmlConfig {
     readonly dataEditable?: boolean;
 
     /**
+     * Whether the project's Cirrus agent skills ("rules") are installed. Injected
+     * as `window.__CIRRUS_RULES_INSTALLED__` **only when `false`**, so the studio
+     * shows a "rules not installed" banner on the loopback dev hosts (which detect
+     * it) and stays quiet on a static deploy (which leaves it unset).
+     */
+    readonly rulesInstalled?: boolean;
+
+    /**
      * Enable the function runner's "Run as identity" tool (execute a function as a
      * chosen user to test auth/RLS). Injected as `window.__CIRRUS_RUN_AS_IDENTITY__`.
      * Like {@link StudioHtmlConfig.dataEditable}, only the loopback-only dev hosts set

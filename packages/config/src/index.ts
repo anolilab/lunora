@@ -1,3 +1,13 @@
+export type { AgentRulesStatus } from "./agent-rules";
+export {
+    AGENT_RULES_DIR,
+    AGENT_RULES_HINT,
+    AGENT_RULES_HINT_ENV,
+    CIRRUS_SKILL_NAMES,
+    claimAgentRulesHint,
+    detectAgentRules,
+    ROOT_SKILL_NAME,
+} from "./agent-rules";
 export type { ContainerIR, DiscoverContainerInfoResult } from "./container-info";
 export { discoverContainerInfo } from "./container-info";
 export type { DetectedFramework, FrameworkClass, FrameworkDetection } from "./detect-framework";

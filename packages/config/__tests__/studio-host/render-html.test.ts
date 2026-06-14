@@ -37,6 +37,20 @@ describe("renderStudioHtml", () => {
         expect(off).not.toContain("__CIRRUS_RUN_AS_IDENTITY__");
     });
 
+    it("injects the rules flag only when rulesInstalled is explicitly false", () => {
+        expect.assertions(3);
+
+        const missing = renderStudioHtml({ basePath: "/", rulesInstalled: false, scriptSrc: "/studio.js", styleHref: "/styles.css" });
+        const installed = renderStudioHtml({ basePath: "/", rulesInstalled: true, scriptSrc: "/studio.js", styleHref: "/styles.css" });
+        const unset = renderStudioHtml({ basePath: "/", scriptSrc: "/studio.js", styleHref: "/styles.css" });
+
+        // eslint-disable-next-line no-secrets/no-secrets -- a static JS assignment string, not a credential
+        expect(missing).toContain("window.__CIRRUS_RULES_INSTALLED__=false;");
+        // Installed and unset both leave the global off, so the studio shows no banner.
+        expect(installed).not.toContain("__CIRRUS_RULES_INSTALLED__");
+        expect(unset).not.toContain("__CIRRUS_RULES_INSTALLED__");
+    });
+
     it("injects the admin token when provided, escaping `<` for safe inline embedding", () => {
         expect.assertions(2);
 

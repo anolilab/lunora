@@ -24,7 +24,9 @@
         "cli",
         "codegen",
         "deploy",
-        "vite"
+        "vite",
+        "tanstack-intent",
+        "agent-skills"
     ],
     "bin": {
         "cirrus": "./dist/bin.mjs"
@@ -32,6 +34,7 @@
     "files": [
         "dist",
         "__assets__",
+        "skills",
         "README.md",
         "LICENSE.md"
     ],

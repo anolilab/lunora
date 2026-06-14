@@ -53,6 +53,14 @@ interface StudioAppProps {
     /** UI language for the studio's own strings. Defaults to `en`. */
     readonly locale?: string;
 
+    /**
+     * Whether the project's Cirrus agent skills ("rules") are installed. When
+     * explicitly `false`, the studio shows a one-line banner pointing at
+     * `cirrus rules install`. The loopback dev hosts inject this; a static deploy
+     * leaves it unset (no banner).
+     */
+    readonly rulesInstalled?: boolean;
+
     /** Forwarded to the composed {@link Studio} (functions, initialShardKey, scheduled overrides). */
     readonly studio?: Omit<StudioProps, "children" | "i18n" | "locale">;
 }
@@ -75,10 +83,32 @@ interface StudioAppBodyProps {
     readonly clearToken: () => void;
     readonly onToggleTheme: () => void;
     readonly onTokenChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
+    readonly rulesInstalled?: boolean;
     readonly studio?: StudioAppProps["studio"];
     readonly theme: "dark" | "light";
     readonly token: string;
 }
+
+/** `localStorage` key remembering that the developer dismissed the rules banner. */
+const RULES_BANNER_DISMISSED_KEY = "cirrus.studio.rulesBannerDismissed";
+
+/** Read the persisted "rules banner dismissed" flag, tolerating storage being unavailable. */
+const readBannerDismissed = (): boolean => {
+    try {
+        return globalThis.localStorage.getItem(RULES_BANNER_DISMISSED_KEY) === "1";
+    } catch {
+        return false;
+    }
+};
+
+/** Persist the "rules banner dismissed" flag, swallowing storage failures (private mode / disabled). */
+const writeBannerDismissed = (): void => {
+    try {
+        globalThis.localStorage.setItem(RULES_BANNER_DISMISSED_KEY, "1");
+    } catch {
+        // ignore — dismissal just won't survive a reload
+    }
+};
 
 /**
  * The header + composed studio. Kept separate from {@link StudioApp}
@@ -86,8 +116,18 @@ interface StudioAppBodyProps {
  * read the `StudioI18nProvider` the app renders above it. The composed
  * `&lt;Studio>` inherits that same provider, so it isn't handed an instance here.
  */
-const StudioAppBody = ({ basePath, clearToken, studio, onToggleTheme, onTokenChange, theme, token }: StudioAppBodyProps): ReactElement => {
+const StudioAppBody = ({ basePath, clearToken, studio, onToggleTheme, onTokenChange, rulesInstalled, theme, token }: StudioAppBodyProps): ReactElement => {
     const t = useT();
+
+    // The "rules not installed" banner is a one-time nudge — let the developer
+    // dismiss it, persisted so it stays gone across reloads. Reads lazily and
+    // tolerates storage being unavailable (private mode / embeddings).
+    const [rulesBannerDismissed, setRulesBannerDismissed] = useState<boolean>(() => readBannerDismissed());
+
+    const dismissRulesBanner = useCallback((): void => {
+        setRulesBannerDismissed(true);
+        writeBannerDismissed();
+    }, []);
 
     return (
         <>
@@ -229,6 +269,42 @@ const StudioAppBody = ({ basePath, clearToken, studio, onToggleTheme, onTokenCha
                 </div>
             </header>
 
+            {rulesInstalled === false && !rulesBannerDismissed && (
+                <div
+                    className="flex shrink-0 items-center gap-2 border-b border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-[12px] text-foreground"
+                    data-testid="dash-app-rules-banner"
+                    role="note"
+                >
+                    <span aria-hidden="true" className="text-amber-500">
+                        ⚠
+                    </span>
+                    <span>
+                        {t("Cirrus AI rules aren't installed.")}{" "}
+                        <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">cirrus rules install</code>{" "}
+                        {t("lets your coding agent use Cirrus correctly.")}
+                    </span>
+                    <button
+                        aria-label={t("Dismiss")}
+                        className="ms-auto flex size-5 items-center justify-center rounded text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent"
+                        data-testid="dash-app-rules-banner-dismiss"
+                        onClick={dismissRulesBanner}
+                        type="button"
+                    >
+                        <svg
+                            aria-hidden="true"
+                            className="size-3.5"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeLinecap="round"
+                            strokeWidth={1.8}
+                            viewBox="0 0 24 24"
+                        >
+                            <path d="M18 6 6 18M6 6l12 12" />
+                        </svg>
+                    </button>
+                </div>
+            )}
+
             <ErrorBoundary fallbackTitle={t("Studio failed")} label={t("Studio")} retryLabel={t("Try again")}>
                 <Studio
                     basePath={basePath}
@@ -270,7 +346,7 @@ const resolveBaseUrl = (explicit: string | undefined): string => {
  * yourself. For embedding into an existing admin UI, use the individual panels
  * or `&lt;Studio>` under your own provider instead.
  */
-export const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClient, studio, locale }: StudioAppProps = {}): ReactElement => {
+export const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClient, rulesInstalled, studio, locale }: StudioAppProps = {}): ReactElement => {
     // Seed from the prop, else a token persisted in a prior session (so a reload
     // doesn't force a re-paste). The prop wins when explicitly provided.
     const [token, setToken] = useState<string>(() => adminToken ?? loadToken());
@@ -353,6 +429,7 @@ export const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClien
                             clearToken={clearToken}
                             onToggleTheme={onToggleTheme}
                             onTokenChange={onTokenChange}
+                            rulesInstalled={rulesInstalled}
                             studio={studio}
                             theme={theme}
                             token={token}

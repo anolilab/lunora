@@ -2,6 +2,7 @@ import { cloudflare } from "@cloudflare/vite-plugin";
 import errorOverlayPlugin from "@visulima/vite-overlay";
 import type { Plugin } from "vite";
 
+import agentRulesHintPlugin from "./agent-rules-hint-plugin";
 import codegenPlugin from "./codegen-plugin";
 import devVariablesPlugin from "./dev-variables-plugin";
 import { createCommandProbe, withDevWorkerEnv } from "./dev-worker-env";
@@ -90,6 +91,7 @@ const cirrus = (options?: CirrusPluginOptions): CirrusPlugins => {
         devVariablesPlugin(resolved),
         codegenPlugin(resolved),
         logStreamPlugin(),
+        agentRulesHintPlugin(resolved),
     ];
 
     if (resolved.studio) {

@@ -2,7 +2,10 @@ import type { ChildProcess } from "node:child_process";
 import { spawn as nodeSpawn } from "node:child_process";
 
 import {
+    AGENT_RULES_HINT,
+    claimAgentRulesHint,
     createConfirm,
+    detectAgentRules,
     ensureDevVariables,
     formatCirrusEvent,
     materializeRemoteWranglerConfig,
@@ -278,6 +281,20 @@ const printBanner = (logger: Logger, plan: DevCommandPlan, studioUrl: string | u
     logger.info("");
 };
 
+/**
+ * When the Cirrus agent skills ("rules") aren't installed in the project, nudge
+ * the developer (and any cloud/headless coding agent reading stdout) to install
+ * them so the AI knows how to use Cirrus. Non-blocking — just one info line.
+ */
+const printAgentRulesHint = (logger: Logger, cwd: string): void => {
+    if (detectAgentRules(cwd).installed || !claimAgentRulesHint()) {
+        return;
+    }
+
+    logger.info(`  ⓘ  ${AGENT_RULES_HINT}`);
+    logger.info("");
+};
+
 interface Teardown {
     codegen?: CodegenWatcherHandle;
     /** Disposer for the materialized remote wrangler temp config (idempotent, never throws). */
@@ -359,6 +376,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
         const worker = (options.startWorker ?? defaultWorkerSpawner)(plan.wrangler, logger);
 
         printBanner(logger, plan, studioUrl);
+        printAgentRulesHint(logger, cwd);
 
         let sigintCount = 0;
         let escalationTimer: NodeJS.Timeout | undefined;
