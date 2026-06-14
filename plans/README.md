@@ -6,9 +6,12 @@ their plan files have been removed — only active work remains here.
 
 What survives in this directory:
 
-| Plan | Title                                                     | Pkg                 | Status      |
-| ---- | --------------------------------------------------------- | ------------------- | ----------- |
-| 022  | Borrow from localflare + d1-manager into Studio (7 items) | studio, do, advisor | IN PROGRESS |
+| Plan | Title                                                     | Pkg                       | Status      |
+| ---- | --------------------------------------------------------- | ------------------------- | ----------- |
+| 022  | Borrow from localflare + d1-manager into Studio (7 items) | studio, do, advisor       | IN PROGRESS |
+| 024  | Visual schema editor (local-dev `schema.ts` + codegen)    | config, vite, cli, studio | TODO        |
+| 025  | Access-rule editor + permissions playground               | studio (+config)          | TODO        |
+| 026  | Datasette faceting + shareable canned queries             | do, studio                | TODO        |
 
 Plus [`convex-gap-analysis.md`](convex-gap-analysis.md) — a reference, point-in-time
 source-level comparison against Convex (not a status-tracked task).
@@ -22,6 +25,26 @@ Plan 022 (baseline `2c403598`) is a **feature/borrow roadmap** derived from
 MIT-licensed localflare and d1-manager projects. Execute it item-by-item (each is
 its own PR); it does not block, and is not blocked by, anything else. When an
 item lands, tick its box in the plan's "Done criteria".
+
+## Plans 024–026
+
+Three further **feature/borrow roadmaps** (baseline `05a1e9fc`), each a
+multi-item plan executed item-by-item:
+
+- **024 — Visual schema editor** (borrows d1-manager's interaction model, MIT).
+  Local-dev-only authoring over `cirrus/schema.ts` + codegen via ts-morph — **no
+  live DDL**; destructive edits route through migrations. Establishes a
+  `schemaEditable` capability flag + a local schema-edit endpoint on both dev
+  hosts.
+- **025 — Access-rule editor + permissions playground** (borrows PocketBase +
+  InstantDB). A read-only permissions matrix + a live `runAs` probe playground
+  over the existing RLS engine (`rlsPolicies`/`maskPolicies`/`runAs` RPCs already
+  exist), plus a local-dev policy/role scaffolder. **Soft-depends on 024** (Item 3
+  reuses 024's local-edit seam).
+- **026 — Datasette faceting + shareable canned queries** (borrows Datasette,
+  Apache-2.0). One bind-safe read-only `facetColumn` op + a facet sidebar, plus
+  shareable URL state + localStorage saved queries. Read-only; no schema/auth
+  change.
 
 ## Notes for executors
 
