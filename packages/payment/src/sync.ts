@@ -81,7 +81,13 @@ const applyPayment = async (store: PaymentStore, action: WebhookAction, paymentA
     }
 
     if ((resolvedAction === "partial_refund" || resolvedAction === "refund") && action.amount) {
-        refundedAmount = addMoney(base.refundedAmount, action.amount);
+        const prospective = addMoney(base.refundedAmount, action.amount);
+
+        if (compareMoney(prospective, base.capturedAmount) > 0) {
+            return { applied: false, reason: "invalid_refund_amount" };
+        }
+
+        refundedAmount = prospective;
     }
 
     await store.upsertPaymentSession({

@@ -86,6 +86,42 @@ describe("applyWebhookAction", () => {
         expect(session?.refundedAmount.minorUnits).toBe(1000n);
     });
 
+    it("rejects an over-refund without mutating state and still applies a valid partial refund", async () => {
+        const store = new MemoryPaymentStore();
+
+        await applyWebhookAction(store, captureEvent("evt_1"));
+
+        const overRefund = await applyWebhookAction(store, {
+            amount: money(1500, "USD"),
+            eventId: "evt_2",
+            provider: "stripe",
+            sessionId: "pi_1",
+            type: "payment.refunded",
+        });
+
+        expect(overRefund).toEqual({ applied: false, reason: "invalid_refund_amount" });
+
+        let session = await store.getPaymentSession("stripe", "pi_1");
+
+        expect(session?.state).toBe("captured");
+        expect(session?.refundedAmount.minorUnits).toBe(0n);
+
+        const valid = await applyWebhookAction(store, {
+            amount: money(400, "USD"),
+            eventId: "evt_3",
+            provider: "stripe",
+            sessionId: "pi_1",
+            type: "payment.refunded",
+        });
+
+        expect(valid.applied).toBe(true);
+
+        session = await store.getPaymentSession("stripe", "pi_1");
+
+        expect(session?.state).toBe("partially_refunded");
+        expect(session?.refundedAmount.minorUnits).toBe(400n);
+    });
+
     it("creates then cancels a subscription", async () => {
         const store = new MemoryPaymentStore();
 

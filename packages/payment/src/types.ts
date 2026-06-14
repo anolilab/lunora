@@ -256,5 +256,5 @@ export interface WebhookAction {
 /** Result of applying a webhook action to the store. */
 export interface ApplyResult {
     readonly applied: boolean;
-    readonly reason?: "duplicate" | "illegal_transition" | "ok" | "unhandled";
+    readonly reason?: "duplicate" | "illegal_transition" | "invalid_refund_amount" | "ok" | "unhandled";
 }
