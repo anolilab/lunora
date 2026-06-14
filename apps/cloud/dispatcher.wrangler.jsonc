@@ -1,0 +1,18 @@
+{
+    "$schema": "node_modules/wrangler/config-schema.json",
+    // The dispatcher Worker (CLOUD-PLAN.md §2.1) — a SEPARATE deployable from the
+    // control plane (wrangler.jsonc). Deploy with:
+    //   wrangler deploy -c dispatcher.wrangler.jsonc
+    "name": "cirrus-dispatcher",
+    "main": "src/dispatcher/worker.ts",
+    "compatibility_date": "2026-06-10",
+    "compatibility_flags": ["nodejs_compat"],
+    // Bind the production dispatch namespace holding tenant Worker scripts.
+    // (Requires the Workers-for-Platforms paid add-on.)
+    "dispatch_namespaces": [{ "binding": "DISPATCHER", "namespace": "cirrus-production" }],
+    "vars": {
+        "CIRRUS_APP_DOMAIN": "cirrus.app",
+    },
+    // Route all hostnames through the dispatcher (subdomains + custom hostnames).
+    "routes": [{ "pattern": "*/*", "zone_name": "cirrus.app" }],
+}
