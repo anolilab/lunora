@@ -17,3 +17,22 @@ CLOUDFLARE_API_TOKEN=replace-with-cloudflare-api-token
 # Secret shared with the GitHub App/webhook; verifies x-hub-signature-256.
 # Generate with: openssl rand -hex 32
 GITHUB_WEBHOOK_SECRET=replace-with-openssl-rand-hex-32
+
+# ── Billing (§4) — Stripe via @cirrus/payment ────────────────────────────────
+# Absent → entitlement reads still work (everyone resolves to the free plan);
+# checkout / portal / webhook fail until these are set.
+STRIPE_SECRET_KEY=sk_test_replace-me
+STRIPE_WEBHOOK_SECRET=whsec_replace-me
+
+# ── Email (§3) — @cirrus/mail ────────────────────────────────────────────────
+# In dev, mail is captured into the studio Mail tab (no transport needed). For
+# real delivery set a sender + a Resend key (or bind a SEND_EMAIL transport).
+MAIL_FROM=Cirrus Cloud <noreply@example.com>
+# RESEND_API_KEY=re_replace-me
+# Force-capture mail even outside dev: CIRRUS_MAIL_CAPTURE=true
+
+# ── Studio social sign-in (optional) — enabled only when both halves are set ──
+# GITHUB_CLIENT_ID=replace-me
+# GITHUB_CLIENT_SECRET=replace-me
+# GOOGLE_CLIENT_ID=replace-me
+# GOOGLE_CLIENT_SECRET=replace-me
