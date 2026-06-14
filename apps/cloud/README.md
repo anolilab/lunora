@@ -91,6 +91,9 @@ src/
   admin/
     proxy.ts         hosted-studio admin proxy to a tenant deployment (§3)
   cli/               cirrus login / link / deploy
+spikes/
+  ws-dispatch/       Phase 1 spike: hibernated-WS subscriptions + per-invocation
+                     limits through env.DISPATCHER.get() (deploy + probe; see its README)
 ```
 
 > **Moving to a private repo:** the control plane is the proprietary layer and is
