@@ -3,6 +3,7 @@ import type { ReactElement } from "react";
 import { useState } from "react";
 
 import { api } from "../../cirrus/_generated/api.js";
+import { BillingSection } from "./BillingSection";
 import { DeployKeysSection } from "./DeployKeysSection";
 import { InvitationsSection } from "./InvitationsSection";
 import { MembersSection } from "./MembersSection";
@@ -15,7 +16,7 @@ interface OrganizationDashboardProps {
     organizationId: OrgId;
 }
 
-type Tab = "projects" | "members" | "keys" | "invitations" | "usage";
+type Tab = "billing" | "invitations" | "keys" | "members" | "projects" | "usage";
 
 const TABS: { id: Tab; label: string }[] = [
     { id: "projects", label: "Projects" },
@@ -23,6 +24,7 @@ const TABS: { id: Tab; label: string }[] = [
     { id: "keys", label: "Deploy keys" },
     { id: "invitations", label: "Invitations" },
     { id: "usage", label: "Usage" },
+    { id: "billing", label: "Billing" },
 ];
 
 /**
@@ -66,6 +68,7 @@ export const OrganizationDashboard = ({ onBack, organizationId }: OrganizationDa
             {tab === "keys" ? <DeployKeysSection organizationId={organizationId} /> : null}
             {tab === "invitations" ? <InvitationsSection organizationId={organizationId} /> : null}
             {tab === "usage" ? <UsageSection organizationId={organizationId} /> : null}
+            {tab === "billing" ? <BillingSection organizationId={organizationId} /> : null}
         </div>
     );
 };
