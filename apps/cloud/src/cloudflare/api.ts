@@ -30,6 +30,8 @@ export interface PutScriptInput {
 }
 
 export interface CloudflareApi {
+    /** Create a Cloudflare-for-SaaS custom hostname for a tenant domain (§4). */
+    createCustomHostname: (input: { hostname: string; zoneId: string }) => Promise<{ id: string }>;
     /** Create a D1 database; returns its uuid (the binding's `database_id`). */
     createD1Database: (name: string) => Promise<{ uuid: string }>;
     /** Create an R2 bucket (idempotent at the call site — caller ignores "exists"). */
@@ -74,8 +76,27 @@ const stripTrailingSlashes = (value: string): string => {
  */
 export const createHttpCloudflareApi = (options: HttpCloudflareApiOptions): CloudflareApi => {
     const fetchImpl = options.fetch ?? globalThis.fetch;
-    const base = `${stripTrailingSlashes(options.baseUrl ?? DEFAULT_BASE)}/accounts/${options.accountId}`;
+    const apiRoot = stripTrailingSlashes(options.baseUrl ?? DEFAULT_BASE);
+    const base = `${apiRoot}/accounts/${options.accountId}`;
     const authHeader = `Bearer ${options.apiToken}`;
+
+    const callAt = async (fullUrl: string, method: string, body: unknown): Promise<unknown> => {
+        const response = await fetchImpl(fullUrl, {
+            body: JSON.stringify(body),
+            headers: { authorization: authHeader, "content-type": "application/json" },
+            method,
+        });
+        const data: unknown = await response.json();
+        const envelope = data as CloudflareEnvelope;
+
+        if (!response.ok || envelope.success === false) {
+            const message = envelope.errors?.map((error) => error.message).join("; ") ?? `HTTP ${String(response.status)}`;
+
+            throw new Error(`cloudflare ${method} ${fullUrl} failed: ${message}`);
+        }
+
+        return envelope.result;
+    };
 
     const callJson = async (path: string, method: string, body: unknown): Promise<unknown> => {
         const response = await fetchImpl(`${base}${path}`, {
@@ -96,6 +117,17 @@ export const createHttpCloudflareApi = (options: HttpCloudflareApiOptions): Clou
     };
 
     return {
+        createCustomHostname: async ({ hostname, zoneId }) => {
+            const result = (await callAt(`${apiRoot}/zones/${zoneId}/custom_hostnames`, "POST", { hostname, ssl: { method: "http", type: "dv" } })) as {
+                id?: string;
+            };
+
+            if (!result.id) {
+                throw new Error("cloudflare custom hostname create returned no id");
+            }
+
+            return { id: result.id };
+        },
         createD1Database: async (name) => {
             const result = (await callJson("/d1/database", "POST", { name })) as { uuid?: string };
 
