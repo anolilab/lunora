@@ -152,7 +152,7 @@ describe("shardDO.runInTransaction", () => {
     });
 
     it("conflictError carries code / status / name as own properties", () => {
-        expect.assertions(4);
+        expect.assertions(5);
 
         const error = new ConflictError();
 
@@ -160,6 +160,18 @@ describe("shardDO.runInTransaction", () => {
         expect(error.status).toBe(409);
         expect(error.name).toBe("ConflictError");
         expect(error.message).toBe("Optimistic concurrency conflict");
+        // Defaults to the generic `conflict` kind so a bare throw isn't mistaken
+        // for OCC write contention by the metrics layer.
+        expect(error.kind).toBe("conflict");
+    });
+
+    it("conflictError records the discriminating kind so the metrics layer can isolate OCC contention", () => {
+        expect.assertions(2);
+
+        // Only `occ` is true write contention; a unique-index breach is a
+        // constraint failure that must not trip the write-contention advisor.
+        expect(new ConflictError("optimistic concurrency conflict", "occ").kind).toBe("occ");
+        expect(new ConflictError("unique constraint violation", "unique").kind).toBe("unique");
     });
 });
 

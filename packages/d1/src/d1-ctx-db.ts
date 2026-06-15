@@ -1809,7 +1809,10 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
         if (triggerDepth > MAX_TRIGGER_DEPTH) {
             triggerDepth -= 1;
 
-            throw new ConflictError(`trigger recursion exceeded ${String(MAX_TRIGGER_DEPTH)} levels on "${event.table}" — check for a self-triggering write`);
+            throw new ConflictError(
+                `trigger recursion exceeded ${String(MAX_TRIGGER_DEPTH)} levels on "${event.table}" — check for a self-triggering write`,
+                "trigger",
+            );
         }
 
         try {
@@ -1832,7 +1835,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             await exec.run(sql, parameters);
         } catch (error) {
             if (isUniqueViolation(error)) {
-                throw new ConflictError(`unique constraint violation on "${table}"`);
+                throw new ConflictError(`unique constraint violation on "${table}"`, "unique");
             }
 
             throw error;
@@ -1895,14 +1898,14 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             returned = await exec.all(sql, parameters);
         } catch (error) {
             if (isUniqueViolation(error)) {
-                throw new ConflictError(`unique constraint violation on "${table}"`);
+                throw new ConflictError(`unique constraint violation on "${table}"`, "unique");
             }
 
             throw error;
         }
 
         if (returned.length === 0) {
-            throw new ConflictError(`optimistic concurrency conflict on "${table}" — the row changed during this mutation; refetch and retry`);
+            throw new ConflictError(`optimistic concurrency conflict on "${table}" — the row changed during this mutation; refetch and retry`, "occ");
         }
     };
 
@@ -2167,7 +2170,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
                 },
                 onCascade: (_holderTable, holderId) => writer.delete(holderId),
                 onRestrict: (message) => {
-                    throw new ConflictError(message);
+                    throw new ConflictError(message, "restrict");
                 },
                 // eslint-disable-next-line unicorn/no-null -- onSetNull writes a SQL NULL into the holder column; that is the literal value being persisted.
                 onSetNull: (_holderTable, holderId, field) => writer.patch(holderId, { [field]: null }),

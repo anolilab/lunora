@@ -1655,7 +1655,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         if (triggerDepth > MAX_TRIGGER_DEPTH) {
             triggerDepth -= 1;
 
-            throw new ConflictError(`trigger recursion exceeded ${String(MAX_TRIGGER_DEPTH)} levels on "${event.table}" — check for a self-triggering write`);
+            throw new ConflictError(
+                `trigger recursion exceeded ${String(MAX_TRIGGER_DEPTH)} levels on "${event.table}" — check for a self-triggering write`,
+                "trigger",
+            );
         }
 
         try {
@@ -2395,7 +2398,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 },
                 onCascade: (holderTable, holderId) => routeForHolder(holderTable).delete(holderId),
                 onRestrict: (message) => {
-                    throw new ConflictError(message);
+                    throw new ConflictError(message, "restrict");
                 },
                 // eslint-disable-next-line unicorn/no-null -- `set null` onDelete: the FK column is set to SQL NULL, the documented semantics of the action
                 onSetNull: (holderTable, holderId, field) => routeForHolder(holderTable).patch(holderId, { [field]: null }),
