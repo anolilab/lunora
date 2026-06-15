@@ -6,6 +6,7 @@ import type {
     ContainerIR,
     InsertWriteIR,
     MaskProcedureIR,
+    NondeterministicCallIR,
     QueryReadIR,
     RlsProcedureIR,
     SchemaIR,
@@ -75,7 +76,8 @@ const toAdvisorSchema = (schema: SchemaIR): AdvisorSchema => {
  * rls procedure snapshots feed `rls_uncovered_table`, and mask procedure
  * snapshots feed `mask_uncovered_pii_column`; declared containers
  * feed the `container_*` lints; declared workflows + `ctx.workflows.get(...)` call
- * sites feed the `workflow_unused` / `workflow_unknown_target` lints
+ * sites feed the `workflow_unused` / `workflow_unknown_target` lints; non-deterministic
+ * calls inside query/mutation handlers feed the `nondeterministic_query_mutation` lint
  * (all default empty for callers that don't analyze functions/containers/workflows).
  * The IR types are structurally identical to the advisor's evidence types so they
  * pass straight through without conversion. Returns the findings; surfacing them
@@ -91,9 +93,21 @@ export const lintSchema = (
     workflows?: ReadonlyArray<WorkflowIR>,
     workflowCalls?: ReadonlyArray<WorkflowCallIR>,
     maskProcedures?: ReadonlyArray<MaskProcedureIR>,
+    nondeterministicCalls?: ReadonlyArray<NondeterministicCallIR>,
 ): Finding[] =>
     runAdvisor(
-        { authApiCalls, containers, inserts, maskProcedures, queries, rlsProcedures, schema: toAdvisorSchema(schema), workflowCalls, workflows },
+        {
+            authApiCalls,
+            containers,
+            inserts,
+            maskProcedures,
+            nondeterministicCalls,
+            queries,
+            rlsProcedures,
+            schema: toAdvisorSchema(schema),
+            workflowCalls,
+            workflows,
+        },
         { source: "static" },
     );
 

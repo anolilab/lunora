@@ -14,6 +14,7 @@ import discoverHttpRoutes from "./discover-http-routes";
 import discoverInserts from "./discover-inserts";
 import discoverMaskProcedures, { discoverMaskMetadata } from "./discover-mask-procedures";
 import discoverMigrations from "./discover-migrations";
+import discoverNondeterministicCalls from "./discover-nondeterministic-calls";
 import discoverPackageDependencies from "./discover-package-dependencies";
 import discoverQueries from "./discover-queries";
 import discoverRlsProcedures, { discoverRlsMetadata } from "./discover-rls-procedures";
@@ -220,6 +221,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   workflows,
                   discoverWorkflowCalls(project, cirrusDirectory),
                   discoverMaskProcedures(project, cirrusDirectory),
+                  discoverNondeterministicCalls(project, cirrusDirectory),
               );
 
     // Read-only RLS metadata (policies + roles) the studio's RLS inspector lists,

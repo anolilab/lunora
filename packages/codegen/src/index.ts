@@ -8,6 +8,7 @@ export { default as discoverHttpRoutes } from "./discover-http-routes";
 export { default as discoverInserts } from "./discover-inserts";
 export { default as discoverMaskProcedures } from "./discover-mask-procedures";
 export { default as discoverMigrations } from "./discover-migrations";
+export { default as discoverNondeterministicCalls } from "./discover-nondeterministic-calls";
 export { default as discoverQueries } from "./discover-queries";
 export { discoverRlsMetadata, default as discoverRlsProcedures } from "./discover-rls-procedures";
 export { default as discoverSchema } from "./discover-schema";

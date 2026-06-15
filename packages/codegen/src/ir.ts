@@ -330,6 +330,28 @@ export interface InsertWriteIR {
 }
 
 /**
+ * A non-deterministic API call (`Date.now`, `Math.random`, `crypto.randomUUID`,
+ * `crypto.getRandomValues`, `fetch`) discovered lexically inside a `query(...)`
+ * or `mutation(...)` handler body — the `nondeterministic_query_mutation` lint
+ * input. Structurally identical to `AdvisorNondeterministicCall` so values pass
+ * straight through to the advisor without conversion, exactly as `AuthApiCallIR`
+ * does for `AdvisorAuthApiCall`. `action(...)` handlers are never recorded —
+ * actions are the determinism escape hatch.
+ */
+export interface NondeterministicCallIR {
+    /** The non-deterministic API invoked, e.g. `Date.now` / `Math.random` / `crypto.randomUUID` / `fetch`. */
+    callee: string;
+    /** Export binding name of the function performing the call, e.g. `sendMessage`. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/cirrus/`, without extension (the api namespace). */
+    file: string;
+    /** Which procedure kind the call lives in — only `query`/`mutation` handlers are recorded. */
+    kind: "mutation" | "query";
+    /** 1-based line of the call, or `0` when unknown. */
+    line: number;
+}
+
+/**
  * Per-procedure RLS usage snapshot, produced by `discoverRlsProcedures` for the
  * `rls_uncovered_table` advisor lint. Structurally identical to
  * `AdvisorRlsProcedure` (they share the same field set) so values pass straight
