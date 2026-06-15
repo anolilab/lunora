@@ -81,7 +81,7 @@ interface ExportGap {
     exportName: string;
     /** Which declaration is unexported. */
     kind: "container" | "workflow";
-    /** The `_generated/<module>` to re-export from, e.g. `workflows`. */
+    /** The `_generated/{module}` to re-export from, e.g. `workflows`. */
     module: "containers" | "workflows";
 }
 
@@ -90,6 +90,7 @@ interface ReconcileBindingsResult {
     added: string[];
     /** `true` when `wrangler.jsonc` was rewritten. */
     changed: boolean;
+
     /**
      * Declared containers/workflows the worker entry doesn't re-export — the
      * structured form of the corresponding `warnings` entries, for the dev error

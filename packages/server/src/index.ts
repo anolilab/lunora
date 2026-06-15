@@ -37,10 +37,10 @@ export type {
     HttpStreamHandlerOptions,
 } from "./http";
 export { httpAction, httpRoute, httpRouter, serveStorageObject } from "./http";
-export type { MigrationDefinition, MigrationDocument, MigrationTransform, RegisteredMigration } from "./migration";
-export { defineMigration } from "./migration";
 export type { MaskColumns, MaskContext, MaskFn, MaskOptions, MaskPolicies, MaskStrategy } from "./mask/index";
 export { mask } from "./mask/index";
+export type { MigrationDefinition, MigrationDocument, MigrationTransform, RegisteredMigration } from "./migration";
+export { defineMigration } from "./migration";
 export type { Component, ComponentFunctions, DefineComponentOptions, DefinePluginOptions, Plugin, PrefixedTables, SchemaExtension } from "./plugin";
 export { composePluginMiddleware, defineComponent, definePlugin, defineSchemaExtension, installPlugins, mergeSchemaExtension } from "./plugin";
 export type { DefinePresenceOptions, PresenceComponent, PresenceFunctions, PresenceMember } from "./presence";

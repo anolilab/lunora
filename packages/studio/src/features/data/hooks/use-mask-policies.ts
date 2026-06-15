@@ -22,7 +22,7 @@ const NO_COLUMNS: ReadonlyArray<MaskColumnMetadata> = [];
  * the browser simply shows no masked columns. The error is never surfaced as a
  * blocking banner: masking is a preview affordance, not core to browsing rows.
  */
-export const useMaskPolicies = (): ReadonlyArray<MaskColumnMetadata> => {
+const useMaskPolicies = (): ReadonlyArray<MaskColumnMetadata> => {
     const client = useCirrus();
     const [columns, setColumns] = useState<ReadonlyArray<MaskColumnMetadata>>(NO_COLUMNS);
 
@@ -42,3 +42,5 @@ export const useMaskPolicies = (): ReadonlyArray<MaskColumnMetadata> => {
 
     return columns;
 };
+
+export default useMaskPolicies;

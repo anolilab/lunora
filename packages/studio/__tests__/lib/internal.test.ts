@@ -7,7 +7,7 @@ describe("fireAndForget", () => {
         expect.assertions(2);
 
         const reason = new Error("boom");
-        const onError = vi.fn();
+        const onError = vi.fn<(error: unknown) => void>();
 
         fireAndForget(Promise.reject(reason), onError);
 
@@ -32,7 +32,7 @@ describe("fireAndForget", () => {
     it("does not call onError when the promise resolves", async () => {
         expect.assertions(1);
 
-        const onError = vi.fn();
+        const onError = vi.fn<(error: unknown) => void>();
 
         fireAndForget(Promise.resolve("ok"), onError);
 

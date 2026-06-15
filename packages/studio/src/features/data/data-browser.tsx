@@ -24,7 +24,7 @@ import { CellDetailDialog, GridActionsBar } from "./grid-features";
 import GridPagination from "./grid-pagination";
 import { useDataBrowser } from "./hooks/use-data-browser";
 import { useGenerateRows } from "./hooks/use-generate-rows";
-import { useMaskPolicies } from "./hooks/use-mask-policies";
+import useMaskPolicies from "./hooks/use-mask-policies";
 import { RowDetailDrawer } from "./row-detail";
 import RowFormEditor from "./row-form";
 import { ShardExplorer } from "./shard-explorer";

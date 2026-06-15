@@ -96,7 +96,7 @@ export const maskColumnsForTable = (columns: ReadonlyArray<MaskColumnMetadata>, 
 /**
  * Apply the active {@link MaskView} to one cell. Returns the raw value unchanged
  * when masking is off or the column isn't mask-covered; otherwise the masked
- * form. Centralises the `enabled && covered` gate so the grid and the JSON/
+ * form. Centralises the enabled-and-covered gate so the grid and the JSON or
  * transposed views stay consistent.
  */
 export const maskCell = (value: unknown, column: string, view: MaskView): unknown => {

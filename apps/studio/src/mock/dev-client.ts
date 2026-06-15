@@ -242,6 +242,14 @@ const dataFor = (reference: string, args: unknown): unknown => {
         case ADMIN_FUNCTIONS.listTables: {
             return TABLES;
         }
+        case ADMIN_FUNCTIONS.listWorkflows: {
+            return {
+                workflows: [
+                    { binding: "WORKFLOW_ORDER_PIPELINE", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" },
+                    { binding: "WORKFLOW_WELCOME_EMAIL", className: "WelcomeEmailWorkflow", exportName: "welcomeEmail", name: "welcome-email" },
+                ],
+            };
+        }
         case ADMIN_FUNCTIONS.maskPolicies: {
             // Fixture mask coverage so the data browser's "Mask sensitive columns"
             // toggle + header chips light up for the `users` table in the dev harness.
@@ -249,14 +257,6 @@ const dataFor = (reference: string, args: unknown): unknown => {
                 columns: [
                     { column: "email", strategy: "redact", table: "users" },
                     { column: "name", strategy: "hash", table: "users" },
-                ],
-            };
-        }
-        case ADMIN_FUNCTIONS.listWorkflows: {
-            return {
-                workflows: [
-                    { binding: "WORKFLOW_ORDER_PIPELINE", className: "OrderPipelineWorkflow", exportName: "orderPipeline", name: "order-pipeline" },
-                    { binding: "WORKFLOW_WELCOME_EMAIL", className: "WelcomeEmailWorkflow", exportName: "welcomeEmail", name: "welcome-email" },
                 ],
             };
         }
