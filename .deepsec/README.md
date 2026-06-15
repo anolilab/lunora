@@ -5,7 +5,7 @@ config for the parent repo. Checked into git so teammates inherit
 project context (auth shape, threat model, custom matchers); generated
 scan output is gitignored.
 
-Currently configured project: `cirrus` (target: `..`).
+Currently configured project: `lunora` (target: `..`).
 
 ## Setup
 
@@ -17,8 +17,8 @@ Currently configured project: `cirrus` (target: `..`).
    subscription. See
    `node_modules/deepsec/dist/docs/vercel-setup.md` after install.
 3. Open the parent repo in your coding agent (Claude Code, Cursor, …)
-   and have it follow `data/cirrus/SETUP.md` to fill in
-   `data/cirrus/INFO.md`.
+   and have it follow `data/lunora/SETUP.md` to fill in
+   `data/lunora/INFO.md`.
 
 ## Daily commands
 
@@ -31,10 +31,10 @@ pnpm deepsec export      --format md-dir --out ./findings
 
 `--project-id` is auto-resolved while there's only one project in
 `deepsec.config.ts`. Once you've added a second project, pass
-`--project-id cirrus` (or whichever id you want) explicitly.
+`--project-id lunora` (or whichever id you want) explicitly.
 
 `scan` is free (regex only). `process` is the AI stage (≈$0.30/file
-on Opus by default). Run state goes to `data/cirrus/`.
+on Opus by default). Run state goes to `data/lunora/`.
 
 ## Adding another project
 
@@ -52,7 +52,7 @@ in your agent to fill in INFO.md.
 
 ```
 deepsec.config.ts        Project list (one entry per scanned repo)
-data/cirrus/
+data/lunora/
   INFO.md                Repo context — checked into git, hand-curated
   SETUP.md               Agent setup prompt — checked in, deletable
   project.json           Generated (gitignored)
