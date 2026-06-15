@@ -170,6 +170,16 @@ interface StudioProps {
      * scheduler admin endpoint, so the tab works without extra wiring.
      */
     readonly scheduledLoad?: SchedulePanelProps["scheduledLoad"];
+
+    /**
+     * Enable the visual schema editor overlay on the schema diagram (add table /
+     * column / index, written back to `cirrus/schema.ts` + codegen). Off by default
+     * so the diagram stays read-only unless a host opts in. Like {@link
+     * StudioProps.dataEditable}, only the loopback-only dev hosts set this — the
+     * write path needs the project's filesystem + toolchain, so a static deploy
+     * leaves it off.
+     */
+    readonly schemaEditable?: boolean;
 }
 
 /** Props the inner shell renders with — everything except the i18n wiring. */
@@ -734,12 +744,12 @@ const RoutePending = (): ReactElement => (
  * `strict: false` because the generic tab routes don't declare a typed search
  * schema; the param is coerced to a string or dropped.
  */
-const SchemaRoutePanel = ({ initialShardKey }: { readonly initialShardKey?: string }): ReactElement => {
+const SchemaRoutePanel = ({ initialShardKey, schemaEditable }: { readonly initialShardKey?: string; readonly schemaEditable?: boolean }): ReactElement => {
     const search: Record<string, unknown> = useSearch({ strict: false });
     const { table } = search;
     const initialTable = typeof table === "string" ? table : undefined;
 
-    return <SchemaViewer initialShardKey={initialShardKey} initialTable={initialTable} />;
+    return <SchemaViewer initialShardKey={initialShardKey} initialTable={initialTable} schemaEditable={schemaEditable} />;
 };
 
 /** Sends unknown paths back to the Home overview. */
@@ -769,6 +779,7 @@ const buildRouter = ({
     openApiSpec,
     openRpcSpec,
     runAsIdentity = false,
+    schemaEditable = false,
     scheduledCancel,
     scheduledCron,
     scheduledLoad,
@@ -804,7 +815,7 @@ const buildRouter = ({
         realtime: <SubscriptionsPanel initialShardKey={initialShardKey} />,
         rls: <RlsPanel />,
         schedule: <SchedulePanel loadCronJobs={scheduledCron} scheduledCancel={scheduledCancel} scheduledLoad={scheduledLoad} />,
-        schema: <SchemaRoutePanel initialShardKey={initialShardKey} />,
+        schema: <SchemaRoutePanel initialShardKey={initialShardKey} schemaEditable={schemaEditable} />,
         security: <SecurityAdvisorPanel />,
         settings: <SettingsPanel initialShardKey={initialShardKey} />,
         sql: <SqlEditorPanel initialShardKey={initialShardKey} />,
@@ -864,6 +875,7 @@ const StudioShell = ({
     openApiSpec,
     openRpcSpec,
     runAsIdentity,
+    schemaEditable,
     scheduledCancel,
     scheduledCron,
     scheduledLoad,
@@ -881,11 +893,12 @@ const StudioShell = ({
                 openApiSpec,
                 openRpcSpec,
                 runAsIdentity,
+                schemaEditable,
                 scheduledCancel,
                 scheduledCron,
                 scheduledLoad,
             }),
-        [basePath, dataEditable, functions, initialShardKey, openApiSpec, openRpcSpec, runAsIdentity, scheduledCancel, scheduledCron, scheduledLoad],
+        [basePath, dataEditable, functions, initialShardKey, openApiSpec, openRpcSpec, runAsIdentity, schemaEditable, scheduledCancel, scheduledCron, scheduledLoad],
     );
 
     return <RouterProvider router={router} />;
@@ -911,6 +924,7 @@ export const Studio = ({
     openApiSpec,
     openRpcSpec,
     runAsIdentity,
+    schemaEditable,
     scheduledCancel,
     scheduledCron,
     scheduledLoad,
@@ -927,6 +941,7 @@ export const Studio = ({
             scheduledCancel={scheduledCancel}
             scheduledCron={scheduledCron}
             scheduledLoad={scheduledLoad}
+            schemaEditable={schemaEditable}
         />
     );
 

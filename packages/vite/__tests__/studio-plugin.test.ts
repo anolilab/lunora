@@ -187,6 +187,21 @@ describe("studioPlugin", () => {
         expect((end.mock.calls[0] as [string])[0]).toContain("loopback");
     });
 
+    it("403s the schema-edit endpoint on a non-loopback bind", () => {
+        expect.assertions(2);
+
+        // The schema-edit endpoint (plan 024) lives under `/__cirrus`, so it is
+        // gated by the same loopback check as the rest of the studio mount.
+        const middleware = installMiddleware("0.0.0.0");
+        const { response } = makeResponse();
+        const next = vi.fn<() => void>();
+
+        middleware({ url: `${STUDIO_PATH}/schema-edit` }, response, next);
+
+        expect(response.statusCode).toBe(403);
+        expect(next).not.toHaveBeenCalled();
+    });
+
     it.each(["localhost", "127.0.0.1", "::1", undefined, false])("serves the studio when host is %s", async (host) => {
         expect.assertions(2);
 

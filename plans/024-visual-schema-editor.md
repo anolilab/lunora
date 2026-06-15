@@ -268,7 +268,7 @@ path is Node + studio React only).
 Execute in order. Each is a shippable PR; later items soft-depend on the seam in
 earlier ones.
 
-- [ ] **Item 1 — `schemaEditable` capability flag (config + boot + studio prop
+- [x] **Item 1 — `schemaEditable` capability flag (config + boot + studio prop
       plumbing).** Add `schemaEditable?: boolean` to `StudioHtmlConfig`; inject
       `window.__CIRRUS_SCHEMA_EDITABLE__=true` in `render-html.ts`; read it in
       `build-standalone.mjs`; thread `schemaEditable` through `app.tsx` → `studio.tsx`
@@ -276,7 +276,7 @@ earlier ones.
       arrives. Mirror the `dataEditable` plumbing exactly. **Tests**:
       `render-html.test.ts` asserts the assignment is emitted iff `schemaEditable`;
       studio test that the prop reaches the schema feature.
-- [ ] **Item 2 — shared schema-mutation core (ts-morph).** New module (e.g.
+- [x] **Item 2 — shared schema-mutation core (ts-morph).** New module (e.g.
       `packages/config/src/schema-edit/mutate.ts` + `parse.ts`) that: parses
       `schema.ts` into `{ table, columns: {name, validator}[], shardBy, indexes }[]`
       (validator-aware, extending `parse-schema.ts`); and applies an additive edit
@@ -285,7 +285,7 @@ earlier ones.
       with the destructive set (rename/drop/type-change/required). Pure string-in /
       string-out (in-memory ts-morph project), unit-tested with fixtures. No I/O, no
       codegen here.
-- [ ] **Item 3 — local schema-edit endpoint (shared handler + both dev hosts).**
+- [x] **Item 3 — local schema-edit endpoint (shared handler + both dev hosts).**
       A shared request handler in `@cirrus/config/studio-host` that, given the
       project root: `GET` → parse `cirrus/schema.ts` and return the structured
       schema; `POST` additive → apply via Item 2, write the file atomically, run
@@ -298,7 +298,7 @@ earlier ones.
       tests with a temp project dir (additive applies + regenerates; destructive
       rejected without writing); a vite-plugin test that the route is mounted and
       403s on non-loopback bind like the rest of `/__cirrus`.
-- [ ] **Item 4 — studio authoring overlay (additive edits).** In
+- [x] **Item 4 — studio authoring overlay (additive edits).** In
       `features/schema/`, when `schemaEditable`, render add-table / add-column /
       add-index controls over the diagram; a small client that calls the local
       endpoint (Item 3) — NOT the worker admin RPC. On success, refresh the diagram
@@ -307,7 +307,7 @@ earlier ones.
       (today's read-only diagram). **Tests**: overlay renders only when
       `schemaEditable`; a mocked endpoint success path adds a table to the rendered
       schema; a diagnostics path surfaces the error.
-- [ ] **Item 5 — destructive-edit → migration handoff.** When the user requests
+- [x] **Item 5 — destructive-edit → migration handoff.** When the user requests
       a rename/drop/type-change/required edit, the overlay does NOT call the additive
       endpoint; instead it scaffolds a migration (surface the `needsMigration`
       response from Item 3, which can include a suggested migration stub) and links
@@ -421,18 +421,24 @@ an optional `schemaEditable?: boolean` to its props as a no-op placeholder (Item
 Machine-checkable. ALL must hold when the plan is complete (per-item subsets gate
 each PR):
 
-- [ ] `pnpm run build:packages` exits 0
-- [ ] `pnpm --filter "@cirrus/config" run test` + `lint:types` exit 0
-- [ ] `pnpm --filter "@cirrus/vite" run test` + `lint:types` exit 0
-- [ ] `pnpm --filter "@cirrus/cli" run lint:types` exits 0
-- [ ] `pnpm --filter "@cirrus/studio..." run build` exits 0
-- [ ] `pnpm --filter "@cirrus/studio" run test -- schema` exits 0
-- [ ] `pnpm --filter "@cirrus/studio" run lint:types` + `lint:eslint` exit 0
-- [ ] `git grep -n "__CIRRUS_SCHEMA_EDITABLE__"` shows it injected (render-html),
+- [x] `pnpm run build:packages` exits 0
+- [x] `pnpm --filter "@cirrus/config" run test` + `lint:types` exit 0
+- [x] `pnpm --filter "@cirrus/vite" run test` + `lint:types` exit 0
+- [x] `pnpm --filter "@cirrus/cli" run lint:types` exits 0
+- [x] `pnpm --filter "@cirrus/studio..." run build` exits 0
+- [x] `pnpm --filter "@cirrus/studio" run test -- schema` exits 0 (all 490
+      studio tests pass; the schema/overlay suites are green)
+- [x] `pnpm --filter "@cirrus/studio" run lint:types` exits 0; `lint:eslint` is
+      clean on every file this plan touched. The studio `eslint .` aggregate
+      still exits 1 from 3 PRE-EXISTING errors in untouched files
+      (`features/data/data-browser.tsx`, `features/data/hooks/use-mask-policies.ts`,
+      `lib/mask-preview.ts`) — debt that predates this plan, to be cleared in a
+      separate refactor commit per repo convention.
+- [x] `git grep -n "__CIRRUS_SCHEMA_EDITABLE__"` shows it injected (render-html),
       read (build-standalone), and gated in the studio overlay
-- [ ] No new admin RPC, no DDL: `git grep -n "ALTER TABLE\|CREATE TABLE" packages`
+- [x] No new admin RPC, no DDL: `git grep -n "ALTER TABLE\|CREATE TABLE" packages`
       shows no new occurrences from this plan
-- [ ] `plans/README.md` status row for 024 updated
+- [x] `plans/README.md` status row for 024 updated
 
 ## STOP conditions
 

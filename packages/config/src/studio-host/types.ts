@@ -29,6 +29,15 @@ export interface StudioHtmlConfig {
      * leaves it off so the control never renders.
      */
     readonly runAsIdentity?: boolean;
+
+    /**
+     * Enable the visual schema editor (add table / column / index, written back to
+     * `cirrus/schema.ts` + codegen). Injected as `window.__CIRRUS_SCHEMA_EDITABLE__`.
+     * Like {@link StudioHtmlConfig.dataEditable}, only the loopback-only dev hosts
+     * set this — editing source + running codegen needs the project's filesystem and
+     * toolchain, so a static deploy leaves it off and the diagram stays read-only.
+     */
+    readonly schemaEditable?: boolean;
     /** URL the studio bundle is served from (absolute, host-relative). */
     readonly scriptSrc: string;
     /** URL the compiled stylesheet is served from (absolute, host-relative). */

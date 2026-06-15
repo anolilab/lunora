@@ -15,4 +15,6 @@
 export { parseDevVariable, resolveAdminToken } from "./admin-token";
 export { default as loadStudioAssets, studioAssetsStamp } from "./assets";
 export { default as renderStudioHtml } from "./render-html";
+export type { SchemaEditRequest, SchemaEditResponse } from "./schema-edit-handler";
+export { handleSchemaEditRequest, SCHEMA_EDIT_ENDPOINT } from "./schema-edit-handler";
 export type { StudioAssets, StudioHtmlConfig, WarnLogger } from "./types";

@@ -33,7 +33,7 @@ const entry = [
     // Editing and the run-as tool are opt-in: the loopback dev hosts inject
     // `__CIRRUS_DATA_EDITABLE__` / `__CIRRUS_RUN_AS_IDENTITY__`, so a plain static
     // deploy stays read-only and can't forge an identity unless the embedder opts in.
-    "  studio: { dataEditable: g.__CIRRUS_DATA_EDITABLE__ === true, runAsIdentity: g.__CIRRUS_RUN_AS_IDENTITY__ === true },",
+    "  studio: { dataEditable: g.__CIRRUS_DATA_EDITABLE__ === true, runAsIdentity: g.__CIRRUS_RUN_AS_IDENTITY__ === true, schemaEditable: g.__CIRRUS_SCHEMA_EDITABLE__ === true },",
     // The loopback dev hosts inject `__CIRRUS_RULES_INSTALLED__=false` when the
     // project's agent skills are missing; absent (static deploy) means installed.
     "  rulesInstalled: g.__CIRRUS_RULES_INSTALLED__ !== false,",

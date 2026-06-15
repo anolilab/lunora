@@ -37,6 +37,17 @@ describe("renderStudioHtml", () => {
         expect(off).not.toContain("__CIRRUS_RUN_AS_IDENTITY__");
     });
 
+    it("injects the schema-editor flag only when schemaEditable is set", () => {
+        expect.assertions(2);
+
+        const editor = renderStudioHtml({ basePath: "/", schemaEditable: true, scriptSrc: "/studio.js", styleHref: "/styles.css" });
+        const off = renderStudioHtml({ basePath: "/", scriptSrc: "/studio.js", styleHref: "/styles.css" });
+
+        // eslint-disable-next-line no-secrets/no-secrets -- a static JS assignment string, not a credential
+        expect(editor).toContain("window.__CIRRUS_SCHEMA_EDITABLE__=true;");
+        expect(off).not.toContain("__CIRRUS_SCHEMA_EDITABLE__");
+    });
+
     it("injects the rules flag only when rulesInstalled is explicitly false", () => {
         expect.assertions(3);
 

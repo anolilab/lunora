@@ -1,4 +1,4 @@
-import type { ServerResponse } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 
 // Shared studio-hosting helpers from the internal `@cirrus/config` layer.
@@ -8,7 +8,7 @@ import type { AddressInfo } from "node:net";
 // lazily (and degrade gracefully when it isn't installed).
 import { detectAgentRules } from "@cirrus/config";
 import type { StudioAssets } from "@cirrus/config/studio-host";
-import { loadStudioAssets, renderStudioHtml, resolveAdminToken, studioAssetsStamp } from "@cirrus/config/studio-host";
+import { handleSchemaEditRequest, loadStudioAssets, renderStudioHtml, resolveAdminToken, SCHEMA_EDIT_ENDPOINT, studioAssetsStamp } from "@cirrus/config/studio-host";
 import type { Plugin, ViteDevServer } from "vite";
 
 /** Dev-server path the studio SPA is served from. */
@@ -25,6 +25,77 @@ const sendOk = (response: ServerResponse, body: Buffer | string, contentType: st
     response.statusCode = 200;
     response.setHeader("Content-Type", contentType);
     response.end(body);
+};
+
+/** Read a request body to a string, bounded so a runaway upload can't OOM dev. */
+const readBody = async (request: IncomingMessage): Promise<string> =>
+    await new Promise<string>((resolve, reject) => {
+        const chunks: Buffer[] = [];
+        let size = 0;
+
+        request.on("data", (chunk: Buffer) => {
+            size += chunk.length;
+
+            if (size > 1_000_000) {
+                reject(new Error("schema-edit body too large"));
+
+                return;
+            }
+
+            chunks.push(chunk);
+        });
+        request.on("end", () => {
+            resolve(Buffer.concat(chunks).toString("utf8"));
+        });
+        request.on("error", reject);
+    });
+
+/**
+ * Serve the local schema-edit endpoint (plan 024 Item 3): `GET` returns the
+ * parsed source schema; `POST` applies an additive edit + reruns codegen (or
+ * rejects a destructive edit with `needsMigration`). Local-dev-only — already
+ * loopback-gated by the caller, like the rest of `/__cirrus`.
+ */
+const serveSchemaEdit = (request: IncomingMessage, response: ServerResponse, projectRoot: string): void => {
+    const respond = (status: number, body: unknown): void => {
+        response.statusCode = status;
+        response.setHeader("Content-Type", "application/json; charset=utf-8");
+        response.end(JSON.stringify(body));
+    };
+
+    if (request.method === "GET") {
+        const result = handleSchemaEditRequest({ method: "GET", projectRoot });
+
+        respond(result.status, result.body);
+
+        return;
+    }
+
+    const handleBody = async (): Promise<void> => {
+        try {
+            const raw = await readBody(request);
+            let parsed: unknown;
+
+            try {
+                parsed = raw === "" ? undefined : JSON.parse(raw);
+            } catch {
+                respond(400, { error: "invalid-json", ok: false });
+
+                return;
+            }
+
+            const result = handleSchemaEditRequest({ body: parsed, method: request.method ?? "POST", projectRoot });
+
+            respond(result.status, result.body);
+        } catch (error: unknown) {
+            respond(500, { error: error instanceof Error ? error.message : String(error), ok: false });
+        }
+    };
+
+    handleBody().catch(() => {
+        // `handleBody` already responds on every error path; this guards against
+        // an unexpected throw so the promise never floats unhandled.
+    });
 };
 
 /**
@@ -76,12 +147,15 @@ const pathnameOf = (url: string): string => {
 const createStudioHandler = (
     server: ViteDevServer,
     isNonLoopbackBind: boolean,
-): ((request: { url?: string }, response: ServerResponse, next: () => void) => void) => {
+): ((request: IncomingMessage, response: ServerResponse, next: () => void) => void) => {
     let assets: StudioAssets | undefined;
     let assetsStamp: number | undefined;
     let html: string | undefined;
 
-    return (request: { url?: string }, response: ServerResponse, next: () => void): void => {
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime value can be undefined on a mocked server even though the type says string
+    const projectRoot = server.config.root ?? process.cwd();
+
+    return (request: IncomingMessage, response: ServerResponse, next: () => void): void => {
         const pathname = pathnameOf(request.url ?? "");
 
         // Own the mount and everything under it (`/__cirrus`, `/__cirrus/`,
@@ -98,6 +172,14 @@ const createStudioHandler = (
             response.statusCode = 403;
             response.setHeader("Content-Type", "text/plain");
             response.end("Cirrus studio is only available on loopback hosts in dev.");
+
+            return;
+        }
+
+        // Local schema-edit endpoint (plan 024). Loopback-gated above; never the
+        // worker. Intercept before the SPA fallback so it isn't shadowed.
+        if (pathname === SCHEMA_EDIT_ENDPOINT) {
+            serveSchemaEdit(request, response, projectRoot);
 
             return;
         }
@@ -131,19 +213,17 @@ const createStudioHandler = (
         }
 
         // Built once per dev session: the basepath is fixed, and the admin token
-        // is read from `.dev.vars` at startup. `config.root` is typed as a
-        // required string but is absent on mocked test servers — fall back to cwd.
-        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- runtime value can be undefined on a mocked server even though the type says string
-        const projectRoot = server.config.root ?? process.cwd();
-
+        // is read from `.dev.vars` at startup.
         html ??= renderStudioHtml({
             adminToken: resolveAdminToken(projectRoot),
             basePath: STUDIO_PATH,
             // Loopback-only dev route (it 403s on a non-loopback bind), so the
-            // developer owns the data — let them edit rows and run-as a user by default.
+            // developer owns the data — let them edit rows, run-as a user, and edit
+            // the schema by default.
             dataEditable: true,
             rulesInstalled: detectAgentRules(projectRoot).installed,
             runAsIdentity: true,
+            schemaEditable: true,
             scriptSrc: STUDIO_SCRIPT_PATH,
             styleHref: STUDIO_STYLE_PATH,
         });
