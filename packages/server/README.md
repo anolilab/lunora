@@ -77,10 +77,12 @@ export const list = query({
 });
 
 export const send = mutation({
-    args: { room: v.string(), body: v.string() },
-    handler: (ctx, { room, body }) => ctx.db.insert("messages", { room, body, ts: Date.now() }),
+    args: { room: v.string(), body: v.string(), ts: v.number() },
+    handler: (ctx, { room, body, ts }) => ctx.db.insert("messages", { room, body, ts }),
 });
 ```
+
+> **Determinism:** `query` and `mutation` handlers must be deterministic — they may be re-run on OCC retry or subscription re-evaluation. Compute time, randomness, and network results in an `action` (e.g. `Date.now()`, `crypto.randomUUID()`, `fetch`) and pass them into the mutation as arguments.
 
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/api/server)**.
 
