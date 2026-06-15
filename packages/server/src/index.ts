@@ -47,6 +47,8 @@ export type { Component, ComponentFunctions, DefineComponentOptions, DefinePlugi
 export { composePluginMiddleware, defineComponent, definePlugin, defineSchemaExtension, installPlugins, mergeSchemaExtension } from "./plugin";
 export type { DefinePresenceOptions, PresenceComponent, PresenceFunctions, PresenceMember } from "./presence";
 export { definePresence, PRESENCE_DEFAULT_TTL_MS, PRESENCE_TABLE, presenceExtension } from "./presence";
+export type { ProtectPublicOptions } from "./protect-public";
+export { protectPublic } from "./protect-public";
 export type { DefinePolicyInput, Permission, Policy, PolicyContext, PolicyDecision, PolicyOperation, RlsOptions, Role, WhereInput } from "./rls/index";
 export { definePermission, definePolicies, definePolicy, defineRole, rls } from "./rls/index";
 export type {
