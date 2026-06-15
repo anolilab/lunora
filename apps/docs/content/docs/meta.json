@@ -8,6 +8,7 @@
         "concepts/constraints",
         "concepts/queries-mutations",
         "concepts/realtime",
+        "concepts/offline-first",
         "concepts/sharding",
         "concepts/rls",
         "concepts/masking",

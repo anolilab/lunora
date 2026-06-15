@@ -145,6 +145,12 @@ const { id, transaction } = db.actions.messages({ channelId, text, userId });
 await transaction.isPersisted.promise;
 ```
 
+This is the same durable-outbox and reconciliation model `@lunora/client`
+exposes directly — see [Offline-first](/docs/concepts/offline-first) for the
+lower-level `persistence` + `queryCache` options, the service-worker app-shell
+recipe, and the connection-status APIs, if you want offline reads and writes
+without adopting the full TanStack DB collection layer.
+
 ## Scoped (sharded) collections
 
 A `scopeBy` field makes a collection re-pointable — for a [sharded](/docs/concepts/sharding)

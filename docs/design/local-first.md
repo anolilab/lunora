@@ -231,6 +231,21 @@ immediately while the socket reconnects.
   currently in-memory only) through the same adapter so a reload keeps causal
   read position.
 
+**Implemented (`@lunora/client`).** Shipped the `QueryCacheAdapter` (sibling to
+`PersistenceAdapter`) with in-memory and IndexedDB adapters (`query-cache.ts`):
+keyed by `functionPath::argsKey::shardKey`, persisting
+`{ identity, value, serverCursor, ts }`, LRU-capped by `ts`, sharing the
+`lunora` IndexedDB database (bumped to schema v2 alongside `offline-mutations`).
+`LunoraClient` hydrates on construct, seeds the first subscription's
+`lastValue`/`serverCursor` (identity-gated so a signed-out cache never leaks to
+a new session), debounces writes when a `data`/`delta` frame advances the value,
+advances + re-persists the cursor on a `resume` frame, sends the persisted
+`serverCursor` as `sinceSeq` on reconnect, and clears the cache on identity
+change. Opt-in via `queryCache?: QueryCacheAdapter | false` (default off).
+**Deferred:** persisting the D1 bookmark through the same adapter
+(read-your-writes across reload) — the query-value + cursor cache lands first;
+the bookmark is a separate causal-position concern tracked for a follow-up.
+
 ### Pillar 3 — Adapter parity + DX (`react`/`vue`/`solid`/`svelte`, docs)
 
 - Port `useConnectionStatus()` (React, `use-connection-status.ts`) to Vue
