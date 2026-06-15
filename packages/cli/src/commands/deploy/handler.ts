@@ -1,8 +1,8 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 import type { CodegenResult } from "@cirrus/codegen";
 import { discoverMigrations, runCodegen } from "@cirrus/codegen";
-import { discoverContainerInfo, findWranglerFile, inferCirrusBindings, readWranglerJsonc, reconcileWranglerBindings } from "@cirrus/config";
+import { DEV_VARS_FILE, discoverContainerInfo, findWranglerFile, inferCirrusBindings, parseDevVariableEntries, readWranglerJsonc, reconcileWranglerBindings } from "@cirrus/config";
 import { join } from "@visulima/path";
 import { Spinner } from "@visulima/spinner";
 import { Project } from "ts-morph";
@@ -265,6 +265,44 @@ const provisionBindings = async (cwd: string, logger: Logger): Promise<void> => 
 
         logger.warn(`binding inference skipped: ${message}`);
     }
+};
+
+/**
+ * Print a NON-BLOCKING reminder that `wrangler deploy` does not push secrets.
+ * `cirrus deploy` ships code + bindings but never uploads `.dev.vars` values —
+ * those are pushed separately via `cirrus env push`. So a user who edited
+ * `.dev.vars` and then deployed would otherwise be left with stale/missing
+ * deployed secrets and no signal that anything drifted (Supabase #45242).
+ *
+ * This only fires when a local `.dev.vars` actually exists and carries at least
+ * one key — there's nothing to remind about otherwise. It is a warning only and
+ * never aborts the deploy; it does not prompt, so it's safe under
+ * `--yes`/non-interactive flows.
+ */
+const warnDevVariablesNotPushed = (cwd: string, logger: Logger): void => {
+    const devVariablesPath = join(cwd, DEV_VARS_FILE);
+
+    if (!existsSync(devVariablesPath)) {
+        return;
+    }
+
+    let keyCount: number;
+
+    try {
+        keyCount = parseDevVariableEntries(readFileSync(devVariablesPath, "utf8")).length;
+    } catch {
+        // A read/parse failure here must never block a deploy — skip the reminder.
+        return;
+    }
+
+    if (keyCount === 0) {
+        return;
+    }
+
+    logger.warn(
+        `Note: \`cirrus deploy\` does not push secrets. ${DEV_VARS_FILE} has ${String(keyCount)} key(s); ` +
+            `if you changed them, run \`cirrus env push --yes\` to update the deployed secrets.`,
+    );
 };
 
 /**
@@ -532,6 +570,11 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
             validation,
         };
     }
+
+    // Non-blocking secret-drift reminder: `wrangler deploy` never pushes
+    // `.dev.vars` values, so an edited `.dev.vars` would otherwise leave the
+    // deployed worker with stale/missing secrets silently (Supabase #45242).
+    warnDevVariablesNotPushed(cwd, options.logger);
 
     const args = ["exec", "wrangler", "deploy"];
 
