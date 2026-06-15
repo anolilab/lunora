@@ -11,7 +11,6 @@ export type {
     AuthUser,
     BackupManifest,
     BackupStore,
-    LunoraWorker,
     CronHandler,
     CronJobDispatch,
     CronJobInfo,
@@ -31,6 +30,7 @@ export type {
     HttpActionLike,
     HttpRouterLike,
     ListAuthUsersOptions,
+    LunoraWorker,
     Route,
     RpcContext,
     RpcEnvelope,
@@ -95,5 +95,7 @@ export type {
 export { createQueryCoordinator, createStaticShardRegistry, mergeStrategyForAggregate } from "./query-coordinator";
 export type { ResolvedShard, ShardNamespaceLike } from "./resolve-shard";
 export { resolveShard } from "./resolve-shard";
+export type { CorsOptions, CsrfOptions, ResolvedSecurity, SecurityHeadersOptions, SecurityOptions } from "./security-headers";
+export { decorateResponse, enforceOrigin, handleCorsPreflight, resolveSecurity } from "./security-headers";
 
 export const VERSION: string = "0.0.0";

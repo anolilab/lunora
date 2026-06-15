@@ -117,7 +117,9 @@ describe("serverQuery — in-process fast-path (PLAN4 §2.2 / §5.3)", () => {
 
         const worker = createWorker({ resolveIdentity, shardDO: shard.namespace });
 
-        const authedHeaders = { cookie: "session=abc" };
+        // A browser POST always carries a same-origin `Origin`; include it so
+        // the secure-by-default CSRF guard admits this cookie-authenticated RPC.
+        const authedHeaders = { cookie: "session=abc", origin: "https://app.example" };
 
         const httpRes = await worker.fetch(rpcRequest({ args: {}, functionPath: "messages:list" }, authedHeaders), {}, fakeContext);
         const httpBody = await httpRes.text();

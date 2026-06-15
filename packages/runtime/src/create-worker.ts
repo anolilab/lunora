@@ -15,6 +15,8 @@ import type { FanOutSpec, QueryCoordinator } from "./query-coordinator";
 import type { ResolvedShard, ShardNamespaceLike } from "./resolve-shard";
 import { resolveShard } from "./resolve-shard";
 import { buildScheduledAdminRoutes } from "./scheduled-admin-routes";
+import type { SecurityOptions } from "./security-headers";
+import { decorateResponse, enforceOrigin, handleCorsPreflight, resolveSecurity } from "./security-headers";
 import { buildStorageAdminRoutes } from "./storage-admin-routes";
 import { buildVectorAdminRoutes } from "./vector-admin-routes";
 
@@ -709,6 +711,16 @@ interface WorkerOptions {
      * `instanceName` passed to `createScheduler` (both default to `default`).
      */
     schedulerInstanceName?: string;
+
+    /**
+     * Secure-by-default HTTP edge applied to every response the worker emits
+     * (RPC, auth, admin, `httpRoute` handlers, SSR fallback): baseline security
+     * headers, deny-by-default CORS, and a CSRF/origin guard. Every layer is on
+     * by default and individually opt-out — see {@link SecurityOptions}. Omit it
+     * to take the hardened defaults; set a field to `false` to relax that layer
+     * (e.g. `security: { cors: { allowedOrigins: ["https://app.example.com"] } }`).
+     */
+    security?: SecurityOptions;
 
     /** Namespace binding for the shard Durable Object (typically `env.SHARD`). */
     shardDO: ShardNamespaceLike;
@@ -2217,6 +2229,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }),
     };
 
+    // Resolve the secure-by-default HTTP edge once at construction. Throws here
+    // (rather than per request) on an unenforceable combination such as a
+    // wildcard CORS origin paired with credentials.
+    const resolvedSecurity = resolveSecurity(options.security);
+
     const handle = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<Response> => {
         const url = new URL(request.url);
 
@@ -2281,10 +2298,29 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                 context.passThroughOnException();
             }
 
+            // CORS preflight is answered up front for allowlisted origins; its
+            // own response already carries the `Access-Control-Allow-*` headers,
+            // so it skips the security-header decoration below.
+            const preflight = handleCorsPreflight(request, resolvedSecurity);
+
+            if (preflight) {
+                return preflight;
+            }
+
+            // CSRF/origin guard: reject unsafe cross-origin cookie requests
+            // before any handler (and thus any state change) runs.
+            const blocked = enforceOrigin(request, resolvedSecurity);
+
+            if (blocked) {
+                return decorateResponse(blocked, request, resolvedSecurity);
+            }
+
             try {
-                return await handle(request, env, context);
+                const response = await handle(request, env, context);
+
+                return decorateResponse(response, request, resolvedSecurity);
             } catch (error: unknown) {
-                return toErrorResponse(error);
+                return decorateResponse(toErrorResponse(error), request, resolvedSecurity);
             }
         },
         async scheduled(controller, env, context) {
