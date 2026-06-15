@@ -1,7 +1,7 @@
 import type { ColumnMetaLike, SchemaLike, ValidatorLike } from "@cirrus/do";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { listGlobalTables, readGlobalTablePage } from "../src/introspect";
+import { facetGlobalColumn, listGlobalTables, readGlobalTablePage } from "../src/introspect";
 import createD1Exec from "./_helpers/node-sqlite-d1";
 
 const col = (kind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike => {
@@ -135,6 +135,98 @@ describe("d1 introspect", () => {
             expect.assertions(1);
 
             await expect(readGlobalTablePage(harness.exec, schema, { table: "_cf_KV" })).rejects.toMatchObject({ code: "UNKNOWN_TABLE" });
+        });
+
+        it("AND-narrows the page by eq filters (a facet drill-down)", async () => {
+            expect.assertions(3);
+
+            const page = await readGlobalTablePage(harness.exec, schema, { filters: [{ column: "name", value: "Acme" }], table: "organizations" });
+
+            expect(page.total).toBe(1);
+            expect(page.rows).toHaveLength(1);
+            expect(page.rows[0]).toMatchObject({ _id: "o1", name: "Acme" });
+        });
+
+        it("maps a displayed `_id` filter to the physical `id` column", async () => {
+            expect.assertions(2);
+
+            const page = await readGlobalTablePage(harness.exec, schema, { filters: [{ column: "_id", value: "o2" }], table: "organizations" });
+
+            expect(page.total).toBe(1);
+            expect(page.rows[0]).toMatchObject({ _id: "o2", name: "Globex" });
+        });
+
+        it("rejects an eq filter on an unknown column", async () => {
+            expect.assertions(1);
+
+            await expect(
+                readGlobalTablePage(harness.exec, schema, { filters: [{ column: "nope", value: "x" }], table: "organizations" }),
+            ).rejects.toMatchObject({ code: "UNKNOWN_COLUMN" });
+        });
+    });
+
+    describe("facetGlobalColumn", () => {
+        it("summarises a column's distinct values with their counts, ordered by frequency", async () => {
+            expect.assertions(2);
+
+            await harness.exec.run(`INSERT INTO "organizations" VALUES ('o3', 3, 'Acme', 1)`, []);
+
+            const facet = await facetGlobalColumn(harness.exec, schema, { column: "name", table: "organizations" });
+
+            expect(facet.truncated).toBe(false);
+            expect(facet.values).toEqual([
+                { count: 2, value: "Acme" },
+                { count: 1, value: "Globex" },
+            ]);
+        });
+
+        it("returns the raw stored value (boolean as 0/1) so a click feeds straight back as an eq filter", async () => {
+            expect.assertions(1);
+
+            const facet = await facetGlobalColumn(harness.exec, schema, { column: "active", table: "organizations" });
+
+            // Two distinct stored values, one row each; raw 0/1, not decoded true/false.
+            expect(facet.values).toEqual(expect.arrayContaining([{ count: 1, value: 1 }, { count: 1, value: 0 }]));
+        });
+
+        it("reflects the active view (eq filters)", async () => {
+            expect.assertions(1);
+
+            await harness.exec.run(`INSERT INTO "organizations" VALUES ('o3', 3, 'Acme', 0)`, []);
+
+            const facet = await facetGlobalColumn(harness.exec, schema, { column: "active", filters: [{ column: "name", value: "Acme" }], table: "organizations" });
+
+            expect(facet.values).toEqual(expect.arrayContaining([{ count: 1, value: 1 }, { count: 1, value: 0 }]));
+        });
+
+        it("caps distinct values at the limit and reports truncation", async () => {
+            expect.assertions(2);
+
+            const facet = await facetGlobalColumn(harness.exec, schema, { column: "name", limit: 1, table: "organizations" });
+
+            expect(facet.values).toHaveLength(1);
+            expect(facet.truncated).toBe(true);
+        });
+
+        it("collapses a sensitive external column to one redacted bucket", async () => {
+            expect.assertions(1);
+
+            const facet = await facetGlobalColumn(harness.exec, schema, { column: "passwordHash", table: "user" });
+
+            // Never groups by the real secret — one masked bucket counting the rows.
+            expect(facet.values).toEqual([{ count: 1, value: "•••" }]);
+        });
+
+        it("rejects an unknown column", async () => {
+            expect.assertions(1);
+
+            await expect(facetGlobalColumn(harness.exec, schema, { column: "nope", table: "organizations" })).rejects.toMatchObject({ code: "UNKNOWN_COLUMN" });
+        });
+
+        it("rejects an internal table", async () => {
+            expect.assertions(1);
+
+            await expect(facetGlobalColumn(harness.exec, schema, { column: "k", table: "_cf_KV" })).rejects.toMatchObject({ code: "UNKNOWN_TABLE" });
         });
     });
 });

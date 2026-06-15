@@ -2,7 +2,7 @@ import type { CirrusAuth, CirrusAuthOptions } from "@cirrus/auth";
 import { cirrusD1Adapter, createAuth, createAuthAdmin, ensureMigrated, handleAuthRequest } from "@cirrus/auth";
 import { admin, organization, passkey, twoFactor } from "@cirrus/auth/plugins";
 import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@cirrus/d1";
-import { createD1CtxDb, listGlobalTables, readGlobalTablePage } from "@cirrus/d1";
+import { createD1CtxDb, facetGlobalColumn, listGlobalTables, readGlobalTablePage } from "@cirrus/d1";
 import { createMailerFromEnv } from "@cirrus/mail";
 import type { ExecutionContextLike, GlobalIntrospector, ScheduledControllerLike, ShardNamespaceLike } from "@cirrus/runtime";
 import { createCrossShardRelationCapabilities, createWorker } from "@cirrus/runtime";
@@ -45,6 +45,7 @@ const d1Introspector = (database: D1DatabaseLike): GlobalIntrospector => {
     const exec = buildExec(database);
 
     return {
+        facetColumn: (options) => facetGlobalColumn(exec, schema as never, options),
         listTables: () => listGlobalTables(exec, schema as never),
         readTablePage: (options) => readGlobalTablePage(exec, schema as never, options),
     };

@@ -6,6 +6,8 @@ import type {
     CronJobInfo,
     FunctionDescriptor,
     FunctionReference,
+    GlobalFacetResult,
+    GlobalFilterClause,
     GlobalTableInfo,
     GlobalTablePage,
     ScheduleRecord,
@@ -32,6 +34,7 @@ interface MockClientHooks {
     emitError: (reference: string, message: string) => void;
     /** Push a job list to every live `subscribeScheduledJobs` subscriber. */
     emitJobs: (jobs: ScheduleRecord[]) => void;
+    facetGlobalColumn: ReturnType<typeof vi.fn>;
     fetchOpenApi: ReturnType<typeof vi.fn>;
     fetchOpenRpc: ReturnType<typeof vi.fn>;
     getAuthCapabilities: ReturnType<typeof vi.fn>;
@@ -91,6 +94,7 @@ const makeMethod = (impl?: Impl): ReturnType<typeof vi.fn> =>
 interface MockClientImpls {
     action?: Impl;
     cancelScheduledJob?: (id: string) => { cancelled: boolean };
+    facetGlobalColumn?: (options: { column: string; filters?: GlobalFilterClause[]; limit?: number; table: string }) => GlobalFacetResult;
     fetchOpenApi?: () => Record<string, unknown>;
     fetchOpenRpc?: () => Record<string, unknown>;
     getCronJobs?: () => CronJobInfo[];
@@ -105,7 +109,7 @@ interface MockClientImpls {
     mutation?: Impl;
     query?: Impl;
     queryVectorIndex?: (options: { name: string; text: string; topK?: number }) => VectorQueryMatch[];
-    readGlobalTablePage?: (options: { limit?: number; offset?: number; table: string }) => GlobalTablePage;
+    readGlobalTablePage?: (options: { filters?: GlobalFilterClause[]; limit?: number; offset?: number; table: string }) => GlobalTablePage;
     shardTraffic?: (table: string) => ShardTrafficResult;
     signedStorageUrl?: (key: string) => string;
 }
@@ -145,8 +149,13 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
     const queryVectorIndex = vi.fn<(options: { name: string; text: string; topK?: number }) => Promise<VectorQueryMatch[]>>(
         async (options: { name: string; text: string; topK?: number }) => impls.queryVectorIndex?.(options) ?? [],
     );
-    const readGlobalTablePage = vi.fn<(options: { limit?: number; offset?: number; table: string }) => Promise<GlobalTablePage>>(
-        async (options: { limit?: number; offset?: number; table: string }) => impls.readGlobalTablePage?.(options) ?? { columns: [], rows: [], total: 0 },
+    const readGlobalTablePage = vi.fn<(options: { filters?: GlobalFilterClause[]; limit?: number; offset?: number; table: string }) => Promise<GlobalTablePage>>(
+        async (options: { filters?: GlobalFilterClause[]; limit?: number; offset?: number; table: string }) =>
+            impls.readGlobalTablePage?.(options) ?? { columns: [], rows: [], total: 0 },
+    );
+    const facetGlobalColumn = vi.fn<(options: { column: string; filters?: GlobalFilterClause[]; limit?: number; table: string }) => Promise<GlobalFacetResult>>(
+        async (options: { column: string; filters?: GlobalFilterClause[]; limit?: number; table: string }) =>
+            impls.facetGlobalColumn?.(options) ?? { truncated: false, values: [] },
     );
     const listAuthUsers = vi.fn<(options?: ListAuthUsersOptions) => Promise<AuthPage<AuthUser>>>(
         async (options: ListAuthUsersOptions = {}) => impls.listAuthUsers?.(options) ?? { rows: [], total: 0 },
@@ -281,6 +290,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         action,
         cancelScheduledJob,
         deleteStorageObject,
+        facetGlobalColumn,
         fetchOpenApi,
         fetchOpenRpc,
         getCronJobs,
@@ -312,6 +322,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         emit,
         emitError,
         emitJobs,
+        facetGlobalColumn,
         fetchOpenApi,
         fetchOpenRpc,
         getCronJobs,

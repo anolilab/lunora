@@ -416,6 +416,28 @@ export interface GlobalTablePage {
     total: number;
 }
 
+/**
+ * One equality constraint a facet-value click adds to the global browser's view
+ * (`column = value`). `value` is the raw stored scalar the facet returned, sent
+ * as-is and bound server-side, so it never injects SQL.
+ */
+export interface GlobalFilterClause {
+    column: string;
+    value: unknown;
+}
+
+/** One distinct value of a faceted global column with its row count, from `/_cirrus/admin/global/facet`. */
+export interface GlobalFacetValue {
+    count: number;
+    value: unknown;
+}
+
+/** Per-column distinct-value summary for the global browser, from `/_cirrus/admin/global/facet`. */
+export interface GlobalFacetResult {
+    truncated: boolean;
+    values: GlobalFacetValue[];
+}
+
 /** A nullable timestamp field as better-auth serializes it: epoch-ms, ISO string, or null. */
 export type NullableTimestamp = null | number | string;
 

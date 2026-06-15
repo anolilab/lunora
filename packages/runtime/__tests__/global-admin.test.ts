@@ -22,9 +22,11 @@ const ADMIN_TOKEN = "admin-bear";
 
 const TABLES = [{ name: "organizations", rowCount: 2 }];
 const PAGE = { columns: ["_id", "name"], rows: [{ _id: "o1", name: "Acme" }], total: 2 };
+const FACET = { truncated: false, values: [{ count: 2, value: "Acme" }] };
 
 const introspector = (): GlobalIntrospector => {
     return {
+        facetColumn: vi.fn<GlobalIntrospector["facetColumn"]>(async () => FACET),
         listTables: vi.fn<GlobalIntrospector["listTables"]>(async () => TABLES),
         readTablePage: vi.fn<GlobalIntrospector["readTablePage"]>(async () => PAGE),
     };
@@ -101,6 +103,64 @@ describe("createWorker — global introspection endpoints", () => {
 
         const response = await worker.fetch(
             new Request("https://app.example/_cirrus/admin/global/table", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(400);
+    });
+
+    it("table parses the JSON `filters` param into eq clauses", async () => {
+        expect.assertions(2);
+
+        const intro = introspector();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, globalIntrospector: intro, shardDO: noopNamespace });
+        const filters = encodeURIComponent(JSON.stringify([{ column: "name", value: "Acme" }]));
+
+        const response = await worker.fetch(
+            new Request(`https://app.example/_cirrus/admin/global/table?table=organizations&filters=${filters}`, {
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "GET",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+        expect(intro.readTablePage).toHaveBeenCalledWith({ filters: [{ column: "name", value: "Acme" }], table: "organizations" });
+    });
+
+    it("facet forwards table / column / filters and returns the summary", async () => {
+        expect.assertions(3);
+
+        const intro = introspector();
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, globalIntrospector: intro, shardDO: noopNamespace });
+        const filters = encodeURIComponent(JSON.stringify([{ column: "name", value: "Acme" }]));
+
+        const response = await worker.fetch(
+            new Request(`https://app.example/_cirrus/admin/global/facet?table=organizations&column=name&limit=5&filters=${filters}`, {
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "GET",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(response.status).toBe(200);
+        await expect(response.json()).resolves.toEqual(FACET);
+        expect(intro.facetColumn).toHaveBeenCalledWith({ column: "name", filters: [{ column: "name", value: "Acme" }], limit: 5, table: "organizations" });
+    });
+
+    it("facet rejects a missing `column` param (400)", async () => {
+        expect.assertions(1);
+
+        const worker = createWorker({ adminToken: ADMIN_TOKEN, globalIntrospector: introspector(), shardDO: noopNamespace });
+
+        const response = await worker.fetch(
+            new Request("https://app.example/_cirrus/admin/global/facet?table=organizations", {
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "GET",
+            }),
             {},
             fakeContext,
         );

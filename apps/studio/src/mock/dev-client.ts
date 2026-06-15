@@ -519,6 +519,21 @@ const createDevMockClient = (): CirrusClient =>
                 total: 12,
             };
         },
+        facetGlobalColumn: async (options: { column: string }): Promise<unknown> => {
+            const byColumn: Record<string, { count: number; value: unknown }[]> = {
+                enabled: [
+                    { count: 7, value: true },
+                    { count: 5, value: false },
+                ],
+                rollout: [
+                    { count: 5, value: 0 },
+                    { count: 4, value: 100 },
+                    { count: 3, value: 50 },
+                ],
+            };
+
+            return { truncated: false, values: byColumn[options.column] ?? [] };
+        },
         cancelAuthOrgInvitation: async (): Promise<void> => {},
         deleteAuthPasskey: async (): Promise<void> => {},
         disableAuthTwoFactor: async (): Promise<void> => {},

@@ -1,6 +1,6 @@
-import type { GlobalTableInfo, GlobalTablePage } from "@cirrus/client";
+import type { GlobalFacetResult, GlobalFilterClause, GlobalTableInfo, GlobalTablePage } from "@cirrus/client";
 import { useCirrus } from "@cirrus/react";
-import type { ReactElement, ReactNode } from "react";
+import type { MouseEvent, ReactElement, ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { EmptyState } from "../../components/ui/empty-state";
@@ -9,8 +9,10 @@ import { useAutoRefresh } from "../../hooks/use-auto-refresh";
 import { useT } from "../../i18n/i18n-context";
 import { CLOUDFLARE_D1_URL } from "../../lib/cf-links";
 import { errorMessage, fireAndForget } from "../../lib/internal";
+import DataFacets from "./data-facets";
 import { CellValue, GridContainer } from "./data-grid";
 import GridPagination from "./grid-pagination";
+import type { FacetState } from "./hooks/use-data-browser";
 import { TableListSidebar } from "./table-list-sidebar";
 
 interface GlobalDataBrowserProps {
@@ -44,6 +46,9 @@ const DEFAULT_PAGE_SIZE = 50;
 /** Hoisted empty table list — a stable reference for the "no tables yet" sidebar (avoids a fresh `[]` literal in JSX). */
 const NO_TABLES: ReadonlyArray<GlobalTableInfo> = [];
 
+/** Hoisted empty column list — a stable `DataFacets` fallback before a page loads (avoids a fresh `[]` literal in JSX). */
+const NO_COLUMNS: ReadonlyArray<string> = [];
+
 /**
  * A stable React key for a global-table row. `.global()` docs carry an `_id`
  * primary key; the positional fallback only applies to the rare idless page.
@@ -52,6 +57,24 @@ const rowKey = (row: Record<string, unknown>, index: number): string => {
     const id = row["_id"];
 
     return typeof id === "string" || typeof id === "number" ? String(id) : `row-${index.toString()}`;
+};
+
+/** Render a facet/filter value for a removable chip, distinguishing NULL and the empty string from a real value. */
+const chipValue = (value: unknown): string => {
+    if (value === null || value === undefined) {
+        return "∅";
+    }
+
+    if (value === "") {
+        return "(empty)";
+    }
+
+    if (typeof value === "object") {
+        return JSON.stringify(value);
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string -- non-object primitives stringify meaningfully; objects are handled above.
+    return String(value);
 };
 
 /**
@@ -83,6 +106,22 @@ export const GlobalDataBrowser = ({
     const [page, setPage] = useState<GlobalTablePage | null>(null);
     const [pageError, setPageError] = useState<null | string>(null);
 
+    // Active drill-down: the `column = value` eq constraints a facet-value click
+    // adds. Unlike the shard browser there's no free-form filter bar — these come
+    // only from facet clicks (and their removable chips). Mirrored into a ref so the
+    // page/facet fetches and the poll tick read the latest set without re-binding.
+    const [filters, setFilters] = useState<GlobalFilterClause[]>([]);
+    const filtersRef = useRef(filters);
+    filtersRef.current = filters;
+
+    // Datasette-style per-column value/count summaries the operator has toggled on.
+    // Opt-in per column (faceting a wide column is costly); each reflects the active
+    // view (the same filters the grid is showing). Mirrored into a ref so the
+    // filter-mutation handlers and poll tick can refetch the open ones.
+    const [facets, setFacets] = useState<Record<string, FacetState>>({});
+    const facetsRef = useRef(facets);
+    facetsRef.current = facets;
+
     const fetchTables = useCallback(async (): Promise<void> => {
         setTablesError(null);
 
@@ -95,11 +134,11 @@ export const GlobalDataBrowser = ({
     }, [client]);
 
     const fetchPage = useCallback(
-        async (table: string, nextOffset: number, limit: number = pageSize): Promise<void> => {
+        async (table: string, nextOffset: number, limit: number = pageSize, activeFilters: GlobalFilterClause[] = filtersRef.current): Promise<void> => {
             setPageError(null);
 
             try {
-                const result = await client.readGlobalTablePage({ limit, offset: nextOffset, table });
+                const result = await client.readGlobalTablePage({ filters: activeFilters, limit, offset: nextOffset, table });
 
                 setPage(result);
                 setOffset(nextOffset);
@@ -109,6 +148,34 @@ export const GlobalDataBrowser = ({
             }
         },
         [client, pageSize],
+    );
+
+    // Fetch one column's facet summary over the active view. `GlobalFacetResult` is
+    // structurally the studio's `FacetResult`, so it drops straight into `FacetState`.
+    const fetchFacet = useCallback(
+        async (table: string, column: string, activeFilters: GlobalFilterClause[]): Promise<void> => {
+            setFacets((current) => (column in current ? { ...current, [column]: { error: null, loading: true, result: current[column]?.result ?? null } } : current));
+
+            try {
+                const result: GlobalFacetResult = await client.facetGlobalColumn({ column, filters: activeFilters, table });
+
+                setFacets((current) => (column in current ? { ...current, [column]: { error: null, loading: false, result } } : current));
+            } catch (error) {
+                setFacets((current) => (column in current ? { ...current, [column]: { error: errorMessage(error), loading: false, result: null } } : current));
+            }
+        },
+        [client],
+    );
+
+    // Refetch every toggled-on facet for the active view — called after a filter
+    // changes (and on each poll tick) so the summaries track the previewed rows.
+    const refetchFacets = useCallback(
+        (table: string, activeFilters: GlobalFilterClause[]): void => {
+            for (const column of Object.keys(facetsRef.current)) {
+                fireAndForget(fetchFacet(table, column, activeFilters));
+            }
+        },
+        [fetchFacet],
     );
 
     useEffect(() => {
@@ -124,6 +191,7 @@ export const GlobalDataBrowser = ({
 
         if (selectedTable !== null) {
             fireAndForget(fetchPage(selectedTable, offset));
+            refetchFacets(selectedTable, filtersRef.current);
         }
     }, true);
 
@@ -137,11 +205,68 @@ export const GlobalDataBrowser = ({
         (table: string): void => {
             setSelectedTable(table);
             appliedInitialTable.current = table;
-            fireAndForget(fetchPage(table, 0));
+            // A fresh table means the previous drill-down filters and facets no longer apply.
+            setFilters([]);
+            filtersRef.current = [];
+            setFacets({});
+            fireAndForget(fetchPage(table, 0, pageSize, []));
             // Mirror the selection to the URL so it's shareable and back/forward works.
             onSelectTable?.(table);
         },
-        [fetchPage, onSelectTable],
+        [fetchPage, onSelectTable, pageSize],
+    );
+
+    // Toggle a column into / out of the facet sidebar. Turning it on seeds a loading
+    // slot and fetches its summary for the active view; turning it off drops it.
+    const onToggleFacet = useCallback(
+        (column: string): void => {
+            setFacets((current) => {
+                if (column in current) {
+                    return Object.fromEntries(Object.entries(current).filter(([name]) => name !== column));
+                }
+
+                if (selectedTable !== null) {
+                    fireAndForget(fetchFacet(selectedTable, column, filtersRef.current));
+                }
+
+                return { ...current, [column]: { error: null, loading: true, result: null } };
+            });
+        },
+        [fetchFacet, selectedTable],
+    );
+
+    // Apply a new filter set: re-read the first page and refetch the open facets so
+    // both reflect the drill-down. `next` is passed explicitly (state is async).
+    const applyFilters = useCallback(
+        (next: GlobalFilterClause[]): void => {
+            setFilters(next);
+            filtersRef.current = next;
+
+            if (selectedTable !== null) {
+                fireAndForget(fetchPage(selectedTable, 0, pageSize, next));
+                refetchFacets(selectedTable, next);
+            }
+        },
+        [fetchPage, pageSize, refetchFacets, selectedTable],
+    );
+
+    // Clicking a facet value adds an `eq` filter for that column/value, narrowing the
+    // view. Replaces any existing clause for the same column so repeated clicks don't stack.
+    const onFacetFilter = useCallback(
+        (column: string, value: unknown): void => {
+            applyFilters([...filtersRef.current.filter((clause) => clause.column !== column), { column, value }]);
+        },
+        [applyFilters],
+    );
+
+    // Remove one active drill-down filter (its chip's ✕).
+    const removeFilter = useCallback(
+        (event: MouseEvent<HTMLButtonElement>): void => {
+            const index = Number(event.currentTarget.dataset["index"]);
+
+            applyFilters(filtersRef.current.filter((_, position) => position !== index));
+        },
+        [applyFilters],
     );
 
     // Reconcile the `initialTable` the Table editor hands us via the URL into the
@@ -290,6 +415,32 @@ export const GlobalDataBrowser = ({
 
                 {page !== null && (
                     <div className="flex min-h-0 flex-1 flex-col" data-testid="gdb-page">
+                        {filters.length > 0 && (
+                            <div className="flex shrink-0 flex-wrap items-center gap-1.5 border-b border-border px-4 py-2 text-xs" data-testid="gdb-filters">
+                                {filters.map((filter, index) => (
+                                    <span
+                                        className="inline-flex items-center gap-1 rounded border border-border bg-muted px-1.5 py-0.5"
+                                        data-testid="gdb-filter-chip"
+                                        key={`${filter.column}:${chipValue(filter.value)}`}
+                                    >
+                                        <span className="font-medium text-foreground">{filter.column}</span>
+                                        <span className="text-muted-foreground">=</span>
+                                        <span className="font-mono text-foreground">{chipValue(filter.value)}</span>
+                                        <button
+                                            aria-label={t("Remove filter")}
+                                            className="ml-0.5 text-muted-foreground hover:text-foreground"
+                                            data-index={index}
+                                            data-testid="gdb-filter-remove"
+                                            onClick={removeFilter}
+                                            type="button"
+                                        >
+                                            ✕
+                                        </button>
+                                    </span>
+                                ))}
+                            </div>
+                        )}
+
                         <GridContainer layout="fill">
                             <div className="min-h-0 flex-1 overflow-auto">
                                 <Table data-testid="gdb-rows">
@@ -333,6 +484,8 @@ export const GlobalDataBrowser = ({
                     </div>
                 )}
             </div>
+
+            <DataFacets columns={page?.columns ?? NO_COLUMNS} facets={facets} onFacetFilter={onFacetFilter} onToggleFacet={onToggleFacet} />
         </div>
     );
 };

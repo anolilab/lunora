@@ -55,14 +55,66 @@ interface GlobalTablePage {
     total: number;
 }
 
+/**
+ * One equality constraint a facet-value click adds to the global browser's view:
+ * `column = value` (or `column IS NULL` when `value` is nullish). `column` is a
+ * displayed column name, validated against the table's columns and mapped to its
+ * physical column (`_id` → `id`) before it is quoted; `value` is the **raw stored
+ * value** the facet returned (a SQLite scalar), bound as a parameter and never
+ * interpolated. AND-combined with the other clauses.
+ */
+interface GlobalFilterClause {
+    column: string;
+    value: unknown;
+}
+
 interface ReadGlobalTablePageOptions {
+    filters?: GlobalFilterClause[];
     limit?: number;
     offset?: number;
     table: string;
 }
 
+/**
+ * Options for {@link facetGlobalColumn} — the read-only "what values does this
+ * column hold?" summary for the global (D1) browser. `column` is the displayed
+ * column to group by (validated and mapped to its physical column, never
+ * interpolated); `filters` mirrors {@link ReadGlobalTablePageOptions}'s eq
+ * constraints so the facet reflects the **active view** (the same rows the
+ * browser is previewing); `limit` caps the distinct values returned (clamped).
+ */
+interface FacetGlobalColumnOptions {
+    column: string;
+    filters?: GlobalFilterClause[];
+    limit?: number;
+    table: string;
+}
+
+/** One distinct value of a faceted global column with its row count over the active view. */
+interface GlobalFacetValue {
+    count: number;
+    value: unknown;
+}
+
+/**
+ * Payload of a {@link facetGlobalColumn} call: the top-N distinct `values` (each
+ * with a `count`) ordered by frequency, plus `truncated` — `true` when more
+ * distinct values existed beyond the cap, so the UI can say so rather than imply
+ * the list is exhaustive. Mirrors the shard browser's `FacetColumnResult`.
+ */
+interface GlobalFacetResult {
+    truncated: boolean;
+    values: GlobalFacetValue[];
+}
+
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 500;
+
+/** Default cap on the number of distinct values a single global facet returns. */
+const DEFAULT_FACET_LIMIT = 30;
+
+/** Hard cap on facet values, so a wide column can't return an unbounded group set. */
+const MAX_FACET_LIMIT = 200;
 
 const quoteIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;
 
@@ -89,10 +141,59 @@ const listTableNames = async (exec: D1Exec): Promise<string[]> => {
     return rows.map((row) => String(row["name"])).filter((name) => !isInternalTable(name));
 };
 
-const countRows = async (exec: D1Exec, quotedTable: string): Promise<number> => {
-    const rows = await exec.all(`SELECT COUNT(*) AS c FROM ${quotedTable}`, []);
+const countRows = async (exec: D1Exec, quotedTable: string, whereSql = "", whereParams: unknown[] = []): Promise<number> => {
+    const rows = await exec.all(`SELECT COUNT(*) AS c FROM ${quotedTable}${whereSql}`, whereParams);
 
     return Number(rows[0]?.["c"] ?? 0);
+};
+
+/**
+ * Map a displayed column name to its physical D1 column. Schema `.global()` tables
+ * expose `_id` (the primary key is physically `id`); every other displayed column
+ * — meta `_creationTime`, a schema field, or an external table's physical column —
+ * is stored under its own name. The caller validates membership first; this only
+ * resolves the storage name so a quoted identifier never leaks `_id`.
+ */
+const physicalColumnName = (schema: SchemaLike, table: string, displayColumn: string): string =>
+    schema.tables[table] !== undefined && displayColumn === "_id" ? "id" : displayColumn;
+
+/**
+ * Compile a list of eq constraints into a bound `WHERE` fragment for the global
+ * read/facet paths. Each clause's column is validated against the table's
+ * displayed columns (typed 404 if unknown) and mapped to its physical, quoted
+ * identifier; a nullish value compiles to `IS NULL` (SQL's `= NULL` never
+ * matches), everything else to `= ?` with the raw value bound. Returns
+ * `undefined` when there are no clauses, so callers append nothing.
+ */
+const buildEqPredicate = (
+    schema: SchemaLike,
+    table: string,
+    displayColumns: string[],
+    filters: GlobalFilterClause[] | undefined,
+): { params: unknown[]; where: string } | undefined => {
+    if (filters === undefined || filters.length === 0) {
+        return undefined;
+    }
+
+    const clauses: string[] = [];
+    const params: unknown[] = [];
+
+    for (const filter of filters) {
+        if (!displayColumns.includes(filter.column)) {
+            throw Object.assign(new Error(`unknown column: ${filter.column}`), { code: "UNKNOWN_COLUMN", name: "CirrusError", status: 404 });
+        }
+
+        const quoted = quoteIdentifier(physicalColumnName(schema, table, filter.column));
+
+        if (filter.value === null || filter.value === undefined) {
+            clauses.push(`${quoted} IS NULL`);
+        } else {
+            clauses.push(`${quoted} = ?`);
+            params.push(filter.value);
+        }
+    }
+
+    return { params, where: clauses.join(" AND ") };
 };
 
 /**
@@ -190,7 +291,9 @@ const listGlobalTables = async (exec: D1Exec, schema: SchemaLike): Promise<Globa
  * Read a page of rows from one D1 table. The table is validated against the live
  * browsable-table list before its name is interpolated, so this can't be coerced
  * into reading an internal table or injecting SQL. `limit` is clamped to
- * `[1, 500]`; `offset` floors at `0`.
+ * `[1, 500]`; `offset` floors at `0`. `filters` AND-narrows the page to rows
+ * matching each `column = value` eq constraint (a facet-value drill-down), bound
+ * through {@link buildEqPredicate} so they never inject SQL.
  */
 const readGlobalTablePage = async (exec: D1Exec, schema: SchemaLike, options: ReadGlobalTablePageOptions): Promise<GlobalTablePage> => {
     const { table } = options;
@@ -206,14 +309,81 @@ const readGlobalTablePage = async (exec: D1Exec, schema: SchemaLike, options: Re
     const limit = clamp(Math.trunc(options.limit ?? DEFAULT_PAGE_SIZE), 1, MAX_PAGE_SIZE);
     const offset = Math.max(0, Math.trunc(options.offset ?? 0));
     const quoted = quoteIdentifier(table);
+    const columns = await resolveColumns(exec, schema, table);
+    const predicate = buildEqPredicate(schema, table, columns, options.filters);
+    const whereSql = predicate === undefined ? "" : ` WHERE ${predicate.where}`;
+    const whereParams = predicate?.params ?? [];
 
-    const total = await countRows(exec, quoted);
-    const raw = await exec.all(`SELECT * FROM ${quoted} LIMIT ? OFFSET ?`, [limit, offset]);
+    const total = await countRows(exec, quoted, whereSql, whereParams);
+    const raw = await exec.all(`SELECT * FROM ${quoted}${whereSql} LIMIT ? OFFSET ?`, [...whereParams, limit, offset]);
     const rows = raw.map((row) => decodeRow(schema, table, row));
-    const [columns, references] = await Promise.all([resolveColumns(exec, schema, table), resolveReferences(exec, schema, table)]);
+    const references = await resolveReferences(exec, schema, table);
 
     return references === undefined ? { columns, rows, total } : { columns, refs: references, rows, total };
 };
 
-export { listGlobalTables, readGlobalTablePage };
-export type { GlobalTableInfo, GlobalTablePage, ReadGlobalTablePageOptions };
+/**
+ * Summarise the distinct values of one displayed column over the **active view**
+ * (the same eq `filters` the global browser is previewing) — the D1 twin of the
+ * shard browser's `facetColumn`. Read-only: a `SELECT col AS value, COUNT(*) AS
+ * count … GROUP BY col ORDER BY count DESC LIMIT N+1`, with the column validated
+ * against the table's displayed columns (typed 404 if unknown), mapped to its
+ * physical column, and quoted — never interpolated from caller input. The extra
+ * over-fetched row is dropped and surfaced as `truncated`. A sensitive column on
+ * an external (non-schema) table is never grouped — it collapses to a single
+ * redacted `•••` bucket — mirroring the page browser's value redaction so the
+ * facet can't leak credentials. The returned `value` is the raw stored scalar, so
+ * a click feeds it straight back as an eq filter.
+ */
+const facetGlobalColumn = async (exec: D1Exec, schema: SchemaLike, options: FacetGlobalColumnOptions): Promise<GlobalFacetResult> => {
+    const { column, table } = options;
+
+    await ensureGlobalTables(exec, schema);
+
+    const tableNames = await listTableNames(exec);
+
+    if (!tableNames.includes(table)) {
+        throw Object.assign(new Error(`unknown table: ${table}`), { code: "UNKNOWN_TABLE", name: "CirrusError", status: 404 });
+    }
+
+    const columns = await resolveColumns(exec, schema, table);
+
+    if (!columns.includes(column)) {
+        throw Object.assign(new Error(`unknown column: ${column}`), { code: "UNKNOWN_COLUMN", name: "CirrusError", status: 404 });
+    }
+
+    const quoted = quoteIdentifier(table);
+    const predicate = buildEqPredicate(schema, table, columns, options.filters);
+    const whereSql = predicate === undefined ? "" : ` WHERE ${predicate.where}`;
+    const whereParams = predicate?.params ?? [];
+
+    // Faceting a sensitive column on an external table would expose the very
+    // values the page browser redacts — collapse it to one masked bucket instead.
+    if (schema.tables[table] === undefined && SENSITIVE_COLUMN.test(column)) {
+        const total = await countRows(exec, quoted, whereSql, whereParams);
+
+        return { truncated: false, values: total === 0 ? [] : [{ count: total, value: "•••" }] };
+    }
+
+    const limit = clamp(Math.trunc(options.limit ?? DEFAULT_FACET_LIMIT), 1, MAX_FACET_LIMIT);
+    const physical = quoteIdentifier(physicalColumnName(schema, table, column));
+
+    // Over-fetch one row past the cap to detect (and report) truncation.
+    const rows = await exec.all(`SELECT ${physical} AS value, COUNT(*) AS count FROM ${quoted}${whereSql} GROUP BY ${physical} ORDER BY count DESC LIMIT ?`, [
+        ...whereParams,
+        limit + 1,
+    ]);
+
+    const truncated = rows.length > limit;
+    const kept = truncated ? rows.slice(0, limit) : rows;
+
+    return {
+        truncated,
+        values: kept.map((row) => {
+            return { count: Number(row["count"]), value: row["value"] };
+        }),
+    };
+};
+
+export { facetGlobalColumn, listGlobalTables, readGlobalTablePage };
+export type { FacetGlobalColumnOptions, GlobalFacetResult, GlobalFacetValue, GlobalFilterClause, GlobalTableInfo, GlobalTablePage, ReadGlobalTablePageOptions };

@@ -23,6 +23,8 @@ import type {
     CronJobInfo,
     FunctionDescriptor,
     FunctionReference,
+    GlobalFacetResult,
+    GlobalFilterClause,
     GlobalTableInfo,
     GlobalTablePage,
     PersistenceAdapter,
@@ -83,6 +85,7 @@ const OPENAPI_PATH = "/_cirrus/admin/openapi";
 const OPENRPC_PATH = "/_cirrus/admin/openrpc";
 const GLOBAL_TABLES_PATH = "/_cirrus/admin/global/tables";
 const GLOBAL_TABLE_PATH = "/_cirrus/admin/global/table";
+const GLOBAL_FACET_PATH = "/_cirrus/admin/global/facet";
 const VECTOR_INDEXES_PATH = "/_cirrus/admin/vector/indexes";
 const VECTOR_QUERY_PATH = "/_cirrus/admin/vector/query";
 const AUTH_USERS_PATH = "/_cirrus/admin/auth/users";
@@ -1098,8 +1101,13 @@ class CirrusClient {
         return (await this.adminFetch(GLOBAL_TABLES_PATH, "GET")) as GlobalTableInfo[];
     }
 
-    /** Read a page of rows from one `.global()` table. */
-    public async readGlobalTablePage(options: { limit?: number; offset?: number; table: string }): Promise<GlobalTablePage> {
+    /**
+     * Read a page of rows from one `.global()` table. `filters` AND-narrows the
+     * page to rows matching each `column = value` eq constraint — the drill-down a
+     * facet-value click applies; the array is JSON-encoded into the `filters`
+     * query param and the values are bound server-side.
+     */
+    public async readGlobalTablePage(options: { filters?: GlobalFilterClause[]; limit?: number; offset?: number; table: string }): Promise<GlobalTablePage> {
         if (this.closed) {
             throw new Error("CirrusClient is closed");
         }
@@ -1114,7 +1122,36 @@ class CirrusClient {
             params.set("offset", String(options.offset));
         }
 
+        if (options.filters !== undefined && options.filters.length > 0) {
+            params.set("filters", JSON.stringify(options.filters));
+        }
+
         return (await this.adminFetch(`${GLOBAL_TABLE_PATH}?${params.toString()}`, "GET")) as GlobalTablePage;
+    }
+
+    /**
+     * Summarise the distinct values of one column in a `.global()` table over the
+     * active view (the same eq `filters` the browser is previewing) — the global
+     * twin of the shard browser's facet. Hits the admin-gated
+     * `GET /_cirrus/admin/global/facet` endpoint; `column` is validated + bound
+     * server-side. Powers the global data browser's facet sidebar.
+     */
+    public async facetGlobalColumn(options: { column: string; filters?: GlobalFilterClause[]; limit?: number; table: string }): Promise<GlobalFacetResult> {
+        if (this.closed) {
+            throw new Error("CirrusClient is closed");
+        }
+
+        const params = new URLSearchParams({ column: options.column, table: options.table });
+
+        if (options.limit !== undefined) {
+            params.set("limit", String(options.limit));
+        }
+
+        if (options.filters !== undefined && options.filters.length > 0) {
+            params.set("filters", JSON.stringify(options.filters));
+        }
+
+        return (await this.adminFetch(`${GLOBAL_FACET_PATH}?${params.toString()}`, "GET")) as GlobalFacetResult;
     }
 
     // --- Vector indexes admin -----------------------------------------------

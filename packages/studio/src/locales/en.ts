@@ -518,6 +518,7 @@ const MESSAGE_IDS = [
     "Environment & bindings",
     "No environment variables or bindings.",
     "Open in Cloudflare",
+    "Remove filter",
     "View-only — values are masked. Edit vars, secrets, and bindings in wrangler or the Cloudflare dashboard.",
     "URL",
     "Environment",

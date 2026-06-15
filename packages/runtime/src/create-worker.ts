@@ -242,15 +242,28 @@ interface GlobalTablePage {
     total: number;
 }
 
+/** One eq constraint a facet-value click adds to the global browser's view. Mirrors `@cirrus/d1`'s `GlobalFilterClause`. */
+interface GlobalFilterClause {
+    column: string;
+    value: unknown;
+}
+
+/** Per-column distinct-value summary for the global browser. Mirrors `@cirrus/d1`'s `GlobalFacetResult`. */
+interface GlobalFacetResult {
+    truncated: boolean;
+    values: { count: number; value: unknown }[];
+}
+
 /**
  * Introspect `.global()` (D1-backed) tables for the data browser. Structurally
- * compatible with `@cirrus/d1`'s `listGlobalTables` / `readGlobalTablePage`
- * (curried with the D1 exec + schema) — the runtime stays free of a hard
- * dependency on the D1 package.
+ * compatible with `@cirrus/d1`'s `listGlobalTables` / `readGlobalTablePage` /
+ * `facetGlobalColumn` (curried with the D1 exec + schema) — the runtime stays
+ * free of a hard dependency on the D1 package.
  */
 interface GlobalIntrospector {
+    facetColumn: (options: { column: string; filters?: GlobalFilterClause[]; limit?: number; table: string }) => Promise<GlobalFacetResult>;
     listTables: () => Promise<GlobalTableInfo[]>;
-    readTablePage: (options: { limit?: number; offset?: number; table: string }) => Promise<GlobalTablePage>;
+    readTablePage: (options: { filters?: GlobalFilterClause[]; limit?: number; offset?: number; table: string }) => Promise<GlobalTablePage>;
 }
 
 /**
@@ -2383,6 +2396,8 @@ export type {
     FunctionRegistryEntry,
     FunctionRegistryLike,
     GlobalExportFunction as GlobalExportFn,
+    GlobalFacetResult,
+    GlobalFilterClause,
     GlobalImportFunction as GlobalImportFn,
     GlobalIntrospector,
     GlobalTableInfo,

@@ -6,7 +6,7 @@
  * admin gate, option registry, and request helpers through injected deps, so the
  * module imports no runtime values from `create-worker` (only its types).
  */
-import type { CronJobDispatch, CronJobInfo, FunctionDescriptor, FunctionRegistryLike, GlobalIntrospector } from "./create-worker";
+import type { CronJobDispatch, CronJobInfo, FunctionDescriptor, FunctionRegistryLike, GlobalFilterClause, GlobalIntrospector } from "./create-worker";
 import { describeArguments } from "./describe-args";
 import { CirrusError } from "./errors";
 
@@ -16,6 +16,44 @@ const OPENAPI_PATH = "/_cirrus/admin/openapi";
 const OPENRPC_PATH = "/_cirrus/admin/openrpc";
 const GLOBAL_TABLES_PATH = "/_cirrus/admin/global/tables";
 const GLOBAL_TABLE_PATH = "/_cirrus/admin/global/table";
+const GLOBAL_FACET_PATH = "/_cirrus/admin/global/facet";
+
+/**
+ * Decode the global browser's `filters` query param: a JSON array of eq
+ * constraints (`{ column, value }`) a facet-value click drills into. Lenient —
+ * absent / malformed / non-array input yields `undefined` (no filtering) rather
+ * than a 400, and each entry is kept only when its `column` is a string; the
+ * value is bound server-side so a bad shape can never inject SQL.
+ */
+const parseGlobalFilters = (raw: string | undefined): GlobalFilterClause[] | undefined => {
+    if (raw === undefined || raw === "") {
+        return undefined;
+    }
+
+    let parsed: unknown;
+
+    try {
+        parsed = JSON.parse(raw);
+    } catch {
+        return undefined;
+    }
+
+    if (!Array.isArray(parsed)) {
+        return undefined;
+    }
+
+    const clauses = parsed.flatMap((entry) => {
+        if (typeof entry !== "object" || entry === null || typeof (entry as { column?: unknown }).column !== "string") {
+            return [];
+        }
+
+        const { column, value } = entry as { column: string; value?: unknown };
+
+        return [{ column, value }];
+    });
+
+    return clauses.length === 0 ? undefined : clauses;
+};
 
 /**
  * Empty-but-valid OpenAPI 3.1 document served by `GET /_cirrus/admin/openapi`
@@ -167,20 +205,53 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
             message: "global endpoints require a `globalIntrospector` on the worker",
         });
 
-        const table = queryParameter(new URL(request.url), "table");
+        const url = new URL(request.url);
+        const table = queryParameter(url, "table");
 
         if (table === undefined) {
             throw new CirrusError("Global-table endpoint requires a `table` query param", { code: "BAD_REQUEST", status: 400 });
         }
 
-        const page = await introspector.readTablePage({ ...parsePaging(request), table });
+        const page = await introspector.readTablePage({ ...parsePaging(request), filters: parseGlobalFilters(queryParameter(url, "filters")), table });
 
         return Response.json(page, { headers: { "content-type": "application/json" }, status: 200 });
+    };
+
+    const handleGlobalFacet = async (request: Request): Promise<Response> => {
+        if (request.method !== "GET") {
+            throw new CirrusError("Global-facet endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        const introspector = requireAdminOption(request, options.globalIntrospector, {
+            code: "GLOBALS_NOT_CONFIGURED",
+            message: "global endpoints require a `globalIntrospector` on the worker",
+        });
+
+        const url = new URL(request.url);
+        const table = queryParameter(url, "table");
+        const column = queryParameter(url, "column");
+
+        if (table === undefined || column === undefined) {
+            throw new CirrusError("Global-facet endpoint requires `table` and `column` query params", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const limitParameter = queryParameter(url, "limit");
+        const limit = limitParameter === undefined ? undefined : Number(limitParameter);
+
+        const result = await introspector.facetColumn({
+            column,
+            filters: parseGlobalFilters(queryParameter(url, "filters")),
+            limit: limit !== undefined && Number.isFinite(limit) ? limit : undefined,
+            table,
+        });
+
+        return Response.json(result, { headers: { "content-type": "application/json" }, status: 200 });
     };
 
     return {
         [CRON_JOBS_PATH]: handleCronJobs,
         [FUNCTIONS_PATH]: handleFunctionsList,
+        [GLOBAL_FACET_PATH]: handleGlobalFacet,
         [GLOBAL_TABLE_PATH]: handleGlobalTablePage,
         [GLOBAL_TABLES_PATH]: handleGlobalTables,
         [OPENAPI_PATH]: handleOpenApi,
