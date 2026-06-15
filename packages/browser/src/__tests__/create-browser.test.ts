@@ -1,0 +1,263 @@
+import { describe, expect, it } from "vitest";
+
+import { createBrowser } from "../create-browser";
+import type { BrowserBindingLike, BrowserContextLike, BrowserLaunchLike, BrowserLike, PageLike } from "../types";
+
+/** A throwaway binding marker — the helpers never touch it directly; Playwright consumes it. */
+const fakeBinding = (): BrowserBindingLike => {
+    return {};
+};
+
+interface PageSpy extends PageLike {
+    gotoCalls: string[];
+    screenshotCalls: Record<string, unknown>[];
+    viewportCalls: { height: number; width: number }[];
+}
+
+interface BrowserSpy extends BrowserLike {
+    closed: number;
+    pages: PageSpy[];
+}
+
+/**
+ * Build a fake `@cloudflare/playwright` `launch` whose result yields a
+ * browser → context → page chain. `gotoThrows` forces `page.goto` to reject so
+ * the browser-level `finally` close path can be asserted. Records every
+ * goto/screenshot/viewport call and the browser close count.
+ */
+const fakeLaunch = (config: { gotoThrows?: boolean } = {}): BrowserLaunchLike & { browsers: BrowserSpy[] } => {
+    const browsers: BrowserSpy[] = [];
+
+    const launch = (async (_binding: BrowserBindingLike): Promise<BrowserLike> => {
+        const pages: PageSpy[] = [];
+
+        const makePage = (): PageSpy => {
+            const page: PageSpy = {
+                content: async () => "<html><body>hi</body></html>",
+                evaluate: async (fn) => (fn as () => unknown)() as never,
+                goto: async (url) => {
+                    page.gotoCalls.push(url);
+
+                    if (config.gotoThrows) {
+                        throw new Error("navigation failed");
+                    }
+
+                    return undefined;
+                },
+                gotoCalls: [],
+                pdf: async () => new Uint8Array([37, 80, 68, 70]),
+                screenshot: async (screenshotOptions) => {
+                    page.screenshotCalls.push(screenshotOptions ?? {});
+
+                    return new Uint8Array([137, 80, 78, 71]);
+                },
+                screenshotCalls: [],
+                setViewportSize: async (viewport) => {
+                    page.viewportCalls.push(viewport);
+                },
+                viewportCalls: [],
+            };
+
+            return page;
+        };
+
+        const context: BrowserContextLike = {
+            newPage: async () => {
+                const page = makePage();
+
+                pages.push(page);
+
+                return page;
+            },
+        };
+
+        const browser: BrowserSpy = {
+            close: async () => {
+                browser.closed += 1;
+            },
+            closed: 0,
+            newContext: async () => context,
+            pages,
+        };
+
+        browsers.push(browser);
+
+        return browser;
+    }) as BrowserLaunchLike & { browsers: BrowserSpy[] };
+
+    launch.browsers = browsers;
+
+    return launch;
+};
+
+describe("createBrowser", () => {
+    it("throws when no binding is supplied", () => {
+        expect.assertions(1);
+
+        // @ts-expect-error -- exercising the JS-caller misuse path
+        expect(() => createBrowser({})).toThrow(/`binding` is required/);
+    });
+
+    it("throws on first use when launch is not available", async () => {
+        expect.assertions(1);
+
+        const browser = createBrowser({ binding: fakeBinding() });
+
+        await expect(browser.screenshot("https://example.com")).rejects.toThrow(/@cloudflare\/playwright/);
+    });
+
+    describe("screenshot", () => {
+        it("navigates to the validated url and returns the bytes", async () => {
+            expect.assertions(3);
+
+            const launch = fakeLaunch();
+            const browser = createBrowser({ binding: fakeBinding(), launch });
+
+            const bytes = await browser.screenshot("https://example.com/page");
+
+            expect(launch.browsers).toHaveLength(1);
+            expect(launch.browsers[0]!.pages[0]!.gotoCalls).toStrictEqual(["https://example.com/page"]);
+            expect(bytes).toStrictEqual(new Uint8Array([137, 80, 78, 71]));
+        });
+
+        it("defaults to a png and forwards type/fullPage", async () => {
+            expect.assertions(1);
+
+            const launch = fakeLaunch();
+            const browser = createBrowser({ binding: fakeBinding(), launch });
+
+            await browser.screenshot("https://example.com", { fullPage: true, type: "jpeg" });
+
+            expect(launch.browsers[0]!.pages[0]!.screenshotCalls[0]).toStrictEqual({ fullPage: true, type: "jpeg" });
+        });
+
+        it("clamps an oversized viewport via setViewportSize", async () => {
+            expect.assertions(1);
+
+            const launch = fakeLaunch();
+            const browser = createBrowser({ binding: fakeBinding(), launch });
+
+            await browser.screenshot("https://example.com", { viewport: { height: 999_999, width: 999_999 } });
+
+            expect(launch.browsers[0]!.pages[0]!.viewportCalls).toStrictEqual([{ height: 4320, width: 3840 }]);
+        });
+
+        it("closes the browser even when goto throws", async () => {
+            expect.assertions(2);
+
+            const launch = fakeLaunch({ gotoThrows: true });
+            const browser = createBrowser({ binding: fakeBinding(), launch });
+
+            await expect(browser.screenshot("https://example.com")).rejects.toThrow(/navigation failed/);
+
+            expect(launch.browsers[0]!.closed).toBe(1);
+        });
+    });
+
+    describe("url validation", () => {
+        const cases: [string, string][] = [
+            ["empty", ""],
+            ["ftp", "ftp://example.com"],
+            // eslint-disable-next-line no-script-url -- intentional test fixture: asserts the validator rejects the `javascript:` scheme
+            ["javascript", "javascript:alert(1)"],
+            ["file", "file:///etc/passwd"],
+            ["data", "data:text/html,<h1>x</h1>"],
+            ["relative", "/just/a/path"],
+        ];
+
+        it.each(cases)("rejects a %s url without launching the browser", async (_label, url) => {
+            expect.assertions(2);
+
+            const launch = fakeLaunch();
+            const browser = createBrowser({ binding: fakeBinding(), launch });
+
+            await expect(browser.screenshot(url)).rejects.toThrow(/@cirrus\/browser/);
+            expect(launch.browsers).toHaveLength(0);
+        });
+
+        it("accepts http and https", async () => {
+            expect.assertions(1);
+
+            const launch = fakeLaunch();
+            const browser = createBrowser({ binding: fakeBinding(), launch });
+
+            await browser.content("http://example.com");
+            await browser.content("https://example.com");
+
+            expect(launch.browsers).toHaveLength(2);
+        });
+    });
+
+    describe("pdf / content / scrape", () => {
+        it("pdf returns the buffer and closes the session", async () => {
+            expect.assertions(2);
+
+            const launch = fakeLaunch();
+            const browser = createBrowser({ binding: fakeBinding(), launch });
+
+            const bytes = await browser.pdf("https://example.com");
+
+            expect(bytes).toStrictEqual(new Uint8Array([37, 80, 68, 70]));
+            expect(launch.browsers[0]!.closed).toBe(1);
+        });
+
+        it("content returns the serialized html", async () => {
+            expect.assertions(1);
+
+            const launch = fakeLaunch();
+            const browser = createBrowser({ binding: fakeBinding(), launch });
+
+            await expect(browser.content("https://example.com")).resolves.toBe("<html><body>hi</body></html>");
+        });
+
+        it("scrape runs the function in the page context", async () => {
+            expect.assertions(1);
+
+            const launch = fakeLaunch();
+            const browser = createBrowser({ binding: fakeBinding(), launch });
+
+            const result = await browser.scrape("https://example.com", () => 42 as never);
+
+            expect(result).toBe(42);
+        });
+    });
+
+    describe("launch escape hatch", () => {
+        it("hands the raw browser to the callback and closes it after", async () => {
+            expect.assertions(2);
+
+            const launch = fakeLaunch();
+            const browser = createBrowser({ binding: fakeBinding(), launch });
+
+            const handle = await browser.launch(async (raw) => raw);
+
+            expect(launch.browsers[0]).toBe(handle);
+            expect(launch.browsers[0]!.closed).toBe(1);
+        });
+
+        it("closes the browser even when the callback throws", async () => {
+            expect.assertions(2);
+
+            const launch = fakeLaunch();
+            const browser = createBrowser({ binding: fakeBinding(), launch });
+
+            await expect(
+                browser.launch(async () => {
+                    throw new Error("boom");
+                }),
+            ).rejects.toThrow(/boom/);
+            expect(launch.browsers[0]!.closed).toBe(1);
+        });
+    });
+
+    // Real `env.BROWSER` / workerd-backed coverage. workerd + the Browser
+    // Rendering binding can't run in this sandbox (see MEMORY: workerd-sandbox-limit),
+    // so this block only runs in CI where an integration harness can provide them.
+    describe.skipIf(!process.env.CI)("live playwright (CI-only)", () => {
+        it("is a placeholder for an integration harness against a real env.BROWSER", () => {
+            expect.assertions(1);
+
+            expect(process.env.CI).toBe(true);
+        });
+    });
+});

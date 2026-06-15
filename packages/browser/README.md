@@ -1,0 +1,144 @@
+<!-- START_PACKAGE_OG_IMAGE_PLACEHOLDER -->
+
+<a href="https://www.anolilab.com/open-source" align="center">
+
+  <img src="__assets__/package-og.svg" alt="browser" />
+
+</a>
+
+<h3 align="center">Cloudflare Browser Rendering for Cirrus: ctx.browser screenshots, PDF, and scraping in actions</h3>
+
+<!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
+
+<br />
+
+<div align="center">
+
+[![typescript-image][typescript-badge]][typescript-url]
+[![FSL-1.1-Apache-2.0 licence][license-badge]][license]
+[![npm version][npm-version-badge]][npm-version]
+[![npm downloads][npm-downloads-badge]][npm-downloads]
+[![PRs Welcome][prs-welcome-badge]][prs-welcome]
+
+</div>
+
+---
+
+<div align="center">
+    <p>
+        <sup>
+            Daniel Bannert's open source work is supported by the community on <a href="https://github.com/sponsors/prisis">GitHub Sponsors</a>
+        </sup>
+    </p>
+</div>
+
+---
+
+Cloudflare [Browser Rendering](https://developers.cloudflare.com/browser-rendering/) for Cirrus. Wraps the `env.BROWSER` binding — driven through [`@cloudflare/playwright`](https://github.com/cloudflare/playwright) (`launch(env.BROWSER)`) — with a small typed `ctx.browser` API: `screenshot`, `pdf`, `scrape`/`content`, plus a low-level `launch()` escape hatch. Every helper opens a context + page, navigates, performs the op, and **always closes the session in a `finally`** (a leaked Browser Rendering session is billed and rate-limited).
+
+Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
+
+## Action-only — and why
+
+`ctx.browser` is wired onto the **action context only** — never `QueryCtx`/`MutationCtx`. Driving a real headless browser to a URL is **non-deterministic network I/O** (the same class as `fetch`), and Cirrus queries/mutations must be deterministic so they can be re-run, cached, and replayed over the live channel. So codegen weaves `ctx.browser` into `ActionCtx` exclusively — exactly like `ctx.ai` / `ctx.fetch`.
+
+This isn't just convention: because the `browser` type is **not on** `QueryCtx`/`MutationCtx`, a `ctx.browser.*` call in a query or mutation is a type error and won't compile. It's the same mistake class the [`nondeterministic_query_mutation` advisor](https://github.com/anolilab/cirrus/blob/alpha/packages/advisor/src/lints/static/nondeterministic-query-mutation.ts) flags for `fetch`/`Date.now`/`Math.random` — here it's structurally impossible.
+
+## Install
+
+`@cloudflare/playwright` is an **optional peer dependency** (it bundles a chromium-protocol shim — apps that never screenshot shouldn't pay for it). Install both:
+
+```sh
+npm install @cirrus/browser @cloudflare/playwright
+```
+
+```sh
+pnpm add @cirrus/browser @cloudflare/playwright
+```
+
+Add the binding to your `wrangler.jsonc` (the Cirrus Vite plugin / CLI infers and reconciles it for you when it sees a `@cirrus/browser` import):
+
+```jsonc
+{
+    "browser": { "binding": "BROWSER" },
+}
+```
+
+## Usage
+
+```ts
+import { action, v } from "@cirrus/server";
+
+export const screenshotPage = action({
+    args: { url: v.string() },
+    handler: async (ctx, { url }) => {
+        // ctx.browser is wired automatically — action context only.
+        const png = await ctx.browser.screenshot(url, { fullPage: true });
+
+        const { key } = await ctx.storage.store(`shots/${crypto.randomUUID()}.png`, png.buffer, {
+            contentType: "image/png",
+        });
+
+        return ctx.storage.getUrl(key);
+    },
+});
+```
+
+Outside an action — in the worker entry, a Durable Object, or a queue/scheduled handler — build the helper directly. It is the exact `launch(env.BROWSER)` equivalence, just with the always-close / URL-validation / viewport-cap guards applied. The config thunk codegen uses is `browser: (env) => createBrowser({ binding: env.BROWSER, launch })`:
+
+```ts
+import { launch } from "@cloudflare/playwright";
+
+import { createBrowser } from "@cirrus/browser";
+
+const browser = createBrowser({ binding: env.BROWSER, launch });
+
+const pdf = await browser.pdf("https://example.com", { format: "A4", printBackground: true });
+const html = await browser.content("https://example.com");
+const title = await browser.scrape("https://example.com", () => document.title);
+```
+
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/addons/browser)**.
+
+## Related
+
+- [`@cirrus/server`](https://www.npmjs.com/package/@cirrus/server) — call `ctx.browser` from actions.
+- [`@cirrus/storage`](https://www.npmjs.com/package/@cirrus/storage) — persist the screenshots/PDFs you render.
+- [`@cirrus/advisor`](https://www.npmjs.com/package/@cirrus/advisor) — the determinism lint that keeps non-deterministic I/O out of queries/mutations.
+
+## Supported Node.js Versions
+
+Libraries in this ecosystem make the best effort to track [Node.js' release schedule](https://github.com/nodejs/release#release-schedule).
+Here's [a post on why we think this is important](https://medium.com/the-node-js-collection/maintainers-should-consider-following-node-js-release-schedule-ab08ed4de71a).
+
+## Contributing
+
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
+
+> **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
+
+## Credits
+
+- [Daniel Bannert](https://github.com/prisis)
+- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
+
+## Made with ❤️ at Anolilab
+
+This is an open source project and will always remain free to use. If you think it's cool, please star it 🌟. [Anolilab](https://www.anolilab.com/open-source) is a Development and AI Studio. Contact us at [hello@anolilab.com](mailto:hello@anolilab.com) if you need any help with these technologies or just want to say hi!
+
+## License
+
+The Cirrus browser package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+
+<!-- badges -->
+
+[license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
+[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/browser?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@cirrus/browser
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/browser?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@cirrus/browser
+[prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
+[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
+[typescript-url]: https://www.typescriptlang.org/

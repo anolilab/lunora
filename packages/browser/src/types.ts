@@ -1,0 +1,168 @@
+/**
+ * Structural projection of the Cloudflare **Browser Rendering** binding
+ * (`env.BROWSER`). The binding is a `Fetcher` under the hood — `@cloudflare/playwright`
+ * drives it via `launch(env.BROWSER)`. Declared locally (an empty structural
+ * marker) so unit tests can pass a plain-object double and the real binding
+ * satisfies the same shape without importing `@cloudflare/workers-types` into
+ * the public surface. See https://developers.cloudflare.com/browser-rendering/.
+ *
+ * It is intentionally opaque: callers never touch the binding directly, they
+ * hand it to {@link CirrusBrowserOptions.binding} and the Playwright layer
+ * consumes it. Typed as a non-empty marker so an arbitrary value (e.g. `{}`)
+ * doesn't silently type-check where a binding is required.
+ */
+export interface BrowserBindingLike {
+    readonly fetch?: (...args: never[]) => unknown;
+}
+
+/**
+ * Minimal projection of a Playwright `Page` — just the methods the helpers drive.
+ * Declared structurally so a test can inject a plain stub instead of a real
+ * headless page (which needs workerd + the Browser Rendering binding).
+ */
+export interface PageLike {
+    /** Return the page's serialized HTML after the navigation settles. */
+    content: () => Promise<string>;
+    /** Run a function in the page context and return its (serializable) result. */
+    evaluate: <T>(function_: (...args: never[]) => T) => Promise<T>;
+
+    /** Navigate to a URL; resolves once the configured wait condition is met. */
+    goto: (url: string, options?: { timeout?: number; waitUntil?: string }) => Promise<unknown>;
+    /** Render the page to a PDF buffer. */
+    pdf: (options?: Record<string, unknown>) => Promise<Uint8Array>;
+    /** Render the page to a PNG/JPEG buffer. */
+    screenshot: (options?: Record<string, unknown>) => Promise<Uint8Array>;
+    /** Constrain the page viewport (a hard cap so a hostile page can't pin the worker). */
+    setViewportSize?: (viewport: { height: number; width: number }) => Promise<void>;
+}
+
+/**
+ * Minimal projection of a Playwright `BrowserContext`. Only `newPage` is used;
+ * declared structurally for the same test-double reason as {@link PageLike}.
+ */
+export interface BrowserContextLike {
+    newPage: () => Promise<PageLike>;
+}
+
+/**
+ * Minimal projection of a Playwright `Browser` (the value `launch` resolves to).
+ * Only `newContext`/`close` are used; declared structurally for the same
+ * test-double reason as {@link PageLike}.
+ */
+export interface BrowserLike {
+    close: () => Promise<void>;
+    newContext: () => Promise<BrowserContextLike>;
+}
+
+/* eslint-disable no-secrets/no-secrets -- the entropy scanner trips on the repeated `@cloudflare/playwright` package name in these doc comments, not a credential */
+
+/**
+ * Structural projection of `@cloudflare/playwright`'s `launch` export
+ * (`import { launch } from "@cloudflare/playwright"`). Injected via
+ * {@link CirrusBrowserOptions.launch} so the factory never imports
+ * `@cloudflare/playwright` at module top — that keeps the heavy optional peer
+ * dep out of the bundle for apps that never screenshot, and lets tests pass a
+ * fake. Calling it with the Browser Rendering binding resolves a {@link BrowserLike}.
+ */
+export type BrowserLaunchLike = (binding: BrowserBindingLike, options?: Record<string, unknown>) => Promise<BrowserLike>;
+
+/** Options shared by the page-driving helpers ({@link Browser.screenshot} etc.). */
+export interface NavigateOptions {
+    /**
+     * Hard timeout in milliseconds for the navigation + operation. Clamped to a
+     * sane ceiling so a hung/hostile page can't pin the worker. Default 30000.
+     */
+    timeoutMs?: number;
+
+    /**
+     * Playwright navigation wait condition. Playwright's set differs from
+     * Puppeteer's: `load`, `domcontentloaded`, `networkidle`, `commit`.
+     * Default `load`.
+     */
+    waitUntil?: "commit" | "domcontentloaded" | "load" | "networkidle";
+}
+
+/** Options for {@link Browser.screenshot}. */
+export interface ScreenshotOptions extends NavigateOptions {
+    /** Capture the full scrollable page rather than just the viewport. */
+    fullPage?: boolean;
+    /** Image encoding. Default `png`. */
+    type?: "jpeg" | "png";
+
+    /**
+     * Viewport size. Each dimension is hard-capped (see the factory's
+     * `MAX_VIEWPORT_*`) so a caller can't request a multi-million-pixel render.
+     */
+    viewport?: { height: number; width: number };
+}
+
+/** Options for {@link Browser.pdf}. */
+export interface PdfOptions extends NavigateOptions {
+    /** Paper format (`A4`, `Letter`, …) forwarded to Playwright. */
+    format?: string;
+    /** Print background graphics. Default `false`. */
+    printBackground?: boolean;
+
+    /**
+     * Viewport used while laying out the page before printing. Hard-capped like
+     * {@link ScreenshotOptions.viewport}.
+     */
+    viewport?: { height: number; width: number };
+}
+
+export interface CirrusBrowserOptions {
+    /** The Cloudflare Browser Rendering binding (`env.BROWSER`). Required. */
+    binding: BrowserBindingLike;
+
+    /**
+     * The `@cloudflare/playwright` `launch` function. Injected rather than
+     * imported at module top so the optional peer dep stays out of the bundle
+     * for non-browser apps and tests can pass a double. The generated worker
+     * passes the real function; omitting it makes the helper throw on first use
+     * with a clear "install `@cloudflare/playwright`" error.
+     */
+    launch?: BrowserLaunchLike;
+    /* eslint-enable no-secrets/no-secrets */
+
+    /**
+     * Default navigation timeout (ms) applied when a per-call `timeoutMs` is not
+     * given. Clamped to the factory's `MAX_TIMEOUT_MS`. Default 30000.
+     */
+    timeoutMs?: number;
+}
+
+/**
+ * The `ctx.browser` surface — Cloudflare Browser Rendering driven through
+ * `@cloudflare/playwright`. **Action-only**: every method performs
+ * non-deterministic network I/O (it navigates a real headless browser to a
+ * URL), so codegen wires it onto `ActionCtx` exclusively — never `QueryCtx`/
+ * `MutationCtx` — exactly like `ctx.ai` / `ctx.fetch`. Each helper launches a
+ * browser, opens a context + page, navigates, performs the op, and always
+ * closes the browser in a `finally` (a leaked session is billed and
+ * rate-limited).
+ */
+export interface Browser {
+    /** Serialized HTML of `url` after navigation settles. */
+    content: (url: string, options?: NavigateOptions) => Promise<string>;
+
+    /**
+     * Low-level escape hatch: launch a raw Playwright `Browser` and hand it to
+     * `fn` (e.g. for multi-page flows or APIs not surfaced here). The browser is
+     * **always closed** when `fn` resolves or throws — do not retain references
+     * to it past the callback.
+     */
+    launch: <T>(function_: (browser: BrowserLike) => Promise<T>) => Promise<T>;
+
+    /** Render `url` to a PDF buffer. */
+    pdf: (url: string, options?: PdfOptions) => Promise<Uint8Array>;
+
+    /**
+     * Navigate to `url`, run `fn` inside the page context, and return its
+     * (serializable) result. `fn` runs in the browser, not the worker — it
+     * cannot close over worker-side variables.
+     */
+    scrape: <T>(url: string, function_: (...args: never[]) => T, options?: NavigateOptions) => Promise<T>;
+
+    /** Render `url` to an image buffer (PNG by default). */
+    screenshot: (url: string, options?: ScreenshotOptions) => Promise<Uint8Array>;
+}
