@@ -1,0 +1,166 @@
+---
+title: "@cirrus/hyperdrive"
+description: Bring-your-own Postgres/MySQL from an action via Cloudflare Hyperdrive.
+---
+
+`@cirrus/hyperdrive` lets an **action** read and write an existing
+Postgres/MySQL database through [Cloudflare
+Hyperdrive](https://developers.cloudflare.com/hyperdrive/) — pooled, cached
+connections from the edge. It surfaces the binding's connection string and a
+driver-agnostic `ctx.sql` client.
+
+> **Integrate an existing database — don't replace the Cirrus data layer.**
+> Hyperdrive points at a database Cirrus has no visibility into, so two
+> invariants the rest of Cirrus relies on do **not** hold for it:
+>
+> 1. **Non-deterministic.** A SQL query over the network is an external,
+>    mutable read — exactly like `fetch`. It is therefore **forbidden in
+>    `query`/`mutation`** and available only on `ActionCtx`. The
+>    `hyperdrive_outside_action` advisor lint flags any `ctx.sql` reached from a
+>    query or mutation.
+> 2. **Non-reactive.** Live queries track writes to the DO's SQLite / D1. An
+>    `UPDATE` issued over Hyperdrive produces **no** Cirrus change event, so
+>    **subscriptions will not re-run** when external rows change.
+>
+> Hyperdrive is the right tool for "read/write my legacy Postgres from an
+> action," and the wrong tool for "make my Postgres reactive." If you want
+> external data to be reactive, write a **projection** of it into a
+> `defineSchema` DO/D1 table (see [Making external data
+> reactive](#making-external-data-reactive)).
+
+## Install
+
+```bash
+pnpm add @cirrus/hyperdrive
+```
+
+No driver is bundled — `postgres`, `pg`, and `mysql2` are heavy and the choice
+is yours. They are declared as **optional peer dependencies**; install the one
+you use:
+
+```bash
+pnpm add postgres        # postgres.js  → fromPostgresJs
+# or
+pnpm add pg              # node-postgres → fromNodePg
+# or
+pnpm add mysql2          # mysql2        → fromMysql2
+```
+
+## Set up the binding
+
+1. Create a Hyperdrive config pointing at your origin database:
+
+    ```bash
+    wrangler hyperdrive create my-db --connection-string="postgres://user:pass@host:5432/db" # gitleaks:allow -- placeholder, not a real secret
+    ```
+
+    This prints an `id`.
+
+2. Add the binding to `wrangler.jsonc`. Use `localConnectionString` so local
+   dev (`cirrus dev`) connects straight to your DB without the edge proxy:
+
+    ```jsonc
+    {
+        "hyperdrive": [
+            {
+                "binding": "HYPERDRIVE",
+                "id": "<the id from step 1>",
+                "localConnectionString": "postgres://user:pass@localhost:5432/db", // gitleaks:allow -- placeholder, not a real secret
+            },
+        ],
+    }
+    ```
+
+    Cirrus validates the binding (it errors when `binding` is missing and warns
+    when `id` is empty — a placeholder id can't connect), but it does **not**
+    auto-provision the `id`: that's a remote resource only `wrangler hyperdrive
+create` can mint, so importing `@cirrus/hyperdrive` surfaces a hint rather
+    than writing the binding for you.
+
+## The canonical recipe
+
+Construct your driver from the connection string and wrap it with the matching
+adapter to get a `ctx.sql`. **Do this only inside an action:**
+
+```ts
+import { createHyperdrive, fromPostgresJs } from "@cirrus/hyperdrive";
+import postgres from "postgres";
+
+import { action, v } from "@cirrus/server";
+
+export const importLegacyOrders = action({
+    args: { orgId: v.string() },
+    handler: async (ctx, { orgId }) => {
+        const { connectionString } = createHyperdrive(ctx.env.HYPERDRIVE);
+        ctx.sql = fromPostgresJs(postgres(connectionString));
+
+        // Read from external Postgres ($1, $2, … placeholders).
+        const orders = await ctx.sql.query<{ id: string; total: number }>("select id, total from orders where org = $1", [orgId]);
+
+        return orders;
+    },
+});
+```
+
+When the codegen detects `ctx.sql` usage it adds `sql: SqlClient` to **`ActionCtx`
+only** — never `QueryCtx` or `MutationCtx` — with a JSDoc restating the
+determinism/realtime caveat.
+
+### Drivers & placeholders
+
+| Driver                   | Adapter          | Placeholders |
+| ------------------------ | ---------------- | ------------ |
+| `postgres` (postgres.js) | `fromPostgresJs` | `$1, $2, …`  |
+| `pg` (node-postgres)     | `fromNodePg`     | `$1, $2, …`  |
+| `mysql2/promise`         | `fromMysql2`     | `?`          |
+
+The package never rewrites SQL — use your driver's native positional syntax.
+
+## Making external data reactive
+
+Cirrus cannot observe external writes, so a subscription over a `defineSchema`
+table won't re-fire when Postgres changes. To make external data reactive,
+**project** it into a DO/D1 table inside the same action — that write _is_ on
+the change-feed, so live queries reading the projection re-run:
+
+```ts
+export const syncOrder = action({
+    args: { id: v.string() },
+    handler: async (ctx, { id }) => {
+        const { connectionString } = createHyperdrive(ctx.env.HYPERDRIVE);
+        ctx.sql = fromPostgresJs(postgres(connectionString));
+
+        const [row] = await ctx.sql.query<{ id: string; total: number }>("select id, total from orders where id = $1", [id]);
+
+        // This write is tracked — a `query` over `orders` re-runs for subscribers.
+        await ctx.runMutation("orders:upsert", { id: row.id, total: row.total });
+    },
+});
+```
+
+## Non-goals
+
+- **No CDC / logical replication.** Cirrus does not ingest your Postgres
+  write-ahead log; the projection pattern above is the supported path to
+  reactivity.
+- **No `ctx.sql` in `query`/`mutation`.** Enforced by the
+  `hyperdrive_outside_action` advisor lint.
+- **No bundled driver / ORM.** You own driver choice and lifecycle.
+
+## Public API
+
+| Export                                                                                              | Purpose                                                  |
+| --------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| `createHyperdrive(binding)`                                                                         | Lift `connectionString` + discrete parts off the binding |
+| `fromPostgresJs(client)`                                                                            | Wrap a postgres.js client as a `SqlClient`               |
+| `fromNodePg(client)`                                                                                | Wrap a `pg` Client/Pool as a `SqlClient`                 |
+| `fromMysql2(connection)`                                                                            | Wrap a `mysql2/promise` connection/pool as a `SqlClient` |
+| `SqlClient`, `HyperdriveLike`, `HyperdriveConnection`, `PostgresJsLike`, `NodePgLike`, `Mysql2Like` | Type-only                                                |
+
+## See also
+
+- [Concepts: queries & mutations](/docs/concepts/queries-mutations) — why
+  actions are the only non-deterministic context
+- [Concepts: advisors](/docs/concepts/advisors) — the
+  `hyperdrive_outside_action` lint
+- [Concepts: real-time](/docs/concepts/realtime) — what the change-feed tracks

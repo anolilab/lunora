@@ -136,6 +136,28 @@ helper that appends an entry idempotently (deduped by `service` + `environment`)
 and the wrangler validator flags any `tail_consumers` entry missing its
 `service`.
 
+### Logpush
+
+To ship logs to a retention/SIEM sink (R2, HTTP, Splunk, Datadog, S3) without a
+consumer Worker, enable [Cloudflare
+Logpush](https://developers.cloudflare.com/workers/observability/logs/logpush/)
+with a single flag:
+
+```jsonc
+{
+    // ...
+    "logpush": true,
+}
+```
+
+Cirrus validates that `logpush` is a boolean (a typo like `"logPush"` would
+otherwise be silently dropped by wrangler), but the **sink itself is a Logpush
+_job_** created in the Cloudflare dashboard or via the API — Cirrus does not
+manage job lifecycle. The Studio surfaces both halves: its **Logs → Log drains**
+panel renders the `{ "logpush": true }` snippet and deep-links to the Cloudflare
+observability dashboard where you create the job. In short: Cirrus validates the
+flag; the job lifecycle stays in Cloudflare.
+
 ## See also
 
 - [Limits](/docs/limits)

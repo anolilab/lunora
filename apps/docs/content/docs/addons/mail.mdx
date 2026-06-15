@@ -81,6 +81,77 @@ export default {
 };
 ```
 
+## Receiving email
+
+`@cirrus/mail/inbound` is the inbound counterpart: it turns a Cloudflare [Email
+Worker](https://developers.cloudflare.com/email-routing/email-workers/) delivery
+into a call to one of your Cirrus functions. The package never imports
+`cloudflare:email` — the generated worker entry supplies the real binding, and
+the package stays unit-testable in plain Node (exactly like the outbound
+Cloudflare transport).
+
+A Cloudflare Email Worker delivers inbound mail to a top-level `email(message,
+env, ctx)` export — a sibling of `fetch`/`scheduled`. Export one built by
+`createInboundEmailHandler`:
+
+```ts
+import { createInboundEmailHandler, dispatchToCirrusFunction, parseInboundEmail } from "@cirrus/mail/inbound";
+
+export const email = createInboundEmailHandler({
+    parse: parseInboundEmail,
+    dispatch: dispatchToCirrusFunction({
+        shard: env.SHARD,
+        functionPath: "inbound:onEmail",
+        shardKey: "__root__",
+    }),
+});
+```
+
+The handler reads `message.raw`, parses it into a normalised `InboundEmail`
+(`{ from, to, subject, messageId, inReplyTo?, references?, headers, text?, html?,
+attachments }`, every header CR/LF-checked), and dispatches it.
+`dispatchToCirrusFunction` posts an RPC envelope to the root shard stub — the
+same admin-RPC-over-shard path the dev mail catcher uses — calling the named
+mutation/action with the parsed message as its args. It needs
+`CIRRUS_ADMIN_TOKEN` to authorize the RPC (read from `env` by default). On a
+parse/dispatch failure the handler calls `message.setReject(reason)` so
+Cloudflare bounces or retries rather than silently dropping the mail; override
+`onError` to log/forward/swallow instead.
+
+The receiving function is an ordinary mutation/action:
+
+```ts
+import { mutation, v } from "@cirrus/server";
+
+export const onEmail = mutation({
+    args: {
+        from: v.string(),
+        to: v.array(v.string()),
+        subject: v.optional(v.string()),
+        text: v.optional(v.string()),
+    },
+    handler: async (ctx, { from, subject, text }) => {
+        await ctx.db.insert("inbox", { from, subject: subject ?? "", body: text ?? "" });
+    },
+});
+```
+
+### wrangler config
+
+Inbound delivery is configured in Cloudflare, not by codegen. Add an [Email
+Routing](https://developers.cloudflare.com/email-routing/) rule (dashboard or
+`wrangler`) that routes an address to this Worker. If your function replies or
+forwards, also declare a `send_email` binding:
+
+```jsonc
+{
+    "send_email": [{ "name": "OUTBOUND" }],
+}
+```
+
+Cirrus validates the `send_email` binding shape but does not manage routing
+rules — that lifecycle stays in Cloudflare.
+
 ## Public API
 
 | Export                                                                                               | Purpose                                                      |

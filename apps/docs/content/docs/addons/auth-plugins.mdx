@@ -27,21 +27,50 @@ import {
     admin,
     anonymous,
     bearer,
+    captcha,
+    createAccessControl,
     customSession,
+    deviceAuthorization,
     emailOTP,
     genericOAuth,
+    haveIBeenPwned,
     jwt,
     magicLink,
+    mcp,
     multiSession,
     oAuthProxy,
     oidcProvider,
+    oneTimeToken,
     organization,
+    passkey,
     phoneNumber,
     siwe,
     twoFactor,
     username,
+    withMcpAuth,
 } from "@cirrus/auth/plugins";
 ```
+
+A few of these are worth calling out:
+
+- `captcha` — better-auth's native CAPTCHA plugin (Cloudflare Turnstile,
+  reCAPTCHA, hCaptcha, captchafox). The idiomatic way to gate auth endpoints —
+  see [CAPTCHA / Turnstile](#captcha--turnstile) below.
+- `createAccessControl` — the access-control / RBAC builder (from
+  `better-auth/plugins/access`); the companion to `admin` / `organization` for
+  defining custom roles + permissions.
+- `deviceAuthorization` — OAuth 2.0 device authorization grant (CLI / headless
+  / TV login).
+- `haveIBeenPwned` — rejects passwords found in the HIBP breach corpus via a
+  k-anonymity check.
+- `oneTimeToken` — issue / verify single-use tokens.
+- `mcp` + `withMcpAuth` — OAuth-protected Model Context Protocol server auth;
+  pairs with the [`@cirrus/mcp`](/docs/addons/mcp) package.
+
+> `captcha`, `mcp`, and `withMcpAuth` have no dedicated
+> `better-auth/plugins/<name>` subpath — they ship only via the
+> `better-auth/plugins` barrel, and `@cirrus/auth/plugins` re-exports them
+> from there.
 
 Anything else better-auth ships (or anything from the community, e.g.
 Polar) keeps working — `createAuth(...)` passes `plugins:` through
@@ -67,6 +96,85 @@ export const buildAuth = (env: { AUTH_SECRET: string; DB: unknown }) =>
 That's the whole change — the new tables (`organization`, `member`,
 `invitation`, …) are discovered by `ensureMigrated` next time the worker
 boots.
+
+To define **custom roles + permissions** beyond the built-in `user` / `admin`,
+use `createAccessControl` (re-exported from `@cirrus/auth/plugins`) and pass the
+resulting roles into `admin({ ac, roles })` / `organization({ ac, roles })` —
+it's better-auth's standard access-control builder, unchanged.
+
+## CAPTCHA / Turnstile
+
+There are two ways to add a Cloudflare Turnstile (or other CAPTCHA) check, and
+they cover different layers.
+
+### `captcha` plugin — for the auth flow
+
+For the **auth flow**, prefer the `captcha` plugin. It hooks better-auth's
+request pipeline directly and protects the sensitive endpoints
+(`/sign-up/email`, `/sign-in/email`, `/request-password-reset` by default in
+better-auth 1.6.18). It reads the token from the `x-captcha-response` request
+header:
+
+```ts
+// cirrus/auth.ts
+import { createAuth } from "@cirrus/auth";
+import { captcha } from "@cirrus/auth/plugins";
+
+export const buildAuth = (env: { AUTH_SECRET: string; DB: unknown; TURNSTILE_SECRET_KEY: string }) =>
+    createAuth({
+        database: env.DB as never,
+        emailAndPassword: { enabled: true },
+        plugins: [captcha({ provider: "cloudflare-turnstile", secretKey: env.TURNSTILE_SECRET_KEY })],
+        secret: env.AUTH_SECRET,
+    });
+```
+
+Pass `endpoints: [...]` to override which routes are gated. The secret lives in
+a plain env var / `.dev.vars` (conventionally `TURNSTILE_SECRET_KEY`) — Turnstile
+has no Cloudflare binding.
+
+### Standalone helpers — for non-auth procedures
+
+For **non-auth** procedures and mutations (where there's no better-auth
+pipeline to hook), `@cirrus/auth` ships standalone Turnstile helpers from the
+package root:
+
+- `verifyTurnstile({ secret, token, remoteip?, fetch? })` — a pure server-side
+  `siteverify` helper, usable from any mutation/action. A `success: false`
+  (bot / invalid / expired) verdict is **returned**, not thrown; it only throws
+  a structural `CirrusError` on transport failure (network error / non-2xx).
+- `verifyTurnstileMiddleware({ secret, token, ... })` — Cirrus procedure
+  middleware (`.use()`) that gates any procedure on a Turnstile check. It reads
+  the token from `ctx` via the `token` selector (the token travels in the
+  function `args`, since the procedure context carries no raw `Headers`). Fails
+  **closed** by default; pass `failOpen: true` to admit on a siteverify outage.
+
+```ts
+// cirrus/contactForm.ts — gate a plain mutation, no auth involved
+import { mutation } from "@cirrus/server";
+import { verifyTurnstileMiddleware } from "@cirrus/auth";
+
+import { v } from "@cirrus/values";
+
+export const submit = mutation
+    .input({ message: v.string(), turnstileToken: v.string() })
+    // The procedure context carries no raw Headers, so the token rides in args
+    // and the selector reads it back off ctx once it's been surfaced there.
+    .use(
+        verifyTurnstileMiddleware({
+            secret: env.TURNSTILE_SECRET_KEY,
+            token: (ctx) => ctx.turnstileToken,
+        }),
+    )
+    .mutation(async ({ args }) => {
+        /* args.message has passed the Turnstile check */
+    });
+```
+
+> **Use the `captcha` plugin for the auth flow.** It hooks better-auth's
+> pipeline and reads the token from the `x-captcha-response` header. The
+> standalone helpers above are for **non-auth** procedures, where you hand them
+> the token explicitly — so reach for them only outside the sign-in/sign-up flow.
 
 ## Studio user dashboard
 
