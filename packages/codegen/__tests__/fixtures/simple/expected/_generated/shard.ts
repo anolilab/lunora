@@ -7,7 +7,7 @@ import { asBucketStorage } from "@lunora/server";
 import { bindOrm, bindTableFacade } from "@lunora/server";
 
 import schema from "../schema.js";
-import { LUNORA_FUNCTIONS, LUNORA_MIGRATIONS } from "./functions.js";
+import { LUNORA_FUNCTIONS, LUNORA_LIFECYCLE_HOOKS, LUNORA_MIGRATIONS } from "./functions.js";
 
 type FunctionKind = "action" | "mutation" | "query";
 
@@ -391,6 +391,10 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return {
                 iterator: (signal) => (registered.handler as (context: unknown, args: Record<string, unknown>, signal: AbortSignal) => AsyncIterable<unknown>)(this.buildCtx({ functionPath }), args, signal),
             };
+        }
+
+        protected override lifecycleHookPaths(event: "connect" | "disconnect"): readonly string[] {
+            return LUNORA_LIFECYCLE_HOOKS[event];
         }
 
         protected override tableRefs(table: string): Record<string, string> | undefined {

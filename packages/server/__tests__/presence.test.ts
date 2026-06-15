@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { MutationCtx as MutationContext, QueryCtx as QueryContext } from "../src/index";
+import type { LifecycleEvent, MutationCtx as MutationContext, QueryCtx as QueryContext } from "../src/index";
 import { v } from "../src/index";
 import { definePresence, PRESENCE_TABLE, presenceExtension } from "../src/presence";
 import { defineSchema, defineTable } from "../src/schema";
@@ -102,6 +102,12 @@ const makeQueryContext = (db: MutationContext["db"]): QueryContext =>
         storage: {} as QueryContext["storage"],
         vectors: {} as QueryContext["vectors"],
     }) as unknown as QueryContext;
+
+// A lifecycle hook forwards its event verbatim, so its registered handler types
+// the event arg as the framework-fixed `never`. Build a shape-checked event and
+// cast only at that boundary.
+const lifecycleEvent = (overrides: Partial<LifecycleEvent>): never =>
+    ({ connectionId: "conn-1", shardKey: "root", userId: null, ...overrides }) satisfies LifecycleEvent as never;
 
 describe("definePresence", () => {
     beforeEach(() => {
@@ -209,6 +215,66 @@ describe("definePresence", () => {
 
         expect(presence.functions.sweep.kind).toBe("mutation");
         expect((presence.functions.sweep as { visibility?: string }).visibility).toBe("internal");
+    });
+
+    it("disconnect is registered as a `disconnect` lifecycle hook", () => {
+        expect.assertions(3);
+
+        const presence = definePresence();
+
+        expect(presence.functions.disconnect.kind).toBe("mutation");
+        expect(presence.functions.disconnect.visibility).toBe("internal");
+        expect(presence.functions.disconnect.lifecycle).toBe("disconnect");
+    });
+
+    it("disconnect hard-deletes the row matching the connection context immediately", async () => {
+        expect.assertions(2);
+
+        const db = createMemoryDb();
+        const presence = definePresence({ ttlMs: 10_000 });
+
+        // A fresh member that the TTL filter would otherwise keep "present".
+        vi.setSystemTime(1000);
+        await presence.functions.heartbeat.handler(makeMutationContext(db, "user-1"), { roomId: "room-1", sessionId: "sess-1" });
+
+        // Socket drops: the hook fires with the client-stamped context, deleting now.
+        await presence.functions.disconnect.handler(
+            makeMutationContext(db, "user-1"),
+            lifecycleEvent({ context: { roomId: "room-1", sessionId: "sess-1" }, userId: "user-1" }),
+        );
+
+        // Same instant — no TTL elapsed — and the member is already gone.
+        const present = await presence.functions.listPresent.handler(makeQueryContext(db), { roomId: "room-1" });
+
+        expect(present).toHaveLength(0);
+
+        // Only the targeted (roomId, sessionId) row is removed.
+        await presence.functions.heartbeat.handler(makeMutationContext(db, "user-2"), { roomId: "room-1", sessionId: "sess-2" });
+        await presence.functions.disconnect.handler(
+            makeMutationContext(db, "user-1"),
+            lifecycleEvent({ connectionId: "conn-2", context: { roomId: "room-1", sessionId: "sess-1" }, userId: "user-1" }),
+        );
+
+        const remaining = await presence.functions.listPresent.handler(makeQueryContext(db), { roomId: "room-1" });
+
+        expect(remaining).toHaveLength(1);
+    });
+
+    it("disconnect is a no-op when the context lacks roomId/sessionId", async () => {
+        expect.assertions(1);
+
+        const db = createMemoryDb();
+        const presence = definePresence({ ttlMs: 10_000 });
+
+        vi.setSystemTime(1000);
+        await presence.functions.heartbeat.handler(makeMutationContext(db, "user-1"), { roomId: "room-1", sessionId: "sess-1" });
+
+        const deleteSpy = vi.spyOn(db, "delete");
+
+        // No context at all — nothing to target, so the row survives for TTL/sweep.
+        await presence.functions.disconnect.handler(makeMutationContext(db, "user-1"), lifecycleEvent({ userId: "user-1" }));
+
+        expect(deleteSpy).not.toHaveBeenCalled();
     });
 });
 

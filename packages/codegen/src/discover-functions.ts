@@ -31,9 +31,21 @@ const INTERNAL_FACTORIES: Record<string, "action" | "mutation" | "query"> = {
     internalQuery: "query",
 };
 
+/**
+ * Connection-lifecycle factory names exported from `@lunora/server`, mapped to
+ * the lifecycle side they fire on. A call to one of these registers an internal
+ * mutation tagged `lifecycle: "connect" | "disconnect"` so emit collects it into
+ * the `LUNORA_LIFECYCLE_HOOKS` manifest the DO dispatches on socket open/close.
+ */
+const LIFECYCLE_FACTORIES: Record<string, "connect" | "disconnect"> = {
+    onConnect: "connect",
+    onDisconnect: "disconnect",
+};
+
 interface DiscoveredFunction {
     args: Record<string, ValidatorIR>;
     kind: string;
+    lifecycle?: "connect" | "disconnect";
     returnType: string;
     visibility: "internal" | "public";
 }
@@ -473,6 +485,13 @@ interface ProcedureClassification {
     kind: string;
 
     /**
+     * Set when the call is a connection-lifecycle hook (`onConnect`/`onDisconnect`):
+     * the socket side it fires on. The classification is otherwise an internal
+     * mutation. Absent for ordinary procedures.
+     */
+    lifecycle?: "connect" | "disconnect";
+
+    /**
      * Builder-terminal chain root — the expression to the left of the terminal
      * `.query(...)` (`c.use(...)`) — so callers can walk it further (e.g. to find
      * `.use(rls(...))`). Absent for the bare-factory form.
@@ -532,6 +551,15 @@ const classifyProcedureCall = (call: CallExpression): ProcedureClassification | 
         return { kind: internalKind, visibility: "internal" };
     }
 
+    const lifecycle = LIFECYCLE_FACTORIES[calleeName];
+
+    if (lifecycle) {
+        // A lifecycle hook is an internal mutation tagged with its socket side;
+        // it lands in LUNORA_FUNCTIONS for path dispatch and in the lifecycle
+        // manifest emit derives from the `lifecycle` tag.
+        return { kind: "mutation", lifecycle, visibility: "internal" };
+    }
+
     return undefined;
 };
 
@@ -588,6 +616,13 @@ const discoverFromCall = (call: CallExpression): DiscoveredFunction | undefined 
             returnType: returnTypeFromBuilderCall(call),
             visibility: classified.visibility,
         };
+    }
+
+    // Lifecycle hooks (`onConnect`/`onDisconnect`) take a bare handler, not the
+    // `{ args, handler }` literal — their args are framework-fixed (empty) and
+    // their return is void, so skip the object-literal extraction.
+    if (classified.lifecycle) {
+        return { args: {}, kind: classified.kind, lifecycle: classified.lifecycle, returnType: "void", visibility: classified.visibility };
     }
 
     return { args: argsFromCall(call), kind: classified.kind, returnType: returnTypeFromCall(call), visibility: classified.visibility };
@@ -706,6 +741,25 @@ const exportCallsOfDeclaration = (declaration: VariableDeclaration): [string, Ca
     return call ? [[declaration.getName(), call]] : [];
 };
 
+/** Build a {@link FunctionIR} entry from one classified registration call, or `undefined` when it isn't a Lunora registration. */
+const functionIrFromCall = (call: CallExpression, exportName: string, relativePath: string): FunctionIR | undefined => {
+    const discovered = discoverFromCall(call);
+
+    if (!discovered) {
+        return undefined;
+    }
+
+    return {
+        args: discovered.args,
+        exportName,
+        filePath: relativePath,
+        kind: discovered.kind as FunctionIR["kind"],
+        returnType: discovered.returnType,
+        visibility: discovered.visibility,
+        ...(discovered.lifecycle ? { lifecycle: discovered.lifecycle } : {}),
+    };
+};
+
 /** Lift every Lunora registration in one source file into {@link FunctionIR} entries. */
 const discoverFileFunctions = (source: SourceFile, relativePath: string): FunctionIR[] => {
     const found: FunctionIR[] = [];
@@ -717,17 +771,10 @@ const discoverFileFunctions = (source: SourceFile, relativePath: string): Functi
 
         for (const declaration of statement.getDeclarations()) {
             for (const [exportName, call] of exportCallsOfDeclaration(declaration)) {
-                const discovered = discoverFromCall(call);
+                const entry = functionIrFromCall(call, exportName, relativePath);
 
-                if (discovered) {
-                    found.push({
-                        args: discovered.args,
-                        exportName,
-                        filePath: relativePath,
-                        kind: discovered.kind as FunctionIR["kind"],
-                        returnType: discovered.returnType,
-                        visibility: discovered.visibility,
-                    });
+                if (entry) {
+                    found.push(entry);
                 }
             }
         }
@@ -791,4 +838,4 @@ const discoverFunctions = (project: Project, lunoraDirectory: string): FunctionI
 };
 
 export type { ProcedureClassification };
-export { lunoraRelativePath, classifyProcedureCall, discoverFunctions, listLunoraSourceFiles };
+export { classifyProcedureCall, discoverFunctions, listLunoraSourceFiles, lunoraRelativePath };

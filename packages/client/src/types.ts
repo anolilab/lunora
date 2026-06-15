@@ -138,6 +138,15 @@ export interface LunoraClientOptions {
      */
     authBasePath?: string;
     bookmarkStorage?: BookmarkStorage;
+
+    /**
+     * Default app context sent in the `connect` envelope right after each socket
+     * opens, forwarded to the server's `onConnect`/`onDisconnect` lifecycle hooks
+     * as `event.context`. A per-shard context registered via
+     * `setConnectionContext` overrides this for that shard. Omit when no lifecycle
+     * hook needs connection context.
+     */
+    connectionContext?: Record<string, unknown>;
     fetch?: typeof fetch;
 
     /**
@@ -190,6 +199,18 @@ export interface ClientUnsubscribeMessage {
     type: "unsubscribe";
 }
 
+/**
+ * One-shot control frame sent right after the socket opens. Registers the
+ * connection's app `context` (e.g. `{ roomId, sessionId }`) with the server and
+ * fires the `onConnect` lifecycle hooks; the same context is replayed to
+ * `onDisconnect` when the socket drops.
+ */
+export interface ClientConnectMessage {
+    context?: Record<string, unknown>;
+    id: string;
+    type: "connect";
+}
+
 export interface ClientAckMessage {
     id: string;
     type: "ack";
@@ -208,7 +229,7 @@ export interface ClientStreamMessage {
     type: "stream";
 }
 
-export type ClientMessage = ClientAckMessage | ClientStreamMessage | ClientSubscribeMessage | ClientUnsubscribeMessage;
+export type ClientMessage = ClientAckMessage | ClientConnectMessage | ClientStreamMessage | ClientSubscribeMessage | ClientUnsubscribeMessage;
 
 /** Subscription protocol — server → client. */
 export interface ServerDataMessage {

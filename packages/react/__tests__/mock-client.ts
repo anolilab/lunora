@@ -1,4 +1,4 @@
-import type { LunoraClient, FunctionReference, Unsubscribe, User } from "@lunora/client";
+import type { FunctionReference, LunoraClient, Unsubscribe, User } from "@lunora/client";
 import { vi } from "vitest";
 
 interface MockClientHooks {
@@ -13,6 +13,7 @@ interface MockClientHooks {
     onAuthTokenChange: ReturnType<typeof vi.fn>;
     query: ReturnType<typeof vi.fn>;
     setAuthToken: ReturnType<typeof vi.fn>;
+    setConnectionContext: ReturnType<typeof vi.fn>;
     /** Set the user `getCurrentUser` resolves to on its next call. */
     setCurrentUser: (user: User | null) => void;
     subscribe: ReturnType<typeof vi.fn>;
@@ -66,6 +67,7 @@ const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): 
         },
     );
     const closeFunction = vi.fn<() => void>();
+    const setConnectionContextFunction = vi.fn<(context: Record<string, unknown> | undefined, options?: { shardKey?: string }) => void>();
 
     let currentUser: User | null = null;
     const getCurrentUserFunction = vi.fn<() => Promise<User | null>>(async () => currentUser);
@@ -90,6 +92,7 @@ const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): 
         onAuthTokenChange: onAuthTokenChangeFunction,
         query: queryFunction,
         setAuthToken: setAuthTokenFunction,
+        setConnectionContext: setConnectionContextFunction,
         subscribe: subscribeFunction,
     } as unknown as LunoraClient;
 
@@ -104,6 +107,7 @@ const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): 
         onAuthTokenChange: onAuthTokenChangeFunction,
         query: queryFunction,
         setAuthToken: setAuthTokenFunction,
+        setConnectionContext: setConnectionContextFunction,
         setCurrentUser,
         subscribe: subscribeFunction,
     };

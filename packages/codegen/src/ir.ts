@@ -130,6 +130,15 @@ export interface FunctionIR {
     kind: "action" | "mutation" | "query" | "stream";
 
     /**
+     * Set on connection-lifecycle hooks (`onConnect`/`onDisconnect`): the socket
+     * side the hook fires on. Such a function is also an internal mutation (so it
+     * lands in `LUNORA_FUNCTIONS` for path dispatch); emit additionally collects
+     * it into the `LUNORA_LIFECYCLE_HOOKS` manifest keyed by this side. Absent on
+     * ordinary functions.
+     */
+    lifecycle?: "connect" | "disconnect";
+
+    /**
      * Serialized TS source for the handler's return type, with `Promise&lt;T>`
      * unwrapped so callers see `T` directly. Defaults to `"unknown"` when
      * ts-morph cannot resolve the type (typically because the consuming

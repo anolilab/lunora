@@ -157,6 +157,18 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
         };
     }, [sendHeartbeat, intervalMs]);
 
+    // Register this room/session as the socket's connection context so the
+    // server's presence `onDisconnect` hook can delete the row the instant the
+    // socket drops — immediate departure, no TTL lag. The heartbeat + TTL stay
+    // as the safety net for an ungraceful drop before the context was recorded.
+    useEffect(() => {
+        client.setConnectionContext({ roomId, sessionId: generatedSessionId }, { shardKey });
+
+        return () => {
+            client.setConnectionContext(undefined, { shardKey });
+        };
+    }, [client, roomId, generatedSessionId, shardKey]);
+
     // Subscribe to the reactive present-list for the room.
     useEffect(() => {
         let cancelled = false;

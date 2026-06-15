@@ -259,7 +259,8 @@ describe("shardDO admin-socket upgrade flagging", () => {
 
         const attachment = await upgradeAndCaptureAttachment({ LUNORA_ADMIN_TOKEN: ADMIN_TOKEN }, `https://shard.internal/?token=${ADMIN_TOKEN}`);
 
-        expect(attachment).toEqual({ admin: true, subs: {} });
+        // The upgrade also mints a per-connection id for lifecycle dispatch.
+        expect(attachment).toEqual({ admin: true, connectionId: expect.any(String), subs: {} });
     });
 
     it("stamps admin:false when no token is presented", async () => {
@@ -267,7 +268,7 @@ describe("shardDO admin-socket upgrade flagging", () => {
 
         const attachment = await upgradeAndCaptureAttachment({ LUNORA_ADMIN_TOKEN: ADMIN_TOKEN }, "https://shard.internal/");
 
-        expect(attachment).toEqual({ admin: false, subs: {} });
+        expect(attachment).toEqual({ admin: false, connectionId: expect.any(String), subs: {} });
     });
 
     it("accepts the admin token as an alternate credential when LUNORA_WS_BEARER gates the socket", async () => {
@@ -277,6 +278,6 @@ describe("shardDO admin-socket upgrade flagging", () => {
             Authorization: `Bearer ${ADMIN_TOKEN}`,
         });
 
-        expect(attachment).toEqual({ admin: true, subs: {} });
+        expect(attachment).toEqual({ admin: true, connectionId: expect.any(String), subs: {} });
     });
 });

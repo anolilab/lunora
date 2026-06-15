@@ -3,7 +3,7 @@ import { applyDelta, isMutationDelta } from "./delta-merge";
 import type { OptimisticUpdate } from "./local-store";
 import { createLocalStore } from "./local-store";
 import type { QueuedMutation } from "./offline-queue";
-import { OfflineQueue, reportPersistenceError } from "./offline-queue";
+import { nextId, OfflineQueue, reportPersistenceError } from "./offline-queue";
 import type { ReconnectCalculator } from "./reconnect";
 import { createReconnect } from "./reconnect";
 import type { StreamHandle, StreamIterable } from "./stream";
@@ -18,7 +18,6 @@ import type {
     AuthSession,
     AuthUser,
     BookmarkStorage,
-    LunoraClientOptions,
     ClientMessage,
     CronJobInfo,
     FunctionDescriptor,
@@ -27,6 +26,7 @@ import type {
     GlobalFilterClause,
     GlobalTableInfo,
     GlobalTablePage,
+    LunoraClientOptions,
     PersistenceAdapter,
     PersistenceErrorContext,
     ReconnectOptions,
@@ -407,6 +407,17 @@ class LunoraClient {
     /** One {@link ShardConnection} per shard key (keyed by `shardKey ?? ""`). */
     private readonly connections = new Map<string, ShardConnection>();
 
+    /** Default `connect`-envelope context applied to a shard with no explicit override. */
+    private readonly defaultConnectionContext: Record<string, unknown> | undefined;
+
+    /**
+     * Per-shard `connect`-envelope context registered via `setConnectionContext`
+     * (keyed by `shardKey ?? ""`), overriding `defaultConnectionContext`. Sent
+     * on every socket open so it replays across reconnects, and forwarded to the
+     * server's `onConnect`/`onDisconnect` lifecycle hooks.
+     */
+    private readonly connectionContexts = new Map<string, Record<string, unknown>>();
+
     // `null` is the public sentinel for "signed out" across getAuthToken /
     // setAuthToken / onAuthTokenChange — part of the exported API contract.
     // eslint-disable-next-line unicorn/no-null -- public auth-token contract sentinel
@@ -456,6 +467,7 @@ class LunoraClient {
         this.bookmark = options.bookmarkStorage ?? createInMemoryBookmarkStorage();
         this.reconnectOptions = options.reconnect;
         this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+        this.defaultConnectionContext = options.connectionContext;
         this.persistence = options.persistence;
         this.onPersistenceError = options.offlineQueue?.onPersistenceError;
         this.offlineQueue = new OfflineQueue(options.offlineQueue, options.persistence);
@@ -597,6 +609,34 @@ class LunoraClient {
         }
     }
 
+    /**
+     * Register (or clear, with `undefined`) the app context sent in the `connect`
+     * envelope for a shard's socket, overriding the client-wide
+     * {@link LunoraClientOptions.connectionContext}. The server forwards it to the
+     * `onConnect`/`onDisconnect` lifecycle hooks as `event.context` — e.g.
+     * `@lunora/react`'s `usePresence` registers `{ roomId, sessionId }` so the
+     * presence row is removed the instant the socket drops, with no TTL lag.
+     *
+     * Stored per shard and replayed on every (re)connect. When a socket for the
+     * shard is already open, a fresh `connect` envelope is sent immediately so the
+     * server sees the new context without waiting for a reconnect.
+     */
+    public setConnectionContext(context: Record<string, unknown> | undefined, options: { shardKey?: string } = {}): void {
+        const key = connectionKey(options.shardKey);
+
+        if (context === undefined) {
+            this.connectionContexts.delete(key);
+        } else {
+            this.connectionContexts.set(key, context);
+        }
+
+        const conn = this.connections.get(key);
+
+        if (conn?.wsState === "open") {
+            this.sendConnectEnvelope(conn);
+        }
+    }
+
     // --- Connection status --------------------------------------------------
 
     /**
@@ -652,6 +692,11 @@ class LunoraClient {
 
         const argsRecord = args as Record<string, unknown>;
 
+        // One stable idempotency key per logical mutation, shared by the direct
+        // send and any offline-queue replay of this write (the entry reuses it as
+        // its `id`). Lets the server dedup a replayed-but-already-committed write.
+        const mutationId = nextId();
+
         // Apply optimistic updates to any subscriber listening on this fn. The
         // legacy per-call `optimistic` transform patches the matching (fn, args,
         // shard) subscriptions; the Convex-parity `optimisticUpdate` callback can
@@ -686,6 +731,10 @@ class LunoraClient {
                 const entry: QueuedMutation<ReturnOf<F>> = {
                     args: argsRecord,
                     functionPath: function_.__lunoraRef,
+                    // Reuse the call's idempotency key as the queue id so the
+                    // replay carries the same `x-lunora-mutation-id` the server
+                    // dedups on.
+                    id: mutationId,
                     // Persist the stamp alongside the record so a hydrated write
                     // can only replay under the identity that queued it.
                     identity: issuingIdentity,
@@ -715,7 +764,7 @@ class LunoraClient {
         }
 
         try {
-            return (await this.rpc(function_.__lunoraRef, argsRecord, options.shardKey, { captureBookmark: true })) as ReturnOf<F>;
+            return (await this.rpc(function_.__lunoraRef, argsRecord, options.shardKey, { captureBookmark: true, mutationId })) as ReturnOf<F>;
         } catch (error) {
             // LIFO: see the offline-queue reject path above. Roll back the
             // most-recent optimistic write first so stacked updates on the same
@@ -1775,20 +1824,23 @@ class LunoraClient {
         return `${this.wsUrl}${separator}${params.join("&")}`;
     }
 
-    private async rpc(
-        functionPath: string,
-        args: Record<string, unknown>,
-        shardKey: string | undefined,
-        flags: { attachBookmark?: boolean; captureBookmark?: boolean } = {},
-    ): Promise<unknown> {
-        if (!this.fetchImpl) {
-            throw new Error("LunoraClient: no `fetch` implementation available");
-        }
-
+    /**
+     * Build the outbound RPC headers: JSON content type, optional bearer auth,
+     * the optional mutation-replay idempotency key, and the D1 read-your-writes
+     * bookmark when the caller opted into `attachBookmark`. The mutation id
+     * rides both the direct send and any offline-queue replay of the same write,
+     * so a mutation the server already committed returns its cached result
+     * instead of running twice.
+     */
+    private rpcRequestHeaders(flags: { attachBookmark?: boolean; mutationId?: string }): Record<string, string> {
         const headers: Record<string, string> = { "content-type": "application/json" };
 
         if (this.authToken) {
             headers["authorization"] = `Bearer ${this.authToken}`;
+        }
+
+        if (flags.mutationId) {
+            headers["x-lunora-mutation-id"] = flags.mutationId;
         }
 
         if (flags.attachBookmark) {
@@ -1798,6 +1850,21 @@ class LunoraClient {
                 headers["x-d1-bookmark"] = bookmark;
             }
         }
+
+        return headers;
+    }
+
+    private async rpc(
+        functionPath: string,
+        args: Record<string, unknown>,
+        shardKey: string | undefined,
+        flags: { attachBookmark?: boolean; captureBookmark?: boolean; mutationId?: string } = {},
+    ): Promise<unknown> {
+        if (!this.fetchImpl) {
+            throw new Error("LunoraClient: no `fetch` implementation available");
+        }
+
+        const headers = this.rpcRequestHeaders(flags);
 
         const response = await this.fetchImpl(joinUrl(this.url, RPC_PATH), {
             body: JSON.stringify({ args, functionPath, shardKey }),
@@ -1919,6 +1986,30 @@ class LunoraClient {
         return body;
     }
 
+    /**
+     * Send the one-shot `connect` envelope on an open shard socket, carrying the
+     * shard's registered context (or the client-wide default). Only sent when a
+     * context is registered: the envelope exists to deliver that context to the
+     * DO, which records it for replay to `onDisconnect` and runs the server's
+     * `onConnect` hooks once per socket. A socket with no context has nothing to
+     * announce, so it stays off the wire and plain subscriptions are unaffected.
+     * Register a context — e.g. `setConnectionContext({})` — to opt a socket into
+     * lifecycle dispatch.
+     */
+    private sendConnectEnvelope(conn: ShardConnection): void {
+        const context = this.connectionContexts.get(connectionKey(conn.shardKey)) ?? this.defaultConnectionContext;
+
+        if (context === undefined) {
+            return;
+        }
+
+        sendOn(conn, {
+            context,
+            id: "connect",
+            type: "connect",
+        });
+    }
+
     private ensureSocket(shardKey: string | undefined): void {
         if (this.closed || this.WebSocketImpl === undefined) {
             return;
@@ -1942,6 +2033,11 @@ class LunoraClient {
             conn.wasEverConnected = true;
             conn.reconnect.reset();
             this.emitConnectionStatus();
+
+            // Announce the connection (and its app context) before resubscribing,
+            // so the server's `onConnect` hooks run with context in place and the
+            // context is recorded for replay to `onDisconnect` at close.
+            this.sendConnectEnvelope(conn);
 
             // Resubscribe everyone bound to this shard.
             this.markShardPendingAck(shardKey);
@@ -2373,15 +2469,18 @@ class LunoraClient {
             this.queuedIdentities.delete(item.id ?? "");
 
             try {
+                // Replay under the write's stable id so the server dedups a
+                // mutation it already committed (e.g. the response was lost on the
+                // first send) — exactly-once rather than at-least-once.
                 // eslint-disable-next-line no-await-in-loop -- sequential replay preserves the FIFO order callers depend on (see above)
-                const value = await this.rpc(item.functionPath, item.args, item.shardKey, { captureBookmark: true });
+                const value = await this.rpc(item.functionPath, item.args, item.shardKey, { captureBookmark: true, mutationId: item.id });
 
                 this.unpersist(item.id);
                 item.resolve(value);
             } catch (error) {
                 // Remove on rejection too: the server reached a verdict, so
                 // replaying again would only re-trigger the same failure
-                // (a poison-message loop). At-least-once, not exactly-once.
+                // (a poison-message loop).
                 this.unpersist(item.id);
                 item.reject(error);
             }

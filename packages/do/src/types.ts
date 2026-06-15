@@ -18,6 +18,12 @@ export interface SubscriptionQuery {
 }
 
 export interface SubscriptionEnvelope {
+    /**
+     * App-supplied connection context carried by the `connect` envelope (e.g.
+     * `{ roomId, sessionId }`). Merged into the socket attachment and forwarded
+     * to every lifecycle hook as `event.context`. Ignored on other envelope types.
+     */
+    context?: Record<string, unknown>;
     id: string;
     query?: SubscriptionQuery;
 
@@ -25,9 +31,39 @@ export interface SubscriptionEnvelope {
      * `subscribe`/`unsubscribe`/`ack` drive live queries; `stream` opens a
      * streaming-query iterator that yields `ServerChunkMessage` frames
      * until the server emits `complete` (or the client cancels with
-     * `unsubscribe` on the same id).
+     * `unsubscribe` on the same id). `connect` is the one-shot control frame the
+     * client sends right after the socket opens to register its connection
+     * `context` and fire the `onConnect` lifecycle hooks.
      */
-    type: "ack" | "stream" | "subscribe" | "unsubscribe";
+    type: "ack" | "connect" | "stream" | "subscribe" | "unsubscribe";
+}
+
+/**
+ * The argument a connection-lifecycle hook receives. Structurally matches
+ * `@lunora/server`'s `LifecycleEvent`; defined here so `@lunora/do` stays free of
+ * a dependency on the API package. The DO forwards it verbatim as the hook's
+ * `args`, and the generated handler casts it back to the typed shape.
+ */
+export interface LifecycleEvent {
+    /** Stable per-socket id minted at upgrade, replayed verbatim on disconnect. */
+    connectionId: string;
+    /** App-supplied connection context from the client `connect` envelope. */
+    context?: Record<string, unknown>;
+    /** This DO's shard name. */
+    shardKey: string;
+    /** Verified user id resolved at upgrade, or `null` for an anonymous socket. */
+    userId: string | null;
+}
+
+/**
+ * Per-socket lifecycle dispatch payload assembled from the attachment at
+ * connect/close: the {@link LifecycleEvent} the hooks receive plus the verified
+ * identity to replay so each hook runs under the connecting user.
+ */
+export interface LifecycleDispatchInfo {
+    event: LifecycleEvent;
+    identity: Record<string, unknown> | undefined;
+    userId: string | undefined;
 }
 
 export interface MutationDelta {
@@ -78,5 +114,32 @@ export interface SocketAttachment {
      * user-subscription sockets, which may never read admin data over the wire.
      */
     admin?: boolean;
+
+    /**
+     * Stable per-socket id minted at upgrade. Its presence marks a socket that
+     * has been through the lifecycle-aware upgrade path, so `webSocketClose`
+     * only dispatches `onDisconnect` hooks for a socket that recorded one.
+     */
+    connectionId?: string;
+
+    /**
+     * App-supplied connection context from the client `connect` envelope (e.g.
+     * `{ roomId, sessionId }`). Stashed here so it survives hibernation and can
+     * be replayed to the `onDisconnect` hooks at close time.
+     */
+    context?: Record<string, unknown>;
+
+    /**
+     * Verified caller identity claims resolved at upgrade (from the
+     * `x-lunora-identity` header the runtime forwards). Replayed to lifecycle
+     * hooks so they run under the connecting user.
+     */
+    identity?: Record<string, unknown>;
     subs: Record<string, SubscriptionQuery>;
+
+    /**
+     * Verified user id resolved at upgrade (from `x-lunora-userid`), or absent
+     * for an anonymous socket. Replayed to lifecycle hooks as `event.userId`.
+     */
+    userId?: string;
 }

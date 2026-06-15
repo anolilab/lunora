@@ -1,13 +1,13 @@
 export { default as asBucketStorage } from "./as-bucket-storage";
 export type {
     ActionBuilder,
-    LunoraBuilders,
     CreateOptions,
     DataModelInit,
     EmptyArgs,
     InternalActionBuilder,
     InternalMutationBuilder,
     InternalQueryBuilder,
+    LunoraBuilders,
     Middleware,
     MiddlewareNext,
     MutationBuilder,
@@ -16,7 +16,7 @@ export type {
 } from "./builder/index";
 export { initLunora } from "./builder/index";
 export type { EnvAccessor, EnvKeyFailure, EnvShape, InferEnv } from "./env";
-export { LunoraEnvError, defineEnv, redactSecrets } from "./env";
+export { defineEnv, LunoraEnvError, redactSecrets } from "./env";
 export type { LunoraErrorCode } from "./error";
 export { LunoraError } from "./error";
 export type { FacadeEntry, FacadeWriterLike, OrmLike } from "./facade";
@@ -24,9 +24,6 @@ export { bindOrm, bindTableFacade } from "./facade";
 export type { ActionDefinition, MutationDefinition, QueryDefinition } from "./functions";
 export { action, internalAction, internalMutation, internalQuery, mutation, query } from "./functions";
 export type {
-    LunoraHttpApp,
-    LunoraHttpEnv,
-    LunoraRouteHandler,
     HttpActionCtx,
     HttpActionHandler,
     HttpMethod,
@@ -35,8 +32,13 @@ export type {
     HttpRouteFactory,
     HttpRouteHandlerOptions,
     HttpStreamHandlerOptions,
+    LunoraHttpApp,
+    LunoraHttpEnv,
+    LunoraRouteHandler,
 } from "./http";
 export { httpAction, httpRoute, httpRouter, serveStorageObject } from "./http";
+export type { LifecycleHandler } from "./lifecycle";
+export { onConnect, onDisconnect } from "./lifecycle";
 export type { MaskColumns, MaskContext, MaskFn, MaskOptions, MaskPolicies, MaskStrategy } from "./mask/index";
 export { mask } from "./mask/index";
 export type { MigrationDefinition, MigrationDocument, MigrationTransform, RegisteredMigration } from "./migration";
@@ -70,7 +72,6 @@ export type {
     AnyApi,
     ArgsValidator,
     AuthState,
-    LunoraLogger,
     DatabaseReader,
     DatabaseWriter,
     FunctionKind,
@@ -78,6 +79,9 @@ export type {
     IndexDefinition,
     IndexRangeBuilder,
     InferArgs,
+    LifecycleEvent,
+    LifecycleEventKind,
+    LunoraLogger,
     MutationCtx,
     OnDeleteAction,
     PaginationOptions,
@@ -88,6 +92,7 @@ export type {
     ReadOnlyStorage,
     RegisteredAction,
     RegisteredFunction,
+    RegisteredLifecycleHook,
     RegisteredMutation,
     RegisteredQuery,
     RegisteredStream,

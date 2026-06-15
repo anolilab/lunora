@@ -164,6 +164,46 @@ describe("createWorker", () => {
         expect(shard.calls[0]!.shardKey).toBe("channel-7");
     });
 
+    it("strips client-supplied identity headers from /_lunora/ws upgrades (anonymous spoof)", async () => {
+        expect.assertions(3);
+
+        // No resolveIdentity → every caller is anonymous. A forged x-lunora-userid /
+        // x-lunora-identity on the upgrade must NOT reach the shard, else an anonymous
+        // attacker could spoof a verified identity on the socket.
+        const worker = createWorker({ shardDO: shard.namespace });
+
+        const upgrade = new Request("https://app.example/_lunora/ws?shard=channel-7", {
+            headers: { Upgrade: "websocket", "x-lunora-identity": '{"roles":["admin"]}', "x-lunora-userid": "victim" },
+        });
+
+        await worker.fetch(upgrade, {}, fakeContext);
+
+        expect(shard.calls).toHaveLength(1);
+        expect(shard.calls[0]!.request.headers.get("x-lunora-userid")).toBeNull();
+        expect(shard.calls[0]!.request.headers.get("x-lunora-identity")).toBeNull();
+    });
+
+    it("overrides client-supplied identity headers on /_lunora/ws with the resolved identity", async () => {
+        expect.assertions(2);
+
+        // A forged x-lunora-userid must be replaced by the server-resolved one, never honoured.
+        const worker = createWorker({
+            resolveIdentity: () => {
+                return { userId: "user_42" };
+            },
+            shardDO: shard.namespace,
+        });
+
+        const upgrade = new Request("https://app.example/_lunora/ws?shard=channel-7", {
+            headers: { Upgrade: "websocket", "x-lunora-userid": "victim" },
+        });
+
+        await worker.fetch(upgrade, {}, fakeContext);
+
+        expect(shard.calls[0]!.request.headers.get("x-lunora-userid")).toBe("user_42");
+        expect(shard.calls[0]!.request.headers.get("x-lunora-identity")).toBeNull();
+    });
+
     it("rejects /_lunora/ws without upgrade header", async () => {
         expect.assertions(1);
 

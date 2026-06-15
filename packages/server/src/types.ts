@@ -211,12 +211,46 @@ interface RegisteredFunction<A extends ArgsValidator, R, Kind extends FunctionKi
     readonly args: A;
     readonly handler: (context: unknown, args: InferArgs<A>) => Promise<R> | R;
     readonly kind: Kind;
+
+    /**
+     * Set on connection-lifecycle hooks (`onConnect` / `onDisconnect`).
+     * Marks the function for the generated `LUNORA_LIFECYCLE_HOOKS` manifest so the
+     * DO dispatches it on socket connect/disconnect rather than via a client RPC.
+     * Absent on ordinary registrations.
+     */
+    readonly lifecycle?: LifecycleEventKind;
     readonly visibility?: FunctionVisibility;
 }
 
 type RegisteredQuery<A extends ArgsValidator, R> = RegisteredFunction<A, R, "query">;
 type RegisteredMutation<A extends ArgsValidator, R> = RegisteredFunction<A, R, "mutation">;
 type RegisteredAction<A extends ArgsValidator, R> = RegisteredFunction<A, R, "action">;
+
+/** Which side of the WebSocket lifecycle a hook fires on. */
+type LifecycleEventKind = "connect" | "disconnect";
+
+/**
+ * The event a connection-lifecycle hook receives as its second argument. It is
+ * the JSON-serializable payload the DO forwards on socket connect/disconnect;
+ * the verified caller identity is also reflected on `ctx.auth` (the hook runs
+ * under the connecting user via `resolveIdentity`).
+ */
+interface LifecycleEvent {
+    /** Stable per-socket id, minted at upgrade and replayed verbatim on disconnect. */
+    readonly connectionId: string;
+    /** App-supplied connection context from the client `connect` envelope (e.g. `{ roomId, sessionId }`). */
+    readonly context?: Record<string, unknown>;
+    /** The shard this socket is bound to. */
+    readonly shardKey: string;
+    /** Verified user id resolved at upgrade, or `null` for an anonymous socket. */
+    readonly userId: string | null;
+}
+
+/**
+ * A registered connection-lifecycle hook — an internal mutation tagged with the
+ * lifecycle side it fires on. Produced by `onConnect` / `onDisconnect`.
+ */
+type RegisteredLifecycleHook = RegisteredFunction<Record<string, never>, void, "mutation"> & { readonly lifecycle: LifecycleEventKind };
 
 /**
  * A streaming query registration. Unlike {@link RegisteredFunction} the handler
@@ -1020,7 +1054,6 @@ export type {
     AnyApi,
     ArgsValidator,
     AuthState,
-    LunoraLogger,
     DatabaseReader,
     DatabaseWriter,
     FunctionKind,
@@ -1028,6 +1061,9 @@ export type {
     IndexDefinition,
     IndexRangeBuilder,
     InferArgs,
+    LifecycleEvent,
+    LifecycleEventKind,
+    LunoraLogger,
     MutationCtx,
     OnDeleteAction,
     PaginationOptions,
@@ -1038,6 +1074,7 @@ export type {
     ReadOnlyStorage,
     RegisteredAction,
     RegisteredFunction,
+    RegisteredLifecycleHook,
     RegisteredMutation,
     RegisteredQuery,
     RegisteredStream,

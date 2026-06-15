@@ -668,7 +668,7 @@ export default crons;
             const result = runCodegen({ projectRoot: workdir });
 
             expect(result.generated.shard).toContain("export const createShardDO");
-            expect(result.generated.shard).toContain('import { LUNORA_FUNCTIONS, LUNORA_MIGRATIONS } from "./functions.js"');
+            expect(result.generated.shard).toContain('import { LUNORA_FUNCTIONS, LUNORA_LIFECYCLE_HOOKS, LUNORA_MIGRATIONS } from "./functions.js"');
             expect(result.generated.shard).toContain('import schema from "../schema.js"');
             expect(result.generated.shard).toContain("class extends ShardDOBase");
             expect(result.generated.shard).toContain("runShardMigrations");
@@ -678,6 +678,34 @@ export default crons;
             // dependency-light and never reach for @lunora/vectors.
             expect(result.generated.shard).not.toContain("@lunora/vectors");
             expect(result.generated.shard).not.toContain("createVectorSyncHook");
+        });
+
+        it("collects onConnect/onDisconnect exports into the LUNORA_LIFECYCLE_HOOKS manifest and wires the shard override", () => {
+            expect.assertions(6);
+
+            writeFileSync(
+                join(workdir, "lunora", "hooks.ts"),
+                `import { onConnect, onDisconnect } from "@lunora/server";
+export const onJoin = onConnect(async (ctx, event) => { void ctx; void event; });
+export const onLeave = onDisconnect(async (ctx, event) => { void ctx; void event; });
+`,
+                "utf8",
+            );
+
+            const result = runCodegen({ projectRoot: workdir });
+
+            // The hooks land in the dispatchable function table by their path…
+            expect(result.generated.functions).toContain('"hooks:onJoin":');
+            expect(result.generated.functions).toContain('"hooks:onLeave":');
+
+            // …and in the connect/disconnect manifest the DO reads at runtime.
+            expect(result.generated.functions).toContain('connect: ["hooks:onJoin"]');
+            expect(result.generated.functions).toContain('disconnect: ["hooks:onLeave"]');
+
+            // The generated ShardDO subclass exposes the manifest to the base via
+            // the lifecycleHookPaths override.
+            expect(result.generated.shard).toContain('import { LUNORA_FUNCTIONS, LUNORA_LIFECYCLE_HOOKS, LUNORA_MIGRATIONS } from "./functions.js"');
+            expect(result.generated.shard).toContain("protected override lifecycleHookPaths(event:");
         });
 
         it("throws when schema.ts is missing", () => {

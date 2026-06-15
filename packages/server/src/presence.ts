@@ -45,10 +45,11 @@
 import { v } from "@lunora/values";
 
 import { mutation, query } from "./functions";
+import { onDisconnect } from "./lifecycle";
 import type { Component, SchemaExtension } from "./plugin";
 import { defineComponent, defineSchemaExtension } from "./plugin";
 import { defineTable } from "./schema";
-import type { MutationCtx as MutationContext, QueryCtx as QueryContext, RegisteredMutation, RegisteredQuery } from "./types";
+import type { MutationCtx as MutationContext, QueryCtx as QueryContext, RegisteredLifecycleHook, RegisteredMutation, RegisteredQuery } from "./types";
 
 /** Default time-to-live for a presence row: a heartbeat keeps a member "present" for this long. */
 const DEFAULT_TTL_MS = 30_000;
@@ -88,6 +89,15 @@ interface DefinePresenceOptions {
 
 /** The registered functions a presence component ships. */
 interface PresenceFunctions {
+    /**
+     * Connection-lifecycle hook: the instant a client's WebSocket drops, hard-
+     * delete its presence row so it disappears from `listPresent` with no TTL
+     * lag. Targets the row by the `{ roomId, sessionId }` the client passed as
+     * the connection `context`. The TTL filter + `sweep` remain the fallback for
+     * ungraceful drops where no `context` was recorded.
+     */
+    disconnect: RegisteredLifecycleHook;
+
     /**
      * Upsert the caller's presence row for `roomId` and stamp `lastSeen = now`.
      * Keyed by `(roomId, sessionId)` — re-heartbeats patch the existing row so
@@ -248,9 +258,31 @@ const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent 
     // re-tag here to keep the factory single-sourced.
     const internalSweep = { ...sweep, visibility: "internal" } as typeof sweep;
 
+    // Immediate-departure hook: when the socket closes, drop the matching row
+    // now instead of waiting for the TTL filter to age it out. The client stamps
+    // `{ roomId, sessionId }` into the connection `context`; without it we have
+    // nothing to target and fall back to TTL + `sweep`.
+    const disconnect = onDisconnect(async (context: MutationContext, event): Promise<void> => {
+        const roomId = event.context?.["roomId"];
+        const sessionId = event.context?.["sessionId"];
+
+        if (typeof roomId !== "string" || typeof sessionId !== "string") {
+            return;
+        }
+
+        const existing = await context.db
+            .query(PRESENCE_TABLE)
+            .withIndex("byRoomSession", (q) => q.eq("roomId", roomId).eq("sessionId", sessionId))
+            .first();
+
+        if (existing) {
+            await context.db.delete(existing["_id"] as never);
+        }
+    });
+
     return defineComponent(PRESENCE_KEY, {
         extension: presenceExtension,
-        functions: { heartbeat, listPresent, sweep: internalSweep },
+        functions: { disconnect, heartbeat, listPresent, sweep: internalSweep },
     }) as PresenceComponent;
 };
 

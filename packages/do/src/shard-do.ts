@@ -8,7 +8,7 @@ import { appendAuditEntry, ensureAuditTable, readAuditLog } from "./audit-log";
 import type { AuthMetrics } from "./auth-metrics";
 import { readAuthMetrics, recordAuthEvent } from "./auth-metrics";
 import type { CdcChange, SqlExec } from "./ctx-db";
-import { CDC_LOG_TABLE, readCdcChanges } from "./ctx-db";
+import { CDC_LOG_TABLE, readCdcChanges, readIdempotent, trimIdempotent, writeIdempotent } from "./ctx-db";
 import type { MigrationDirection, MigrationRunResult } from "./data-migration";
 import { DATA_MIGRATION_STATE_TABLE, readMigrationStatus } from "./data-migration";
 import type { DependencyTracker } from "./dependency-tracker";
@@ -71,7 +71,7 @@ import { runReadonlySql } from "./sql-console";
 import { findDanglingReferences } from "./storage-correlation";
 import type { TransactionSqlLike } from "./transaction";
 import { ConflictError } from "./transaction";
-import type { MutationDelta, RpcRequest, SocketAttachment, SubscriptionEnvelope, SubscriptionQuery } from "./types";
+import type { LifecycleDispatchInfo, LifecycleEvent, MutationDelta, RpcRequest, SocketAttachment, SubscriptionEnvelope, SubscriptionQuery } from "./types";
 
 /**
  * Client→server text frame the runtime answers with {@link WS_KEEPALIVE_PONG}
@@ -1555,6 +1555,25 @@ abstract class ShardDO {
     private currentRequestUserId: string | undefined;
 
     /**
+     * Client-issued idempotency key for the in-flight mutation, forwarded via the
+     * `x-lunora-mutation-id` header. When set, the dispatch path dedups the call
+     * by `(currentRequestUserId, mutationId)`: a replay short-circuits to the
+     * cached result, and `runInTransaction` records the result alongside the
+     * writes so the dedup row is durable iff the writes are. Absent on queries
+     * and legacy clients. Cleared in the `fetch` `finally` block.
+     */
+    private currentRequestMutationId: string | undefined;
+
+    /**
+     * Wall-clock millis of the last `__idempotency` GC sweep on this warm
+     * instance. The dedup write throttles `trimIdempotent` to at most once an
+     * hour off this field (in-memory, so a fresh instance just sweeps on its
+     * first mutation) — keeping the 24h-retention cleanup off the per-mutation
+     * hot path without needing a separate alarm/cron.
+     */
+    private lastIdempotencyTrimAt = 0;
+
+    /**
      * Per-request identity envelope forwarded from the runtime via the
      * `x-lunora-identity` JSON header. Stores claims like `email`,
      * `name`, or custom roles populated by `resolveIdentity` on the
@@ -1718,142 +1737,159 @@ abstract class ShardDO {
             return this.handleWebSocketUpgrade(request);
         }
 
-        if (url.pathname === "/rpc" && request.method === "POST") {
-            let payload: RpcRequest;
-
-            try {
-                payload = await request.json();
-            } catch {
-                return jsonResponse({ error: { code: "BAD_REQUEST", message: "invalid JSON body" } }, 400);
-            }
-
-            // Reserved admin-introspection RPCs are intercepted before user
-            // dispatch — they read raw SQLite directly rather than running a
-            // registered function, and carry their own bearer-token gate.
-            if (payload.functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
-                return this.handleAdminRpc(request, payload.functionPath, payload.args ?? {});
-            }
-
-            // Stash the inbound D1 bookmark and identity headers for the
-            // duration of the handler call so getters return the right
-            // values. Cleared on exit so the next request starts fresh.
-            this.currentRequestBookmark = request.headers.get("x-d1-bookmark") ?? undefined;
-            this.currentResponseBookmark = undefined;
-            this.currentRequestUserId = request.headers.get("x-lunora-userid") ?? undefined;
-            this.currentRequestIdentity = parseIdentityHeader(request.headers.get("x-lunora-identity"));
-            this.currentRequestSystem = request.headers.get("x-lunora-system") === "1";
-            // Reset the per-request read/cache capture (filled by `runCachedQuery`
-            // for cached query paths) so a previous dispatch can't leak into this
-            // entry's logged read set / cache-hit flag.
-            this.currentRequestReadTables = undefined;
-            this.currentRequestCacheHit = undefined;
-
-            this.metrics.requests += 1;
-            const dispatchStartedAt = Date.now();
-
-            // Collect the tables this dispatch full-scans (stamped by the
-            // ctx-db read hook) so `recordFunctionCall` can persist the causal
-            // attribution. Fresh per request; drained below.
-            this.currentScannedTables = new Set<string>();
-
-            // Collect the declared indexes this dispatch exercises (stamped by
-            // the ctx-db index-use hook) so `recordFunctionCall` can persist the
-            // per-index hit counter behind the dead-index lint. Fresh per
-            // request; drained below.
-            this.currentIndexHits = new Set<string>();
-
-            // Collect per-statement SQL samples from the instrumented `sql`
-            // getter so `flushStmtSamples` can persist them to the durable
-            // `__lunora_metrics_queries` table after the handler resolves.
-            // Allocating a fresh array here activates the instrumentation (the
-            // `sql` getter only wraps when this field is defined).
-            this.currentStmtSamples = [];
-
-            try {
-                // Reserved cross-shard relation read/count (reverse cross-backend
-                // relations). Served BEFORE user dispatch and returned BARE (row
-                // array / number) — never `{ result }`-wrapped — so the Query
-                // Coordinator's `concat`/`sum` merge composes the per-shard
-                // values. Runs under the forwarded identity stashed above; the
-                // worker refuses this prefix on a single-shard envelope, so it's
-                // only reachable through the authorizeFanOut-gated fan-out path.
-                if (payload.functionPath.startsWith(RELATION_FUNCTION_PREFIX)) {
-                    const value = await this.runRelationFanoutRead(payload.functionPath, payload.args ?? {});
-
-                    return jsonResponse(value, 200, this.currentResponseBookmark);
-                }
-
-                const result = await this.handleRpc(payload.functionPath, payload.args ?? {});
-                const durationMs = Date.now() - dispatchStartedAt;
-
-                // Record the handler's own latency (before the subscription
-                // write-flush below) against the per-function counters, along
-                // with any tables it full-scanned (causal attribution).
-                this.recordFunctionCall(payload.functionPath, durationMs, undefined, this.currentScannedTables, this.currentIndexHits);
-
-                // Flush per-statement SQL samples accumulated during dispatch to
-                // the durable `__lunora_metrics_queries` table. Best-effort:
-                // a flush failure (e.g. no sql handle in tests) must never fail
-                // the response.
-                this.flushStmtSamples();
-
-                // Snapshot the written-table set BEFORE `flushChangedTables`
-                // drains it — afterwards `pendingChangedTables` is `undefined`,
-                // so the request log would record an empty write set.
-                const tablesWritten = [...(this.pendingChangedTables ?? [])];
-
-                this.recordRequestLog(payload.functionPath, payload.args ?? {}, durationMs, "ok", tablesWritten);
-
-                // Inspect the post-write size before responding. SQLite-in-DO
-                // exposes `databaseSize` as a real getter; reading it is a
-                // cheap stat call, not a full table scan.
-                this.maybeWarnRootSize();
-
-                // Snapshot the response before re-running subscriptions so the
-                // bookmark captured by the handler is preserved verbatim.
-                const response = jsonResponse({ result }, 200, this.currentResponseBookmark);
-
-                await this.flushChangedTables();
-
-                return response;
-            } catch (error: unknown) {
-                this.metrics.errors += 1;
-                const durationMs = Date.now() - dispatchStartedAt;
-                const message = error instanceof Error ? error.message : String(error);
-                // Count only OCC conflicts as write contention — a unique-index
-                // breach / onDelete-restrict / trigger-overflow also surfaces as a
-                // 409 ConflictError but is a constraint failure, not contention, and
-                // would mis-fire the write-contention advisor.
-                const conflicted = error instanceof ConflictError && error.kind === "occ";
-
-                this.recordFunctionCall(payload.functionPath, durationMs, message, this.currentScannedTables, this.currentIndexHits, conflicted);
-                // Flush statement samples even on error paths — partial sampling
-                // is better than losing the timing signal entirely.
-                this.flushStmtSamples();
-                this.recordRequestLog(payload.functionPath, payload.args ?? {}, durationMs, "error", [...(this.pendingChangedTables ?? [])], message);
-                this.logs.push({
-                    functionPath: payload.functionPath,
-                    level: "error",
-                    message,
-                    timestamp: Date.now(),
-                });
-
-                return this.errorToResponse(error);
-            } finally {
-                this.currentRequestBookmark = undefined;
-                this.currentResponseBookmark = undefined;
-                this.currentRequestUserId = undefined;
-                this.currentRequestIdentity = undefined;
-                this.currentRequestSystem = false;
-                this.currentScannedTables = undefined;
-                this.currentIndexHits = undefined;
-                this.currentRequestReadTables = undefined;
-                this.currentRequestCacheHit = undefined;
-                this.currentStmtSamples = undefined;
-            }
+        if (url.pathname !== "/rpc" || request.method !== "POST") {
+            return new Response("Not found", { status: 404 });
         }
 
-        return new Response("Not found", { status: 404 });
+        let payload: RpcRequest;
+
+        try {
+            payload = await request.json();
+        } catch {
+            return jsonResponse({ error: { code: "BAD_REQUEST", message: "invalid JSON body" } }, 400);
+        }
+
+        // Reserved admin-introspection RPCs are intercepted before user
+        // dispatch — they read raw SQLite directly rather than running a
+        // registered function, and carry their own bearer-token gate.
+        if (payload.functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
+            return this.handleAdminRpc(request, payload.functionPath, payload.args ?? {});
+        }
+
+        // Stash the inbound D1 bookmark and identity headers for the
+        // duration of the handler call so getters return the right
+        // values. Cleared on exit so the next request starts fresh.
+        this.currentRequestBookmark = request.headers.get("x-d1-bookmark") ?? undefined;
+        this.currentResponseBookmark = undefined;
+        this.currentRequestUserId = request.headers.get("x-lunora-userid") ?? undefined;
+        this.currentRequestMutationId = request.headers.get("x-lunora-mutation-id") ?? undefined;
+        this.currentRequestIdentity = parseIdentityHeader(request.headers.get("x-lunora-identity"));
+        this.currentRequestSystem = request.headers.get("x-lunora-system") === "1";
+        // Reset the per-request read/cache capture (filled by `runCachedQuery`
+        // for cached query paths) so a previous dispatch can't leak into this
+        // entry's logged read set / cache-hit flag.
+        this.currentRequestReadTables = undefined;
+        this.currentRequestCacheHit = undefined;
+
+        this.metrics.requests += 1;
+        const dispatchStartedAt = Date.now();
+
+        // Collect the tables this dispatch full-scans (stamped by the
+        // ctx-db read hook) so `recordFunctionCall` can persist the causal
+        // attribution. Fresh per request; drained below.
+        this.currentScannedTables = new Set<string>();
+
+        // Collect the declared indexes this dispatch exercises (stamped by
+        // the ctx-db index-use hook) so `recordFunctionCall` can persist the
+        // per-index hit counter behind the dead-index lint. Fresh per
+        // request; drained below.
+        this.currentIndexHits = new Set<string>();
+
+        // Collect per-statement SQL samples from the instrumented `sql`
+        // getter so `flushStmtSamples` can persist them to the durable
+        // `__lunora_metrics_queries` table after the handler resolves.
+        // Allocating a fresh array here activates the instrumentation (the
+        // `sql` getter only wraps when this field is defined).
+        this.currentStmtSamples = [];
+
+        try {
+            // Reserved cross-shard relation read/count (reverse cross-backend
+            // relations). Served BEFORE user dispatch and returned BARE (row
+            // array / number) — never `{ result }`-wrapped — so the Query
+            // Coordinator's `concat`/`sum` merge composes the per-shard
+            // values. Runs under the forwarded identity stashed above; the
+            // worker refuses this prefix on a single-shard envelope, so it's
+            // only reachable through the authorizeFanOut-gated fan-out path.
+            if (payload.functionPath.startsWith(RELATION_FUNCTION_PREFIX)) {
+                const value = await this.runRelationFanoutRead(payload.functionPath, payload.args ?? {});
+
+                return jsonResponse(value, 200, this.currentResponseBookmark);
+            }
+
+            // Mutation-replay dedup: if this `(identity, mutationId)` already
+            // committed, return its cached result without re-running the
+            // handler (so a client that replays an unacked write — same id —
+            // sees exactly-once semantics). The id rides the
+            // `x-lunora-mutation-id` header (stashed into `currentRequestMutationId`
+            // above), the same source the write side reads inside
+            // `runInTransaction`, so the dedup row is durable iff the writes are.
+            const cached = this.readIdempotentResult(this.currentRequestMutationId);
+
+            if (cached !== undefined) {
+                this.recordFunctionCall(payload.functionPath, Date.now() - dispatchStartedAt, undefined, this.currentScannedTables, this.currentIndexHits);
+
+                return jsonResponse({ result: cached.value }, 200, this.currentResponseBookmark);
+            }
+
+            const result = await this.handleRpc(payload.functionPath, payload.args ?? {});
+            const durationMs = Date.now() - dispatchStartedAt;
+
+            // Record the handler's own latency (before the subscription
+            // write-flush below) against the per-function counters, along
+            // with any tables it full-scanned (causal attribution).
+            this.recordFunctionCall(payload.functionPath, durationMs, undefined, this.currentScannedTables, this.currentIndexHits);
+
+            // Flush per-statement SQL samples accumulated during dispatch to
+            // the durable `__lunora_metrics_queries` table. Best-effort:
+            // a flush failure (e.g. no sql handle in tests) must never fail
+            // the response.
+            this.flushStmtSamples();
+
+            // Snapshot the written-table set BEFORE `flushChangedTables`
+            // drains it — afterwards `pendingChangedTables` is `undefined`,
+            // so the request log would record an empty write set.
+            const tablesWritten = [...(this.pendingChangedTables ?? [])];
+
+            this.recordRequestLog(payload.functionPath, payload.args ?? {}, durationMs, "ok", tablesWritten);
+
+            // Inspect the post-write size before responding. SQLite-in-DO
+            // exposes `databaseSize` as a real getter; reading it is a
+            // cheap stat call, not a full table scan.
+            this.maybeWarnRootSize();
+
+            // Snapshot the response before re-running subscriptions so the
+            // bookmark captured by the handler is preserved verbatim.
+            const response = jsonResponse({ result }, 200, this.currentResponseBookmark);
+
+            await this.flushChangedTables();
+
+            return response;
+        } catch (error: unknown) {
+            this.metrics.errors += 1;
+            const durationMs = Date.now() - dispatchStartedAt;
+            const message = error instanceof Error ? error.message : String(error);
+            // Count only OCC conflicts as write contention — a unique-index
+            // breach / onDelete-restrict / trigger-overflow also surfaces as a
+            // 409 ConflictError but is a constraint failure, not contention, and
+            // would mis-fire the write-contention advisor.
+            const conflicted = error instanceof ConflictError && error.kind === "occ";
+
+            this.recordFunctionCall(payload.functionPath, durationMs, message, this.currentScannedTables, this.currentIndexHits, conflicted);
+            // Flush statement samples even on error paths — partial sampling
+            // is better than losing the timing signal entirely.
+            this.flushStmtSamples();
+            this.recordRequestLog(payload.functionPath, payload.args ?? {}, durationMs, "error", [...(this.pendingChangedTables ?? [])], message);
+            this.logs.push({
+                functionPath: payload.functionPath,
+                level: "error",
+                message,
+                timestamp: Date.now(),
+            });
+
+            return this.errorToResponse(error);
+        } finally {
+            this.currentRequestBookmark = undefined;
+            this.currentResponseBookmark = undefined;
+            this.currentRequestUserId = undefined;
+            this.currentRequestMutationId = undefined;
+            this.currentRequestIdentity = undefined;
+            this.currentRequestSystem = false;
+            this.currentScannedTables = undefined;
+            this.currentIndexHits = undefined;
+            this.currentRequestReadTables = undefined;
+            this.currentRequestCacheHit = undefined;
+            this.currentStmtSamples = undefined;
+        }
     }
 
     /**
@@ -1870,6 +1906,30 @@ abstract class ShardDO {
             envelope = JSON.parse(text) as SubscriptionEnvelope;
         } catch {
             ws.send(JSON.stringify({ message: "invalid envelope", type: "error" }));
+
+            return;
+        }
+
+        if (envelope.type === "connect") {
+            // One-shot control frame the client sends right after the socket
+            // opens: record its connection `context` on the attachment (so it
+            // survives hibernation and can be replayed at close) and fire the
+            // `onConnect` lifecycle hooks under the socket's verified identity.
+            const attachment = this.readAttachment(ws);
+
+            if (envelope.context !== undefined) {
+                attachment.context = envelope.context;
+
+                try {
+                    (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
+                } catch {
+                    // Over-large context can't be persisted; the hook still runs
+                    // with the supplied context this turn, but it won't survive
+                    // to disconnect. Never throw out of webSocketMessage.
+                }
+            }
+
+            await this.dispatchLifecycle("connect", this.lifecycleInfo(attachment));
 
             return;
         }
@@ -1972,8 +2032,18 @@ abstract class ShardDO {
      * closed the socket by the time we're called — calling `ws.close()`
      * again would throw "WebSocket has been closed" in the Workers runtime.
      */
-    // eslint-disable-next-line @typescript-eslint/require-await -- Workers hibernation handler: the platform invokes/awaits it; the signature must stay async even though this body is synchronous
     public async webSocketClose(ws: WebSocket, _code: number, _reason: string, _wasClean: boolean): Promise<void> {
+        // Fire `onDisconnect` lifecycle hooks the instant the socket drops —
+        // replaying the identity + context recorded at connect — so presence and
+        // other cleanup happen immediately, not after a TTL. Only a socket that
+        // recorded a `connectionId` (went through the lifecycle-aware upgrade)
+        // dispatches; the hooks run under the connecting user's identity.
+        const attachment = this.readAttachment(ws);
+
+        if (attachment.connectionId !== undefined) {
+            await this.dispatchLifecycle("disconnect", this.lifecycleInfo(attachment));
+        }
+
         // Abort in-flight stream iterators bound to this socket so user
         // handlers stop pumping into a closed channel rather than discovering
         // it on the next yield.
@@ -2005,6 +2075,49 @@ abstract class ShardDO {
 
     /** Subclasses implement function dispatch. */
     public abstract handleRpc(functionPath: string, args: Record<string, unknown>): Promise<unknown>;
+
+    /**
+     * The registered function paths to dispatch when a socket connects/disconnects.
+     * Base default is empty; the codegen subclass overrides it to return the
+     * generated lifecycle manifest keyed by `event`. Kept as a data hook (like
+     * `tableRefs`/`rlsMetadata`) so the security-load-bearing dispatch — running
+     * each hook under the verified identity + system dispatch — stays here in the
+     * base and can't be mis-wired by generated code.
+     */
+    // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass returns the generated lifecycle manifest
+    protected lifecycleHookPaths(_event: "connect" | "disconnect"): ReadonlyArray<string> {
+        return [];
+    }
+
+    /**
+     * Run every registered `connect`/`disconnect` hook for a socket, each under
+     * the connecting user's verified identity and a trusted system dispatch (so
+     * the internal hooks are permitted). A hook that throws is swallowed (logged)
+     * — a disconnect must never fail the hibernation close path, and one hook's
+     * failure must not skip the rest. Hooks run sequentially so they share the
+     * DO's single-threaded write snapshot deterministically.
+     */
+    protected async dispatchLifecycle(event: "connect" | "disconnect", info: LifecycleDispatchInfo): Promise<void> {
+        for (const functionPath of this.lifecycleHookPaths(event)) {
+            try {
+                // The event is passed as the handler's `args`; the lifecycle
+                // wrapper forwards it verbatim. `handleRpc` builds the ctx and
+                // enforces the internal-visibility gate, which the system flag
+                // satisfies.
+                // eslint-disable-next-line no-await-in-loop -- sequential by design: hooks share the DO's single-threaded write snapshot deterministically, and a throwing hook must not skip the rest
+                await this.withRequestIdentity(info.userId, info.identity, () =>
+                    this.withSystemDispatch(() => this.handleRpc(functionPath, info.event as unknown as Record<string, unknown>)),
+                );
+            } catch (error: unknown) {
+                this.logs.push({
+                    functionPath,
+                    level: "error",
+                    message: error instanceof Error ? error.message : String(error),
+                    timestamp: Date.now(),
+                });
+            }
+        }
+    }
 
     /**
      * Serve a reserved {@link RELATION_FUNCTION_PREFIX} fan-out read/count for
@@ -2238,6 +2351,34 @@ abstract class ShardDO {
 
             try {
                 const value = await handler();
+
+                // Record the mutation-replay dedup row as the last write before
+                // COMMIT, through the same `storage.sql` handle, so it commits in
+                // the same transaction as the handler's writes — durable iff they
+                // are. Only set on the client mutation path; `INSERT OR IGNORE`
+                // keeps a re-entrant transaction a no-op. The codegen mutation
+                // handler is `runInTransaction(() => userHandler(ctx))`, so
+                // `value` is the result the dispatch path returns.
+                if (this.currentRequestMutationId !== undefined) {
+                    const now = Date.now();
+
+                    // `JSON.stringify(undefined)` is `undefined`, not a string — a
+                    // void mutation must still cache a non-null `result_json`, so
+                    // fall back to the literal `"null"`. (`JSON.stringify` is typed
+                    // `=> string`, hence the disable: the `??` is load-bearing at
+                    // runtime despite the type claiming it can't be.)
+                    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- JSON.stringify(undefined) returns undefined at runtime
+                    writeIdempotent(this.sql as SqlExec, this.currentRequestUserId ?? "", this.currentRequestMutationId, JSON.stringify(value) ?? "null", now);
+
+                    // Throttled, in-transaction GC: drop dedup rows older than 24h
+                    // at most once an hour per warm instance. Past any realistic
+                    // offline-replay window, so a pruned id can only ever re-run a
+                    // mutation the client long since saw acked.
+                    if (now - this.lastIdempotencyTrimAt > 3_600_000) {
+                        trimIdempotent(this.sql as SqlExec, now - 86_400_000);
+                        this.lastIdempotencyTrimAt = now;
+                    }
+                }
 
                 sqlExec("COMMIT");
 
@@ -2665,6 +2806,30 @@ abstract class ShardDO {
     }
 
     /**
+     * Look up a previously-committed mutation for the in-flight request's
+     * `(identity, mutationId)`. Returns `{ value }` (the cached, JSON-decoded
+     * handler result) on a hit so the dispatch path can short-circuit, or
+     * `undefined` when `mutationId` is absent (queries / legacy clients) or the
+     * mutation has not run yet. Tolerates a stub `sql` handle without the dedup
+     * table (returns a miss) so unit harnesses that skip migrations still work.
+     */
+    protected readIdempotentResult(mutationId: string | undefined): { value: unknown } | undefined {
+        if (mutationId === undefined) {
+            return undefined;
+        }
+
+        try {
+            const record = readIdempotent(this.sql as SqlExec, this.currentRequestUserId ?? "", mutationId);
+
+            return record === undefined ? undefined : { value: JSON.parse(record.resultJson) };
+        } catch {
+            // Missing table (pre-migration shard / test stub) or a malformed
+            // cached payload — treat as a miss and let the handler run.
+            return undefined;
+        }
+    }
+
+    /**
      * Replay a batch of CDC changes into this shard (point-in-time recovery).
      * Schema-aware — it builds a `createShardCtxDb` writer — so the base class
      * can't implement it; the codegen-generated subclass overrides this to call
@@ -3019,6 +3184,41 @@ abstract class ShardDO {
             } catch {
                 // A buggy log sink must not break the handler — see emitLogEvent.
             }
+        }
+    }
+
+    /**
+     * Assemble the per-socket {@link LifecycleDispatchInfo} from its attachment:
+     * the verified identity to replay and the {@link LifecycleEvent} the hooks
+     * receive as their argument. `shardKey` is this DO's shard name.
+     */
+    private lifecycleInfo(attachment: SocketAttachment): LifecycleDispatchInfo {
+        const event: LifecycleEvent = {
+            connectionId: attachment.connectionId ?? "",
+            shardKey: this.state.id?.name ?? ROOT_SHARD_NAME,
+            // eslint-disable-next-line unicorn/no-null -- LifecycleEvent.userId is `string | null`; null is the contractual anonymous sentinel mirrored on ctx.auth
+            userId: attachment.userId ?? null,
+            ...(attachment.context === undefined ? {} : { context: attachment.context }),
+        };
+
+        return { event, identity: attachment.identity, userId: attachment.userId };
+    }
+
+    /**
+     * Run `fn` with the trusted-system flag set (restored afterwards), so an
+     * internal function dispatched through `handleRpc` is permitted. Mirrors the
+     * header-driven flag the worker's authorized path sets, without forging a
+     * header. The single toggle primitive for lifecycle-hook dispatch.
+     */
+    private async withSystemDispatch<R>(run: () => Promise<R> | R): Promise<R> {
+        const previous = this.currentRequestSystem;
+
+        this.currentRequestSystem = true;
+
+        try {
+            return await run();
+        } finally {
+            this.currentRequestSystem = previous;
         }
     }
 
@@ -4874,10 +5074,26 @@ abstract class ShardDO {
         const server = pair[1];
 
         this.state.acceptWebSocket(server);
+
+        // Capture the verified identity the runtime forwarded on the upgrade
+        // (`resolveIdentity` wired into the WS upgrade) and mint a stable
+        // per-socket id. Both are stashed on the attachment so they survive
+        // hibernation and can be replayed to the connection-lifecycle hooks at
+        // connect/close — including `webSocketClose`, when the socket carries no
+        // request of its own.
+        const userId = request.headers.get("x-lunora-userid") ?? undefined;
+        const identity = parseIdentityHeader(request.headers.get("x-lunora-identity"));
+
         // Stamp admin authorization onto the socket at upgrade so later
         // `__lunora_admin__:*` subscribe envelopes (which carry no credential of
         // their own) can be gated without re-checking a token per message.
-        (server as HibernatableWebSocket).serializeAttachment?.({ admin: this.isAdminSocket(request), subs: {} } satisfies SocketAttachment);
+        (server as HibernatableWebSocket).serializeAttachment?.({
+            admin: this.isAdminSocket(request),
+            connectionId: crypto.randomUUID(),
+            subs: {},
+            ...(identity === undefined ? {} : { identity }),
+            ...(userId === undefined ? {} : { userId }),
+        } satisfies SocketAttachment);
 
         // eslint-disable-next-line unicorn/no-null -- Web Response body for a 101 upgrade is `BodyInit | null`; null is the standard "no body" value
         return new Response(null, { status: 101, webSocket: client });

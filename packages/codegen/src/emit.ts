@@ -1074,9 +1074,32 @@ export const v = vBase as unknown as Omit<typeof vBase, "id"> & {
  * `server.ts` (which user code imports for `v`/`query`/`mutation`) so the two
  * never form an initialization cycle. See {@link emitServer}.
  */
+
+/**
+ * Build the `LUNORA_LIFECYCLE_HOOKS` manifest body: the connect/disconnect
+ * function-path arrays the generated ShardDO iterates on socket open/close. Each
+ * entry is the same `${namespace}:${fn}` key the function lands under in
+ * `LUNORA_FUNCTIONS`, so the DO dispatches a hook by path like any other
+ * registered function. Functions arrive pre-sorted, so the arrays are stable.
+ */
+const renderLifecycleManifest = (functions: ReadonlyArray<FunctionIR>): { connect: string[]; disconnect: string[] } => {
+    const manifest: { connect: string[]; disconnect: string[] } = { connect: [], disconnect: [] };
+
+    for (const definition of functions) {
+        if (!definition.lifecycle) {
+            continue;
+        }
+
+        manifest[definition.lifecycle].push(`${sanitizeNamespace(definition.filePath)}:${definition.exportName}`);
+    }
+
+    return manifest;
+};
+
 const emitFunctions = (functions: ReadonlyArray<FunctionIR>, migrations: ReadonlyArray<MigrationIR> = []): string => {
     const hasFunctions = functions.length > 0;
     const { dispatchBody, importBlock, migrationBody } = renderFunctionRegistry(functions, migrations);
+    const lifecycleHooks = renderLifecycleManifest(functions);
 
     const caller = renderCaller(functions);
     const callerTypes = caller.types ? `\n${caller.types}\n` : "";
@@ -1120,6 +1143,17 @@ export interface RegisteredLunoraFunction {
  * emits (\`api[namespace][fn].__lunoraRef === "namespace:fn"\`).
  */
 export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {${dispatchBody}};
+
+/**
+ * Connection-lifecycle manifest: the function paths the generated ShardDO
+ * dispatches when a client's WebSocket connects (\`connect\`) or disconnects
+ * (\`disconnect\`). Each path also resolves through {@link LUNORA_FUNCTIONS}; the
+ * DO runs every hook under the socket's verified identity via system dispatch.
+ */
+export const LUNORA_LIFECYCLE_HOOKS: { connect: readonly string[]; disconnect: readonly string[] } = {
+    connect: [${lifecycleHooks.connect.map((path) => JSON.stringify(path)).join(", ")}],
+    disconnect: [${lifecycleHooks.disconnect.map((path) => JSON.stringify(path)).join(", ")}],
+};
 
 /**
  * Resolve and invoke a registered function from an external caller. Throws a
@@ -2125,7 +2159,7 @@ const emitShard = ({
         ...paymentsImports,
         ``,
         `import schema from "../schema.js";`,
-        `import { LUNORA_FUNCTIONS, LUNORA_MIGRATIONS } from "./functions.js";`,
+        `import { LUNORA_FUNCTIONS, LUNORA_LIFECYCLE_HOOKS, LUNORA_MIGRATIONS } from "./functions.js";`,
     );
 
     const vectorsConfigField = hasVectors ? `\n    vectors?: (env: Record<string, unknown>) => Record<string, VectorizeIndexLike>;` : "";
@@ -2504,6 +2538,10 @@ ${relationFanout.override}
             return {
                 iterator: (signal) => (registered.handler as (context: unknown, args: Record<string, unknown>, signal: AbortSignal) => AsyncIterable<unknown>)(this.buildCtx({ functionPath }), args, signal),
             };
+        }
+
+        protected override lifecycleHookPaths(event: "connect" | "disconnect"): readonly string[] {
+            return LUNORA_LIFECYCLE_HOOKS[event];
         }
 
         protected override tableRefs(table: string): Record<string, string> | undefined {

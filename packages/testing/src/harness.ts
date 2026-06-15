@@ -4,9 +4,9 @@ import type {
     ActionCtx,
     ArgsValidator,
     AuthState,
-    LunoraLogger,
     DatabaseWriter,
     InferArgs,
+    LunoraLogger,
     MutationCtx,
     QueryCtx,
     RegisteredAction,
@@ -178,6 +178,7 @@ const lunoraTest = (schema: TestSchema): TestHarness => {
             scheduler: stubProxy("scheduler") as MutationCtx["scheduler"],
             storage: stubProxy("storage") as MutationCtx["storage"],
             vectors: stubProxy("vectors") as MutationCtx["vectors"],
+            workflows: stubProxy("workflows") as MutationCtx["workflows"],
         };
 
         const actionContext: ActionCtx = {
@@ -194,6 +195,7 @@ const lunoraTest = (schema: TestSchema): TestHarness => {
             scheduler: stubProxy("scheduler") as ActionCtx["scheduler"],
             storage: stubProxy("storage") as ActionCtx["storage"],
             vectors: stubProxy("vectors") as ActionCtx["vectors"],
+            workflows: stubProxy("workflows") as ActionCtx["workflows"],
         };
 
         const runRegistered = (

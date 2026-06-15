@@ -3,7 +3,7 @@ import { buildAuthAdminRoutes } from "./auth-admin-routes";
 import { MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJsonBodyWithLimit } from "./body-readers";
 import { buildDataMovementAdminRoutes } from "./data-movement-admin-routes";
 import type { FunctionArgumentDescriptor } from "./describe-args";
-import { LunoraError, isStructuralLunoraError, isStructuralConflictError, toErrorResponse } from "./errors";
+import { isStructuralConflictError, isStructuralLunoraError, LunoraError, toErrorResponse } from "./errors";
 import type { ExportRow } from "./export-stream";
 import { collectKnownTables, streamExportRows } from "./export-stream";
 import { streamingImport } from "./import-stream";
@@ -893,6 +893,10 @@ const resolveForwardContext = async (request: Request, env: unknown, resolveIden
     const authorization = request.headers.get("authorization");
     const cookie = request.headers.get("cookie");
     const bookmark = request.headers.get("x-d1-bookmark");
+    // Client-supplied mutation-replay idempotency key. Safe to forward verbatim:
+    // the DO namespaces the dedup record by the server-minted identity, so a
+    // forged id can only ever collide with the same caller's own mutations.
+    const mutationId = request.headers.get("x-lunora-mutation-id");
 
     if (authorization) {
         headers["authorization"] = authorization;
@@ -904,6 +908,10 @@ const resolveForwardContext = async (request: Request, env: unknown, resolveIden
 
     if (bookmark) {
         headers["x-d1-bookmark"] = bookmark;
+    }
+
+    if (mutationId) {
+        headers["x-lunora-mutation-id"] = mutationId;
     }
 
     if (!resolveIdentity) {
@@ -1577,13 +1585,13 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         const shardKey = url.searchParams.get("shard") ?? defaultShard;
 
-        // Resolve the calling identity (if any) and run the per-shard
-        // authorization callback before forwarding. The WS path doesn't
-        // need the rest of the forward context — only the identity for
-        // the authorization decision.
+        // Resolve the calling identity once: it both gates the shard and is
+        // forwarded to the DO so the socket carries a verified userId (the basis
+        // for trusted `onConnect`/`onDisconnect` lifecycle hooks). Mirrors the
+        // RPC path's `resolveForwardContext` → `authorize*` ordering.
+        const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, options.resolveIdentity);
+
         if (options.authorizeShard) {
-            // eslint-disable-next-line unicorn/no-null -- the public authorizeShard callback's anonymous-identity sentinel is `null`
-            const identity = options.resolveIdentity ? ((await options.resolveIdentity(request, env)) ?? null) : null;
             const allowed = await options.authorizeShard(identity, shardKey);
 
             if (!allowed) {
@@ -1593,7 +1601,32 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             warnUnauthenticatedShardAccessOnce("shard");
         }
 
-        return forwardToShard(options.shardDO, shardKey, request);
+        // Clone the upgrade request, attaching only the resolved identity headers.
+        // The original headers — crucially `Upgrade: websocket` — are preserved so
+        // the DO still performs the handshake; the DO reads `x-lunora-userid` /
+        // `x-lunora-identity` at upgrade and stashes them on the socket attachment.
+        //
+        // SECURITY: `x-lunora-userid` / `x-lunora-identity` are server-minted and
+        // trusted verbatim by the DO. Strip any client-supplied copies from the
+        // clone *unconditionally* before re-setting the resolved values — otherwise
+        // an anonymous caller could forge `x-lunora-userid` and, because the
+        // resolved-anonymous path never overwrites it, spoof a verified identity on
+        // the socket. Only an authenticated `resolveForwardContext` result may set them.
+        const upgradeHeaders = new Headers(request.headers);
+        upgradeHeaders.delete("x-lunora-userid");
+        upgradeHeaders.delete("x-lunora-identity");
+        const forwardedUserId = forwardedHeaders["x-lunora-userid"];
+        const forwardedIdentity = forwardedHeaders["x-lunora-identity"];
+
+        if (forwardedUserId !== undefined) {
+            upgradeHeaders.set("x-lunora-userid", forwardedUserId);
+        }
+
+        if (forwardedIdentity !== undefined) {
+            upgradeHeaders.set("x-lunora-identity", forwardedIdentity);
+        }
+
+        return forwardToShard(options.shardDO, shardKey, new Request(request, { headers: upgradeHeaders }));
     };
 
     /**
@@ -2384,7 +2417,6 @@ export type {
     AdminTableResolver,
     BackupManifest,
     BackupStore,
-    LunoraWorker,
     CronHandler,
     CronJobDispatch,
     CronJobInfo,
@@ -2405,6 +2437,7 @@ export type {
     HttpActionContext,
     HttpActionLike,
     HttpRouterLike,
+    LunoraWorker,
     ResolvedIdentity,
     Route,
     RpcContext,
