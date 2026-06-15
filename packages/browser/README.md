@@ -98,6 +98,18 @@ const html = await browser.content("https://example.com");
 const title = await browser.scrape("https://example.com", () => document.title);
 ```
 
+## URL safety (SSRF guard)
+
+Every navigation URL is validated before the browser is launched. Beyond rejecting non-`http(s)` schemes (`file:`, `javascript:`, `data:`, …) and embedded `user:pass@` credentials, the helper **default-denies private / internal targets** — loopback (`127.0.0.0/8`, `::1`), RFC1918 (`10/8`, `172.16/12`, `192.168/16`), link-local incl. the cloud-metadata address (`169.254.169.254`), CGNAT (`100.64/10`), IPv6 ULA/link-local, and `localhost` / `*.internal` / `*.local` literals (octal/hex/integer IPv4 and IPv4-mapped IPv6 encodings are normalized first, so they can't slip past). This matters because action `url` args are often caller-controlled. <!-- gitleaks:allow -- illustrative `user:pass@` in prose, not a credential -->
+
+If you deliberately drive the browser at an internal service reachable through a private-network binding / Cloudflare Tunnel, opt out per-factory:
+
+```ts
+const browser = createBrowser({ binding: env.BROWSER, launch, allowPrivateTargets: true });
+```
+
+Only set `allowPrivateTargets` when every URL is trusted — it re-opens the SSRF surface. The guard does not resolve DNS, so a public hostname that resolves to a private address (DNS rebinding) is out of scope; keep caller-supplied URLs trusted regardless.
+
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/addons/browser)**.
 
 ## Related

@@ -111,6 +111,18 @@ export interface PdfOptions extends NavigateOptions {
 }
 
 export interface CirrusBrowserOptions {
+    /**
+     * Opt out of the SSRF guard that, by default, refuses to navigate to a
+     * private / internal / loopback / link-local host (RFC1918, `127.0.0.0/8`,
+     * `169.254.0.0/16` incl. the cloud-metadata address, CGNAT, IPv6 ULA/
+     * link-local, and `localhost` / `*.internal` / `*.local` literals). Leave it
+     * `false` (the default) unless every caller-supplied URL is trusted — e.g.
+     * you deliberately drive the browser at an internal service reachable through
+     * a Cloudflare Tunnel / private-network binding. Setting it `true` re-opens
+     * the SSRF surface, so never combine it with caller-controlled URLs.
+     */
+    allowPrivateTargets?: boolean;
+
     /** The Cloudflare Browser Rendering binding (`env.BROWSER`). Required. */
     binding: BrowserBindingLike;
 

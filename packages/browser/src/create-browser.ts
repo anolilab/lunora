@@ -10,14 +10,128 @@ const MAX_TIMEOUT_MS = 120_000;
 const MAX_VIEWPORT_WIDTH = 3840;
 const MAX_VIEWPORT_HEIGHT = 4320;
 
+/** Canonical dotted-quad octet matcher (1–3 digits), hoisted so it isn't recompiled per host part. */
+const IPV4_OCTET = /^\d{1,3}$/;
+
+/** IPv4-mapped IPv6 in the hex form the WHATWG `URL` parser emits (`::ffff:7f00:1`). */
+const IPV6_MAPPED_HEX = /^::ffff:([\da-f]{1,4}):([\da-f]{1,4})$/;
+
+/** IPv4-mapped IPv6 in dotted form (`::ffff:127.0.0.1`), for parsers that keep it. */
+const IPV6_MAPPED_DOTTED = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/;
+
+/** Leading / trailing `URL.hostname` IPv6 brackets (`[::1]`). */
+const IPV6_BRACKETS = /^\[|\]$/g;
+
 /**
- * Reject anything that isn't an absolute `http(s)` URL up front (the spirit of
- * `validateKey` in `@cirrus/storage`): a non-string, empty, relative, or
- * non-`http(s)` value (e.g. `javascript:`, `file:`, `ftp:`, `data:`) never
- * reaches the headless browser, so a hostile caller can't drive it to a local
- * file or a non-network scheme. Returns the normalized absolute URL string.
+ * Parse a canonical dotted-quad IPv4 string into its four octets, or `undefined`
+ * if it isn't one. The WHATWG `URL` parser already normalizes the octal/hex/integer
+ * IPv4 forms (`0177.0.0.1`, `0x7f.1`, `2130706433`) to dotted-decimal, so by the
+ * time a hostname reaches here an IPv4 literal is always canonical — closing those
+ * SSRF-bypass encodings for free.
  */
-const validateUrl = (url: string): string => {
+const parseIpv4 = (host: string): [number, number, number, number] | undefined => {
+    const parts = host.split(".");
+
+    if (parts.length !== 4) {
+        return undefined;
+    }
+
+    const octets = parts.map((part) => (IPV4_OCTET.test(part) ? Number(part) : -1));
+
+    if (octets.some((octet) => octet < 0 || octet > 255)) {
+        return undefined;
+    }
+
+    return octets as [number, number, number, number];
+};
+
+/** True if an IPv4 octet tuple is loopback / private / link-local / CGNAT / reserved — the ranges an SSRF guard blocks. */
+const isPrivateIpv4 = ([a, b]: [number, number, number, number]): boolean =>
+    a === 0 || // 0.0.0.0/8 "this host"
+    a === 10 || // 10.0.0.0/8 private
+    a === 127 || // 127.0.0.0/8 loopback
+    (a === 100 && b >= 64 && b <= 127) || // 100.64.0.0/10 CGNAT
+    (a === 169 && b === 254) || // 169.254.0.0/16 link-local (incl. 169.254.169.254 metadata)
+    (a === 172 && b >= 16 && b <= 31) || // 172.16.0.0/12 private
+    (a === 192 && b === 168) || // 192.168.0.0/16 private
+    a >= 224; // 224.0.0.0/4 multicast + 240.0.0.0/4 reserved + 255.255.255.255 broadcast
+
+/** True if an IPv6 literal (brackets already stripped) is loopback / unspecified / ULA / link-local, or maps to a private IPv4. */
+const isPrivateIpv6 = (host: string): boolean => {
+    const ip = host.toLowerCase();
+
+    // IPv4-mapped (`::ffff:127.0.0.1`). The WHATWG `URL` parser normalizes the
+    // embedded IPv4 to two hex words (`::ffff:7f00:1`); accept the dotted form too
+    // for parsers that keep it. Either way, decode the low 32 bits and reuse the
+    // IPv4 ranges so a mapped loopback/private address can't slip past.
+    const mappedHex = IPV6_MAPPED_HEX.exec(ip);
+
+    if (mappedHex) {
+        const high = Number.parseInt(mappedHex[1] ?? "0", 16);
+        const low = Number.parseInt(mappedHex[2] ?? "0", 16);
+
+        return isPrivateIpv4([Math.floor(high / 256), high % 256, Math.floor(low / 256), low % 256]);
+    }
+
+    const mappedDotted = IPV6_MAPPED_DOTTED.exec(ip);
+
+    if (mappedDotted) {
+        const v4 = parseIpv4(mappedDotted[1] ?? "");
+
+        return v4 === undefined || isPrivateIpv4(v4);
+    }
+
+    return (
+        ip === "::" || // unspecified
+        ip === "::1" || // loopback
+        ip.startsWith("fc") || // fc00::/7 unique-local
+        ip.startsWith("fd") || // fc00::/7 unique-local
+        ip.startsWith("fe8") || // fe80::/10 link-local
+        ip.startsWith("fe9") ||
+        ip.startsWith("fea") ||
+        ip.startsWith("feb")
+    );
+};
+
+/** Special-use hostname literals that resolve to the local host / internal namespaces. */
+const isPrivateHostname = (host: string): boolean =>
+    host === "localhost" || host.endsWith(".localhost") || host.endsWith(".local") || host.endsWith(".internal") || host.endsWith(".home.arpa");
+
+/**
+ * Classify a parsed URL's host as a private / internal SSRF target. IPv6 hosts
+ * arrive bracketed from `URL.hostname` (`[::1]`); strip them before matching.
+ */
+const isPrivateTarget = (parsed: URL): boolean => {
+    const host = parsed.hostname.replaceAll(IPV6_BRACKETS, "");
+
+    if (host.includes(":")) {
+        return isPrivateIpv6(host);
+    }
+
+    const v4 = parseIpv4(host);
+
+    return v4 === undefined ? isPrivateHostname(host.toLowerCase()) : isPrivateIpv4(v4);
+};
+
+/**
+ * Validate a caller-supplied navigation URL. The boundary, in order:
+ *
+ * - Scheme — only absolute `http(s)`. A non-string, empty, relative, or non-`http(s)`
+ * value (`javascript:`, `file:`, `ftp:`, `data:`) never reaches the headless browser,
+ * so a hostile caller can't drive it at a local file or a non-network scheme.
+ * - Credentials — a `user:pass@host` userinfo component is rejected: page navigation
+ * never needs it, and it's a credential-leak / host-spoof smell.
+ * - SSRF target — unless `allowPrivateTargets` is set, a private / internal / loopback
+ * / link-local host is refused (see {@link isPrivateTarget}). Browser Rendering egresses
+ * from Cloudflare's network, but a private-network binding / Cloudflare Tunnel can still
+ * make such hosts reachable, so default-deny is the safe posture; trusted internal use
+ * opts in explicitly.
+ *
+ * Returns the normalized absolute URL string. Does **not** resolve DNS, so a public
+ * hostname that later resolves to a private address (DNS rebinding) is out of scope —
+ * keep caller-supplied URLs trusted regardless of this guard.
+ */
+const validateUrl = (url: string, allowPrivateTargets: boolean): string => {
     if (typeof url !== "string" || url.length === 0) {
         throw new Error("@cirrus/browser: url must be a non-empty string");
     }
@@ -32,6 +146,16 @@ const validateUrl = (url: string): string => {
 
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
         throw new Error(`@cirrus/browser: url protocol must be http(s) (got "${parsed.protocol}")`);
+    }
+
+    if (parsed.username !== "" || parsed.password !== "") {
+        throw new Error("@cirrus/browser: url must not embed credentials (strip the `user:pass@` userinfo)"); // gitleaks:allow -- illustrative error text, not a credential
+    }
+
+    if (!allowPrivateTargets && isPrivateTarget(parsed)) {
+        throw new Error(
+            `@cirrus/browser: url host "${parsed.hostname}" is a private/internal address; pass createBrowser({ …, allowPrivateTargets: true }) to allow it`,
+        );
     }
 
     return parsed.toString();
@@ -103,7 +227,7 @@ export const createBrowser = (options: CirrusBrowserOptions): Browser => {
         use: (page: PageLike) => Promise<T>,
         viewport?: { height: number; width: number },
     ): Promise<T> => {
-        const target = validateUrl(url);
+        const target = validateUrl(url, options.allowPrivateTargets ?? false);
         const timeout = resolveTimeout(navigate.timeoutMs, options.timeoutMs);
 
         return withBrowser(async (browser) => {

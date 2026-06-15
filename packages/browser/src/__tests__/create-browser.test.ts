@@ -155,6 +155,7 @@ describe("createBrowser", () => {
     });
 
     describe("url validation", () => {
+        /* eslint-disable sonarjs/no-clear-text-protocols -- intentional test fixtures: these http URLs assert the scheme/SSRF guard rejects them; no real connection is made */
         const cases: [string, string][] = [
             ["empty", ""],
             ["ftp", "ftp://example.com"],
@@ -163,7 +164,23 @@ describe("createBrowser", () => {
             ["file", "file:///etc/passwd"],
             ["data", "data:text/html,<h1>x</h1>"],
             ["relative", "/just/a/path"],
+            // SSRF: private / internal / loopback / link-local targets are default-denied.
+            ["localhost", "http://localhost:3000"],
+            ["loopback v4", "http://127.0.0.1/admin"],
+            ["loopback integer", "http://2130706433"],
+            ["private 10/8", "http://10.0.0.5"],
+            ["private 172.16/12", "http://172.16.4.4"],
+            ["private 192.168/16", "https://192.168.1.1"],
+            ["link-local metadata", "http://169.254.169.254/latest/meta-data/"],
+            ["cgnat", "http://100.64.0.1"],
+            ["ipv6 loopback", "http://[::1]:8080"],
+            ["ipv6 ula", "http://[fd00::1]"],
+            ["ipv6 mapped loopback", "http://[::ffff:127.0.0.1]"],
+            [".internal", "https://api.internal/health"],
+            [".local", "http://printer.local"],
+            ["embedded credentials", "https://user:pass@example.com"], // gitleaks:allow -- test fixture asserting credential rejection, not a real secret
         ];
+        /* eslint-enable sonarjs/no-clear-text-protocols */
 
         it.each(cases)("rejects a %s url without launching the browser", async (_label, url) => {
             expect.assertions(2);
@@ -185,6 +202,28 @@ describe("createBrowser", () => {
             await browser.content("https://example.com");
 
             expect(launch.browsers).toHaveLength(2);
+        });
+
+        it("navigates to a private host when allowPrivateTargets is set", async () => {
+            expect.assertions(2);
+
+            const launch = fakeLaunch();
+            const browser = createBrowser({ allowPrivateTargets: true, binding: fakeBinding(), launch });
+
+            await browser.content("http://127.0.0.1:8787/health");
+
+            expect(launch.browsers).toHaveLength(1);
+            expect(launch.browsers[0]?.pages[0]?.gotoCalls).toEqual(["http://127.0.0.1:8787/health"]);
+        });
+
+        it("still rejects a non-http scheme even with allowPrivateTargets", async () => {
+            expect.assertions(2);
+
+            const launch = fakeLaunch();
+            const browser = createBrowser({ allowPrivateTargets: true, binding: fakeBinding(), launch });
+
+            await expect(browser.screenshot("file:///etc/passwd")).rejects.toThrow(/@cirrus\/browser/);
+            expect(launch.browsers).toHaveLength(0);
         });
     });
 
