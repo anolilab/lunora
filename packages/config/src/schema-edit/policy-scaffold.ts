@@ -1,10 +1,12 @@
 /**
- * ts-morph scaffolding core for the access-rule editor (plan 025 Item 3). The
- * sibling of the visual schema editor's mutation core ({@link ./mutate}): it
- * generates a `definePolicy` / `defineRole` / `definePermission` **stub** file
- * and, optionally, wires `.use(rls(policies))` into an existing procedure's
- * builder chain. Pure string-in / string-out over an in-memory ts-morph
- * project — no I/O, no codegen (the handler wires those).
+ * Scaffolding core for the access-rule editor (plan 025 Item 3). The sibling of
+ * the visual schema editor's mutation core ({@link ./mutate}): it generates a
+ * `definePolicy` / `defineRole` / `definePermission` **stub** file and,
+ * optionally, wires `.use(rls(policies))` into an existing procedure's builder
+ * chain. The stub is emitted from a string template (the layout is fixed); only
+ * the wiring path parses with ts-morph, to edit one existing chain without
+ * disturbing its handler. Both are pure string-in / string-out — no I/O, no
+ * codegen (the handler wires those).
  *
  * Safety boundary mirrors plan 024 exactly: only **additive** scaffolding
  * applies. The scaffolder never authors the `when` predicate body (it emits a
@@ -89,8 +91,10 @@ const scaffoldPolicyFile = (edit: ScaffoldPolicyEdit): ScaffoldFileResult => {
     // Both `name` and `table` flow into the generated source — `name` as
     // identifiers, `table` raw into the JSDoc prose below — so both must be
     // bare identifiers. Without this, a `table` of `*/ maliciousCode; /*` (or a
-    // newline/backtick) could break out of the comment and inject code.
-    if (!IDENTIFIER_PATTERN.test(edit.name) || !IDENTIFIER_PATTERN.test(edit.table)) {
+    // newline/backtick) could break out of the comment and inject code. The
+    // `typeof` guards come first because `RegExp.test` coerces a non-string
+    // (number, array) to a string that could slip past the pattern.
+    if (typeof edit.name !== "string" || typeof edit.table !== "string" || !IDENTIFIER_PATTERN.test(edit.name) || !IDENTIFIER_PATTERN.test(edit.table)) {
         return { ok: false, reason: "invalid-identifier" };
     }
 
@@ -204,7 +208,10 @@ const chainHasRls = (receiver: Node): boolean => {
  * tell the developer to convert it rather than silently rewriting their code.
  */
 const wireRlsIntoProcedure = (source: string, edit: WireRlsEdit): WireResult => {
-    if (!IDENTIFIER_PATTERN.test(edit.policies)) {
+    // `policies` is interpolated into the appended `rls(...)` call, so it must be
+    // a bare identifier. Guard `typeof` first — `RegExp.test` would coerce a
+    // non-string and could let it slip past the pattern.
+    if (typeof edit.policies !== "string" || !IDENTIFIER_PATTERN.test(edit.policies)) {
         return { ok: false, reason: "invalid-identifier" };
     }
 

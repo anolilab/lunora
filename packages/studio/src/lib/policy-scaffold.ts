@@ -38,6 +38,20 @@ interface WireRlsRequest {
 /** Any scaffolder request the control can issue. */
 type PolicyScaffoldRequest = ScaffoldPolicyRequest | WireRlsRequest;
 
+/**
+ * Human-readable copy for the host's machine failure tokens, so the panel shows
+ * a sentence rather than a raw slug like `already-wired`. An unknown token (a
+ * newer host, an `invalid-json`/`invalid-edit` protocol error) falls back to the
+ * token itself so nothing is swallowed.
+ */
+const FAILURE_MESSAGES: Readonly<Record<string, string>> = {
+    "already-wired": "That procedure already has an rls(...) policy wired in.",
+    "file-exists": "A policy file with that name already exists — pick another name or edit it by hand.",
+    "invalid-identifier": "Name, table, and policy-set must be plain identifiers (letters, digits, _ or $).",
+    "unknown-procedure": "No exported procedure was found at that file path.",
+    "unsupported-procedure-shape": "That procedure uses the bare query({…}) form — convert it to the builder form (c.use(…).query(…)) before wiring RLS.",
+};
+
 /** Outcome of a scaffold/wire apply, normalising every host response. */
 type PolicyScaffoldResult =
     | { diagnostics: ReadonlyArray<string>; kind: "ok"; label: string }
@@ -68,7 +82,10 @@ const applyPolicyScaffold = async (request: PolicyScaffoldRequest): Promise<Poli
         return { diagnostics: body.diagnostics ?? [], kind: "ok", label: body.fileName ?? body.exportName ?? "" };
     }
 
-    return { kind: "error", message: body.error ?? `policy scaffold failed (${String(response.status)})` };
+    const token = body.error;
+    const message = token === undefined ? `policy scaffold failed (${String(response.status)})` : (FAILURE_MESSAGES[token] ?? token);
+
+    return { kind: "error", message };
 };
 
 export type { PolicyScaffoldRequest, PolicyScaffoldResult, ScaffoldPolicyRequest, WireRlsRequest };

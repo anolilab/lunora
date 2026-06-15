@@ -16,6 +16,7 @@ import {
     renderStudioHtml,
     resolveAdminToken,
     SCHEMA_EDIT_ENDPOINT,
+    serveJsonHandler,
     studioAssetsStamp,
 } from "@cirrus/config/studio-host";
 import type { Plugin, ViteDevServer } from "vite";
@@ -34,121 +35,6 @@ const sendOk = (response: ServerResponse, body: Buffer | string, contentType: st
     response.statusCode = 200;
     response.setHeader("Content-Type", contentType);
     response.end(body);
-};
-
-/** Read a request body to a string, bounded so a runaway upload can't OOM dev. */
-const readBody = async (request: IncomingMessage): Promise<string> =>
-    await new Promise<string>((resolve, reject) => {
-        const chunks: Buffer[] = [];
-        let size = 0;
-
-        request.on("data", (chunk: Buffer) => {
-            size += chunk.length;
-
-            if (size > 1_000_000) {
-                reject(new Error("schema-edit body too large"));
-
-                return;
-            }
-
-            chunks.push(chunk);
-        });
-        request.on("end", () => {
-            resolve(Buffer.concat(chunks).toString("utf8"));
-        });
-        request.on("error", reject);
-    });
-
-/** Write a JSON response with the given status — shared by the local-dev endpoints below. */
-const respondJson = (response: ServerResponse, status: number, body: unknown): void => {
-    response.statusCode = status;
-    response.setHeader("Content-Type", "application/json; charset=utf-8");
-    response.end(JSON.stringify(body));
-};
-
-/**
- * Serve the local schema-edit endpoint (plan 024 Item 3): `GET` returns the
- * parsed source schema; `POST` applies an additive edit + reruns codegen (or
- * rejects a destructive edit with `needsMigration`). Local-dev-only — already
- * loopback-gated by the caller, like the rest of `/__cirrus`.
- */
-const serveSchemaEdit = (request: IncomingMessage, response: ServerResponse, projectRoot: string): void => {
-    const respond = (status: number, body: unknown): void => {
-        respondJson(response, status, body);
-    };
-
-    if (request.method === "GET") {
-        const result = handleSchemaEditRequest({ method: "GET", projectRoot });
-
-        respond(result.status, result.body);
-
-        return;
-    }
-
-    const handleBody = async (): Promise<void> => {
-        try {
-            const raw = await readBody(request);
-            let parsed: unknown;
-
-            try {
-                parsed = raw === "" ? undefined : JSON.parse(raw);
-            } catch {
-                respond(400, { error: "invalid-json", ok: false });
-
-                return;
-            }
-
-            const result = handleSchemaEditRequest({ body: parsed, method: request.method ?? "POST", projectRoot });
-
-            respond(result.status, result.body);
-        } catch (error: unknown) {
-            respond(500, { error: error instanceof Error ? error.message : String(error), ok: false });
-        }
-    };
-
-    handleBody().catch(() => {
-        // `handleBody` already responds on every error path; this guards against
-        // an unexpected throw so the promise never floats unhandled.
-    });
-};
-
-/**
- * Serve the local policy-scaffold endpoint (plan 025 Item 3): `POST` writes a
- * new deny-by-default `name.policies.ts` stub, or appends `.use(rls(...))` to
- * an existing procedure chain, then reruns codegen (a destructive rewrite is
- * refused with `needsManualEdit`). Local-dev-only — already loopback-gated by
- * the caller, like the rest of `/__cirrus`.
- */
-const servePolicyScaffold = (request: IncomingMessage, response: ServerResponse, projectRoot: string): void => {
-    const respond = (status: number, body: unknown): void => {
-        respondJson(response, status, body);
-    };
-
-    const handleBody = async (): Promise<void> => {
-        try {
-            const raw = await readBody(request);
-            let parsed: unknown;
-
-            try {
-                parsed = raw === "" ? undefined : JSON.parse(raw);
-            } catch {
-                respond(400, { error: "invalid-json", ok: false });
-
-                return;
-            }
-
-            const result = handlePolicyScaffoldRequest({ body: parsed, method: request.method ?? "POST", projectRoot });
-
-            respond(result.status, result.body);
-        } catch (error: unknown) {
-            respond(500, { error: error instanceof Error ? error.message : String(error), ok: false });
-        }
-    };
-
-    handleBody().catch(() => {
-        // `handleBody` already responds on every error path; this guards against
-        // an unexpected throw so the promise never floats unhandled.
-    });
 };
 
 /**
@@ -232,7 +118,7 @@ const createStudioHandler = (
         // Local schema-edit endpoint (plan 024). Loopback-gated above; never the
         // worker. Intercept before the SPA fallback so it isn't shadowed.
         if (pathname === SCHEMA_EDIT_ENDPOINT) {
-            serveSchemaEdit(request, response, projectRoot);
+            serveJsonHandler(request, response, handleSchemaEditRequest, projectRoot);
 
             return;
         }
@@ -240,7 +126,7 @@ const createStudioHandler = (
         // Local policy-scaffold endpoint (plan 025 Item 3). Same loopback gate
         // and codegen toolchain as the schema editor above.
         if (pathname === POLICY_SCAFFOLD_ENDPOINT) {
-            servePolicyScaffold(request, response, projectRoot);
+            serveJsonHandler(request, response, handlePolicyScaffoldRequest, projectRoot);
 
             return;
         }

@@ -13,6 +13,22 @@ import { applyPolicyScaffold } from "../../lib/policy-scaffold";
 /** Which scaffolder form is open, if any. */
 type Mode = "scaffold" | "wire" | null;
 
+/** The scaffolder's text inputs across both forms; one `useState` keyed by field name. */
+interface ScaffolderForm {
+    /** Wire form: exported procedure name to wire. */
+    readonly exportName: string;
+    /** Wire form: cirrus-relative module path of the procedure file. */
+    readonly filePath: string;
+    /** Wire form: identifier of the policy set passed to `rls(...)`. */
+    readonly policies: string;
+    /** Scaffold form: base name for the file + exported policy set. */
+    readonly policyName: string;
+    /** Scaffold form: logical table the policy guards. */
+    readonly tableName: string;
+}
+
+const EMPTY_FORM: ScaffolderForm = { exportName: "", filePath: "", policyName: "", policies: "", tableName: "" };
+
 /**
  * Local-dev access-rule scaffolder (plan 025 Item 3). Two additive actions over
  * the dev host's local policy-scaffold endpoint — never the worker admin RPC.
@@ -33,24 +49,24 @@ const PolicyScaffolder = (): ReactElement => {
     const [busy, setBusy] = useState<boolean>(false);
     const [result, setResult] = useState<PolicyScaffoldResult | null>(null);
 
-    // Scaffold-file form.
-    const [policyName, setPolicyName] = useState<string>("");
-    const [tableName, setTableName] = useState<string>("");
+    // One form object across both modes. `filePath` is the cirrus-relative module
+    // path (no extension); it is explicit rather than derived from a function's
+    // path because the generated registry key sanitizes nested directories
+    // (`a/b` → `a_b`).
+    const [form, setForm] = useState<ScaffolderForm>(EMPTY_FORM);
 
-    // Wire form. `filePath` is the cirrus-relative module path (no extension);
-    // it is explicit rather than derived from a function's path because the
-    // generated registry key sanitizes nested directories (`a/b` → `a_b`).
-    const [filePath, setFilePath] = useState<string>("");
-    const [exportName, setExportName] = useState<string>("");
-    const [policies, setPolicies] = useState<string>("");
+    const onFieldChange = useCallback((event: ChangeEvent<HTMLInputElement>): void => {
+        const field = event.target.name as keyof ScaffolderForm;
+        const { value } = event.target;
+
+        setForm((previous) => {
+            return { ...previous, [field]: value };
+        });
+    }, []);
 
     const reset = useCallback((): void => {
         setMode(null);
-        setPolicyName("");
-        setTableName("");
-        setFilePath("");
-        setExportName("");
-        setPolicies("");
+        setForm(EMPTY_FORM);
     }, []);
 
     const submit = useCallback(
@@ -76,12 +92,12 @@ const PolicyScaffolder = (): ReactElement => {
     );
 
     const onSubmitScaffold = useCallback((): void => {
-        fireAndForget(submit({ kind: "scaffoldPolicy", name: policyName.trim(), table: tableName.trim() }));
-    }, [submit, policyName, tableName]);
+        fireAndForget(submit({ kind: "scaffoldPolicy", name: form.policyName.trim(), table: form.tableName.trim() }));
+    }, [submit, form.policyName, form.tableName]);
 
     const onSubmitWire = useCallback((): void => {
-        fireAndForget(submit({ exportName: exportName.trim(), filePath: filePath.trim(), kind: "wireRls", policies: policies.trim() }));
-    }, [submit, exportName, filePath, policies]);
+        fireAndForget(submit({ exportName: form.exportName.trim(), filePath: form.filePath.trim(), kind: "wireRls", policies: form.policies.trim() }));
+    }, [submit, form.exportName, form.filePath, form.policies]);
 
     const openScaffold = useCallback((): void => {
         setResult(null);
@@ -90,22 +106,6 @@ const PolicyScaffolder = (): ReactElement => {
     const openWire = useCallback((): void => {
         setResult(null);
         setMode("wire");
-    }, []);
-
-    const onPolicyNameChange = useCallback((event: ChangeEvent<HTMLInputElement>): void => {
-        setPolicyName(event.target.value);
-    }, []);
-    const onTableNameChange = useCallback((event: ChangeEvent<HTMLInputElement>): void => {
-        setTableName(event.target.value);
-    }, []);
-    const onFilePathChange = useCallback((event: ChangeEvent<HTMLInputElement>): void => {
-        setFilePath(event.target.value);
-    }, []);
-    const onExportNameChange = useCallback((event: ChangeEvent<HTMLInputElement>): void => {
-        setExportName(event.target.value);
-    }, []);
-    const onPoliciesChange = useCallback((event: ChangeEvent<HTMLInputElement>): void => {
-        setPolicies(event.target.value);
     }, []);
 
     return (
@@ -136,15 +136,27 @@ const PolicyScaffolder = (): ReactElement => {
                     <div className="mt-3 flex flex-wrap items-end gap-2" data-testid="policy-scaffolder-new-form">
                         <div className="flex flex-col gap-1 text-xs">
                             <Label htmlFor="policy-scaffolder-name">{t("Policy name")}</Label>
-                            <Input data-testid="policy-scaffolder-name" id="policy-scaffolder-name" onChange={onPolicyNameChange} value={policyName} />
+                            <Input
+                                data-testid="policy-scaffolder-name"
+                                id="policy-scaffolder-name"
+                                name="policyName"
+                                onChange={onFieldChange}
+                                value={form.policyName}
+                            />
                         </div>
                         <div className="flex flex-col gap-1 text-xs">
                             <Label htmlFor="policy-scaffolder-table">{t("Table name")}</Label>
-                            <Input data-testid="policy-scaffolder-table" id="policy-scaffolder-table" onChange={onTableNameChange} value={tableName} />
+                            <Input
+                                data-testid="policy-scaffolder-table"
+                                id="policy-scaffolder-table"
+                                name="tableName"
+                                onChange={onFieldChange}
+                                value={form.tableName}
+                            />
                         </div>
                         <Button
                             data-testid="policy-scaffolder-create"
-                            disabled={busy || policyName.trim() === "" || tableName.trim() === ""}
+                            disabled={busy || form.policyName.trim() === "" || form.tableName.trim() === ""}
                             onClick={onSubmitScaffold}
                             size="xs"
                             type="button"
@@ -161,19 +173,37 @@ const PolicyScaffolder = (): ReactElement => {
                     <div className="mt-3 flex flex-wrap items-end gap-2" data-testid="policy-scaffolder-wire-form">
                         <div className="flex flex-col gap-1 text-xs">
                             <Label htmlFor="policy-scaffolder-file">{t("Procedure file path")}</Label>
-                            <Input data-testid="policy-scaffolder-file" id="policy-scaffolder-file" onChange={onFilePathChange} value={filePath} />
+                            <Input
+                                data-testid="policy-scaffolder-file"
+                                id="policy-scaffolder-file"
+                                name="filePath"
+                                onChange={onFieldChange}
+                                value={form.filePath}
+                            />
                         </div>
                         <div className="flex flex-col gap-1 text-xs">
                             <Label htmlFor="policy-scaffolder-export">{t("Exported procedure")}</Label>
-                            <Input data-testid="policy-scaffolder-export" id="policy-scaffolder-export" onChange={onExportNameChange} value={exportName} />
+                            <Input
+                                data-testid="policy-scaffolder-export"
+                                id="policy-scaffolder-export"
+                                name="exportName"
+                                onChange={onFieldChange}
+                                value={form.exportName}
+                            />
                         </div>
                         <div className="flex flex-col gap-1 text-xs">
                             <Label htmlFor="policy-scaffolder-policies">{t("Policy set identifier")}</Label>
-                            <Input data-testid="policy-scaffolder-policies" id="policy-scaffolder-policies" onChange={onPoliciesChange} value={policies} />
+                            <Input
+                                data-testid="policy-scaffolder-policies"
+                                id="policy-scaffolder-policies"
+                                name="policies"
+                                onChange={onFieldChange}
+                                value={form.policies}
+                            />
                         </div>
                         <Button
                             data-testid="policy-scaffolder-apply"
-                            disabled={busy || filePath.trim() === "" || exportName.trim() === "" || policies.trim() === ""}
+                            disabled={busy || form.filePath.trim() === "" || form.exportName.trim() === "" || form.policies.trim() === ""}
                             onClick={onSubmitWire}
                             size="xs"
                             type="button"

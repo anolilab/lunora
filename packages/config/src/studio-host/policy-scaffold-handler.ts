@@ -212,8 +212,11 @@ const handlePolicyScaffoldRequest = (request: PolicyScaffoldRequest): PolicyScaf
         return handleWireRls(request, edit);
     }
 
-    // Unreachable: the only remaining kind is destructive, handled above.
-    return refuseDestructive(edit);
+    // Unreachable: `classifyPolicyEdit` routed every non-additive kind to the
+    // destructive branch above, leaving only the two additive kinds handled
+    // here. Throw rather than guess so a future additive kind that forgets its
+    // branch fails loudly instead of silently masquerading as destructive.
+    throw new Error(`unhandled additive policy edit kind: ${String((edit as { kind?: unknown }).kind)}`);
 };
 
 export type { PolicyScaffoldBody, PolicyScaffoldRequest, PolicyScaffoldResponse, WirePolicyEdit };

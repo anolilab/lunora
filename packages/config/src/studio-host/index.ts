@@ -19,4 +19,6 @@ export { handlePolicyScaffoldRequest, POLICY_SCAFFOLD_ENDPOINT } from "./policy-
 export { default as renderStudioHtml } from "./render-html";
 export type { SchemaEditRequest, SchemaEditResponse } from "./schema-edit-handler";
 export { handleSchemaEditRequest, SCHEMA_EDIT_ENDPOINT } from "./schema-edit-handler";
+export type { LocalEndpointHandler, LocalEndpointRequest, LocalEndpointResponse } from "./serve-json-handler";
+export { serveJsonHandler } from "./serve-json-handler";
 export type { StudioAssets, StudioHtmlConfig, WarnLogger } from "./types";
