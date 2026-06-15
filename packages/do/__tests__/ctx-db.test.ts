@@ -162,6 +162,68 @@ describe("createShardCtxDb — patch/replace/delete", () => {
         await expect(writer.patch("missing", { text: "x" })).rejects.toThrow(/document not found/u);
     });
 
+    it("patch throws a descriptive error when a field is explicitly undefined", async () => {
+        expect.assertions(2);
+
+        const { writer } = setupWriter({ idGenerator: () => "m_1" });
+
+        await writer.insert("messages", { authorId: "u1", channelId: "c1", text: "hi" });
+
+        await expect(writer.patch("m_1", { text: undefined })).rejects.toThrow(
+            "Cannot patch field 'text' to undefined — use null to clear a nullable field, or omit the key to leave it unchanged.",
+        );
+
+        // The silent delete must not have happened: the field is untouched.
+        const fetched = await writer.get("m_1");
+
+        expect(fetched).toMatchObject({ text: "hi" });
+    });
+
+    it("patch sets a nullable field to null (null is preserved, not stripped)", async () => {
+        expect.assertions(2);
+
+        const { writer } = setupWriter({ idGenerator: () => "m_1" });
+
+        await writer.insert("messages", { authorId: "u1", channelId: "c1", text: "hi" });
+        await writer.patch("m_1", { text: null });
+
+        const fetched = await writer.get("m_1");
+
+        expect(fetched).toHaveProperty("text", null);
+        expect(fetched).toMatchObject({ channelId: "c1" });
+    });
+
+    it("patch omitting a key leaves that field unchanged", async () => {
+        expect.assertions(1);
+
+        const { writer } = setupWriter({ idGenerator: () => "m_1" });
+
+        await writer.insert("messages", { authorId: "u1", channelId: "c1", text: "hi" });
+        // `text` is not a property of the patch object at all — must be a no-op.
+        await writer.patch("m_1", { channelId: "c2" });
+
+        const fetched = await writer.get("m_1");
+
+        expect(fetched).toMatchObject({ channelId: "c2", text: "hi" });
+    });
+
+    it("replace throws a descriptive error when a field is explicitly undefined", async () => {
+        expect.assertions(2);
+
+        const { writer } = setupWriter({ idGenerator: () => "m_1" });
+
+        await writer.insert("messages", { authorId: "u1", channelId: "c1", text: "hi" });
+
+        await expect(writer.replace("m_1", { authorId: "u2", channelId: "c2", text: undefined })).rejects.toThrow(
+            "Cannot replace field 'text' to undefined — use null to clear a nullable field, or omit the key to leave it unchanged.",
+        );
+
+        // The aborted replace must not have mutated the row.
+        const fetched = await writer.get("m_1");
+
+        expect(fetched).toMatchObject({ authorId: "u1", channelId: "c1", text: "hi" });
+    });
+
     it("replace overwrites the whole document but keeps the id", async () => {
         expect.assertions(1);
 

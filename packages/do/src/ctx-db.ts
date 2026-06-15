@@ -1196,6 +1196,29 @@ const applyOnUpdate = (definition: TableDefinitionLike, provided: Record<string,
     }
 };
 
+/**
+ * Reject `patch`/`replace` documents that carry an explicit `undefined` value.
+ *
+ * The `{ ...existing, ...patch }` merge plus `JSON.stringify` silently drops any
+ * key whose value is `undefined`, so `patch(id, { field: undefined })` would
+ * delete* `field` rather than leave it alone — a silent-data-loss footgun.
+ * Turning it into a loud, descriptive error forces the caller to be explicit:
+ * pass `null` to clear a nullable field, or omit the key to leave it unchanged.
+ *
+ * Only keys that are *present* on the object with value `undefined` error; an
+ * omitted key (not an own-enumerable property) stays a no-op, so callers who
+ * never set a key keep their existing behaviour.
+ */
+const assertNoExplicitUndefined = (op: "patch" | "replace", document: Record<string, unknown>): void => {
+    for (const field of Object.keys(document)) {
+        if (document[field] === undefined) {
+            throw new Error(
+                `Cannot ${op} field '${field}' to undefined — use null to clear a nullable field, or omit the key to leave it unchanged.`,
+            );
+        }
+    }
+};
+
 /** workerd and node:sqlite both phrase a UNIQUE-index breach as "UNIQUE constraint failed". */
 const UNIQUE_VIOLATION_RE = /unique constraint failed/i;
 const isUniqueViolation = (error: unknown): boolean => error instanceof Error && UNIQUE_VIOLATION_RE.test(error.message);
@@ -2804,6 +2827,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             onRead(tableName, id);
 
+            // Reject explicit `undefined` values: the merge + JSON.stringify below
+            // would silently strip them, deleting the field instead of updating it.
+            assertNoExplicitUndefined("patch", patch);
+
             const merged = { ...existing, ...patch, _id: id };
 
             applyOnUpdate(tableDefinition, patch, merged);
@@ -3078,6 +3105,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             if (!tableDefinition) {
                 throw new Error(`unknown table: ${tableName}`);
             }
+
+            // Reject explicit `undefined` values: the spread + JSON.stringify below
+            // would silently strip them, deleting the field instead of writing it.
+            assertNoExplicitUndefined("replace", document);
 
             const creationTime = typeof document["_creationTime"] === "number" ? document["_creationTime"] : clock();
             const replaced: Record<string, unknown> = { ...document, _creationTime: creationTime, _id: id };
