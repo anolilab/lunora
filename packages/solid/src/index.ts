@@ -1,3 +1,11 @@
+export { LunoraContext, useLunora } from "./context";
+export { default as createConnectionStatus } from "./create-connection-status";
+export type { MutationClient, MutationHandle } from "./create-mutation";
+export { createMutation, createMutationForClient } from "./create-mutation";
+export type { CreateQueryOptions } from "./create-query";
+export { createQuery } from "./create-query";
+export { default as hydratePreloaded } from "./hydrate-preloaded";
+
 /**
  * SolidJS adapter for Lunora.
  *
@@ -18,12 +26,6 @@
  */
 export type { LunoraProviderProps } from "./lunora-provider";
 export { LunoraProvider } from "./lunora-provider";
-export { LunoraContext, useLunora } from "./context";
-export type { MutationClient, MutationHandle } from "./create-mutation";
-export { createMutation, createMutationForClient } from "./create-mutation";
-export type { CreateQueryOptions } from "./create-query";
-export { createQuery } from "./create-query";
-export { default as hydratePreloaded } from "./hydrate-preloaded";
 
 // Re-export the core type surface so consumers can stay on a single import for
 // function references, args/return inference, and the SSR `Preloaded` token.

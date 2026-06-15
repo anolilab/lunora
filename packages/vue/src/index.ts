@@ -1,3 +1,5 @@
+export { hydratePreloaded } from "./hydrate-preloaded";
+
 /**
  * `@lunora/vue` — the Vue adapter for Lunora.
  *
@@ -16,12 +18,11 @@
  * Nuxt (Class-B: inject Lunora realtime into Nitro's emitted Worker) lives in
  * the Vue-free `@lunora/vue/worker` entry (`withLunora`).
  */
-export { LUNORA_INJECTION_KEY, createLunora, provideLunora, useLunora } from "./lunora-provider";
-export { hydratePreloaded } from "./hydrate-preloaded";
+export { createLunora, LUNORA_INJECTION_KEY, provideLunora, useLunora } from "./lunora-provider";
 export type {
     ArgsOf,
-    LunoraClient,
     FunctionReference,
+    LunoraClient,
     MutationCallOptions,
     OptimisticLocalStore,
     OptimisticUpdate,
@@ -31,6 +32,7 @@ export type {
     UseQueryOptions,
     User,
 } from "./types";
+export { default as useConnectionStatus } from "./use-connection-status";
 export type { MutationHandle } from "./use-mutation";
 export { useMutation } from "./use-mutation";
 export { subscribeToQuery, useQuery } from "./use-query";

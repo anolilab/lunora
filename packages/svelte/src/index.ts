@@ -1,3 +1,6 @@
+export type { ConnectionStatusStore } from "./connection-status";
+export { connectionStatus } from "./connection-status";
+
 /**
  * Svelte adapter for Lunora (`@lunora/svelte`).
  *
@@ -26,4 +29,4 @@ export { mutation } from "./mutation";
 export type { QueryStore, QueryStoreOptions } from "./query";
 export { query } from "./query";
 // Re-export the core types adapters lean on, so consumers import them from one place.
-export type { ArgsOf, LunoraClient, FunctionReference, MutationCallOptions, Preloaded, ReturnOf } from "@lunora/client";
+export type { ArgsOf, ConnectionStatus, FunctionReference, LunoraClient, MutationCallOptions, Preloaded, ReturnOf } from "@lunora/client";
