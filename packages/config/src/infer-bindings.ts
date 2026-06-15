@@ -79,6 +79,20 @@ const IMPORT_SCHEDULER_PATTERN = /\bfrom\s+["']@cirrus\/scheduler["']/;
 const IMPORT_STORAGE_PATTERN = /\bfrom\s+["']@cirrus\/storage["']/;
 const IMPORT_AI_PATTERN = /\bfrom\s+["']@cirrus\/ai["']/;
 const IMPORT_PAYMENT_PATTERN = /\bfrom\s+["']@cirrus\/payment["']/;
+// New Cloudflare-coverage binding capabilities. The canonical import-source →
+// wrangler-key → provisioning table (see plans 027/028/031/032/035/036):
+//   @cirrus/kv         → kv_namespaces             → hint (un-mintable namespace id)
+//   @cirrus/hyperdrive → hyperdrive                → hint (un-mintable remote id)
+//   @cirrus/browser    → browser                   → self-describing (binding name only)
+//   @cirrus/images     → images                    → self-describing (binding name only)
+//   @cirrus/analytics  → analytics_engine_datasets → self-describing (dataset == binding name)
+//   @cirrus/pipelines  → pipelines                 → hint (un-mintable remote pipeline name)
+const IMPORT_KV_PATTERN = /\bfrom\s+["']@cirrus\/kv["']/;
+const IMPORT_HYPERDRIVE_PATTERN = /\bfrom\s+["']@cirrus\/hyperdrive["']/;
+const IMPORT_BROWSER_PATTERN = /\bfrom\s+["']@cirrus\/browser["']/;
+const IMPORT_IMAGES_PATTERN = /\bfrom\s+["']@cirrus\/images["']/;
+const IMPORT_ANALYTICS_PATTERN = /\bfrom\s+["']@cirrus\/analytics["']/;
+const IMPORT_PIPELINES_PATTERN = /\bfrom\s+["']@cirrus\/pipelines["']/;
 
 /**
  * The provider secret pairs `@cirrus/payment` reads at runtime. The package is
@@ -125,10 +139,22 @@ interface InferredBindings {
     signals: string[];
     /** `@cirrus/ai` is imported or `env.AI` is used → needs the `ai` Workers AI binding. */
     usesAi: boolean;
+    /** `@cirrus/analytics` is imported → self-describing `analytics_engine_datasets` binding (auto-writeable). */
+    usesAnalytics: boolean;
     /** `@cirrus/auth` is imported (sessions may be D1- or `SessionDO`-backed). */
     usesAuth: boolean;
+    /** `@cirrus/browser` is imported → self-describing `browser` binding (auto-writeable). */
+    usesBrowser: boolean;
+    /** `@cirrus/hyperdrive` is imported (binding needs an un-mintable remote `id`; hint-only). */
+    usesHyperdrive: boolean;
+    /** `@cirrus/images` is imported → self-describing `images` binding (auto-writeable). */
+    usesImages: boolean;
+    /** `@cirrus/kv` is imported (namespace binding name + id are user-defined; hint-only). */
+    usesKv: boolean;
     /** `@cirrus/payment` is imported (provider secrets must be set in `.dev.vars`; no binding). */
     usesPayment: boolean;
+    /** `@cirrus/pipelines` is imported (binding needs an un-mintable remote pipeline name; hint-only). */
+    usesPipelines: boolean;
     /** `@cirrus/scheduler` is imported. */
     usesScheduler: boolean;
     /** `@cirrus/storage` is imported (R2 bucket binding name is user-defined). */
@@ -141,20 +167,45 @@ interface InferredBindings {
 interface Capabilities {
     needsD1: boolean;
     usesAi: boolean;
+    usesAnalytics: boolean;
     usesAuth: boolean;
+    usesBrowser: boolean;
+    usesHyperdrive: boolean;
+    usesImages: boolean;
+    usesKv: boolean;
     usesPayment: boolean;
+    usesPipelines: boolean;
     usesScheduler: boolean;
     usesStorage: boolean;
 }
 
-const NO_CAPABILITIES: Capabilities = { needsD1: false, usesAi: false, usesAuth: false, usesPayment: false, usesScheduler: false, usesStorage: false };
+const NO_CAPABILITIES: Capabilities = {
+    needsD1: false,
+    usesAi: false,
+    usesAnalytics: false,
+    usesAuth: false,
+    usesBrowser: false,
+    usesHyperdrive: false,
+    usesImages: false,
+    usesKv: false,
+    usesPayment: false,
+    usesPipelines: false,
+    usesScheduler: false,
+    usesStorage: false,
+};
 
 const mergeCapabilities = (a: Capabilities, b: Capabilities): Capabilities => {
     return {
         needsD1: a.needsD1 || b.needsD1,
         usesAi: a.usesAi || b.usesAi,
+        usesAnalytics: a.usesAnalytics || b.usesAnalytics,
         usesAuth: a.usesAuth || b.usesAuth,
+        usesBrowser: a.usesBrowser || b.usesBrowser,
+        usesHyperdrive: a.usesHyperdrive || b.usesHyperdrive,
+        usesImages: a.usesImages || b.usesImages,
+        usesKv: a.usesKv || b.usesKv,
         usesPayment: a.usesPayment || b.usesPayment,
+        usesPipelines: a.usesPipelines || b.usesPipelines,
         usesScheduler: a.usesScheduler || b.usesScheduler,
         usesStorage: a.usesStorage || b.usesStorage,
     };
@@ -180,6 +231,30 @@ const capabilityForImportSource = (source: string): Capabilities => {
 
     if (source === "@cirrus/payment") {
         return { ...NO_CAPABILITIES, usesPayment: true };
+    }
+
+    if (source === "@cirrus/kv") {
+        return { ...NO_CAPABILITIES, usesKv: true };
+    }
+
+    if (source === "@cirrus/hyperdrive") {
+        return { ...NO_CAPABILITIES, usesHyperdrive: true };
+    }
+
+    if (source === "@cirrus/browser") {
+        return { ...NO_CAPABILITIES, usesBrowser: true };
+    }
+
+    if (source === "@cirrus/images") {
+        return { ...NO_CAPABILITIES, usesImages: true };
+    }
+
+    if (source === "@cirrus/analytics") {
+        return { ...NO_CAPABILITIES, usesAnalytics: true };
+    }
+
+    if (source === "@cirrus/pipelines") {
+        return { ...NO_CAPABILITIES, usesPipelines: true };
     }
 
     return NO_CAPABILITIES;
@@ -213,8 +288,14 @@ const regexCapabilities = (code: string): Capabilities => {
     return {
         needsD1: false,
         usesAi: IMPORT_AI_PATTERN.test(code),
+        usesAnalytics: IMPORT_ANALYTICS_PATTERN.test(code),
         usesAuth: IMPORT_AUTH_PATTERN.test(code),
+        usesBrowser: IMPORT_BROWSER_PATTERN.test(code),
+        usesHyperdrive: IMPORT_HYPERDRIVE_PATTERN.test(code),
+        usesImages: IMPORT_IMAGES_PATTERN.test(code),
+        usesKv: IMPORT_KV_PATTERN.test(code),
         usesPayment: IMPORT_PAYMENT_PATTERN.test(code),
+        usesPipelines: IMPORT_PIPELINES_PATTERN.test(code),
         usesScheduler: IMPORT_SCHEDULER_PATTERN.test(code),
         usesStorage: IMPORT_STORAGE_PATTERN.test(code),
     };
@@ -453,6 +534,59 @@ const scanCapabilities = (projectRoot: string, scanDirectories: ReadonlyArray<st
     return merged;
 };
 
+/** Provenance lines for declared DO containers / workflows. */
+const describeDeclaredExports = (containers: ReadonlyArray<InferredContainer>, workflows: ReadonlyArray<InferredWorkflow>): string[] => [
+    ...containers.map((container) =>
+        container.exported
+            ? `${container.bindingName}/${container.className} (container "${container.exportName}" declared and exported)`
+            : `hint: container "${container.exportName}" is declared but ${container.className} is not exported by the worker entry — add \`export * from "./cirrus/_generated/containers"\``,
+    ),
+    ...workflows.map((workflow) =>
+        workflow.exported
+            ? `${workflow.bindingName}/${workflow.className} (workflow "${workflow.exportName}" declared and exported)`
+            : `hint: workflow "${workflow.exportName}" is declared but ${workflow.className} is not exported by the worker entry — add \`export * from "./cirrus/_generated/workflows"\``,
+    ),
+];
+
+/**
+ * Provenance lines implied by capability imports. Each entry is a predicate on
+ * the scanned capabilities plus the signal it contributes when true.
+ */
+const describeCapabilitySignals = (capabilities: Capabilities, exported: ReadonlySet<string>): string[] => {
+    const rules: ReadonlyArray<[boolean, string]> = [
+        [capabilities.usesAi, "AI (@cirrus/ai imported or env.AI used)"],
+        [
+            capabilities.usesAuth && !exported.has("SessionDO"),
+            "hint: @cirrus/auth is imported but no SessionDO is exported (sessions are D1-backed, or export SessionDO for DO-backed sessions)",
+        ],
+        [capabilities.usesScheduler && !exported.has("SchedulerDO"), "hint: @cirrus/scheduler is imported but no SchedulerDO is exported by the worker entry"],
+        [capabilities.usesStorage, "hint: @cirrus/storage is imported; add an r2_buckets binding (bucket binding names are user-defined)"],
+        [capabilities.usesPayment, `hint: @cirrus/payment is imported; set the provider secrets in .dev.vars — ${PAYMENT_PROVIDER_SECRETS}`],
+        // Self-describing bindings: the binding name is the whole config (no remote
+        // id to mint), so reconcile auto-writes them like the DO/D1 bindings.
+        [capabilities.usesBrowser, "browser (@cirrus/browser imported) — self-describing { binding: BROWSER }"],
+        [capabilities.usesImages, "images (@cirrus/images imported) — self-describing { binding: IMAGES }"],
+        [capabilities.usesAnalytics, "analytics_engine_datasets (@cirrus/analytics imported) — self-describing { binding: ANALYTICS, dataset }"],
+        // Hint bindings: each needs a remote resource Cirrus can't fabricate (a KV
+        // namespace id, a Hyperdrive id, a Pipelines pipeline name), so they surface
+        // as hints — never an auto-write — exactly like R2's user-defined bucket name.
+        [
+            capabilities.usesKv,
+            "hint: @cirrus/kv is imported; add a kv_namespaces binding ({ binding, id }) and pass env.<BINDING> to createKv() — the namespace id can't be auto-provisioned",
+        ],
+        [
+            capabilities.usesHyperdrive,
+            "hint: @cirrus/hyperdrive is imported; run 'wrangler hyperdrive create' and add a 'hyperdrive' binding ({ binding, id }) — the id can't be auto-provisioned",
+        ],
+        [
+            capabilities.usesPipelines,
+            "hint: @cirrus/pipelines is imported; run 'wrangler pipelines create <name>' and add a 'pipelines' binding ({ binding, pipeline }) — the pipeline resource can't be auto-provisioned",
+        ],
+    ];
+
+    return rules.filter(([active]) => active).map(([, signal]) => signal);
+};
+
 /** Build the human-readable provenance list. */
 const describeSignals = (
     durableObjects: DurableObjectSpec[],
@@ -468,41 +602,7 @@ const describeSignals = (
         signals.push("DB (.global() table declared)");
     }
 
-    for (const container of containers) {
-        signals.push(
-            container.exported
-                ? `${container.bindingName}/${container.className} (container "${container.exportName}" declared and exported)`
-                : `hint: container "${container.exportName}" is declared but ${container.className} is not exported by the worker entry — add \`export * from "./cirrus/_generated/containers"\``,
-        );
-    }
-
-    for (const workflow of workflows) {
-        signals.push(
-            workflow.exported
-                ? `${workflow.bindingName}/${workflow.className} (workflow "${workflow.exportName}" declared and exported)`
-                : `hint: workflow "${workflow.exportName}" is declared but ${workflow.className} is not exported by the worker entry — add \`export * from "./cirrus/_generated/workflows"\``,
-        );
-    }
-
-    if (capabilities.usesAi) {
-        signals.push("AI (@cirrus/ai imported or env.AI used)");
-    }
-
-    if (capabilities.usesAuth && !exported.has("SessionDO")) {
-        signals.push("hint: @cirrus/auth is imported but no SessionDO is exported (sessions are D1-backed, or export SessionDO for DO-backed sessions)");
-    }
-
-    if (capabilities.usesScheduler && !exported.has("SchedulerDO")) {
-        signals.push("hint: @cirrus/scheduler is imported but no SchedulerDO is exported by the worker entry");
-    }
-
-    if (capabilities.usesStorage) {
-        signals.push("hint: @cirrus/storage is imported; add an r2_buckets binding (bucket binding names are user-defined)");
-    }
-
-    if (capabilities.usesPayment) {
-        signals.push(`hint: @cirrus/payment is imported; set the provider secrets in .dev.vars — ${PAYMENT_PROVIDER_SECRETS}`);
-    }
+    signals.push(...describeDeclaredExports(containers, workflows), ...describeCapabilitySignals(capabilities, exported));
 
     return signals;
 };
@@ -532,8 +632,14 @@ const inferCirrusBindings = async (options: InferOptions): Promise<InferredBindi
         needsD1,
         signals: describeSignals(durableObjects, needsD1, capabilities, containers, workflows),
         usesAi: capabilities.usesAi,
+        usesAnalytics: capabilities.usesAnalytics,
         usesAuth: capabilities.usesAuth,
+        usesBrowser: capabilities.usesBrowser,
+        usesHyperdrive: capabilities.usesHyperdrive,
+        usesImages: capabilities.usesImages,
+        usesKv: capabilities.usesKv,
         usesPayment: capabilities.usesPayment,
+        usesPipelines: capabilities.usesPipelines,
         usesScheduler: capabilities.usesScheduler,
         usesStorage: capabilities.usesStorage,
         workflows,

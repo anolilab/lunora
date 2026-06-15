@@ -342,6 +342,50 @@ describe("wrangler-validator", () => {
             expect(result.wranglerPath).toBeUndefined();
         });
 
+        it("warns (never errors) when assets.directory does not exist yet", () => {
+            expect.assertions(2);
+
+            writeSchema(SCHEMA_NO_GLOBAL);
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                `{
+    "name": "x",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "assets": { "directory": "./dist/client", "binding": "ASSETS" }
+}
+`,
+                "utf8",
+            );
+
+            const result = validateWranglerProject({ projectRoot: workdir });
+
+            expect(result.report.valid).toBe(true);
+            expect(result.report.warnings.join(" ")).toMatch(/assets\.directory.*does not exist yet/u);
+        });
+
+        it("does not warn about assets.directory once the directory exists", () => {
+            expect.assertions(1);
+
+            writeSchema(SCHEMA_NO_GLOBAL);
+            mkdirSync(join(workdir, "dist", "client"), { recursive: true });
+            writeFileSync(
+                join(workdir, "wrangler.jsonc"),
+                `{
+    "name": "x",
+    "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "assets": { "directory": "./dist/client", "binding": "ASSETS" }
+}
+`,
+                "utf8",
+            );
+
+            const result = validateWranglerProject({ projectRoot: workdir });
+
+            expect(result.report.warnings.join(" ")).not.toMatch(/assets\.directory/u);
+        });
+
         it("does not require D1 when no table is global", () => {
             expect.assertions(1);
 
@@ -730,6 +774,185 @@ describe("wrangler-validator", () => {
             const report = validateWranglerConfig(baseConfig({ workflows: [null] as never }));
 
             expect(report.errors.join(" ")).toContain("must be a { name, binding, class_name } object");
+        });
+    });
+
+    // Cloudflare-coverage bindings + config flags (plans 027-043). A minimal
+    // valid base (SHARD binding + compat date) keeps each case focused on the
+    // new key under test — only its own error/warning should appear.
+    describe("cloudflare-coverage bindings", () => {
+        const validBase = (overrides: Partial<WranglerConfig>): WranglerConfig => {
+            return {
+                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                ...overrides,
+            };
+        };
+
+        it("accepts a well-formed kv_namespaces binding; warns on a missing id; errors on a missing binding", () => {
+            expect.assertions(4);
+
+            const valid = validateWranglerConfig(validBase({ kv_namespaces: [{ binding: "CACHE", id: "abc123" }] }));
+
+            expect(valid.valid).toBe(true);
+
+            const missingId = validateWranglerConfig(validBase({ kv_namespaces: [{ binding: "CACHE" }] }));
+
+            expect(missingId.valid).toBe(true);
+            expect(missingId.warnings.join(" ")).toMatch(/wrangler kv namespace create/u);
+
+            const missingBinding = validateWranglerConfig(validBase({ kv_namespaces: [{ id: "abc123" }] }));
+
+            expect(missingBinding.errors.join(" ")).toContain('must have a non-empty "binding"');
+        });
+
+        it("accepts a well-formed hyperdrive binding; warns on a missing id; errors on a missing binding", () => {
+            expect.assertions(3);
+
+            const valid = validateWranglerConfig(validBase({ hyperdrive: [{ binding: "HYPERDRIVE", id: "hd_123" }] }));
+
+            expect(valid.valid).toBe(true);
+
+            const missingId = validateWranglerConfig(validBase({ hyperdrive: [{ binding: "HYPERDRIVE" }] }));
+
+            expect(missingId.warnings.join(" ")).toMatch(/wrangler hyperdrive create/u);
+
+            const missingBinding = validateWranglerConfig(validBase({ hyperdrive: [{ id: "hd_123" }] }));
+
+            expect(missingBinding.errors.join(" ")).toContain('must have a non-empty "binding"');
+        });
+
+        it("accepts a well-formed pipelines binding; warns on a missing pipeline; errors on a missing binding", () => {
+            expect.assertions(3);
+
+            const valid = validateWranglerConfig(validBase({ pipelines: [{ binding: "PIPE", pipeline: "events" }] }));
+
+            expect(valid.valid).toBe(true);
+
+            const missingPipeline = validateWranglerConfig(validBase({ pipelines: [{ binding: "PIPE" }] }));
+
+            expect(missingPipeline.warnings.join(" ")).toMatch(/wrangler pipelines create/u);
+
+            const missingBinding = validateWranglerConfig(validBase({ pipelines: [{ pipeline: "events" }] }));
+
+            expect(missingBinding.errors.join(" ")).toContain('must have a non-empty "binding"');
+        });
+
+        it("accepts a well-formed analytics_engine_datasets binding; warns on a missing dataset; errors on a missing binding", () => {
+            expect.assertions(3);
+
+            const valid = validateWranglerConfig(validBase({ analytics_engine_datasets: [{ binding: "ANALYTICS", dataset: "events" }] }));
+
+            expect(valid.valid).toBe(true);
+
+            const missingDataset = validateWranglerConfig(validBase({ analytics_engine_datasets: [{ binding: "ANALYTICS" }] }));
+
+            expect(missingDataset.warnings.join(" ")).toMatch(/defaults to the binding name/u);
+
+            const missingBinding = validateWranglerConfig(validBase({ analytics_engine_datasets: [{ dataset: "events" }] }));
+
+            expect(missingBinding.errors.join(" ")).toContain('must have a non-empty "binding"');
+        });
+
+        it("accepts a well-formed browser block and flags an empty one", () => {
+            expect.assertions(2);
+
+            expect(validateWranglerConfig(validBase({ browser: { binding: "BROWSER" } })).valid).toBe(true);
+            expect(validateWranglerConfig(validBase({ browser: {} })).errors.join(" ")).toContain("browser must be an object");
+        });
+
+        it("accepts a well-formed images block and flags an empty one", () => {
+            expect.assertions(2);
+
+            expect(validateWranglerConfig(validBase({ images: { binding: "IMAGES" } })).valid).toBe(true);
+            expect(validateWranglerConfig(validBase({ images: {} })).errors.join(" ")).toContain("images must be an object");
+        });
+
+        it("accepts a well-formed services entry and rejects one missing binding or service", () => {
+            expect.assertions(3);
+
+            expect(validateWranglerConfig(validBase({ services: [{ binding: "PRICING", entrypoint: "PricingEntry", service: "pricing-worker" }] })).valid).toBe(
+                true,
+            );
+            expect(validateWranglerConfig(validBase({ services: [{ service: "pricing-worker" }] })).errors.join(" ")).toContain(
+                'must have a non-empty "binding"',
+            );
+            expect(validateWranglerConfig(validBase({ services: [{ binding: "PRICING" }] })).errors.join(" ")).toContain('must have a non-empty "service"');
+        });
+
+        it("accepts a well-formed dispatch_namespaces entry and rejects one missing binding or namespace", () => {
+            expect.assertions(3);
+
+            expect(validateWranglerConfig(validBase({ dispatch_namespaces: [{ binding: "DISPATCHER", namespace: "tenants" }] })).valid).toBe(true);
+            expect(validateWranglerConfig(validBase({ dispatch_namespaces: [{ namespace: "tenants" }] })).errors.join(" ")).toContain(
+                'must have a non-empty "binding"',
+            );
+            expect(validateWranglerConfig(validBase({ dispatch_namespaces: [{ binding: "DISPATCHER" }] })).errors.join(" ")).toContain(
+                'must have a non-empty "namespace"',
+            );
+        });
+
+        it("does not trip DO/migration cross-checks when only dispatch_namespaces is added", () => {
+            expect.assertions(1);
+
+            const report = validateWranglerConfig(validBase({ dispatch_namespaces: [{ binding: "DISPATCHER", namespace: "tenants" }] }));
+
+            expect(report.errors).toHaveLength(0);
+        });
+
+        it("accepts a well-formed mtls_certificates entry and rejects one missing binding or certificate_id", () => {
+            expect.assertions(3);
+
+            expect(validateWranglerConfig(validBase({ mtls_certificates: [{ binding: "MY_CERT", certificate_id: "cert_1" }] })).valid).toBe(true);
+            expect(validateWranglerConfig(validBase({ mtls_certificates: [{ certificate_id: "cert_1" }] })).errors.join(" ")).toContain(
+                'must have a non-empty "binding"',
+            );
+            expect(validateWranglerConfig(validBase({ mtls_certificates: [{ binding: "MY_CERT" }] })).errors.join(" ")).toContain(
+                'must have a non-empty "certificate_id"',
+            );
+        });
+
+        it("accepts a well-formed send_email binding and warns (never errors) on one missing name", () => {
+            expect.assertions(4);
+
+            expect(validateWranglerConfig(validBase({ send_email: [{ name: "SEND_EMAIL" }] })).valid).toBe(true);
+
+            // A missing `name` is a strictly additive advisory — wrangler reports the
+            // authoritative error at deploy, so validation stays valid and only warns.
+            const missingName = validateWranglerConfig(validBase({ send_email: [{ destination_address: "ops@example.com" }] }));
+
+            expect(missingName.valid).toBe(true);
+            expect(missingName.warnings.join(" ")).toContain('has no non-empty "name"');
+
+            // A wrong *type* is still a malformed shape and errors.
+            expect(validateWranglerConfig(validBase({ send_email: {} as never })).errors.join(" ")).toContain("send_email must be an array");
+        });
+
+        it("recognizes logpush as a boolean and rejects a non-boolean", () => {
+            expect.assertions(3);
+
+            expect(validateWranglerConfig(validBase({ logpush: true })).valid).toBe(true);
+            expect(validateWranglerConfig(validBase({})).valid).toBe(true);
+            expect(validateWranglerConfig(validBase({ logpush: "true" as never })).errors.join(" ")).toContain("logpush must be a boolean");
+        });
+
+        it("accepts placement.mode smart, and rejects a typo'd mode or wrong shape", () => {
+            expect.assertions(3);
+
+            expect(validateWranglerConfig(validBase({ placement: { mode: "smart" } })).valid).toBe(true);
+            expect(validateWranglerConfig(validBase({ placement: { mode: "fast" } })).errors.join(" ")).toContain('placement.mode must be "smart"');
+            expect(validateWranglerConfig(validBase({ placement: "smart" as never })).errors.join(" ")).toContain("placement must be an object");
+        });
+
+        it("accepts a well-formed assets block and flags a missing directory, wrong shape, or non-string binding", () => {
+            expect.assertions(4);
+
+            expect(validateWranglerConfig(validBase({ assets: { binding: "ASSETS", directory: "./dist/client" } })).valid).toBe(true);
+            expect(validateWranglerConfig(validBase({ assets: { binding: "ASSETS" } })).errors.join(" ")).toContain('must declare a non-empty "directory"');
+            expect(validateWranglerConfig(validBase({ assets: "x" as never })).errors.join(" ")).toContain("assets must be an object");
+            expect(validateWranglerConfig(validBase({ assets: { binding: 5 as never, directory: "./dist/client" } })).errors.join(" ")).toContain(
+                "assets.binding must be a non-empty string",
+            );
         });
     });
 });

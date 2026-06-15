@@ -55,12 +55,24 @@ interface WorkflowEntry {
 
 interface WranglerShape {
     ai?: { binding?: string };
+    // Self-describing: { binding, dataset } with no remote id — auto-writeable (see reconcileAnalytics).
+    analytics_engine_datasets?: ReadonlyArray<{ binding?: string; dataset?: string }>;
+    // Self-describing: a parameterless { binding } — auto-writeable like `ai` (see reconcileBrowser).
+    browser?: { binding?: string };
     containers?: ReadonlyArray<ContainerEntry>;
     d1_databases?: ReadonlyArray<{ binding?: string }>;
     durable_objects?: { bindings?: ReadonlyArray<DurableObjectBinding> };
+    // Hint-only: the `id` is a remote Hyperdrive resource Cirrus can't mint — warned, never written.
+    hyperdrive?: ReadonlyArray<{ binding?: string; id?: string }>;
+    // Self-describing: a parameterless { binding } — auto-writeable like `ai` (see reconcileImages).
+    images?: { binding?: string };
+    // Hint-only: the namespace `id` is a remote KV resource Cirrus can't mint — warned, never written.
+    kv_namespaces?: ReadonlyArray<{ binding?: string; id?: string }>;
     migrations?: ReadonlyArray<MigrationEntry>;
     name?: string;
     observability?: { enabled?: boolean };
+    // Hint-only: the `pipeline` name is a remote resource Cirrus can't mint — warned, never written.
+    pipelines?: ReadonlyArray<{ binding?: string; pipeline?: string }>;
     r2_buckets?: ReadonlyArray<{ binding?: string }>;
     workflows?: ReadonlyArray<WorkflowEntry>;
 }
@@ -135,6 +147,33 @@ interface ReconcileStep {
 }
 
 /**
+ * Collect hint-only binding warnings. Each carries a remote id/name Cirrus
+ * can't mint (a KV namespace id, a Hyperdrive id, a Pipelines pipeline name);
+ * like R2's user-defined bucket name they are warned, never auto-written, and
+ * the warning is suppressed once the corresponding binding array is already
+ * present so a wired-up project starts the dev server clean. Self-describing
+ * bindings (browser/images/analytics) are auto-written instead; see reconcile.
+ */
+const collectHintBindingWarnings = (inferred: InferredBindings, parsed?: WranglerShape): string[] => {
+    const rules: ReadonlyArray<[boolean, string]> = [
+        [
+            inferred.usesKv && (parsed?.kv_namespaces?.length ?? 0) === 0,
+            "@cirrus/kv is used but no kv_namespaces binding exists; add a kv_namespaces entry ({ binding, id }) and pass env.<BINDING> to createKv() — the namespace id can't be auto-provisioned.",
+        ],
+        [
+            inferred.usesHyperdrive && (parsed?.hyperdrive?.length ?? 0) === 0,
+            "@cirrus/hyperdrive is used but no hyperdrive binding exists; run 'wrangler hyperdrive create' and add a 'hyperdrive' binding ({ binding, id }) — the id can't be auto-provisioned.",
+        ],
+        [
+            inferred.usesPipelines && (parsed?.pipelines?.length ?? 0) === 0,
+            "@cirrus/pipelines is used but no pipelines binding exists; run 'wrangler pipelines create <name>' and add a 'pipelines' binding ({ binding, pipeline }) — the pipeline resource can't be auto-provisioned.",
+        ],
+    ];
+
+    return rules.filter(([active]) => active).map(([, warning]) => warning);
+};
+
+/**
  * Hints for capabilities used but not safely auto-provisionable — only emitted
  * when the corresponding binding is actually **missing**. `parsed` (the existing
  * `wrangler.jsonc`, when one was read) suppresses a hint whose binding is already
@@ -199,6 +238,8 @@ const collectWarnings = (inferred: InferredBindings, parsed?: WranglerShape): st
             "@cirrus/payment is used; set the provider secrets in .dev.vars — STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET (Stripe) or POLAR_ACCESS_TOKEN + POLAR_WEBHOOK_SECRET (Polar).",
         );
     }
+
+    warnings.push(...collectHintBindingWarnings(inferred, parsed));
 
     return warnings;
 };
@@ -281,6 +322,49 @@ const reconcileAi = (text: string, parsed: WranglerShape): ReconcileStep => {
     }
 
     return { added: ["AI (Workers AI)"], text: applyModify(text, ["ai"], { binding: "AI" }) };
+};
+
+/**
+ * Add the `browser` Browser Rendering binding for `@cirrus/browser` usage, if
+ * absent. Self-describing — the binding name is the whole config, with no remote
+ * id to mint — so it is written safely like `ai`. Idempotent on `parsed.browser.binding`. Pure.
+ */
+const reconcileBrowser = (text: string, parsed: WranglerShape): ReconcileStep => {
+    if (typeof parsed.browser?.binding === "string" && parsed.browser.binding.length > 0) {
+        return { added: [], text };
+    }
+
+    return { added: ["BROWSER (Browser Rendering)"], text: applyModify(text, ["browser"], { binding: "BROWSER" }) };
+};
+
+/**
+ * Add the `images` Cloudflare Images binding for `@cirrus/images` usage, if
+ * absent. Self-describing like `browser` (parameterless `{ binding }`, no remote
+ * id), so it is auto-written. Idempotent on `parsed.images.binding`. Pure.
+ */
+const reconcileImages = (text: string, parsed: WranglerShape): ReconcileStep => {
+    if (typeof parsed.images?.binding === "string" && parsed.images.binding.length > 0) {
+        return { added: [], text };
+    }
+
+    return { added: ["IMAGES (Cloudflare Images)"], text: applyModify(text, ["images"], { binding: "IMAGES" }) };
+};
+
+/**
+ * Add the `analytics_engine_datasets` binding for `@cirrus/analytics` usage, if
+ * absent. Self-describing: the `dataset` name is user-chosen and created lazily
+ * on first write (no remote id to mint), so it auto-writes like the DO bindings.
+ * The dataset defaults to the binding name on Cloudflare's side; we write it
+ * explicitly to avoid drift. Idempotent on any existing `analytics_engine_datasets` entry. Pure.
+ */
+const reconcileAnalytics = (text: string, parsed: WranglerShape): ReconcileStep => {
+    if ((parsed.analytics_engine_datasets?.length ?? 0) > 0) {
+        return { added: [], text };
+    }
+
+    const nextDatasets = [{ binding: "ANALYTICS", dataset: "ANALYTICS" }];
+
+    return { added: ["ANALYTICS (Analytics Engine)"], text: applyModify(text, ["analytics_engine_datasets"], nextDatasets) };
 };
 
 /** Map a camelCase custom instance type onto wrangler's snake_case fields. Pure. */
@@ -461,12 +545,19 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
     // Each step rewrites `text` but reads the original `parsed`; this is only
     // safe because the steps touch disjoint top-level keys (durable_objects /
     // migrations vs d1_databases vs ai vs containers / observability vs
-    // workflows). A future step that depends on a key an earlier step mutated
-    // must re-parse rather than reuse `parsed`.
+    // workflows vs browser vs images vs analytics_engine_datasets). A future
+    // step that depends on a key an earlier step mutated must re-parse rather
+    // than reuse `parsed`. Self-describing bindings (browser/images/analytics)
+    // auto-write here; their hint-only siblings (kv/hyperdrive/pipelines) carry
+    // an un-mintable remote id and only surface as warnings (see collectWarnings).
     const doStep = reconcileDurableObjects(original, parsed, requiredDurableObjects);
     const d1Step = inferred.needsD1 ? reconcileD1(doStep.text, parsed) : { added: [], text: doStep.text };
     const aiStep = inferred.usesAi ? reconcileAi(d1Step.text, parsed) : { added: [], text: d1Step.text };
-    const containerStep = exportedContainers.length > 0 ? reconcileContainers(aiStep.text, parsed, exportedContainers) : { added: [], text: aiStep.text };
+    const browserStep = inferred.usesBrowser ? reconcileBrowser(aiStep.text, parsed) : { added: [], text: aiStep.text };
+    const imagesStep = inferred.usesImages ? reconcileImages(browserStep.text, parsed) : { added: [], text: browserStep.text };
+    const analyticsStep = inferred.usesAnalytics ? reconcileAnalytics(imagesStep.text, parsed) : { added: [], text: imagesStep.text };
+    const containerStep =
+        exportedContainers.length > 0 ? reconcileContainers(analyticsStep.text, parsed, exportedContainers) : { added: [], text: analyticsStep.text };
     const workflowStep =
         exportedWorkflows.length > 0 ? reconcileWorkflows(containerStep.text, parsed, exportedWorkflows) : { added: [], text: containerStep.text };
 
@@ -486,7 +577,16 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
     writeFileSync(wranglerPath, workflowStep.text, "utf8");
 
     return {
-        added: [...doStep.added, ...d1Step.added, ...aiStep.added, ...containerStep.added, ...workflowStep.added],
+        added: [
+            ...doStep.added,
+            ...d1Step.added,
+            ...aiStep.added,
+            ...browserStep.added,
+            ...imagesStep.added,
+            ...analyticsStep.added,
+            ...containerStep.added,
+            ...workflowStep.added,
+        ],
         changed: true,
         exportGaps,
         warnings,

@@ -19,8 +19,14 @@ const baseInferred = (overrides: Partial<InferredBindings> = {}): InferredBindin
         needsD1: false,
         signals: [],
         usesAi: false,
+        usesAnalytics: false,
         usesAuth: false,
+        usesBrowser: false,
+        usesHyperdrive: false,
+        usesImages: false,
+        usesKv: false,
         usesPayment: false,
+        usesPipelines: false,
         usesScheduler: false,
         usesStorage: false,
         workflows: [],
@@ -240,6 +246,92 @@ describe("reconcileWranglerBindings", () => {
 
         expect(result.changed).toBe(false);
         expect(result.reason).toContain("not found");
+    });
+
+    it("auto-writes the self-describing browser binding when @cirrus/browser is inferred, idempotently", () => {
+        expect.assertions(3);
+
+        const first = reconcileWranglerBindings(root, baseInferred({ usesBrowser: true }));
+
+        expect(first.added).toContain("BROWSER (Browser Rendering)");
+        expect(readConfig().browser).toEqual({ binding: "BROWSER" });
+
+        const second = reconcileWranglerBindings(root, baseInferred({ usesBrowser: true }));
+
+        expect(second.changed).toBe(false);
+    });
+
+    it("auto-writes the self-describing analytics dataset when @cirrus/analytics is inferred, idempotently", () => {
+        expect.assertions(3);
+
+        const first = reconcileWranglerBindings(root, baseInferred({ usesAnalytics: true }));
+
+        expect(first.added).toContain("ANALYTICS (Analytics Engine)");
+        expect(readConfig().analytics_engine_datasets).toEqual([{ binding: "ANALYTICS", dataset: "ANALYTICS" }]);
+
+        const second = reconcileWranglerBindings(root, baseInferred({ usesAnalytics: true }));
+
+        expect(second.changed).toBe(false);
+    });
+
+    it("warns rather than writes a kv_namespaces binding when @cirrus/kv is used (the namespace id can't be minted)", () => {
+        expect.assertions(2);
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesKv: true }));
+
+        expect(result.warnings.join(" ")).toMatch(/kv_namespaces/u);
+        expect(readConfig().kv_namespaces).toBeUndefined();
+    });
+
+    it("does not warn about kv when a kv_namespaces binding already exists", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(root, "wrangler.jsonc"),
+            `{
+    "name": "cirrus-app",
+    "compatibility_date": "2026-04-07",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "kv_namespaces": [{ "binding": "CACHE", "id": "abc123" }],
+}
+`,
+            "utf8",
+        );
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesKv: true }));
+
+        expect(result.warnings.join(" ")).not.toMatch(/kv_namespaces/u);
+    });
+
+    it("warns rather than writes a hyperdrive binding when @cirrus/hyperdrive is used (the id can't be minted)", () => {
+        expect.assertions(2);
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesHyperdrive: true }));
+
+        expect(result.warnings.join(" ")).toMatch(/hyperdrive/u);
+        expect(readConfig().hyperdrive).toBeUndefined();
+    });
+
+    it("does not warn about hyperdrive when a hyperdrive binding already exists", () => {
+        expect.assertions(1);
+
+        writeFileSync(
+            join(root, "wrangler.jsonc"),
+            `{
+    "name": "cirrus-app",
+    "compatibility_date": "2026-04-07",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "hyperdrive": [{ "binding": "PG", "id": "real-hyperdrive-id" }],
+}
+`,
+            "utf8",
+        );
+
+        const result = reconcileWranglerBindings(root, baseInferred({ usesHyperdrive: true }));
+
+        expect(result.warnings.join(" ")).not.toMatch(/hyperdrive is used/u);
     });
 
     describe("containers", () => {

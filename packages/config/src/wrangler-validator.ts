@@ -63,16 +63,58 @@ interface WranglerWorkflowEntry {
 }
 
 interface WranglerConfig {
+    // Analytics Engine datasets (self-describing: { binding, dataset }, dataset
+    // defaults to the binding name). See `validateAnalyticsBindings`.
+    analytics_engine_datasets?: ReadonlyArray<{ binding?: string; dataset?: string } | null | undefined>;
+    // Workers Static Assets (serves the client build alongside the worker). NOT
+    // Cloudflare Pages (an explicit non-goal). See `validateAssets`.
+    assets?: { binding?: string; directory?: string; html_handling?: string; not_found_handling?: string };
+    // Browser Rendering binding (`env.BROWSER`). Self-describing { binding }.
+    browser?: { binding?: string };
     compatibility_date?: string;
     compatibility_flags?: ReadonlyArray<string>;
     // Parsed from untrusted JSONC, so individual entries may be `null` or
     // otherwise malformed; `validateContainers` guards against that at runtime.
     containers?: ReadonlyArray<WranglerContainerEntry | null | undefined>;
     d1_databases?: ReadonlyArray<{ binding?: string }>;
+    // Workers for Platforms dispatch namespaces — passthrough/shape-check only
+    // (the `outbound` shape is deep WfP territory Cirrus does not police). See
+    // `validateDispatchNamespaces`.
+    dispatch_namespaces?: ReadonlyArray<{ binding?: string; namespace?: string; outbound?: unknown } | null | undefined>;
     durable_objects?: { bindings?: ReadonlyArray<WranglerDurableObjectBinding> };
+    // Hyperdrive (bring-your-own Postgres/MySQL). The `id` is a remote resource
+    // (`wrangler hyperdrive create`) Cirrus can't mint — warn, don't fail. See
+    // `validateHyperdriveBindings`.
+    hyperdrive?: ReadonlyArray<{ binding?: string; id?: string; localConnectionString?: string } | null | undefined>;
+    // Cloudflare Images binding (`env.IMAGES`). Self-describing { binding }.
+    images?: { binding?: string };
+    // Workers KV namespaces. The namespace `id` is a remote resource Cirrus
+    // can't mint — warn, don't fail. See `validateKvNamespaces`.
+    kv_namespaces?: ReadonlyArray<{ binding?: string; id?: string } | null | undefined>;
+    // Cloudflare Logpush toggle (jobs are created out-of-band via dashboard/API).
+    logpush?: boolean;
     migrations?: ReadonlyArray<{ new_classes?: ReadonlyArray<string>; new_sqlite_classes?: ReadonlyArray<string> } | null | undefined>;
+    // mTLS client-certificate bindings (`Fetcher` that presents a client cert on
+    // outbound fetch). Cert material lives in Cloudflare, referenced by id. See
+    // `validateMtlsCertificates`.
+    mtls_certificates?: ReadonlyArray<{ binding?: string; certificate_id?: string } | null | undefined>;
     observability?: { enabled?: boolean };
+    // Pipelines (R2-backed streaming ingestion). The `pipeline` name is a remote
+    // resource (`wrangler pipelines create`) Cirrus can't mint — warn, don't
+    // fail. See `validatePipelineBindings`.
+    pipelines?: ReadonlyArray<{ binding?: string; pipeline?: string } | null | undefined>;
+    // Smart Placement (`{ mode: "smart" }` — the only documented mode). See
+    // `validatePlacement`.
+    placement?: { mode?: string };
     r2_buckets?: ReadonlyArray<{ binding?: string }>;
+    // Email Routing outbound bindings used for auto-reply/forward from an
+    // inbound `email()` worker (plan 029). Shape-check only. See
+    // `validateSendEmail`.
+    send_email?: ReadonlyArray<{ allowed_destination_addresses?: ReadonlyArray<string>; destination_address?: string; name?: string } | null | undefined>;
+    // Service bindings (worker-to-worker RPC / fetch). The `service` target is
+    // an external worker Cirrus can't discover — validate shape only, hint-only
+    // inference (the binding name is user-supplied). See `validateServices`.
+    services?: ReadonlyArray<{ binding?: string; entrypoint?: string; environment?: string; service?: string } | null | undefined>;
     // Parsed from untrusted JSONC, so individual entries may be `null` or
     // otherwise malformed; the validators below guard against that at runtime.
     tail_consumers?: ReadonlyArray<TailConsumer | null | undefined>;
@@ -292,6 +334,416 @@ const validateWorkflows = (wrangler: WranglerConfig, errors: string[]): void => 
 };
 
 /**
+ * Each `kv_namespaces[]` entry must name a non-empty `binding` (error). The
+ * namespace `id` is a remote resource (`wrangler kv namespace create`) Cirrus
+ * can't mint, so a missing `id` is a warning, not an error — mirrors the
+ * Hyperdrive/Pipelines hint ethos. Shape modeled on `validateVectorizeBindings`.
+ */
+const validateKvNamespaces = (wrangler: WranglerConfig, errors: string[], warnings: string[]): void => {
+    const namespaces = wrangler.kv_namespaces;
+
+    if (namespaces === undefined) {
+        return;
+    }
+
+    if (!Array.isArray(namespaces)) {
+        errors.push("kv_namespaces must be an array of { binding, id } entries");
+
+        return;
+    }
+
+    const entries = namespaces as ReadonlyArray<{ binding?: string; id?: string } | null | undefined>;
+
+    for (const [index, entry] of entries.entries()) {
+        const label = `kv_namespaces[${String(index)}]`;
+
+        if (!entry || typeof entry !== "object" || typeof entry.binding !== "string" || entry.binding.length === 0) {
+            errors.push(`${label} must have a non-empty "binding" naming the KV namespace binding`);
+
+            continue;
+        }
+
+        if (typeof entry.id !== "string" || entry.id.length === 0) {
+            warnings.push(
+                `${label} ("${entry.binding}") has no "id" — run \`wrangler kv namespace create\` and set the namespace id, or the binding can't resolve`,
+            );
+        }
+    }
+};
+
+/**
+ * Each `hyperdrive[]` entry must name a non-empty `binding` (error). The `id`
+ * is a remote resource (`wrangler hyperdrive create`) Cirrus can't fabricate,
+ * so a missing/placeholder `id` is a warning (the binding can't connect without
+ * it), not an error — mirrors the D1 placeholder-id ethos in reconcile.
+ */
+const validateHyperdriveBindings = (wrangler: WranglerConfig, errors: string[], warnings: string[]): void => {
+    const bindings = wrangler.hyperdrive;
+
+    if (bindings === undefined) {
+        return;
+    }
+
+    if (!Array.isArray(bindings)) {
+        errors.push("hyperdrive must be an array of { binding, id } entries");
+
+        return;
+    }
+
+    const entries = bindings as ReadonlyArray<{ binding?: string; id?: string } | null | undefined>;
+
+    for (const [index, entry] of entries.entries()) {
+        const label = `hyperdrive[${String(index)}]`;
+
+        if (!entry || typeof entry !== "object" || typeof entry.binding !== "string" || entry.binding.length === 0) {
+            errors.push(`${label} must have a non-empty "binding" naming the Hyperdrive binding`);
+
+            continue;
+        }
+
+        if (typeof entry.id !== "string" || entry.id.length === 0) {
+            warnings.push(`${label} ("${entry.binding}") has no "id" — run \`wrangler hyperdrive create\` and set the id, or the binding can't connect`);
+        }
+    }
+};
+
+/**
+ * Each `pipelines[]` entry must name a non-empty `binding` (error). The
+ * `pipeline` name is a remote resource (`wrangler pipelines create`) Cirrus
+ * can't fabricate, so a missing one is a warning (the binding can't resolve),
+ * not an error. Same hint ethos as KV/Hyperdrive.
+ */
+const validatePipelineBindings = (wrangler: WranglerConfig, errors: string[], warnings: string[]): void => {
+    const bindings = wrangler.pipelines;
+
+    if (bindings === undefined) {
+        return;
+    }
+
+    if (!Array.isArray(bindings)) {
+        errors.push("pipelines must be an array of { binding, pipeline } entries");
+
+        return;
+    }
+
+    const entries = bindings as ReadonlyArray<{ binding?: string; pipeline?: string } | null | undefined>;
+
+    for (const [index, entry] of entries.entries()) {
+        const label = `pipelines[${String(index)}]`;
+
+        if (!entry || typeof entry !== "object" || typeof entry.binding !== "string" || entry.binding.length === 0) {
+            errors.push(`${label} must have a non-empty "binding" naming the Pipelines binding`);
+
+            continue;
+        }
+
+        if (typeof entry.pipeline !== "string" || entry.pipeline.length === 0) {
+            warnings.push(
+                `${label} ("${entry.binding}") has no "pipeline" — run \`wrangler pipelines create <name>\` and set the pipeline name, or the binding can't resolve`,
+            );
+        }
+    }
+};
+
+/**
+ * Each `analytics_engine_datasets[]` entry must name a non-empty `binding`
+ * (error). The `dataset` defaults to the binding name on Cloudflare's side and
+ * is created lazily on first write, so a missing `dataset` is a warning ("set it
+ * explicitly to avoid drift"), not an error — this binding is self-describing.
+ */
+const validateAnalyticsBindings = (wrangler: WranglerConfig, errors: string[], warnings: string[]): void => {
+    const datasets = wrangler.analytics_engine_datasets;
+
+    if (datasets === undefined) {
+        return;
+    }
+
+    if (!Array.isArray(datasets)) {
+        errors.push("analytics_engine_datasets must be an array of { binding, dataset } entries");
+
+        return;
+    }
+
+    const entries = datasets as ReadonlyArray<{ binding?: string; dataset?: string } | null | undefined>;
+
+    for (const [index, entry] of entries.entries()) {
+        const label = `analytics_engine_datasets[${String(index)}]`;
+
+        if (!entry || typeof entry !== "object" || typeof entry.binding !== "string" || entry.binding.length === 0) {
+            errors.push(`${label} must have a non-empty "binding" naming the Analytics Engine binding`);
+
+            continue;
+        }
+
+        if (typeof entry.dataset !== "string" || entry.dataset.length === 0) {
+            warnings.push(`${label} ("${entry.binding}") has no "dataset" — it defaults to the binding name; set it explicitly to avoid drift`);
+        }
+    }
+};
+
+/**
+ * The `browser` Browser Rendering binding is optional, but a present block must
+ * name a non-empty `binding`. The binding is self-describing (the name is the
+ * whole config), so this is a pure shape check.
+ */
+const validateBrowserBinding = (wrangler: WranglerConfig, errors: string[]): void => {
+    const { browser } = wrangler;
+
+    if (browser === undefined) {
+        return;
+    }
+
+    if (typeof browser !== "object" || Array.isArray(browser) || typeof browser.binding !== "string" || browser.binding.length === 0) {
+        errors.push('browser must be an object with a non-empty "binding" (e.g. { "binding": "BROWSER" })');
+    }
+};
+
+/**
+ * The `images` Cloudflare Images binding is optional, but a present block must
+ * name a non-empty `binding`. Self-describing, so a pure shape check (mirrors
+ * `validateBrowserBinding`).
+ */
+const validateImagesBinding = (wrangler: WranglerConfig, errors: string[]): void => {
+    const { images } = wrangler;
+
+    if (images === undefined) {
+        return;
+    }
+
+    if (typeof images !== "object" || Array.isArray(images) || typeof images.binding !== "string" || images.binding.length === 0) {
+        errors.push('images must be an object with a non-empty "binding" (e.g. { "binding": "IMAGES" })');
+    }
+};
+
+/**
+ * Each `services[]` entry must name a non-empty `binding` and a non-empty
+ * `service` (the target worker). `entrypoint` (a named `WorkerEntrypoint` class
+ * on the target) is optional. The typed-`env` codegen seam for `env.&lt;SERVICE>`
+ * is the codegen agent's job (a generated `CirrusServices`/`Env` augmentation);
+ * config only shape-checks the binding here. Shape modeled on `validateWorkflows`.
+ */
+const validateServices = (wrangler: WranglerConfig, errors: string[]): void => {
+    const { services } = wrangler;
+
+    if (services === undefined) {
+        return;
+    }
+
+    if (!Array.isArray(services)) {
+        errors.push("services must be an array of { binding, service, entrypoint? } entries");
+
+        return;
+    }
+
+    const entries = services as ReadonlyArray<{ binding?: string; service?: string } | null | undefined>;
+
+    for (const [index, entry] of entries.entries()) {
+        const label = `services[${String(index)}]`;
+
+        if (!entry || typeof entry !== "object") {
+            errors.push(`${label} must be a { binding, service, entrypoint? } object`);
+
+            continue;
+        }
+
+        if (typeof entry.binding !== "string" || entry.binding.length === 0) {
+            errors.push(`${label} must have a non-empty "binding" naming the service binding`);
+        }
+
+        if (typeof entry.service !== "string" || entry.service.length === 0) {
+            errors.push(`${label} must have a non-empty "service" naming the target Worker`);
+        }
+    }
+};
+
+/**
+ * Each `dispatch_namespaces[]` entry (Workers for Platforms) must name a
+ * non-empty `binding` and a non-empty `namespace`. Passthrough/shape-check only:
+ * the `outbound` binding shape is deep WfP territory Cirrus deliberately does
+ * not police. Cirrus supports this binding as wrangler config passthrough — it
+ * provides no script-upload/management or tenant-isolation runtime.
+ */
+const validateDispatchNamespaces = (wrangler: WranglerConfig, errors: string[]): void => {
+    const namespaces = wrangler.dispatch_namespaces;
+
+    if (namespaces === undefined) {
+        return;
+    }
+
+    if (!Array.isArray(namespaces)) {
+        errors.push("dispatch_namespaces must be an array of { binding, namespace } entries");
+
+        return;
+    }
+
+    const entries = namespaces as ReadonlyArray<{ binding?: string; namespace?: string } | null | undefined>;
+
+    for (const [index, entry] of entries.entries()) {
+        const label = `dispatch_namespaces[${String(index)}]`;
+
+        if (!entry || typeof entry !== "object") {
+            errors.push(`${label} must be a { binding, namespace } object`);
+
+            continue;
+        }
+
+        if (typeof entry.binding !== "string" || entry.binding.length === 0) {
+            errors.push(`${label} must have a non-empty "binding"`);
+        }
+
+        if (typeof entry.namespace !== "string" || entry.namespace.length === 0) {
+            errors.push(`${label} must have a non-empty "namespace" naming the dispatch namespace`);
+        }
+    }
+};
+
+/**
+ * Each `mtls_certificates[]` entry must name a non-empty `binding` and a
+ * non-empty `certificate_id` (the cert is uploaded via `wrangler mtls-certificate
+ * upload`; Cirrus never handles cert/key material). Passthrough/shape-check only.
+ */
+const validateMtlsCertificates = (wrangler: WranglerConfig, errors: string[]): void => {
+    const certificates = wrangler.mtls_certificates;
+
+    if (certificates === undefined) {
+        return;
+    }
+
+    if (!Array.isArray(certificates)) {
+        errors.push("mtls_certificates must be an array of { binding, certificate_id } entries");
+
+        return;
+    }
+
+    const entries = certificates as ReadonlyArray<{ binding?: string; certificate_id?: string } | null | undefined>;
+
+    for (const [index, entry] of entries.entries()) {
+        const label = `mtls_certificates[${String(index)}]`;
+
+        if (!entry || typeof entry !== "object") {
+            errors.push(`${label} must be a { binding, certificate_id } object`);
+
+            continue;
+        }
+
+        if (typeof entry.binding !== "string" || entry.binding.length === 0) {
+            errors.push(`${label} must have a non-empty "binding"`);
+        }
+
+        if (typeof entry.certificate_id !== "string" || entry.certificate_id.length === 0) {
+            errors.push(`${label} must have a non-empty "certificate_id" (upload via \`wrangler mtls-certificate upload\`)`);
+        }
+    }
+};
+
+/**
+ * `send_email[]` (Email Routing outbound, used for auto-reply/forward from an
+ * inbound `email()` worker — plan 029). The routing rule that delivers inbound
+ * mail to the worker is dashboard-configured and not codegen-managed, so this is
+ * a **strictly additive advisory** — like `tail_consumers` it must never turn an
+ * otherwise-valid config invalid. A wrong *type* (`send_email` not an array) is a
+ * malformed shape and stays an error; a per-entry missing `name` is surfaced as a
+ * warning (wrangler will report the authoritative error at deploy time).
+ */
+const validateSendEmail = (wrangler: WranglerConfig, errors: string[], warnings: string[]): void => {
+    const sendEmail = wrangler.send_email;
+
+    if (sendEmail === undefined) {
+        return;
+    }
+
+    if (!Array.isArray(sendEmail)) {
+        errors.push("send_email must be an array of { name, destination_address? } entries");
+
+        return;
+    }
+
+    const entries = sendEmail as ReadonlyArray<{ name?: string } | null | undefined>;
+
+    for (const [index, entry] of entries.entries()) {
+        if (!entry || typeof entry !== "object" || typeof entry.name !== "string" || entry.name.length === 0) {
+            warnings.push(`send_email[${String(index)}] has no non-empty "name" naming the send-email binding — set one before deploying`);
+        }
+    }
+};
+
+/**
+ * `logpush` is a known boolean key — `"logpush": true` enables Cloudflare
+ * Logpush (the actual R2/HTTP/SIEM sink is a Logpush *job* created out-of-band
+ * via the dashboard/API, NOT a worker binding). Recognizing the key here catches
+ * a typo like `"logPush"` that wrangler would otherwise silently drop.
+ */
+const validateLogpush = (wrangler: WranglerConfig, errors: string[]): void => {
+    if (wrangler.logpush !== undefined && typeof wrangler.logpush !== "boolean") {
+        errors.push('logpush must be a boolean (set "logpush": true to enable Cloudflare Logpush)');
+    }
+};
+
+/**
+ * `placement` is Smart Placement config — `{ "mode": "smart" }` is the only
+ * documented shape. Recognizing it catches a typo'd mode (`"smrat"`) wrangler
+ * would silently drop. Smart Placement is opt-in only and never auto-injected
+ * (it can regress geo-distributed latency for a DO/D1-centric app).
+ */
+const validatePlacement = (wrangler: WranglerConfig, errors: string[]): void => {
+    const { placement } = wrangler;
+
+    if (placement === undefined) {
+        return;
+    }
+
+    if (typeof placement !== "object" || Array.isArray(placement)) {
+        errors.push('placement must be an object (e.g. { "mode": "smart" })');
+
+        return;
+    }
+
+    if (placement.mode !== undefined && placement.mode !== "smart") {
+        errors.push('placement.mode must be "smart" (the only supported Smart Placement mode)');
+    }
+};
+
+/**
+ * `assets` is the Workers Static Assets block — serves the client build from the
+ * same worker (Cloudflare serves files for free, only invoking the worker on a
+ * miss, so the Cirrus SSR/API handler is unaffected). NOT Cloudflare Pages,
+ * which is an explicit non-goal — the worker is the deploy unit. A present block
+ * must declare a non-empty string `directory`; `binding`/`html_handling`/
+ * `not_found_handling` if present must be strings. The directory-existence
+ * nicety is FS-aware (it lives in `validateWranglerProject`, not here) because
+ * the dir is created by the client build and may legitimately not exist yet.
+ */
+const validateAssets = (wrangler: WranglerConfig, errors: string[]): void => {
+    const { assets } = wrangler;
+
+    if (assets === undefined) {
+        return;
+    }
+
+    if (typeof assets !== "object" || Array.isArray(assets)) {
+        errors.push('assets must be an object (e.g. { "directory": "./dist/client", "binding": "ASSETS" })');
+
+        return;
+    }
+
+    if (typeof assets.directory !== "string" || assets.directory.length === 0) {
+        errors.push('assets must declare a non-empty "directory" pointing at the built client output (e.g. "./dist/client")');
+    }
+
+    if (assets.binding !== undefined && (typeof assets.binding !== "string" || assets.binding.length === 0)) {
+        errors.push('assets.binding must be a non-empty string (e.g. "ASSETS")');
+    }
+
+    if (assets.html_handling !== undefined && typeof assets.html_handling !== "string") {
+        errors.push("assets.html_handling must be a string");
+    }
+
+    if (assets.not_found_handling !== undefined && typeof assets.not_found_handling !== "string") {
+        errors.push("assets.not_found_handling must be a string");
+    }
+};
+
+/**
  * `tail_consumers` is optional, but a present entry must name the consumer
  * Worker via a non-empty `service`. A malformed entry would be silently
  * dropped by wrangler and the sink would never receive logs, so we surface it
@@ -397,6 +849,23 @@ const validateWranglerConfig = (wrangler: WranglerConfig | undefined, schema?: S
     validateContainers(wrangler, errors, warnings);
     validateWorkflows(wrangler, errors);
 
+    // Cloudflare-coverage bindings (plans 027-043). Hint bindings warn on a
+    // missing remote id; self-describing + passthrough bindings are pure
+    // shape checks. Config-only flags (logpush/placement/assets) catch typos.
+    validateKvNamespaces(wrangler, errors, warnings);
+    validateHyperdriveBindings(wrangler, errors, warnings);
+    validatePipelineBindings(wrangler, errors, warnings);
+    validateAnalyticsBindings(wrangler, errors, warnings);
+    validateBrowserBinding(wrangler, errors);
+    validateImagesBinding(wrangler, errors);
+    validateServices(wrangler, errors);
+    validateDispatchNamespaces(wrangler, errors);
+    validateMtlsCertificates(wrangler, errors);
+    validateSendEmail(wrangler, errors, warnings);
+    validateLogpush(wrangler, errors);
+    validatePlacement(wrangler, errors);
+    validateAssets(wrangler, errors);
+
     return { errors, valid: errors.length === 0, warnings };
 };
 
@@ -417,6 +886,35 @@ interface WranglerProjectValidationResult {
     report: WranglerValidationReport;
     wranglerPath: string | undefined;
 }
+
+/**
+ * FS-aware existence check for local-path container images: every `./`, `../`,
+ * `/`, or `Dockerfile`-bearing image must resolve to an existing file (wrangler
+ * resolves it relative to the config file). Registry references are skipped.
+ */
+const collectContainerImageErrors = (
+    containers: ReadonlyArray<WranglerContainerEntry | null | undefined>,
+    configDirectory: string,
+    wranglerPath: string,
+): string[] => {
+    const errors: string[] = [];
+
+    for (const entry of containers) {
+        const image = entry?.image;
+
+        if (typeof image !== "string" || !(image.startsWith("./") || image.startsWith("../") || image.startsWith("/") || image.includes("Dockerfile"))) {
+            continue;
+        }
+
+        if (!existsSync(image.startsWith("/") ? image : join(configDirectory, image))) {
+            errors.push(
+                `containers image "${image}" does not exist (resolved relative to ${wranglerPath}); create the Dockerfile or point image at a registry reference`,
+            );
+        }
+    }
+
+    return errors;
+};
 
 /**
  * File-system aware variant: reads `wrangler.jsonc`/`wrangler.json` from
@@ -464,17 +962,19 @@ const validateWranglerProject = (options: WranglerProjectValidationOptions): Wra
     // references are left to wrangler — pure shape checks already ran above.
     const configDirectory = dirname(wranglerPath);
 
-    for (const entry of wrangler.containers ?? []) {
-        const image = entry?.image;
+    report.errors.push(...collectContainerImageErrors(wrangler.containers ?? [], configDirectory, wranglerPath));
 
-        if (typeof image !== "string" || !(image.startsWith("./") || image.startsWith("../") || image.startsWith("/") || image.includes("Dockerfile"))) {
-            continue;
-        }
+    // FS-aware: `assets.directory` is created by the client build, so it may
+    // legitimately not exist at validation time (pre-build). Surface a *warning*
+    // (never an error) so pre-build validation flows aren't broken — mirrors the
+    // container-image existence check above, but downgraded to a warning.
+    const assetsDirectory = wrangler.assets?.directory;
 
-        if (!existsSync(image.startsWith("/") ? image : join(configDirectory, image))) {
-            report.errors.push(
-                `containers image "${image}" does not exist (resolved relative to ${wranglerPath}); create the Dockerfile or point image at a registry reference`,
-            );
+    if (typeof assetsDirectory === "string" && assetsDirectory.length > 0) {
+        const resolved = assetsDirectory.startsWith("/") ? assetsDirectory : join(configDirectory, assetsDirectory);
+
+        if (!existsSync(resolved)) {
+            report.warnings.push(`assets.directory "${assetsDirectory}" does not exist yet — it is created by the client build; run the build before deploy`);
         }
     }
 

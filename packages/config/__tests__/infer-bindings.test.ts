@@ -359,4 +359,44 @@ export { OrderPipelineWorkflow } from "../../cirrus/_generated/workflows.js";
 
         expect(result.usesPayment).toBe(false);
     });
+
+    // Cloudflare-coverage capability arms (plans 027/028/031/032/035/036).
+    // Each maps an `@cirrus/*` import to a capability flag + signal. Hint
+    // bindings (kv/hyperdrive/pipelines) emit a `hint:` signal; self-describing
+    // bindings (browser/images/analytics) emit a plain provisioning signal.
+    it.each([
+        ["@cirrus/kv", "usesKv", /hint: @cirrus\/kv/u],
+        ["@cirrus/hyperdrive", "usesHyperdrive", /hint: @cirrus\/hyperdrive/u],
+        ["@cirrus/pipelines", "usesPipelines", /hint: @cirrus\/pipelines/u],
+        ["@cirrus/browser", "usesBrowser", /browser \(@cirrus\/browser/u],
+        ["@cirrus/images", "usesImages", /images \(@cirrus\/images/u],
+        ["@cirrus/analytics", "usesAnalytics", /analytics_engine_datasets/u],
+    ] as const)("infers %s usage and emits the expected signal", async (source, flag, signalRe) => {
+        expect.assertions(2);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("cirrus/feature.ts", `import { thing } from "${source}";\nexport const handler = () => thing;`);
+
+        const result = await inferCirrusBindings({ projectRoot: root });
+
+        expect(result[flag]).toBe(true);
+        expect(result.signals.join(" ")).toMatch(signalRe);
+    });
+
+    it("leaves every Cloudflare-coverage flag false for a project importing none of them", async () => {
+        expect.assertions(6);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+
+        const result = await inferCirrusBindings({ projectRoot: root });
+
+        expect(result.usesKv).toBe(false);
+        expect(result.usesHyperdrive).toBe(false);
+        expect(result.usesPipelines).toBe(false);
+        expect(result.usesBrowser).toBe(false);
+        expect(result.usesImages).toBe(false);
+        expect(result.usesAnalytics).toBe(false);
+    });
 });
