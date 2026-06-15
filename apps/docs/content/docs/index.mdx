@@ -5,9 +5,10 @@ description: A type-safe real-time backend on your own Cloudflare account.
 
 Cirrus is a Convex-style backend framework that runs entirely on **your own
 Cloudflare Workers + Durable Objects account**. It gives you typed functions,
-live subscriptions, schema-driven storage, first-party auth, file storage and
-a scheduler — without making you give up ownership of the data or paying a
-per-seat platform tax.
+live subscriptions, schema-driven storage, first-party auth, file storage, a
+scheduler, durable workflows, server-side authorization (row-level security and
+data masking), and a local admin studio — without making you give up ownership
+of the data or paying a per-seat platform tax.
 
 Where Convex couples you to a hosted runtime, Cirrus lets you ship the exact
 same DX onto your own infrastructure. Where prior art on Cloudflare like
@@ -45,6 +46,10 @@ export const list = query({
 - **`@cirrus/client` + `@cirrus/react`** — browser SDK and React hooks
 - **`@cirrus/vite` + `@cirrus/cli`** — codegen, dev server, scaffolding
 - **`@cirrus/auth` / `@cirrus/mail` / `@cirrus/storage` / `@cirrus/scheduler`** — first-party add-ons
+- **`@cirrus/workflow`** — durable, replayable multi-step workflows on Cloudflare Workflows
+- **Row-level security + data masking** — opt-in, server-side authorization in `@cirrus/server`
+- **`@cirrus/advisor`** — schema, performance, and security lints, surfaced in the studio
+- **`@cirrus/studio`** — a local admin console for data, functions, logs, and advisors
 
 ## See also
 

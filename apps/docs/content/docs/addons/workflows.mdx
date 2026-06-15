@@ -1,0 +1,189 @@
+---
+title: "@cirrus/workflow"
+description: Durable, multi-step execution that replays deterministically — built on Cloudflare Workflows.
+---
+
+`@cirrus/workflow` gives Cirrus durable workflows: chain steps into a single
+unit that **survives Worker restarts and redeploys** and **replays
+deterministically** on failure. Each step's result is persisted and memoized —
+when a later step throws, only that step retries; the completed ones don't run
+again.
+
+It wraps [Cloudflare Workflows](https://developers.cloudflare.com/workflows/)
+(a first-party, GA durable-execution engine) with type-safe authoring: you
+write a `defineWorkflow` and codegen emits the `WorkflowEntrypoint` class, wires
+a typed `ctx.workflows` handle, and reconciles the `[[workflows]]` binding in
+`wrangler.jsonc` for you.
+
+Use it for sagas, multi-stage AI pipelines, human-in-the-loop approvals, and any
+long-running orchestration where "re-run the whole job from scratch" isn't good
+enough.
+
+## Define a workflow
+
+Workflows live in `cirrus/workflows.ts` as named exports. Scaffold one with
+`vis generate cirrus-workflow --name=orderPipeline`, or write it by hand:
+
+```ts
+// cirrus/workflows.ts
+import { defineWorkflow } from "@cirrus/workflow";
+
+import { api } from "./_generated/api";
+import type { Id } from "./_generated/server";
+
+export const channelWelcome = defineWorkflow<
+    { channelId: Id<"channels"> }, // params (input)
+    { channelId: Id<"channels">; posted: number } // output
+>({
+    handler: async (context) => {
+        const { channelId } = context.params;
+
+        // A durable, memoized, retried step.
+        await context.step.do("greet", () => context.run(api.messages.send, { channelId, text: "👋 Welcome!" }, { shardKey: channelId }));
+
+        // The workflow hibernates here and resumes after a minute —
+        // the delay survives Worker evictions and redeploys.
+        await context.step.sleep("settle", "1 minute");
+
+        await context.step.do("tips", () => context.run(api.messages.send, { channelId, text: "Tip: messages stream live." }, { shardKey: channelId }));
+
+        context.log.info("welcome sequence complete", { channelId });
+
+        return { channelId, posted: 2 };
+    },
+});
+```
+
+`defineWorkflow<Params, Output>` takes a single config object:
+
+- `handler` — the workflow body; receives the run context (below).
+- `name` (optional) — override the deployed workflow name. Defaults to the
+  kebab-cased export name (`orderPipeline` → `order-pipeline`).
+
+### The run context
+
+The handler receives one argument bundling the durable-step API and a typed
+function caller:
+
+| Member           | What it is                                                                                          |
+| ---------------- | --------------------------------------------------------------------------------------------------- |
+| `context.params` | The input passed to `.create({ params })`, typed as `Params`.                                       |
+| `context.step`   | The durable-step API — `do` / `sleep` / `sleepUntil` / `waitForEvent`.                              |
+| `context.run`    | Call a Cirrus function (`api.*`) by typed reference; pass `{ shardKey }` to target a shard.         |
+| `context.log`    | Structured logger (`debug`/`info`/`warn`/`error`), captured by `wrangler tail` and the Studio logs. |
+| `context.event`  | The raw triggering event (`id`, `payload`, timestamp).                                              |
+| `context.env`    | The Worker environment bindings.                                                                    |
+
+### Durable steps
+
+`context.step` is the Cloudflare Workflows step API:
+
+```ts
+// Memoized + retried. On replay, a completed step returns its stored
+// result without re-running the callback.
+const order = await context.step.do("load", () => context.run(api.orders.get, { id: orderId }, { shardKey: orderId }));
+
+// Per-step retry policy.
+await context.step.do("charge", { retries: { limit: 3, delay: "2 seconds", backoff: "exponential" }, timeout: "30 seconds" }, () =>
+    context.run(api.payments.charge, { orderId }),
+);
+
+// Durable delays — minutes to weeks, not held in memory.
+await context.step.sleep("cool-off", "1 minute");
+await context.step.sleepUntil("run-at", new Date("2026-07-01T00:00:00Z"));
+
+// Pause until an external event (approvals, webhooks, human-in-the-loop).
+const approval = await context.step.waitForEvent<{ approved: boolean }>("await-approval", {
+    type: "approval",
+    timeout: "7 days",
+});
+```
+
+> Steps must be **JSON-serialisable and idempotent** — the same determinism
+> contract Cloudflare (and Convex) impose. A step body may run more than once on
+> retry, so don't rely on side effects outside the step's return value.
+
+## Start and manage instances
+
+Codegen wires a typed `ctx.workflows` handle onto **mutations and actions**.
+Start an instance from a function:
+
+```ts
+// cirrus/channels.ts
+export const create = mutation({
+    args: { channelId: v.id("channels") },
+    handler: async (context, { channelId }) => {
+        const instance = await context.workflows.get("channelWelcome").create({ params: { channelId } });
+
+        return { instanceId: instance.id };
+    },
+});
+```
+
+`ctx.workflows.get("<exportName>")` returns a handle with:
+
+- `create({ id?, params?, retention? })` — start an instance. `create()` resolves
+  once the instance is **queued** (not when it finishes); the workflow runs on
+  Cloudflare's infrastructure.
+- `createBatch([...])` — start many in one batch.
+- `get(id)` — a handle to an existing instance.
+
+An instance handle exposes its lifecycle: `status()` (returns
+`status` + `output`/`error`), `pause()`, `resume()`, `terminate()`, and
+`sendEvent({ type, payload })` (to satisfy a `waitForEvent`).
+
+## Wiring (handled by codegen)
+
+After adding `cirrus/workflows.ts`, re-run codegen (`cirrus dev` does this on
+save). It:
+
+1. Emits a `WorkflowEntrypoint` subclass per export into
+   `cirrus/_generated/workflows.ts` (`channelWelcome` → `ChannelWelcomeWorkflow`).
+2. Wires the typed `ctx.workflows` handle.
+3. Reconciles `wrangler.jsonc`'s `workflows[]` array — `binding`, `class_name`,
+   and `name` — from the same definition.
+
+Your worker entry must re-export the generated classes so wrangler can find
+them:
+
+```ts
+// src/server/index.ts
+export { ChannelWelcomeWorkflow } from "../../cirrus/_generated/workflows";
+```
+
+The resulting binding:
+
+```jsonc
+// wrangler.jsonc (codegen-reconciled)
+{
+    "workflows": [{ "binding": "WORKFLOW_CHANNEL_WELCOME", "class_name": "ChannelWelcomeWorkflow", "name": "channel-welcome" }],
+}
+```
+
+## Advisor lints
+
+Two static [advisors](/docs/concepts/advisors) keep workflow wiring honest:
+
+- **`workflow_unknown_target`** (error) — `ctx.workflows.get("name")` references a
+  workflow that doesn't exist (typo or removed export).
+- **`workflow_unused`** (info) — a declared workflow is never started by any
+  function (dead code that's still billed as a `WorkflowEntrypoint`), unless it's
+  triggered externally.
+
+## Studio
+
+The Studio's **Workflows** panel (under the Functions domain) lists every
+declared workflow with its export name, generated class, binding, and deployed
+name; lets you **start an instance** from a JSON-params form; and shows a table
+of instances with their live status (queued / running / complete / errored) and
+output. See [the Studio guide](/docs/addons/studio#functions).
+
+> Cloudflare bills for workflow instance-state storage. Keep step payloads small
+> and set a `retention` policy when you don't need long-lived instance history.
+
+## See also
+
+- [Scheduler](/docs/addons/scheduler) — `runAfter` / `runAt` / cron, for
+  single-shot deferred work that doesn't need replay.
+- [Studio](/docs/addons/studio) — the Workflows inspector.
+- [Advisors](/docs/concepts/advisors) — the workflow lints.

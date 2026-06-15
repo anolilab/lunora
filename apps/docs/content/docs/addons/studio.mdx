@@ -1,56 +1,192 @@
 ---
 title: "@cirrus/studio"
-description: Embeddable React panels for inspecting and operating a Cirrus backend.
+description: The Cirrus Studio — a local admin console for your schema, data, functions, logs, and advisors.
 ---
 
-`@cirrus/studio` is a component library for inspecting and operating a Cirrus
-backend — a data browser, function runner, metrics, migrations, scheduled jobs,
-file browser, and more. Compose the panels yourself behind a `<CirrusProvider>`,
-mount the ready-made `<Studio>` shell, or use the batteries-included
-`mountStudio` entry.
+The Cirrus Studio is a self-contained admin console for inspecting and operating
+a Cirrus backend: browse and edit data, run functions, read logs, inspect the
+schema, run advisors, manage auth, and more. It ships as a React component
+library so you can mount the whole console, embed a single panel, or compose your
+own layout.
+
+It is modelled on Supabase Studio's two-zone console: a slim **icon rail** of
+domains down the left, a **secondary nav** listing that domain's pages, and the
+active panel filling the rest. Every page is a real, shareable URL (TanStack
+Router over the History API), so deep links and back/forward work.
 
 ## Running the studio
 
 Three ways, smallest setup first:
 
-1. **`cirrus dev` (zero config).** The `@cirrus/vite` plugin serves the studio
-   at **`/__cirrus`** during dev and prints the URL on startup. Add
-   `@cirrus/studio` to your project's deps and it just works; opt out with
+1. **`cirrus dev` (zero config).** The [`@cirrus/vite`](/docs/api/vite) plugin
+   serves the studio at **`/__cirrus`** during dev and prints the URL on startup.
+   Add `@cirrus/studio` to your project's deps and it just works; opt out with
    `cirrus({ studio: false })`.
-2. **Standalone app.** `apps/studio` is a deployable Vite SPA that points at
-   any worker via `VITE_CIRRUS_URL` — for hosting the studio separately from
-   dev.
-3. **Embed.** Mount `<StudioApp baseUrl="…" />` or compose individual panels
+2. **Standalone app.** `apps/studio` is a deployable Vite SPA that points at any
+   worker via `VITE_CIRRUS_URL` — for hosting the studio separately from dev.
+3. **Embed.** Mount the batteries-included console, or compose individual panels
    under your own `<CirrusProvider>`.
 
 ```ts
-// mount the whole app into a <div id="root">
+// mount the whole console into <div id="root">
 import { mountStudio } from "@cirrus/studio/mount";
 
 mountStudio({ baseUrl: "https://my-app.workers.dev" });
 ```
 
-## Panels
+```tsx
+// or embed the shell / a single panel in your own React app
+import { StudioApp, Studio, DataBrowser } from "@cirrus/studio";
 
-- `DataBrowser` — list a shard's tables and page through their rows (table/JSON
-  toggle), with optional row insert/patch/delete.
-- `GlobalDataBrowser` — the same, for `.global()` (D1-backed) tables.
-- `SchemaViewer` — every table with its row count, expandable to its columns.
-- `FunctionRunner` — pick a registered function, edit its JSON args, and invoke
-  it (query / mutation / action).
-- `MetricsPanel` — per-shard health: request/error counts, uptime, DB size, and
-  reactive-cache hit rate.
-- `MigrationsPanel` — inspect data-migration run-state and kick off a migration.
-- `ExportImportPanel` — snapshot a shard to NDJSON and restore it.
-- `FileBrowser` — page through storage (R2) objects by prefix.
-- `ScheduledJobs` — view and cancel functions queued via `runAfter` / `runAt`.
-- `UsersPanel` — browse auth users and their sessions (read-only).
-- `LogsPanel` — tail the shard's recent log ring buffer.
+<StudioApp baseUrl="https://my-app.workers.dev" />;
+<Studio dataEditable functions={CIRRUS_FUNCTIONS} />;
+```
+
+The `<Studio>` shell takes a few host-controlled switches worth knowing:
+
+- `dataEditable` — allow row insert/edit/delete (off by default; the console is
+  read-only until the host opts in).
+- `runAsIdentity` — let the function runner execute **as** a chosen authenticated
+  identity, to test auth + RLS. Security-sensitive (it forges identity on an
+  admin RPC) — only ever enable on a trusted loopback-dev gate, never in
+  production.
+- `functions` — the descriptors that populate the function runner and API tab.
+- `initialShardKey` — the shard every shard-scoped panel targets on first load.
+
+## How the console is laid out
+
+The icon rail has **nine domains**, top to bottom, with Settings pinned to the
+bottom. Each owns a set of pages:
+
+| Domain        | Pages                                                                             |
+| ------------- | --------------------------------------------------------------------------------- |
+| **Home**      | Home                                                                              |
+| **Database**  | Data · SQL editor · Schema · Migrations · Vectors · Export / Import · Time Travel |
+| **Functions** | Functions · API · Workflows                                                       |
+| **Auth**      | Users · Organizations · Sessions · Configuration                                  |
+| **Storage**   | Files · Access Rules                                                              |
+| **Reports**   | Dashboards · Metrics · Health                                                     |
+| **Advisors**  | Security · RLS Policies · Performance                                             |
+| **Logs**      | Logs · Audit · Scheduled · Realtime · Mail · Log drains · Payments                |
+| **Settings**  | Settings                                                                          |
+
+Most shard-scoped pages share a **shard-key input** — Durable Objects aren't
+enumerable server-side, so you target a shard by key. The data and SQL pages
+remember the shards you've visited and offer a "Shards seen" picker with a live
+table/row-count summary. A **⌘K command palette** jumps to any page by name.
+
+The rail also collapses to just icons, and the whole console localises its own
+UI strings (`locale` / `i18n` props).
+
+## Home
+
+The landing overview: connection state, deployment health, and a roll-up of
+**advisor findings** (security, performance, schema) so the first thing you see
+is whatever needs attention. Drill into any summary to its panel.
+
+## Database
+
+The data console — everything that reads or shapes stored state.
+
+- **Data** — _Browse and edit rows across your shard and global tables._ A
+  full-height table editor: pick a table, page through rows (table or JSON view),
+  filter, and — when `dataEditable` is on — insert, patch, and delete. It covers
+  both shard tables and `.global()` (D1-backed) tables. Two power tools:
+    - **Mask preview** — a "Mask sensitive columns" toggle that previews
+      redact/hash/custom output client-side and flags masked columns in the grid
+      header, mirroring what [data masking](/docs/concepts/masking) does on the
+      server. Codegen emits the `(table, column, strategy)` map it reads.
+    - **Row generation** — generate realistic seed rows with `@faker-js/faker`,
+      inferred from each column's type, before inserting.
+    - **Cascade preview** — before deleting a row, see which related rows a
+      cascading relation would take with it.
+- **SQL editor** — _Run read-only SQL against a shard._ A full-height query
+  console for ad-hoc `SELECT`s against a shard's SQLite.
+- **Schema** — _Inspect each table and its columns._ Every table with its row
+  count, expandable to its columns, indexes, and relations. It also renders an
+  interactive **schema diagram** (React Flow): tables as nodes, relations as
+  edges, with a storage-tier filter (shard / global), a find box, and **export
+  to PNG / SVG / JSON**. The Insights "add the index" deep-link lands here with
+  the offending table pre-expanded.
+- **Migrations** — _Review migration status and run them._ Inspect
+  data-migration run-state and kick one off.
+- **Vectors** — _Browse Vectorize indexes and run similarity searches._
+- **Export / Import** — _Export a shard to NDJSON, or import rows from it._
+- **Time Travel** — _Restore a shard to a point in the last 30 days_ (PITR).
+
+## Functions
+
+- **Functions** — _Run registered queries, mutations, and actions._ Pick a
+  function, edit its JSON args, and invoke it; per-function call/error stats sit
+  above the runner. With `runAsIdentity` enabled, run a function **as** a chosen
+  identity to test auth and RLS behaviour.
+- **API** — _Interactive OpenAPI reference and copy-paste snippets for your
+  functions._ Renders the generated OpenAPI 3.1 / OpenRPC documents.
+- **Workflows** — _Inspect declared Cloudflare Workflows and their bindings._
+  Lists every [durable workflow](/docs/addons/workflows) with its export name,
+  generated class, binding, and deployed name; starts an instance from a
+  JSON-params form; and tracks instances with their live status (queued /
+  running / complete / errored) and output.
+
+## Auth
+
+Backed by [`@cirrus/auth`](/docs/addons/auth)'s admin API. Capability-driven —
+each page shows only when its better-auth plugin is enabled.
+
+- **Users** — _Manage auth users — roles, bans, sessions, and identity._
+- **Organizations** — _Browse and manage organizations, members, and
+  invitations._
+- **Sessions** — _Browse and revoke active sessions across all users._
+- **Configuration** — _Enabled plugins and session config_ (read-only).
+
+## Storage
+
+- **Files** — _Browse objects in your R2 storage buckets_ by prefix.
+- **Access Rules** — _Inspect storage access rules — per bucket, operation, and
+  key prefix._
+
+## Reports
+
+- **Dashboards** — _Chart widgets backed by saved read-only SQL queries._
+- **Metrics** — _Per-shard health and aggregate metrics_ — request/error counts,
+  uptime, DB size, reactive-cache hit rate.
+- **Health** — _At-a-glance connection, error, and shard signals._
+
+## Advisors
+
+The [advisors](/docs/concepts/advisors) surface — splinter-style lints over your
+schema, functions, and runtime signal.
+
+- **Security** — _Review admin gates, credentials, and log redaction_ — the
+  security-category findings.
+- **RLS Policies** — _Inspect row-level-security policies and roles, per table._
+- **Performance** — _Surface slow functions, error spikes, and cache problems._
+  Runtime insights derived from each shard's durable metrics; findings deep-link
+  to the fix (e.g. the Schema page to add a missing index).
+
+## Logs
+
+Operational streams and the optional package-backed pages.
+
+- **Logs** — _A live stream of recent function logs_ (the shard's log ring
+  buffer).
+- **Audit** — _A durable log of admin state-changing operations._
+- **Scheduled** — _Inspect and cancel scheduled jobs_ ([`@cirrus/scheduler`](/docs/addons/scheduler)).
+- **Realtime** — _Active WebSocket subscriptions on this shard._
+- **Mail** — _Email your app sent, captured in dev_ ([`@cirrus/mail`](/docs/addons/mail)).
+- **Log drains** — _Forward logs to Logpush, Tail Workers, or a webhook
+  collector._
+- **Payments** — _Synced customers, subscriptions, and webhook events._
+
+## Settings
+
+_Read-only deployment config — vars, secrets, and bindings._ Pinned to the
+bottom of the rail.
 
 ## Admin gate
 
-The studio reaches the backend two ways: reserved `__cirrus_admin__:*` RPCs
-that `ShardDO` intercepts (data, schema, metrics, logs, migrations, export), and
+The studio reaches the backend two ways: reserved `__cirrus_admin__:*` RPCs that
+`ShardDO` intercepts (data, schema, metrics, logs, migrations, export), and
 admin-gated worker endpoints under `/_cirrus/admin/*` for things that live
 outside the shard (scheduler, storage, functions, global tables, auth).
 
@@ -63,33 +199,36 @@ credentials of their own — configure the client's auth token at the host.
 createWorker({
     shardDO: env.SHARD,
     adminToken: env.CIRRUS_ADMIN_TOKEN,
-    schedulerDO: env.SCHEDULER, // enables the scheduled-jobs tab
+    schedulerDO: env.SCHEDULER, // enables the scheduled-jobs page
     functions: CIRRUS_FUNCTIONS, // enables function discovery
     storageList: createStorage({ bucket: env.FILES }).list, // enables the file browser
 });
 ```
 
-`globalIntrospector` (D1 tables) and `authAdmin` (the user-management + organization
-dashboard, via `@cirrus/auth`'s `createAuthAdmin(auth)`) wire up the remaining tabs;
-see the package README for the full per-tab configuration. The auth dashboard is
-capability-driven — it shows only the surfaces whose better-auth plugin is enabled.
-Tabs whose data source isn't configured are omitted from the `<Studio>` shell.
+`globalIntrospector` (D1 tables) and `authAdmin` (the user-management +
+organization dashboard, via `@cirrus/auth`'s `createAuthAdmin(auth)`) wire up the
+remaining pages; see the package README for the full per-page configuration. The
+auth dashboard is capability-driven — it shows only the surfaces whose
+better-auth plugin is enabled. Pages whose data source isn't configured are
+omitted from the `<Studio>` shell.
 
 ## Optional-package nav gating
 
-The studio also hides the nav pages for optional `@cirrus/*` packages your app
-doesn't use — Payments, Mail, Files + Access Rules, Vectors, and Scheduler — so
-you never land on a page that errors with "unknown table". This is automatic:
-codegen statically detects which features a deployment wires up and emits the
-result into the generated `ShardDO`, which the studio reads once over the
-`__cirrus_admin__:studioFeatures` RPC.
+The studio also hides the pages for optional `@cirrus/*` packages your app
+doesn't use — Payments, Mail, Files + Access Rules, Vectors, Scheduler, and
+Workflows — so you never land on a page that errors with "unknown table". This is
+automatic: codegen statically detects which features a deployment wires up and
+emits the result into the generated `ShardDO`, which the studio reads once over
+the `__cirrus_admin__:studioFeatures` RPC.
 
 A feature's page shows when **any** of these is true:
 
 - a `cirrus/` source imports its package (e.g. `@cirrus/mail`) or reads its
-  context helper (`ctx.payments`, `ctx.storage`, `ctx.vectors`, `ctx.scheduler`);
+  context helper (`ctx.payments`, `ctx.storage`, `ctx.vectors`, `ctx.scheduler`,
+  `ctx.workflows`);
 - a schema signal implies it — a `v.storage()` column or storage access rule
-  (Files), a declared cron (Scheduler), or a vector index (Vectors);
+  (Files), a declared cron (Scheduler), a vector index (Vectors), or a declared
+  workflow (Workflows);
 - the package is a declared dependency in your `package.json` — so a package
   wired only in your worker entry (outside `cirrus/`), like `@cirrus/mail`, still
   shows its page.
@@ -105,4 +244,7 @@ removing a package and the nav updates itself.
 
 - [@cirrus/vite](/docs/api/vite) — the `studio` plugin option
 - [@cirrus/cli](/docs/api/cli) — `cirrus dev`
+- [Advisors](/docs/concepts/advisors) — the lints behind the Advisors domain
+- [Data masking](/docs/concepts/masking) — the mask preview in the data browser
+- [Workflows](/docs/addons/workflows) — the Workflows inspector
 - [Architecture](/docs/architecture)

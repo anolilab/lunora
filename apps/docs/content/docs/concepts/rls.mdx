@@ -1,0 +1,122 @@
+---
+title: Row-level security
+description: Server-side authorization that decides which rows a procedure can read or write.
+---
+
+Row-level security (RLS) controls **which rows** a caller can see and change.
+Where [data masking](/docs/concepts/masking) decides _which fields_ within a row
+come back redacted, RLS decides _which rows_ a procedure returns or is allowed to
+write. Both are server-side, both attach to a procedure's `.use(...)` chain, and
+both are **opt-in per procedure** — a bare `query`/`mutation` sees an unwrapped
+`ctx.db` and no policy applies, even if another procedure guards the same table.
+
+```ts
+import { definePolicy, definePolicies, rls } from "@cirrus/server";
+
+import { query } from "./_generated/server";
+
+// "you only see documents you own"
+const ownDocuments = definePolicy({
+    table: "documents",
+    on: "read",
+    when: ({ auth }) => ({ ownerId: auth.userId }),
+});
+
+export const listDocuments = query.use(rls(definePolicies([ownDocuments]))).query(async (ctx) => ctx.db.findMany("documents"));
+```
+
+## Policies
+
+A **policy** is a pure function bound to a `table` and an operation (`on`). At
+request time the middleware calls its `when(...)` with the request context and
+uses the return value to decide access:
+
+| `when` returns | On a `read`                                                                 | On a write (`insert` / `update` / `delete`)                                   |
+| -------------- | --------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `WhereInput`   | AND-merged into every query on the table — non-matching rows are invisible. | Evaluated against the candidate/pre-write row; a mismatch throws `FORBIDDEN`. |
+| `true`         | No predicate merged — unrestricted.                                         | The row is allowed.                                                           |
+| `false`        | The table matches **zero** rows.                                            | The operation throws `FORBIDDEN`.                                             |
+| `undefined`    | This policy opts out (useful when branching on roles).                      | This policy opts out.                                                         |
+
+The `on` operations are `read` (covers `get` / `findFirst` / `findMany` /
+`query` / `count`), `insert`, `update`, and `delete`. A `WhereInput` predicate
+uses the same operator set as the query compiler —
+`eq`/`ne`/`in`/`notIn`/`lt`/`lte`/`gt`/`gte`/`isNull`/`contains` plus
+`AND`/`OR`/`NOT`.
+
+```ts
+const documentPolicies = definePolicies([
+    // read: only your own documents
+    definePolicy({ table: "documents", on: "read", when: ({ auth }) => ({ ownerId: auth.userId }) }),
+    // insert: you can only create documents you own
+    definePolicy({ table: "documents", on: "insert", when: ({ auth, row }) => row?.ownerId === auth.userId }),
+    // delete: only the owner may delete
+    definePolicy({ table: "documents", on: "delete", when: ({ auth, row }) => row?.ownerId === auth.userId }),
+]);
+```
+
+### The policy context
+
+`when` receives a context with:
+
+- `auth.userId` — the resolved caller id (`null` when unauthenticated).
+- `auth.roles` — the request's role list (from better-auth claims today).
+- `auth.can(permission)` — whether any of those roles grants a named permission
+  (see below). Fails closed for unknown roles.
+- `auth.identity` — the raw identity claims.
+- `row` — present only on **write** policies: the candidate document on `insert`,
+  the pre-write row on `update`/`delete`.
+- `ctx` — the full procedure context the middleware closed over.
+
+## Permissions and roles
+
+Rather than enumerate role strings inside every policy, declare a named
+**permission**, grant it through a **role**, register the roles with the
+middleware, and check it with `auth.can(...)`:
+
+```ts
+import { definePermission, defineRole, definePolicy, definePolicies, rls } from "@cirrus/server";
+
+import { mutation } from "./_generated/server";
+
+const deletePosts = definePermission("posts:delete");
+const admin = defineRole("admin", { permissions: [deletePosts] });
+
+const canDelete = definePolicy({
+    table: "posts",
+    on: "delete",
+    when: ({ auth }) => auth.can(deletePosts),
+});
+
+export const removePost = mutation.use(rls(definePolicies([canDelete]), { roles: [admin] })).mutation(async (ctx, { id }) => ctx.db.delete(id));
+```
+
+The middleware unions the permissions of every role in `auth.roles` at request
+time. A role **not** passed in `rls(..., { roles })` grants nothing — `auth.can`
+is conservative and fails closed for unknown roles. Permissions and roles are
+shared with [data masking](/docs/concepts/masking), which checks the same
+`auth.can(...)` view.
+
+## What's covered, what isn't
+
+- **Reads are AND-merged.** Every `get`, `findFirst`/`findMany`, and the
+  `query().withIndex().order().collect()/first()/take()/paginate()` chain folds
+  the policy predicate in, so a non-matching row is invisible — not an error.
+- **Writes throw on denial.** `insert`, `patch`/`replace`, and `delete` evaluate
+  the candidate/pre-write row and throw `FORBIDDEN` (HTTP 403) on a mismatch.
+- **`count` is unsupported on a restricted table.** It throws
+  `COUNT_RLS_UNSUPPORTED` (HTTP 422) — a count over a row-filtered table would
+  leak the size of rows you can't see.
+- **Nested relations aren't re-checked.** Rows hydrated through a `with` clause
+  sit below the facade the middleware wraps — the same boundary masking draws.
+- **It's opt-in.** Only procedures whose chain includes `.use(rls(...))` are
+  guarded. The [`rls_uncovered_table`](/docs/concepts/advisors) advisor warns
+  when a **public** procedure reads or writes a table that's RLS-protected
+  elsewhere but skips the middleware — the authorization gap.
+
+## See also
+
+- [Data masking](/docs/concepts/masking) — column-level redaction, the read-path
+  companion that shares roles/permissions with RLS.
+- [Advisors](/docs/concepts/advisors) — the `rls_uncovered_table` lint.
+- [Studio](/docs/addons/studio#advisors) — the RLS Policies panel.
