@@ -29,3 +29,7 @@ export type { SqlExecutor } from "./sql-store";
 export { createSqlAuthStore, d1Executor } from "./sql-store";
 export type { AuthQuery, AuthRow, AuthStore, AuthWhereClause } from "./store";
 export { createMemoryAuthStore, matchesWhere } from "./store";
+export type { FetchLike, TurnstileVerifyResult, VerifyTurnstileOptions } from "./turnstile";
+export { TURNSTILE_VERIFY_ENDPOINT, verifyTurnstile } from "./turnstile";
+export type { VerifyTurnstileMiddlewareOptions } from "./turnstile-middleware";
+export { verifyTurnstileMiddleware } from "./turnstile-middleware";

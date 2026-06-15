@@ -50,6 +50,14 @@
             "types": "./dist/middleware.d.ts",
             "import": "./dist/middleware.mjs"
         },
+        "./turnstile": {
+            "types": "./dist/turnstile.d.ts",
+            "import": "./dist/turnstile.mjs"
+        },
+        "./turnstile-middleware": {
+            "types": "./dist/turnstile-middleware.d.ts",
+            "import": "./dist/turnstile-middleware.mjs"
+        },
         "./schema": {
             "types": "./dist/schema.d.ts",
             "import": "./dist/schema.mjs"

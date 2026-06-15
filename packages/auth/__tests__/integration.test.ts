@@ -34,14 +34,16 @@ const PASSWORD = "correct-horse-battery-staple"; // secret-scanner:allow
 
 let database: DatabaseSync;
 
-const executorFor = (db: DatabaseSync): SqlExecutor => ({
-    all: (sql, parameters) => Promise.resolve(db.prepare(sql).all(...(parameters as never[])) as Record<string, unknown>[]),
-    run: (sql, parameters) => {
-        db.prepare(sql).run(...(parameters as never[]));
+const executorFor = (db: DatabaseSync): SqlExecutor => {
+    return {
+        all: (sql, parameters) => Promise.resolve(db.prepare(sql).all(...(parameters as never[])) as Record<string, unknown>[]),
+        run: (sql, parameters) => {
+            db.prepare(sql).run(...(parameters as never[]));
 
-        return Promise.resolve();
-    },
-});
+            return Promise.resolve();
+        },
+    };
+};
 
 /** SQLite column affinity for a better-auth field type. */
 const affinity = (type: ReadonlyArray<string> | string): string => {

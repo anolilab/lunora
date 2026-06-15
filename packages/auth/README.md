@@ -67,6 +67,12 @@ const auth = createAuth({
 const response = await handleAuthRequest(auth, request);
 ```
 
+### Plugins & CAPTCHA
+
+better-auth's plugin factories are re-exported from `@cirrus/auth/plugins` (so you don't need better-auth's deep import paths): `admin`, `anonymous`, `bearer`, `captcha`, `createAccessControl`, `customSession`, `deviceAuthorization`, `emailOTP`, `genericOAuth`, `haveIBeenPwned`, `jwt`, `magicLink`, `mcp`, `multiSession`, `oAuthProxy`, `oidcProvider`, `oneTimeToken`, `organization`, `passkey`, `phoneNumber`, `siwe`, `twoFactor`, `username`, and `withMcpAuth`.
+
+For Cloudflare Turnstile on the **auth flow**, use the `captcha` plugin (`captcha({ provider: "cloudflare-turnstile", secretKey: env.TURNSTILE_SECRET_KEY })`); it reads the token from the `x-captcha-response` header. For **non-auth** procedures, the package root also exports standalone helpers — `verifyTurnstile` (pure `siteverify`) and `verifyTurnstileMiddleware` (a `.use()` middleware that takes the token from the function args).
+
 > This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/addons/auth)**.
 
 ## Related

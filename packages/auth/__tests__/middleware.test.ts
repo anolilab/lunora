@@ -103,7 +103,7 @@ describe("withAuthPlugins", () => {
         // The default surface is the runtime header guard (a transparent proxy
         // over `auth.api`), so it is structurally the api but not identity-equal.
         // The unguarded `auth.api` is reachable via the `withoutHeaders()` hatch.
-        expect((context.authApi as { withoutHeaders(): unknown }).withoutHeaders()).toBe(auth.api);
+        expect((context.authApi as { withoutHeaders: () => unknown }).withoutHeaders()).toBe(auth.api);
 
         // Non-null assertions narrow away the `| undefined` from the optional
         // chain so `toBeFunction` checks the resolved endpoint type, not the union.
@@ -128,7 +128,7 @@ describe("withAuthPlugins", () => {
         // would reach it after composing the middleware. This is a server-side
         // seed with no inbound request, so we use the explicit `withoutHeaders()`
         // opt-out (the runtime guard would otherwise reject the header-less call).
-        await (context.authApi as unknown as { withoutHeaders(): typeof auth.api }).withoutHeaders().createOrganization({
+        await (context.authApi as unknown as { withoutHeaders: () => typeof auth.api }).withoutHeaders().createOrganization({
             body: { name: "Acme", slug: "acme", userId: ownerId },
         });
 
@@ -186,19 +186,21 @@ describe("withAuthPlugins — runtime header guard", () => {
         banUser: (options: { body: { userId: string }; headers?: Headers }) => Promise<{ called: true; sawHeaders: boolean }>;
     }
 
-    const stubAuth = (calls: { options: unknown }[]): { api: StubApi } => ({
-        api: {
-            banUser: (options) => {
-                calls.push({ options });
+    const stubAuth = (calls: { options: unknown }[]): { api: StubApi } => {
+        return {
+            api: {
+                banUser: (options) => {
+                    calls.push({ options });
 
-                return Promise.resolve({ called: true, sawHeaders: options.headers !== undefined });
+                    return Promise.resolve({ called: true, sawHeaders: options.headers !== undefined });
+                },
             },
-        },
-    });
+        };
+    };
 
-    const installAuthApi = async (auth: unknown, enforceHeaders?: boolean): Promise<{ banUser: StubApi["banUser"]; withoutHeaders(): StubApi }> => {
+    const installAuthApi = async (auth: unknown, enforceHeaders?: boolean): Promise<{ banUser: StubApi["banUser"]; withoutHeaders: () => StubApi }> => {
         const middleware = withAuthPlugins(auth as never, enforceHeaders === undefined ? undefined : { enforceHeaders });
-        const context = await runMiddleware<{ authApi: { banUser: StubApi["banUser"]; withoutHeaders(): StubApi } }>(middleware as never, {});
+        const context = await runMiddleware<{ authApi: { banUser: StubApi["banUser"]; withoutHeaders: () => StubApi } }>(middleware, {});
 
         return context.authApi;
     };
@@ -223,6 +225,7 @@ describe("withAuthPlugins — runtime header guard", () => {
 
         // `headers: undefined` is the same bypass as omitting it.
         await expect(authApi.banUser({ body: { userId: "u_1" }, headers: undefined })).rejects.toBeInstanceOf(CirrusAuthHeadersError);
+
         // A `null` headers value is the bypass too — cast through `unknown` since
         // the stub's signature only admits `Headers | undefined`.
         const callWithNullHeaders = authApi.banUser as unknown as (o: { body: { userId: string }; headers: null }) => Promise<unknown>;
@@ -297,7 +300,7 @@ describe("withAuthPlugins — runtime header guard", () => {
         const middleware = withAuthPlugins(auth);
         const context = await runMiddleware<{
             authApi: { createOrganization: (options: { body: { name: string; slug: string }; headers?: Headers }) => Promise<unknown> };
-        }>(middleware as never, {});
+        }>(middleware, {});
 
         // Header-less privileged call → guard throws (would have escalated).
         await expect(context.authApi.createOrganization({ body: { name: "Acme", slug: "acme" } })).rejects.toBeInstanceOf(CirrusAuthHeadersError);

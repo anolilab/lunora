@@ -12,50 +12,19 @@ interface MiddlewareNext<ContextIn> {
 }
 
 /**
- * Thrown by the runtime header guard when a privileged `ctx.authApi.*` endpoint
- * is invoked without a `headers` property on its argument object. Carries the
- * offending `method` name so callers can pinpoint the bad call site, and points
- * at the explicit escape hatches.
- *
- * This is the runtime sibling of the static `auth_api_call_without_headers`
- * advisor lint — both treat a header-less `ctx.authApi.*` call as an
- * authorization bypass, so a call that trips the lint also trips this guard.
- */
-export class CirrusAuthHeadersError extends Error {
-    /** The `ctx.authApi.<method>` that was called without `headers`. */
-    public readonly method: string;
-
-    public constructor(method: string) {
-        super(
-            `@cirrus/auth: ctx.authApi.${method}(…) was called without \`headers\`. ` +
-                "better-auth treats a header-less call as a trusted server-to-server " +
-                "invocation and skips session authorization entirely — an authorization " +
-                "bypass. Pass the inbound request headers: " +
-                `ctx.authApi.${method}({ body, headers: request.headers }). ` +
-                "If you genuinely intend an unauthenticated server-to-server call, opt " +
-                "out explicitly via ctx.authApi.withoutHeaders().<method>(…), or disable " +
-                "the guard for the whole middleware with withAuthPlugins(auth, { enforceHeaders: false }).",
-        );
-
-        this.name = "CirrusAuthHeadersError";
-        this.method = method;
-    }
-}
-
-/**
  * Decide whether a `ctx.authApi.*` call carried `headers`. Mirrors the static
  * advisor's `hasHeaders` rule (`@cirrus/codegen`'s `discover-authapi-calls`) so
  * the runtime guard and the lint agree on what counts as a header-bearing call:
  *
  * - **No argument at all** → no headers (the lint flags `method()`).
  * - **An object argument** → require a `headers` property to be present
- *   (the lint flags `method({ body })` but not `method({ body, headers })`).
- *   A nullish `headers` value still counts as "absent" — passing
- *   `headers: undefined` is the same bypass as omitting it.
+ * (the lint flags `method({ body })` but not `method({ body, headers })`).
+ * A nullish `headers` value still counts as "absent" — passing
+ * `headers: undefined` is the same bypass as omitting it.
  * - **A non-object argument** (a pre-bound options variable, a call, …) →
- *   treated as header-bearing. The static lint under-reports here too
- *   ("can't prove headers is absent → don't flag"); we mirror that rather than
- *   risk false positives on a security guard.
+ * treated as header-bearing. The static lint under-reports here too
+ * ("can't prove headers is absent → don't flag"); we mirror that rather than
+ * risk false positives on a security guard.
  */
 const callHasHeaders = (argument: unknown): boolean => {
     if (argument === undefined) {
@@ -88,6 +57,7 @@ const guardAuthApi = <Api extends Record<string, unknown>>(api: Api): Api => {
     const withoutHeaders = (): Api => api;
 
     return new Proxy(api, {
+        // eslint-disable-next-line sonarjs/function-return-type -- a Proxy `get` trap is intrinsically polymorphic: it returns the synthetic `withoutHeaders`, the guarded endpoint wrapper, or any passthrough property value
         get(target, property, receiver) {
             // The explicit opt-out: `ctx.authApi.withoutHeaders()` returns the
             // raw, unguarded surface. We only synthesise it when the underlying
@@ -111,6 +81,7 @@ const guardAuthApi = <Api extends Record<string, unknown>>(api: Api): Api => {
                     // rejected promise — it composes with `await`/`.catch` the
                     // same way an endpoint error would, instead of throwing
                     // synchronously during the call expression.
+                    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- only invoked inside a deferred endpoint closure, long after the class is defined; declared after the helpers to keep exports grouped at end of file
                     return Promise.reject(new CirrusAuthHeadersError(method));
                 }
 
@@ -119,8 +90,39 @@ const guardAuthApi = <Api extends Record<string, unknown>>(api: Api): Api => {
                 return Reflect.apply(value as (...a: unknown[]) => unknown, target, arguments_);
             };
         },
-    }) as Api;
+    });
 };
+
+/**
+ * Thrown by the runtime header guard when a privileged `ctx.authApi.*` endpoint
+ * is invoked without a `headers` property on its argument object. Carries the
+ * offending `method` name so callers can pinpoint the bad call site, and points
+ * at the explicit escape hatches.
+ *
+ * This is the runtime sibling of the static `auth_api_call_without_headers`
+ * advisor lint — both treat a header-less `ctx.authApi.*` call as an
+ * authorization bypass, so a call that trips the lint also trips this guard.
+ */
+export class CirrusAuthHeadersError extends Error {
+    /** The `ctx.authApi.&lt;method>` that was called without `headers`. */
+    public readonly method: string;
+
+    public constructor(method: string) {
+        super(
+            `@cirrus/auth: ctx.authApi.${method}(…) was called without \`headers\`. ` +
+                "better-auth treats a header-less call as a trusted server-to-server " +
+                "invocation and skips session authorization entirely — an authorization " +
+                "bypass. Pass the inbound request headers: " +
+                `ctx.authApi.${method}({ body, headers: request.headers }). ` +
+                "If you genuinely intend an unauthenticated server-to-server call, opt " +
+                "out explicitly via ctx.authApi.withoutHeaders().<method>(…), or disable " +
+                "the guard for the whole middleware with withAuthPlugins(auth, { enforceHeaders: false }).",
+        );
+
+        this.name = "CirrusAuthHeadersError";
+        this.method = method;
+    }
+}
 
 /**
  * Options for {@link withAuthPlugins}.
@@ -130,7 +132,7 @@ export interface WithAuthPluginsOptions {
      * Whether to install the runtime header guard around `ctx.authApi`.
      *
      * **Defaults to `true` — the safe default.** When enabled, every
-     * `ctx.authApi.<method>(…)` call that omits `headers` throws
+     * `ctx.authApi.&lt;method>(…)` call that omits `headers` throws
      * {@link CirrusAuthHeadersError} instead of silently running with full
      * server-to-server privileges. For a deliberate, per-call unauthenticated
      * invocation, use the explicit `ctx.authApi.withoutHeaders()` escape hatch
@@ -184,7 +186,7 @@ export interface CirrusAuthApiContext<Auth extends CirrusAuth> {
      * statically; the guard is the runtime backstop for the cases the lint
      * can't see (dynamic method names, indirected calls). For the rare,
      * deliberate unauthenticated server-to-server call, opt out explicitly with
-     * `ctx.authApi.withoutHeaders().<method>(…)`.
+     * `ctx.authApi.withoutHeaders().&lt;method>(…)`.
      *
      * Cirrus's procedure context carries only the resolved identity, not the
      * raw inbound `Headers`, so this middleware CANNOT pre-bind them for you.
@@ -192,7 +194,7 @@ export interface CirrusAuthApiContext<Auth extends CirrusAuth> {
      * call** (typically from an HTTP action — see {@link withAuthPlugins}). A
      * header-less call is an authorization bypass, not a convenience.
      */
-    readonly authApi: Auth["api"] & {
+    readonly authApi: {
         /**
          * Explicit, loud escape hatch from the runtime header guard. Returns
          * the raw, **unguarded** `auth.api` surface — every endpoint reached
@@ -208,8 +210,8 @@ export interface CirrusAuthApiContext<Auth extends CirrusAuth> {
          * Use only for deliberate, audited unauthenticated calls. For ordinary
          * request-driven calls, pass `headers` so authorization is enforced.
          */
-        withoutHeaders(): Auth["api"];
-    };
+        withoutHeaders: () => Auth["api"];
+    } & Auth["api"];
 }
 
 /**
@@ -237,9 +239,9 @@ export interface CirrusAuthApiContext<Auth extends CirrusAuth> {
  *
  * - **Default (safe):** `withAuthPlugins(auth)` — header-less calls throw.
  * - **Per-call opt-out (preferred):** `ctx.authApi.withoutHeaders().banUser(…)`
- *   for a deliberate, audited unauthenticated server-to-server call.
+ * for a deliberate, audited unauthenticated server-to-server call.
  * - **Whole-middleware opt-out (loud):** `withAuthPlugins(auth, { enforceHeaders: false })`
- *   disables the guard entirely; only do this once every call site is audited.
+ * disables the guard entirely; only do this once every call site is audited.
  *
  * Cirrus's procedure context does not currently carry the raw request headers
  * (only the resolved identity — see `AuthState` in `@cirrus/server`), so
