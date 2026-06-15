@@ -4,9 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import useDebounced from "../../../hooks/use-debounced";
 import useLiveAdmin from "../../../hooks/use-live-admin";
-import type { BulkDeleteResult, TableInfo, TablePage, WriteRowResult } from "../../../lib/admin";
+import type { BulkDeleteResult, FacetResult, FilterClause, TableInfo, TablePage, WriteRowResult } from "../../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../lib/admin";
 import { adminRef, callOptions, fireAndForget } from "../../../lib/internal";
+import type { DataView } from "../../../lib/saved-queries";
 import { recordShard } from "../../../lib/shard-history";
 import type { DataBrowserTableModel, TableRow } from "../data-browser-grid";
 import { rowId, useDataBrowserTable } from "../data-browser-grid";
@@ -27,6 +28,39 @@ const toOrderBy = (sorting: SortingState): undefined | { column: string; directi
 };
 
 /**
+ * Coerce a clicked facet value into the string an `EditableFilter` carries (the
+ * filter bar's values are strings until coerced for the wire). NULL/undefined map
+ * to the empty string; objects are JSON-encoded so they don't stringify to
+ * `[object Object]`.
+ */
+const facetValueText = (value: unknown): string => {
+    if (value === null || value === undefined) {
+        return "";
+    }
+
+    if (typeof value === "object") {
+        return JSON.stringify(value);
+    }
+
+    // eslint-disable-next-line @typescript-eslint/no-base-to-string -- non-object primitives stringify meaningfully; objects are handled above
+    return String(value);
+};
+
+/**
+ * Hydrate the filter bar from URL/saved-query {@link FilterClause}s. The inverse
+ * of `toFilterClauses`: the bar's value is always a string (it re-coerces numbers
+ * on the wire), so every clause value is stringified back. Objects can't appear
+ * on a real clause value, but are JSON-encoded defensively.
+ */
+const toEditableFilters = (clauses: ReadonlyArray<FilterClause>): EditableFilter[] =>
+    clauses.map((clause) => {
+        return { column: clause.column, operator: clause.operator, value: clause.value === undefined ? "" : facetValueText(clause.value) };
+    });
+
+/** Translate a single-sort `orderBy` into the TanStack sorting state the grid renders. */
+const fromOrderBy = (orderBy: DataView["orderBy"]): SortingState => (orderBy === undefined ? [] : [{ desc: orderBy.direction === "desc", id: orderBy.column }]);
+
+/**
  * Hard ceiling on the number of bounded server `deleteRows`/`clearTable` calls
  * one bulk action loops through, so "delete matching" / "clear table" can never
  * run unbounded. Each call deletes up to the server's per-call cap (500 rows)
@@ -44,6 +78,7 @@ const PREVIEW_CANDIDATES = 20;
 
 const LIST_TABLES = adminRef(ADMIN_FUNCTIONS.listTables);
 const READ_TABLE_PAGE = adminRef(ADMIN_FUNCTIONS.readTablePage);
+const FACET_COLUMN = adminRef(ADMIN_FUNCTIONS.facetColumn);
 const WRITE_ROW = adminRef(ADMIN_FUNCTIONS.writeRow);
 const DELETE_ROWS = adminRef(ADMIN_FUNCTIONS.deleteRows);
 const CLEAR_TABLE = adminRef(ADMIN_FUNCTIONS.clearTable);
@@ -86,6 +121,17 @@ const rowDocument = (row: TableRow): Record<string, unknown> => {
     return fields;
 };
 
+/**
+ * One faceted column's current state for the facet sidebar: whether its summary
+ * has loaded (`result`), is still loading, or failed. Keyed by column in the
+ * model's `facets` map; absent → not toggled on.
+ */
+interface FacetState {
+    error: null | string;
+    loading: boolean;
+    result: FacetResult | null;
+}
+
 /** Everything {@link useDataBrowser} exposes to the `DataBrowser` render. */
 interface DataBrowserModel {
     addRow: () => void;
@@ -96,10 +142,16 @@ interface DataBrowserModel {
     clearTable: () => void;
     columns: string[];
     committing: boolean;
+    /** The currently-displayed view (table/shard/filters/search/sort) — for "Copy link" and "Save query". */
+    currentView: DataView;
     discardStaged: () => void;
     editableColumn: (column: string) => boolean;
     editing: null | { docText: string; id: null | string };
     editingCell: null | { column: string; rowId: string };
+    /** Add an `eq` filter for `column = value` (a facet-value click), appending to the active filters. */
+    facetFilter: (column: string, value: unknown) => void;
+    /** Per-column facet state for every toggled-on column; absent → not faceting that column. */
+    facets: Record<string, FacetState>;
     filter: string;
     filters: EditableFilter[];
     goNext: () => void;
@@ -137,6 +189,8 @@ interface DataBrowserModel {
     table: DataBrowserTableModel;
     tables: TableInfo[] | null;
     tablesError: null | string;
+    /** Toggle a column into / out of the facet sidebar (fetches its summary when turned on). */
+    toggleFacet: (column: string) => void;
     total: number;
     viewMode: "json" | "table";
     writeError: null | string;
@@ -151,14 +205,32 @@ interface DataBrowserModel {
  * unchanged — the component is now just markup wiring.
  */
 const useDataBrowser = ({
+    initialFilters,
+    initialOrderBy,
+    initialSearch,
     initialShardKey,
     onSelectTable,
+    onViewChange,
     pageSize: initialPageSize,
     tableParam,
 }: {
+    /** Structured filters to hydrate from a shared link / saved query. */
+    initialFilters: FilterClause[] | undefined;
+    /** Sort to hydrate from a shared link / saved query. */
+    initialOrderBy: DataView["orderBy"];
+    /** Substring search to hydrate from a shared link / saved query. */
+    initialSearch: string | undefined;
     initialShardKey: string | undefined;
     /** Called whenever the selected table changes, so the host can mirror it to the URL. */
     onSelectTable: ((table: string) => void) | undefined;
+
+    /**
+     * Called whenever the loaded view (shard / search / filters / sort) changes, so
+     * the host can mirror the full view state to the URL — making every view a real,
+     * shareable link. Fires only for the actually-displayed view (the `loaded`
+     * descriptor), never a half-typed shard key.
+     */
+    onViewChange: ((view: Pick<DataView, "filters" | "orderBy" | "search" | "shard">) => void) | undefined;
     pageSize: number;
     /** The table named in the URL — drives the selection so browser back/forward works. */
     tableParam: string | undefined;
@@ -170,6 +242,12 @@ const useDataBrowser = ({
     const [pageSize, setPageSize] = useState<number>(initialPageSize);
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
+
+    // Hydrate the view from a shared link / saved query on first mount. Held in a
+    // ref so the table-reconcile effect's `selectTable` can seed the page with the
+    // shared filters/search/sort the first time it opens the URL's table, then
+    // forget them (subsequent selections start clean). Consumed once.
+    const hydrationRef = useRef<DataView | null>({ filters: initialFilters, orderBy: initialOrderBy, search: initialSearch, table: tableParam });
     const [tables, setTables] = useState<TableInfo[] | null>(null);
     const [tablesError, setTablesError] = useState<null | string>(null);
 
@@ -182,11 +260,11 @@ const useDataBrowser = ({
     // Page-local sort: operates ONLY on the rows of the currently loaded page.
     // Reset whenever a new table is selected so stale state can't leak across
     // selections.
-    const [sorting, setSorting] = useState<SortingState>([]);
+    const [sorting, setSorting] = useState<SortingState>(() => fromOrderBy(initialOrderBy));
 
     // Search box value. Debounced into a server-side `search` (filters across the
     // WHOLE table, not just the loaded page), which re-fetches from offset 0.
-    const [filter, setFilter] = useState<string>("");
+    const [filter, setFilter] = useState<string>(initialSearch ?? "");
     const search = useDebounced(filter.trim(), 300);
 
     // The shard key the table list is fetched for, debounced so typing a key
@@ -197,10 +275,16 @@ const useDataBrowser = ({
     // Structured column filters. Held in a ref too so `fetchPage` reads the
     // current value without threading them through its five call sites; an effect
     // re-fetches from offset 0 when they change (mirroring the debounced search).
-    const [filters, setFilters] = useState<EditableFilter[]>([]);
+    const [filters, setFilters] = useState<EditableFilter[]>(() => toEditableFilters(initialFilters ?? []));
     const filtersRef = useRef<EditableFilter[]>(filters);
 
     filtersRef.current = filters;
+
+    // Facets (Datasette-style per-column value/count summaries): the columns the
+    // operator has toggled into the facet sidebar, each with its loaded summary.
+    // Opt-in per column (faceting a wide column is costly); the summaries reflect
+    // the ACTIVE view and refetch when the filters/search/shard/table change.
+    const [facets, setFacets] = useState<Record<string, FacetState>>({});
 
     // Sorting is server-side: `fetchPage` reads the current sort off this ref (so
     // it need not thread through every call site) and an effect re-fetches from
@@ -350,16 +434,30 @@ const useDataBrowser = ({
 
     const selectTable = useCallback(
         (table: string): void => {
-            // A fresh table means the previous sort/search/filters/staged edits no longer apply.
-            setSorting([]);
-            setFilter("");
-            setFilters([]);
-            filtersRef.current = [];
+            // First open of a shared/saved view: seed the bar with its filters/search/
+            // sort rather than clearing. Consumed once — later table switches start
+            // clean. Guarded to the URL's own table so an unrelated switch never picks
+            // it up.
+            const hydration = hydrationRef.current?.table === undefined || hydrationRef.current.table === table ? hydrationRef.current : null;
+
+            hydrationRef.current = null;
+
+            const nextSorting = fromOrderBy(hydration?.orderBy);
+            const nextFilters = toEditableFilters(hydration?.filters ?? []);
+            const nextSearch = hydration?.search ?? "";
+
+            // A fresh table means the previous sort/search/filters/facets/staged edits no longer apply.
+            setSorting(nextSorting);
+            setFilter(nextSearch);
+            setFilters(nextFilters);
+            filtersRef.current = nextFilters;
+            sortingRef.current = nextSorting;
+            setFacets({});
             stagedEdits.clear();
             setEditingCell(null);
             setSelectedTable(table);
             appliedTableRef.current = table;
-            fireAndForget(fetchPage(shardKey, table, 0, ""));
+            fireAndForget(fetchPage(shardKey, table, 0, nextSearch));
             // Mirror the selection to the URL so it's shareable and back/forward works.
             onSelectTable?.(table);
         },
@@ -374,6 +472,7 @@ const useDataBrowser = ({
             setSorting([]);
             setFilters([]);
             filtersRef.current = [];
+            setFacets({});
             setSelectedTable(targetTable);
             appliedTableRef.current = targetTable;
             setFilter(id);
@@ -407,6 +506,99 @@ const useDataBrowser = ({
         },
         [client, shardKey],
     );
+
+    // ── Facets (Datasette-style per-column value/count summaries) ───────────
+    const fetchFacet = useCallback(
+        async (shard: string, table: string, column: string, activeFilters: EditableFilter[], searchQuery: string): Promise<void> => {
+            setFacets((current) => {
+                return { ...current, [column]: { error: null, loading: true, result: current[column]?.result ?? null } };
+            });
+
+            try {
+                const result = (await client.query(
+                    FACET_COLUMN,
+                    { column, filters: toFilterClauses(activeFilters), search: searchQuery, table },
+                    callOptions(shard),
+                )) as FacetResult;
+
+                setFacets((current) => (column in current ? { ...current, [column]: { error: null, loading: false, result } } : current));
+            } catch (error) {
+                setFacets((current) =>
+                    column in current ? { ...current, [column]: { error: (error as Error).message, loading: false, result: null } } : current,
+                );
+            }
+        },
+        [client],
+    );
+
+    // Toggle a column into / out of the facet sidebar. Turning it on seeds a
+    // loading slot and fetches its summary for the current view; turning it off
+    // drops it entirely.
+    const toggleFacet = useCallback(
+        (column: string): void => {
+            setFacets((current) => {
+                if (column in current) {
+                    return Object.fromEntries(Object.entries(current).filter(([name]) => name !== column));
+                }
+
+                if (selectedTable !== null) {
+                    fireAndForget(fetchFacet(shardKey, selectedTable, column, filtersRef.current, search));
+                }
+
+                return { ...current, [column]: { error: null, loading: true, result: null } };
+            });
+        },
+        [fetchFacet, search, selectedTable, shardKey],
+    );
+
+    // Clicking a facet value adds an `eq` filter for that column/value, narrowing
+    // the view to those rows. Reuses the same `EditableFilter` machinery as the
+    // filter bar (its value is a string until coerced on the wire). Replaces any
+    // existing clause for the same column so repeated clicks don't stack.
+    const facetFilter = useCallback((column: string, value: unknown): void => {
+        const text = facetValueText(value);
+
+        setFilters((current) => [...current.filter((clause) => clause.column !== column), { column, operator: "eq", value: text }]);
+    }, []);
+
+    // Refetch every toggled-on facet when the active view (filters/search/shard/
+    // table) changes, so the summaries always reflect the previewed rows. Keyed on
+    // the `loaded` descriptor (set by `fetchPage`) so it tracks the displayed view,
+    // not a half-typed shard key, and only after a page has loaded.
+    useEffect(() => {
+        // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- the facet summaries are derived from the loaded view (a value, not a discrete event); refetching them when it changes mirrors the page-refetch effects above.
+        if (loaded === null) {
+            return;
+        }
+
+        for (const column of Object.keys(facets)) {
+            fireAndForget(fetchFacet(loaded.shard, loaded.table, column, loaded.filters, loaded.search));
+        }
+        // `facets` keys are intentionally excluded — toggling a single facet on is
+        // handled by `toggleFacet`'s own fetch; this effect only re-runs the
+        // already-open facets when the underlying view changes.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [loaded, fetchFacet]);
+
+    // Mirror the loaded view (shard / search / filters / sort) to the host so it can
+    // write it into the URL — making every view a real, shareable link. Keyed on the
+    // `loaded` descriptor so it tracks exactly what's displayed (never a half-typed
+    // shard key) and only after a page has loaded; the table itself is mirrored
+    // separately by `onSelectTable`.
+    useEffect(() => {
+        // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- the URL is a projection of the loaded view (a value, not a discrete event); mirroring it when the view changes is the correct pattern, like the facet-refetch effect above.
+        if (loaded === null || onViewChange === undefined) {
+            return;
+        }
+
+        // eslint-disable-next-line react-you-might-not-need-an-effect/no-pass-live-state-to-parent, react-you-might-not-need-an-effect/no-pass-data-to-parent -- the host writes this into the URL (a side effect, not derivable render state); it must run only for the actually-displayed `loaded` view, so an effect keyed on it is the correct place — the same shape as `onSelectTable`.
+        onViewChange({
+            filters: toFilterClauses(loaded.filters),
+            orderBy: toOrderBy(loaded.sort),
+            search: loaded.search,
+            shard: loaded.shard,
+        });
+    }, [loaded, onViewChange]);
 
     // Reconcile the URL's table into the selection. Fires on first load (deep link)
     // and on browser back/forward; an in-app selection already set `appliedTableRef`
@@ -636,6 +828,20 @@ const useDataBrowser = ({
     // hook owns only the derived react-table/virtualizer wiring.
     const table = useDataBrowserTable(page, sorting, setSorting);
 
+    // The currently-displayed view, for the "Copy link" / "Save query" affordances.
+    // Derived from the live state (not the `loaded` descriptor) so it reflects the
+    // bar as edited, even before a re-fetch lands. Uses the debounced `search` so a
+    // half-typed query isn't captured mid-keystroke.
+    const currentView = useMemo<DataView>(() => {
+        return {
+            filters: toFilterClauses(filters),
+            orderBy: toOrderBy(sorting),
+            search,
+            shard: shardKey,
+            table: selectedTable ?? undefined,
+        };
+    }, [filters, search, selectedTable, shardKey, sorting]);
+
     const total = page?.total ?? 0;
     const hasPrevious = offset > 0;
     const hasNext = page !== null && offset + page.rows.length < total;
@@ -783,10 +989,13 @@ const useDataBrowser = ({
         clearTable: emptyTable,
         columns: page?.columns ?? [],
         committing,
+        currentView,
         discardStaged,
         editableColumn,
         editing,
         editingCell,
+        facetFilter,
+        facets,
         filter,
         filters,
         goNext,
@@ -824,11 +1033,12 @@ const useDataBrowser = ({
         table,
         tables,
         tablesError,
+        toggleFacet,
         total,
         viewMode,
         writeError,
     };
 };
 
-export type { DataBrowserModel };
+export type { DataBrowserModel, FacetState };
 export { useDataBrowser };

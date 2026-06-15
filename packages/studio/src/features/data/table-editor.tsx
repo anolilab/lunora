@@ -1,12 +1,15 @@
 import { useCirrus } from "@cirrus/react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import type { ReactElement } from "react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { StorageTier } from "../../components/storage-tier";
 import { TIER_META } from "../../components/storage-tier";
 import { useT } from "../../i18n/i18n-context";
+import { dataViewToSearch, searchToDataView } from "../../lib/data-view-params";
 import { fireAndForget } from "../../lib/internal";
+import type { DataView, SavedQuery } from "../../lib/saved-queries";
+import { deleteSavedQuery, loadSavedQueries, saveQuery } from "../../lib/saved-queries";
 import { DataBrowser } from "./data-browser";
 import { GlobalDataBrowser } from "./global-data-browser";
 
@@ -73,11 +76,18 @@ export const TableEditor = ({ editable = false, initialShardKey }: TableEditorPr
     const client = useCirrus();
     const navigate = useNavigate();
 
-    // Tier + open table come from the URL. `strict: false` because the generic tab
-    // routes declare no typed search schema; values are coerced or dropped.
+    // The whole data-browser view comes from the URL: tier + open table plus the
+    // shard / filters / search / sort that make every view a real, shareable link.
+    // `strict: false` because the generic tab routes declare no typed search schema;
+    // values are coerced or dropped by `searchToDataView`.
     const search: Record<string, unknown> = useSearch({ strict: false });
-    const tier: StorageTier = search["schema"] === "global" ? "global" : "shard";
-    const tableParameter = typeof search["table"] === "string" ? search["table"] : undefined;
+    const view = useMemo<DataView>(() => searchToDataView(search), [search]);
+    const tier: StorageTier = view.tier ?? "shard";
+    const tableParameter = view.table;
+
+    // The persisted (localStorage) saved views, surfaced in the data browser's
+    // canned-query toolbar. Seeded from storage once; mutated through the helpers.
+    const [savedQueries, setSavedQueries] = useState<SavedQuery[]>(() => loadSavedQueries());
 
     // The `.global()` table names, so a shard-row ref into one routes to the global
     // tier instead of 404-ing against the shard's SQLite (global tables live in D1).
@@ -149,6 +159,76 @@ export const TableEditor = ({ editable = false, initialShardKey }: TableEditorPr
         [navigate],
     );
 
+    // Mirror the loaded view (shard / search / filters / sort) into the URL so the
+    // link IS the query. The browser fires this for the displayed view; we merge the
+    // serialized params over the current ones (keeping `schema`/`table`), dropping any
+    // that fall back to their default.
+    const onViewChange = useCallback(
+        (next: Pick<DataView, "filters" | "orderBy" | "search" | "shard">): void => {
+            const patch = dataViewToSearch(next);
+
+            fireAndForget(
+                navigate({
+                    replace: true,
+                    search: (previous: Record<string, unknown>) => {
+                        return { ...previous, filters: patch.filters, order: patch.order, search: patch.search, shard: patch.shard };
+                    },
+                    to: "/data",
+                }),
+            );
+        },
+        [navigate],
+    );
+
+    // Copy the current view's full URL to the clipboard. Best-effort: a missing/
+    // throwing clipboard (insecure context) is swallowed — the URL is still in the bar.
+    const onCopyLink = useCallback((): void => {
+        try {
+            // eslint-disable-next-line n/no-unsupported-features/node-builtins -- this is browser-only studio UI; `navigator.clipboard` is the Web Clipboard API, not the Node global, and never runs server-side.
+            fireAndForget(globalThis.navigator.clipboard.writeText(globalThis.location.href));
+        } catch {
+            /* clipboard unavailable (insecure context) — nothing to copy to */
+        }
+    }, []);
+
+    // Persist the current view under a name, then refresh the toolbar's list.
+    const onSaveQuery = useCallback((name: string, snapshot: DataView): void => {
+        setSavedQueries(saveQuery(name, snapshot));
+    }, []);
+
+    const onDeleteQuery = useCallback((name: string): void => {
+        setSavedQueries(deleteSavedQuery(name));
+    }, []);
+
+    // Apply a saved view: navigate to the URL it encodes, which re-hydrates the
+    // browser. A single push records both the table and the full view in history.
+    const onApplyQuery = useCallback(
+        (query: SavedQuery): void => {
+            const patch = dataViewToSearch(query.view);
+
+            fireAndForget(
+                navigate({
+                    search: () => {
+                        return {
+                            filters: patch.filters,
+                            order: patch.order,
+                            schema: patch.schema,
+                            search: patch.search,
+                            shard: patch.shard,
+                            table: patch.table,
+                        };
+                    },
+                    to: "/data",
+                }),
+            );
+        },
+        [navigate],
+    );
+
+    const queryBar = useMemo(() => {
+        return { onApplyQuery, onCopyLink, onDeleteQuery, onSaveQuery, saved: savedQueries };
+    }, [onApplyQuery, onCopyLink, onDeleteQuery, onSaveQuery, savedQueries]);
+
     const schemaSwitch = <SchemaSwitch onChange={selectTier} tier={tier} />;
 
     return tier === "global" ? (
@@ -157,9 +237,14 @@ export const TableEditor = ({ editable = false, initialShardKey }: TableEditorPr
         <DataBrowser
             editable={editable}
             globalTableNames={globalTableNames}
-            initialShardKey={initialShardKey}
+            initialFilters={view.filters}
+            initialOrderBy={view.orderBy}
+            initialSearch={view.search}
+            initialShardKey={view.shard ?? initialShardKey}
             onNavigateToGlobal={onNavigateToGlobal}
             onSelectTable={onSelectTable}
+            onViewChange={onViewChange}
+            queryBar={queryBar}
             schemaSwitch={schemaSwitch}
             tableParam={tableParameter}
         />

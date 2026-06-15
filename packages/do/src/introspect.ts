@@ -38,6 +38,7 @@ const ADMIN_FUNCTIONS = {
     describeTable: "__cirrus_admin__:describeTable",
     describeTables: "__cirrus_admin__:describeTables",
     exportShard: "__cirrus_admin__:exportShard",
+    facetColumn: "__cirrus_admin__:facetColumn",
     getAdvisories: "__cirrus_admin__:getAdvisories",
     getAuditLog: "__cirrus_admin__:getAuditLog",
     getAuthMetrics: "__cirrus_admin__:getAuthMetrics",
@@ -615,8 +616,49 @@ interface SelectMatchingIdsOptions {
     table: string;
 }
 
+/**
+ * Options for {@link facetColumn} — the read-only "what values does this column
+ * actually have?" summary. `column` is the displayed column to group by (a
+ * physical/meta column or a `__doc__` field), validated against the table's known
+ * columns and never interpolated. `filters` + `search` mirror
+ * {@link ReadTablePageOptions}'s predicate args so the facet reflects the **active
+ * view** (the same rows the data browser is previewing). `limit` caps the number
+ * of distinct values returned (clamped); one extra is over-fetched to detect
+ * truncation.
+ */
+interface FacetColumnOptions {
+    column: string;
+    filters?: FilterClause[];
+    limit?: number;
+    search?: string;
+    table: string;
+}
+
+/** One distinct value of a faceted column with its row count over the active view. */
+interface FacetValue {
+    count: number;
+    value: unknown;
+}
+
+/**
+ * Payload of a {@link facetColumn} call: the top-N distinct `values` (each with a
+ * `count`) ordered by frequency, plus `truncated` — `true` when more distinct
+ * values existed beyond the cap (so the UI can say so rather than imply the list
+ * is exhaustive).
+ */
+interface FacetColumnResult {
+    truncated: boolean;
+    values: FacetValue[];
+}
+
 const DEFAULT_PAGE_SIZE = 50;
 const MAX_PAGE_SIZE = 500;
+
+/** Default cap on the number of distinct values a single facet returns. */
+const DEFAULT_FACET_LIMIT = 30;
+
+/** Hard cap on facet values, so a wide column can't return an unbounded group set. */
+const MAX_FACET_LIMIT = 200;
 
 /** The physical columns of a canonical Cirrus shard table (user fields live in `__doc__`). */
 const DOC_COLUMN = "__doc__";
@@ -952,6 +994,100 @@ const selectMatchingIds = (sql: SqlExec, options: SelectMatchingIdsOptions): { h
     return { hasMore, ids };
 };
 
+/**
+ * The set of displayed columns the data browser would show for `table`, used to
+ * validate a faceted column without trusting the caller. Physical/meta columns
+ * come from PRAGMA; for a doc-stored table (`__doc__` present) the user fields are
+ * the union of the JSON object keys across a bounded sample of rows — the same
+ * keys {@link expandDocumentRows} lifts to top-level columns. So a typo'd column
+ * (e.g. a doc field that no row has) is rejected up front rather than silently
+ * faceting a column of all-NULLs.
+ */
+const knownDisplayColumns = (sql: SqlExec, quotedTable: string, physicalColumns: string[]): Set<string> => {
+    const known = new Set(physicalColumns.filter((name) => name !== DOC_COLUMN));
+
+    if (!physicalColumns.includes(DOC_COLUMN)) {
+        return known;
+    }
+
+    const sample = sql.exec<{ doc: unknown }>(`SELECT ${quoteIdentifier(DOC_COLUMN)} AS doc FROM ${quotedTable} LIMIT ?`, MAX_PAGE_SIZE).toArray();
+
+    for (const { doc } of sample) {
+        const documentData = typeof doc === "string" ? safeParseObject(doc) : undefined;
+
+        if (documentData !== undefined) {
+            for (const key of Object.keys(documentData)) {
+                known.add(key);
+            }
+        }
+    }
+
+    return known;
+};
+
+/**
+ * Summarise the distinct values of one displayed column over the **active view** —
+ * Datasette-style faceting. Read-only: a `SELECT &lt;col> AS value, COUNT(*) AS count
+ * … GROUP BY &lt;col> ORDER BY count DESC LIMIT N+1` with every value and JSON path
+ * bound, never interpolated. `column` is validated against the table's known
+ * displayed columns (rejected with a typed 404 if unknown) and resolved through the
+ * SAME {@link resolveColumnExpression} allowlist as filters/order-by, so a
+ * physical column groups by its quoted identifier and a `__doc__` field by a bound
+ * `json_extract` path. `filters` + `search` compile through the SAME
+ * {@link buildTablePredicate} as {@link readTablePage}, so the facet reflects
+ * exactly the rows the browser is previewing. The extra over-fetched row is dropped
+ * and surfaced as `truncated`, so a capped facet never silently implies it is
+ * exhaustive. The table name is validated against `sqlite_master` first, so this
+ * can't be coerced into scanning bookkeeping tables.
+ */
+const facetColumn = (sql: SqlExec, options: FacetColumnOptions): FacetColumnResult => {
+    const { column, table } = options;
+
+    if (isInternalTable(table) || !tableExists(sql, table)) {
+        throw Object.assign(new Error(`unknown table: ${table}`), { code: "UNKNOWN_TABLE", name: "CirrusError", status: 404 });
+    }
+
+    const quoted = quoteIdentifier(table);
+    const physicalColumns = sql
+        .exec<{ name: string }>(`PRAGMA table_info(${quoted})`)
+        .toArray()
+        .map((info) => info.name);
+
+    if (!knownDisplayColumns(sql, quoted, physicalColumns).has(column)) {
+        throw Object.assign(new Error(`unknown column: ${column}`), { code: "UNKNOWN_COLUMN", name: "CirrusError", status: 404 });
+    }
+
+    const resolved = resolveColumnExpression(column, physicalColumns);
+
+    if (resolved === undefined) {
+        // Defensive: a known column always resolves; if it somehow doesn't, fail
+        // closed rather than build SQL without a bound expression.
+        throw Object.assign(new Error(`unknown column: ${column}`), { code: "UNKNOWN_COLUMN", name: "CirrusError", status: 404 });
+    }
+
+    const limit = clamp(Math.trunc(options.limit ?? DEFAULT_FACET_LIMIT), 1, MAX_FACET_LIMIT);
+    const needle = options.search?.trim() ?? "";
+    const predicate = buildTablePredicate(physicalColumns, needle, options.filters);
+
+    const whereSql = predicate === undefined ? "" : ` WHERE ${predicate.where}`;
+    const whereParams = predicate?.parameters ?? [];
+
+    // The grouped expression's bound path params appear twice (SELECT + GROUP BY),
+    // so they bracket the WHERE params on each side in SQL order. Over-fetch one
+    // row past the cap to detect (and report) truncation.
+    const rows = sql
+        .exec<{
+            count: bigint | number;
+            value: unknown;
+        }>(`SELECT ${resolved.expression} AS value, COUNT(*) AS count FROM ${quoted}${whereSql} GROUP BY ${resolved.expression} ORDER BY count DESC LIMIT ?`, ...resolved.params, ...whereParams, ...resolved.params, limit + 1)
+        .toArray();
+
+    const truncated = rows.length > limit;
+    const kept = truncated ? rows.slice(0, limit) : rows;
+
+    return { truncated, values: kept.map((row) => {return { count: Number(row.count), value: row.value }}) };
+};
+
 /** One row that references a stored R2 object through a `v.storage()` column. */
 interface StorageReference {
     /** The `v.storage()` column the key was found in. */
@@ -1079,6 +1215,7 @@ const summarizeSubscriptions = (attachments: SocketAttachmentLike[]): Subscripti
 export {
     ADMIN_FUNCTION_PREFIX,
     ADMIN_FUNCTIONS,
+    facetColumn,
     findStorageReferences,
     listTables,
     MAX_PAGE_SIZE,
@@ -1095,6 +1232,9 @@ export type {
     ColumnMeta,
     CreateWorkflowInstanceResult,
     DeployInfo,
+    FacetColumnOptions,
+    FacetColumnResult,
+    FacetValue,
     FilterClause,
     FilterOperator,
     FunctionCallStat,

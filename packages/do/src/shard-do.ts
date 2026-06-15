@@ -44,6 +44,7 @@ import type {
 import {
     ADMIN_FUNCTION_PREFIX,
     ADMIN_FUNCTIONS,
+    facetColumn,
     findStorageReferences,
     listTables,
     MAX_PAGE_SIZE,
@@ -4001,6 +4002,10 @@ abstract class ShardDO {
             return this.readAdminTablePage(sql, args);
         }
 
+        if (functionPath === ADMIN_FUNCTIONS.facetColumn) {
+            return this.readAdminFacetColumn(sql, args);
+        }
+
         if (functionPath === ADMIN_FUNCTIONS.runSql) {
             return this.readAdminRunSql(sql, args);
         }
@@ -4343,6 +4348,27 @@ abstract class ShardDO {
         // An empty table name can't bind to a real dependency, so fall back
         // to the wildcard rather than a set that never intersects a write.
         return { result: page, tables: new Set([table === "" ? ADMIN_WILDCARD : table]) };
+    }
+
+    /**
+     * Resolve a `facetColumn` admin read — Datasette-style per-column value/count
+     * summary over the active view. Reuses {@link readTablePage}'s predicate args
+     * (`filters` + `search`) so the facet reflects exactly the previewed rows; the
+     * `column` is validated + bound inside {@link facetColumn} (never interpolated).
+     * Read-only `SELECT … GROUP BY`. Depends on its table like {@link readAdminTablePage}.
+     */
+    // eslint-disable-next-line class-methods-use-this -- instance method for symmetry with the other `readAdmin*` resolvers
+    private readAdminFacetColumn(sql: SqlExec, args: Record<string, unknown>): { result: unknown; tables: Set<string> } {
+        const table = typeof args["table"] === "string" ? args["table"] : "";
+        const result = facetColumn(sql, {
+            column: typeof args["column"] === "string" ? args["column"] : "",
+            filters: parseTablePageFilters(args["filters"]),
+            limit: typeof args["limit"] === "number" ? args["limit"] : undefined,
+            search: typeof args["search"] === "string" ? args["search"] : undefined,
+            table,
+        });
+
+        return { result, tables: new Set([table === "" ? ADMIN_WILDCARD : table]) };
     }
 
     /**

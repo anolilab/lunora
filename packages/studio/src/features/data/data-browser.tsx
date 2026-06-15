@@ -6,16 +6,19 @@ import { ConfirmButton } from "../../components/confirm-button";
 import { ShardInput } from "../../components/shard-input";
 import { EmptyState } from "../../components/ui/empty-state";
 import { useT } from "../../i18n/i18n-context";
-import type { TableInfo } from "../../lib/admin";
+import type { FilterClause, TableInfo } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { adminRef, callOptions } from "../../lib/internal";
 import type { MaskView } from "../../lib/mask-preview";
 import { maskColumnsForTable, maskRows } from "../../lib/mask-preview";
+import type { DataView, SavedQuery } from "../../lib/saved-queries";
 import type { GridEdit, GridReferences, TableRow } from "./data-browser-grid";
 import { DataBrowserTableView } from "./data-browser-grid";
+import DataFacets from "./data-facets";
 import type { EditableFilter } from "./data-filters";
 import { DataFilters } from "./data-filters";
 import { TransposedTable } from "./data-grid";
+import DataQueryBar from "./data-query-bar";
 import { GenerateRowsDialog } from "./generate-rows-dialog";
 import { CellDetailDialog, GridActionsBar } from "./grid-features";
 import GridPagination from "./grid-pagination";
@@ -43,6 +46,12 @@ interface DataBrowserProps {
      * editor; defaults to none when the browser is used standalone.
      */
     readonly globalTableNames?: ReadonlySet<string>;
+    /** Structured filters to hydrate from a shared link / saved query. */
+    readonly initialFilters?: FilterClause[];
+    /** Sort to hydrate from a shared link / saved query. */
+    readonly initialOrderBy?: DataView["orderBy"];
+    /** Substring search to hydrate from a shared link / saved query. */
+    readonly initialSearch?: string;
     /** Shard key the browser targets on first load. Defaults to the root shard. */
     readonly initialShardKey?: string;
 
@@ -58,8 +67,29 @@ interface DataBrowserProps {
      * (the Table editor pushes `?table=…`). Omitted in standalone use.
      */
     readonly onSelectTable?: (table: string) => void;
+
+    /**
+     * Called whenever the loaded view (shard / search / filters / sort) changes, so
+     * the host can mirror it to the URL — making every view a shareable link.
+     * Omitted in standalone use (view state stays in-component).
+     */
+    readonly onViewChange?: (view: Pick<DataView, "filters" | "orderBy" | "search" | "shard">) => void;
     /** Rows requested per page. Clamped server-side to `[1, 500]`. */
     readonly pageSize?: number;
+
+    /**
+     * The canned-query toolbar's handlers + saved list. Supplied by the Table editor
+     * (it owns the router and the `saved-queries` localStorage helper); omitted in
+     * standalone use, which hides the toolbar entirely. `onSaveQuery` receives the
+     * name plus the current view to persist.
+     */
+    readonly queryBar?: {
+        readonly onApplyQuery: (query: SavedQuery) => void;
+        readonly onCopyLink: () => void;
+        readonly onDeleteQuery: (name: string) => void;
+        readonly onSaveQuery: (name: string, view: DataView) => void;
+        readonly saved: ReadonlyArray<SavedQuery>;
+    };
 
     /**
      * The schema/source selector rendered at the top of the table-list sidebar —
@@ -231,10 +261,15 @@ const DataBrowserViewControls = ({
 export const DataBrowser = ({
     editable = false,
     globalTableNames,
+    initialFilters,
+    initialOrderBy,
+    initialSearch,
     initialShardKey,
     onNavigateToGlobal,
     onSelectTable,
+    onViewChange,
     pageSize: initialPageSize = DEFAULT_PAGE_SIZE,
+    queryBar,
     schemaSwitch,
     tableParam,
 }: DataBrowserProps): ReactElement => {
@@ -247,10 +282,13 @@ export const DataBrowser = ({
         clearTable,
         columns,
         committing,
+        currentView,
         discardStaged,
         editableColumn,
         editing,
         editingCell,
+        facetFilter,
+        facets,
         filter,
         filters,
         goNext,
@@ -288,10 +326,11 @@ export const DataBrowser = ({
         table,
         tables,
         tablesError,
+        toggleFacet,
         total,
         viewMode,
         writeError,
-    } = useDataBrowser({ initialShardKey, onSelectTable, pageSize: initialPageSize, tableParam });
+    } = useDataBrowser({ initialFilters, initialOrderBy, initialSearch, initialShardKey, onSelectTable, onViewChange, pageSize: initialPageSize, tableParam });
 
     const client = useCirrus();
 
@@ -363,7 +402,9 @@ export const DataBrowser = ({
     // the grid/JSON/transposed renderers read. The chips show whenever a column is
     // covered; cell values are only rewritten when the toggle is on.
     const maskColumns = useMemo(() => maskColumnsForTable(maskPolicies, selectedTable ?? ""), [maskPolicies, selectedTable]);
-    const maskView = useMemo<MaskView>(() => {return { columns: maskColumns, enabled: maskOn }}, [maskColumns, maskOn]);
+    const maskView = useMemo<MaskView>(() => {
+        return { columns: maskColumns, enabled: maskOn };
+    }, [maskColumns, maskOn]);
 
     // The cell whose full value the expand dialog is showing, if any. Opened from
     // the per-cell expand affordance; pure view state like `inspecting`.
@@ -389,6 +430,16 @@ export const DataBrowser = ({
             navigateToRef(target, id);
         },
         [globalTableNames, navigateToRef, onNavigateToGlobal],
+    );
+
+    // Inject the current view into the query bar's save handler, so the bar only has
+    // to collect a name. Stable as long as the view / host handler are.
+    const onSaveQuery = queryBar?.onSaveQuery;
+    const saveCurrentQuery = useCallback(
+        (name: string): void => {
+            onSaveQuery?.(name, currentView);
+        },
+        [currentView, onSaveQuery],
     );
 
     // The inline-edit context passed down to every grid cell.
@@ -471,6 +522,16 @@ export const DataBrowser = ({
                                 total={total}
                                 viewMode={viewMode}
                             />
+
+                            {queryBar !== undefined && (
+                                <DataQueryBar
+                                    onApply={queryBar.onApplyQuery}
+                                    onCopyLink={queryBar.onCopyLink}
+                                    onDelete={queryBar.onDeleteQuery}
+                                    onSave={saveCurrentQuery}
+                                    saved={queryBar.saved}
+                                />
+                            )}
 
                             {viewMode === "table" && page.rows.length > 0 && (
                                 <GridActionsBar
@@ -575,6 +636,8 @@ export const DataBrowser = ({
                     </div>
                 )}
             </div>
+
+            {page !== null && <DataFacets columns={columns} facets={facets} onFacetFilter={facetFilter} onToggleFacet={toggleFacet} />}
 
             {inspecting !== null && page !== null && (
                 <RowDetailDrawer columns={page.columns} onClose={closeInspect} onNavigate={handleNavigateRef} refs={page.refs} row={inspecting} />

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { findStorageReferences, listTables, readTablePage, selectMatchingIds, summarizeSubscriptions } from "../src/introspect";
+import { facetColumn, findStorageReferences, listTables, readTablePage, selectMatchingIds, summarizeSubscriptions } from "../src/introspect";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 describe("introspect", () => {
@@ -383,6 +383,98 @@ describe("introspect", () => {
 
             expect(() => selectMatchingIds(database.sql, { table: "nope" })).toThrow(/unknown table/u);
             expect(() => selectMatchingIds(database.sql, { table: "_cf_KV" })).toThrow(/unknown table/u);
+        });
+    });
+
+    describe("facetColumn", () => {
+        beforeEach(() => {
+            // A canonical doc-stored table so both physical and __doc__ facet paths
+            // can be exercised. `status` skews so ORDER BY count is observable.
+            database.raw(`CREATE TABLE "posts" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "__doc__" TEXT NOT NULL)`);
+            database.raw(
+                `INSERT INTO "posts" VALUES ` +
+                    `('p1', 1, '{"status":"open","authorId":"u1"}'), ` +
+                    `('p2', 2, '{"status":"open","authorId":"u2"}'), ` +
+                    `('p3', 3, '{"status":"open","authorId":"u1"}'), ` +
+                    `('p4', 4, '{"status":"closed","authorId":"u2"}'), ` +
+                    `('p5', 5, '{"status":"error","authorId":"u1"}')`,
+            );
+        });
+
+        it("groups a doc field into value/count rows ordered by frequency", () => {
+            expect.assertions(2);
+
+            const { truncated, values } = facetColumn(database.sql, { column: "status", table: "posts" });
+
+            // open=3, closed=1, error=1 → open leads; the two singletons follow.
+            expect(values[0]).toEqual({ count: 3, value: "open" });
+            expect(truncated).toBe(false);
+        });
+
+        it("facets a physical column", () => {
+            expect.assertions(1);
+
+            const { values } = facetColumn(database.sql, { column: "votes", table: "messages" });
+
+            // messages.votes: 3, 1, 0 — each distinct once.
+            expect(values.toSorted((a, b) => Number(a.value) - Number(b.value))).toEqual([
+                { count: 1, value: 0 },
+                { count: 1, value: 1 },
+                { count: 1, value: 3 },
+            ]);
+        });
+
+        it("reflects the active filters/search (facets over the previewed view)", () => {
+            expect.assertions(2);
+
+            const { values } = facetColumn(database.sql, {
+                column: "status",
+                filters: [{ column: "authorId", operator: "eq", value: "u1" }],
+                table: "posts",
+            });
+
+            // u1's rows: p1(open), p3(open), p5(error) → open=2, error=1.
+            const byValue = Object.fromEntries(values.map((row) => [row.value, row.count]));
+
+            expect(byValue["open"]).toBe(2);
+            expect(byValue["error"]).toBe(1);
+        });
+
+        it("caps at the limit and reports truncation, over-fetching one extra", () => {
+            expect.assertions(3);
+
+            const { truncated, values } = facetColumn(database.sql, { column: "status", limit: 2, table: "posts" });
+
+            // 3 distinct statuses, cap 2 → returns 2 and flags truncated.
+            expect(values).toHaveLength(2);
+            expect(truncated).toBe(true);
+            // The most frequent value is always kept first.
+            expect(values[0]).toEqual({ count: 3, value: "open" });
+        });
+
+        it("does not flag truncation when distinct values fit exactly under the cap", () => {
+            expect.assertions(2);
+
+            const { truncated, values } = facetColumn(database.sql, { column: "status", limit: 3, table: "posts" });
+
+            expect(values).toHaveLength(3);
+            expect(truncated).toBe(false);
+        });
+
+        it("rejects an unknown column with a CirrusError (never interpolates it)", () => {
+            expect.assertions(2);
+
+            // A typo'd doc field that no row has must be rejected, not silently
+            // faceted as a column of NULLs.
+            expect(() => facetColumn(database.sql, { column: "nope", table: "posts" })).toThrow(/unknown column/u);
+            expect(() => facetColumn(database.sql, { column: "alsoNope", table: "messages" })).toThrow(/unknown column/u);
+        });
+
+        it("throws an unknown-table CirrusError for an internal/unknown table", () => {
+            expect.assertions(2);
+
+            expect(() => facetColumn(database.sql, { column: "x", table: "nope" })).toThrow(/unknown table/u);
+            expect(() => facetColumn(database.sql, { column: "k", table: "_cf_KV" })).toThrow(/unknown table/u);
         });
     });
 
