@@ -10,7 +10,7 @@ import type { FilterClause, TableInfo } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { adminRef, callOptions } from "../../lib/internal";
 import type { MaskView } from "../../lib/mask-preview";
-import { maskColumnsForTable, maskRows } from "../../lib/mask-preview";
+import { maskColumnsForTable, maskRows, mergeSensitiveColumns } from "../../lib/mask-preview";
 import type { DataView, SavedQuery } from "../../lib/saved-queries";
 import type { GridEdit, GridReferences, TableRow } from "./data-browser-grid";
 import { DataBrowserTableView } from "./data-browser-grid";
@@ -393,15 +393,25 @@ export const DataBrowser = ({
     // "masked" header chips. The operator keeps full DB access — this is a preview,
     // not enforcement.
     const maskPolicies = useMaskPolicies();
-    const [maskOn, setMaskOn] = useState<boolean>(false);
+    // Default the preview ON so plaintext secrets are hidden out of the box (the
+    // operator reveals them by toggling). The toggle is only rendered when the
+    // active table actually has sensitive columns, so an ordinary table is
+    // unaffected; when it does, the safe-by-default state is masked.
+    const [maskOn, setMaskOn] = useState<boolean>(true);
     const onToggleMask = useCallback((): void => {
         setMaskOn((current) => !current);
     }, []);
 
-    // The active table's masked columns (column → strategy) and the threaded view
-    // the grid/JSON/transposed renderers read. The chips show whenever a column is
-    // covered; cell values are only rewritten when the toggle is on.
-    const maskColumns = useMemo(() => maskColumnsForTable(maskPolicies, selectedTable ?? ""), [maskPolicies, selectedTable]);
+    // The active table's masked columns (column → strategy). Explicit codegen
+    // policies (`.use(mask(...))`) are layered with a name-heuristic fallback so a
+    // plaintext `password` / `api_key` / `token` column with no declared policy is
+    // still masked by default (as `"redact"`). Explicit policies always win.
+    const explicitMaskColumns = useMemo(() => maskColumnsForTable(maskPolicies, selectedTable ?? ""), [maskPolicies, selectedTable]);
+    const maskColumns = useMemo(() => mergeSensitiveColumns(explicitMaskColumns, columns), [explicitMaskColumns, columns]);
+
+    // The threaded view the grid/JSON/transposed renderers read. The chips show
+    // whenever a column is covered; cell values are only rewritten when the toggle
+    // is on.
     const maskView = useMemo<MaskView>(() => {
         return { columns: maskColumns, enabled: maskOn };
     }, [maskColumns, maskOn]);

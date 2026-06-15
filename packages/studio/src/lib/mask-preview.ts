@@ -14,6 +14,77 @@ import type { MaskColumnMetadata, MaskStrategy } from "./admin";
  * FNV-1a digest byte-for-byte so a hashed column reads identically here.
  */
 
+/** Insert a space at every camelCase boundary so `apiKey` splits into `api`/`key`. */
+const CAMEL_BOUNDARY_RE = /([a-z\d])([A-Z])/gu;
+
+/** Split on `_`, `-`, or whitespace runs. */
+const WORD_SEPARATOR_RE = /[\s_-]+/u;
+
+/**
+ * Common sensitive column names — a defence-in-depth fallback for tables that
+ * carry secrets in plaintext **without** an explicit `.use(mask(...))` policy.
+ * Without this list a `password` / `api_key` / `token` column with no declared
+ * policy would render in cleartext by default; matching one here masks it
+ * (with `"redact"`) so the browser fails safe.
+ *
+ * Each entry is matched as a **whole word** (case-insensitively) against the
+ * tokens a column name splits into on `_`, `-`, or camelCase boundaries — so
+ * `apiKey`, `api_key`, `API-KEY`, and `user_password` all hit, while innocuous
+ * names like `secretary`, `tokenizer`, or `password_changed_at`… (still a hit on
+ * `password`, intentionally) are handled by token equality rather than a naive
+ * substring scan. The list is deliberately conservative: well-known secret
+ * names only, to avoid masking ordinary columns.
+ */
+const SENSITIVE_COLUMN_NAMES: ReadonlySet<string> = new Set([
+    "access_token",
+    "api_key",
+    "apikey",
+    "card_number",
+    "client_secret",
+    "credit_card",
+    "cvv",
+    "passwd",
+    "password",
+    "private_key",
+    "pwd",
+    "refresh_token",
+    "secret",
+    "ssn",
+    "token",
+]);
+
+/**
+ * Split a column name into lower-cased word tokens on `_` / `-` / whitespace and
+ * camelCase boundaries — so `apiKey` → `["api", "key", "apikey"]`-style matching
+ * is possible. Returns both the individual segments and adjacent-pair joins
+ * (`api`+`key` → `apikey`, `api_key`) so multi-word secrets in the set are hit.
+ */
+const tokenize = (name: string): ReadonlyArray<string> => {
+    const segments = name
+        .replaceAll(CAMEL_BOUNDARY_RE, "$1 $2")
+        .split(WORD_SEPARATOR_RE)
+        .map((part) => part.toLowerCase())
+        .filter((part) => part.length > 0);
+
+    const tokens = new Set<string>(segments);
+
+    // Re-join adjacent segments so split multi-word names (api + key) match the
+    // joined-and underscored forms in the set (`apikey`, `api_key`).
+    for (let index = 0; index < segments.length - 1; index += 1) {
+        const current = segments[index];
+        const next = segments[index + 1];
+
+        if (current === undefined || next === undefined) {
+            continue;
+        }
+
+        tokens.add(`${current}${next}`);
+        tokens.add(`${current}_${next}`);
+    }
+
+    return [...tokens];
+};
+
 /** Sentinel rendered for a `"custom"` strategy whose closure the studio can't run. */
 export const CUSTOM_MASK_SENTINEL = "•••";
 
@@ -91,6 +162,49 @@ export const maskColumnsForTable = (columns: ReadonlyArray<MaskColumnMetadata>, 
     }
 
     return map;
+};
+
+/**
+ * Heuristic: does this column name look like it holds a secret? Case-insensitive,
+ * word-boundary aware (see {@link tokenize}) — so `password`, `apiKey`,
+ * `api_key`, `user_password`, `accessToken` all match, while `secretary`,
+ * `tokenizer`, or `passport` do not. Used as a default-on fallback layered over
+ * the explicit `.use(mask(...))` policies.
+ */
+export const isSensitiveColumnName = (name: string): boolean => {
+    for (const token of tokenize(name)) {
+        if (SENSITIVE_COLUMN_NAMES.has(token)) {
+            return true;
+        }
+    }
+
+    return false;
+};
+
+/**
+ * Layer the name-heuristic over the explicit mask policies: returns a `column →
+ * strategy` map that keeps every explicit entry and adds a `"redact"` strategy
+ * for any of `columnNames` whose name looks sensitive (and isn't already
+ * explicitly covered). Explicit policies always win — a column with a declared
+ * `"hash"` keeps it; the heuristic only fills the gaps.
+ */
+export const mergeSensitiveColumns = (
+    explicit: ReadonlyMap<string, MaskStrategy>,
+    columnNames: ReadonlyArray<string>,
+): ReadonlyMap<string, MaskStrategy> => {
+    const heuristic = columnNames.filter((column) => !explicit.has(column) && isSensitiveColumnName(column));
+
+    if (heuristic.length === 0) {
+        return explicit;
+    }
+
+    const merged = new Map<string, MaskStrategy>(explicit);
+
+    for (const column of heuristic) {
+        merged.set(column, "redact");
+    }
+
+    return merged;
 };
 
 /**

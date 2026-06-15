@@ -73,12 +73,16 @@ describe("dataBrowser masking", () => {
         expect(screen.queryByTestId("db-mask-chip-__id__")).toBeNull();
     });
 
-    it("shows raw values until the mask toggle is switched on", async () => {
+    it("reveals raw values once the mask toggle is switched off", async () => {
         expect.assertions(2);
 
         const mock = createMaskedClient();
 
         await openUsers(mock);
+
+        // The toggle defaults ON (sensitive columns present), so reveal raw values
+        // by switching it off.
+        fireEvent.click(screen.getByTestId("db-mask-toggle"));
 
         const firstRow = screen.getAllByTestId("db-row")[0] as HTMLElement;
 
@@ -86,14 +90,12 @@ describe("dataBrowser masking", () => {
         expect(within(firstRow).getByText("Ada Lovelace")).toBeDefined();
     });
 
-    it("redacts and hashes covered cells when the toggle is on", async () => {
+    it("redacts and hashes covered cells by default (toggle defaults on)", async () => {
         expect.assertions(3);
 
         const mock = createMaskedClient();
 
         await openUsers(mock);
-
-        fireEvent.click(screen.getByTestId("db-mask-toggle"));
 
         const firstRow = screen.getAllByTestId("db-row")[0] as HTMLElement;
 
@@ -105,14 +107,13 @@ describe("dataBrowser masking", () => {
         expect(within(firstRow).queryByText("Ada Lovelace")).toBeNull();
     });
 
-    it("masks the JSON view when the toggle is on", async () => {
+    it("masks the JSON view by default (toggle defaults on)", async () => {
         expect.assertions(2);
 
         const mock = createMaskedClient();
 
         await openUsers(mock);
 
-        fireEvent.click(screen.getByTestId("db-mask-toggle"));
         fireEvent.click(screen.getByTestId("db-view-json"));
 
         const json = screen.getByTestId("db-json").textContent ?? "";
@@ -124,10 +125,55 @@ describe("dataBrowser masking", () => {
     it("hides the toggle when no column in the selected table is masked", async () => {
         expect.assertions(1);
 
+        // No explicit policies AND the columns (`__id__`, `email`, `name`) carry no
+        // heuristic-sensitive names, so nothing is masked and the toggle is hidden.
         const mock = createMaskedClient({ columns: [] });
 
         await openUsers(mock);
 
         expect(screen.queryByTestId("db-mask-toggle")).toBeNull();
+    });
+
+    it("masks a plaintext secret column with no explicit policy via the name heuristic", async () => {
+        expect.assertions(3);
+
+        const SECRET_TABLES = [{ name: "accounts", rowCount: 1 }];
+        const SECRET_PAGE = {
+            columns: ["__id__", "password"],
+            rows: [{ __id__: "a1", password: "hunter2" }],
+            total: 1,
+        };
+
+        // No mask policies at all — masking must come purely from the name heuristic.
+        const mock = createMockClient({
+            query: (reference): unknown => {
+                if (reference === ADMIN_FUNCTIONS.listTables) {
+                    return SECRET_TABLES;
+                }
+
+                if (reference === ADMIN_FUNCTIONS.maskPolicies) {
+                    return { columns: [] };
+                }
+
+                return SECRET_PAGE;
+            },
+        });
+
+        render(renderBrowser(mock));
+        fireEvent.click(await screen.findByTestId("db-table-accounts"));
+        await screen.findByTestId("db-page");
+
+        // The toggle appears (a sensitive column exists) and defaults ON, so the
+        // plaintext secret is hidden out of the box.
+        expect(screen.getByTestId("db-mask-toggle")).toBeDefined();
+
+        const firstRow = screen.getAllByTestId("db-row")[0] as HTMLElement;
+
+        expect(within(firstRow).queryByText("hunter2")).toBeNull();
+
+        // Toggling off reveals the raw value.
+        fireEvent.click(screen.getByTestId("db-mask-toggle"));
+
+        expect(within(screen.getAllByTestId("db-row")[0] as HTMLElement).getByText("hunter2")).toBeDefined();
     });
 });
