@@ -17,6 +17,7 @@ import containerPublicInternet from "./lints/static/container-public-internet";
 import duplicateIndex from "./lints/static/duplicate-index";
 import emptyIndex from "./lints/static/empty-index";
 import filterWithoutIndex from "./lints/static/filter-without-index";
+import hyperdriveOutsideAction from "./lints/static/hyperdrive-outside-action";
 import indexReferencesUnknownField from "./lints/static/index-references-unknown-field";
 import maskUncoveredPiiColumn from "./lints/static/mask-uncovered-pii-column";
 import nondeterministicQueryMutation from "./lints/static/nondeterministic-query-mutation";
@@ -29,8 +30,11 @@ import workflowUnknownTarget from "./lints/static/workflow-unknown-target";
 import workflowUnused from "./lints/static/workflow-unused";
 import type { Finding, Lint, LintContext, LintSource } from "./types";
 
+export type { AnalyticsMetricsOptions, AnalyticsMetricsSource, AnalyticsRuntimeMetrics } from "./ae-metrics";
+export { AE_METRIC_EVENTS, loadAnalyticsRuntimeMetrics } from "./ae-metrics";
 export type { AdvisorAuthApiCall } from "./authapi-calls";
 export type { AdvisorContainer } from "./containers";
+export type { AdvisorHyperdriveCall } from "./hyperdrive-calls";
 export type { AdvisorIndexHit, AdvisorTableScan } from "./index-usage";
 export type { AdvisorInsertWrite } from "./inserts";
 export { default as constraintValidator } from "./lints/runtime/constraint-validator";
@@ -43,6 +47,7 @@ export { default as containerPublicInternet } from "./lints/static/container-pub
 export { default as duplicateIndex } from "./lints/static/duplicate-index";
 export { default as emptyIndex } from "./lints/static/empty-index";
 export { default as filterWithoutIndex } from "./lints/static/filter-without-index";
+export { default as hyperdriveOutsideAction } from "./lints/static/hyperdrive-outside-action";
 export { default as indexReferencesUnknownField } from "./lints/static/index-references-unknown-field";
 export { default as maskUncoveredPiiColumn } from "./lints/static/mask-uncovered-pii-column";
 export { default as nondeterministicQueryMutation } from "./lints/static/nondeterministic-query-mutation";
@@ -83,6 +88,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     workflowUnused,
     filterWithoutIndex,
     nondeterministicQueryMutation,
+    hyperdriveOutsideAction,
     authApiCallWithoutHeaders,
     rlsUncoveredTable,
     maskUncoveredPiiColumn,

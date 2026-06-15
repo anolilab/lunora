@@ -1,5 +1,6 @@
 import type { AdvisorAuthApiCall } from "./authapi-calls";
 import type { AdvisorContainer } from "./containers";
+import type { AdvisorHyperdriveCall } from "./hyperdrive-calls";
 import type { AdvisorIndexHit, AdvisorTableScan } from "./index-usage";
 import type { AdvisorInsertWrite } from "./inserts";
 import type { AdvisorMaskProcedure } from "./mask-procedures";
@@ -92,6 +93,14 @@ export interface LintContext {
      * the container lints find nothing.
      */
     containers?: ReadonlyArray<AdvisorContainer>;
+
+    /**
+     * Hyperdrive `ctx.sql` accesses discovered lexically inside `query`/`mutation`
+     * handler bodies — the `hyperdrive_outside_action` input. Supplied by the
+     * codegen feeder, which omits `action` handlers (where `ctx.sql` is the typed,
+     * intended surface); absent for runtime callers, where the lint finds nothing.
+     */
+    hyperdriveCalls?: ReadonlyArray<AdvisorHyperdriveCall>;
 
     /**
      * Per-declared-index hit counts observed at runtime (the dead-index half of
