@@ -3,6 +3,7 @@ import type { AdvisorContainer } from "./containers";
 import type { AdvisorIndexHit, AdvisorTableScan } from "./index-usage";
 import type { AdvisorInsertWrite } from "./inserts";
 import type { AdvisorMaskProcedure } from "./mask-procedures";
+import type { AdvisorNondeterministicCall } from "./nondeterministic-calls";
 import type { AdvisorQueryRead } from "./queries";
 import type { AdvisorRlsProcedure } from "./rls-procedures";
 import type { AdvisorSchema } from "./schema";
@@ -118,6 +119,16 @@ export interface LintContext {
      * nothing.
      */
     maskProcedures?: ReadonlyArray<AdvisorMaskProcedure>;
+
+    /**
+     * Non-deterministic API calls (`Date.now`, `Math.random`,
+     * `crypto.randomUUID`, `crypto.getRandomValues`, `fetch`) discovered lexically
+     * inside `query`/`mutation` handler bodies — the `nondeterministic_query_mutation`
+     * input. Supplied by the codegen feeder, which omits `action` handlers (their
+     * non-determinism is intentional); absent for runtime callers, where the lint
+     * finds nothing.
+     */
+    nondeterministicCalls?: ReadonlyArray<AdvisorNondeterministicCall>;
 
     /**
      * Query reads discovered in function bodies (the `filter_without_index`

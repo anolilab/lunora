@@ -19,6 +19,7 @@ import emptyIndex from "./lints/static/empty-index";
 import filterWithoutIndex from "./lints/static/filter-without-index";
 import indexReferencesUnknownField from "./lints/static/index-references-unknown-field";
 import maskUncoveredPiiColumn from "./lints/static/mask-uncovered-pii-column";
+import nondeterministicQueryMutation from "./lints/static/nondeterministic-query-mutation";
 import relationReferencesUnknownField from "./lints/static/relation-references-unknown-field";
 import relationReferencesUnknownTable from "./lints/static/relation-references-unknown-table";
 import rlsUncoveredTable from "./lints/static/rls-uncovered-table";
@@ -44,6 +45,7 @@ export { default as emptyIndex } from "./lints/static/empty-index";
 export { default as filterWithoutIndex } from "./lints/static/filter-without-index";
 export { default as indexReferencesUnknownField } from "./lints/static/index-references-unknown-field";
 export { default as maskUncoveredPiiColumn } from "./lints/static/mask-uncovered-pii-column";
+export { default as nondeterministicQueryMutation } from "./lints/static/nondeterministic-query-mutation";
 export { default as relationReferencesUnknownField } from "./lints/static/relation-references-unknown-field";
 export { default as relationReferencesUnknownTable } from "./lints/static/relation-references-unknown-table";
 export { default as rlsUncoveredTable } from "./lints/static/rls-uncovered-table";
@@ -52,6 +54,7 @@ export { default as unindexedForeignKey } from "./lints/static/unindexed-foreign
 export { default as workflowUnknownTarget } from "./lints/static/workflow-unknown-target";
 export { default as workflowUnused } from "./lints/static/workflow-unused";
 export type { AdvisorMaskProcedure } from "./mask-procedures";
+export type { AdvisorNondeterministicCall } from "./nondeterministic-calls";
 export type { AdvisorQueryRead } from "./queries";
 export type { AdvisorRlsProcedure } from "./rls-procedures";
 export type { AdvisorIndex, AdvisorRelation, AdvisorSchema, AdvisorTable } from "./schema";
@@ -79,6 +82,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     tableWithoutInsert,
     workflowUnused,
     filterWithoutIndex,
+    nondeterministicQueryMutation,
     authApiCallWithoutHeaders,
     rlsUncoveredTable,
     maskUncoveredPiiColumn,
