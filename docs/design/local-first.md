@@ -259,6 +259,18 @@ the bookmark is a separate causal-position concern tracked for a follow-up.
   enabling `persistence` + `queryCache`, the service-worker app-shell snippet,
   and the reconciliation model. Cross-link from `addons/db.mdx`.
 
+**Implemented.** Ported `useConnectionStatus` to Vue (composable →
+`Readonly<Ref<ConnectionStatus>>`), Solid (`createConnectionStatus` →
+`Accessor`), and Svelte (`connectionStatus` → readable store), each wrapping the
+existing `client.onConnectionStatus()` / `client.connectionStatus()` and tearing
+the listener down on scope dispose. Shipped the offline-first recipe as
+`concepts/offline-first.mdx` (the docs tree has no `guides/` section) — enabling
+`persistence` + `queryCache`, the cross-framework connection-status snippets, the
+service-worker app-shell, and the reconciliation model — cross-linked from
+`addons/db.mdx` and `api/client.mdx`. **Deferred:** the optional `useOutbox()`
+pending-writes count surface (not required for the offline-first story; the
+outbox already drives sync without a UI hook).
+
 ### Pillar 4 — Correctness: fix drift + tests
 
 - **AsyncStorage drift.** Either ship `createAsyncStoragePersistence()` (React
@@ -278,6 +290,21 @@ the bookmark is a separate causal-position concern tracked for a follow-up.
        partly covered in `internals.test.ts`; extend to the collection layer).
     5. identity change between sessions → cached reads + queued writes are dropped,
        not replayed under the new identity.
+
+**Implemented.** Shipped `createAsyncStoragePersistence({ storage })` — a
+`PersistenceAdapter` over any async key/value store (React Native `AsyncStorage`,
+Expo `SecureStore`, …); the whole FIFO log is JSON-serialized under one key and
+all read-modify-writes are funnelled through a single promise chain (AsyncStorage
+has no transactions). It joins the shared `persistence.test.ts` contract suite
+(in-memory + `fake-indexeddb` + fake AsyncStorage). Corrected `api/client.mdx`'s
+stale `offlineQueue.storage` claim to point at the real `persistence` option +
+the new adapter. Added the e2e offline lifecycle suite
+(`packages/client/__tests__/offline-lifecycle.test.ts`) covering scenarios 1, 2,
+3, and 5 plus the client-layer half of 4 (a coded `CONFLICT` rolls the optimistic
+value back), each driving the real adapters across a reload boundary against the
+mock socket. **Deferred:** extending scenario 4 to the `@lunora/db` collection
+layer (`packages/db/__tests__`) — the client transport rollback is proven; the
+TanStack-DB collection rollback is a separate follow-up.
 
 > Note on the sandbox: workerd can't run here (see project memory
 > `project-workerd-sandbox-limit`), so Pillar 1 server logic is validated with
