@@ -30,6 +30,7 @@ import {
     emitDataModel,
     emitDrizzleSchema,
     emitFunctions,
+    emitSeed,
     emitServer,
     emitShard,
     emitVectors,
@@ -62,6 +63,18 @@ const writeIfChanged = (filePath: string, content: string): void => {
     }
 
     writeFileSync(filePath, content, "utf8");
+};
+
+/**
+ * Write a conditionally-emitted `_generated/` file: a no-op when `content` is
+ * the empty string (the convention `emit*` helpers use to mean "not
+ * applicable"), so the file is only created for projects that actually use the
+ * feature. Keeps the per-feature gating out of `runCodegen`'s control flow.
+ */
+const writeIfPresent = (filePath: string, content: string): void => {
+    if (content !== "") {
+        writeIfChanged(filePath, content);
+    }
 };
 
 /**
@@ -249,6 +262,15 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const featureUsage = discoverFeatureUsage(project, cirrusDirectory);
     const hasAi = featureUsage.ai;
     const hasPayments = featureUsage.payments;
+    // New Cloudflare-capability ctx augmentations (Plans 027/028/031/032/035/036).
+    // These flip the emitted ctx type seam in `server.ts` (type-only dynamic
+    // imports); the runtime ShardDO wiring lands with each capability's package.
+    const hasKv = featureUsage.kv;
+    const hasHyperdrive = featureUsage.hyperdrive;
+    const hasBrowser = featureUsage.browser;
+    const hasImages = featureUsage.images;
+    const hasAnalytics = featureUsage.analytics;
+    const hasPipelines = featureUsage.pipelines;
 
     // Which optional, package-backed features the studio should show a nav page
     // for. `buildStudioFeatures` OR's the code-usage flags with the schema/project
@@ -272,7 +294,13 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const serverContent = emitServer({
         containers,
         hasAi,
+        hasAnalytics,
+        hasBrowser,
+        hasHyperdrive,
+        hasImages,
+        hasKv,
         hasPayments,
+        hasPipelines,
         schema,
         storageRuleBuckets: storageRulesMetadata.rules.map((rule) => rule.bucket),
         workflows,
@@ -282,6 +310,11 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         advisories,
         containers,
         hasAi,
+        hasAnalytics,
+        hasBrowser,
+        hasHyperdrive,
+        hasImages,
+        hasKv,
         hasPayments,
         maskMetadata,
         rlsMetadata,
@@ -295,6 +328,10 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const cronsContent = emitCrons(crons);
     const vectorsContent = emitVectors(schema.vectorIndexes);
     const drizzleFiles = emitDrizzleSchema(schema);
+    // Only emit the project-bound seed client when `@cirrus/seed` is a declared
+    // dependency — seeding is a dev/test concern, so a project that never
+    // installs it keeps a clean `_generated/` and never imports the package.
+    const seedContent = emitSeed(dependencies.has("@cirrus/seed"));
 
     // Which API spec(s) the run emits. Defaults to `"openapi"` so existing
     // projects (and the golden fixtures) keep writing only `openapi.json`.
@@ -346,17 +383,15 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         writeIfChanged(join(outputDirectory, "drizzle.global.ts"), drizzleFiles.global);
         writeIfChanged(join(outputDirectory, "drizzle.shard.ts"), drizzleFiles.shard);
 
-        // Only written when containers are declared — non-container projects
-        // keep a clean `_generated/` (and never import `@cirrus/container`).
-        if (containersContent !== "") {
-            writeIfChanged(join(outputDirectory, "containers.ts"), containersContent);
-        }
-
-        // Only written when workflows are declared — non-workflow projects keep a
-        // clean `_generated/` (and never import `@cirrus/workflow`).
-        if (workflowsContent !== "") {
-            writeIfChanged(join(outputDirectory, "workflows.ts"), workflowsContent);
-        }
+        // Conditionally-emitted files: each is written only when its feature is
+        // in use (the `emit*` helper returns `""` otherwise), so projects that
+        // don't use them keep a clean `_generated/` and never import the package.
+        //   - containers.ts  → `@cirrus/container`, when containers are declared
+        //   - workflows.ts   → `@cirrus/workflow`, when workflows are declared
+        //   - seed.ts        → `@cirrus/seed`, when it's a declared dependency
+        writeIfPresent(join(outputDirectory, "containers.ts"), containersContent);
+        writeIfPresent(join(outputDirectory, "workflows.ts"), workflowsContent);
+        writeIfPresent(join(outputDirectory, "seed.ts"), seedContent);
 
         if (wantsOpenApi) {
             // The `.json` is the portable artifact for external tooling; the
@@ -397,6 +432,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
             openApiModule: openApiModuleContent,
             openRpc: openRpcContent,
             openRpcModule: openRpcModuleContent,
+            seed: seedContent,
             server: serverContent,
             shard: shardContent,
             vectors: vectorsContent,
@@ -518,6 +554,8 @@ export interface CodegenResult {
          * `apiSpec` includes `openrpc`.
          */
         openRpcModule: string;
+        /** Project-bound seed client (`_generated/seed.ts`); `""` (and not written) when `@cirrus/seed` is not a declared dependency. */
+        seed: string;
         server: string;
         shard: string;
         /** Static vector-index registry (`_generated/vectors.ts`) — `CIRRUS_VECTOR_INDEXES`. Empty array body when the schema declares none. */

@@ -23,10 +23,22 @@ import { listCirrusSourceFiles } from "./discover-functions";
 interface FeatureUsage {
     /** A `cirrus/` source imports `@cirrus/ai` or reads `ctx.ai`. */
     ai: boolean;
+    /** A `cirrus/` source imports `@cirrus/analytics` or reads `ctx.analytics`. */
+    analytics: boolean;
+    /** A `cirrus/` source imports `@cirrus/browser` or reads `ctx.browser`. */
+    browser: boolean;
+    /** A `cirrus/` source imports `@cirrus/hyperdrive` or reads `ctx.sql`. */
+    hyperdrive: boolean;
+    /** A `cirrus/` source imports `@cirrus/images` or reads `ctx.images`. */
+    images: boolean;
+    /** A `cirrus/` source imports `@cirrus/kv` or reads `ctx.kv`. */
+    kv: boolean;
     /** A `cirrus/` source imports `@cirrus/mail`. */
     mail: boolean;
     /** A `cirrus/` source imports `@cirrus/payment` or reads `ctx.payments`. */
     payments: boolean;
+    /** A `cirrus/` source imports `@cirrus/pipelines` or reads `ctx.pipelines`. */
+    pipelines: boolean;
     /** A source imports `@cirrus/scheduler` or reads `ctx.scheduler`. */
     scheduler: boolean;
     /** A source imports `@cirrus/storage` or reads `ctx.storage`. */
@@ -47,8 +59,14 @@ interface FeatureProbe {
 
 const PROBES: Record<keyof FeatureUsage, FeatureProbe> = {
     ai: { contextProperty: "ai", moduleSpecifier: "@cirrus/ai" },
+    analytics: { contextProperty: "analytics", moduleSpecifier: "@cirrus/analytics" },
+    browser: { contextProperty: "browser", moduleSpecifier: "@cirrus/browser" },
+    hyperdrive: { contextProperty: "sql", moduleSpecifier: "@cirrus/hyperdrive" },
+    images: { contextProperty: "images", moduleSpecifier: "@cirrus/images" },
+    kv: { contextProperty: "kv", moduleSpecifier: "@cirrus/kv" },
     mail: { moduleSpecifier: "@cirrus/mail" },
     payments: { contextProperty: "payments", moduleSpecifier: "@cirrus/payment" },
+    pipelines: { contextProperty: "pipelines", moduleSpecifier: "@cirrus/pipelines" },
     scheduler: { contextProperty: "scheduler", moduleSpecifier: "@cirrus/scheduler" },
     storage: { contextProperty: "storage", moduleSpecifier: "@cirrus/storage" },
     vectors: { contextProperty: "vectors", moduleSpecifier: "@cirrus/vectors" },
@@ -116,7 +134,21 @@ const readsContextProperty = (sourceFile: SourceFile, property: string): boolean
  * `payments`) and — via {@link buildStudioFeatures} — the studio nav.
  */
 const discoverFeatureUsage = (project: Project, cirrusDirectory: string): FeatureUsage => {
-    const usage: FeatureUsage = { ai: false, mail: false, payments: false, scheduler: false, storage: false, vectors: false, workflows: false };
+    const usage: FeatureUsage = {
+        ai: false,
+        analytics: false,
+        browser: false,
+        hyperdrive: false,
+        images: false,
+        kv: false,
+        mail: false,
+        payments: false,
+        pipelines: false,
+        scheduler: false,
+        storage: false,
+        vectors: false,
+        workflows: false,
+    };
     const keys = Object.keys(PROBES) as (keyof FeatureUsage)[];
 
     for (const filePath of listCirrusSourceFiles(cirrusDirectory)) {

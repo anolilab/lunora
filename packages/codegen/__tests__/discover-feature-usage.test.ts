@@ -10,7 +10,21 @@ import { buildStudioFeatures, discoverFeatureUsage } from "../src/discover-featu
 
 let workdir: string;
 
-const ALL_OFF: FeatureUsage = { ai: false, mail: false, payments: false, scheduler: false, storage: false, vectors: false, workflows: false };
+const ALL_OFF: FeatureUsage = {
+    ai: false,
+    analytics: false,
+    browser: false,
+    hyperdrive: false,
+    images: false,
+    kv: false,
+    mail: false,
+    payments: false,
+    pipelines: false,
+    scheduler: false,
+    storage: false,
+    vectors: false,
+    workflows: false,
+};
 
 const NO_SIGNALS = { cronCount: 0, dependencies: new Set<string>(), storageColumnCount: 0, storageRuleCount: 0, vectorIndexCount: 0, workflowCount: 0 };
 
@@ -69,6 +83,47 @@ describe("discover-feature-usage", () => {
 
         expect(reverse.ai).toBe(true);
         expect(reverse.payments).toBe(true);
+    });
+
+    it("detects the new Cloudflare-capability features via import or the `ctx.*` helper", () => {
+        expect.assertions(12);
+
+        // Imports flip kv / analytics / hyperdrive / images / browser / pipelines.
+        writeSource("flag.ts", `import { createKv } from "@cirrus/kv";\nexport const a = () => createKv();`);
+        writeSource("track.ts", `import { createAnalytics } from "@cirrus/analytics";\nexport const b = () => createAnalytics();`);
+        writeSource("pg.ts", `import { createHyperdrive } from "@cirrus/hyperdrive";\nexport const c = () => createHyperdrive();`);
+        writeSource("img.ts", `import { createImages } from "@cirrus/images";\nexport const d = () => createImages();`);
+        writeSource("shot.ts", `import { createBrowser } from "@cirrus/browser";\nexport const e = () => createBrowser();`);
+        writeSource("ship.ts", `import { createPipeline } from "@cirrus/pipelines";\nexport const f = () => createPipeline();`);
+
+        const usage = discoverFeatureUsage(newProject(), workdir);
+
+        expect(usage.kv).toBe(true);
+        expect(usage.analytics).toBe(true);
+        expect(usage.hyperdrive).toBe(true);
+        expect(usage.images).toBe(true);
+        expect(usage.browser).toBe(true);
+        expect(usage.pipelines).toBe(true);
+
+        // The `ctx.*` reads flip them too — note hyperdrive is reached via `ctx.sql`
+        // and pipelines via `ctx.pipelines`.
+        rmSync(workdir, { force: true, recursive: true });
+        mkdirSync(workdir, { recursive: true });
+        writeSource("k.ts", `export const a = async (ctx) => ctx.kv.get("k");`);
+        writeSource("a.ts", `export const b = async (ctx) => ctx.analytics.writeDataPoint({});`);
+        writeSource("s.ts", `export const c = async (ctx) => ctx.sql.query("select 1");`);
+        writeSource("i.ts", `export const d = async (ctx) => ctx.images.transform(x);`);
+        writeSource("b.ts", `export const e = async (ctx) => ctx.browser.screenshot("https://x");`);
+        writeSource("p.ts", `export const f = async (ctx) => ctx.pipelines.send([]);`);
+
+        const viaCtx = discoverFeatureUsage(newProject(), workdir);
+
+        expect(viaCtx.kv).toBe(true);
+        expect(viaCtx.analytics).toBe(true);
+        expect(viaCtx.hyperdrive).toBe(true);
+        expect(viaCtx.images).toBe(true);
+        expect(viaCtx.browser).toBe(true);
+        expect(viaCtx.pipelines).toBe(true);
     });
 
     it("flips a flag on a `ctx.*` helper read even without the package import", () => {

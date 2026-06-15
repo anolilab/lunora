@@ -24,6 +24,19 @@ const fixtureRoot = join(here, "fixtures", "simple");
 const expectedDirectory = join(fixtureRoot, "expected", "_generated");
 const SCHEMA_NOT_FOUND_RE = /schema\.ts not found/u;
 
+/**
+ * Slice a single `export interface &lt;Name> ... { ... }` block out of emitted
+ * `server.ts` so a ctx-augmentation assertion can scope to exactly one context
+ * (e.g. assert a field is on `ActionCtx` but absent from `QueryCtx`).
+ */
+const ctxInterface = (server: string, name: "ActionCtx" | "MutationCtx" | "QueryCtx"): string => {
+    const start = server.indexOf(`export interface ${name} `);
+    const open = server.indexOf("{", start);
+    const close = server.indexOf("\n}", open);
+
+    return server.slice(open, close);
+};
+
 let workdir: string;
 
 describe("run-codegen", () => {
@@ -105,6 +118,49 @@ export const mySubs = action({ args: { reference: v.string() }, handler: async (
             expect(result.generated.server).toContain("readonly payments: CirrusPayment;");
         });
 
+        it("wires ctx.kv end-to-end (every ctx) when a query reads ctx.kv", () => {
+            expect.assertions(4);
+
+            writeFileSync(
+                join(workdir, "cirrus", "cache.ts"),
+                `import { query, v } from "@cirrus/server";
+export const cached = query({ args: { key: v.string() }, handler: async (ctx, { key }) => ctx.kv.get(key) });
+`,
+                "utf8",
+            );
+
+            const result = runCodegen({ lint: false, projectRoot: workdir });
+
+            expect(result.generated.shard).toContain('import { createKv } from "@cirrus/kv"');
+            expect(result.generated.shard).toContain("\n                kv,");
+            // KV rides every ctx, so it must NOT be gated behind the action-only block.
+            expect(result.generated.shard).not.toContain("ctx.kv = kv;");
+            expect(result.generated.server).toContain('readonly kv: import("@cirrus/kv").Kv;');
+        });
+
+        it("wires ctx.sql (Hyperdrive) end-to-end onto the ActionCtx ONLY (value-level) when an action reads ctx.sql", () => {
+            expect.assertions(4);
+
+            writeFileSync(
+                join(workdir, "cirrus", "external.ts"),
+                `import { action, v } from "@cirrus/server";
+export const ext = action({ args: { id: v.string() }, handler: async (ctx, { id }) => ctx.sql.query("select 1") });
+`,
+                "utf8",
+            );
+
+            const result = runCodegen({ lint: false, projectRoot: workdir });
+
+            expect(result.generated.shard).toContain('import type { SqlClient } from "@cirrus/hyperdrive";');
+            // Attached only inside the `if (isAction)` block — never spliced into the shared ctx literal.
+            expect(result.generated.shard).toContain("ctx.sql = sql;");
+
+            const baseCtxBody = result.generated.shard.slice(0, result.generated.shard.indexOf("const isAction ="));
+
+            expect(baseCtxBody).not.toContain("\n                sql,");
+            expect(result.generated.server).toContain('readonly sql: import("@cirrus/hyperdrive").SqlClient;');
+        });
+
         it("gates studioFeatures end-to-end: payments on (ctx read), crons drive scheduler, storage column drives storage, mail/vectors off", () => {
             expect.assertions(5);
 
@@ -136,6 +192,32 @@ export default crons;
             // The fixture app declares no mail or vector usage, so those stay hidden.
             expect(result.generated.shard).toContain('"mail": false');
             expect(result.generated.shard).toContain('"vectors": false');
+        });
+
+        it("does not emit a seed client for a project that doesn't depend on @cirrus/seed", () => {
+            expect.assertions(1);
+
+            const result = runCodegen({ lint: false, projectRoot: workdir });
+
+            expect(result.generated.seed).toBe("");
+        });
+
+        it("emits a project-bound seed client when @cirrus/seed is a declared dependency", () => {
+            expect.assertions(5);
+
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ devDependencies: { "@cirrus/seed": "workspace:*" }, name: "demo" }), "utf8");
+
+            const result = runCodegen({ lint: false, projectRoot: workdir });
+
+            expect(result.generated.seed).toContain('import { createSeedClient as createSeedClientBase } from "@cirrus/seed";');
+            // The runtime schema is the default export of cirrus/schema.ts (same import the ShardDO uses).
+            expect(result.generated.seed).toContain('import schema from "../schema.js";');
+            expect(result.generated.seed).toContain('import type { InsertModel } from "./dataModel.js";');
+            // InsertModel is pre-bound and the schema pre-applied, so callers pass only options.
+            expect(result.generated.seed).toContain(
+                "export const createSeedClient = (options?: SeedClientOptions): SeedClient<InsertModel> => createSeedClientBase<InsertModel>(schema, options);",
+            );
+            expect(result.generated.seed).not.toContain("| undefined");
         });
 
         it("emits api.ts with grouped queries/mutations", () => {
@@ -1122,6 +1204,122 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).not.toContain("aiStub");
         });
 
+        it("wires ctx.kv into the ShardDO on EVERY ctx when KV is used", () => {
+            expect.assertions(6);
+
+            const schema: SchemaIR = { tables: [], vectorIndexes: [] };
+
+            const output = emitShard({ hasKv: true, schema });
+
+            expect(output).toContain('import { createKv } from "@cirrus/kv"');
+            expect(output).toContain("kv?: (env: Record<string, unknown>) => KVNamespaceLike;");
+            expect(output).toContain("const kvStub: Kv");
+            expect(output).toContain("createKv({ namespace: kvBinding as KVNamespaceLike })");
+            expect(output).toContain("config.kv?.(env) ?? (env as Record<string, unknown>).KV");
+            // KV rides the base ctx literal (every ctx) — not the `isAction` block.
+            expect(output).toContain("\n                kv,");
+        });
+
+        it("wires ctx.analytics into the ShardDO on EVERY ctx (positional createAnalytics) when analytics is used", () => {
+            expect.assertions(6);
+
+            const schema: SchemaIR = { tables: [], vectorIndexes: [] };
+
+            const output = emitShard({ hasAnalytics: true, schema });
+
+            expect(output).toContain('import { createAnalytics } from "@cirrus/analytics"');
+            expect(output).toContain("analytics?: (env: Record<string, unknown>) => AnalyticsEngineDatasetLike;");
+            expect(output).toContain("const analyticsStub: AnalyticsClient");
+            // Positional binding arg — NOT an options object.
+            expect(output).toContain("createAnalytics(analyticsBinding as AnalyticsEngineDatasetLike)");
+            expect(output).toContain("config.analytics?.(env) ?? (env as Record<string, unknown>).ANALYTICS");
+            expect(output).toContain("\n                analytics,");
+        });
+
+        it("wires ctx.images onto the ACTION ctx ONLY (value-level) when images is used", () => {
+            expect.assertions(6);
+
+            const schema: SchemaIR = { tables: [], vectorIndexes: [] };
+
+            const output = emitShard({ hasImages: true, schema });
+
+            expect(output).toContain('import { createImages } from "@cirrus/images"');
+            expect(output).toContain("images?: (env: Record<string, unknown>) => ImagesBindingLike;");
+            expect(output).toContain("const imagesStub: Images");
+            expect(output).toContain("createImages({ binding: imagesBinding as ImagesBindingLike })");
+            // Attached only inside the `isAction` block, never spliced into the base ctx literal.
+            expect(output).toContain("ctx.images = images;");
+            // eslint-disable-next-line no-secrets/no-secrets -- asserting on a generated ctx-builder line, not a credential
+            expect(output).toContain('const isAction = CIRRUS_FUNCTIONS[options.functionPath ?? ""]?.kind === "action";');
+        });
+
+        it("wires ctx.sql (Hyperdrive) onto the ACTION ctx ONLY via a REQUIRED config thunk when hyperdrive is used", () => {
+            expect.assertions(6);
+
+            const schema: SchemaIR = { tables: [], vectorIndexes: [] };
+
+            const output = emitShard({ hasHyperdrive: true, schema });
+
+            expect(output).toContain('import type { SqlClient } from "@cirrus/hyperdrive";');
+            expect(output).toContain("sql?: (env: Record<string, unknown>) => SqlClient;");
+            expect(output).toContain("const sqlStub: SqlClient");
+            // No auto-construct: the build is config-thunk-first (createHyperdrive returns connection info, not a SqlClient).
+            expect(output).toContain("const sql: SqlClient = config.sql ? config.sql(env) : sqlStub;");
+            expect(output).not.toContain("createHyperdrive");
+            expect(output).toContain("ctx.sql = sql;");
+        });
+
+        it("wires ctx.browser onto the ACTION ctx ONLY via a config thunk (no puppeteer import) when browser is used", () => {
+            expect.assertions(6);
+
+            const schema: SchemaIR = { tables: [], vectorIndexes: [] };
+
+            const output = emitShard({ hasBrowser: true, schema });
+
+            expect(output).toContain('import type { Browser } from "@cirrus/browser";');
+            expect(output).toContain("browser?: (env: Record<string, unknown>) => Browser;");
+            expect(output).toContain("const browserStub: Browser");
+            expect(output).toContain("const browser: Browser = config.browser ? config.browser(env) : browserStub;");
+            // The generated server stays dependency-light: never imports the optional puppeteer peer.
+            expect(output).not.toContain("@cloudflare/puppeteer");
+            expect(output).toContain("ctx.browser = browser;");
+        });
+
+        it("omits the new Cloudflare helpers entirely when none are used (no isAction gate, no stubs)", () => {
+            expect.assertions(8);
+
+            const schema: SchemaIR = { tables: [], vectorIndexes: [] };
+
+            const output = emitShard({ schema });
+
+            expect(output).not.toContain("@cirrus/kv");
+            expect(output).not.toContain("@cirrus/analytics");
+            expect(output).not.toContain("@cirrus/images");
+            expect(output).not.toContain("@cirrus/hyperdrive");
+            expect(output).not.toContain("@cirrus/browser");
+            expect(output).not.toContain("isAction");
+            expect(output).not.toContain("ctx.images = images;");
+            expect(output).not.toContain("kvStub");
+        });
+
+        it("never attaches ctx.sql/browser/images onto the base ctx literal (ActionCtx-only at the value level)", () => {
+            expect.assertions(3);
+
+            const schema: SchemaIR = { tables: [], vectorIndexes: [] };
+
+            // The base ctx object literal runs the closing `};` that ends with the
+            // workflows/payments fields — slice everything BEFORE the `isAction`
+            // gate so we only inspect the shared (query/mutation/action) ctx body.
+            const output = emitShard({ hasBrowser: true, hasHyperdrive: true, hasImages: true, schema });
+            const baseCtxBody = output.slice(0, output.indexOf("const isAction ="));
+
+            // None of the three action-only helpers are spliced into the shared ctx
+            // literal — they're attached only inside the `if (isAction)` block below.
+            expect(baseCtxBody).not.toContain("\n                sql,");
+            expect(baseCtxBody).not.toContain("\n                browser,");
+            expect(baseCtxBody).not.toContain("\n                images,");
+        });
+
         it("wires ctx.payments into the ShardDO when payments are used", () => {
             expect.assertions(5);
 
@@ -1174,6 +1372,106 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             expect(withoutAi).not.toContain("@cirrus/ai");
             expect(withoutAi).not.toContain("readonly ai:");
+        });
+
+        it("emits a CloudflareBindings / Env seam with an open index signature", () => {
+            expect.assertions(3);
+
+            const server = emitServer({});
+
+            expect(server).toContain("export interface CloudflareBindings {");
+            expect(server).toContain("readonly [binding: string]: unknown;");
+            expect(server).toContain("export type Env = CloudflareBindings;");
+        });
+
+        it("narrows the Env seam with discovered AI / container / workflow binding names", () => {
+            expect.assertions(3);
+
+            const server = emitServer({
+                containers: [
+                    {
+                        bindingName: "CONTAINER_TRANSCODER",
+                        className: "TranscoderContainer",
+                        exportName: "transcoder",
+                        image: { buildContext: ".", dockerfilePath: "Dockerfile", kind: "dockerfile" },
+                    },
+                ],
+                hasAi: true,
+                workflows: [{ bindingName: "WORKFLOW_ORDERS", className: "OrdersWorkflow", exportName: "orders", name: "orders" }],
+            });
+
+            expect(server).toContain("readonly AI?: unknown;");
+            expect(server).toContain("readonly CONTAINER_TRANSCODER?: unknown;");
+            expect(server).toContain("readonly WORKFLOW_ORDERS?: unknown;");
+        });
+
+        it("wires ctx.kv onto EVERY ctx (a KV read is allowed in deterministic handlers)", () => {
+            expect.assertions(4);
+
+            const withKv = emitServer({ hasKv: true });
+            const queryCtx = ctxInterface(withKv, "QueryCtx");
+            const mutationCtx = ctxInterface(withKv, "MutationCtx");
+            const actionCtx = ctxInterface(withKv, "ActionCtx");
+
+            expect(queryCtx).toContain('readonly kv: import("@cirrus/kv").Kv;');
+            expect(mutationCtx).toContain('readonly kv: import("@cirrus/kv").Kv;');
+            expect(actionCtx).toContain('readonly kv: import("@cirrus/kv").Kv;');
+            expect(emitServer({})).not.toContain("@cirrus/kv");
+        });
+
+        it("wires ctx.analytics onto EVERY ctx (write-only fire-and-forget side effect)", () => {
+            expect.assertions(4);
+
+            const withAnalytics = emitServer({ hasAnalytics: true });
+
+            expect(ctxInterface(withAnalytics, "QueryCtx")).toContain('readonly analytics: import("@cirrus/analytics").AnalyticsClient;');
+            expect(ctxInterface(withAnalytics, "MutationCtx")).toContain('readonly analytics: import("@cirrus/analytics").AnalyticsClient;');
+            expect(ctxInterface(withAnalytics, "ActionCtx")).toContain('readonly analytics: import("@cirrus/analytics").AnalyticsClient;');
+            expect(emitServer({})).not.toContain("@cirrus/analytics");
+        });
+
+        it("wires ctx.sql (Hyperdrive) onto ActionCtx ONLY — never query/mutation (determinism)", () => {
+            expect.assertions(4);
+
+            const withSql = emitServer({ hasHyperdrive: true });
+
+            expect(ctxInterface(withSql, "ActionCtx")).toContain('readonly sql: import("@cirrus/hyperdrive").SqlClient;');
+            expect(ctxInterface(withSql, "QueryCtx")).not.toContain("readonly sql:");
+            expect(ctxInterface(withSql, "MutationCtx")).not.toContain("readonly sql:");
+            expect(emitServer({})).not.toContain("@cirrus/hyperdrive");
+        });
+
+        it("wires ctx.browser onto ActionCtx ONLY — never query/mutation (determinism)", () => {
+            expect.assertions(4);
+
+            const withBrowser = emitServer({ hasBrowser: true });
+
+            expect(ctxInterface(withBrowser, "ActionCtx")).toContain('readonly browser: import("@cirrus/browser").Browser;');
+            expect(ctxInterface(withBrowser, "QueryCtx")).not.toContain("readonly browser:");
+            expect(ctxInterface(withBrowser, "MutationCtx")).not.toContain("readonly browser:");
+            expect(emitServer({})).not.toContain("@cirrus/browser");
+        });
+
+        it("wires ctx.images onto ActionCtx ONLY — never query/mutation (determinism)", () => {
+            expect.assertions(4);
+
+            const withImages = emitServer({ hasImages: true });
+
+            expect(ctxInterface(withImages, "ActionCtx")).toContain('readonly images: import("@cirrus/images").Images;');
+            expect(ctxInterface(withImages, "QueryCtx")).not.toContain("readonly images:");
+            expect(ctxInterface(withImages, "MutationCtx")).not.toContain("readonly images:");
+            expect(emitServer({})).not.toContain("@cirrus/images");
+        });
+
+        it("wires ctx.pipelines onto ActionCtx ONLY — never query/mutation", () => {
+            expect.assertions(4);
+
+            const withPipelines = emitServer({ hasPipelines: true });
+
+            expect(ctxInterface(withPipelines, "ActionCtx")).toContain('readonly pipelines: import("@cirrus/pipelines").PipelineClient;');
+            expect(ctxInterface(withPipelines, "QueryCtx")).not.toContain("readonly pipelines:");
+            expect(ctxInterface(withPipelines, "MutationCtx")).not.toContain("readonly pipelines:");
+            expect(emitServer({})).not.toContain("@cirrus/pipelines");
         });
 
         it("binds every table facade through the shard ctx-db (which routes `.global()` ops to D1)", () => {

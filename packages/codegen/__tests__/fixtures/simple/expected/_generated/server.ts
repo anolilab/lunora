@@ -34,6 +34,23 @@ export type { DataModel, Doc, Id, TableName } from "./dataModel.js";
 export type StorageBucketName = "default";
 
 /**
+ * This project's Cloudflare bindings, as far as codegen can discover them from
+ * `cirrus/` source — the container/workflow Durable Object namespaces and the
+ * conventional Workers AI binding. Bindings the config layer reconciles from
+ * user-named wrangler config (R2/KV/D1/`services`/queues/…) aren't statically
+ * visible here, so the open index signature keeps them reachable (cast at the
+ * use site). Service bindings (`env.<SERVICE>.fetch(...)` / RPC stubs) live
+ * under this signature too — Cirrus can't type a third-party worker's RPC
+ * surface, so treat them as `Fetcher`/`Service<unknown>` and cast.
+ */
+export interface CloudflareBindings {
+    readonly [binding: string]: unknown;
+}
+
+/** Alias for {@link CloudflareBindings} — the typed shape of `env`. */
+export type Env = CloudflareBindings;
+
+/**
  * Project-typed contexts. The base contexts from `@cirrus/server` are
  * untyped against the schema; here `db` is widened to the generated per-table
  * facade (`ctx.db.<table>.findMany(...)`) while keeping the legacy structural

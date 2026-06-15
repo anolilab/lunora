@@ -553,6 +553,41 @@ export const internal = anyApi as unknown as InternalApiTypes;
 };
 
 /**
+ * Emit `_generated/seed.ts` — a project-bound `createSeedClient` with this
+ * schema's `InsertModel` and runtime schema pre-applied, so a test or script
+ * calls `createSeedClient({ seed: 1 }).users(5)` with full column types and no
+ * manual wiring. The runtime schema is the default export of `cirrus/schema.ts`
+ * (the same import the generated ShardDO uses).
+ *
+ * Returns `""` when `@cirrus/seed` is not a declared dependency, so projects
+ * that don't use it keep a clean `_generated/` and never import the package.
+ */
+const emitSeed = (enabled: boolean): string => {
+    if (!enabled) {
+        return "";
+    }
+
+    return `${GENERATED_HEADER}import { createSeedClient as createSeedClientBase } from "@cirrus/seed";
+import type { SeedClient, SeedClientOptions } from "@cirrus/seed";
+
+import schema from "../schema.js";
+import type { InsertModel } from "./dataModel.js";
+
+/**
+ * Schema-aware seed client with this project's \`InsertModel\` and runtime schema
+ * pre-bound. Each table is a method; call it with a count, a range, explicit
+ * partial rows, or per-field overrides. Foreign keys connect to rows seeded
+ * earlier in the run, and FK-parent tables are seeded automatically.
+ * @example
+ * const seed = createSeedClient({ seed: 1 });
+ * const { users } = await seed.users(5);
+ * const { posts } = await seed.posts((x) => x([10, 20]));
+ */
+export const createSeedClient = (options?: SeedClientOptions): SeedClient<InsertModel> => createSeedClientBase<InsertModel>(schema, options);
+`;
+};
+
+/**
  * Convert a raw file path into a JS-identifier-safe alias used as the
  * imported namespace inside `_generated/server.ts`. Keeps the path
  * recognisable in the generated source while satisfying the lexer.
@@ -743,16 +778,35 @@ const buildStorageBucketNames = (schema: SchemaIR, ruleBuckets: ReadonlyArray<st
 interface EmitServerOptions {
     containers?: ReadonlyArray<ContainerIR>;
     hasAi?: boolean;
+    /** A `cirrus/` source uses `@cirrus/analytics` / `ctx.analytics` — wires the write helper onto every ctx. */
+    hasAnalytics?: boolean;
+    /** A `cirrus/` source uses `@cirrus/browser` / `ctx.browser` — wires `ctx.browser` onto ActionCtx only. */
+    hasBrowser?: boolean;
+    /** A `cirrus/` source uses `@cirrus/hyperdrive` / `ctx.sql` — wires `ctx.sql` onto ActionCtx only. */
+    hasHyperdrive?: boolean;
+    /** A `cirrus/` source uses `@cirrus/images` / `ctx.images` — wires `ctx.images` onto ActionCtx only. */
+    hasImages?: boolean;
+    /** A `cirrus/` source uses `@cirrus/kv` / `ctx.kv` — wires `ctx.kv` onto every ctx. */
+    hasKv?: boolean;
     hasPayments?: boolean;
+    /** A `cirrus/` source uses `@cirrus/pipelines` / `ctx.pipelines` — wires `ctx.pipelines` onto ActionCtx only. */
+    hasPipelines?: boolean;
     schema?: SchemaIR;
     storageRuleBuckets?: ReadonlyArray<string>;
     workflows?: ReadonlyArray<WorkflowIR>;
 }
 
+/* eslint-disable sonarjs/cognitive-complexity -- emitter that gates each Cloudflare-capability fragment behind its own `has*`/length flag to assemble dense generated TS; the branching is the per-binding emission contract, not refactorable logic */
 const emitServer = ({
     containers = [],
     hasAi = false,
+    hasAnalytics = false,
+    hasBrowser = false,
+    hasHyperdrive = false,
+    hasImages = false,
+    hasKv = false,
     hasPayments = false,
+    hasPipelines = false,
     schema,
     storageRuleBuckets = [],
     workflows = [],
@@ -782,6 +836,89 @@ const emitServer = ({
         containers.length > 0
             ? `\n    readonly containers: {${containers.map((container) => `\n        readonly ${container.exportName}: ContainerAccessor;`).join("")}\n    };`
             : "";
+
+    // ─── Job A — the typed `Env` / `CloudflareBindings` seam ──────────────────
+    //
+    // Codegen emits a `CloudflareBindings` interface (aliased as `Env`) so
+    // `env.<BINDING>` and service-binding access become typed at the seam every
+    // handler reaches `env` through. Codegen can only see the bindings it
+    // discovers from source (the `CONTAINER_*` Durable Object namespaces a
+    // `defineContainer` declares, the `WORKFLOW_*` namespaces a `defineWorkflow`
+    // declares, and the conventional `AI` binding when the project uses Workers
+    // AI) — the rest of wrangler's bindings (R2/KV/D1/service/queue/etc.) are
+    // user-named and reconciled by the config layer, so the interface keeps an
+    // open `[binding: string]: unknown` index signature: a known binding is
+    // narrowed, an unknown one is still reachable (cast at the use site). This is
+    // the foundation the `ctx.*` augmentations below reuse — `Env` is the single
+    // emitted type for the bindings object.
+    const envBindingFields = [
+        ...(hasAi ? [`    /** Workers AI binding (the conventional \`env.AI\`), narrowing \`ctx.ai\`. */\n    readonly AI?: unknown;`] : []),
+        ...containers.map((container) => {
+            assertIdentifier(container.bindingName, `container binding "${container.bindingName}"`);
+
+            return `    /** Durable Object namespace for the \`${container.exportName}\` container. */\n    readonly ${container.bindingName}?: unknown;`;
+        }),
+        ...workflows.map((workflow) => {
+            assertIdentifier(workflow.bindingName, `workflow binding "${workflow.bindingName}"`);
+
+            return `    /** Workflow binding for the \`${workflow.exportName}\` workflow. */\n    readonly ${workflow.bindingName}?: unknown;`;
+        }),
+    ].join("\n");
+    const envBlock = `
+
+/**
+ * This project's Cloudflare bindings, as far as codegen can discover them from
+ * \`cirrus/\` source — the container/workflow Durable Object namespaces and the
+ * conventional Workers AI binding. Bindings the config layer reconciles from
+ * user-named wrangler config (R2/KV/D1/\`services\`/queues/…) aren't statically
+ * visible here, so the open index signature keeps them reachable (cast at the
+ * use site). Service bindings (\`env.<SERVICE>.fetch(...)\` / RPC stubs) live
+ * under this signature too — Cirrus can't type a third-party worker's RPC
+ * surface, so treat them as \`Fetcher\`/\`Service<unknown>\` and cast.
+ */
+export interface CloudflareBindings {
+    readonly [binding: string]: unknown;${envBindingFields ? `\n${envBindingFields}` : ""}
+}
+
+/** Alias for {@link CloudflareBindings} — the typed shape of \`env\`. */
+export type Env = CloudflareBindings;`;
+
+    // ─── Job B — `ctx.*` augmentations for the new Cloudflare capabilities ─────
+    //
+    // Each new helper is typed via a type-only dynamic \`import("@cirrus/<pkg>")\`
+    // in the emitted template (NOT a real import here) — so emit.ts compiles even
+    // though those packages may not exist yet, mirroring the codegen emitter's
+    // forward-referencing of generated/peer types. The determinism stance follows
+    // \`ctx.ai\`: external network/compute I/O lands on ActionCtx ONLY (never the
+    // deterministic query/mutation contexts), while write-only / side-effect-free
+    // helpers (\`kv\`, \`analytics\`) ride every ctx.
+    //
+    // `ctx.kv` — Workers KV. Typed on EVERY ctx (a KV read is allowed in a
+    // deterministic read path the way `ctx.db` is; the binding is user-named).
+    const kvContextField = hasKv ? `\n    readonly kv: import("@cirrus/kv").Kv;` : "";
+    // `ctx.sql` — Hyperdrive (external Postgres/MySQL). ActionCtx ONLY: external,
+    // non-deterministic I/O whose writes are invisible to Cirrus live queries.
+    const hyperdriveActionField = hasHyperdrive
+        ? `\n    /**\n     * External database access via Hyperdrive. Non-deterministic — available only in actions. Writes here are NOT tracked by Cirrus live queries; subscriptions will not re-run on external DB changes.\n     */\n    readonly sql: import("@cirrus/hyperdrive").SqlClient;`
+        : "";
+    // `ctx.browser` — Browser Rendering. ActionCtx ONLY: non-deterministic network I/O.
+    const browserActionField = hasBrowser
+        ? `\n    /** Browser Rendering (screenshots/PDF/scrape). Non-deterministic — available only in actions. */\n    readonly browser: import("@cirrus/browser").Browser;`
+        : "";
+    // `ctx.images` — Cloudflare Images binding transforms. ActionCtx ONLY: non-deterministic compute/network I/O.
+    const imagesActionField = hasImages
+        ? `\n    /** Cloudflare Images transforms (resize/format/optimize). Non-deterministic — available only in actions. */\n    readonly images: import("@cirrus/images").Images;`
+        : "";
+    // `ctx.analytics` — Analytics Engine write helper. EVERY ctx: a write-only,
+    // fire-and-forget side effect, not a determinism hazard for reads.
+    const analyticsContextField = hasAnalytics
+        ? `\n    /** Analytics Engine telemetry sink. Fire-and-forget and sampled; do not read it back in-handler. */\n    readonly analytics: import("@cirrus/analytics").AnalyticsClient;`
+        : "";
+    // `ctx.pipelines` — Pipelines (R2-backed) ingestion sink. ActionCtx ONLY
+    // (write-only fire-and-forget, but external I/O — kept off query/mutation).
+    const pipelinesActionField = hasPipelines
+        ? `\n    /** Pipelines ingestion sink (durable, R2-backed). Fire-and-forget and batched; do not read it back in-handler. */\n    readonly pipelines: import("@cirrus/pipelines").PipelineClient;`
+        : "";
 
     // Workflows live on BOTH MutationCtx and ActionCtx (a workflow can be kicked
     // off from a mutation or an action — mirrors `ctx.scheduler`). The base
@@ -840,7 +977,7 @@ ${aiTypeImport}${paymentsTypeImport}${containersTypeImport}${workflowsTypeImport
 export type { DataModel, Doc, Id, TableName } from "./dataModel.js";
 
 /** Storage buckets this schema declares (\`v.storage("name")\`), narrowing \`ctx.storage.bucket(name)\`. */
-export type StorageBucketName = ${storageBucketUnion};${workflowsTypeBlock}
+export type StorageBucketName = ${storageBucketUnion};${envBlock}${workflowsTypeBlock}
 
 /**
  * Project-typed contexts. The base contexts from \`@cirrus/server\` are
@@ -852,19 +989,19 @@ export type StorageBucketName = ${storageBucketUnion};${workflowsTypeBlock}
 export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"> {
     readonly db: DatabaseReader & DatabaseReaderFacade;
     readonly orm: OrmReader;
-    readonly storage: ReadOnlyStorage<StorageBucketName>;
+    readonly storage: ReadOnlyStorage<StorageBucketName>;${kvContextField}${analyticsContextField}
 }
 
 export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"${workflowsOmit}> {
     readonly db: DatabaseWriter & DatabaseWriterFacade;
     readonly orm: OrmWriter;
-    readonly storage: ReadOnlyStorage<StorageBucketName>;${workflowsContextField}
+    readonly storage: ReadOnlyStorage<StorageBucketName>;${kvContextField}${analyticsContextField}${workflowsContextField}
 }
 
 export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"${workflowsOmit}> {
     readonly db: DatabaseWriter & DatabaseWriterFacade;
     readonly orm: OrmWriter;
-    readonly storage: StorageBase<StorageBucketName>;${aiActionField}${paymentsActionField}${containersActionField}${workflowsContextField}
+    readonly storage: StorageBase<StorageBucketName>;${aiActionField}${paymentsActionField}${containersActionField}${kvContextField}${hyperdriveActionField}${browserActionField}${imagesActionField}${analyticsContextField}${pipelinesActionField}${workflowsContextField}
 }
 
 /** \`query()\` bound to this project's typed {@link QueryCtx}. */
@@ -923,6 +1060,7 @@ export const v = vBase as unknown as Omit<typeof vBase, "id"> & {
 
     return server;
 };
+/* eslint-enable sonarjs/cognitive-complexity */
 
 /**
  * Emit `_generated/functions.ts` — a static dispatch table that maps
@@ -1292,6 +1430,225 @@ const aiStub: CirrusAi = {
     };
 };
 
+interface HelperFragments {
+    /** Lines built inside `buildCtx` (resolve the binding, construct the helper, else fall to the stub). */
+    build: string;
+    /** Optional `ShardDOConfig` field declaration (the config thunk override). */
+    configField: string;
+    /** Property woven into the `ctx` object literal (e.g. `\n                kv,`). */
+    contextField: string;
+    /** `import` lines added to the generated ShardDO module. */
+    importLines: string[];
+    /** Module-level throwing stub the build falls back to when no binding/thunk resolves. */
+    stub: string;
+}
+
+const EMPTY_HELPER_FRAGMENTS: HelperFragments = { build: "", configField: "", contextField: "", importLines: [], stub: "" };
+
+/**
+ * `ctx.kv` (Workers KV) fragments, mirroring {@link emitAiFragments}. KV reads
+ * are allowed in deterministic read paths (like `ctx.db`), so this rides EVERY
+ * ctx (query/mutation/action). The binding resolves from a `config.kv` thunk
+ * override, else the conventional `env.KV`; absent both, every method throws a
+ * directed error via `kvStub`.
+ */
+const emitKvFragments = (hasKv: boolean): HelperFragments => {
+    if (!hasKv) {
+        return EMPTY_HELPER_FRAGMENTS;
+    }
+
+    const kvMissing = `throw new Error("ctx.kv: no KV binding found. Add a \\\`kv_namespaces\\\` binding (env.KV) to wrangler.jsonc, or pass \\\`kv\\\` to createShardDO().");`;
+
+    return {
+        build: `
+            const kvBinding = config.kv?.(env) ?? (env as Record<string, unknown>).KV;
+            const kv: Kv = kvBinding ? createKv({ namespace: kvBinding as KVNamespaceLike }) : kvStub;
+`,
+        configField: `\n    kv?: (env: Record<string, unknown>) => KVNamespaceLike;`,
+        contextField: `\n                kv,`,
+        importLines: [`import type { Kv, KVNamespaceLike } from "@cirrus/kv";`, `import { createKv } from "@cirrus/kv";`],
+        stub: `
+const kvStub: Kv = {
+    delete: async () => {
+        ${kvMissing}
+    },
+    get: async () => {
+        ${kvMissing}
+    },
+    getRaw: async () => {
+        ${kvMissing}
+    },
+    getWithMetadata: async () => {
+        ${kvMissing}
+    },
+    list: async () => {
+        ${kvMissing}
+    },
+    put: async () => {
+        ${kvMissing}
+    },
+};
+`,
+    };
+};
+
+/**
+ * `ctx.analytics` (Analytics Engine) fragments. Writes are fire-and-forget and
+ * sampled — not a determinism hazard for reads — so this rides EVERY ctx. The
+ * binding resolves from a `config.analytics` thunk override, else the
+ * conventional `env.ANALYTICS`. `createAnalytics` takes the binding POSITIONALLY
+ * (not an options object). Absent a binding, both methods throw via
+ * `analyticsStub`.
+ */
+const emitAnalyticsFragments = (hasAnalytics: boolean): HelperFragments => {
+    if (!hasAnalytics) {
+        return EMPTY_HELPER_FRAGMENTS;
+    }
+
+    const analyticsMissing = `throw new Error("ctx.analytics: no Analytics Engine binding found. Add an \\\`analytics_engine_datasets\\\` binding (env.ANALYTICS) to wrangler.jsonc, or pass \\\`analytics\\\` to createShardDO().");`;
+
+    return {
+        build: `
+            const analyticsBinding = config.analytics?.(env) ?? (env as Record<string, unknown>).ANALYTICS;
+            const analytics: AnalyticsClient = analyticsBinding ? createAnalytics(analyticsBinding as AnalyticsEngineDatasetLike) : analyticsStub;
+`,
+        configField: `\n    analytics?: (env: Record<string, unknown>) => AnalyticsEngineDatasetLike;`,
+        contextField: `\n                analytics,`,
+        importLines: [
+            `import type { AnalyticsClient, AnalyticsEngineDatasetLike } from "@cirrus/analytics";`,
+            `import { createAnalytics } from "@cirrus/analytics";`,
+        ],
+        stub: `
+const analyticsStub: AnalyticsClient = {
+    track: () => {
+        ${analyticsMissing}
+    },
+    writeDataPoint: () => {
+        ${analyticsMissing}
+    },
+};
+`,
+    };
+};
+
+/**
+ * `ctx.images` (Cloudflare Images transforms) fragments. ActionCtx ONLY:
+ * transforms are non-deterministic compute/network I/O, so the build is attached
+ * to the ctx object only when the executing function is an action (see the
+ * `isAction` gate in `buildCtx`). The binding resolves from a `config.images`
+ * thunk override, else the conventional `env.IMAGES`; absent both, methods throw
+ * via `imagesStub`.
+ */
+const emitImagesFragments = (hasImages: boolean): HelperFragments => {
+    if (!hasImages) {
+        return EMPTY_HELPER_FRAGMENTS;
+    }
+
+    const imagesMissing = `throw new Error("ctx.images: no Images binding found. Add an \\\`images\\\` binding (env.IMAGES) to wrangler.jsonc, or pass \\\`images\\\` to createShardDO().");`;
+
+    return {
+        build: `
+            const imagesBinding = config.images?.(env) ?? (env as Record<string, unknown>).IMAGES;
+            const images: Images = imagesBinding ? createImages({ binding: imagesBinding as ImagesBindingLike }) : imagesStub;
+`,
+        configField: `\n    images?: (env: Record<string, unknown>) => ImagesBindingLike;`,
+        // ActionCtx-only: woven onto the action ctx object, never query/mutation.
+        contextField: `\n                images,`,
+        importLines: [`import type { Images, ImagesBindingLike } from "@cirrus/images";`, `import { createImages } from "@cirrus/images";`],
+        stub: `
+const imagesStub: Images = {
+    info: async () => {
+        ${imagesMissing}
+    },
+    transform: async () => {
+        ${imagesMissing}
+    },
+};
+`,
+    };
+};
+
+/**
+ * `ctx.sql` (Hyperdrive — external Postgres/MySQL) fragments. ActionCtx ONLY:
+ * external SQL is non-deterministic and non-reactive. `createHyperdrive` returns
+ * connection info, NOT a `SqlClient` — a `SqlClient` needs a user-chosen driver
+ * (postgres/pg/mysql2 via `fromPostgresJs`/`fromNodePg`/`fromMysql2`), so codegen
+ * does NOT auto-construct it. We emit a REQUIRED `config.sql` thunk; absent it,
+ * `sqlStub.query` throws a directed error pointing at the driver wiring.
+ */
+const emitHyperdriveFragments = (hasHyperdrive: boolean): HelperFragments => {
+    if (!hasHyperdrive) {
+        return EMPTY_HELPER_FRAGMENTS;
+    }
+
+    const sqlMissing = `throw new Error("ctx.sql: provide a \\\`sql\\\` config thunk that builds a SqlClient from your driver, e.g. \\\`sql: (env) => fromPostgresJs(postgres(env.HYPERDRIVE.connectionString))\\\`.");`;
+
+    return {
+        build: `
+            const sql: SqlClient = config.sql ? config.sql(env) : sqlStub;
+`,
+        configField: `\n    sql?: (env: Record<string, unknown>) => SqlClient;`,
+        // ActionCtx-only: woven onto the action ctx object, never query/mutation.
+        contextField: `\n                sql,`,
+        importLines: [`import type { SqlClient } from "@cirrus/hyperdrive";`],
+        stub: `
+const sqlStub: SqlClient = {
+    query: async () => {
+        ${sqlMissing}
+    },
+};
+`,
+    };
+};
+
+/**
+ * `ctx.browser` (Browser Rendering) fragments. ActionCtx ONLY: non-deterministic
+ * network I/O. `createBrowser` needs an injected Playwright `launch` (the optional
+ * `@cloudflare/playwright` peer); to keep the generated server dependency-light we
+ * do NOT import it here. We emit a config-thunk-first build; absent the
+ * `config.browser` thunk, every method throws a directed error via `browserStub`.
+ */
+const emitBrowserFragments = (hasBrowser: boolean): HelperFragments => {
+    if (!hasBrowser) {
+        return EMPTY_HELPER_FRAGMENTS;
+    }
+
+    const browserMissing = `throw new Error("ctx.browser: provide a \\\`browser\\\` config thunk, e.g. \\\`browser: (env) => createBrowser({ binding: env.BROWSER, launch })\\\` with \\\`import { launch } from '@cloudflare/playwright'\\\`.");`;
+
+    return {
+        build: `
+            const browser: Browser = config.browser ? config.browser(env) : browserStub;
+`,
+        configField: `\n    browser?: (env: Record<string, unknown>) => Browser;`,
+        // ActionCtx-only: woven onto the action ctx object, never query/mutation.
+        contextField: `\n                browser,`,
+        // Type-only import: the generated build never calls `createBrowser`
+        // (the `config.browser` thunk owns construction, injecting the optional
+        // `@cloudflare/playwright` peer the worker stays free of), so only the
+        // `Browser` type is referenced here.
+        importLines: [`import type { Browser } from "@cirrus/browser";`],
+        stub: `
+const browserStub: Browser = {
+    content: async () => {
+        ${browserMissing}
+    },
+    launch: async () => {
+        ${browserMissing}
+    },
+    pdf: async () => {
+        ${browserMissing}
+    },
+    scrape: async () => {
+        ${browserMissing}
+    },
+    screenshot: async () => {
+        ${browserMissing}
+    },
+};
+`,
+    };
+};
+
 /**
  * Emit `_generated/containers.ts` — one container-enabled Durable Object class
  * per `defineContainer` export, each a thin subclass of `CirrusContainer`
@@ -1609,6 +1966,16 @@ interface EmitShardOptions {
     advisories?: ReadonlyArray<Finding>;
     containers?: ReadonlyArray<ContainerIR>;
     hasAi?: boolean;
+    /** A `cirrus/` source reads `ctx.analytics` — wires the Analytics Engine write helper onto every ctx. */
+    hasAnalytics?: boolean;
+    /** A `cirrus/` source reads `ctx.browser` — wires `ctx.browser` onto the ActionCtx only. */
+    hasBrowser?: boolean;
+    /** A `cirrus/` source reads `ctx.sql` (Hyperdrive) — wires `ctx.sql` onto the ActionCtx only. */
+    hasHyperdrive?: boolean;
+    /** A `cirrus/` source reads `ctx.images` — wires `ctx.images` onto the ActionCtx only. */
+    hasImages?: boolean;
+    /** A `cirrus/` source reads `ctx.kv` — wires `ctx.kv` onto every ctx. */
+    hasKv?: boolean;
     hasPayments?: boolean;
     maskMetadata?: MaskMetadataIR;
     rlsMetadata?: RlsMetadataIR;
@@ -1618,10 +1985,16 @@ interface EmitShardOptions {
     workflows?: ReadonlyArray<WorkflowIR>;
 }
 
+/* eslint-disable sonarjs/cognitive-complexity -- emitter that gates each Cloudflare-capability fragment behind its own `has*`/length flag to assemble dense generated TS; the branching is the per-binding emission contract, not refactorable logic */
 const emitShard = ({
     advisories = [],
     containers = [],
     hasAi = false,
+    hasAnalytics = false,
+    hasBrowser = false,
+    hasHyperdrive = false,
+    hasImages = false,
+    hasKv = false,
     hasPayments = false,
     maskMetadata,
     rlsMetadata,
@@ -1631,6 +2004,15 @@ const emitShard = ({
     workflows = [],
 }: EmitShardOptions): string => {
     const { build: aiBuild, configField: aiConfigField, contextField: aiContextField, stub: aiStub } = emitAiFragments(hasAi);
+    // New Cloudflare-capability helpers, mirroring `emitAiFragments`. `kv` /
+    // `analytics` ride EVERY ctx (deterministic-read / fire-and-forget-write);
+    // `images` / `sql` / `browser` are ActionCtx-only (external, non-deterministic
+    // I/O) and are woven onto the action ctx object only — see the `isAction` gate.
+    const kvFragments = emitKvFragments(hasKv);
+    const analyticsFragments = emitAnalyticsFragments(hasAnalytics);
+    const imagesFragments = emitImagesFragments(hasImages);
+    const hyperdriveFragments = emitHyperdriveFragments(hasHyperdrive);
+    const browserFragments = emitBrowserFragments(hasBrowser);
     const {
         build: containersBuild,
         contextField: containersContextField,
@@ -1733,6 +2115,11 @@ const emitShard = ({
     }
 
     importLines.push(
+        ...kvFragments.importLines,
+        ...analyticsFragments.importLines,
+        ...imagesFragments.importLines,
+        ...hyperdriveFragments.importLines,
+        ...browserFragments.importLines,
         ...containerImportLines,
         ...workflowImportLines,
         ...paymentsImports,
@@ -1914,6 +2301,37 @@ ${schema.tables
 `
         : "";
 
+    // `ctx.kv` / `ctx.analytics` ride EVERY ctx: their builds run inline before
+    // the ctx object literal and their props are spliced into it (like `ctx.ai`).
+    const everyContextBuild = `${kvFragments.build}${analyticsFragments.build}`;
+    const everyContextField = `${kvFragments.contextField}${analyticsFragments.contextField}`;
+
+    // `ctx.images` / `ctx.sql` (Hyperdrive) / `ctx.browser` are ActionCtx-ONLY:
+    // external, non-deterministic I/O the typed `ActionCtx` exposes but
+    // `QueryCtx`/`MutationCtx` do not. We enforce that at the VALUE level too —
+    // the binds run AND the props are attached only when the executing function
+    // is an `action`, so a query/mutation handler never even has `ctx.sql` on the
+    // object (its type already forbids it; this makes the runtime match). Gated
+    // behind a single `isAction` check derived from the dispatch registry.
+    const actionOnlyHasAny = hasImages || hasHyperdrive || hasBrowser;
+    const actionOnlyBlock = actionOnlyHasAny
+        ? `
+            // ActionCtx-only helpers (external, non-deterministic I/O): constructed
+            // and attached only for an \`action\` so query/mutation ctx never carry them.
+            if (isAction) {
+${imagesFragments.build}${hyperdriveFragments.build}${browserFragments.build}${[
+              ...(hasImages ? ["                ctx.images = images;"] : []),
+              ...(hasHyperdrive ? ["                ctx.sql = sql;"] : []),
+              ...(hasBrowser ? ["                ctx.browser = browser;"] : []),
+          ].join("\n")}
+            }
+`
+        : "";
+    // Only resolve the executing function's kind when an action-only helper is
+    // wired — otherwise `isAction` would be an unused local.
+    // eslint-disable-next-line no-secrets/no-secrets -- emitted ctx-builder line referencing the generated CIRRUS_FUNCTIONS registry, not a credential
+    const isActionLine = actionOnlyHasAny ? `            const isAction = CIRRUS_FUNCTIONS[options.functionPath ?? ""]?.kind === "action";\n` : "";
+
     /* eslint-disable no-secrets/no-secrets -- emitted ShardDO source: type names (RunShardWriteResult, AsyncIterable<unknown>, …) are generated framework API, not credentials */
     return `${GENERATED_HEADER}${importLines.join("\n")}
 
@@ -1956,7 +2374,7 @@ export interface ShardDOConfig {
     /** Optional telemetry sink. When supplied, each \`ctx.log.*\` call is forwarded to \`sink.onLog\`. Pass the SAME sink you give \`createWorker({ observability })\` (which drives \`onRpc\`) to route both RPC and log events. */
     observability?: (env: Record<string, unknown>) => LogSink | undefined;
     scheduler?: (env: Record<string, unknown>) => unknown;
-    storage?: (env: Record<string, unknown>) => unknown;${vectorsConfigField}${aiConfigField}${paymentsConfigField}${d1ConfigField}
+    storage?: (env: Record<string, unknown>) => unknown;${vectorsConfigField}${aiConfigField}${kvFragments.configField}${analyticsFragments.configField}${imagesFragments.configField}${hyperdriveFragments.configField}${browserFragments.configField}${paymentsConfigField}${d1ConfigField}
 }
 
 const schedulerStub = {
@@ -1994,7 +2412,7 @@ const storageStub = {
         throw new Error("ctx.storage: no storage configured. Pass \`storage\` to createShardDO().");
     },
 };
-${globalDatabaseStub}${vectorsStub}${aiStub}${paymentStub}${bindTableHelper}
+${globalDatabaseStub}${vectorsStub}${aiStub}${kvFragments.stub}${analyticsFragments.stub}${imagesFragments.stub}${hyperdriveFragments.stub}${browserFragments.stub}${paymentStub}${bindTableHelper}
 // Bound in-process \`ctx.run*\` composition depth so a self- or cyclically-
 // referencing call fails loudly with a clear error instead of overflowing the
 // stack. Tracked across the awaited handler chain (one DO invocation is
@@ -2348,7 +2766,7 @@ ${workflowsMetadataOverride}
             const env = (this.env ?? {}) as Record<string, unknown>;
             const userId = this.getCurrentUserId();
             const identity = this.getCurrentIdentity();
-${vectorsBuild}${aiBuild}${containersBuild}${workflowsBuild}
+${vectorsBuild}${aiBuild}${everyContextBuild}${containersBuild}${workflowsBuild}
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
             // Build the storage adapter once and share it between \`ctx.storage\`
             // and \`ctx.db.system._storage\` so both read the same R2 binding. The
@@ -2380,9 +2798,9 @@ ${facadeBlock}${paymentsBuild}
                 fetch: globalThis.fetch.bind(globalThis),
                 log,${ormContextField}
                 scheduler,
-                storage,${vectorsContextField}${aiContextField}${paymentsContextField}${containersContextField}${workflowsContextField}
+                storage,${vectorsContextField}${aiContextField}${everyContextField}${paymentsContextField}${containersContextField}${workflowsContextField}
             };
-
+${isActionLine}${actionOnlyBlock}
             ctx.runAction = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("action", reference.__cirrusRef, fnArgs, ctx);
             ctx.runMutation = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("mutation", reference.__cirrusRef, fnArgs, ctx);
             ctx.runQuery = (reference: FunctionReference, fnArgs: Record<string, unknown>) => dispatchRun("query", reference.__cirrusRef, fnArgs, ctx);
@@ -2393,6 +2811,7 @@ ${facadeBlock}${paymentsBuild}
 `;
     /* eslint-enable no-secrets/no-secrets */
 };
+/* eslint-enable sonarjs/cognitive-complexity */
 
 // ─── Drizzle schema emission ─────────────────────────────────────────────────
 
@@ -2776,6 +3195,7 @@ export {
     emitDataModel,
     emitDrizzleSchema,
     emitFunctions,
+    emitSeed,
     emitServer,
     emitShard,
     emitVectors,
