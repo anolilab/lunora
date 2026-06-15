@@ -68,7 +68,7 @@
         "@base-ui/react": "catalog:ui",
         "html-to-image": "catalog:frontend",
         "@cirrus/advisor": "workspace:*",
-        "@faker-js/faker": "catalog:data",
+        "@cirrus/analytics": "workspace:*",
         "@cirrus/client": "workspace:*",
         "@cirrus/react": "workspace:*",
         "@hugeicons/core-free-icons": "catalog:ui",

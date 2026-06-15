@@ -11,11 +11,13 @@ import type { StudioAssets } from "@cirrus/config/studio-host";
 import {
     handlePolicyScaffoldRequest,
     handleSchemaEditRequest,
+    handleSeedRequest,
     loadStudioAssets,
     POLICY_SCAFFOLD_ENDPOINT,
     renderStudioHtml,
     resolveAdminToken,
     SCHEMA_EDIT_ENDPOINT,
+    SEED_ENDPOINT,
     serveJsonHandler,
     studioAssetsStamp,
 } from "@cirrus/config/studio-host";
@@ -127,6 +129,15 @@ const createStudioHandler = (
         // and codegen toolchain as the schema editor above.
         if (pathname === POLICY_SCAFFOLD_ENDPOINT) {
             serveJsonHandler(request, response, handlePolicyScaffoldRequest, projectRoot);
+
+            return;
+        }
+
+        // Local seed-data endpoint (the studio "Generate rows" action). Loopback-
+        // gated above; generates rows in Node so faker stays out of the browser
+        // bundle and the worker. The client inserts the rows via `writeRow`.
+        if (pathname === SEED_ENDPOINT) {
+            serveJsonHandler(request, response, handleSeedRequest, projectRoot);
 
             return;
         }

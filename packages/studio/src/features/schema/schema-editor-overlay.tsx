@@ -139,7 +139,10 @@ export const SchemaEditorOverlay = ({ onApplied, tableNames }: SchemaEditorOverl
         // surface the migration handoff locally (plan 024 Item 5) — same UI the
         // host's `needsMigration` response drives — and route to Migrations.
         setMode("destructive");
-        setResult({ kind: "needs-migration", message: t("This edit changes stored data and must go through a migration. Review the migration before applying.") });
+        setResult({
+            kind: "needs-migration",
+            message: t("This edit changes stored data and must go through a migration. Review the migration before applying."),
+        });
     }, [t]);
 
     const onTableNameChange = useCallback((event: ChangeEvent<HTMLInputElement>): void => {
@@ -306,7 +309,13 @@ export const SchemaEditorOverlay = ({ onApplied, tableNames }: SchemaEditorOverl
                             <Input data-testid="sc-editor-index-fields" id="sc-editor-index-fields" onChange={onIndexFieldsChange} value={indexFields} />
                         </div>
                         <Label className="flex items-center gap-1 text-xs" htmlFor="sc-editor-index-unique">
-                            <input checked={unique} data-testid="sc-editor-index-unique" id="sc-editor-index-unique" onChange={onUniqueChange} type="checkbox" />
+                            <input
+                                checked={unique}
+                                data-testid="sc-editor-index-unique"
+                                id="sc-editor-index-unique"
+                                onChange={onUniqueChange}
+                                type="checkbox"
+                            />
                             <span className="text-muted-foreground">{t("Unique")}</span>
                         </Label>
                         <Button
@@ -335,7 +344,14 @@ export const SchemaEditorOverlay = ({ onApplied, tableNames }: SchemaEditorOverl
                         <p className="text-sm text-amber-600 dark:text-amber-500" role="alert">
                             {t("This edit changes stored data and must go through a migration. Review the migration before applying.")}
                         </p>
-                        <Button className="self-start" data-testid="sc-editor-open-migrations" onClick={onOpenMigrations} size="xs" type="button" variant="outline">
+                        <Button
+                            className="self-start"
+                            data-testid="sc-editor-open-migrations"
+                            onClick={onOpenMigrations}
+                            size="xs"
+                            type="button"
+                            variant="outline"
+                        >
                             {t("Open Migrations")}
                         </Button>
                     </div>

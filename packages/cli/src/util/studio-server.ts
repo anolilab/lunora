@@ -22,11 +22,13 @@ import type { LocalEndpointHandler } from "@cirrus/config/studio-host";
 import {
     handlePolicyScaffoldRequest,
     handleSchemaEditRequest,
+    handleSeedRequest,
     loadStudioAssets,
     POLICY_SCAFFOLD_ENDPOINT,
     renderStudioHtml,
     resolveAdminToken,
     SCHEMA_EDIT_ENDPOINT,
+    SEED_ENDPOINT,
     serveJsonHandler,
     studioAssetsStamp,
 } from "@cirrus/config/studio-host";
@@ -184,6 +186,14 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
         // Local policy-scaffold endpoint (plan 025) — same loopback-only gate.
         if (pathname === POLICY_SCAFFOLD_ENDPOINT) {
             serveLoopbackOnly(request, response, handlePolicyScaffoldRequest, "Cirrus policy scaffolding is only available on loopback hosts in dev.");
+
+            return;
+        }
+
+        // Local seed-data endpoint (studio "Generate rows") — same loopback-only
+        // gate. Generates rows in Node so faker never reaches the browser bundle.
+        if (pathname === SEED_ENDPOINT) {
+            serveLoopbackOnly(request, response, handleSeedRequest, "Cirrus data seeding is only available on loopback hosts in dev.");
 
             return;
         }

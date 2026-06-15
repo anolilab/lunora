@@ -101,7 +101,10 @@ describe("schemaEditorOverlay", () => {
         // The endpoint answers 409 needsMigration for destructive edits; the
         // overlay only ever POSTs additive edits, but the handoff surfaces
         // whatever needsMigration the host returns (plan 024 Item 5).
-        stubFetch(409, { message: "This edit changes stored data and must go through a migration. Review the migration before applying.", needsMigration: true });
+        stubFetch(409, {
+            message: "This edit changes stored data and must go through a migration. Review the migration before applying.",
+            needsMigration: true,
+        });
         const onApplied = vi.fn<(tables: ReadonlyArray<SchemaEditTable>) => void>();
 
         render(<SchemaEditorOverlay onApplied={onApplied} tableNames={TODOS_ONLY} />);

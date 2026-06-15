@@ -42,9 +42,13 @@ describe("nav with a search param in the URL", () => {
 
         globalThis.history.pushState({}, "", "/data");
         renderStudio();
-        await waitFor(() => { expect(globalThis.location.pathname).toBe("/data"); });
+        await waitFor(() => {
+            expect(globalThis.location.pathname).toBe("/data");
+        });
         fireEvent.click(await screen.findByTestId("dash-tab-schema"));
-        await waitFor(() => { expect(globalThis.location.pathname).toBe("/schema"); });
+        await waitFor(() => {
+            expect(globalThis.location.pathname).toBe("/schema");
+        });
     });
 
     it("switches to a sibling tab when ?table= is set", async () => {
@@ -52,9 +56,13 @@ describe("nav with a search param in the URL", () => {
 
         globalThis.history.pushState({}, "", "/data?table=verification");
         renderStudio();
-        await waitFor(() => { expect(globalThis.location.pathname).toBe("/data"); });
+        await waitFor(() => {
+            expect(globalThis.location.pathname).toBe("/data");
+        });
         fireEvent.click(await screen.findByTestId("dash-tab-schema"));
-        await waitFor(() => { expect(globalThis.location.pathname).toBe("/schema"); });
+        await waitFor(() => {
+            expect(globalThis.location.pathname).toBe("/schema");
+        });
     });
 
     it("jumps to another domain via the rail when ?table= is set", async () => {
@@ -62,10 +70,14 @@ describe("nav with a search param in the URL", () => {
 
         globalThis.history.pushState({}, "", "/data?table=verification");
         renderStudio();
-        await waitFor(() => { expect(globalThis.location.pathname).toBe("/data"); });
+        await waitFor(() => {
+            expect(globalThis.location.pathname).toBe("/data");
+        });
         // The logs rail icon routes to its first sub-page (`/logs`).
         fireEvent.click(await screen.findByTestId("dash-rail-logs"));
-        await waitFor(() => { expect(globalThis.location.pathname).toBe("/logs"); });
+        await waitFor(() => {
+            expect(globalThis.location.pathname).toBe("/logs");
+        });
     });
 
     it("switches tabs when ?filters= is set", async () => {
@@ -73,8 +85,12 @@ describe("nav with a search param in the URL", () => {
 
         globalThis.history.pushState({}, "", `/data?table=verification&filters=${encodeURIComponent('[{"column":"id","operator":"eq","value":"1"}]')}`);
         renderStudio();
-        await waitFor(() => { expect(globalThis.location.pathname).toBe("/data"); });
+        await waitFor(() => {
+            expect(globalThis.location.pathname).toBe("/data");
+        });
         fireEvent.click(await screen.findByTestId("dash-tab-sql"));
-        await waitFor(() => { expect(globalThis.location.pathname).toBe("/sql"); });
+        await waitFor(() => {
+            expect(globalThis.location.pathname).toBe("/sql");
+        });
     });
 });

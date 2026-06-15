@@ -4,7 +4,7 @@ import { useCallback, useState } from "react";
 import type { ColumnMeta, TableColumnsResult, TablePage, WriteRowResult } from "../../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../../lib/admin";
 import { adminRef, callOptions, fireAndForget } from "../../../lib/internal";
-import { MAX_FK_SAMPLE } from "../faker-generator";
+import { MAX_FK_SAMPLE } from "../../../lib/seed-data";
 
 const DESCRIBE_TABLE = adminRef(ADMIN_FUNCTIONS.describeTable);
 const READ_TABLE_PAGE = adminRef(ADMIN_FUNCTIONS.readTablePage);

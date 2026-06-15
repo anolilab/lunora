@@ -778,6 +778,15 @@ const MESSAGE_IDS = [
     "Searching…",
     "vectors",
     "Vectors",
+    // Analytics Engine usage panel.
+    "Analytics",
+    "Analytics is not configured.",
+    "Hot shards",
+    "Latency p50 / p95 per function",
+    "No data points yet.",
+    "Request volume per function",
+    "Set CLOUDFLARE_ACCOUNT_ID and CLOUDFLARE_API_TOKEN (Analytics Read) in your .dev.vars to enable usage panels.",
+    "Usage and latency from Analytics Engine — request volume, p50/p95, and hot shards.",
     // Storage access rules view.
     "(whole bucket)",
     "Access Rules",

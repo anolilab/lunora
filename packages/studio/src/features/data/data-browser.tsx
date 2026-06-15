@@ -345,7 +345,7 @@ export const DataBrowser = ({
         [client],
     );
 
-    // Generate & insert dummy rows via @faker-js/faker.
+    // Generate & insert dummy rows via the local seed endpoint (Node-side @cirrus/seed).
     const onRefreshAfterGenerate = useCallback((): void => {
         if (selectedTable !== null) {
             selectTable(selectedTable);

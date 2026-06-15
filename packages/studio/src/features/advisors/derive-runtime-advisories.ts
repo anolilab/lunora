@@ -1,4 +1,4 @@
-import type { AdvisorIndexHit, AdvisorShardTraffic, AdvisorTableScan } from "@cirrus/advisor";
+import type { AdvisorIndexHit, AdvisorShardTraffic, AdvisorTableScan, AnalyticsRuntimeMetrics } from "@cirrus/advisor";
 import { runAdvisor, RUNTIME_LINTS } from "@cirrus/advisor";
 
 import type { FunctionCallStat, MetricsIndexHit, TableIndexInfo } from "../../lib/admin";
@@ -19,6 +19,17 @@ interface DeclaredIndex {
 
 /** Inputs the studio gathers from the admin RPCs to feed the runtime lints. */
 interface RuntimeAdvisoryInputs {
+    /**
+     * Optional Analytics-Engine-derived runtime metrics, fetched out-of-band via
+     * `@cirrus/advisor`'s analytics runtime-metrics loader when an AE read token is
+     * configured. Each non-empty array **replaces** the corresponding in-DO
+     * signal below (AE's cross-shard scan attribution is the authoritative source
+     * when available); an empty/absent array falls back to the in-DO counters, so
+     * the advisors still function with no AE token. Strictly optional — the panel
+     * passes this only after a successful AE read.
+     */
+    analyticsMetrics?: AnalyticsRuntimeMetrics | null;
+
     /**
      * Every declared index across the schema's tables, enumerated from
      * `listTables` + `listTableIndexes`. Reconciled against `indexHits` so a
@@ -142,12 +153,20 @@ const declaredIndexesFor = (table: string, indexes: ReadonlyArray<TableIndexInfo
  * unit-tests without a client.
  */
 const deriveRuntimeAdvisories = (inputs: RuntimeAdvisoryInputs): AdvisorRow[] => {
-    const indexHits = reconcileIndexHits(inputs.declaredIndexes ?? [], inputs.indexHits ?? []);
-    const tableScans = aggregateTableScans(inputs.functions ?? []);
+    const inDoIndexHits = reconcileIndexHits(inputs.declaredIndexes ?? [], inputs.indexHits ?? []);
+    const inDoTableScans = aggregateTableScans(inputs.functions ?? []);
     // The cross-shard traffic feed now flows in (was omitted while the studio
     // held only one shard's snapshot); the worker's shard-traffic fan-out builds
     // it on demand, so `hot_shard` fires on a genuine cross-shard skew.
-    const shardTraffic = inputs.shardTraffic ?? [];
+    const inDoShardTraffic = inputs.shardTraffic ?? [];
+
+    // When AE metrics are supplied, each non-empty AE array takes precedence over
+    // the in-DO signal (AE's cross-shard scan attribution is authoritative); an
+    // empty AE array degrades to the in-DO counters.
+    const analytics = inputs.analyticsMetrics;
+    const indexHits = analytics && analytics.indexHits.length > 0 ? analytics.indexHits : inDoIndexHits;
+    const tableScans = analytics && analytics.tableScans.length > 0 ? analytics.tableScans : inDoTableScans;
+    const shardTraffic = analytics && analytics.shardTraffic.length > 0 ? analytics.shardTraffic : inDoShardTraffic;
 
     const findings = runAdvisor({ indexHits, schema: { tables: [] }, shardTraffic, tableScans }, { lints: RUNTIME_LINTS, source: "runtime" });
 

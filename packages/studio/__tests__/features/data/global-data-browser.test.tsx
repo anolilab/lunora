@@ -113,7 +113,9 @@ describe("globalDataBrowser", () => {
         });
 
         expect(mock.facetGlobalColumn).toHaveBeenCalledWith(expect.objectContaining({ column: "name", table: "organizations" }));
-        expect(mock.readGlobalTablePage).toHaveBeenCalledWith(expect.objectContaining({ filters: [{ column: "name", value: "Acme" }], table: "organizations" }));
+        expect(mock.readGlobalTablePage).toHaveBeenCalledWith(
+            expect.objectContaining({ filters: [{ column: "name", value: "Acme" }], table: "organizations" }),
+        );
     });
 
     it("removes a drill-down filter via its chip ✕", async () => {

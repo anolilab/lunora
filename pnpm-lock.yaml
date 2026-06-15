@@ -1306,6 +1306,9 @@ importers:
       '@cirrus/container':
         specifier: workspace:*
         version: link:../container
+      '@cirrus/seed':
+        specifier: workspace:*
+        version: link:../seed
       '@cirrus/studio':
         specifier: workspace:*
         version: link:../studio
@@ -1994,9 +1997,6 @@ importers:
       '@cirrus/react':
         specifier: workspace:*
         version: link:../react
-      '@faker-js/faker':
-        specifier: catalog:data
-        version: 10.4.0
       '@hugeicons/core-free-icons':
         specifier: catalog:ui
         version: 4.2.0

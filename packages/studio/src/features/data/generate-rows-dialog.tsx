@@ -5,7 +5,7 @@ import { ModalShell } from "../../components/ui/modal-shell";
 import { useT } from "../../i18n/i18n-context";
 import type { ColumnMeta } from "../../lib/admin";
 import { fireAndForget } from "../../lib/internal";
-import { generateRows, MAX_GENERATE_ROWS } from "./faker-generator";
+import { collectSkippedFkColumns, MAX_GENERATE_ROWS, requestSeedRows } from "../../lib/seed-data";
 
 /** Shared control-button class for dialog actions. */
 const BTN =
@@ -35,9 +35,11 @@ interface GenerateRowsDialogProps {
 }
 
 /**
- * A dialog that generates N dummy rows for the active table via `@faker-js/faker`,
- * then inserts them through the schema-aware `writeRow` path. Generates rows
- * locally (no server round-trip for generation), then sends them in batch.
+ * A dialog that generates N dummy rows for the active table, then inserts them
+ * through the schema-aware `writeRow` path. Generation runs server-side in the
+ * dev host (`@cirrus/seed` over `@faker-js/faker`) so faker stays out of the
+ * browser bundle; the dialog fetches the rows from the local seed endpoint and
+ * then sends them to the worker in batch.
  *
  * Columns with empty FK pools are skipped and listed in the dialog so the
  * operator knows which relations were not populated.
@@ -64,7 +66,17 @@ const GenerateRowsDialog = ({ columns, fkPools, onClose, onInsertRows, table }: 
         setInserting(true);
 
         try {
-            const { rows, skippedFkColumns } = generateRows(columns, count, fkPools);
+            // Vary the seed per click so repeated generations don't collide on
+            // the deterministic `_id` the planner derives from (seed, index).
+            const generated = await requestSeedRows({ count, existingIds: fkPools, seed: Date.now(), table });
+
+            if (generated.kind === "error") {
+                setError(generated.message);
+
+                return;
+            }
+
+            const { rows } = generated;
 
             if (rows.length === 0) {
                 setError(t("No rows generated — all columns were skipped."));
@@ -82,13 +94,15 @@ const GenerateRowsDialog = ({ columns, fkPools, onClose, onInsertRows, table }: 
 
             setInserted(rows.length);
 
+            const skippedFkColumns = collectSkippedFkColumns(columns, fkPools);
+
             if (skippedFkColumns.length > 0) {
                 setError(t("Inserted {count} rows. Skipped FK columns: {cols}", { cols: skippedFkColumns.join(", "), count: rows.length.toString() }));
             }
         } finally {
             setInserting(false);
         }
-    }, [columns, count, fkPools, onInsertRows, t]);
+    }, [columns, count, fkPools, onInsertRows, t, table]);
 
     const onGenerate = useCallback((): void => {
         fireAndForget(handleGenerate());

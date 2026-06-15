@@ -77,6 +77,7 @@ export {
     SchemaSnapshotParseError,
     serializeSchemaSnapshot,
 } from "./schema-drift";
+export { schemaFromIr } from "./schema-from-ir";
 export { CIRRUS_ERROR_CODES, validatorIrToJsonSchema } from "./schema-ir";
 export type { Finding } from "@cirrus/advisor";
 

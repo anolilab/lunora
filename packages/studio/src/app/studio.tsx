@@ -19,6 +19,7 @@ import { Skeleton } from "../components/ui/skeleton";
 import { InsightsPanel } from "../features/advisors/insights-panel";
 import RlsPanel from "../features/advisors/rls-panel";
 import SecurityAdvisorPanel from "../features/advisors/security-advisor-panel";
+import { AnalyticsPanel } from "../features/analytics/analytics-panel";
 import ApiTab from "../features/api/api-tab";
 import { AuthConfigPanel } from "../features/auth/auth-config-panel";
 import { AuthSessionsPanel } from "../features/auth/auth-sessions-panel";
@@ -62,6 +63,7 @@ import { CommandPalette } from "./command-palette";
 
 /** Identifier for each built-in studio tab. */
 type StudioTab =
+    | "analytics"
     | "api"
     | "audit"
     | "authConfig"
@@ -202,6 +204,7 @@ type NavGroupKey = "advisors" | "auth" | "database" | "functions" | "home" | "lo
  * from the active/hover nav state in the scoped stylesheet.
  */
 const TAB_ICONS: Record<StudioTab, ReactNode> = {
+    analytics: <path d="M5 20V10m6.5 10V4M18 20v-7M3 20h18" />,
     api: <path d="m9 8-4 4 4 4m6-8 4 4-4 4M13 5l-2 14" />,
     audit: <path d="M7 4h7l4 4v11a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1Zm6 0v5h5M9 13h6M9 16h6M9 10h2" />,
     authConfig: (
@@ -259,7 +262,7 @@ const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
     { key: "functions", tabs: ["functions", "api", "workflows"] },
     { key: "auth", tabs: ["users", "organizations", "authSessions", "authConfig"] },
     { key: "storage", tabs: ["files", "storageRules"] },
-    { key: "reports", tabs: ["dashboards", "metrics", "health"] },
+    { key: "reports", tabs: ["dashboards", "metrics", "analytics", "health"] },
     { key: "advisors", tabs: ["security", "rls", "permissions", "insights"] },
     { key: "logs", tabs: ["logs", "audit", "schedule", "realtime", "mail", "drains", "payments"] },
     { key: "settings", tabs: ["settings"] },
@@ -346,6 +349,7 @@ const TABS = [
     "storageRules",
     "dashboards",
     "metrics",
+    "analytics",
     "health",
     "security",
     "rls",
@@ -419,6 +423,7 @@ const StudioLayout = (): ReactElement => {
     // locale changes but aren't rebuilt on every unrelated render.
     const tabLabel = useMemo<Record<StudioTab, string>>(() => {
         return {
+            analytics: t("Analytics"),
             api: t("API"),
             audit: t("Audit"),
             authConfig: t("Configuration"),
@@ -471,6 +476,7 @@ const StudioLayout = (): ReactElement => {
     // One-line section descriptions for the page header.
     const tabDescription = useMemo<Record<StudioTab, string>>(() => {
         return {
+            analytics: t("Usage and latency from Analytics Engine — request volume, p50/p95, and hot shards."),
             api: t("Interactive OpenAPI reference and copy-paste snippets for your functions."),
             audit: t("A durable log of admin state-changing operations."),
             authConfig: t("Enabled plugins and session config (read-only)."),
@@ -793,6 +799,7 @@ const buildRouter = ({
     const rootRoute = createRootRoute({ component: StudioLayout });
 
     const panels: Record<StudioTab, ReactElement> = {
+        analytics: <AnalyticsPanel />,
         api: <ApiTab functions={functions} initialShardKey={initialShardKey} openApiSpec={openApiSpec} openRpcSpec={openRpcSpec} />,
         audit: <AuditPanel initialShardKey={initialShardKey} />,
         authConfig: <AuthConfigPanel />,

@@ -61,7 +61,7 @@ interface MockClientHooks {
     removeAuthUser: ReturnType<typeof vi.fn>;
     revokeAuthSession: ReturnType<typeof vi.fn>;
     revokeAuthUserSessions: ReturnType<typeof vi.fn>;
-    setAuthUserPassword: ReturnType<typeof vi.fn>;
+    setAuthUserPassword: ReturnType<typeof vi.fn>; // gitleaks:allow -- mock method name, not a secret
     setAuthUserRole: ReturnType<typeof vi.fn>;
     shardTraffic: ReturnType<typeof vi.fn>;
     signedStorageUrl: ReturnType<typeof vi.fn>;
@@ -149,7 +149,9 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
     const queryVectorIndex = vi.fn<(options: { name: string; text: string; topK?: number }) => Promise<VectorQueryMatch[]>>(
         async (options: { name: string; text: string; topK?: number }) => impls.queryVectorIndex?.(options) ?? [],
     );
-    const readGlobalTablePage = vi.fn<(options: { filters?: GlobalFilterClause[]; limit?: number; offset?: number; table: string }) => Promise<GlobalTablePage>>(
+    const readGlobalTablePage = vi.fn<
+        (options: { filters?: GlobalFilterClause[]; limit?: number; offset?: number; table: string }) => Promise<GlobalTablePage>
+    >(
         async (options: { filters?: GlobalFilterClause[]; limit?: number; offset?: number; table: string }) =>
             impls.readGlobalTablePage?.(options) ?? { columns: [], rows: [], total: 0 },
     );
@@ -279,7 +281,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         removeAuthUser,
         revokeAuthSession,
         revokeAuthUserSessions,
-        setAuthUserPassword,
+        setAuthUserPassword, // gitleaks:allow -- mock method name, not a secret
         setAuthUserRole,
         unbanAuthUser,
         unlinkAuthAccount,

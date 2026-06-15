@@ -154,7 +154,9 @@ export const GlobalDataBrowser = ({
     // structurally the studio's `FacetResult`, so it drops straight into `FacetState`.
     const fetchFacet = useCallback(
         async (table: string, column: string, activeFilters: GlobalFilterClause[]): Promise<void> => {
-            setFacets((current) => (column in current ? { ...current, [column]: { error: null, loading: true, result: current[column]?.result ?? null } } : current));
+            setFacets((current) =>
+                column in current ? { ...current, [column]: { error: null, loading: true, result: current[column]?.result ?? null } } : current,
+            );
 
             try {
                 const result: GlobalFacetResult = await client.facetGlobalColumn({ column, filters: activeFilters, table });

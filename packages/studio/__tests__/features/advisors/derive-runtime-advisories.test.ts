@@ -190,6 +190,37 @@ describe("deriveRuntimeAdvisories", () => {
 
         expect(rows).toHaveLength(0);
     });
+
+    it("prefers Analytics-Engine metrics over the in-DO signal when supplied", () => {
+        expect.assertions(2);
+
+        // The in-DO functions feed shows NO hot scan, but the AE-derived metrics
+        // carry the authoritative cross-shard attribution: a hot scan of `orders`.
+        const rows = deriveRuntimeAdvisories({
+            analyticsMetrics: {
+                indexHits: [],
+                shardTraffic: [],
+                tableScans: [{ scans: 80, table: "orders" }],
+            },
+            functions: [],
+        });
+
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.entity).toBe("orders");
+    });
+
+    it("falls back to the in-DO signal when the AE arrays are empty (no token / dataset never written)", () => {
+        expect.assertions(2);
+
+        // AE returned nothing (all arrays empty) — the in-DO hot scan still surfaces.
+        const rows = deriveRuntimeAdvisories({
+            analyticsMetrics: { indexHits: [], shardTraffic: [], tableScans: [] },
+            functions: [HOT_SCAN_FN],
+        });
+
+        expect(rows).toHaveLength(1);
+        expect(rows[0]?.entity).toBe("events");
+    });
 });
 
 describe("declaredIndexesFor", () => {
