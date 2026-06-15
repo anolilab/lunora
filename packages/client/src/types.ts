@@ -130,6 +130,52 @@ export interface PersistenceAdapter {
     remove: (id: string) => Promise<void>;
 }
 
+/**
+ * One persisted query result in the durable read cache (Pillar 2). Keyed in the
+ * store by `shardKey + functionPath + argsKey`; the record carries everything
+ * needed to render offline on reload and to resume the live subscription.
+ */
+export interface CachedQuery {
+    /**
+     * Issuing identity fingerprint (same shape the offline queue stamps). A
+     * cached value only hydrates when it matches the current identity, so a
+     * signed-out cache never leaks into a new session. `null` = cached while
+     * signed out.
+     */
+    identity: string | null;
+
+    /**
+     * The `cursor` high-watermark this value reflects, replayed as `sinceSeq`
+     * on reconnect so the server can resume instead of re-snapshotting. Absent
+     * when the value predates CDC / no cursor was advertised.
+     */
+    serverCursor?: number;
+
+    /** Wall-clock millis the value was written — drives LRU eviction. */
+    ts: number;
+
+    /** The full query result last seen from the server. */
+    value: unknown;
+}
+
+/**
+ * Durable store for the client read cache (Pillar 2): query results survive a
+ * reload so reads hydrate from disk and render immediately while the socket
+ * reconnects. Opt-in via {@link LunoraClientOptions.queryCache}; omit to keep
+ * reads in memory only (today's behaviour). Mirrors {@link PersistenceAdapter}'s
+ * shape over the same IndexedDB plumbing.
+ */
+export interface QueryCacheAdapter {
+    /** Drop every cached query (e.g. on logout / identity change). */
+    clear: () => Promise<void>;
+    /** Load every cached query — called once at startup to hydrate reads. */
+    load: () => Promise<(CachedQuery & { key: string })[]>;
+    /** Upsert one cached query by key (called when a subscription value advances). */
+    put: (key: string, entry: CachedQuery) => Promise<void>;
+    /** Remove one cached query by key. */
+    remove: (key: string) => Promise<void>;
+}
+
 export interface LunoraClientOptions {
     /**
      * Base path the worker mounts better-auth at, used by the client's
@@ -160,6 +206,15 @@ export interface LunoraClientOptions {
     offlineQueue?: OfflineQueueOptions;
     /** Durable store for the offline mutation queue; omit to keep it in memory. */
     persistence?: PersistenceAdapter;
+
+    /**
+     * Durable store for the read cache (Pillar 2). When supplied, query results
+     * are persisted as their subscriptions advance and hydrated on construction
+     * so a reload renders cached data before the socket reconnects, then resumes
+     * the live subscription from the persisted cursor. Omit (or pass `false`) to
+     * keep reads in memory only — the default, unchanged behaviour.
+     */
+    queryCache?: QueryCacheAdapter | false;
     reconnect?: ReconnectOptions;
     url: string;
     WebSocket?: typeof WebSocket;
@@ -190,7 +245,16 @@ export type RpcResponseBody = { result: unknown } | { error: { code: string; mes
 /** Subscription protocol — client → server. */
 export interface ClientSubscribeMessage {
     id: string;
-    query: { args?: Record<string, unknown>; functionPath?: string; table?: string };
+
+    /**
+     * `sinceSeq` is the persisted `cursor` high-watermark the client last saw
+     * for this shard (Pillar 1b resume). Present only when a durable
+     * {@link QueryCacheAdapter} restored a cached value with a cursor; the
+     * server replies with a lightweight `resume` frame instead of a full
+     * snapshot when nothing the query reads changed since it. Absent on a
+     * first-time subscribe.
+     */
+    query: { args?: Record<string, unknown>; functionPath?: string; sinceSeq?: number; table?: string };
     type: "subscribe";
 }
 
@@ -233,10 +297,28 @@ export type ClientMessage = ClientAckMessage | ClientConnectMessage | ClientStre
 
 /** Subscription protocol — server → client. */
 export interface ServerDataMessage {
+    /**
+     * The `__cdc_log` high-watermark covered by this frame (Pillar 1b). The
+     * client persists it as the query's `serverCursor` and replays it as
+     * `sinceSeq` on the next reconnect. Absent on shards that never enabled CDC.
+     */
+    cursor?: number;
     data?: unknown;
     delta?: unknown;
     id: string;
     type: "data" | "delta";
+}
+
+/**
+ * Lightweight resume acknowledgement (Pillar 1b): the server determined that
+ * nothing the subscription reads changed since the client's `sinceSeq`, so it
+ * skips re-sending the snapshot. The client keeps its cached value and only
+ * advances `serverCursor` to `cursor`.
+ */
+export interface ServerResumeMessage {
+    cursor?: number;
+    id: string;
+    type: "resume";
 }
 
 export interface ServerErrorMessage {
@@ -263,7 +345,7 @@ export interface ServerChunkMessage {
     type: "chunk";
 }
 
-export type ServerMessage = ServerAckMessage | ServerChunkMessage | ServerCompleteMessage | ServerDataMessage | ServerErrorMessage;
+export type ServerMessage = ServerAckMessage | ServerChunkMessage | ServerCompleteMessage | ServerDataMessage | ServerErrorMessage | ServerResumeMessage;
 
 /**
  * The authenticated user as exposed client-side, mirroring better-auth's

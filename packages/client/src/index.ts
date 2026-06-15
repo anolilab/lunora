@@ -1,11 +1,11 @@
 export { default as createInMemoryBookmarkStorage } from "./bookmark";
-export type { ConnectionStatus, MutationCallOptions } from "./lunora-client";
-export { LunoraClient } from "./lunora-client";
 export type { MutationDelta } from "./delta-merge";
 export { applyDelta, isMutationDelta } from "./delta-merge";
 export { CONFLICT_ERROR_CODE, isConflictError } from "./errors";
 export type { OptimisticLocalStore, OptimisticUpdate } from "./local-store";
 export { createLocalStore } from "./local-store";
+export type { ConnectionStatus, MutationCallOptions } from "./lunora-client";
+export { LunoraClient } from "./lunora-client";
 export type { MutationRunnerSinks } from "./mutation-runner";
 export { createMutationRunner } from "./mutation-runner";
 export type { QueuedMutation } from "./offline-queue";
@@ -13,6 +13,8 @@ export { OfflineQueue } from "./offline-queue";
 export type { IndexedDbPersistenceOptions } from "./persistence";
 export { createIndexedDbPersistence, createInMemoryPersistence } from "./persistence";
 export { preloadedQueryResult, preloadQuery } from "./preload";
+export type { IndexedDbQueryCacheOptions } from "./query-cache";
+export { createIndexedDbQueryCache, createInMemoryQueryCache, queryCacheKey } from "./query-cache";
 export type { ReconnectCalculator } from "./reconnect";
 export { createReconnect } from "./reconnect";
 export type { StreamHandle, StreamIterable } from "./stream";
@@ -27,7 +29,7 @@ export type {
     AuthSession,
     AuthUser,
     BookmarkStorage,
-    LunoraClientOptions,
+    CachedQuery,
     ClientMessage,
     CronJobInfo,
     FunctionArgumentDescriptor,
@@ -38,10 +40,12 @@ export type {
     GlobalFilterClause,
     GlobalTableInfo,
     GlobalTablePage,
+    LunoraClientOptions,
     OfflineQueueOptions,
     PersistedMutation,
     PersistenceAdapter,
     Preloaded,
+    QueryCacheAdapter,
     ReconnectOptions,
     ReturnOf,
     RpcEnvelope,

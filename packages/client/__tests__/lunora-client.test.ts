@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { LunoraClient } from "../src/lunora-client";
 import { isConflictError } from "../src/errors";
 import type { OptimisticUpdate } from "../src/local-store";
+import { LunoraClient } from "../src/lunora-client";
 import { createInMemoryPersistence } from "../src/persistence";
+import { createInMemoryQueryCache, queryCacheKey } from "../src/query-cache";
 import type { FunctionReference } from "../src/types";
 
 const flushMicrotasks = (): Promise<void> =>
@@ -1986,6 +1987,171 @@ describe("lunoraClient", () => {
             const [requestUrl] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
 
             expect(requestUrl).toBe("https://app.example/auth/get-session");
+        });
+    });
+
+    // --- Persistent read cache (Pillar 2) -----------------------------------
+
+    describe("lunoraClient — persistent read cache", () => {
+        it("hydrates a cached value and replays it to the first subscriber before any socket frame", async () => {
+            expect.assertions(2);
+
+            const cache = createInMemoryQueryCache();
+
+            // Written while signed out (identity null) so it matches a signed-out client.
+            await cache.put(queryCacheKey("messages:list", "{}"), { identity: null, serverCursor: 7, ts: 1, value: { count: 42 } });
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                queryCache: cache,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            // Let the constructor's hydrate microtask drain.
+            await flushMicrotasks();
+
+            const received: unknown[] = [];
+
+            client.subscribe(fnRef("messages:list"), {}, (d) => received.push(d));
+
+            // The cached value is replayed synchronously — no socket frame yet.
+            expect(received).toEqual([{ count: 42 }]);
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            // The subscribe frame carries the persisted cursor as `sinceSeq`.
+            const sub = JSON.parse(socket.sent[0]!);
+
+            expect(sub.query.sinceSeq).toBe(7);
+        });
+
+        it("drops a cached read whose identity does not match the current session", async () => {
+            expect.assertions(1);
+
+            const cache = createInMemoryQueryCache();
+
+            // Cached under a different identity than the (signed-out) client.
+            await cache.put(queryCacheKey("messages:list", "{}"), { identity: "other-user", serverCursor: 3, ts: 1, value: { count: 99 } });
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                queryCache: cache,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            await flushMicrotasks();
+
+            const received: unknown[] = [];
+
+            client.subscribe(fnRef("messages:list"), {}, (d) => received.push(d));
+
+            // Mismatched identity ⇒ nothing replayed.
+            expect(received).toEqual([]);
+        });
+
+        it("does not send sinceSeq on a cold subscription with no persisted cursor", () => {
+            expect.assertions(1);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                queryCache: createInMemoryQueryCache(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.subscribe(fnRef("messages:list"), {}, () => undefined);
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            const sub = JSON.parse(socket.sent[0]!);
+
+            expect(sub.query.sinceSeq).toBeUndefined();
+        });
+
+        it("keeps the cached value and acks on a resume frame without firing the callback again", async () => {
+            expect.assertions(2);
+
+            const cache = createInMemoryQueryCache();
+
+            await cache.put(queryCacheKey("messages:list", "{}"), { identity: null, serverCursor: 7, ts: 1, value: { count: 42 } });
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                queryCache: cache,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            await flushMicrotasks();
+
+            const received: unknown[] = [];
+
+            client.subscribe(fnRef("messages:list"), {}, (d) => received.push(d));
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            const sub = JSON.parse(socket.sent[0]!);
+
+            // The server proves nothing changed since `sinceSeq` and resumes,
+            // advancing the watermark to 9.
+            socket.receive({ cursor: 9, id: sub.id, type: "resume" });
+
+            // The callback fired once (the synchronous cached replay) and not again.
+            expect(received).toEqual([{ count: 42 }]);
+
+            // The advanced cursor is persisted (re-stamped onto the unchanged
+            // value) so a later reconnect resumes from 9, not 7.
+            client.close();
+
+            await flushMicrotasks();
+
+            const stored = await cache.load();
+
+            expect(stored).toEqual([
+                { identity: null, key: queryCacheKey("messages:list", "{}"), serverCursor: 9, ts: expect.any(Number), value: { count: 42 } },
+            ]);
+        });
+
+        it("persists a query value (with its cursor) when a data frame advances it", async () => {
+            expect.assertions(1);
+
+            const cache = createInMemoryQueryCache();
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                queryCache: cache,
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.subscribe(fnRef("messages:list"), {}, () => undefined);
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            const sub = JSON.parse(socket.sent[0]!);
+
+            socket.receive({ id: sub.id, type: "ack" });
+            socket.receive({ cursor: 12, data: { count: 5 }, id: sub.id, type: "data" });
+
+            // close() flushes the debounced read-cache write immediately.
+            client.close();
+
+            await flushMicrotasks();
+
+            const stored = await cache.load();
+
+            expect(stored).toEqual([
+                { identity: null, key: queryCacheKey("messages:list", "{}"), serverCursor: 12, ts: expect.any(Number), value: { count: 5 } },
+            ]);
         });
     });
 });

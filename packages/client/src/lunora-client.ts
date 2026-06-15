@@ -4,6 +4,7 @@ import type { OptimisticUpdate } from "./local-store";
 import { createLocalStore } from "./local-store";
 import type { QueuedMutation } from "./offline-queue";
 import { nextId, OfflineQueue, reportPersistenceError } from "./offline-queue";
+import { queryCacheKey } from "./query-cache";
 import type { ReconnectCalculator } from "./reconnect";
 import { createReconnect } from "./reconnect";
 import type { StreamHandle, StreamIterable } from "./stream";
@@ -18,6 +19,7 @@ import type {
     AuthSession,
     AuthUser,
     BookmarkStorage,
+    CachedQuery,
     ClientMessage,
     CronJobInfo,
     FunctionDescriptor,
@@ -29,6 +31,7 @@ import type {
     LunoraClientOptions,
     PersistenceAdapter,
     PersistenceErrorContext,
+    QueryCacheAdapter,
     ReconnectOptions,
     ReturnOf,
     RpcResponseBody,
@@ -37,6 +40,7 @@ import type {
     ServerDataMessage,
     ServerErrorMessage,
     ServerMessage,
+    ServerResumeMessage,
     ShardTrafficResult,
     StorageListPage,
     StorageObject,
@@ -63,6 +67,13 @@ const WS_KEEPALIVE_PING = "lunora-ping";
 
 /** Default heartbeat cadence (ms) — see {@link LunoraClientOptions.heartbeatIntervalMs}. */
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 30_000;
+
+/**
+ * Debounce window (ms) for durable read-cache writes (Pillar 2). A burst of
+ * deltas on one subscription coalesces into a single `put` per key after the
+ * socket settles, keeping IndexedDB off the per-frame hot path.
+ */
+const QUERY_CACHE_DEBOUNCE_MS = 250;
 
 /**
  * Maximum number of stream-start frames queued per connection while the
@@ -402,6 +413,25 @@ class LunoraClient {
 
     private readonly persistence: PersistenceAdapter | undefined;
 
+    /** Durable read cache (Pillar 2); `undefined` when `queryCache` is omitted or `false`. */
+    private readonly queryCache: QueryCacheAdapter | undefined;
+
+    /**
+     * Values restored from the `queryCache` at construction, keyed by the
+     * read-cache key, awaiting the `subscribe()` that will consume them. A
+     * key is consumed (deleted) the first time its subscription is created, so
+     * the cache only ever seeds the initial value — live frames take over after.
+     */
+    private readonly hydratedQueryCache = new Map<string, CachedQuery>();
+
+    /**
+     * Coalesced read-cache writes: the latest value per key, flushed to
+     * the `queryCache` on a short debounce so a burst of deltas persists once.
+     */
+    private readonly pendingCacheWrites = new Map<string, CachedQuery>();
+
+    private cacheFlushTimer: ReturnType<typeof setTimeout> | undefined;
+
     private readonly subscriptions = new SubscriptionRegistry();
 
     /** One {@link ShardConnection} per shard key (keyed by `shardKey ?? ""`). */
@@ -469,6 +499,7 @@ class LunoraClient {
         this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
         this.defaultConnectionContext = options.connectionContext;
         this.persistence = options.persistence;
+        this.queryCache = options.queryCache === false ? undefined : options.queryCache;
         this.onPersistenceError = options.offlineQueue?.onPersistenceError;
         this.offlineQueue = new OfflineQueue(options.offlineQueue, options.persistence);
 
@@ -478,6 +509,15 @@ class LunoraClient {
             // so they flush once the WS connects.
             queueMicrotask((): void => {
                 this.hydratePersistedQueue().catch(() => undefined);
+            });
+        }
+
+        if (this.queryCache) {
+            // Load the durable read cache into `hydratedQueryCache` so the first
+            // `subscribe()` for each key seeds its value before any socket opens.
+            // Best-effort and identity-gated at seed time.
+            queueMicrotask((): void => {
+                this.hydrateQueryCache().catch(() => undefined);
             });
         }
     }
@@ -1453,16 +1493,19 @@ class LunoraClient {
         if (!state) {
             this.nextSubId += 1;
             const id = `sub_${this.nextSubId.toString()}`;
+            const argsKey = stableStringify(argsRecord);
+            const cached = this.takeHydratedCache(function_.__lunoraRef, argsKey, options.shardKey);
 
             state = {
                 acked: false,
                 args: argsRecord,
-                argsKey: stableStringify(argsRecord),
+                argsKey,
                 callbacks: new Set<SubscriptionCallback>(),
                 errorCallbacks: new Set<SubscriptionErrorCallback>(),
                 fn: function_,
                 id,
-                lastValue: undefined,
+                lastValue: cached?.value,
+                serverCursor: cached?.serverCursor,
                 serverVersion: 0,
                 shardKey: options.shardKey,
             };
@@ -1645,6 +1688,17 @@ class LunoraClient {
         this.offlineQueue.clear();
         this.queuedIdentities.clear();
 
+        // Persist any debounced read-cache writes still pending so the last
+        // values survive the reload, then drop the timer.
+        if (this.cacheFlushTimer !== undefined) {
+            clearTimeout(this.cacheFlushTimer);
+            this.cacheFlushTimer = undefined;
+        }
+
+        if (this.pendingCacheWrites.size > 0) {
+            this.flushQueryCacheWrites().catch(() => undefined);
+        }
+
         // Release client-held listener registries so callback closures (React
         // state setters, framework refs, user data) don't outlive the client.
         // The client is terminal after close(), so nothing should fire these.
@@ -1669,6 +1723,95 @@ class LunoraClient {
         } catch {
             /* durable store unavailable — boot without restored writes */
         }
+    }
+
+    /**
+     * Load every cached query into {@link hydratedQueryCache} so the next
+     * `subscribe()` for each key seeds its initial value off disk. A
+     * subscription created before this resolves simply misses the cache (it
+     * gets a live snapshot as before); the gate at seed time also drops any
+     * entry whose stamped identity no longer matches the current one.
+     */
+    private async hydrateQueryCache(): Promise<void> {
+        if (!this.queryCache) {
+            return;
+        }
+
+        try {
+            const entries = await this.queryCache.load();
+
+            for (const { key, ...entry } of entries) {
+                this.hydratedQueryCache.set(key, entry);
+            }
+        } catch {
+            /* durable store unavailable — boot without restored reads */
+        }
+    }
+
+    /**
+     * Consume the hydrated read-cache entry for a key (if any), gated on
+     * identity. The entry is removed whether or not it matches — the cache only
+     * ever seeds a subscription's first value. A mismatch (the cache was written
+     * under a different identity) yields `undefined` so a signed-out cache never
+     * leaks into a new session.
+     */
+    private takeHydratedCache(functionPath: string, argsKey: string, shardKey?: string): CachedQuery | undefined {
+        const key = queryCacheKey(functionPath, argsKey, shardKey);
+        const entry = this.hydratedQueryCache.get(key);
+
+        if (entry === undefined) {
+            return undefined;
+        }
+
+        this.hydratedQueryCache.delete(key);
+
+        return entry.identity === this.identityFingerprint() ? entry : undefined;
+    }
+
+    /**
+     * Queue a coalesced read-cache write for a subscription's current value.
+     * Latest-wins per key; flushed on a short debounce so a delta burst writes
+     * once. No-op when the read cache is disabled or the value is undefined
+     * (nothing to render offline).
+     */
+    private persistQueryValue(state: SubscriptionState): void {
+        if (!this.queryCache || state.lastValue === undefined) {
+            return;
+        }
+
+        const key = queryCacheKey(state.fn.__lunoraRef, state.argsKey, state.shardKey);
+
+        this.pendingCacheWrites.set(key, {
+            identity: this.identityFingerprint(),
+            serverCursor: state.serverCursor,
+            ts: Date.now(),
+            value: state.lastValue,
+        });
+
+        this.cacheFlushTimer ??= setTimeout(() => {
+            this.flushQueryCacheWrites().catch(() => undefined);
+        }, QUERY_CACHE_DEBOUNCE_MS);
+    }
+
+    /** Drain {@link pendingCacheWrites} to the durable store. */
+    private async flushQueryCacheWrites(): Promise<void> {
+        this.cacheFlushTimer = undefined;
+
+        const { queryCache } = this;
+
+        if (!queryCache) {
+            this.pendingCacheWrites.clear();
+
+            return;
+        }
+
+        const batch = [...this.pendingCacheWrites.entries()];
+
+        this.pendingCacheWrites.clear();
+
+        // Writes are independent; fire them together and swallow individual
+        // failures (a quota error on one key must not drop the others).
+        await Promise.allSettled(batch.map(([key, entry]) => queryCache.put(key, entry)));
     }
 
     /** Derive the aggregate status from the per-shard socket states. */
@@ -2195,7 +2338,15 @@ class LunoraClient {
 
         sendOn(conn, {
             id: state.id,
-            query: { args: state.args, functionPath: state.fn.__lunoraRef, table },
+            // `sinceSeq` rides along when we hold a persisted cursor for this
+            // sub (a hydrated read or an earlier frame), so the server can
+            // resume instead of re-snapshotting. Omitted on a cold sub.
+            query: {
+                args: state.args,
+                functionPath: state.fn.__lunoraRef,
+                table,
+                ...(state.serverCursor === undefined ? {} : { sinceSeq: state.serverCursor }),
+            },
             type: "subscribe",
         });
     }
@@ -2246,6 +2397,11 @@ class LunoraClient {
             }
             case "error": {
                 this.handleErrorMessage(message);
+
+                break;
+            }
+            case "resume": {
+                this.handleResumeMessage(message);
 
                 break;
             }
@@ -2301,12 +2457,44 @@ class LunoraClient {
         state.lastValue = payload;
         state.serverVersion += 1;
 
+        // Advance the resume cursor when the frame carries one (CDC-enabled
+        // shard); replayed as `sinceSeq` on the next reconnect.
+        if (message.cursor !== undefined) {
+            state.serverCursor = message.cursor;
+        }
+
+        // Persist the new value to the durable read cache (debounced).
+        this.persistQueryValue(state);
+
         for (const callback of state.callbacks) {
             try {
                 callback(payload);
             } catch {
                 /* user callback threw — ignore */
             }
+        }
+    }
+
+    /**
+     * Handle a `resume` frame (Pillar 1b): the server proved nothing the
+     * subscription reads changed since our `sinceSeq`, so the cached value is
+     * still current. We keep `lastValue` as-is, mark the sub acked, and advance
+     * the cursor (re-persisting so the next reconnect resumes from the newer
+     * watermark). No callback fires — the value didn't change, and `subscribe()`
+     * already replayed the cached value to every consumer synchronously.
+     */
+    private handleResumeMessage(message: ServerResumeMessage): void {
+        const state = this.subscriptions.getById(message.id);
+
+        if (!state) {
+            return;
+        }
+
+        state.acked = true;
+
+        if (message.cursor !== undefined && message.cursor !== state.serverCursor) {
+            state.serverCursor = message.cursor;
+            this.persistQueryValue(state);
         }
     }
 
@@ -2424,6 +2612,25 @@ class LunoraClient {
             (error as Error & { code?: string }).code = "OFFLINE_IDENTITY_CHANGED";
             item.reject(error);
         }
+
+        this.clearQueryCacheForIdentityChange();
+    }
+
+    /**
+     * Drop the durable read cache on an identity change so a cached value stamped
+     * under the previous identity can never hydrate into a new session. Clears
+     * the in-flight write batch and the not-yet-consumed hydrated entries too;
+     * the durable `clear()` is best-effort.
+     */
+    private clearQueryCacheForIdentityChange(): void {
+        if (this.cacheFlushTimer !== undefined) {
+            clearTimeout(this.cacheFlushTimer);
+            this.cacheFlushTimer = undefined;
+        }
+
+        this.pendingCacheWrites.clear();
+        this.hydratedQueryCache.clear();
+        this.queryCache?.clear().catch(() => undefined);
     }
 
     private async flushOfflineQueue(shardKey: string | undefined): Promise<void> {

@@ -30,6 +30,15 @@ export interface SubscriptionState {
     lastValue: unknown;
 
     /**
+     * The `__cdc_log` high-watermark (`cursor`) the `lastValue` reflects,
+     * captured from the last `data`/`delta`/`resume` frame. Persisted to the
+     * durable read cache and replayed as `sinceSeq` on reconnect so the server
+     * can resume instead of re-snapshotting (Pillar 1b/2). Absent until the
+     * first cursor-stamped frame arrives.
+     */
+    serverCursor?: number;
+
+    /**
      * Monotonic counter incremented on every server-pushed delta or data.
      * Used by optimistic-update rollback to detect whether the server has
      * already moved past the value we'd otherwise restore.
