@@ -127,6 +127,27 @@ export const TableEditor = ({ editable = false, initialShardKey }: TableEditorPr
         );
     }, [client]);
 
+    // Reconcile a cross-tier table reference. A shard-tier URL that names a known
+    // `.global()` table — a stale link, or a `?table=verification` deep-link into a
+    // better-auth / external D1 table — would otherwise reach the shard SQLite browser
+    // and surface `unknown table: …`. Once the global names are known, rewrite the URL
+    // to the global tier (replace, so the bad URL leaves no back-button entry). Keeps
+    // `?table` as-is; the global browser then opens it.
+    useEffect(() => {
+        // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- not an event: this reconciles a deep-linked / stale URL against the asynchronously-loaded global table names; there is no user interaction to hang the redirect off of.
+        if (tier === "shard" && tableParameter !== undefined && globalTableNames.has(tableParameter)) {
+            fireAndForget(
+                navigate({
+                    replace: true,
+                    search: (previous: Record<string, unknown>) => {
+                        return { ...previous, schema: "global" };
+                    },
+                    to: "/data",
+                }),
+            );
+        }
+    }, [globalTableNames, navigate, tableParameter, tier]);
+
     // Switch tier via the schema dropdown: write `?schema=…` and clear `?table` (the
     // other tier lists different tables). `schema` is omitted for the shard default
     // so the URL stays clean (`/data` rather than `/data?schema=shard`).

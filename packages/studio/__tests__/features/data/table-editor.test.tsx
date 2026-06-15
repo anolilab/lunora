@@ -302,4 +302,22 @@ describe("tableEditor", () => {
         expect(screen.getByTestId("gdb-page").textContent).toContain("general");
         expect(schemaParam(router)).toBe("global");
     });
+
+    it("reroutes a shard-tier deep link naming a global table to the global tier", async () => {
+        expect.assertions(3);
+
+        // A stale / hand-edited link points the shard tier at `organizations`, which
+        // only exists in D1 (the global tier). Without reconciliation the shard browser
+        // reads it and throws `unknown table: organizations`; instead the editor must
+        // rewrite the URL to the global tier and open the table there.
+        const { router, ui } = renderEditor(createEditorClient(), "/data?table=organizations");
+
+        render(ui);
+
+        await screen.findByTestId("cirrus-global-data-browser");
+
+        expect(screen.queryByTestId("cirrus-data-browser")).toBeNull();
+        expect(schemaParam(router)).toBe("global");
+        expect(tableParam(router)).toBe("organizations");
+    });
 });
