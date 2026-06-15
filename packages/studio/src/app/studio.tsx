@@ -39,6 +39,7 @@ import type { SchedulePanelProps } from "../features/logs/schedule-panel";
 import { SchedulePanel } from "../features/logs/schedule-panel";
 import SubscriptionsPanel from "../features/logs/subscriptions-panel";
 import { PaymentsPanel } from "../features/payments/payments-panel";
+import { PermissionsPanel } from "../features/permissions/permissions-panel";
 import DashboardsPanel from "../features/reports/dashboards-panel";
 import { HealthPanel } from "../features/reports/health-panel";
 import { MetricsPanel } from "../features/reports/metrics-panel";
@@ -80,6 +81,7 @@ type StudioTab =
     | "migrations"
     | "organizations"
     | "payments"
+    | "permissions"
     | "pitr"
     | "realtime"
     | "rls"
@@ -223,6 +225,7 @@ const TAB_ICONS: Record<StudioTab, ReactNode> = {
     metrics: <path d="M5 20V10m6.5 10V4M18 20v-7M3 20h18" />,
     migrations: <path d="M4 12a8 8 0 0 1 13.7-5.6L20 8M20 4v4h-4M20 12a8 8 0 0 1-13.7 5.6L4 16m0 4v-4h4" />,
     organizations: <path d="M3 21V8l6-4 6 4v13M9 21v-5h2v5M15 11h6v10M18 14v.01M18 17v.01M6 9v.01M6 12v.01M6 15v.01" />,
+    permissions: <path d="M12 3 5 6v5c0 4.5 3 7.8 7 9 4-1.2 7-4.5 7-9V6l-7-3Zm-3 8 2.2 2.2L15 9.5M8.5 16h7" />,
     pitr: <path d="M12 21a9 9 0 1 0-9-9M12 7.5V12l3 2M3 12l-2-2m2 2 2-2" />,
     realtime: <path d="M5 12a7 7 0 0 1 14 0M8 12a4 4 0 0 1 8 0M12 12v8m0-8a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" />,
     rls: <path d="M12 3 5 6v5c0 4.5 3 7.8 7 9 4-1.2 7-4.5 7-9V6l-7-3ZM8.5 10h7M8.5 13h7" />,
@@ -257,7 +260,7 @@ const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
     { key: "auth", tabs: ["users", "organizations", "authSessions", "authConfig"] },
     { key: "storage", tabs: ["files", "storageRules"] },
     { key: "reports", tabs: ["dashboards", "metrics", "health"] },
-    { key: "advisors", tabs: ["security", "rls", "insights"] },
+    { key: "advisors", tabs: ["security", "rls", "permissions", "insights"] },
     { key: "logs", tabs: ["logs", "audit", "schedule", "realtime", "mail", "drains", "payments"] },
     { key: "settings", tabs: ["settings"] },
 ];
@@ -346,6 +349,7 @@ const TABS = [
     "health",
     "security",
     "rls",
+    "permissions",
     "insights",
     "logs",
     "realtime",
@@ -435,6 +439,7 @@ const StudioLayout = (): ReactElement => {
             pitr: t("Time Travel"),
             mail: t("Mail"),
             payments: t("Payments"),
+            permissions: t("Permissions"),
             realtime: t("Realtime"),
             rls: t("RLS Policies"),
             schedule: t("Scheduled"),
@@ -486,6 +491,7 @@ const StudioLayout = (): ReactElement => {
             pitr: t("Restore a shard to a point in the last 30 days."),
             mail: t("Email your app sent, captured in dev."),
             payments: t("Synced customers, subscriptions, and webhook events."),
+            permissions: t("Inspect access policies per table, and probe a function as any identity."),
             realtime: t("Active WebSocket subscriptions on this shard."),
             rls: t("Inspect row-level-security policies and roles, per table."),
             schedule: t("Inspect and cancel scheduled jobs."),
@@ -809,6 +815,7 @@ const buildRouter = ({
         metrics: <MetricsPanel initialShardKey={initialShardKey} />,
         migrations: <MigrationsPanel initialShardKey={initialShardKey} />,
         organizations: <OrganizationsPanel />,
+        permissions: <PermissionsPanel functions={functions} runAsIdentity={runAsIdentity} />,
         pitr: <PitrPanel initialShardKey={initialShardKey} />,
         mail: <MailPanel />,
         payments: <PaymentsPanel />,

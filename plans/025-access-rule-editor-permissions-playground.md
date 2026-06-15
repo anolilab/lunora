@@ -200,7 +200,7 @@ plain-Node studio React + advisor tests.
 
 ## Item breakdown
 
-- [ ] **Item 1 — Permissions matrix (read-only).** New
+- [x] **Item 1 — Permissions matrix (read-only).** New
       `features/permissions/permissions-matrix.tsx`. Fetch `rlsPolicies` (+ optionally
       `maskPolicies`) via a live admin hook (mirror `migrations.tsx`'s
       `useLiveAdmin`). Render a table × operation grid: rows = tables, columns =
@@ -211,7 +211,7 @@ plain-Node studio React + advisor tests.
       capability needed — it's read-only metadata). **Tests**: renders policies into
       the grid from a mocked `rlsPolicies` result; an uncovered table shows the
       warning marker.
-- [ ] **Item 2 — Permissions playground (live probe).** A panel that lets the
+- [x] **Item 2 — Permissions playground (live probe).** A panel that lets the
       developer pick a function + an identity (userId / roles / claims) and run it via
       the existing `runAs` RPC, showing allow/deny + the returned/denied result. Reuse
       the function-runner's `runAs` dispatch (extract the shared call into
