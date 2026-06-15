@@ -28,7 +28,7 @@ What's missing: nothing. This is a deliberate "do not build yet" decision.
 
 ## Item breakdown
 
-- [ ] **Item 1: Record the non-goal + revisit trigger (the whole plan).**
+- [x] **Item 1: Record the non-goal + revisit trigger (the whole plan).**
     - Add a short "Why no MQTT/Pub/Sub" note where realtime is documented (the `cirrus-realtime` skill, or a docs page): realtime fan-out is DO-WebSocket-based; MQTT broker ingest is out of scope while Pub/Sub is beta.
     - State the **revisit trigger** explicitly: (a) Cloudflare Pub/Sub reaches GA (general availability, ungated onboarding, stable API), **and** (b) a user needs to ingest from native-MQTT devices into Cirrus. Both must hold.
     - If/when revisited, the likely shape is a tiny on-publish Worker-hook helper in `@cirrus/runtime` that authenticates a message and routes it to a mutation — _not_ a new broker abstraction. Do not pre-build it.

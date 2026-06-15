@@ -10,25 +10,25 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (one-line reason) | REJECTED.
 
 ## Plan index
 
-| Plan | Cloudflare product            | Shape                                   | Pkg                      | Pri | Eff | Status              |
-| ---- | ----------------------------- | --------------------------------------- | ------------------------ | --- | --- | ------------------- |
-| 027  | Workers KV                    | thin `@cirrus/kv` + `ctx.kv`            | new `@cirrus/kv`         | P2  | M   | DONE                |
-| 028  | Hyperdrive (Postgres/MySQL)   | `@cirrus/hyperdrive` + `ctx.sql`        | new `@cirrus/hyperdrive` | P2  | L   | DONE                |
-| 029  | Email Routing (inbound)       | `@cirrus/mail/inbound` subpath          | mail                     | P2  | M   | DONE                |
-| 030  | Service Bindings              | config validate + typed env seam        | config (+codegen)        | P2  | M   | DONE                |
-| 031  | Browser Rendering             | `@cirrus/browser` + `ctx.browser`       | new `@cirrus/browser`    | P2  | M   | DONE (Playwright)   |
-| 032  | Cloudflare Images             | `@cirrus/images` + `ctx.images`         | new `@cirrus/images`     | P1  | M   | DONE                |
-| 033  | Stream (video)                | `@cirrus/stream` (REST + signed URLs)   | new `@cirrus/stream`     | P3  | M-L | TODO (P3, deferred) |
-| 034  | Turnstile (CAPTCHA)           | `@cirrus/auth` middleware + helper      | auth                     | P1  | S   | DONE                |
-| 035  | Analytics Engine              | `ctx.analytics` + Studio SQL read       | config/studio            | P1  | M   | DONE                |
-| 036  | Pipelines                     | hint-binding + `ctx` send helper        | config/storage           | P3  | S   | TODO (P3, deferred) |
-| 037  | Realtime / Calls (WebRTC)     | optional TURN/SFU helper (out-of-core)  | —                        | P3  | S   | TODO (P3, deferred) |
-| 038  | Pub/Sub (MQTT)                | defer until GA (non-goal w/ trigger)    | —                        | P3  | S   | TODO (P3, deferred) |
-| 039  | Workers for Platforms         | validator passthrough only              | config                   | P3  | S   | TODO (P3, deferred) |
-| 040  | Logpush                       | validator key + docs (Studio card live) | config                   | P2  | S   | DONE                |
-| 041  | Smart Placement               | validator typo-safety + doc note        | config                   | P3  | S   | TODO (P3, deferred) |
-| 042  | mTLS client certificates      | validator passthrough only              | config                   | P3  | S   | TODO (P3, deferred) |
-| 043  | Pages → Workers Static Assets | reject Pages; scope `assets` validator  | config                   | P3  | S   | TODO (P3, deferred) |
+| Plan | Cloudflare product            | Shape                                   | Pkg                      | Pri | Eff | Status                     |
+| ---- | ----------------------------- | --------------------------------------- | ------------------------ | --- | --- | -------------------------- |
+| 027  | Workers KV                    | thin `@cirrus/kv` + `ctx.kv`            | new `@cirrus/kv`         | P2  | M   | DONE                       |
+| 028  | Hyperdrive (Postgres/MySQL)   | `@cirrus/hyperdrive` + `ctx.sql`        | new `@cirrus/hyperdrive` | P2  | L   | DONE                       |
+| 029  | Email Routing (inbound)       | `@cirrus/mail/inbound` subpath          | mail                     | P2  | M   | DONE                       |
+| 030  | Service Bindings              | config validate + typed env seam        | config (+codegen)        | P2  | M   | DONE                       |
+| 031  | Browser Rendering             | `@cirrus/browser` + `ctx.browser`       | new `@cirrus/browser`    | P2  | M   | DONE (Playwright)          |
+| 032  | Cloudflare Images             | `@cirrus/images` + `ctx.images`         | new `@cirrus/images`     | P1  | M   | DONE                       |
+| 033  | Stream (video)                | `@cirrus/stream` (REST + signed URLs)   | new `@cirrus/stream`     | P3  | M-L | TODO (P3, deferred)        |
+| 034  | Turnstile (CAPTCHA)           | `@cirrus/auth` middleware + helper      | auth                     | P1  | S   | DONE                       |
+| 035  | Analytics Engine              | `ctx.analytics` + Studio SQL read       | config/studio            | P1  | M   | DONE                       |
+| 036  | Pipelines                     | hint-binding + `ctx` send helper        | config/storage           | P3  | S   | TODO (P3, deferred)        |
+| 037  | Realtime / Calls (WebRTC)     | optional TURN/SFU helper (out-of-core)  | —                        | P3  | S   | TODO (P3, deferred)        |
+| 038  | Pub/Sub (MQTT)                | defer until GA (non-goal w/ trigger)    | —                        | P3  | S   | DONE (non-goal documented) |
+| 039  | Workers for Platforms         | validator passthrough only              | config                   | P3  | S   | DONE                       |
+| 040  | Logpush                       | validator key + docs (Studio card live) | config                   | P2  | S   | DONE                       |
+| 041  | Smart Placement               | validator typo-safety + doc note        | config                   | P3  | S   | DONE                       |
+| 042  | mTLS client certificates      | validator passthrough only              | config                   | P3  | S   | DONE                       |
+| 043  | Pages → Workers Static Assets | reject Pages; scope `assets` validator  | config                   | P3  | S   | DONE (Pages rejected)      |
 
 ## How these were derived
 

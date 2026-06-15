@@ -28,11 +28,11 @@ What's missing: an explicit "Pages is a non-goal" statement, and `assets` is not
 
 ## Item breakdown
 
-- [ ] **Item 1: Document Pages as a non-goal; point users to Workers Static Assets.**
+- [x] **Item 1: Document Pages as a non-goal; point users to Workers Static Assets.**
     - Short docs note: Cirrus does not and will not ship a Cloudflare Pages deploy path — the Cirrus worker is the deploy unit. To serve the Vite build from the same Worker, use Workers Static Assets (`assets` block). Link CF Static Assets docs.
     - Revisit trigger: Cloudflare deprecates or materially changes Workers Static Assets such that Pages becomes the only path again (unlikely). No code.
 
-- [ ] **Item 2: Recognize and shape-check the `assets` block in the validator.**
+- [x] **Item 2: Recognize and shape-check the `assets` block in the validator.**
     - In `packages/config/src/wrangler-validator.ts`, add to `WranglerConfig` (`:65-83`): `assets?: { binding?: string; directory?: string; html_handling?: string; not_found_handling?: string };`.
     - Add `validateAssets(wrangler, errors, warnings)` (mirror `validateTailConsumers` shape): if `assets !== undefined`, require it to be an object and require a non-empty string `directory` (`'assets must declare a non-empty "directory" pointing at the built client output (e.g. "./dist/client")'`); if `binding` is present it must be a non-empty string; if `html_handling`/`not_found_handling` are present they must be strings. Call it next to the other `validate*` calls (`:395-398`).
     - **FS-aware nicety (optional, in `validateWranglerProject`, `:427-488`)**: the existing container-image existence check already does `existsSync(join(configDirectory, image))`. By the same pattern, if `assets.directory` is set but does not exist _at validation time_, push a **warning** (not error — the dir only exists after a build): `'assets.directory "<dir>" does not exist yet — it is created by the client build; run the build before deploy'`. Keep it a warning to avoid breaking pre-build validation.

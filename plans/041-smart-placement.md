@@ -27,7 +27,7 @@ What's missing: `placement` is not a typed/validated key, and there's no guidanc
 
 ## Item breakdown
 
-- [ ] **Item 1: Recognize and shape-check `placement` in the validator (the whole plan).**
+- [x] **Item 1: Recognize and shape-check `placement` in the validator (the whole plan).**
     - In `packages/config/src/wrangler-validator.ts`, add to `WranglerConfig` (`:65-83`, alphabetical): `placement?: { mode?: string };`.
     - Add `validatePlacement(wrangler, errors)` (mirror `validateTailConsumers`'s shape): if `wrangler.placement !== undefined`, require it to be an object; if `placement.mode` is present, require it to be the string `"smart"` (the only documented value today) and otherwise push `'placement.mode must be "smart" (the only supported Smart Placement mode)'`. Call it alongside the other `validate*` calls (`:395-398`).
     - Tests in `packages/config/__tests__/` (mirror existing validator tests): `{ placement: { mode: "smart" } }` → valid; `{ placement: { mode: "fast" } }` → one error; `{ placement: "smart" }` (wrong shape) → one error; absent → no error. Plain-Node Vitest; no workerd.

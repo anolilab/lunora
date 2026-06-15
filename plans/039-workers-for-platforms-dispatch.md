@@ -59,7 +59,7 @@ multi-tenant runtime.
 
 ## Item breakdown
 
-- [ ] Item 1: Validator passthrough for `dispatch_namespaces`
+- [x] Item 1: Validator passthrough for `dispatch_namespaces`
     - `packages/config/src/wrangler-validator.ts` — add to `WranglerConfig` (65-83): `dispatch_namespaces?: ReadonlyArray<{ binding?: string; namespace?: string; outbound?: unknown } | null | undefined>`. Add a minimal `validateDispatchNamespaces(wrangler, errors)` (model on `validateTailConsumers`, 300-322): each entry needs a non-empty `binding` and a non-empty `namespace`. Wire it into `validateWranglerConfig` (346-401). Keep validation _thin_ — do not validate `outbound` binding shapes (that's deep WfP territory Cirrus shouldn't police).
     - **Test**: `packages/config/__tests__/wrangler-validator.test.ts` — a malformed `dispatch_namespaces` entry (missing `binding`/`namespace`) errors; a well-formed entry passes; absent key is silent. Confirm that adding the key does **not** trip any "unknown binding" or DO/migration cross-checks.
 
@@ -68,7 +68,7 @@ multi-tenant runtime.
     - If Plan 030's seam does **not** exist yet, **skip this item** — do not build env-typing infrastructure for a P3 binding. Leave `env.DISPATCHER` as `Record<string, unknown>` access; document the cast users should apply.
     - **Test (only if implemented)**: a codegen fixture with a `dispatch_namespaces` entry emits the typed property; absent, emits nothing. Plain-Node golden assertion.
 
-- [ ] Item 3: Documentation note (scope honesty)
+- [x] Item 3: Documentation note (scope honesty)
     - In the plan-status update (and any future docs PR — do **not** create docs files here unless the user asks), record explicitly: Cirrus supports `dispatch_namespaces` as **wrangler config passthrough** (validated, optionally typed) for users who already operate a Workers-for-Platforms account; Cirrus does **not** provide script-upload/management, tenant isolation, or outbound-binding helpers. This sets the boundary so a future contributor doesn't mistake passthrough support for an endorsement to build the multi-tenant runtime.
 
 ## Verification

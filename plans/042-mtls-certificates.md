@@ -56,7 +56,7 @@ remote-dev proxying, a package, any `ctx.*` facade.
 
 ## Item breakdown
 
-- [ ] Item 1: Validator passthrough for `mtls_certificates`
+- [x] Item 1: Validator passthrough for `mtls_certificates`
     - `packages/config/src/wrangler-validator.ts` — add to `WranglerConfig` (65-83): `mtls_certificates?: ReadonlyArray<{ binding?: string; certificate_id?: string } | null | undefined>`. Add a thin `validateMtlsCertificates(wrangler, errors)` (model on `validateTailConsumers`, 300-322): each entry needs a non-empty `binding` and a non-empty `certificate_id`. Wire into `validateWranglerConfig` (346-401).
     - **Test**: `packages/config/__tests__/wrangler-validator.test.ts` — a malformed entry (missing `binding` or `certificate_id`) errors; a well-formed `{ binding, certificate_id }` passes; absent key is silent; confirm it triggers no DO/migration cross-checks.
 
@@ -65,7 +65,7 @@ remote-dev proxying, a package, any `ctx.*` facade.
     - If Plan 030's seam is absent, **skip this item**. `env.<CERT>.fetch(...)` works fine via `Record<string, unknown>`; document the cast (`(env.MY_CERT as Fetcher).fetch(req)`).
     - **Test (only if implemented)**: a codegen fixture with an `mtls_certificates` entry emits the typed `Fetcher` property; absent, emits nothing. Plain-Node golden assertion.
 
-- [ ] Item 3: Documentation note (scope honesty)
+- [x] Item 3: Documentation note (scope honesty)
     - In the plan-status update (do **not** create docs files here unless asked): record that Cirrus supports `mtls_certificates` as **wrangler config passthrough** (validated, optionally typed). Cert upload/rotation is done via `wrangler mtls-certificate upload`; Cirrus never handles cert/key material. This pins the boundary so no one mistakes passthrough support for a cert-management feature.
 
 ## Verification
