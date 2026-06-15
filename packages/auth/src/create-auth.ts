@@ -57,5 +57,26 @@ export const createAuth = (options: CirrusAuthOptions): CirrusAuth => {
         validateSessionPolicy(options.session);
     }
 
-    return betterAuth(options);
+    // Rate limiting is ON by default for `/api/auth/*`.
+    //
+    // better-auth's own default is `rateLimit.enabled ?? isProduction`, and its
+    // `isProduction` is `process.env.NODE_ENV === "production"` resolved at
+    // module-load time. On Cloudflare Workers that check is unreliable: the
+    // runtime has no Node `process.env` (absent entirely without
+    // `nodejs_compat`, and even with it `NODE_ENV` is rarely `"production"` at
+    // request time). So better-auth would silently leave auth endpoints
+    // *unthrottled* on a real deployment — the surprise we refuse to ship.
+    //
+    // We therefore default `enabled: true` whenever the caller hasn't made an
+    // explicit choice. We only fill the `enabled` flag and otherwise forward
+    // the caller's `rateLimit` verbatim, so better-auth's `window` (10s) / `max`
+    // (100) defaults and any custom rules still apply. Callers who genuinely
+    // want it off can pass `rateLimit: { enabled: false }` (e.g. when fronting
+    // auth with their own limiter), and any explicit `enabled` value wins.
+    const resolvedOptions: CirrusAuthOptions =
+        options.rateLimit?.enabled === undefined
+            ? { ...options, rateLimit: { ...options.rateLimit, enabled: true } }
+            : options;
+
+    return betterAuth(resolvedOptions);
 };
