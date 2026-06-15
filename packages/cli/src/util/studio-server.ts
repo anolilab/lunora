@@ -18,7 +18,16 @@ import { connect } from "node:net";
 import type { Duplex } from "node:stream";
 
 import { detectAgentRules } from "@cirrus/config";
-import { handleSchemaEditRequest, loadStudioAssets, renderStudioHtml, resolveAdminToken, SCHEMA_EDIT_ENDPOINT, studioAssetsStamp } from "@cirrus/config/studio-host";
+import {
+    handlePolicyScaffoldRequest,
+    handleSchemaEditRequest,
+    loadStudioAssets,
+    POLICY_SCAFFOLD_ENDPOINT,
+    renderStudioHtml,
+    resolveAdminToken,
+    SCHEMA_EDIT_ENDPOINT,
+    studioAssetsStamp,
+} from "@cirrus/config/studio-host";
 
 /** Request paths the studio server reverse-proxies to the worker (admin RPC, RPC, WS). */
 const PROXY_PREFIX = "/_cirrus";
@@ -77,6 +86,13 @@ const readBody = async (request: IncomingMessage): Promise<string> =>
         request.on("error", reject);
     });
 
+/** Write a JSON response with the given status — shared by the local-dev endpoints below. */
+const respondJson = (response: ServerResponse, status: number, body: unknown): void => {
+    response.statusCode = status;
+    response.setHeader("Content-Type", "application/json; charset=utf-8");
+    response.end(JSON.stringify(body));
+};
+
 /**
  * Serve the local schema-edit endpoint (plan 024 Item 3) on a loopback bind.
  * `GET` returns the parsed source schema; `POST` applies an additive edit +
@@ -86,9 +102,7 @@ const readBody = async (request: IncomingMessage): Promise<string> =>
  */
 const serveSchemaEdit = (request: IncomingMessage, response: ServerResponse, projectRoot: string): void => {
     const respond = (status: number, body: unknown): void => {
-        response.statusCode = status;
-        response.setHeader("Content-Type", "application/json; charset=utf-8");
-        response.end(JSON.stringify(body));
+        respondJson(response, status, body);
     };
 
     if (request.method === "GET") {
@@ -113,6 +127,46 @@ const serveSchemaEdit = (request: IncomingMessage, response: ServerResponse, pro
             }
 
             const result = handleSchemaEditRequest({ body: parsed, method: request.method ?? "POST", projectRoot });
+
+            respond(result.status, result.body);
+        } catch (error: unknown) {
+            respond(500, { error: error instanceof Error ? error.message : String(error), ok: false });
+        }
+    };
+
+    handleBody().catch(() => {
+        // `handleBody` already responds on every error path; this guards against
+        // an unexpected throw so the promise never floats unhandled.
+    });
+};
+
+/**
+ * Serve the local policy-scaffold endpoint (plan 025 Item 3) on a loopback
+ * bind. `POST` writes a new deny-by-default `name.policies.ts` stub, or
+ * appends `.use(rls(...))` to an existing procedure chain, then reruns codegen
+ * (a destructive rewrite is refused with `needsManualEdit`). Mounted at
+ * {@link POLICY_SCAFFOLD_ENDPOINT} (`/__cirrus/...`), outside the `/_cirrus`
+ * worker-proxy prefix, so it is never proxied.
+ */
+const servePolicyScaffold = (request: IncomingMessage, response: ServerResponse, projectRoot: string): void => {
+    const respond = (status: number, body: unknown): void => {
+        respondJson(response, status, body);
+    };
+
+    const handleBody = async (): Promise<void> => {
+        try {
+            const raw = await readBody(request);
+            let parsed: unknown;
+
+            try {
+                parsed = raw === "" ? undefined : JSON.parse(raw);
+            } catch {
+                respond(400, { error: "invalid-json", ok: false });
+
+                return;
+            }
+
+            const result = handlePolicyScaffoldRequest({ body: parsed, method: request.method ?? "POST", projectRoot });
 
             respond(result.status, result.body);
         } catch (error: unknown) {
@@ -208,6 +262,25 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
         response.end(body);
     };
 
+    // Local filesystem-mutating endpoints (schema edit, policy scaffold) are
+    // loopback-only; off a loopback bind they answer 403 with a clear reason.
+    const serveLoopbackOnly = (
+        request: IncomingMessage,
+        response: ServerResponse,
+        serve: (request: IncomingMessage, response: ServerResponse, projectRoot: string) => void,
+        deniedMessage: string,
+    ): void => {
+        if (isLoopback) {
+            serve(request, response, options.cwd);
+
+            return;
+        }
+
+        response.statusCode = 403;
+        response.setHeader("Content-Type", "text/plain");
+        response.end(deniedMessage);
+    };
+
     const document = Buffer.from(html);
     const server: Server = createServer((request, response) => {
         const pathname = pathnameOf(request.url ?? "/");
@@ -221,13 +294,14 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
 
         // Local schema-edit endpoint (plan 024) — loopback-only, never proxied.
         if (pathname === SCHEMA_EDIT_ENDPOINT) {
-            if (isLoopback) {
-                serveSchemaEdit(request, response, options.cwd);
-            } else {
-                response.statusCode = 403;
-                response.setHeader("Content-Type", "text/plain");
-                response.end("Cirrus schema editing is only available on loopback hosts in dev.");
-            }
+            serveLoopbackOnly(request, response, serveSchemaEdit, "Cirrus schema editing is only available on loopback hosts in dev.");
+
+            return;
+        }
+
+        // Local policy-scaffold endpoint (plan 025) — same loopback-only gate.
+        if (pathname === POLICY_SCAFFOLD_ENDPOINT) {
+            serveLoopbackOnly(request, response, servePolicyScaffold, "Cirrus policy scaffolding is only available on loopback hosts in dev.");
 
             return;
         }

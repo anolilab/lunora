@@ -8,7 +8,16 @@ import type { AddressInfo } from "node:net";
 // lazily (and degrade gracefully when it isn't installed).
 import { detectAgentRules } from "@cirrus/config";
 import type { StudioAssets } from "@cirrus/config/studio-host";
-import { handleSchemaEditRequest, loadStudioAssets, renderStudioHtml, resolveAdminToken, SCHEMA_EDIT_ENDPOINT, studioAssetsStamp } from "@cirrus/config/studio-host";
+import {
+    handlePolicyScaffoldRequest,
+    handleSchemaEditRequest,
+    loadStudioAssets,
+    POLICY_SCAFFOLD_ENDPOINT,
+    renderStudioHtml,
+    resolveAdminToken,
+    SCHEMA_EDIT_ENDPOINT,
+    studioAssetsStamp,
+} from "@cirrus/config/studio-host";
 import type { Plugin, ViteDevServer } from "vite";
 
 /** Dev-server path the studio SPA is served from. */
@@ -50,6 +59,13 @@ const readBody = async (request: IncomingMessage): Promise<string> =>
         request.on("error", reject);
     });
 
+/** Write a JSON response with the given status — shared by the local-dev endpoints below. */
+const respondJson = (response: ServerResponse, status: number, body: unknown): void => {
+    response.statusCode = status;
+    response.setHeader("Content-Type", "application/json; charset=utf-8");
+    response.end(JSON.stringify(body));
+};
+
 /**
  * Serve the local schema-edit endpoint (plan 024 Item 3): `GET` returns the
  * parsed source schema; `POST` applies an additive edit + reruns codegen (or
@@ -58,9 +74,7 @@ const readBody = async (request: IncomingMessage): Promise<string> =>
  */
 const serveSchemaEdit = (request: IncomingMessage, response: ServerResponse, projectRoot: string): void => {
     const respond = (status: number, body: unknown): void => {
-        response.statusCode = status;
-        response.setHeader("Content-Type", "application/json; charset=utf-8");
-        response.end(JSON.stringify(body));
+        respondJson(response, status, body);
     };
 
     if (request.method === "GET") {
@@ -85,6 +99,45 @@ const serveSchemaEdit = (request: IncomingMessage, response: ServerResponse, pro
             }
 
             const result = handleSchemaEditRequest({ body: parsed, method: request.method ?? "POST", projectRoot });
+
+            respond(result.status, result.body);
+        } catch (error: unknown) {
+            respond(500, { error: error instanceof Error ? error.message : String(error), ok: false });
+        }
+    };
+
+    handleBody().catch(() => {
+        // `handleBody` already responds on every error path; this guards against
+        // an unexpected throw so the promise never floats unhandled.
+    });
+};
+
+/**
+ * Serve the local policy-scaffold endpoint (plan 025 Item 3): `POST` writes a
+ * new deny-by-default `name.policies.ts` stub, or appends `.use(rls(...))` to
+ * an existing procedure chain, then reruns codegen (a destructive rewrite is
+ * refused with `needsManualEdit`). Local-dev-only — already loopback-gated by
+ * the caller, like the rest of `/__cirrus`.
+ */
+const servePolicyScaffold = (request: IncomingMessage, response: ServerResponse, projectRoot: string): void => {
+    const respond = (status: number, body: unknown): void => {
+        respondJson(response, status, body);
+    };
+
+    const handleBody = async (): Promise<void> => {
+        try {
+            const raw = await readBody(request);
+            let parsed: unknown;
+
+            try {
+                parsed = raw === "" ? undefined : JSON.parse(raw);
+            } catch {
+                respond(400, { error: "invalid-json", ok: false });
+
+                return;
+            }
+
+            const result = handlePolicyScaffoldRequest({ body: parsed, method: request.method ?? "POST", projectRoot });
 
             respond(result.status, result.body);
         } catch (error: unknown) {
@@ -180,6 +233,14 @@ const createStudioHandler = (
         // worker. Intercept before the SPA fallback so it isn't shadowed.
         if (pathname === SCHEMA_EDIT_ENDPOINT) {
             serveSchemaEdit(request, response, projectRoot);
+
+            return;
+        }
+
+        // Local policy-scaffold endpoint (plan 025 Item 3). Same loopback gate
+        // and codegen toolchain as the schema editor above.
+        if (pathname === POLICY_SCAFFOLD_ENDPOINT) {
+            servePolicyScaffold(request, response, projectRoot);
 
             return;
         }

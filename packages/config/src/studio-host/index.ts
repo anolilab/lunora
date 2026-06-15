@@ -14,6 +14,8 @@
  */
 export { parseDevVariable, resolveAdminToken } from "./admin-token";
 export { default as loadStudioAssets, studioAssetsStamp } from "./assets";
+export type { PolicyScaffoldBody, PolicyScaffoldRequest, PolicyScaffoldResponse, WirePolicyEdit } from "./policy-scaffold-handler";
+export { handlePolicyScaffoldRequest, POLICY_SCAFFOLD_ENDPOINT } from "./policy-scaffold-handler";
 export { default as renderStudioHtml } from "./render-html";
 export type { SchemaEditRequest, SchemaEditResponse } from "./schema-edit-handler";
 export { handleSchemaEditRequest, SCHEMA_EDIT_ENDPOINT } from "./schema-edit-handler";

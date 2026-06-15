@@ -47,6 +47,17 @@ export type {
 export { applyAdditiveEdit, classifyEdit } from "./schema-edit/mutate";
 export type { ParseSchemaResult, SchemaColumn, SchemaIndex, SchemaTable } from "./schema-edit/parse";
 export { parseSchema } from "./schema-edit/parse";
+export type {
+    AdditivePolicyEdit,
+    DestructivePolicyEdit,
+    PolicyEdit,
+    PolicyScaffoldFailureReason,
+    ScaffoldFileResult,
+    ScaffoldPolicyEdit,
+    WireResult,
+    WireRlsEdit,
+} from "./schema-edit/policy-scaffold";
+export { classifyPolicyEdit, scaffoldPolicyFile, wireRlsIntoProcedure } from "./schema-edit/policy-scaffold";
 export type { DiscoverSchemaInfoResult, SchemaInfo } from "./schema-info";
 export { discoverSchemaInfo } from "./schema-info";
 export type { DiscoverWorkflowInfoResult, WorkflowIR } from "./workflow-info";

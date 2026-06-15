@@ -815,7 +815,7 @@ const buildRouter = ({
         metrics: <MetricsPanel initialShardKey={initialShardKey} />,
         migrations: <MigrationsPanel initialShardKey={initialShardKey} />,
         organizations: <OrganizationsPanel />,
-        permissions: <PermissionsPanel functions={functions} runAsIdentity={runAsIdentity} />,
+        permissions: <PermissionsPanel functions={functions} runAsIdentity={runAsIdentity} schemaEditable={schemaEditable} />,
         pitr: <PitrPanel initialShardKey={initialShardKey} />,
         mail: <MailPanel />,
         payments: <PaymentsPanel />,
@@ -905,7 +905,19 @@ const StudioShell = ({
                 scheduledCron,
                 scheduledLoad,
             }),
-        [basePath, dataEditable, functions, initialShardKey, openApiSpec, openRpcSpec, runAsIdentity, schemaEditable, scheduledCancel, scheduledCron, scheduledLoad],
+        [
+            basePath,
+            dataEditable,
+            functions,
+            initialShardKey,
+            openApiSpec,
+            openRpcSpec,
+            runAsIdentity,
+            schemaEditable,
+            scheduledCancel,
+            scheduledCron,
+            scheduledLoad,
+        ],
     );
 
     return <RouterProvider router={router} />;

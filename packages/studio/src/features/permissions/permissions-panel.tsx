@@ -6,6 +6,7 @@ import type { RlsOperation } from "../../lib/admin";
 import type { FunctionDescriptor } from "../../lib/types";
 import { PermissionsMatrix } from "./permissions-matrix";
 import { PermissionsPlayground } from "./permissions-playground";
+import PolicyScaffolder from "./policy-scaffolder";
 
 interface PermissionsPanelProps {
     /** Functions exposed to the playground; auto-discovered when omitted. */
@@ -16,6 +17,14 @@ interface PermissionsPanelProps {
      * read-only; the playground's run control is enabled only when this is set.
      */
     readonly runAsIdentity?: boolean;
+
+    /**
+     * Loopback-dev gate for the local policy/role scaffolder (plan 025 Item 3).
+     * The scaffolder writes to `cirrus/` + reruns codegen, so it renders only
+     * when set — absent from a deployed/read-only studio. Shares the schema
+     * editor's capability flag.
+     */
+    readonly schemaEditable?: boolean;
 }
 
 /**
@@ -28,7 +37,7 @@ interface PermissionsPanelProps {
  * canonical function), so the matrix passes the covering procedure's path and
  * the playground selects it.
  */
-export const PermissionsPanel = ({ functions, runAsIdentity = false }: PermissionsPanelProps = {}): ReactElement => {
+export const PermissionsPanel = ({ functions, runAsIdentity = false, schemaEditable = false }: PermissionsPanelProps = {}): ReactElement => {
     const t = useT();
     const [prefill, setPrefill] = useState<{ functionPath: string; nonce: number } | undefined>(undefined);
 
@@ -55,6 +64,12 @@ export const PermissionsPanel = ({ functions, runAsIdentity = false }: Permissio
                 <p className="text-sm text-muted-foreground">{t("Pick a function and an identity, then run it to see the access outcome.")}</p>
                 <PermissionsPlayground functions={functions} prefill={prefill} runAsIdentity={runAsIdentity} />
             </section>
+
+            {schemaEditable && (
+                <section className="flex flex-col gap-2">
+                    <PolicyScaffolder />
+                </section>
+            )}
         </div>
     );
 };
