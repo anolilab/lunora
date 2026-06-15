@@ -74,9 +74,7 @@ export const createAuth = (options: CirrusAuthOptions): CirrusAuth => {
     // want it off can pass `rateLimit: { enabled: false }` (e.g. when fronting
     // auth with their own limiter), and any explicit `enabled` value wins.
     const resolvedOptions: CirrusAuthOptions =
-        options.rateLimit?.enabled === undefined
-            ? { ...options, rateLimit: { ...options.rateLimit, enabled: true } }
-            : options;
+        options.rateLimit?.enabled === undefined ? { ...options, rateLimit: { ...options.rateLimit, enabled: true } } : options;
 
     return betterAuth(resolvedOptions);
 };

@@ -1079,13 +1079,24 @@ const facetColumn = (sql: SqlExec, options: FacetColumnOptions): FacetColumnResu
         .exec<{
             count: bigint | number;
             value: unknown;
-        }>(`SELECT ${resolved.expression} AS value, COUNT(*) AS count FROM ${quoted}${whereSql} GROUP BY ${resolved.expression} ORDER BY count DESC LIMIT ?`, ...resolved.params, ...whereParams, ...resolved.params, limit + 1)
+        }>(
+            `SELECT ${resolved.expression} AS value, COUNT(*) AS count FROM ${quoted}${whereSql} GROUP BY ${resolved.expression} ORDER BY count DESC LIMIT ?`,
+            ...resolved.params,
+            ...whereParams,
+            ...resolved.params,
+            limit + 1,
+        )
         .toArray();
 
     const truncated = rows.length > limit;
     const kept = truncated ? rows.slice(0, limit) : rows;
 
-    return { truncated, values: kept.map((row) => {return { count: Number(row.count), value: row.value }}) };
+    return {
+        truncated,
+        values: kept.map((row) => {
+            return { count: Number(row.count), value: row.value };
+        }),
+    };
 };
 
 /** One row that references a stored R2 object through a `v.storage()` column. */

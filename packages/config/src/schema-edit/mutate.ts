@@ -89,7 +89,9 @@ type ApplyEditResult = { ok: false; reason: ApplyFailureReason } | { ok: true; t
 /** Find the `defineSchema({ ... })` tables object literal, or a failure reason. */
 const findTablesObject = (
     source: string,
-): { object: ObjectLiteralExpression; sourceFile: ReturnType<Project["createSourceFile"]> } | { reason: Exclude<ApplyFailureReason, "destructive" | "duplicate-column" | "duplicate-index" | "duplicate-table" | "unknown-table"> } => {
+):
+    | { object: ObjectLiteralExpression; sourceFile: ReturnType<Project["createSourceFile"]> }
+    | { reason: Exclude<ApplyFailureReason, "destructive" | "duplicate-column" | "duplicate-index" | "duplicate-table" | "unknown-table"> } => {
     const project = new Project({ compilerOptions: { allowJs: true }, useInMemoryFileSystem: true });
     const sourceFile = project.createSourceFile("schema.ts", source, { overwrite: true });
 
@@ -103,9 +105,9 @@ const findTablesObject = (
     }
 
     if (defineSchemaCall === undefined) {
-        const aliased = sourceFile.getImportDeclarations().some((declaration) =>
-            declaration.getNamedImports().some((named) => named.getName() === "defineSchema" && named.getAliasNode() !== undefined),
-        );
+        const aliased = sourceFile
+            .getImportDeclarations()
+            .some((declaration) => declaration.getNamedImports().some((named) => named.getName() === "defineSchema" && named.getAliasNode() !== undefined));
 
         return { reason: aliased ? "aliased-define-schema" : "no-define-schema" };
     }
@@ -122,7 +124,10 @@ const findTablesObject = (
 /** Look up a table's property assignment in the tables object, if present. */
 const findTableProperty = (tablesObject: ObjectLiteralExpression, table: string): PropertyAssignment | undefined => {
     for (const property of tablesObject.getProperties()) {
-        if (property.getKind() === SyntaxKind.PropertyAssignment && (property as PropertyAssignment).getNameNode().getText().replaceAll(/["']/gu, "") === table) {
+        if (
+            property.getKind() === SyntaxKind.PropertyAssignment &&
+            (property as PropertyAssignment).getNameNode().getText().replaceAll(/["']/gu, "") === table
+        ) {
             return property as PropertyAssignment;
         }
     }
@@ -172,7 +177,13 @@ const applyAddOptionalColumn = (tablesObject: ObjectLiteralExpression, edit: Add
         return "unknown-table";
     }
 
-    const exists = shape.getProperties().some((property) => property.getKind() === SyntaxKind.PropertyAssignment && (property as PropertyAssignment).getNameNode().getText().replaceAll(/["']/gu, "") === edit.column);
+    const exists = shape
+        .getProperties()
+        .some(
+            (property) =>
+                property.getKind() === SyntaxKind.PropertyAssignment &&
+                (property as PropertyAssignment).getNameNode().getText().replaceAll(/["']/gu, "") === edit.column,
+        );
 
     if (exists) {
         return "duplicate-column";
@@ -205,7 +216,11 @@ const applyAddIndex = (tableProperty: PropertyAssignment | undefined, edit: AddI
         const access = expression.asKindOrThrow(SyntaxKind.PropertyAccessExpression);
         const [nameArgument] = call.getArguments();
 
-        return access.getName() === "index" && nameArgument?.getKind() === SyntaxKind.StringLiteral && nameArgument.asKindOrThrow(SyntaxKind.StringLiteral).getLiteralText() === edit.name;
+        return (
+            access.getName() === "index" &&
+            nameArgument?.getKind() === SyntaxKind.StringLiteral &&
+            nameArgument.asKindOrThrow(SyntaxKind.StringLiteral).getLiteralText() === edit.name
+        );
     });
 
     if (duplicate) {

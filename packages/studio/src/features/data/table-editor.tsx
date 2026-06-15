@@ -212,7 +212,7 @@ export const TableEditor = ({ editable = false, initialShardKey }: TableEditorPr
     const onViewChange = useCallback(
         (next: Pick<DataView, "filters" | "orderBy" | "search" | "shard">): void => {
             const patch = dataViewToSearch(next);
-            const {current} = searchRef;
+            const { current } = searchRef;
 
             // Skip the mirror when the URL already reflects the loaded view — i.e.
             // the four params this callback owns are unchanged. The data browser

@@ -89,7 +89,9 @@ describe("applyAdditiveEdit", () => {
         expect.assertions(4);
 
         expect(reasonOf(applyAdditiveEdit(SCHEMA, { kind: "addTable", table: "todos" }))).toBe("duplicate-table");
-        expect(reasonOf(applyAdditiveEdit(SCHEMA, { column: "text", kind: "addOptionalColumn", table: "todos", validator: "v.string()" }))).toBe("duplicate-column");
+        expect(reasonOf(applyAdditiveEdit(SCHEMA, { column: "text", kind: "addOptionalColumn", table: "todos", validator: "v.string()" }))).toBe(
+            "duplicate-column",
+        );
         expect(reasonOf(applyAdditiveEdit(SCHEMA, { fields: ["text"], kind: "addIndex", name: "by_text", table: "todos" }))).toBe("duplicate-index");
         expect(reasonOf(applyAdditiveEdit(SCHEMA, { column: "x", kind: "addOptionalColumn", table: "ghost", validator: "v.string()" }))).toBe("unknown-table");
     });

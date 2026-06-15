@@ -137,7 +137,7 @@ describe("d1 introspect", () => {
             await expect(readGlobalTablePage(harness.exec, schema, { table: "_cf_KV" })).rejects.toMatchObject({ code: "UNKNOWN_TABLE" });
         });
 
-        it("AND-narrows the page by eq filters (a facet drill-down)", async () => {
+        it("aND-narrows the page by eq filters (a facet drill-down)", async () => {
             expect.assertions(3);
 
             const page = await readGlobalTablePage(harness.exec, schema, { filters: [{ column: "name", value: "Acme" }], table: "organizations" });
@@ -186,7 +186,12 @@ describe("d1 introspect", () => {
             const facet = await facetGlobalColumn(harness.exec, schema, { column: "active", table: "organizations" });
 
             // Two distinct stored values, one row each; raw 0/1, not decoded true/false.
-            expect(facet.values).toEqual(expect.arrayContaining([{ count: 1, value: 1 }, { count: 1, value: 0 }]));
+            expect(facet.values).toEqual(
+                expect.arrayContaining([
+                    { count: 1, value: 1 },
+                    { count: 1, value: 0 },
+                ]),
+            );
         });
 
         it("reflects the active view (eq filters)", async () => {
@@ -194,9 +199,18 @@ describe("d1 introspect", () => {
 
             await harness.exec.run(`INSERT INTO "organizations" VALUES ('o3', 3, 'Acme', 0)`, []);
 
-            const facet = await facetGlobalColumn(harness.exec, schema, { column: "active", filters: [{ column: "name", value: "Acme" }], table: "organizations" });
+            const facet = await facetGlobalColumn(harness.exec, schema, {
+                column: "active",
+                filters: [{ column: "name", value: "Acme" }],
+                table: "organizations",
+            });
 
-            expect(facet.values).toEqual(expect.arrayContaining([{ count: 1, value: 1 }, { count: 1, value: 0 }]));
+            expect(facet.values).toEqual(
+                expect.arrayContaining([
+                    { count: 1, value: 1 },
+                    { count: 1, value: 0 },
+                ]),
+            );
         });
 
         it("caps distinct values at the limit and reports truncation", async () => {

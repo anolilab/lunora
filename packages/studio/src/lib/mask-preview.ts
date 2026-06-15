@@ -188,10 +188,7 @@ export const isSensitiveColumnName = (name: string): boolean => {
  * explicitly covered). Explicit policies always win — a column with a declared
  * `"hash"` keeps it; the heuristic only fills the gaps.
  */
-export const mergeSensitiveColumns = (
-    explicit: ReadonlyMap<string, MaskStrategy>,
-    columnNames: ReadonlyArray<string>,
-): ReadonlyMap<string, MaskStrategy> => {
+export const mergeSensitiveColumns = (explicit: ReadonlyMap<string, MaskStrategy>, columnNames: ReadonlyArray<string>): ReadonlyMap<string, MaskStrategy> => {
     const heuristic = columnNames.filter((column) => !explicit.has(column) && isSensitiveColumnName(column));
 
     if (heuristic.length === 0) {

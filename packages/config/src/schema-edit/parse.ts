@@ -181,7 +181,9 @@ const parseSchema = (source: string): ParseSchemaResult => {
     if (defineSchemaCall === undefined) {
         // Distinguish "the file aliases the import" from "there is no schema at
         // all", so the editor can explain that aliasing is unsupported.
-        const aliased = sourceFile.getImportDeclarations().some((declaration) => declaration.getNamedImports().some((named) => named.getName() === "defineSchema" && named.getAliasNode() !== undefined));
+        const aliased = sourceFile
+            .getImportDeclarations()
+            .some((declaration) => declaration.getNamedImports().some((named) => named.getName() === "defineSchema" && named.getAliasNode() !== undefined));
 
         return { ok: false, reason: aliased ? "aliased-define-schema" : "no-define-schema" };
     }

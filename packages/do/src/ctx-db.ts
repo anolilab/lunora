@@ -1212,9 +1212,7 @@ const applyOnUpdate = (definition: TableDefinitionLike, provided: Record<string,
 const assertNoExplicitUndefined = (op: "patch" | "replace", document: Record<string, unknown>): void => {
     for (const field of Object.keys(document)) {
         if (document[field] === undefined) {
-            throw new Error(
-                `Cannot ${op} field '${field}' to undefined — use null to clear a nullable field, or omit the key to leave it unchanged.`,
-            );
+            throw new Error(`Cannot ${op} field '${field}' to undefined — use null to clear a nullable field, or omit the key to leave it unchanged.`);
         }
     }
 };

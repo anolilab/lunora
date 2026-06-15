@@ -2,7 +2,15 @@ import { existsSync, readFileSync } from "node:fs";
 
 import type { CodegenResult } from "@cirrus/codegen";
 import { discoverMigrations, runCodegen } from "@cirrus/codegen";
-import { DEV_VARS_FILE, discoverContainerInfo, findWranglerFile, inferCirrusBindings, parseDevVariableEntries, readWranglerJsonc, reconcileWranglerBindings } from "@cirrus/config";
+import {
+    DEV_VARS_FILE,
+    discoverContainerInfo,
+    findWranglerFile,
+    inferCirrusBindings,
+    parseDevVariableEntries,
+    readWranglerJsonc,
+    reconcileWranglerBindings,
+} from "@cirrus/config";
 import { join } from "@visulima/path";
 import { Spinner } from "@visulima/spinner";
 import { Project } from "ts-morph";
