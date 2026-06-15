@@ -1,7 +1,7 @@
 import { useCirrus } from "@cirrus/react";
-import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useNavigate, useRouter, useSearch } from "@tanstack/react-router";
 import type { ReactElement } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { StorageTier } from "../../components/storage-tier";
 import { TIER_META } from "../../components/storage-tier";
@@ -75,6 +75,7 @@ const SchemaSwitch = ({ onChange, tier }: { readonly onChange: (tier: StorageTie
 export const TableEditor = ({ editable = false, initialShardKey }: TableEditorProps): ReactElement => {
     const client = useCirrus();
     const navigate = useNavigate();
+    const router = useRouter();
 
     // The whole data-browser view comes from the URL: tier + open table plus the
     // shard / filters / search / sort that make every view a real, shareable link.
@@ -82,6 +83,22 @@ export const TableEditor = ({ editable = false, initialShardKey }: TableEditorPr
     // values are coerced or dropped by `searchToDataView`.
     const search: Record<string, unknown> = useSearch({ strict: false });
     const view = useMemo<DataView>(() => searchToDataView(search), [search]);
+
+    // Live mirror of the URL search params for `onViewChange`'s redundancy check,
+    // held in a ref so that callback stays referentially stable (its dep is only
+    // `navigate`). Without this, mirroring the loaded view back to the URL on a
+    // deep-link load (`/data?table=…`) fires a `navigate({ to: "/data" })` that
+    // clobbers an in-flight tab switch — you couldn't leave the data tab.
+    const searchRef = useRef(search);
+    searchRef.current = search;
+
+    // True while the data route is the active one. The URL-mirroring callbacks below
+    // all `navigate({ to: "/data" })`; some fire from deferred effects/microtasks that
+    // can land after a tab switch, so they consult this to avoid yanking the route back
+    // to the data tab. Reads the router's *live* location (not a render snapshot, which
+    // an unmounting panel never updates to the new route) and matches the last path
+    // segment, so it holds under a mount prefix too (`/__cirrus/data`).
+    const onDataRoute = useCallback((): boolean => router.state.location.pathname.split("/").findLast(Boolean) === "data", [router]);
     const tier: StorageTier = view.tier ?? "shard";
     const tableParameter = view.table;
 
@@ -128,9 +145,17 @@ export const TableEditor = ({ editable = false, initialShardKey }: TableEditorPr
     );
 
     // Mirror a table selection to the URL (`?table=…`) so it's shareable and recorded
-    // in history for back/forward.
+    // in history for back/forward. Guarded by {@link onDataRoute}: the data browser
+    // reconciles the URL's table into its selection through a deferred microtask, which
+    // can fire just *after* a tab switch has moved the route away — without the guard
+    // that stale mirror would `navigate({ to: "/data" })` straight back, trapping the
+    // user on the data tab whenever the URL carried a `?table=`.
     const onSelectTable = useCallback(
         (table: string): void => {
+            if (!onDataRoute()) {
+                return;
+            }
+
             fireAndForget(
                 navigate({
                     search: (previous: Record<string, unknown>) => {
@@ -140,7 +165,7 @@ export const TableEditor = ({ editable = false, initialShardKey }: TableEditorPr
                 }),
             );
         },
-        [navigate],
+        [navigate, onDataRoute],
     );
 
     // Follow a shard-row `v.id` ref whose target is a `.global()` table: switch to
@@ -166,6 +191,27 @@ export const TableEditor = ({ editable = false, initialShardKey }: TableEditorPr
     const onViewChange = useCallback(
         (next: Pick<DataView, "filters" | "orderBy" | "search" | "shard">): void => {
             const patch = dataViewToSearch(next);
+            const {current} = searchRef;
+
+            // Skip the mirror when the URL already reflects the loaded view — i.e.
+            // the four params this callback owns are unchanged. The data browser
+            // fires this on every load (including a deep-link `/data?table=…`),
+            // where it would otherwise re-assert the current URL via a
+            // `navigate({ to: "/data" })` that races and cancels a concurrent tab
+            // switch, trapping the user on the data tab.
+            const unchanged =
+                (current["filters"] ?? undefined) === patch.filters &&
+                (current["order"] ?? undefined) === patch.order &&
+                (current["search"] ?? undefined) === patch.search &&
+                (current["shard"] ?? undefined) === patch.shard;
+
+            // Skip the mirror when the URL already reflects the loaded view, or when a
+            // tab switch has already left the data route — either way a `navigate({ to:
+            // "/data" })` here is at best redundant and at worst clobbers the in-flight
+            // navigation, stranding the user on the data tab.
+            if (unchanged || !onDataRoute()) {
+                return;
+            }
 
             fireAndForget(
                 navigate({
@@ -177,7 +223,7 @@ export const TableEditor = ({ editable = false, initialShardKey }: TableEditorPr
                 }),
             );
         },
-        [navigate],
+        [navigate, onDataRoute],
     );
 
     // Copy the current view's full URL to the clipboard. Best-effort: a missing/
