@@ -1,0 +1,150 @@
+---
+title: Constraints
+description: Unique, non-null and foreign-key integrity declared on the schema and enforced at write time.
+---
+
+A **constraint** is an invariant your data must hold: a column is unique, a
+column is never null, or a foreign key always points at a row that exists.
+Cirrus constraints are declared on the [schema](/docs/concepts/schema) — on the
+column validator or the relation — and most are enforced **at write time** by
+the storage layer, so a violating `insert` / `patch` / `delete` throws rather
+than committing.
+
+There is no separate constraint DSL. A constraint is just a modifier on a
+column (`.unique()`, the default-on `NOT NULL`) or an option on a relation
+(`onDelete`). Codegen and the runtime read these off the same table definition.
+
+```ts
+// cirrus/schema.ts
+import { defineSchema, defineTable, v } from "@cirrus/server";
+
+export default defineSchema({
+    users: defineTable({
+        email: v.string().unique(), // UNIQUE
+        name: v.string(), // NOT NULL (the default)
+        bio: v.string().nullable(), // nullable — opt out of NOT NULL
+    })
+        .global()
+        .index("by_email", ["email"], { unique: true }),
+
+    posts: defineTable({
+        authorId: v.id("users"),
+        title: v.string(),
+    }).relations((r) => ({
+        author: r.one("users", { field: "authorId", onDelete: "cascade" }),
+    })),
+});
+```
+
+## Constraint kinds
+
+| Kind                  | Declared with                                       | Enforced                                   | On violation                                     |
+| --------------------- | --------------------------------------------------- | ------------------------------------------ | ------------------------------------------------ |
+| Unique (column)       | `v.string().unique()`                               | Write time — synthesized `UNIQUE` index    | `ConflictError` (`CONFLICT`, 409)                |
+| Unique (multi-field)  | `.index(name, [..], { unique: true })`              | Write time — `UNIQUE` index                | `ConflictError` (`CONFLICT`, 409)                |
+| Non-null (`NOT NULL`) | default on every column; opt out with `.nullable()` | Write time — column validator parse        | `ValidationError`                                |
+| Foreign-key delete    | `r.one(table, { field, onDelete })`                 | Delete time on the referenced (parent) row | `ConflictError` (`CONFLICT`, 409) for `restrict` |
+
+> The advisor [`constraint_validator`](/docs/concepts/advisors) lint is a
+> _complementary_ check: it samples existing rows and flags ones that already
+> violate a declared constraint (data inserted before the constraint existed —
+> a migration, a raw import, a past bug). Write-time enforcement guards new
+> writes; the advisor catches the backlog.
+
+## Unique
+
+`.unique()` on a column synthesizes a single-column `UNIQUE` index named
+`<table>_unique_<field>`, so SQLite enforces uniqueness at insert/patch time.
+For a multi-column uniqueness rule, declare a unique secondary index instead:
+
+```ts
+defineTable({
+    workspaceId: v.id("workspaces"),
+    slug: v.string(),
+}).index("by_slug", ["workspaceId", "slug"], { unique: true });
+```
+
+When a write would create a duplicate, the storage layer maps the engine's
+`UNIQUE constraint failed` error to a `ConflictError` — code `CONFLICT`, HTTP
+status `409` — so callers can refetch and retry or surface the conflict.
+
+> `.unique()` (the column constraint) is distinct from the `.unique()` **query**
+> helper, which asserts a read matched at most one row and throws a
+> `NotUniqueError` (code `NOT_UNIQUE`) when more than one matches.
+
+## Non-null
+
+Every column is `NOT NULL` by default — `notNull` is `true` on a fresh column
+validator. Calling `.nullable()` widens the read type to `T | null` and flips
+`notNull` to `false`, allowing SQL `NULL`. A write that supplies `null` for a
+non-nullable column fails the column validator's `parse`, raising a
+`ValidationError` before the row reaches SQL.
+
+```ts
+defineTable({
+    title: v.string(), // required, non-null
+    archivedAt: v.number().nullable(), // may be null
+    status: v.string().default("todo"), // optional on insert; never null once stored
+});
+```
+
+> `.default(value)` / `.$defaultFn(fn)` make a column _optional on insert_ (the
+> write layer fills it) but it is still `NOT NULL` once stored — "optional on
+> insert" and "nullable" are independent. Use `.nullable()` only when `NULL` is
+> a value you actually want to read back.
+
+## Foreign-key integrity
+
+A `one` relation declares a many-to-one foreign key: the FK `field` lives on the
+holding table and points at the target table's `references` column (default
+`_id`). Pass `onDelete` to choose what happens to holder rows when the
+referenced (parent) row is deleted:
+
+| `onDelete` value | Behavior when the referenced row is deleted                            |
+| ---------------- | ---------------------------------------------------------------------- |
+| `"cascade"`      | Each holder row is recursively deleted (chains through its relations). |
+| `"set null"`     | The holder's FK column is patched to `NULL`.                           |
+| `"restrict"`     | The delete is aborted with a `ConflictError` if any holder exists.     |
+
+```ts
+defineTable({
+    authorId: v.id("users"),
+    body: v.string(),
+}).relations((r) => ({
+    // deleting a user deletes their posts
+    author: r.one("users", { field: "authorId", onDelete: "cascade" }),
+}));
+```
+
+`onDelete` actions resolve **before** the physical delete commits, so a
+`restrict` aborts cleanly and cascaded child deletes still fire their own
+`before`/`after` triggers and broadcasts per row. There is no insert-time FK
+enforcement: an `insert` does not verify that the referenced row exists, and a
+non-null FK pointing at a missing row only surfaces via the advisor
+`constraint_validator` lint (which reports the dangling reference as a sampled
+finding).
+
+> **Cross-backend caveat.** When a cascade crosses storage backends (a sharded
+> Durable Object holder of a `.global()` D1 parent, or vice-versa) the cascade
+> is _not transactional_: the global side fires before the local delete commits.
+> If the local delete then fails, holders may be gone while the parent remains.
+> Add your own reconciliation (a periodic job or a queue retry) where this
+> matters.
+
+## Error codes
+
+| Error             | `code`       | Status | Thrown when                                                                           |
+| ----------------- | ------------ | ------ | ------------------------------------------------------------------------------------- |
+| `ConflictError`   | `CONFLICT`   | 409    | A `UNIQUE` index breach, an `onDelete: "restrict"` abort, or an OCC conflict.         |
+| `NotUniqueError`  | `NOT_UNIQUE` | —      | The `.unique()` query helper matched more than one row.                               |
+| `ValidationError` | —            | —      | A non-nullable column received `null`/`undefined`, or a `.check()` refinement failed. |
+
+`ConflictError` is recognized structurally across packages (it declares `code`
+and `status` as own properties), so the runtime maps it to a `409` without an
+`instanceof` check.
+
+## See also
+
+- [Schema](/docs/concepts/schema) — declaring tables, validators, indexes and relations
+- [Advisors](/docs/concepts/advisors) — the `constraint_validator` lint that samples existing rows for violations
+- [Row-level security](/docs/concepts/rls) — server-side authorization over which rows a procedure may read or write

@@ -43,12 +43,15 @@ export const list = query({
 - **`@cirrus/runtime`** — Worker entrypoint, RPC envelope, shard routing
 - **`@cirrus/do`** — `ShardDO` and `SessionDO` base classes
 - **`@cirrus/d1`** — D1 Sessions API wrapper for `.global()` tables
-- **`@cirrus/client` + `@cirrus/react`** — browser SDK and React hooks
+- **`@cirrus/client` + `@cirrus/react` / `@cirrus/vue` / `@cirrus/solid` / `@cirrus/svelte`** — browser SDK and framework adapters
 - **`@cirrus/vite` + `@cirrus/cli`** — codegen, dev server, scaffolding
 - **`@cirrus/auth` / `@cirrus/mail` / `@cirrus/storage` / `@cirrus/scheduler`** — first-party add-ons
+- **`@cirrus/vectors`** — Cloudflare Vectorize adapter for typed similarity search and RAG
 - **`@cirrus/workflow`** — durable, replayable multi-step workflows on Cloudflare Workflows
+- **`@cirrus/ratelimit` / `@cirrus/payment`** — rate-limiting middleware and provider-agnostic payments
 - **Row-level security + data masking** — opt-in, server-side authorization in `@cirrus/server`
 - **`@cirrus/advisor`** — schema, performance, and security lints, surfaced in the studio
+- **`@cirrus/testing` / `@cirrus/mcp`** — an in-memory test harness and an MCP server for AI agents
 - **`@cirrus/studio`** — a local admin console for data, functions, logs, and advisors
 
 ## See also
