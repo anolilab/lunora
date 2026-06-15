@@ -7,6 +7,9 @@ import { defineSchema, defineTable, v } from "@cirrus/server";
  *   across tenants in the channel-picker.
  * - `messages` shard by `channelId` so a busy channel scales horizontally
  *   instead of melting the root DO.
+ * - `inbox` holds messages received via `@cirrus/mail/inbound` — it lives in the
+ *   default root DO (no `.shardBy`/`.global`) to match the inbound dispatcher's
+ *   default `__root__` shard key.
  */
 export default defineSchema({
     channels: defineTable({
@@ -16,6 +19,15 @@ export default defineSchema({
     })
         .global()
         .index("by_name", ["name"], { unique: true }),
+
+    inbox: defineTable({
+        body: v.string(),
+        from: v.string(),
+        messageId: v.string(),
+        receivedAt: v.number(),
+        subject: v.string(),
+        to: v.array(v.string()),
+    }).index("by_received", ["receivedAt"]),
 
     messages: defineTable({
         channelId: v.id("channels"),

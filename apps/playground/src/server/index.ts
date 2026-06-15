@@ -4,6 +4,8 @@ import { admin, organization, passkey, twoFactor } from "@cirrus/auth/plugins";
 import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@cirrus/d1";
 import { createD1CtxDb, facetGlobalColumn, listGlobalTables, readGlobalTablePage } from "@cirrus/d1";
 import { createMailerFromEnv } from "@cirrus/mail";
+import type { ForwardableEmailMessageLike, ShardNamespaceLike as InboundShardNamespaceLike } from "@cirrus/mail/inbound";
+import { createInboundEmailHandler, dispatchToCirrusFunction, parseInboundEmail } from "@cirrus/mail/inbound";
 import type { ExecutionContextLike, GlobalIntrospector, ScheduledControllerLike, ShardNamespaceLike } from "@cirrus/runtime";
 import { createCrossShardRelationCapabilities, createWorker } from "@cirrus/runtime";
 import type { DurableObjectNamespaceLike } from "@cirrus/scheduler";
@@ -518,6 +520,47 @@ const handleStorageAsset = async (request: Request, env: Env): Promise<null | Re
     return new Response(object.body, {
         headers: { "content-type": object.httpMetadata?.contentType ?? "application/octet-stream" },
     });
+};
+
+/**
+ * Inbound Email Routing entry (`@cirrus/mail/inbound`).
+ *
+ * Cloudflare delivers received mail to this top-level `email(message, env, ctx)`
+ * export — a sibling of `fetch`/`scheduled`. The handler reads `message.raw`,
+ * parses it with `parseInboundEmail`, and dispatches the normalised message into
+ * the `inbound:onEmail` mutation over the root shard's admin RPC (authorized by
+ * `CIRRUS_ADMIN_TOKEN`). `resolveArgs` narrows the parsed `InboundEmail` to the
+ * mutation's validated args — including the receive timestamp, stamped here
+ * (a non-deterministic context) so the `onEmail` mutation handler stays
+ * deterministic. Built lazily because the `SHARD` namespace lives on the
+ * per-request `env`.
+ *
+ * Dormant until a Cloudflare Email Routing rule routes an address to this Worker
+ * (dashboard-configured); on a parse/dispatch failure the handler defaults to
+ * `message.setReject(reason)` so Cloudflare bounces or retries. `env.SHARD`'s
+ * runtime stub `fetch` is typed `(Request) => Promise<Response>`; the inbound
+ * dispatcher's structural namespace expects `fetch(url, init)` — the DO stub
+ * accepts both at runtime, so the cast is sound.
+ */
+export const email = async (message: ForwardableEmailMessageLike, env: Env, context: ExecutionContextLike): Promise<void> => {
+    const handler = createInboundEmailHandler({
+        dispatch: dispatchToCirrusFunction({
+            functionPath: "inbound:onEmail",
+            resolveArgs: (parsed) => ({
+                from: parsed.from,
+                messageId: parsed.messageId,
+                receivedAt: Date.now(),
+                subject: parsed.subject,
+                text: parsed.text,
+                to: parsed.to,
+            }),
+            shard: env.SHARD as unknown as InboundShardNamespaceLike,
+            shardKey: "__root__",
+        }),
+        parse: parseInboundEmail,
+    });
+
+    await handler(message, env as unknown as Record<string, unknown>, context);
 };
 
 export default {
