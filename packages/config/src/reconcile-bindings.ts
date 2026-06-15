@@ -312,42 +312,19 @@ const reconcileD1 = (text: string, parsed: WranglerShape): ReconcileStep => {
 };
 
 /**
- * Add the `ai` Workers AI binding for `@cirrus/ai` / `env.AI` usage, if absent.
- * Unlike R2 (user-defined bucket name), the binding is parameterless —
- * `{ "binding": "AI" }` — so it can be written safely like `DB`. Pure.
+ * Add a self-describing single-`{ binding }` binding (`ai`, `browser`, `images`)
+ * if absent. These share one shape — the binding name is the whole config, with
+ * no remote id to mint — so each is written safely like `DB`, and one helper
+ * covers all three. Idempotent on `parsed[key].binding`. Pure.
  */
-const reconcileAi = (text: string, parsed: WranglerShape): ReconcileStep => {
-    if (typeof parsed.ai?.binding === "string" && parsed.ai.binding.length > 0) {
+const reconcileSelfDescribing = (text: string, parsed: WranglerShape, key: "ai" | "browser" | "images", binding: string, label: string): ReconcileStep => {
+    const current = parsed[key]?.binding;
+
+    if (typeof current === "string" && current.length > 0) {
         return { added: [], text };
     }
 
-    return { added: ["AI (Workers AI)"], text: applyModify(text, ["ai"], { binding: "AI" }) };
-};
-
-/**
- * Add the `browser` Browser Rendering binding for `@cirrus/browser` usage, if
- * absent. Self-describing — the binding name is the whole config, with no remote
- * id to mint — so it is written safely like `ai`. Idempotent on `parsed.browser.binding`. Pure.
- */
-const reconcileBrowser = (text: string, parsed: WranglerShape): ReconcileStep => {
-    if (typeof parsed.browser?.binding === "string" && parsed.browser.binding.length > 0) {
-        return { added: [], text };
-    }
-
-    return { added: ["BROWSER (Browser Rendering)"], text: applyModify(text, ["browser"], { binding: "BROWSER" }) };
-};
-
-/**
- * Add the `images` Cloudflare Images binding for `@cirrus/images` usage, if
- * absent. Self-describing like `browser` (parameterless `{ binding }`, no remote
- * id), so it is auto-written. Idempotent on `parsed.images.binding`. Pure.
- */
-const reconcileImages = (text: string, parsed: WranglerShape): ReconcileStep => {
-    if (typeof parsed.images?.binding === "string" && parsed.images.binding.length > 0) {
-        return { added: [], text };
-    }
-
-    return { added: ["IMAGES (Cloudflare Images)"], text: applyModify(text, ["images"], { binding: "IMAGES" }) };
+    return { added: [label], text: applyModify(text, [key], { binding }) };
 };
 
 /**
@@ -542,56 +519,57 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
     // / migrations (no `requiredDurableObjects` entry, unlike containers).
     const exportedWorkflows = inferred.workflows.filter((workflow) => workflow.exported);
 
-    // Each step rewrites `text` but reads the original `parsed`; this is only
-    // safe because the steps touch disjoint top-level keys (durable_objects /
-    // migrations vs d1_databases vs ai vs containers / observability vs
-    // workflows vs browser vs images vs analytics_engine_datasets). A future
-    // step that depends on a key an earlier step mutated must re-parse rather
-    // than reuse `parsed`. Self-describing bindings (browser/images/analytics)
-    // auto-write here; their hint-only siblings (kv/hyperdrive/pipelines) carry
-    // an un-mintable remote id and only surface as warnings (see collectWarnings).
-    const doStep = reconcileDurableObjects(original, parsed, requiredDurableObjects);
-    const d1Step = inferred.needsD1 ? reconcileD1(doStep.text, parsed) : { added: [], text: doStep.text };
-    const aiStep = inferred.usesAi ? reconcileAi(d1Step.text, parsed) : { added: [], text: d1Step.text };
-    const browserStep = inferred.usesBrowser ? reconcileBrowser(aiStep.text, parsed) : { added: [], text: aiStep.text };
-    const imagesStep = inferred.usesImages ? reconcileImages(browserStep.text, parsed) : { added: [], text: browserStep.text };
-    const analyticsStep = inferred.usesAnalytics ? reconcileAnalytics(imagesStep.text, parsed) : { added: [], text: imagesStep.text };
-    const containerStep =
-        exportedContainers.length > 0 ? reconcileContainers(analyticsStep.text, parsed, exportedContainers) : { added: [], text: analyticsStep.text };
-    const workflowStep =
-        exportedWorkflows.length > 0 ? reconcileWorkflows(containerStep.text, parsed, exportedWorkflows) : { added: [], text: containerStep.text };
+    // The reconcile pipeline: each enabled step rewrites `text` but reads the
+    // original `parsed`. This is only safe because the steps touch disjoint
+    // top-level keys (durable_objects / migrations vs d1_databases vs ai vs
+    // browser vs images vs analytics_engine_datasets vs containers /
+    // observability vs workflows). A future step that depends on a key an
+    // earlier step mutated must re-parse rather than reuse `parsed`.
+    // Self-describing bindings (ai/browser/images/analytics) auto-write here;
+    // their hint-only siblings (kv/hyperdrive/pipelines) carry an un-mintable
+    // remote id and only surface as warnings (see collectWarnings).
+    const pipeline: ReadonlyArray<{ enabled: boolean; run: (text: string) => ReconcileStep }> = [
+        { enabled: true, run: (text) => reconcileDurableObjects(text, parsed, requiredDurableObjects) },
+        { enabled: inferred.needsD1, run: (text) => reconcileD1(text, parsed) },
+        { enabled: inferred.usesAi, run: (text) => reconcileSelfDescribing(text, parsed, "ai", "AI", "AI (Workers AI)") },
+        { enabled: inferred.usesBrowser, run: (text) => reconcileSelfDescribing(text, parsed, "browser", "BROWSER", "BROWSER (Browser Rendering)") },
+        { enabled: inferred.usesImages, run: (text) => reconcileSelfDescribing(text, parsed, "images", "IMAGES", "IMAGES (Cloudflare Images)") },
+        { enabled: inferred.usesAnalytics, run: (text) => reconcileAnalytics(text, parsed) },
+        { enabled: exportedContainers.length > 0, run: (text) => reconcileContainers(text, parsed, exportedContainers) },
+        { enabled: exportedWorkflows.length > 0, run: (text) => reconcileWorkflows(text, parsed, exportedWorkflows) },
+    ];
+
+    let text = original;
+    const added: string[] = [];
+
+    for (const step of pipeline) {
+        if (!step.enabled) {
+            continue;
+        }
+
+        const result = step.run(text);
+
+        text = result.text;
+        added.push(...result.added);
+    }
 
     // A freshly-written DB binding carries a placeholder id; surface it so the
     // user runs `wrangler d1 create` before the deploy reaches wrangler (which
-    // would otherwise fail late on the literal placeholder).
-    if (d1Step.added.length > 0) {
+    // would otherwise fail late on the literal placeholder). `reconcileD1` is the
+    // only step that emits this label.
+    if (added.includes("DB (D1)")) {
         warnings.push(
             `wrote a DB binding with a placeholder database_id ("${D1_PLACEHOLDER_ID}") — run \`wrangler d1 create <name>\` and replace it before deploying.`,
         );
     }
 
-    if (workflowStep.text === original) {
+    if (text === original) {
         return { added: [], changed: false, exportGaps, reason: "bindings already in sync", warnings, wranglerPath };
     }
 
-    writeFileSync(wranglerPath, workflowStep.text, "utf8");
+    writeFileSync(wranglerPath, text, "utf8");
 
-    return {
-        added: [
-            ...doStep.added,
-            ...d1Step.added,
-            ...aiStep.added,
-            ...browserStep.added,
-            ...imagesStep.added,
-            ...analyticsStep.added,
-            ...containerStep.added,
-            ...workflowStep.added,
-        ],
-        changed: true,
-        exportGaps,
-        warnings,
-        wranglerPath,
-    };
+    return { added, changed: true, exportGaps, warnings, wranglerPath };
 };
 
 export type { ExportGap, ReconcileBindingsResult };

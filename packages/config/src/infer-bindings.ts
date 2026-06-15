@@ -74,25 +74,42 @@ const TYPE_ONLY_EXPORT_PATTERNS: Record<DurableObjectClass, RegExp> = {
 const ENV_DB_PATTERN = /\benv\s*\.\s*DB\b/;
 const ENV_AI_PATTERN = /\benv\s*\.\s*AI\b/;
 const TYPE_ONLY_IMPORT_PATTERN = /^\s*import\s+type\b/;
-const IMPORT_AUTH_PATTERN = /\bfrom\s+["']@cirrus\/auth["']/;
-const IMPORT_SCHEDULER_PATTERN = /\bfrom\s+["']@cirrus\/scheduler["']/;
-const IMPORT_STORAGE_PATTERN = /\bfrom\s+["']@cirrus\/storage["']/;
-const IMPORT_AI_PATTERN = /\bfrom\s+["']@cirrus\/ai["']/;
-const IMPORT_PAYMENT_PATTERN = /\bfrom\s+["']@cirrus\/payment["']/;
-// New Cloudflare-coverage binding capabilities. The canonical import-source →
-// wrangler-key → provisioning table (see plans 027/028/031/032/035/036):
+
+/**
+ * The single source of truth for import-driven capabilities: each capability
+ * flag → the `@cirrus/*` package whose import implies it, plus the regex used by
+ * the {@link regexCapabilities} fallback when `es-module-lexer` can't parse a
+ * mid-edit file. Everything else that enumerates capabilities — the
+ * {@link Capabilities} type, {@link NO_CAPABILITIES}, {@link mergeCapabilities},
+ * {@link capabilityForImportSource}, {@link regexCapabilities}, and the final
+ * {@link InferredBindings} return — is derived from this table, so adding a
+ * binding is a one-line entry rather than a seven-site edit.
+ */
+// Provisioning behaviour per package (see plans 027/028/031/032/035/036):
 //   @cirrus/kv         → kv_namespaces             → hint (un-mintable namespace id)
 //   @cirrus/hyperdrive → hyperdrive                → hint (un-mintable remote id)
 //   @cirrus/browser    → browser                   → self-describing (binding name only)
 //   @cirrus/images     → images                    → self-describing (binding name only)
 //   @cirrus/analytics  → analytics_engine_datasets → self-describing (dataset == binding name)
 //   @cirrus/pipelines  → pipelines                 → hint (un-mintable remote pipeline name)
-const IMPORT_KV_PATTERN = /\bfrom\s+["']@cirrus\/kv["']/;
-const IMPORT_HYPERDRIVE_PATTERN = /\bfrom\s+["']@cirrus\/hyperdrive["']/;
-const IMPORT_BROWSER_PATTERN = /\bfrom\s+["']@cirrus\/browser["']/;
-const IMPORT_IMAGES_PATTERN = /\bfrom\s+["']@cirrus\/images["']/;
-const IMPORT_ANALYTICS_PATTERN = /\bfrom\s+["']@cirrus\/analytics["']/;
-const IMPORT_PIPELINES_PATTERN = /\bfrom\s+["']@cirrus\/pipelines["']/;
+const CAPABILITY_SOURCES = {
+    usesAi: { pattern: /\bfrom\s+["']@cirrus\/ai["']/, source: "@cirrus/ai" },
+    usesAnalytics: { pattern: /\bfrom\s+["']@cirrus\/analytics["']/, source: "@cirrus/analytics" },
+    usesAuth: { pattern: /\bfrom\s+["']@cirrus\/auth["']/, source: "@cirrus/auth" },
+    usesBrowser: { pattern: /\bfrom\s+["']@cirrus\/browser["']/, source: "@cirrus/browser" },
+    usesHyperdrive: { pattern: /\bfrom\s+["']@cirrus\/hyperdrive["']/, source: "@cirrus/hyperdrive" },
+    usesImages: { pattern: /\bfrom\s+["']@cirrus\/images["']/, source: "@cirrus/images" },
+    usesKv: { pattern: /\bfrom\s+["']@cirrus\/kv["']/, source: "@cirrus/kv" },
+    usesPayment: { pattern: /\bfrom\s+["']@cirrus\/payment["']/, source: "@cirrus/payment" },
+    usesPipelines: { pattern: /\bfrom\s+["']@cirrus\/pipelines["']/, source: "@cirrus/pipelines" },
+    usesScheduler: { pattern: /\bfrom\s+["']@cirrus\/scheduler["']/, source: "@cirrus/scheduler" },
+    usesStorage: { pattern: /\bfrom\s+["']@cirrus\/storage["']/, source: "@cirrus/storage" },
+} as const satisfies Record<string, { pattern: RegExp; source: string }>;
+
+/** The import-driven capability flag names (every key of {@link CAPABILITY_SOURCES}). */
+type CapabilityFlag = keyof typeof CAPABILITY_SOURCES;
+
+const CAPABILITY_FLAGS = Object.keys(CAPABILITY_SOURCES) as CapabilityFlag[];
 
 /**
  * The provider secret pairs `@cirrus/payment` reads at runtime. The package is
@@ -163,98 +180,46 @@ interface InferredBindings {
     workflows: InferredWorkflow[];
 }
 
-/** Which capabilities a unit of source imports. Pure value, no mutation. */
-interface Capabilities {
-    needsD1: boolean;
-    usesAi: boolean;
-    usesAnalytics: boolean;
-    usesAuth: boolean;
-    usesBrowser: boolean;
-    usesHyperdrive: boolean;
-    usesImages: boolean;
-    usesKv: boolean;
-    usesPayment: boolean;
-    usesPipelines: boolean;
-    usesScheduler: boolean;
-    usesStorage: boolean;
-}
+/**
+ * Which capabilities a unit of source imports. Pure value, no mutation. The
+ * import-driven flags are {@link CAPABILITY_SOURCES}'s keys; `needsD1` is the
+ * one capability not driven by an import (it comes from `env.DB` / a `.global()`
+ * schema), so it is added explicitly.
+ */
+type Capabilities = Record<CapabilityFlag | "needsD1", boolean>;
 
-const NO_CAPABILITIES: Capabilities = {
-    needsD1: false,
-    usesAi: false,
-    usesAnalytics: false,
-    usesAuth: false,
-    usesBrowser: false,
-    usesHyperdrive: false,
-    usesImages: false,
-    usesKv: false,
-    usesPayment: false,
-    usesPipelines: false,
-    usesScheduler: false,
-    usesStorage: false,
+/** Every capability key, including the non-import-driven `needsD1`. */
+const ALL_CAPABILITY_KEYS: ReadonlyArray<keyof Capabilities> = [...CAPABILITY_FLAGS, "needsD1"];
+
+/** Build a fresh all-`false` capability set keyed by {@link ALL_CAPABILITY_KEYS}. */
+const emptyCapabilities = (): Capabilities => {
+    const base = {} as Capabilities;
+
+    for (const key of ALL_CAPABILITY_KEYS) {
+        base[key] = false;
+    }
+
+    return base;
 };
 
+const NO_CAPABILITIES: Capabilities = Object.freeze(emptyCapabilities());
+
 const mergeCapabilities = (a: Capabilities, b: Capabilities): Capabilities => {
-    return {
-        needsD1: a.needsD1 || b.needsD1,
-        usesAi: a.usesAi || b.usesAi,
-        usesAnalytics: a.usesAnalytics || b.usesAnalytics,
-        usesAuth: a.usesAuth || b.usesAuth,
-        usesBrowser: a.usesBrowser || b.usesBrowser,
-        usesHyperdrive: a.usesHyperdrive || b.usesHyperdrive,
-        usesImages: a.usesImages || b.usesImages,
-        usesKv: a.usesKv || b.usesKv,
-        usesPayment: a.usesPayment || b.usesPayment,
-        usesPipelines: a.usesPipelines || b.usesPipelines,
-        usesScheduler: a.usesScheduler || b.usesScheduler,
-        usesStorage: a.usesStorage || b.usesStorage,
-    };
+    const merged = {} as Capabilities;
+
+    for (const key of ALL_CAPABILITY_KEYS) {
+        merged[key] = a[key] || b[key];
+    }
+
+    return merged;
 };
 
 /** Map a single import source onto the capability it implies. */
 const capabilityForImportSource = (source: string): Capabilities => {
-    if (source === "@cirrus/auth") {
-        return { ...NO_CAPABILITIES, usesAuth: true };
-    }
-
-    if (source === "@cirrus/scheduler") {
-        return { ...NO_CAPABILITIES, usesScheduler: true };
-    }
-
-    if (source === "@cirrus/storage") {
-        return { ...NO_CAPABILITIES, usesStorage: true };
-    }
-
-    if (source === "@cirrus/ai") {
-        return { ...NO_CAPABILITIES, usesAi: true };
-    }
-
-    if (source === "@cirrus/payment") {
-        return { ...NO_CAPABILITIES, usesPayment: true };
-    }
-
-    if (source === "@cirrus/kv") {
-        return { ...NO_CAPABILITIES, usesKv: true };
-    }
-
-    if (source === "@cirrus/hyperdrive") {
-        return { ...NO_CAPABILITIES, usesHyperdrive: true };
-    }
-
-    if (source === "@cirrus/browser") {
-        return { ...NO_CAPABILITIES, usesBrowser: true };
-    }
-
-    if (source === "@cirrus/images") {
-        return { ...NO_CAPABILITIES, usesImages: true };
-    }
-
-    if (source === "@cirrus/analytics") {
-        return { ...NO_CAPABILITIES, usesAnalytics: true };
-    }
-
-    if (source === "@cirrus/pipelines") {
-        return { ...NO_CAPABILITIES, usesPipelines: true };
+    for (const flag of CAPABILITY_FLAGS) {
+        if (CAPABILITY_SOURCES[flag].source === source) {
+            return { ...NO_CAPABILITIES, [flag]: true };
+        }
     }
 
     return NO_CAPABILITIES;
@@ -285,20 +250,13 @@ const lexCapabilities = (code: string): Capabilities => {
 
 /** Regex fallback for when `es-module-lexer` cannot parse a mid-edit file. */
 const regexCapabilities = (code: string): Capabilities => {
-    return {
-        needsD1: false,
-        usesAi: IMPORT_AI_PATTERN.test(code),
-        usesAnalytics: IMPORT_ANALYTICS_PATTERN.test(code),
-        usesAuth: IMPORT_AUTH_PATTERN.test(code),
-        usesBrowser: IMPORT_BROWSER_PATTERN.test(code),
-        usesHyperdrive: IMPORT_HYPERDRIVE_PATTERN.test(code),
-        usesImages: IMPORT_IMAGES_PATTERN.test(code),
-        usesKv: IMPORT_KV_PATTERN.test(code),
-        usesPayment: IMPORT_PAYMENT_PATTERN.test(code),
-        usesPipelines: IMPORT_PIPELINES_PATTERN.test(code),
-        usesScheduler: IMPORT_SCHEDULER_PATTERN.test(code),
-        usesStorage: IMPORT_STORAGE_PATTERN.test(code),
-    };
+    const capabilities = { ...NO_CAPABILITIES };
+
+    for (const flag of CAPABILITY_FLAGS) {
+        capabilities[flag] = CAPABILITY_SOURCES[flag].pattern.test(code);
+    }
+
+    return capabilities;
 };
 
 /** Detect, for a single source file, which Cirrus capabilities it pulls in. */
@@ -626,23 +584,22 @@ const inferCirrusBindings = async (options: InferOptions): Promise<InferredBindi
     const containers = detectContainerExports(entryPath, discoverContainerInfo(options.projectRoot, schemaDirectory).containers);
     const workflows = detectWorkflowExports(entryPath, discoverWorkflowInfo(options.projectRoot, schemaDirectory).workflows);
 
+    // The import-driven `uses*` flags are projected straight off the scanned
+    // capabilities (keyed by CAPABILITY_SOURCES); `needsD1` is overridden with
+    // the schema-augmented value computed above rather than the raw import flag.
+    const capabilityFlags = {} as Pick<InferredBindings, CapabilityFlag>;
+
+    for (const flag of CAPABILITY_FLAGS) {
+        capabilityFlags[flag] = capabilities[flag];
+    }
+
     return {
         containers,
         durableObjects,
         needsD1,
         signals: describeSignals(durableObjects, needsD1, capabilities, containers, workflows),
-        usesAi: capabilities.usesAi,
-        usesAnalytics: capabilities.usesAnalytics,
-        usesAuth: capabilities.usesAuth,
-        usesBrowser: capabilities.usesBrowser,
-        usesHyperdrive: capabilities.usesHyperdrive,
-        usesImages: capabilities.usesImages,
-        usesKv: capabilities.usesKv,
-        usesPayment: capabilities.usesPayment,
-        usesPipelines: capabilities.usesPipelines,
-        usesScheduler: capabilities.usesScheduler,
-        usesStorage: capabilities.usesStorage,
         workflows,
+        ...capabilityFlags,
     };
 };
 

@@ -333,305 +333,197 @@ const validateWorkflows = (wrangler: WranglerConfig, errors: string[]): void => 
     }
 };
 
+/** A non-empty string — the shape every binding's required fields must satisfy. */
+const isNonEmptyString = (value: unknown): value is string => typeof value === "string" && value.length > 0;
+
 /**
- * Each `kv_namespaces[]` entry must name a non-empty `binding` (error). The
- * namespace `id` is a remote resource (`wrangler kv namespace create`) Cirrus
- * can't mint, so a missing `id` is a warning, not an error — mirrors the
- * Hyperdrive/Pipelines hint ethos. Shape modeled on `validateVectorizeBindings`.
+ * `Array.isArray` widens the readonly element type to `any`; restore it as a
+ * record of untrusted parsed entries (each may be `null`/malformed) so the
+ * generic checkers below can index arbitrary string fields type-safely.
  */
-const validateKvNamespaces = (wrangler: WranglerConfig, errors: string[], warnings: string[]): void => {
-    const namespaces = wrangler.kv_namespaces;
+const asBindingEntries = (value: ReadonlyArray<unknown>): ReadonlyArray<Record<string, unknown> | null | undefined> =>
+    value as ReadonlyArray<Record<string, unknown> | null | undefined>;
 
-    if (namespaces === undefined) {
+/**
+ * Hint-style binding arrays: each entry needs a non-empty `binding` (error); its
+ * secondary field is a remote resource Cirrus can't mint (a KV namespace id, a
+ * Hyperdrive id, a Pipelines pipeline name, an AE dataset), so a missing one is
+ * a warning — the binding can't resolve/connect without it, but only the user
+ * can supply it. One descriptor table replaces four near-identical validators.
+ */
+const HINT_BINDING_RULES = [
+    {
+        arrayMessage: "kv_namespaces must be an array of { binding, id } entries",
+        bindingMessage: (label: string) => `${label} must have a non-empty "binding" naming the KV namespace binding`,
+        hintField: "id",
+        hintMessage: (label: string, binding: string) =>
+            `${label} ("${binding}") has no "id" — run \`wrangler kv namespace create\` and set the namespace id, or the binding can't resolve`,
+        key: "kv_namespaces",
+    },
+    {
+        arrayMessage: "hyperdrive must be an array of { binding, id } entries",
+        bindingMessage: (label: string) => `${label} must have a non-empty "binding" naming the Hyperdrive binding`,
+        hintField: "id",
+        hintMessage: (label: string, binding: string) =>
+            `${label} ("${binding}") has no "id" — run \`wrangler hyperdrive create\` and set the id, or the binding can't connect`,
+        key: "hyperdrive",
+    },
+    {
+        arrayMessage: "pipelines must be an array of { binding, pipeline } entries",
+        bindingMessage: (label: string) => `${label} must have a non-empty "binding" naming the Pipelines binding`,
+        hintField: "pipeline",
+        hintMessage: (label: string, binding: string) =>
+            `${label} ("${binding}") has no "pipeline" — run \`wrangler pipelines create <name>\` and set the pipeline name, or the binding can't resolve`,
+        key: "pipelines",
+    },
+    {
+        arrayMessage: "analytics_engine_datasets must be an array of { binding, dataset } entries",
+        bindingMessage: (label: string) => `${label} must have a non-empty "binding" naming the Analytics Engine binding`,
+        hintField: "dataset",
+        hintMessage: (label: string, binding: string) =>
+            `${label} ("${binding}") has no "dataset" — it defaults to the binding name; set it explicitly to avoid drift`,
+        key: "analytics_engine_datasets",
+    },
+] as const satisfies ReadonlyArray<{
+    arrayMessage: string;
+    bindingMessage: (label: string) => string;
+    hintField: string;
+    hintMessage: (label: string, binding: string) => string;
+    key: keyof WranglerConfig;
+}>;
+
+/**
+ * Validate one hint-style binding array (see {@link HINT_BINDING_RULES}): a
+ * non-object entry or one missing a non-empty `binding` errors; an entry whose
+ * hint field is absent warns.
+ */
+const validateHintBinding = (wrangler: WranglerConfig, rule: (typeof HINT_BINDING_RULES)[number], errors: string[], warnings: string[]): void => {
+    const value = wrangler[rule.key];
+
+    if (value === undefined) {
         return;
     }
 
-    if (!Array.isArray(namespaces)) {
-        errors.push("kv_namespaces must be an array of { binding, id } entries");
+    if (!Array.isArray(value)) {
+        errors.push(rule.arrayMessage);
 
         return;
     }
 
-    const entries = namespaces as ReadonlyArray<{ binding?: string; id?: string } | null | undefined>;
+    for (const [index, entry] of asBindingEntries(value).entries()) {
+        const label = `${rule.key}[${String(index)}]`;
 
-    for (const [index, entry] of entries.entries()) {
-        const label = `kv_namespaces[${String(index)}]`;
-
-        if (!entry || typeof entry !== "object" || typeof entry.binding !== "string" || entry.binding.length === 0) {
-            errors.push(`${label} must have a non-empty "binding" naming the KV namespace binding`);
+        if (!entry || typeof entry !== "object" || !isNonEmptyString(entry.binding)) {
+            errors.push(rule.bindingMessage(label));
 
             continue;
         }
 
-        if (typeof entry.id !== "string" || entry.id.length === 0) {
-            warnings.push(
-                `${label} ("${entry.binding}") has no "id" — run \`wrangler kv namespace create\` and set the namespace id, or the binding can't resolve`,
-            );
+        if (!isNonEmptyString(entry[rule.hintField])) {
+            warnings.push(rule.hintMessage(label, entry.binding));
         }
     }
 };
 
 /**
- * Each `hyperdrive[]` entry must name a non-empty `binding` (error). The `id`
- * is a remote resource (`wrangler hyperdrive create`) Cirrus can't fabricate,
- * so a missing/placeholder `id` is a warning (the binding can't connect without
- * it), not an error — mirrors the D1 placeholder-id ethos in reconcile.
+ * The self-describing single-object bindings — the binding name is the whole
+ * config (no array, no remote id to mint). A present block must be an object
+ * with a non-empty `binding`. One table replaces the Browser/Images validators.
  */
-const validateHyperdriveBindings = (wrangler: WranglerConfig, errors: string[], warnings: string[]): void => {
-    const bindings = wrangler.hyperdrive;
+const SELF_DESCRIBING_BINDING_RULES = [
+    { key: "browser", message: 'browser must be an object with a non-empty "binding" (e.g. { "binding": "BROWSER" })' },
+    { key: "images", message: 'images must be an object with a non-empty "binding" (e.g. { "binding": "IMAGES" })' },
+] as const satisfies ReadonlyArray<{ key: keyof WranglerConfig; message: string }>;
 
-    if (bindings === undefined) {
+/** Validate one self-describing `{ binding }` object against its rule (pure shape check). */
+const validateSelfDescribingBinding = (wrangler: WranglerConfig, rule: (typeof SELF_DESCRIBING_BINDING_RULES)[number], errors: string[]): void => {
+    const value = wrangler[rule.key];
+
+    if (value === undefined) {
         return;
     }
 
-    if (!Array.isArray(bindings)) {
-        errors.push("hyperdrive must be an array of { binding, id } entries");
-
-        return;
-    }
-
-    const entries = bindings as ReadonlyArray<{ binding?: string; id?: string } | null | undefined>;
-
-    for (const [index, entry] of entries.entries()) {
-        const label = `hyperdrive[${String(index)}]`;
-
-        if (!entry || typeof entry !== "object" || typeof entry.binding !== "string" || entry.binding.length === 0) {
-            errors.push(`${label} must have a non-empty "binding" naming the Hyperdrive binding`);
-
-            continue;
-        }
-
-        if (typeof entry.id !== "string" || entry.id.length === 0) {
-            warnings.push(`${label} ("${entry.binding}") has no "id" — run \`wrangler hyperdrive create\` and set the id, or the binding can't connect`);
-        }
+    if (typeof value !== "object" || Array.isArray(value) || !isNonEmptyString((value as { binding?: unknown }).binding)) {
+        errors.push(rule.message);
     }
 };
 
 /**
- * Each `pipelines[]` entry must name a non-empty `binding` (error). The
- * `pipeline` name is a remote resource (`wrangler pipelines create`) Cirrus
- * can't fabricate, so a missing one is a warning (the binding can't resolve),
- * not an error. Same hint ethos as KV/Hyperdrive.
+ * Binding arrays whose entries carry two or more **required** string fields (a
+ * missing field is an error, not a hint). Unlike the hint bindings these
+ * reference targets Cirrus can't discover (a service worker, a dispatch
+ * namespace, an mTLS cert id), so the shape is all we police. One table replaces
+ * the Services/DispatchNamespaces/MtlsCertificates validators.
  */
-const validatePipelineBindings = (wrangler: WranglerConfig, errors: string[], warnings: string[]): void => {
-    const bindings = wrangler.pipelines;
-
-    if (bindings === undefined) {
-        return;
-    }
-
-    if (!Array.isArray(bindings)) {
-        errors.push("pipelines must be an array of { binding, pipeline } entries");
-
-        return;
-    }
-
-    const entries = bindings as ReadonlyArray<{ binding?: string; pipeline?: string } | null | undefined>;
-
-    for (const [index, entry] of entries.entries()) {
-        const label = `pipelines[${String(index)}]`;
-
-        if (!entry || typeof entry !== "object" || typeof entry.binding !== "string" || entry.binding.length === 0) {
-            errors.push(`${label} must have a non-empty "binding" naming the Pipelines binding`);
-
-            continue;
-        }
-
-        if (typeof entry.pipeline !== "string" || entry.pipeline.length === 0) {
-            warnings.push(
-                `${label} ("${entry.binding}") has no "pipeline" — run \`wrangler pipelines create <name>\` and set the pipeline name, or the binding can't resolve`,
-            );
-        }
-    }
-};
+const REQUIRED_FIELD_BINDING_RULES = [
+    {
+        arrayMessage: "services must be an array of { binding, service, entrypoint? } entries",
+        fields: [
+            { field: "binding", message: (label: string) => `${label} must have a non-empty "binding" naming the service binding` },
+            { field: "service", message: (label: string) => `${label} must have a non-empty "service" naming the target Worker` },
+        ],
+        key: "services",
+        objectMessage: (label: string) => `${label} must be a { binding, service, entrypoint? } object`,
+    },
+    {
+        arrayMessage: "dispatch_namespaces must be an array of { binding, namespace } entries",
+        fields: [
+            { field: "binding", message: (label: string) => `${label} must have a non-empty "binding"` },
+            { field: "namespace", message: (label: string) => `${label} must have a non-empty "namespace" naming the dispatch namespace` },
+        ],
+        key: "dispatch_namespaces",
+        objectMessage: (label: string) => `${label} must be a { binding, namespace } object`,
+    },
+    {
+        arrayMessage: "mtls_certificates must be an array of { binding, certificate_id } entries",
+        fields: [
+            { field: "binding", message: (label: string) => `${label} must have a non-empty "binding"` },
+            {
+                field: "certificate_id",
+                message: (label: string) => `${label} must have a non-empty "certificate_id" (upload via \`wrangler mtls-certificate upload\`)`,
+            },
+        ],
+        key: "mtls_certificates",
+        objectMessage: (label: string) => `${label} must be a { binding, certificate_id } object`,
+    },
+] as const satisfies ReadonlyArray<{
+    arrayMessage: string;
+    fields: ReadonlyArray<{ field: string; message: (label: string) => string }>;
+    key: keyof WranglerConfig;
+    objectMessage: (label: string) => string;
+}>;
 
 /**
- * Each `analytics_engine_datasets[]` entry must name a non-empty `binding`
- * (error). The `dataset` defaults to the binding name on Cloudflare's side and
- * is created lazily on first write, so a missing `dataset` is a warning ("set it
- * explicitly to avoid drift"), not an error — this binding is self-describing.
+ * Validate one required-fields binding array (see {@link REQUIRED_FIELD_BINDING_RULES}):
+ * a non-object entry errors with the rule's object message; otherwise every
+ * declared field must be a non-empty string.
  */
-const validateAnalyticsBindings = (wrangler: WranglerConfig, errors: string[], warnings: string[]): void => {
-    const datasets = wrangler.analytics_engine_datasets;
+const validateRequiredFieldsBinding = (wrangler: WranglerConfig, rule: (typeof REQUIRED_FIELD_BINDING_RULES)[number], errors: string[]): void => {
+    const value = wrangler[rule.key];
 
-    if (datasets === undefined) {
+    if (value === undefined) {
         return;
     }
 
-    if (!Array.isArray(datasets)) {
-        errors.push("analytics_engine_datasets must be an array of { binding, dataset } entries");
-
-        return;
-    }
-
-    const entries = datasets as ReadonlyArray<{ binding?: string; dataset?: string } | null | undefined>;
-
-    for (const [index, entry] of entries.entries()) {
-        const label = `analytics_engine_datasets[${String(index)}]`;
-
-        if (!entry || typeof entry !== "object" || typeof entry.binding !== "string" || entry.binding.length === 0) {
-            errors.push(`${label} must have a non-empty "binding" naming the Analytics Engine binding`);
-
-            continue;
-        }
-
-        if (typeof entry.dataset !== "string" || entry.dataset.length === 0) {
-            warnings.push(`${label} ("${entry.binding}") has no "dataset" — it defaults to the binding name; set it explicitly to avoid drift`);
-        }
-    }
-};
-
-/**
- * The `browser` Browser Rendering binding is optional, but a present block must
- * name a non-empty `binding`. The binding is self-describing (the name is the
- * whole config), so this is a pure shape check.
- */
-const validateBrowserBinding = (wrangler: WranglerConfig, errors: string[]): void => {
-    const { browser } = wrangler;
-
-    if (browser === undefined) {
-        return;
-    }
-
-    if (typeof browser !== "object" || Array.isArray(browser) || typeof browser.binding !== "string" || browser.binding.length === 0) {
-        errors.push('browser must be an object with a non-empty "binding" (e.g. { "binding": "BROWSER" })');
-    }
-};
-
-/**
- * The `images` Cloudflare Images binding is optional, but a present block must
- * name a non-empty `binding`. Self-describing, so a pure shape check (mirrors
- * `validateBrowserBinding`).
- */
-const validateImagesBinding = (wrangler: WranglerConfig, errors: string[]): void => {
-    const { images } = wrangler;
-
-    if (images === undefined) {
-        return;
-    }
-
-    if (typeof images !== "object" || Array.isArray(images) || typeof images.binding !== "string" || images.binding.length === 0) {
-        errors.push('images must be an object with a non-empty "binding" (e.g. { "binding": "IMAGES" })');
-    }
-};
-
-/**
- * Each `services[]` entry must name a non-empty `binding` and a non-empty
- * `service` (the target worker). `entrypoint` (a named `WorkerEntrypoint` class
- * on the target) is optional. The typed-`env` codegen seam for `env.&lt;SERVICE>`
- * is the codegen agent's job (a generated `CirrusServices`/`Env` augmentation);
- * config only shape-checks the binding here. Shape modeled on `validateWorkflows`.
- */
-const validateServices = (wrangler: WranglerConfig, errors: string[]): void => {
-    const { services } = wrangler;
-
-    if (services === undefined) {
-        return;
-    }
-
-    if (!Array.isArray(services)) {
-        errors.push("services must be an array of { binding, service, entrypoint? } entries");
+    if (!Array.isArray(value)) {
+        errors.push(rule.arrayMessage);
 
         return;
     }
 
-    const entries = services as ReadonlyArray<{ binding?: string; service?: string } | null | undefined>;
-
-    for (const [index, entry] of entries.entries()) {
-        const label = `services[${String(index)}]`;
+    for (const [index, entry] of asBindingEntries(value).entries()) {
+        const label = `${rule.key}[${String(index)}]`;
 
         if (!entry || typeof entry !== "object") {
-            errors.push(`${label} must be a { binding, service, entrypoint? } object`);
+            errors.push(rule.objectMessage(label));
 
             continue;
         }
 
-        if (typeof entry.binding !== "string" || entry.binding.length === 0) {
-            errors.push(`${label} must have a non-empty "binding" naming the service binding`);
-        }
-
-        if (typeof entry.service !== "string" || entry.service.length === 0) {
-            errors.push(`${label} must have a non-empty "service" naming the target Worker`);
-        }
-    }
-};
-
-/**
- * Each `dispatch_namespaces[]` entry (Workers for Platforms) must name a
- * non-empty `binding` and a non-empty `namespace`. Passthrough/shape-check only:
- * the `outbound` binding shape is deep WfP territory Cirrus deliberately does
- * not police. Cirrus supports this binding as wrangler config passthrough — it
- * provides no script-upload/management or tenant-isolation runtime.
- */
-const validateDispatchNamespaces = (wrangler: WranglerConfig, errors: string[]): void => {
-    const namespaces = wrangler.dispatch_namespaces;
-
-    if (namespaces === undefined) {
-        return;
-    }
-
-    if (!Array.isArray(namespaces)) {
-        errors.push("dispatch_namespaces must be an array of { binding, namespace } entries");
-
-        return;
-    }
-
-    const entries = namespaces as ReadonlyArray<{ binding?: string; namespace?: string } | null | undefined>;
-
-    for (const [index, entry] of entries.entries()) {
-        const label = `dispatch_namespaces[${String(index)}]`;
-
-        if (!entry || typeof entry !== "object") {
-            errors.push(`${label} must be a { binding, namespace } object`);
-
-            continue;
-        }
-
-        if (typeof entry.binding !== "string" || entry.binding.length === 0) {
-            errors.push(`${label} must have a non-empty "binding"`);
-        }
-
-        if (typeof entry.namespace !== "string" || entry.namespace.length === 0) {
-            errors.push(`${label} must have a non-empty "namespace" naming the dispatch namespace`);
-        }
-    }
-};
-
-/**
- * Each `mtls_certificates[]` entry must name a non-empty `binding` and a
- * non-empty `certificate_id` (the cert is uploaded via `wrangler mtls-certificate
- * upload`; Cirrus never handles cert/key material). Passthrough/shape-check only.
- */
-const validateMtlsCertificates = (wrangler: WranglerConfig, errors: string[]): void => {
-    const certificates = wrangler.mtls_certificates;
-
-    if (certificates === undefined) {
-        return;
-    }
-
-    if (!Array.isArray(certificates)) {
-        errors.push("mtls_certificates must be an array of { binding, certificate_id } entries");
-
-        return;
-    }
-
-    const entries = certificates as ReadonlyArray<{ binding?: string; certificate_id?: string } | null | undefined>;
-
-    for (const [index, entry] of entries.entries()) {
-        const label = `mtls_certificates[${String(index)}]`;
-
-        if (!entry || typeof entry !== "object") {
-            errors.push(`${label} must be a { binding, certificate_id } object`);
-
-            continue;
-        }
-
-        if (typeof entry.binding !== "string" || entry.binding.length === 0) {
-            errors.push(`${label} must have a non-empty "binding"`);
-        }
-
-        if (typeof entry.certificate_id !== "string" || entry.certificate_id.length === 0) {
-            errors.push(`${label} must have a non-empty "certificate_id" (upload via \`wrangler mtls-certificate upload\`)`);
+        for (const field of rule.fields) {
+            if (!isNonEmptyString(entry[field.field])) {
+                errors.push(field.message(label));
+            }
         }
     }
 };
@@ -849,18 +741,22 @@ const validateWranglerConfig = (wrangler: WranglerConfig | undefined, schema?: S
     validateContainers(wrangler, errors, warnings);
     validateWorkflows(wrangler, errors);
 
-    // Cloudflare-coverage bindings (plans 027-043). Hint bindings warn on a
-    // missing remote id; self-describing + passthrough bindings are pure
-    // shape checks. Config-only flags (logpush/placement/assets) catch typos.
-    validateKvNamespaces(wrangler, errors, warnings);
-    validateHyperdriveBindings(wrangler, errors, warnings);
-    validatePipelineBindings(wrangler, errors, warnings);
-    validateAnalyticsBindings(wrangler, errors, warnings);
-    validateBrowserBinding(wrangler, errors);
-    validateImagesBinding(wrangler, errors);
-    validateServices(wrangler, errors);
-    validateDispatchNamespaces(wrangler, errors);
-    validateMtlsCertificates(wrangler, errors);
+    // Cloudflare-coverage bindings (plans 027-043), driven by descriptor tables.
+    // Hint bindings warn on a missing remote id; self-describing + passthrough
+    // bindings are pure shape checks. Config-only flags (logpush/placement/
+    // assets) catch typos.
+    for (const rule of HINT_BINDING_RULES) {
+        validateHintBinding(wrangler, rule, errors, warnings);
+    }
+
+    for (const rule of REQUIRED_FIELD_BINDING_RULES) {
+        validateRequiredFieldsBinding(wrangler, rule, errors);
+    }
+
+    for (const rule of SELF_DESCRIBING_BINDING_RULES) {
+        validateSelfDescribingBinding(wrangler, rule, errors);
+    }
+
     validateSendEmail(wrangler, errors, warnings);
     validateLogpush(wrangler, errors);
     validatePlacement(wrangler, errors);
