@@ -15,6 +15,8 @@ import type { EditableFilter } from "../data-filters";
 import { toFilterClauses } from "../data-filters";
 import type { StagedChange, StagedEditsModel } from "../staged-edits";
 import { useStagedEdits } from "../staged-edits";
+import type { FacetFetcher, FacetState } from "./use-facets";
+import { useFacets } from "./use-facets";
 
 /**
  * Convert TanStack's sorting state into the `readTablePage` `orderBy` arg. The
@@ -120,17 +122,6 @@ const rowDocument = (row: TableRow): Record<string, unknown> => {
 
     return fields;
 };
-
-/**
- * One faceted column's current state for the facet sidebar: whether its summary
- * has loaded (`result`), is still loading, or failed. Keyed by column in the
- * model's `facets` map; absent → not toggled on.
- */
-interface FacetState {
-    error: null | string;
-    loading: boolean;
-    result: FacetResult | null;
-}
 
 /** Everything {@link useDataBrowser} exposes to the `DataBrowser` render. */
 interface DataBrowserModel {
@@ -283,8 +274,10 @@ const useDataBrowser = ({
     // Facets (Datasette-style per-column value/count summaries): the columns the
     // operator has toggled into the facet sidebar, each with its loaded summary.
     // Opt-in per column (faceting a wide column is costly); the summaries reflect
-    // the ACTIVE view and refetch when the filters/search/shard/table change.
-    const [facets, setFacets] = useState<Record<string, FacetState>>({});
+    // the ACTIVE view and refetch when the filters/search/shard/table change. The
+    // shared `useFacets` hook owns the slot transitions and toggle/refetch; only the
+    // per-view query (`FACET_COLUMN` over the current shard/filters/search) is ours.
+    const { clearFacets, facets, refetchFacets, toggleFacet: toggleFacetColumn } = useFacets();
 
     // Sorting is server-side: `fetchPage` reads the current sort off this ref (so
     // it need not thread through every call site) and an effect re-fetches from
@@ -452,7 +445,7 @@ const useDataBrowser = ({
             setFilters(nextFilters);
             filtersRef.current = nextFilters;
             sortingRef.current = nextSorting;
-            setFacets({});
+            clearFacets();
             stagedEdits.clear();
             setEditingCell(null);
             setSelectedTable(table);
@@ -461,7 +454,7 @@ const useDataBrowser = ({
             // Mirror the selection to the URL so it's shareable and back/forward works.
             onSelectTable?.(table);
         },
-        [fetchPage, onSelectTable, shardKey, stagedEdits],
+        [clearFacets, fetchPage, onSelectTable, shardKey, stagedEdits],
     );
 
     // Follow a foreign-key cell: switch to the target table and search for the
@@ -472,7 +465,7 @@ const useDataBrowser = ({
             setSorting([]);
             setFilters([]);
             filtersRef.current = [];
-            setFacets({});
+            clearFacets();
             setSelectedTable(targetTable);
             appliedTableRef.current = targetTable;
             setFilter(id);
@@ -481,7 +474,7 @@ const useDataBrowser = ({
             fireAndForget(fetchPage(shardKey, targetTable, 0, id));
             onSelectTable?.(targetTable);
         },
-        [fetchPage, onSelectTable, shardKey],
+        [clearFacets, fetchPage, onSelectTable, shardKey],
     );
 
     // One-shot read of the row a foreign-key cell points at, for the hover preview,
@@ -508,47 +501,28 @@ const useDataBrowser = ({
     );
 
     // ── Facets (Datasette-style per-column value/count summaries) ───────────
-    const fetchFacet = useCallback(
-        async (shard: string, table: string, column: string, activeFilters: EditableFilter[], searchQuery: string): Promise<void> => {
-            setFacets((current) => {
-                return { ...current, [column]: { error: null, loading: true, result: current[column]?.result ?? null } };
-            });
-
-            try {
-                const result = (await client.query(
+    // The per-view fetcher the shared hook drives: one `FACET_COLUMN` query over the
+    // given shard/filters/search. `FacetResult` is the on-the-wire summary shape.
+    const facetFetcher = useCallback(
+        (shard: string, table: string, activeFilters: EditableFilter[], searchQuery: string): FacetFetcher =>
+            (column) =>
+                client.query(
                     FACET_COLUMN,
                     { column, filters: toFilterClauses(activeFilters), search: searchQuery, table },
                     callOptions(shard),
-                )) as FacetResult;
-
-                setFacets((current) => (column in current ? { ...current, [column]: { error: null, loading: false, result } } : current));
-            } catch (error) {
-                setFacets((current) =>
-                    column in current ? { ...current, [column]: { error: (error as Error).message, loading: false, result: null } } : current,
-                );
-            }
-        },
+                ) as Promise<FacetResult>,
         [client],
     );
 
     // Toggle a column into / out of the facet sidebar. Turning it on seeds a
     // loading slot and fetches its summary for the current view; turning it off
-    // drops it entirely.
+    // drops it entirely. With no table selected the hook seeds the slot without
+    // fetching (a null fetcher).
     const toggleFacet = useCallback(
         (column: string): void => {
-            setFacets((current) => {
-                if (column in current) {
-                    return Object.fromEntries(Object.entries(current).filter(([name]) => name !== column));
-                }
-
-                if (selectedTable !== null) {
-                    fireAndForget(fetchFacet(shardKey, selectedTable, column, filtersRef.current, search));
-                }
-
-                return { ...current, [column]: { error: null, loading: true, result: null } };
-            });
+            toggleFacetColumn(column, selectedTable === null ? null : facetFetcher(shardKey, selectedTable, filtersRef.current, search));
         },
-        [fetchFacet, search, selectedTable, shardKey],
+        [facetFetcher, search, selectedTable, shardKey, toggleFacetColumn],
     );
 
     // Clicking a facet value adds an `eq` filter for that column/value, narrowing
@@ -571,14 +545,10 @@ const useDataBrowser = ({
             return;
         }
 
-        for (const column of Object.keys(facets)) {
-            fireAndForget(fetchFacet(loaded.shard, loaded.table, column, loaded.filters, loaded.search));
-        }
-        // `facets` keys are intentionally excluded — toggling a single facet on is
-        // handled by `toggleFacet`'s own fetch; this effect only re-runs the
-        // already-open facets when the underlying view changes.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [loaded, fetchFacet]);
+        // `refetchFacets` re-runs only the already-open facets (read off the hook's
+        // ref); toggling a single facet on is handled by `toggleFacet`'s own fetch.
+        refetchFacets(facetFetcher(loaded.shard, loaded.table, loaded.filters, loaded.search));
+    }, [loaded, facetFetcher, refetchFacets]);
 
     // Mirror the loaded view (shard / search / filters / sort) to the host so it can
     // write it into the URL — making every view a real, shareable link. Keyed on the
@@ -1040,5 +1010,6 @@ const useDataBrowser = ({
     };
 };
 
-export type { DataBrowserModel, FacetState };
+export type { DataBrowserModel };
+export type { FacetState } from "./use-facets";
 export { useDataBrowser };

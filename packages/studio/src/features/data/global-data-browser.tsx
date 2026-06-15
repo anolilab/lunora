@@ -12,7 +12,7 @@ import { errorMessage, fireAndForget } from "../../lib/internal";
 import DataFacets from "./data-facets";
 import { CellValue, GridContainer } from "./data-grid";
 import GridPagination from "./grid-pagination";
-import type { FacetState } from "./hooks/use-data-browser";
+import { useFacets } from "./hooks/use-facets";
 import { TableListSidebar } from "./table-list-sidebar";
 
 interface GlobalDataBrowserProps {
@@ -116,11 +116,10 @@ export const GlobalDataBrowser = ({
 
     // Datasette-style per-column value/count summaries the operator has toggled on.
     // Opt-in per column (faceting a wide column is costly); each reflects the active
-    // view (the same filters the grid is showing). Mirrored into a ref so the
-    // filter-mutation handlers and poll tick can refetch the open ones.
-    const [facets, setFacets] = useState<Record<string, FacetState>>({});
-    const facetsRef = useRef(facets);
-    facetsRef.current = facets;
+    // view (the same filters the grid is showing). The shared `useFacets` hook owns
+    // the slot transitions and exposes a ref so the filter-mutation handlers and
+    // poll tick can refetch the open ones; only the per-view fetch call is ours.
+    const { clearFacets, facets, refetchFacets: refetchFacetsViaHook, toggleFacet } = useFacets();
 
     const fetchTables = useCallback(async (): Promise<void> => {
         setTablesError(null);
@@ -150,22 +149,13 @@ export const GlobalDataBrowser = ({
         [client, pageSize],
     );
 
-    // Fetch one column's facet summary over the active view. `GlobalFacetResult` is
-    // structurally the studio's `FacetResult`, so it drops straight into `FacetState`.
-    const fetchFacet = useCallback(
-        async (table: string, column: string, activeFilters: GlobalFilterClause[]): Promise<void> => {
-            setFacets((current) =>
-                column in current ? { ...current, [column]: { error: null, loading: true, result: current[column]?.result ?? null } } : current,
-            );
-
-            try {
-                const result: GlobalFacetResult = await client.facetGlobalColumn({ column, filters: activeFilters, table });
-
-                setFacets((current) => (column in current ? { ...current, [column]: { error: null, loading: false, result } } : current));
-            } catch (error) {
-                setFacets((current) => (column in current ? { ...current, [column]: { error: errorMessage(error), loading: false, result: null } } : current));
-            }
-        },
+    // A column's facet summary is fetched over the active view via `facetGlobalColumn`.
+    // `GlobalFacetResult` is structurally the studio's `FacetResult`, so it drops
+    // straight into `FacetState`. This builds the per-view fetcher the shared hook drives.
+    const facetFetcher = useCallback(
+        (table: string, activeFilters: GlobalFilterClause[]): ((column: string) => Promise<GlobalFacetResult>) =>
+            (column) =>
+                client.facetGlobalColumn({ column, filters: activeFilters, table }),
         [client],
     );
 
@@ -173,11 +163,9 @@ export const GlobalDataBrowser = ({
     // changes (and on each poll tick) so the summaries track the previewed rows.
     const refetchFacets = useCallback(
         (table: string, activeFilters: GlobalFilterClause[]): void => {
-            for (const column of Object.keys(facetsRef.current)) {
-                fireAndForget(fetchFacet(table, column, activeFilters));
-            }
+            refetchFacetsViaHook(facetFetcher(table, activeFilters));
         },
-        [fetchFacet],
+        [facetFetcher, refetchFacetsViaHook],
     );
 
     useEffect(() => {
@@ -210,31 +198,22 @@ export const GlobalDataBrowser = ({
             // A fresh table means the previous drill-down filters and facets no longer apply.
             setFilters([]);
             filtersRef.current = [];
-            setFacets({});
+            clearFacets();
             fireAndForget(fetchPage(table, 0, pageSize, []));
             // Mirror the selection to the URL so it's shareable and back/forward works.
             onSelectTable?.(table);
         },
-        [fetchPage, onSelectTable, pageSize],
+        [clearFacets, fetchPage, onSelectTable, pageSize],
     );
 
     // Toggle a column into / out of the facet sidebar. Turning it on seeds a loading
-    // slot and fetches its summary for the active view; turning it off drops it.
+    // slot and fetches its summary for the active view; turning it off drops it. With
+    // no table selected the hook seeds the slot without fetching (a null fetcher).
     const onToggleFacet = useCallback(
         (column: string): void => {
-            setFacets((current) => {
-                if (column in current) {
-                    return Object.fromEntries(Object.entries(current).filter(([name]) => name !== column));
-                }
-
-                if (selectedTable !== null) {
-                    fireAndForget(fetchFacet(selectedTable, column, filtersRef.current));
-                }
-
-                return { ...current, [column]: { error: null, loading: true, result: null } };
-            });
+            toggleFacet(column, selectedTable === null ? null : facetFetcher(selectedTable, filtersRef.current));
         },
-        [fetchFacet, selectedTable],
+        [facetFetcher, selectedTable, toggleFacet],
     );
 
     // Apply a new filter set: re-read the first page and refetch the open facets so
