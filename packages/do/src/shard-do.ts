@@ -3030,6 +3030,19 @@ abstract class ShardDO {
      * subscriber. The generated `buildCtx` reads identity via
      * `getCurrentUserId`, so we pin it to anonymous around the call
      * rather than threading it through the generated signature.
+     *
+     * Developer-facing consequence: a query that authorizes or filters on
+     * the caller's identity — via `.use(rls(...))` or by reading
+     * `ctx.auth.userId` directly — evaluates as ANONYMOUS over the live
+     * channel. Its one-shot `fetch` RPC carries identity and returns the
+     * user's rows, but the WS subscription (seed + every write-driven
+     * refresh) runs here under anonymous identity, so it fails CLOSED: an
+     * empty/denied result rather than another user's data (no leak), but a
+     * silent correctness mismatch between the initial fetch and the live
+     * updates. For per-user live data, scope it by shard (`.shardBy(...)`)
+     * or pass the identifier as an explicit query arg instead of relying on
+     * `ctx.auth` inside a subscribed query. See the cirrus-realtime skill
+     * ("Authorization & live queries").
      */
     private async withAnonymousIdentity<R>(run: () => Promise<R> | R): Promise<R> {
         return this.withRequestIdentity(undefined, undefined, run);

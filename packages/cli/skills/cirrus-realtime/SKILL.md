@@ -65,6 +65,36 @@ const todos = useQuery(api.todos.list, {}) as Doc<"todos">[] | undefined;
   `usePreloadedQuery` + `cirrusQueryOptions` support SSR/preload handoff via
   `@cirrus/react/server`.
 
+## Authorization & Live Queries
+
+Subscriptions re-run the query handler **server-side under anonymous
+identity**. The one-shot `fetch` RPC behind the initial load carries the
+caller's identity, but the live WebSocket channel (the subscription seed and
+every write-driven refresh) does not — it evaluates as anonymous.
+
+This matters for any query that authorizes or filters on the authenticated
+user:
+
+- A query guarded by `.use(rls(...))` or one that reads `ctx.auth.userId`
+  directly returns the user's rows on the **initial** HTTP fetch, but its
+  **live** updates evaluate anonymously and may resolve to an empty/denied
+  set.
+- This **fails closed** — the live channel shows _less_ data, never another
+  user's data, so there is no leak. But it is a correctness caveat: the
+  initial render and the live updates can disagree.
+
+The supported pattern today is to scope per-user data **outside** of
+`ctx.auth` inside a subscribed query:
+
+- Partition the data by shard with `.shardBy(userId)` (or tenant/room), so the
+  subscription is already scoped to the right state, or
+- Pass the identifier as an **explicit query arg**
+  (`useQuery(api.todos.list, { userId })`) and filter on the arg rather than on
+  `ctx.auth`.
+
+Reserve `rls()` / `ctx.auth`-based filtering for non-subscribed reads (one-shot
+actions/queries) where identity is always present.
+
 ## Mutations + Optimistic Updates
 
 `useMutation(reference)` returns `{ mutate, pending }`. Pass an `optimistic`
