@@ -1,3 +1,5 @@
+import type { AdvisorAdminRoute } from "./admin-routes";
+import type { AdvisorArgumentValidator } from "./argument-validators";
 import type { AdvisorAuthApiCall } from "./authapi-calls";
 import type { AdvisorContainer } from "./containers";
 import type { AdvisorHyperdriveCall } from "./hyperdrive-calls";
@@ -5,10 +7,13 @@ import type { AdvisorIndexHit, AdvisorTableScan } from "./index-usage";
 import type { AdvisorInsertWrite } from "./inserts";
 import type { AdvisorMaskProcedure } from "./mask-procedures";
 import type { AdvisorNondeterministicCall } from "./nondeterministic-calls";
+import type { AdvisorProcedureProtection } from "./procedure-protections";
 import type { AdvisorQueryRead } from "./queries";
 import type { AdvisorRlsProcedure } from "./rls-procedures";
 import type { AdvisorSchema } from "./schema";
+import type { AdvisorSecretLiteral } from "./secrets";
 import type { AdvisorShardTraffic } from "./shard-traffic";
+import type { AdvisorSqlInterpolation } from "./sql-interpolation";
 import type { AdvisorTableSample } from "./table-samples";
 import type { AdvisorWorkflow, AdvisorWorkflowCall } from "./workflows";
 
@@ -81,6 +86,22 @@ export interface Finding {
  */
 export interface LintContext {
     /**
+     * `httpRoute.&lt;verb>("/admin/…")` routes on admin/privileged-looking paths and
+     * whether each references an auth/admin guard — the `admin_route_without_guard`
+     * input. Supplied by the codegen feeder; absent for runtime callers, where the
+     * lint finds nothing.
+     */
+    adminRoutes?: ReadonlyArray<AdvisorAdminRoute>;
+
+    /**
+     * Per-public-procedure argument validators that weaken input safety — the
+     * `public_arg_uses_any` (`v.any()` args) and `unbounded_string_arg` (length-less
+     * `v.string()` args) input. Supplied by the codegen feeder for public procedures
+     * only; absent for runtime callers, where the lints find nothing.
+     */
+    argValidators?: ReadonlyArray<AdvisorArgumentValidator>;
+
+    /**
      * `ctx.authApi.&lt;method>(...)` calls discovered in function bodies (the
      * `auth_api_call_without_headers` input). Supplied by the codegen feeder; absent
      * for runtime callers, where the lint finds nothing.
@@ -140,6 +161,16 @@ export interface LintContext {
     nondeterministicCalls?: ReadonlyArray<AdvisorNondeterministicCall>;
 
     /**
+     * Per-procedure protective-middleware snapshots — the
+     * `public_mutation_without_ratelimit` and `user_creating_mutation_without_captcha`
+     * input. Records which `.use(...)` guards (`rateLimit`, captcha, `rls`, `mask`,
+     * the `protectPublic` bundle) each procedure carries and whether it writes a
+     * user table or sends mail. Supplied by the codegen feeder; absent for runtime
+     * callers, where the lints find nothing.
+     */
+    procedureProtections?: ReadonlyArray<AdvisorProcedureProtection>;
+
+    /**
      * Query reads discovered in function bodies (the `filter_without_index`
      * input). Supplied by the codegen feeder; absent for runtime callers, where
      * the query-shaped lints simply find nothing.
@@ -159,12 +190,28 @@ export interface LintContext {
     schema: AdvisorSchema;
 
     /**
+     * Secret-shaped string literals discovered in the lunora source — the
+     * `hardcoded_secret` input. Each carries only a redacted preview, never the
+     * full value. Supplied by the codegen feeder; absent for runtime callers,
+     * where the lint finds nothing.
+     */
+    secretLiterals?: ReadonlyArray<AdvisorSecretLiteral>;
+
+    /**
      * Per-shard observed traffic — the `hot_shard` lint input. Supplied by the
      * studio backend, which fans out over a sharded function's shards and reads
      * each shard's recorded request volume from the durable `__lunora_metrics`
      * accumulator. Absent for static callers, where the lint finds nothing.
      */
     shardTraffic?: ReadonlyArray<AdvisorShardTraffic>;
+
+    /**
+     * `ctx.sql` tagged-template interpolations that splice an unparameterized
+     * string-building expression into the query — the `sql_injection_risk` input.
+     * Supplied by the codegen feeder; absent for runtime callers, where the lint
+     * finds nothing.
+     */
+    sqlInterpolations?: ReadonlyArray<AdvisorSqlInterpolation>;
 
     /**
      * Bounded row samples per table — the `constraint_validator` lint input.
