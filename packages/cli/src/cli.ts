@@ -16,6 +16,7 @@ import { exportCommand } from "./commands/export";
 import { importCommand } from "./commands/import";
 import { infoCommand } from "./commands/info";
 import { initCommand } from "./commands/init";
+import { insightsCommand } from "./commands/insights";
 import { logsCommand } from "./commands/logs";
 import { migrateCommand } from "./commands/migrate";
 import { prepareCommand } from "./commands/prepare";
@@ -39,6 +40,7 @@ const COMMANDS = [
     "prepare",
     "logs",
     "run",
+    "insights",
     "reset",
     "migrate",
     "export",
@@ -71,6 +73,7 @@ const CLI_COMMANDS = [
     prepareCommand,
     logsCommand,
     runCommand,
+    insightsCommand,
     resetCommand,
     migrateCommand,
     exportCommand,

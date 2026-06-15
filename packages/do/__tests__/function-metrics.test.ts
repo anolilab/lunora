@@ -17,6 +17,7 @@ import {
 import type { FunctionCallStat } from "../src/introspect";
 import type { ShardDOState } from "../src/shard-do";
 import { ShardDO } from "../src/shard-do";
+import { ConflictError } from "../src/transaction";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 const ADMIN_TOKEN = "metrics-admin";
@@ -52,6 +53,27 @@ class ScanningShard extends ShardDO {
             onRead("comments");
             // An indexed point read of `users` must NOT count as a scan.
             onRead("users", "user-1");
+        }
+
+        return { ok: true };
+    }
+}
+
+/**
+ * A shard whose `handleRpc` raises a {@link ConflictError}: `occ:bump` throws an
+ * optimistic-concurrency conflict (the contention signal counted as a write
+ * conflict), `unique:insert` throws a unique-constraint breach (a 409 that is
+ * NOT contention and must not advance the conflict counter).
+ */
+class ConflictingShard extends ShardDO {
+    // eslint-disable-next-line class-methods-use-this -- override stub; routes by functionPath only
+    public override async handleRpc(functionPath: string): Promise<unknown> {
+        if (functionPath === "occ:bump") {
+            throw new ConflictError(`optimistic concurrency conflict on "counters"`, "occ");
+        }
+
+        if (functionPath === "unique:insert") {
+            throw new ConflictError(`unique constraint violation on "users"`, "unique");
         }
 
         return { ok: true };
@@ -117,6 +139,27 @@ describe("function-metrics module", () => {
             expect(row.errors).toBe(1);
             expect(row.lastErrorMessage).toBe("kaboom");
             expect(row.lastErrorAt).toBe(2000);
+        } finally {
+            database.close();
+        }
+    });
+
+    it("counts OCC write conflicts as a subset of errors", () => {
+        expect.assertions(3);
+
+        const database = createSqliteExec();
+
+        try {
+            recordFunctionMetric(database.sql, { durationMs: 5, errored: false, path: "counters:bump", ts: 1000 });
+            recordFunctionMetric(database.sql, { conflicted: true, durationMs: 5, errored: true, errorMessage: "occ", path: "counters:bump", ts: 2000 });
+            recordFunctionMetric(database.sql, { conflicted: true, durationMs: 5, errored: true, errorMessage: "occ", path: "counters:bump", ts: 3000 });
+
+            const [row] = readFunctionMetrics(database.sql) as [FunctionCallStat];
+
+            expect(row.calls).toBe(3);
+            // Conflicts are a subset of errors (every conflict also threw).
+            expect(row.errors).toBe(2);
+            expect(row.conflicts).toBe(2);
         } finally {
             database.close();
         }
@@ -315,6 +358,32 @@ describe("shardDO persisted metrics", () => {
             const buckets = database.raw(`SELECT COUNT(*) AS c FROM "${FUNCTION_METRICS_BUCKETS_TABLE}"`);
 
             expect(buckets[0]).toEqual({ c: 1 });
+        } finally {
+            database.close();
+        }
+    });
+
+    it("counts only OCC conflicts through fetch — a unique-violation 409 is an error but not a conflict", async () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+
+        try {
+            const shard = new ConflictingShard(makeState(database), { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+
+            // Two OCC conflicts and one unique-constraint breach — all 409s, all
+            // errors; only the OCC pair is write contention.
+            await shard.fetch(userRequest("occ:bump"));
+            await shard.fetch(userRequest("occ:bump"));
+            await shard.fetch(userRequest("unique:insert"));
+
+            const response = await shard.fetch(adminRequest("__cirrus_admin__:getFunctionStats"));
+            const body = await response.json<{ result: { functions: FunctionCallStat[] } }>();
+            const byPath = new Map(body.result.functions.map((s) => [s.path, s]));
+
+            expect(byPath.get("occ:bump")).toMatchObject({ calls: 2, conflicts: 2, errors: 2 });
+            // The unique-violation dispatch errored but is NOT counted as contention.
+            expect(byPath.get("unique:insert")).toMatchObject({ calls: 1, conflicts: 0, errors: 1 });
         } finally {
             database.close();
         }

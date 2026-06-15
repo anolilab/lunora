@@ -1227,7 +1227,7 @@ const runWrite = (sql: SqlExec, table: string, query: string, ...params: unknown
         runSql(sql, query, ...params);
     } catch (error) {
         if (isUniqueViolation(error)) {
-            throw new ConflictError(`unique constraint violation on "${table}"`);
+            throw new ConflictError(`unique constraint violation on "${table}"`, "unique");
         }
 
         throw error;
@@ -1248,7 +1248,7 @@ const runGuardedWrite = (sql: SqlExec, table: string, query: string, ...params: 
     const changedRow = runSql<{ changed: number }>(sql, `SELECT changes() AS changed`).one();
 
     if (changedRow.changed === 0) {
-        throw new ConflictError(`optimistic concurrency conflict on "${table}" — the row changed during this mutation; refetch and retry`);
+        throw new ConflictError(`optimistic concurrency conflict on "${table}" — the row changed during this mutation; refetch and retry`, "occ");
     }
 };
 

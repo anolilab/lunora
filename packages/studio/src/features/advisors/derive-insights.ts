@@ -13,7 +13,7 @@ type InsightSeverity = "error" | "info" | "warning";
  * links to the Schema/Indexes tab to add the index, rather than leaving the
  * slowness an unattributed symptom.
  */
-type InsightKind = "high-error-rate" | "high-evictions" | "low-cache-hit-rate" | "missing-index" | "slow-function";
+type InsightKind = "high-error-rate" | "high-evictions" | "high-write-contention" | "low-cache-hit-rate" | "missing-index" | "slow-function";
 
 /**
  * One detected issue. `value` is the headline number whose meaning depends on
@@ -21,7 +21,8 @@ type InsightKind = "high-error-rate" | "high-evictions" | "low-cache-hit-rate" |
  * slow-function / missing-index, an entry count for evictions. `fn` is set only
  * for per-function insights; `message` carries the last error for
  * high-error-rate; `tables` carries the full-scanned tables (busiest first) for
- * the causal `missing-index` kind.
+ * the causal `missing-index` kind. For `high-write-contention` it is the OCC
+ * conflict ratio (conflicts / calls).
  */
 interface Insight {
     fn?: string;
@@ -36,10 +37,14 @@ interface Insight {
 interface InsightThresholds {
     /** Flag functions whose error ratio is at or above this (0–1). */
     highErrorRate: number;
+    /** Flag functions whose OCC write-conflict ratio is at or above this (0–1). */
+    highWriteContention: number;
     /** Flag a cache whose hit rate is below this (0–1). */
     lowCacheHitRate: number;
     /** Require this many cache samples (hits + misses) before judging hit rate, to avoid cold-start noise. */
     minCacheSamples: number;
+    /** Require this many calls before judging a function's conflict ratio. */
+    minConflictCalls: number;
     /** Require this many calls before judging a function's error ratio. */
     minErrorCalls: number;
     /** Flag functions whose slowest call is at or above this many milliseconds. */
@@ -48,8 +53,10 @@ interface InsightThresholds {
 
 const DEFAULT_INSIGHT_THRESHOLDS: InsightThresholds = {
     highErrorRate: 0.05,
+    highWriteContention: 0.1,
     lowCacheHitRate: 0.5,
     minCacheSamples: 10,
+    minConflictCalls: 5,
     minErrorCalls: 5,
     slowFunctionMs: 1000,
 };
@@ -61,10 +68,12 @@ const SEVERITY_ORDER: Record<InsightSeverity, number> = { error: 0, info: 2, war
  * Per-function heuristics for one `getFunctionStats` row, factored out of
  * {@link deriveInsights} so the cache + function passes each stay simple.
  *
- * Emits up to two insights: a latency one (`missing-index` when a full-table
+ * Emits up to three insights: a latency one (`missing-index` when a full-table
  * scan explains the slowness — the causal upgrade, naming the scanned tables —
- * otherwise the bare `slow-function`) and a `high-error-rate` one when the
- * function fails over a meaningful call count.
+ * otherwise the bare `slow-function`), a `high-error-rate` one when the function
+ * fails over a meaningful call count, and a `high-write-contention` one when OCC
+ * write conflicts (a subset of errors) make up a meaningful share of calls — the
+ * signal that the function is a sharding candidate.
  */
 const deriveFunctionInsights = (stat: FunctionCallStat, thresholds: InsightThresholds): Insight[] => {
     const insights: Insight[] = [];
@@ -95,6 +104,17 @@ const deriveFunctionInsights = (stat: FunctionCallStat, thresholds: InsightThres
         });
     }
 
+    const conflicts = stat.conflicts ?? 0;
+
+    if (conflicts > 0 && stat.calls >= thresholds.minConflictCalls && conflicts / stat.calls >= thresholds.highWriteContention) {
+        insights.push({
+            fn: stat.path,
+            kind: "high-write-contention",
+            severity: "warning",
+            value: conflicts / stat.calls,
+        });
+    }
+
     return insights;
 };
 
@@ -110,7 +130,9 @@ const deriveFunctionInsights = (stat: FunctionCallStat, thresholds: InsightThres
  * slow function whose latency is *explained* by a full-table scan — the causal
  * upgrade of slow-function, naming the scanned table(s)); slow-function (a
  * function whose slowest call crosses the threshold with no scan attribution to
- * blame); high-error-rate (a function failing over a meaningful count).
+ * blame); high-error-rate (a function failing over a meaningful count);
+ * high-write-contention (a function whose OCC write conflicts make up a
+ * meaningful share of calls — a sharding candidate).
  *
  * A slow function with full-scan attribution emits `missing-index` (causal, with
  * `tables`) instead of the bare `slow-function`, so the panel can link straight

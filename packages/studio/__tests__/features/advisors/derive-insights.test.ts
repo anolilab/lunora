@@ -115,6 +115,28 @@ describe(deriveInsights, () => {
         expect(insight).toMatchObject({ fn: "messages:send", kind: "high-error-rate", message: "boom", severity: "error", value: 0.2 });
     });
 
+    it("flags high write contention when OCC conflicts make up a meaningful share of calls", () => {
+        expect.assertions(3);
+
+        // 2 conflicts of 3 calls trips the 10% ratio but not the 5-call floor → ignored.
+        const tooFew = deriveInsights(null, [fn({ calls: 3, conflicts: 2, errors: 2 })]);
+
+        expect(tooFew.some((insight) => insight.kind === "high-write-contention")).toBe(false);
+
+        // 4 conflicts of 20 calls = 20% over the floor → flagged as a warning
+        // (alongside the high-error-rate insight the same row trips).
+        const contention = deriveInsights(null, [fn({ calls: 20, conflicts: 4, errors: 4, path: "rooms:bump" })]).find(
+            (insight) => insight.kind === "high-write-contention",
+        );
+
+        expect(contention).toMatchObject({ fn: "rooms:bump", kind: "high-write-contention", severity: "warning", value: 0.2 });
+
+        // A function with no conflicts never trips it, even with errors.
+        const noConflicts = deriveInsights(null, [fn({ calls: 20, conflicts: 0, errors: 10, path: "users:create" })]);
+
+        expect(noConflicts.some((insight) => insight.kind === "high-write-contention")).toBe(false);
+    });
+
     it("sorts errors before warnings before info", () => {
         expect.assertions(1);
 

@@ -110,6 +110,14 @@ interface FunctionMetricIndexHit {
 
 /** Fields recorded for one completed dispatch. `errored` advances the failure counters. */
 interface RecordFunctionMetricInput {
+    /**
+     * Whether the dispatch failed on an optimistic-concurrency (OCC) write
+     * conflict — a compare-and-swap that lost to a concurrent commit. Advances
+     * the durable `conflicts` counter behind the write-contention advisor. A
+     * conflicted dispatch also `errored`, so conflicts are a subset of errors.
+     * Omitted/false on the common path, keeping the hot path unchanged.
+     */
+    conflicted?: boolean;
     /** Wall-clock millis the handler took. */
     durationMs: number;
     /** Whether the dispatch threw. */
@@ -182,6 +190,7 @@ const ensureFunctionMetricsTables = (sql: SqlExec): void => {
             path TEXT PRIMARY KEY,
             calls INTEGER NOT NULL DEFAULT 0,
             errors INTEGER NOT NULL DEFAULT 0,
+            conflicts INTEGER NOT NULL DEFAULT 0,
             scans INTEGER NOT NULL DEFAULT 0,
             total_duration_ms REAL NOT NULL DEFAULT 0,
             min_duration_ms REAL,
@@ -192,11 +201,16 @@ const ensureFunctionMetricsTables = (sql: SqlExec): void => {
         )`,
     );
 
-    // Back-fill the `scans` column on shards created before causal attribution.
-    try {
-        runSql(sql, `ALTER TABLE "${FUNCTION_METRICS_TABLE}" ADD COLUMN scans INTEGER NOT NULL DEFAULT 0`);
-    } catch {
-        // Column already exists (fresh schema above, or a prior call) — no-op.
+    // Back-fill columns added after the original `__cirrus_metrics` shape, for
+    // shards created before each feature landed. SQLite has no
+    // `ADD COLUMN IF NOT EXISTS`, so the duplicate-column error from a re-run
+    // (or the freshly-created schema above) is swallowed per column.
+    for (const column of ["scans", "conflicts"]) {
+        try {
+            runSql(sql, `ALTER TABLE "${FUNCTION_METRICS_TABLE}" ADD COLUMN ${column} INTEGER NOT NULL DEFAULT 0`);
+        } catch {
+            // Column already exists — no-op.
+        }
     }
 
     runSql(
@@ -254,6 +268,7 @@ const recordFunctionMetric = (sql: SqlExec, input: RecordFunctionMetricInput): v
     // dispatch, regardless of how many rows it narrowed.
     const indexHits = dedupeIndexHits(input.indexHits ?? []);
     const errorCount = input.errored ? 1 : 0;
+    const conflictCount = input.conflicted ? 1 : 0;
     // eslint-disable-next-line unicorn/no-null -- SQL NULL is the correct value for "no failure yet"; coalesced into the row on the first throw.
     const lastErrorAt = input.errored ? input.ts : null;
     // eslint-disable-next-line unicorn/no-null -- SQL NULL is the correct value for "no failure yet".
@@ -266,11 +281,12 @@ const recordFunctionMetric = (sql: SqlExec, input: RecordFunctionMetricInput): v
     runSql(
         sql,
         `INSERT INTO "${FUNCTION_METRICS_TABLE}"
-            (path, calls, errors, scans, total_duration_ms, min_duration_ms, max_duration_ms, last_called_at, last_error_at, last_error_message)
-         VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?)
+            (path, calls, errors, conflicts, scans, total_duration_ms, min_duration_ms, max_duration_ms, last_called_at, last_error_at, last_error_message)
+         VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(path) DO UPDATE SET
             calls = calls + 1,
             errors = errors + excluded.errors,
+            conflicts = conflicts + excluded.conflicts,
             scans = scans + excluded.scans,
             total_duration_ms = total_duration_ms + excluded.total_duration_ms,
             min_duration_ms = MIN(COALESCE(min_duration_ms, excluded.min_duration_ms), excluded.min_duration_ms),
@@ -280,6 +296,7 @@ const recordFunctionMetric = (sql: SqlExec, input: RecordFunctionMetricInput): v
             last_error_message = CASE WHEN excluded.last_error_at IS NULL THEN last_error_message ELSE excluded.last_error_message END`,
         input.path,
         errorCount,
+        conflictCount,
         scanCount,
         input.durationMs,
         input.durationMs,
@@ -441,6 +458,7 @@ const readFunctionMetrics = (sql: SqlExec): FunctionCallStat[] => {
 
     const rows = runSql<{
         calls: number;
+        conflicts: number;
         errors: number;
         last_called_at: number;
         last_error_at: null | number;
@@ -454,6 +472,7 @@ const readFunctionMetrics = (sql: SqlExec): FunctionCallStat[] => {
     return rows.map((row): FunctionCallStat => {
         return {
             calls: row.calls,
+            conflicts: row.conflicts,
             errors: row.errors,
             lastCalledAt: row.last_called_at,
             lastErrorAt: row.last_error_at,

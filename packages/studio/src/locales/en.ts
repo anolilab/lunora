@@ -381,6 +381,7 @@ const MESSAGE_IDS = [
     // Function stats panel.
     "avg",
     "calls",
+    "conflicts",
     "kind",
     "last error",
     "last run",
@@ -397,11 +398,13 @@ const MESSAGE_IDS = [
     "High cache eviction rate",
     "Slow function",
     "High error rate",
+    "High write contention",
     "{rate} hit rate over recent traffic.",
     "{count} entries evicted recently.",
     "Slowest call took {duration}.",
     "Slowest call took {duration} — it full-scanned {tables} with no index.",
     "{rate} of calls failed.",
+    "{rate} of calls hit a write conflict — consider sharding to cut contention.",
     // Shell / IA (icon-rail domains + section descriptions).
     "Home",
     "Reports",

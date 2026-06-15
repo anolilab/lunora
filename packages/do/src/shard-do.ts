@@ -1820,8 +1820,13 @@ abstract class ShardDO {
                 this.metrics.errors += 1;
                 const durationMs = Date.now() - dispatchStartedAt;
                 const message = error instanceof Error ? error.message : String(error);
+                // Count only OCC conflicts as write contention — a unique-index
+                // breach / onDelete-restrict / trigger-overflow also surfaces as a
+                // 409 ConflictError but is a constraint failure, not contention, and
+                // would mis-fire the write-contention advisor.
+                const conflicted = error instanceof ConflictError && error.kind === "occ";
 
-                this.recordFunctionCall(payload.functionPath, durationMs, message, this.currentScannedTables, this.currentIndexHits);
+                this.recordFunctionCall(payload.functionPath, durationMs, message, this.currentScannedTables, this.currentIndexHits, conflicted);
                 // Flush statement samples even on error paths — partial sampling
                 // is better than losing the timing signal entirely.
                 this.flushStmtSamples();
@@ -3167,6 +3172,7 @@ abstract class ShardDO {
         errorMessage?: string,
         scannedTables?: ReadonlySet<string>,
         indexHits?: ReadonlySet<string>,
+        conflicted: boolean = false,
     ): void {
         const now = Date.now();
         const scanned = scannedTables ? [...scannedTables] : [];
@@ -3180,6 +3186,7 @@ abstract class ShardDO {
         // table and one per exercised index. Survives restart/hibernation.
         try {
             recordFunctionMetric(this.state.storage.sql as unknown as SqlExec, {
+                conflicted,
                 durationMs,
                 errored: errorMessage !== undefined,
                 errorMessage,
@@ -3195,6 +3202,7 @@ abstract class ShardDO {
         const existing = this.functionStats.get(functionPath);
         const stat: FunctionCallStat = existing ?? {
             calls: 0,
+            conflicts: 0,
             errors: 0,
             lastCalledAt: now,
             // eslint-disable-next-line unicorn/no-null -- wire shape: `null` until the function first throws
@@ -3226,6 +3234,10 @@ abstract class ShardDO {
             stat.errors += 1;
             stat.lastErrorAt = now;
             stat.lastErrorMessage = errorMessage;
+        }
+
+        if (conflicted) {
+            stat.conflicts += 1;
         }
 
         if (existing === undefined) {

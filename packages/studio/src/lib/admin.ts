@@ -311,10 +311,13 @@ export interface FunctionScanAttribution {
  * `scans` / `scannedTables` carry the causal full-scan attribution (PLAN3 1.2).
  * They're additive — a worker predating the feature reports `scans: 0` and
  * `scannedTables: []`, so the fields are optional on the wire and the consumer
- * defaults them.
+ * defaults them. `conflicts` (OCC write-contention count, a subset of `errors`)
+ * is likewise additive and optional for the same back-compat reason.
  */
 export interface FunctionCallStat {
     calls: number;
+    /** OCC write-conflict count — a subset of `errors`; absent on a pre-conflict-tracking worker. */
+    conflicts?: number;
     errors: number;
     lastCalledAt: number;
     lastErrorAt: null | number;

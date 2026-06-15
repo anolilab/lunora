@@ -74,6 +74,7 @@ const insightTitle = (t: TFunction, insight: Insight): string =>
     ({
         "high-error-rate": t("High error rate"),
         "high-evictions": t("High cache eviction rate"),
+        "high-write-contention": t("High write contention"),
         "low-cache-hit-rate": t("Low cache hit rate"),
         "missing-index": t("Missing index"),
         "slow-function": t("Slow function"),
@@ -89,6 +90,9 @@ const insightDetail = (t: TFunction, insight: Insight): string =>
     ({
         "high-error-rate": t("{rate} of calls failed.", { rate: percent(insight.value) }),
         "high-evictions": t("{count} entries evicted recently.", { count: insight.value }),
+        "high-write-contention": t("{rate} of calls hit a write conflict — consider sharding to cut contention.", {
+            rate: percent(insight.value),
+        }),
         "low-cache-hit-rate": t("{rate} hit rate over recent traffic.", { rate: percent(insight.value) }),
         "missing-index": t("Slowest call took {duration} — it full-scanned {tables} with no index.", {
             duration: seconds(insight.value),

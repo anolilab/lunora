@@ -181,6 +181,15 @@ interface FunctionScanAttribution {
 interface FunctionCallStat {
     /** Total dispatches, successful or failed. */
     calls: number;
+
+    /**
+     * Subset of `calls` that failed on an optimistic-concurrency (OCC) write
+     * conflict — the true write-contention signal (a CAS that lost to a
+     * concurrent commit). A conflicted dispatch also counts in `errors`, so
+     * `conflicts` never exceeds `errors`. `0` on a function that never contended
+     * or a worker predating the feed.
+     */
+    conflicts: number;
     /** Subset of `calls` that threw. */
     errors: number;
     /** Epoch-ms of the most recent dispatch. */

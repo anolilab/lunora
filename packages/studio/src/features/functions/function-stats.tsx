@@ -58,6 +58,26 @@ const errorCell = (stat: FunctionCallStat): string => {
     return `${stat.errors.toString()} (${((stat.errors / stat.calls) * 100).toFixed(1)}%)`;
 };
 
+/**
+ * OCC write-conflict count plus its rate, mirroring {@link errorCell}. Conflicts
+ * are a subset of errors (a retryable optimistic-concurrency miss), so this
+ * column isolates write contention from the broader error column. `conflicts` is
+ * absent on a pre-conflict-tracking worker, so it defaults to 0.
+ */
+const conflictCell = (stat: FunctionCallStat): string => {
+    const conflicts = stat.conflicts ?? 0;
+
+    if (stat.calls === 0) {
+        return "—";
+    }
+
+    if (conflicts === 0) {
+        return "0";
+    }
+
+    return `${conflicts.toString()} (${((conflicts / stat.calls) * 100).toFixed(1)}%)`;
+};
+
 /** Stable comparators per sort mode; the server already returns recent-first, but re-sorting keeps live pushes ordered too. */
 const SORTERS: Record<SortKey, (a: FunctionCallStat, b: FunctionCallStat) => number> = {
     calls: (a, b) => b.calls - a.calls,
@@ -228,6 +248,7 @@ export const FunctionStatsPanel = ({ functions, initialShardKey }: FunctionStats
                             <TableHead>{t("kind")}</TableHead>
                             <TableHead className="text-right">{t("calls")}</TableHead>
                             <TableHead className="text-right">{t("errors")}</TableHead>
+                            <TableHead className="text-right">{t("conflicts")}</TableHead>
                             <TableHead className="text-right">{t("avg")}</TableHead>
                             <TableHead className="text-right">{t("max")}</TableHead>
                             <TableHead>{t("last run")}</TableHead>
@@ -250,6 +271,9 @@ export const FunctionStatsPanel = ({ functions, initialShardKey }: FunctionStats
                                     </TableCell>
                                     <TableCell className="text-right tabular-nums">{stat.calls}</TableCell>
                                     <TableCell className={cn("text-right tabular-nums", stat.errors > 0 && "text-destructive")}>{errorCell(stat)}</TableCell>
+                                    <TableCell className={cn("text-right tabular-nums", (stat.conflicts ?? 0) > 0 && "text-amber-600 dark:text-amber-500")}>
+                                        {conflictCell(stat)}
+                                    </TableCell>
                                     <TableCell className="text-right tabular-nums">
                                         {stat.calls === 0 ? "—" : formatMs(stat.totalDurationMs / stat.calls)}
                                     </TableCell>
