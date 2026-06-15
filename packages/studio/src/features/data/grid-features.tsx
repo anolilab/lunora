@@ -115,10 +115,18 @@ const ExportMenu = ({
 
     return (
         <DropdownMenu>
-            <DropdownMenuTrigger className={CONTROL_BTN} data-testid="grid-export" disabled={rows.length === 0}>
-                {t("Export")}
+            <DropdownMenuTrigger
+                className={CONTROL_BTN}
+                data-testid="grid-export"
+                disabled={rows.length === 0}
+                title="Exports only the rows loaded on the current page, not the whole table"
+            >
+                {/* Make the page scope explicit: this exports the loaded page, not the full table.
+                    Hardcoded English (not via `t()`) so no new en.ts catalog id is required. */}
+                Export page
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
+                <DropdownMenuLabel>Export loaded rows</DropdownMenuLabel>
                 <DropdownMenuItem data-testid="grid-export-csv" onClick={onCsv}>
                     {t("CSV")}
                 </DropdownMenuItem>
