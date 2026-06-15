@@ -158,6 +158,94 @@ panel renders the `{ "logpush": true }` snippet and deep-links to the Cloudflare
 observability dashboard where you create the job. In short: Cirrus validates the
 flag; the job lifecycle stays in Cloudflare.
 
+## Platform configuration
+
+A few Cloudflare platform features are pure `wrangler.jsonc` config — there is
+no Cirrus adapter to import, you just declare the block and Cirrus's
+`wrangler-validator` shape-checks it so a typo is a build-time error instead of
+a value wrangler silently drops. The resource itself is always provisioned by
+you (dashboard or `wrangler`); Cirrus validates the config, it does not manage
+lifecycle.
+
+### Smart Placement
+
+[Smart Placement](https://developers.cloudflare.com/workers/configuration/smart-placement/)
+lets Cloudflare run your Worker close to the services it calls (e.g. a regional
+database) instead of close to the user. Opt in with:
+
+```jsonc
+{
+    // ...
+    "placement": { "mode": "smart" },
+}
+```
+
+`"smart"` is the only supported mode — the validator rejects any other value (a
+typo like `"fast"`) and a non-object `placement`.
+
+### mTLS client certificates
+
+To present a client certificate when your Worker calls a mutually-authenticated
+upstream, upload the cert (`wrangler mtls-certificate upload`) and bind it:
+
+```jsonc
+{
+    // ...
+    "mtls_certificates": [{ "binding": "MY_CERT", "certificate_id": "<from-upload>" }],
+}
+```
+
+Each entry must name a non-empty `binding` and a non-empty `certificate_id`; the
+validator flags either when missing.
+
+### Workers for Platforms
+
+If you build a multi-tenant platform that deploys user Workers into a [dispatch
+namespace](https://developers.cloudflare.com/cloudflare-for-platforms/workers-for-platforms/),
+bind the namespace:
+
+```jsonc
+{
+    // ...
+    "dispatch_namespaces": [{ "binding": "DISPATCHER", "namespace": "tenants" }],
+}
+```
+
+Both `binding` and `namespace` are required on each entry.
+
+### Static assets
+
+Cirrus deploys as a single Worker, so the conventional way to serve your Vite
+client build is [Workers Static
+Assets](https://developers.cloudflare.com/workers/static-assets/) — Cloudflare
+serves the files for free and only invokes the Worker on a miss, so the Cirrus
+SSR/API fetch handler still runs underneath:
+
+```jsonc
+{
+    // ...
+    "assets": { "directory": "./dist/client", "binding": "ASSETS" },
+}
+```
+
+The validator requires a non-empty `directory` (pointing at the built client
+output) and shape-checks the optional `binding` / `html_handling` /
+`not_found_handling` fields. Cirrus does **not** auto-inject this block — the
+output directory is framework-adapter-specific, so you declare it.
+
+## Non-goals
+
+A couple of Cloudflare products are deliberately **not** wired into Cirrus:
+
+- **Cloudflare Pages.** The Cirrus Worker is the deploy unit; there is no second
+  Pages artifact. Serve your client build from the same Worker with the
+  [Static assets](#static-assets) block above instead.
+- **Pub/Sub (MQTT).** Realtime fan-out is handled by Durable-Object-hibernated
+  WebSocket subscriptions (see [Real-time](/docs/concepts/realtime)), which need
+  no external broker. Cloudflare Pub/Sub is a beta MQTT broker with no Worker
+  binding; the only thing it adds is native-MQTT device ingest, a narrow niche
+  we'll revisit if/when it reaches GA and a concrete need appears.
+
 ## See also
 
 - [Limits](/docs/limits)
