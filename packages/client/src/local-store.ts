@@ -60,7 +60,7 @@ export const createLocalStore = (
     // optimistic patch only lands on the exact query variant it names.
     const findState = (functionRef: string, argsKey: string): SubscriptionState | undefined => {
         for (const state of subscriptions.all()) {
-            if (state.fn.__cirrusRef === functionRef && state.shardKey === shardKey && state.argsKey === argsKey) {
+            if (state.fn.__lunoraRef === functionRef && state.shardKey === shardKey && state.argsKey === argsKey) {
                 return state;
             }
         }
@@ -73,7 +73,7 @@ export const createLocalStore = (
             const matches: { args: ArgsOf<F>; value: ReturnOf<F> | undefined }[] = [];
 
             for (const state of subscriptions.all()) {
-                if (state.fn.__cirrusRef === function_.__cirrusRef && state.shardKey === shardKey) {
+                if (state.fn.__lunoraRef === function_.__lunoraRef && state.shardKey === shardKey) {
                     matches.push({ args: state.args as ArgsOf<F>, value: state.lastValue as ReturnOf<F> | undefined });
                 }
             }
@@ -81,12 +81,12 @@ export const createLocalStore = (
             return matches;
         },
         getQuery: <F extends FunctionReference>(function_: F, args: ArgsOf<F>): ReturnOf<F> | undefined => {
-            const state = findState(function_.__cirrusRef, stableStringify(args ?? {}));
+            const state = findState(function_.__lunoraRef, stableStringify(args ?? {}));
 
             return state?.lastValue as ReturnOf<F> | undefined;
         },
         setQuery: <F extends FunctionReference>(function_: F, args: ArgsOf<F>, value: ReturnOf<F> | undefined): void => {
-            const state = findState(function_.__cirrusRef, stableStringify(args ?? {}));
+            const state = findState(function_.__lunoraRef, stableStringify(args ?? {}));
 
             if (!state) {
                 return;

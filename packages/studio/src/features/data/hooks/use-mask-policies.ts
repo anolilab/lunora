@@ -1,4 +1,4 @@
-import { useCirrus } from "@cirrus/react";
+import { useLunora } from "@lunora/react";
 import { useCallback, useEffect, useState } from "react";
 
 import type { MaskColumnMetadata, MaskPoliciesResult } from "../../../lib/admin";
@@ -12,8 +12,8 @@ const NO_COLUMNS: ReadonlyArray<MaskColumnMetadata> = [];
 
 /**
  * Fetch the deployment's mask metadata — the `(table, column, strategy)` entries
- * `@cirrus/codegen` discovers from every `.use(mask(...))` chain, served by
- * `__cirrus_admin__:maskPolicies`. Deployment-wide (root shard), loaded once;
+ * `@lunora/codegen` discovers from every `.use(mask(...))` chain, served by
+ * `__lunora_admin__:maskPolicies`. Deployment-wide (root shard), loaded once;
  * the data browser uses it to drive the "Mask sensitive columns" preview and the
  * per-column "masked" header chips.
  *
@@ -23,7 +23,7 @@ const NO_COLUMNS: ReadonlyArray<MaskColumnMetadata> = [];
  * blocking banner: masking is a preview affordance, not core to browsing rows.
  */
 const useMaskPolicies = (): ReadonlyArray<MaskColumnMetadata> => {
-    const client = useCirrus();
+    const client = useLunora();
     const [columns, setColumns] = useState<ReadonlyArray<MaskColumnMetadata>>(NO_COLUMNS);
 
     const refresh = useCallback(async (): Promise<void> => {

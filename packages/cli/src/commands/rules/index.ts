@@ -1,20 +1,20 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
 /**
- * `cirrus rules` — manage the Cirrus agent skills ("rules") in the current
- * project. `install` copies the skills bundled with `@cirrus/cli` into
+ * `lunora rules` — manage the Lunora agent skills ("rules") in the current
+ * project. `install` copies the skills bundled with `@lunora/cli` into
  * `.agents/skills/` (the Convex `ai-files install` analog); `check` reports
  * which are present. The dev server and Vite plugin nudge you to run `install`
  * when the rules are missing.
  */
 const rulesCommand: Command = {
     argument: { description: "install | check", name: "subcommand", type: String },
-    description: "Install the Cirrus agent skills (AI rules) into .agents/skills/, or check they're present",
+    description: "Install the Lunora agent skills (AI rules) into .agents/skills/, or check they're present",
     examples: [
-        ["cirrus rules install", "Copy the Cirrus agent skills into .agents/skills/"],
-        ["cirrus rules install --overwrite", "Reinstall, replacing edited skill files"],
-        ["cirrus rules check", "Report which Cirrus skills are installed"],
-        ["cirrus rules check --strict", "Exit non-zero when rules are missing (CI gate)"],
+        ["lunora rules install", "Copy the Lunora agent skills into .agents/skills/"],
+        ["lunora rules install --overwrite", "Reinstall, replacing edited skill files"],
+        ["lunora rules check", "Report which Lunora skills are installed"],
+        ["lunora rules check --strict", "Exit non-zero when rules are missing (CI gate)"],
     ],
     group: "Project",
     loader: () =>

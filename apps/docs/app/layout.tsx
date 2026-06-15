@@ -16,7 +16,7 @@ export const metadata = {
     icons: {
         icon: "/favicon.svg",
     },
-    title: "Cirrus",
+    title: "Lunora",
 };
 
 export default RootLayout;

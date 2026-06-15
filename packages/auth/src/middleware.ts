@@ -1,9 +1,9 @@
-import type { CirrusAuth } from "./create-auth";
+import type { LunoraAuth } from "./create-auth";
 
 /**
- * Structural mirror of `@cirrus/server`'s `MiddlewareNext` — the continuation
+ * Structural mirror of `@lunora/server`'s `MiddlewareNext` — the continuation
  * callback handed to a middleware. Repeated here so this package does not take
- * a runtime dependency on `@cirrus/server`; the types are assignable from the
+ * a runtime dependency on `@lunora/server`; the types are assignable from the
  * fully-typed builder.
  */
 interface MiddlewareNext<ContextIn> {
@@ -13,7 +13,7 @@ interface MiddlewareNext<ContextIn> {
 
 /**
  * Decide whether a `ctx.authApi.*` call carried `headers`. Mirrors the static
- * advisor's `hasHeaders` rule (`@cirrus/codegen`'s `discover-authapi-calls`) so
+ * advisor's `hasHeaders` rule (`@lunora/codegen`'s `discover-authapi-calls`) so
  * the runtime guard and the lint agree on what counts as a header-bearing call:
  *
  * - **No argument at all** → no headers (the lint flags `method()`).
@@ -43,7 +43,7 @@ const callHasHeaders = (argument: unknown): boolean => {
 
 /**
  * Wrap a better-auth `api` surface in a Proxy that throws
- * {@link CirrusAuthHeadersError} when any endpoint is invoked without `headers`.
+ * {@link LunoraAuthHeadersError} when any endpoint is invoked without `headers`.
  *
  * The proxy is transparent: property reads return guarded function wrappers for
  * callable endpoints and pass everything else (non-function properties) through
@@ -82,7 +82,7 @@ const guardAuthApi = <Api extends Record<string, unknown>>(api: Api): Api => {
                     // same way an endpoint error would, instead of throwing
                     // synchronously during the call expression.
                     // eslint-disable-next-line @typescript-eslint/no-use-before-define -- only invoked inside a deferred endpoint closure, long after the class is defined; declared after the helpers to keep exports grouped at end of file
-                    return Promise.reject(new CirrusAuthHeadersError(method));
+                    return Promise.reject(new LunoraAuthHeadersError(method));
                 }
 
                 // Call with `target` as `this` so endpoints that read other
@@ -103,13 +103,13 @@ const guardAuthApi = <Api extends Record<string, unknown>>(api: Api): Api => {
  * advisor lint — both treat a header-less `ctx.authApi.*` call as an
  * authorization bypass, so a call that trips the lint also trips this guard.
  */
-export class CirrusAuthHeadersError extends Error {
+export class LunoraAuthHeadersError extends Error {
     /** The `ctx.authApi.&lt;method>` that was called without `headers`. */
     public readonly method: string;
 
     public constructor(method: string) {
         super(
-            `@cirrus/auth: ctx.authApi.${method}(…) was called without \`headers\`. ` +
+            `@lunora/auth: ctx.authApi.${method}(…) was called without \`headers\`. ` +
                 "better-auth treats a header-less call as a trusted server-to-server " +
                 "invocation and skips session authorization entirely — an authorization " +
                 "bypass. Pass the inbound request headers: " +
@@ -119,7 +119,7 @@ export class CirrusAuthHeadersError extends Error {
                 "the guard for the whole middleware with withAuthPlugins(auth, { enforceHeaders: false }).",
         );
 
-        this.name = "CirrusAuthHeadersError";
+        this.name = "LunoraAuthHeadersError";
         this.method = method;
     }
 }
@@ -133,7 +133,7 @@ export interface WithAuthPluginsOptions {
      *
      * **Defaults to `true` — the safe default.** When enabled, every
      * `ctx.authApi.&lt;method>(…)` call that omits `headers` throws
-     * {@link CirrusAuthHeadersError} instead of silently running with full
+     * {@link LunoraAuthHeadersError} instead of silently running with full
      * server-to-server privileges. For a deliberate, per-call unauthenticated
      * invocation, use the explicit `ctx.authApi.withoutHeaders()` escape hatch
      * rather than disabling the guard wholesale.
@@ -146,7 +146,7 @@ export interface WithAuthPluginsOptions {
 }
 
 /**
- * The Cirrus context extension this middleware installs. It does *not* replace
+ * The Lunora context extension this middleware installs. It does *not* replace
  * `ctx.auth` (the identity-only surface populated by the runtime — `userId` and
  * `getIdentity()`); instead it adds a sibling `ctx.authApi` that points at the
  * full better-auth plugin API surface.
@@ -154,11 +154,11 @@ export interface WithAuthPluginsOptions {
  * The shape of `authApi` is the shape of the better-auth instance's `api` —
  * a flat record of endpoint functions like `createOrganization`, `banUser`,
  * `listMembers`, … contributed by whichever plugins are configured on the auth
- * instance. Because the type is `Auth["api"]` and `CirrusAuth` is generic over
+ * instance. Because the type is `Auth["api"]` and `LunoraAuth` is generic over
  * the auth instance, callers get end-to-end inference: the endpoints they see
  * are exactly the ones their auth instance loaded.
  */
-export interface CirrusAuthApiContext<Auth extends CirrusAuth> {
+export interface LunoraAuthApiContext<Auth extends LunoraAuth> {
     /**
      * The better-auth endpoint surface — every endpoint contributed by every
      * plugin configured on the auth instance, ready to call directly:
@@ -181,14 +181,14 @@ export interface CirrusAuthApiContext<Auth extends CirrusAuth> {
      *
      * To stop that bypass at runtime, `withAuthPlugins` installs a guard around
      * `ctx.authApi` by default: a header-less call to any endpoint throws
-     * {@link CirrusAuthHeadersError} rather than running with full privileges.
+     * {@link LunoraAuthHeadersError} rather than running with full privileges.
      * The same `auth_api_call_without_headers` advisor lint catches it
      * statically; the guard is the runtime backstop for the cases the lint
      * can't see (dynamic method names, indirected calls). For the rare,
      * deliberate unauthenticated server-to-server call, opt out explicitly with
      * `ctx.authApi.withoutHeaders().&lt;method>(…)`.
      *
-     * Cirrus's procedure context carries only the resolved identity, not the
+     * Lunora's procedure context carries only the resolved identity, not the
      * raw inbound `Headers`, so this middleware CANNOT pre-bind them for you.
      * Therefore: **thread the inbound `Headers` into every `ctx.authApi.*`
      * call** (typically from an HTTP action — see {@link withAuthPlugins}). A
@@ -215,7 +215,7 @@ export interface CirrusAuthApiContext<Auth extends CirrusAuth> {
 }
 
 /**
- * Build a Cirrus middleware that mounts a better-auth instance's plugin API
+ * Build a Lunora middleware that mounts a better-auth instance's plugin API
  * onto `ctx.authApi`. Compose it with `.use(...)` once per builder and every
  * downstream handler gets typed access to the plugin endpoints — no more
  * importing the auth instance directly from every query/mutation file.
@@ -233,7 +233,7 @@ export interface CirrusAuthApiContext<Auth extends CirrusAuth> {
  *
  * To make that bypass fail loudly instead of silently, this middleware wraps
  * `ctx.authApi` in a **runtime header guard by default**: any endpoint called
- * without a `headers` property throws {@link CirrusAuthHeadersError}. The guard
+ * without a `headers` property throws {@link LunoraAuthHeadersError}. The guard
  * mirrors the static `auth_api_call_without_headers` advisor lint exactly, so
  * the two agree on what counts as a header-bearing call.
  *
@@ -243,16 +243,16 @@ export interface CirrusAuthApiContext<Auth extends CirrusAuth> {
  * - **Whole-middleware opt-out (loud):** `withAuthPlugins(auth, { enforceHeaders: false })`
  * disables the guard entirely; only do this once every call site is audited.
  *
- * Cirrus's procedure context does not currently carry the raw request headers
- * (only the resolved identity — see `AuthState` in `@cirrus/server`), so
+ * Lunora's procedure context does not currently carry the raw request headers
+ * (only the resolved identity — see `AuthState` in `@lunora/server`), so
  * this middleware **cannot** pre-bind headers for you and does **not** do so.
  * You MUST pass the inbound `Headers` explicitly into **every** `ctx.authApi.*`
  * call, from a transport that has them — typically an HTTP action:
  *
  * ```ts
- * // cirrus/orgs.ts
- * import { httpAction } from "@cirrus/server";
- * import { withAuthPlugins } from "@cirrus/auth/middleware";
+ * // lunora/orgs.ts
+ * import { httpAction } from "@lunora/server";
+ * import { withAuthPlugins } from "@lunora/auth/middleware";
  * import { auth } from "./auth.js";
  *
  * export const createOrg = httpAction(async (ctx, request) => {
@@ -281,19 +281,19 @@ export interface CirrusAuthApiContext<Auth extends CirrusAuth> {
  * because TypeScript doesn't allow declaring `const fn: &lt;CtxIn>() => ...` —
  * the generic must live on a callable type alias or interface.
  */
-export type WithAuthPluginsMiddleware<Auth extends CirrusAuth> = <ContextIn>(options: {
+export type WithAuthPluginsMiddleware<Auth extends LunoraAuth> = <ContextIn>(options: {
     ctx: ContextIn;
     next: MiddlewareNext<ContextIn>;
-}) => Promise<CirrusAuthApiContext<Auth> & ContextIn>;
+}) => Promise<LunoraAuthApiContext<Auth> & ContextIn>;
 
-export const withAuthPlugins = <Auth extends CirrusAuth>(auth: Auth, options: WithAuthPluginsOptions = {}): WithAuthPluginsMiddleware<Auth> => {
+export const withAuthPlugins = <Auth extends LunoraAuth>(auth: Auth, options: WithAuthPluginsOptions = {}): WithAuthPluginsMiddleware<Auth> => {
     const enforceHeaders = options.enforceHeaders ?? true;
 
     // Build the surface once per middleware, not per request: the guard proxy
     // is stateless, so the same wrapped object is safe to share across calls.
     const authApi = enforceHeaders
-        ? (guardAuthApi(auth.api as Record<string, unknown>) as CirrusAuthApiContext<Auth>["authApi"])
-        : (auth.api as CirrusAuthApiContext<Auth>["authApi"]);
+        ? (guardAuthApi(auth.api as Record<string, unknown>) as LunoraAuthApiContext<Auth>["authApi"])
+        : (auth.api as LunoraAuthApiContext<Auth>["authApi"]);
 
     // The callable is generic over CtxIn so `next({ ctx: { authApi } })`
     // returns `CtxIn & { authApi }` — fields the upstream middleware
@@ -301,7 +301,7 @@ export const withAuthPlugins = <Auth extends CirrusAuth>(auth: Auth, options: Wi
     // (instead of a fresh object) is critical: the structural mirror of
     // `Middleware` says the return value IS the new ctx, so returning anything
     // narrower would drop upstream fields.
-    return async <ContextIn>({ next }: { ctx: ContextIn; next: MiddlewareNext<ContextIn> }): Promise<CirrusAuthApiContext<Auth> & ContextIn> => {
+    return async <ContextIn>({ next }: { ctx: ContextIn; next: MiddlewareNext<ContextIn> }): Promise<LunoraAuthApiContext<Auth> & ContextIn> => {
         const extended = await next({ ctx: { authApi } });
 
         return extended;

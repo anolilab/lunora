@@ -3,14 +3,14 @@
  *
  * `defineMigration` declares a per-document backfill over one table: `up`
  * transforms every existing row, `down` (optional) reverses it. Unlike the D1
- * SQL schema migrations in `@cirrus/d1`, these run *inside each shard's*
+ * SQL schema migrations in `@lunora/d1`, these run *inside each shard's*
  * Durable Object against live documents, in keyset batches, and are resumable —
- * the per-shard runner in `@cirrus/do` tracks progress in a reserved
- * `__cirrus_migrations` table so an interrupted run picks up where it stopped.
+ * the per-shard runner in `@lunora/do` tracks progress in a reserved
+ * `__lunora_migrations` table so an interrupted run picks up where it stopped.
  *
- * The returned object carries a `__cirrusMigration` brand so codegen can
+ * The returned object carries a `__lunoraMigration` brand so codegen can
  * discover declarations through the type checker (mirroring the procedure
- * builder's `__cirrusProcedure` brand) and emit them into a `CIRRUS_MIGRATIONS`
+ * builder's `__lunoraProcedure` brand) and emit them into a `LUNORA_MIGRATIONS`
  * registry the DO and CLI look migrations up by id.
  */
 
@@ -41,7 +41,7 @@ export interface MigrationDefinition {
 
 /** A {@link MigrationDefinition} plus the codegen discovery marker. */
 export interface RegisteredMigration extends MigrationDefinition {
-    readonly __cirrusMigration: true;
+    readonly __lunoraMigration: true;
 }
 
 /** Declare an online data migration. See the module docs for runtime semantics. */
@@ -50,5 +50,5 @@ export const defineMigration = (definition: MigrationDefinition): RegisteredMigr
         throw new Error("defineMigration: `id` must be a non-empty string");
     }
 
-    return { __cirrusMigration: true, ...definition };
+    return { __lunoraMigration: true, ...definition };
 };

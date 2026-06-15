@@ -1,12 +1,12 @@
-import type { StripeClientLike } from "@cirrus/payment";
-import { createStripeAdapter } from "@cirrus/payment";
-import type { ExecutionContextLike, ShardNamespaceLike } from "@cirrus/runtime";
-import { createWorker } from "@cirrus/runtime";
+import type { StripeClientLike } from "@lunora/payment";
+import { createStripeAdapter } from "@lunora/payment";
+import type { ExecutionContextLike, ShardNamespaceLike } from "@lunora/runtime";
+import { createWorker } from "@lunora/runtime";
 import Stripe from "stripe";
 
-import { app } from "../../cirrus/http.js";
-import { openApiSpec } from "../../cirrus/_generated/openapi.js";
-import { createShardDO } from "../../cirrus/_generated/shard.js";
+import { app } from "../../lunora/http.js";
+import { openApiSpec } from "../../lunora/_generated/openapi.js";
+import { createShardDO } from "../../lunora/_generated/shard.js";
 
 interface Env {
     SHARD: ShardNamespaceLike;
@@ -54,7 +54,7 @@ export default {
     async fetch(request: Request, env: Env, ctx: ExecutionContextLike): Promise<Response> {
         if (!worker) {
             // `httpRouter: app` mounts the `POST /payment/webhook` action; everything
-            // else falls through to Cirrus's RPC + reactive query surface.
+            // else falls through to Lunora's RPC + reactive query surface.
             worker = createWorker({ httpRouter: app, openApiSpec, shardDO: env.SHARD });
         }
 

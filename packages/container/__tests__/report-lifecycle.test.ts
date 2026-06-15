@@ -35,7 +35,7 @@ describe(reportContainerLifecycle, () => {
 
         const envelope = buildContainerLifecycleEvent("transcoder", "do-1", "start");
 
-        await reportContainerLifecycle({ CIRRUS_ADMIN_TOKEN: "s3cret", SHARD: namespace }, envelope);
+        await reportContainerLifecycle({ LUNORA_ADMIN_TOKEN: "s3cret", SHARD: namespace }, envelope);
 
         expect(namespace.getByNameCalls).toStrictEqual([ROOT_SHARD_NAME]);
         expect(captured).toBeDefined();
@@ -54,7 +54,7 @@ describe(reportContainerLifecycle, () => {
         const envelope = buildContainerLifecycleEvent("transcoder", "do-1", "start");
 
         // No throw, and resolves to undefined — there is nothing to call.
-        await expect(reportContainerLifecycle({ CIRRUS_ADMIN_TOKEN: "s3cret" }, envelope)).resolves.toBeUndefined();
+        await expect(reportContainerLifecycle({ LUNORA_ADMIN_TOKEN: "s3cret" }, envelope)).resolves.toBeUndefined();
     });
 
     it("skips silently when no admin token is configured (the gate would reject)", async () => {
@@ -80,6 +80,6 @@ describe(reportContainerLifecycle, () => {
 
         const envelope = buildContainerLifecycleEvent("transcoder", "do-1", "error", "boom");
 
-        await expect(reportContainerLifecycle({ CIRRUS_ADMIN_TOKEN: "s3cret", SHARD: namespace }, envelope)).resolves.toBeUndefined();
+        await expect(reportContainerLifecycle({ LUNORA_ADMIN_TOKEN: "s3cret", SHARD: namespace }, envelope)).resolves.toBeUndefined();
     });
 });

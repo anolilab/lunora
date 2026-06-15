@@ -8,7 +8,7 @@
  * the response without buffering the whole snapshot in memory.
  *
  * Globally-scoped (`.global()`) tables live in D1, not the DO, so this module
- * deliberately skips them — the worker reads them through `@cirrus/d1`'s
+ * deliberately skips them — the worker reads them through `@lunora/d1`'s
  * sibling helpers and concatenates the two streams.
  */
 import type { DatabaseWriterLike, SchemaLike } from "./ctx-db";
@@ -308,13 +308,13 @@ const importShardRows = async (writer: DatabaseWriterLike, schema: SchemaLike, a
     return { conflicts, errors, inserted };
 };
 
-/** Arguments accepted by the `__cirrus_admin__:exportShard` admin RPC. */
+/** Arguments accepted by the `__lunora_admin__:exportShard` admin RPC. */
 interface ExportShardAdminArgs {
     batchSize?: number;
     tables?: ReadonlyArray<string>;
 }
 
-/** Arguments accepted by the `__cirrus_admin__:importShard` admin RPC. */
+/** Arguments accepted by the `__lunora_admin__:importShard` admin RPC. */
 interface ImportShardAdminArgs {
     rows: ReadonlyArray<ExportRow>;
     startLine?: number;

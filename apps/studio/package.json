@@ -1,5 +1,5 @@
 {
-    "name": "@cirrus/studio-app",
+    "name": "@lunora/studio-app",
     "version": "0.0.0",
     "private": true,
     "license": "FSL-1.1-Apache-2.0",
@@ -18,7 +18,7 @@
         "test": "vitest run --passWithNoTests"
     },
     "dependencies": {
-        "@cirrus/studio": "workspace:*",
+        "@lunora/studio": "workspace:*",
         "@fontsource-variable/geist": "catalog:ui",
         "react": "catalog:frontend",
         "react-dom": "catalog:frontend",

@@ -1,4 +1,4 @@
-import { useCirrus } from "@cirrus/react";
+import { useLunora } from "@lunora/react";
 import type { ChangeEvent, MouseEvent, ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -48,7 +48,7 @@ const formatPayload = (instance: ObservedInstance): string => {
  *
  * Per workflow it shows the `defineWorkflow` export, the generated
  * `WorkflowEntrypoint` class, the wrangler `Workflow` binding, and the stable
- * deployed `workflows[].name` — statically discovered by `@cirrus/codegen` and
+ * deployed `workflows[].name` — statically discovered by `@lunora/codegen` and
  * served by the list-workflows admin RPC, so it refreshes on every codegen run
  * (dev: on save; prod: on deploy).
  *
@@ -58,7 +58,7 @@ const formatPayload = (instance: ObservedInstance): string => {
  * admin RPC (`binding.get(id).status()`).
  */
 const WorkflowsPanel = (): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const t = useT();
 
     const [data, setData] = useState<WorkflowsResult | null>(null);
@@ -202,7 +202,7 @@ const WorkflowsPanel = (): ReactElement => {
     );
 
     return (
-        <div className="flex flex-col gap-6" data-testid="cirrus-workflows-panel">
+        <div className="flex flex-col gap-6" data-testid="lunora-workflows-panel">
             {error !== null && (
                 <p className="text-sm text-destructive" data-testid="workflows-error" role="alert">
                     {error}
@@ -217,7 +217,7 @@ const WorkflowsPanel = (): ReactElement => {
 
             {data !== null && workflows.length === 0 ? (
                 <EmptyState
-                    description={t("No defineWorkflow is declared in cirrus/workflows.ts in this deployment. Add one to run a durable, multi-step workflow.")}
+                    description={t("No defineWorkflow is declared in lunora/workflows.ts in this deployment. Add one to run a durable, multi-step workflow.")}
                     testId="workflows-empty"
                     title={t("No workflows defined")}
                 />

@@ -30,7 +30,7 @@ const NO_SIGNALS = { cronCount: 0, dependencies: new Set<string>(), storageColum
 
 describe("discover-feature-usage", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-feature-disco-"));
+        workdir = mkdtempSync(join(tmpdir(), "lunora-feature-disco-"));
     });
 
     afterEach(() => {
@@ -54,10 +54,10 @@ describe("discover-feature-usage", () => {
         expect(discoverFeatureUsage(newProject(), workdir)).toStrictEqual(ALL_OFF);
     });
 
-    it("flips a flag on an imported `@cirrus/*` package", () => {
+    it("flips a flag on an imported `@lunora/*` package", () => {
         expect.assertions(1);
 
-        writeSource("notify.ts", `import { sendMail } from "@cirrus/mail";\nexport const go = () => sendMail();`);
+        writeSource("notify.ts", `import { sendMail } from "@lunora/mail";\nexport const go = () => sendMail();`);
 
         expect(discoverFeatureUsage(newProject(), workdir)).toMatchObject({ mail: true });
     });
@@ -65,7 +65,7 @@ describe("discover-feature-usage", () => {
     it("detects ai and payments via the package import or the `ctx.*` helper", () => {
         expect.assertions(4);
 
-        writeSource("ask.ts", `import { createAi } from "@cirrus/ai";\nexport const a = () => createAi();`);
+        writeSource("ask.ts", `import { createAi } from "@lunora/ai";\nexport const a = () => createAi();`);
         writeSource("bill.ts", `export const charge = async (ctx) => ctx.payments.checkout();`);
 
         const usage = discoverFeatureUsage(newProject(), workdir);
@@ -77,7 +77,7 @@ describe("discover-feature-usage", () => {
         rmSync(join(workdir, "ask.ts"));
         rmSync(join(workdir, "bill.ts"));
         writeSource("ask2.ts", `export const a = async (ctx) => ctx.ai.run("m", {});`);
-        writeSource("bill2.ts", `import { stripe } from "@cirrus/payment";\nexport const c = () => stripe();`);
+        writeSource("bill2.ts", `import { stripe } from "@lunora/payment";\nexport const c = () => stripe();`);
 
         const reverse = discoverFeatureUsage(newProject(), workdir);
 
@@ -89,12 +89,12 @@ describe("discover-feature-usage", () => {
         expect.assertions(12);
 
         // Imports flip kv / analytics / hyperdrive / images / browser / pipelines.
-        writeSource("flag.ts", `import { createKv } from "@cirrus/kv";\nexport const a = () => createKv();`);
-        writeSource("track.ts", `import { createAnalytics } from "@cirrus/analytics";\nexport const b = () => createAnalytics();`);
-        writeSource("pg.ts", `import { createHyperdrive } from "@cirrus/hyperdrive";\nexport const c = () => createHyperdrive();`);
-        writeSource("img.ts", `import { createImages } from "@cirrus/images";\nexport const d = () => createImages();`);
-        writeSource("shot.ts", `import { createBrowser } from "@cirrus/browser";\nexport const e = () => createBrowser();`);
-        writeSource("ship.ts", `import { createPipeline } from "@cirrus/pipelines";\nexport const f = () => createPipeline();`);
+        writeSource("flag.ts", `import { createKv } from "@lunora/kv";\nexport const a = () => createKv();`);
+        writeSource("track.ts", `import { createAnalytics } from "@lunora/analytics";\nexport const b = () => createAnalytics();`);
+        writeSource("pg.ts", `import { createHyperdrive } from "@lunora/hyperdrive";\nexport const c = () => createHyperdrive();`);
+        writeSource("img.ts", `import { createImages } from "@lunora/images";\nexport const d = () => createImages();`);
+        writeSource("shot.ts", `import { createBrowser } from "@lunora/browser";\nexport const e = () => createBrowser();`);
+        writeSource("ship.ts", `import { createPipeline } from "@lunora/pipelines";\nexport const f = () => createPipeline();`);
 
         const usage = discoverFeatureUsage(newProject(), workdir);
 
@@ -149,7 +149,7 @@ describe("discover-feature-usage", () => {
     it("detects scheduler via either the package import or `ctx.scheduler`", () => {
         expect.assertions(2);
 
-        writeSource("a.ts", `import { cronJobs } from "@cirrus/scheduler";\nexport const c = cronJobs();`);
+        writeSource("a.ts", `import { cronJobs } from "@lunora/scheduler";\nexport const c = cronJobs();`);
         const viaImport = discoverFeatureUsage(newProject(), workdir);
 
         rmSync(join(workdir, "a.ts"));
@@ -164,7 +164,7 @@ describe("discover-feature-usage", () => {
         expect.assertions(1);
 
         // `ctx.mail` is not a real helper — mail is reached via its own client, so
-        // only a `@cirrus/mail` import should ever flip the flag.
+        // only a `@lunora/mail` import should ever flip the flag.
         writeSource("u.ts", `export const f = (user) => user.mail;`);
 
         expect(discoverFeatureUsage(newProject(), workdir).mail).toBe(false);
@@ -212,9 +212,9 @@ describe("discover-feature-usage", () => {
         it("shows a package-backed page when the package is a declared dependency (worker-entry wiring)", () => {
             expect.assertions(1);
 
-            // This is the mail fix: mail is wired in the worker entry, not under `cirrus/`,
+            // This is the mail fix: mail is wired in the worker entry, not under `lunora/`,
             // so only the declared dependency keeps its page shown.
-            const result = buildStudioFeatures(ALL_OFF, { ...NO_SIGNALS, dependencies: new Set(["@cirrus/mail", "@cirrus/payment"]) });
+            const result = buildStudioFeatures(ALL_OFF, { ...NO_SIGNALS, dependencies: new Set(["@lunora/mail", "@lunora/payment"]) });
 
             expect(result).toMatchObject({ mail: true, payments: true });
         });

@@ -1,5 +1,5 @@
-import type { SchedulerStatus } from "@cirrus/client";
-import { useCirrus } from "@cirrus/react";
+import type { SchedulerStatus } from "@lunora/client";
+import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -88,7 +88,7 @@ const ratePercent = (numerator: number, denominator: number): string => {
  * Sum the per-function metric buckets into app-level request / error series,
  * ordered oldest-first, for the durable trend sparklines. Buckets arrive
  * per-`(path, bucketMs)`; collapsing on `bucketMs` gives the whole app's
- * requests-per-minute and errors-per-minute — the cirrus-attributed view CF's
+ * requests-per-minute and errors-per-minute — the lunora-attributed view CF's
  * per-Worker charts can't produce.
  */
 const requestErrorSeries = (history: MetricsSnapshot["history"]): { errors: number[]; requests: number[] } => {
@@ -176,7 +176,7 @@ interface SloData {
  * failing the pull. `metricsError` is set only when NOT one shard returned
  * metrics, carrying the root shard's reason.
  */
-const loadSloData = async (client: ReturnType<typeof useCirrus>, rootShard: string, shards: ReadonlyArray<string>): Promise<SloData> => {
+const loadSloData = async (client: ReturnType<typeof useLunora>, rootShard: string, shards: ReadonlyArray<string>): Promise<SloData> => {
     const perShardSettled = await Promise.all(
         shards.map((shard) => {
             const shardOptions = callOptions(shard);
@@ -225,21 +225,21 @@ const loadSloData = async (client: ReturnType<typeof useCirrus>, rootShard: stri
 /**
  * App-level health & SLO overview. On top of the original single-shard snapshot
  * (recent errors, request/error counts, shards seen) it composes the
- * cirrus-attributed SLO signals the studio can already reach — app error
+ * lunora-attributed SLO signals the studio can already reach — app error
  * rate, auth-failure rate, scheduler backlog, and migration status — each with a
  * status badge, plus durable request/error and auth sparklines, and a
  * worst-first per-function error-rate list. None of this is CF's per-Worker
- * charting: it is attributed to cirrus functions, the auth flow, and the
+ * charting: it is attributed to lunora functions, the auth flow, and the
  * scheduler/migration subsystems.
  *
  * Every read is independent and best-effort (via `Promise.allSettled`): a
- * missing `CIRRUS_ADMIN_TOKEN`, an unconfigured scheduler, or a cold instance
+ * missing `LUNORA_ADMIN_TOKEN`, an unconfigured scheduler, or a cold instance
  * degrades that one tile to `—` without blanking the rest. The overview is always
  * live: a root-shard `getMetrics` subscription drives a full cross-shard re-pull
  * on every write-flush (coalesced so a burst yields at most one in-flight pull).
  */
 export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const t = useT();
 
     const [entries, setEntries] = useState<LogEntry[]>([]);
@@ -388,7 +388,7 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
     const authLevel = auth === null ? "ok" : rateLevel(auth.failureRate, AUTH_FAIL_WARN, AUTH_FAIL_CRIT);
 
     return (
-        <div className="flex flex-col gap-4" data-testid="cirrus-health">
+        <div className="flex flex-col gap-4" data-testid="lunora-health">
             <div className="flex flex-wrap items-center gap-3">
                 <ConnectionBadge />
                 <LiveError message={liveError} prefix="hl" />

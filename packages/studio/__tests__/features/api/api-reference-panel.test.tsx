@@ -1,4 +1,4 @@
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraProvider } from "@lunora/react";
 import { render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
@@ -8,20 +8,20 @@ import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
 
 const SPEC_WITH_PATHS: Record<string, unknown> = {
-    info: { title: "Cirrus API", version: "1.0.0" },
+    info: { title: "Lunora API", version: "1.0.0" },
     openapi: "3.1.0",
     paths: {
-        "/_cirrus/rpc#messages:list": {
-            post: { operationId: "messages:list", summary: "query: messages:list", tags: ["messages"], "x-cirrus-function-kind": "query" },
+        "/_lunora/rpc#messages:list": {
+            post: { operationId: "messages:list", summary: "query: messages:list", tags: ["messages"], "x-lunora-function-kind": "query" },
         },
     },
 };
 
 const SPEC_WITH_RESPONSE: Record<string, unknown> = {
-    info: { title: "Cirrus API", version: "1.0.0" },
+    info: { title: "Lunora API", version: "1.0.0" },
     openapi: "3.1.0",
     paths: {
-        "/_cirrus/rpc#messages:list": {
+        "/_lunora/rpc#messages:list": {
             post: {
                 operationId: "messages:list",
                 responses: {
@@ -29,18 +29,18 @@ const SPEC_WITH_RESPONSE: Record<string, unknown> = {
                 },
                 summary: "query: messages:list",
                 tags: ["messages"],
-                "x-cirrus-function-kind": "query",
+                "x-lunora-function-kind": "query",
             },
         },
     },
 };
 
-const EMPTY_SPEC: Record<string, unknown> = { info: { title: "Cirrus API", version: "0.0.0" }, openapi: "3.1.0", paths: {} };
+const EMPTY_SPEC: Record<string, unknown> = { info: { title: "Lunora API", version: "0.0.0" }, openapi: "3.1.0", paths: {} };
 
 const renderPanel = (mock: MockClientHooks, spec?: unknown): ReactElement => (
-    <CirrusProvider client={mock.asClient}>
+    <LunoraProvider client={mock.asClient}>
         <ApiReferencePanel spec={spec} />
-    </CirrusProvider>
+    </LunoraProvider>
 );
 
 describe("apiReferencePanel", () => {
@@ -85,10 +85,10 @@ describe("apiReferencePanel", () => {
         expect.assertions(4);
 
         const SPEC_WITH_SCHEMA: Record<string, unknown> = {
-            info: { title: "Cirrus API", version: "1.0.0" },
+            info: { title: "Lunora API", version: "1.0.0" },
             openapi: "3.1.0",
             paths: {
-                "/_cirrus/rpc#planets:get": {
+                "/_lunora/rpc#planets:get": {
                     post: {
                         operationId: "planets:get",
                         responses: {
@@ -111,7 +111,7 @@ describe("apiReferencePanel", () => {
                         },
                         summary: "query: planets:get",
                         tags: ["planets"],
-                        "x-cirrus-function-kind": "query",
+                        "x-lunora-function-kind": "query",
                     },
                 },
             },

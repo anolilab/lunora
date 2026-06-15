@@ -5,7 +5,7 @@
  * that answers `count`/`sum`/`avg`/`min`/`max` without scanning. The companion
  * naming, canonical `by`-tuple key encoding, numeric coercion, backfill tally
  * fold, and read-time projection are dialect-agnostic, so they live here and are
- * imported by both `ctx-db.ts` (`@cirrus/do`) and `d1-ctx-db.ts` (`@cirrus/d1`) —
+ * imported by both `ctx-db.ts` (`@lunora/do`) and `d1-ctx-db.ts` (`@lunora/d1`) —
  * guaranteeing the two engines maintain and read companions byte-for-byte
  * identically.
  */

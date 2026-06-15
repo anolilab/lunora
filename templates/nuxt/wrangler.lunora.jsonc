@@ -1,0 +1,20 @@
+{
+    // Standalone Lunora worker — owns `/_lunora/*` (RPC + WebSocket) and the
+    // ShardDO class. Built and deployed independently of the Nuxt SSR worker.
+    //
+    // Deploy with:  wrangler deploy --config wrangler.lunora.jsonc
+    // Develop with: wrangler dev   --config wrangler.lunora.jsonc
+    //               (then set NUXT_PUBLIC_LUNORA_URL=http://localhost:<port> in .dev.vars)
+    //
+    // After deploying, set NUXT_PUBLIC_LUNORA_URL to this worker's URL
+    // (e.g. https://{{name}}-lunora.workers.dev) so the Nuxt SSR loader and
+    // the browser LunoraClient know where to reach `/_lunora/*`.
+    "name": "{{name}}-lunora",
+    "main": "lunora/server.ts",
+    "compatibility_date": "2026-06-10",
+    "compatibility_flags": ["nodejs_compat"],
+    "durable_objects": {
+        "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
+    },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+}

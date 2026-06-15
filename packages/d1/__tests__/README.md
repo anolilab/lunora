@@ -1,7 +1,7 @@
-# `@cirrus/d1` — Test Layout
+# `@lunora/d1` — Test Layout
 
 This package has two parallel test suites coordinated by a single
-`pnpm --filter @cirrus/d1 test`.
+`pnpm --filter @lunora/d1 test`.
 
 ```
 __tests__/
@@ -35,10 +35,10 @@ or anything else where SQLite semantics matter.
 
 ```bash
 # Mocks only (default):
-pnpm --filter @cirrus/d1 test
+pnpm --filter @lunora/d1 test
 
 # Both projects (opt-in — requires unrestricted localhost-loopback
 # access between workerd and the test host; see top-level
 # workerd-integration note in packages/do/__tests__/README.md):
-CIRRUS_WORKERD_TESTS=1 pnpm --filter @cirrus/d1 test
+LUNORA_WORKERD_TESTS=1 pnpm --filter @lunora/d1 test
 ```

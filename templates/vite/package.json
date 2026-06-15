@@ -4,23 +4,23 @@
     "private": true,
     "type": "module",
     "scripts": {
-        "dev": "cirrus dev",
+        "dev": "lunora dev",
         "build": "vite build",
-        "codegen": "cirrus codegen",
-        "deploy": "cirrus deploy"
+        "codegen": "lunora codegen",
+        "deploy": "lunora deploy"
     },
     "dependencies": {
-        "@cirrus/client": "^0.0.0",
-        "@cirrus/do": "^0.0.0",
-        "@cirrus/react": "^0.0.0",
-        "@cirrus/runtime": "^0.0.0",
-        "@cirrus/server": "^0.0.0",
+        "@lunora/client": "^0.0.0",
+        "@lunora/do": "^0.0.0",
+        "@lunora/react": "^0.0.0",
+        "@lunora/runtime": "^0.0.0",
+        "@lunora/server": "^0.0.0",
         "react": "^19.2.7",
         "react-dom": "^19.2.7"
     },
     "devDependencies": {
-        "@cirrus/cli": "^0.0.0",
-        "@cirrus/vite": "^0.0.0",
+        "@lunora/cli": "^0.0.0",
+        "@lunora/vite": "^0.0.0",
         "@cloudflare/workers-types": "^4.20260611.1",
         "typescript": "^6.0.3",
         "vite": "^8.0.16",

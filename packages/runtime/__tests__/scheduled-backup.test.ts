@@ -102,7 +102,7 @@ describe("createWorker — scheduled backup", () => {
 
         await fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME });
 
-        const ndjsonKey = "backups/cirrus-backup-2026-06-03T12-00-00-000Z.ndjson";
+        const ndjsonKey = "backups/lunora-backup-2026-06-03T12-00-00-000Z.ndjson";
         const manifestKey = `${ndjsonKey}.manifest.json`;
 
         expect(store.objects.has(ndjsonKey)).toBe(true);
@@ -138,7 +138,7 @@ describe("createWorker — scheduled backup", () => {
 
         await fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME });
 
-        const ndjson = store.objects.get("backups/cirrus-backup-2026-06-03T12-00-00-000Z.ndjson") ?? "";
+        const ndjson = store.objects.get("backups/lunora-backup-2026-06-03T12-00-00-000Z.ndjson") ?? "";
         const tables = ndjson
             .trim()
             .split("\n")
@@ -219,10 +219,10 @@ describe("createWorker — scheduled backup", () => {
 
         const store = memoryBackupStore();
         // Two pre-existing snapshots already on the store (older + newer).
-        store.objects.set("backups/cirrus-backup-2026-06-01T00-00-00-000Z.ndjson", "old\n");
-        store.objects.set("backups/cirrus-backup-2026-06-01T00-00-00-000Z.ndjson.manifest.json", "{}");
-        store.objects.set("backups/cirrus-backup-2026-06-02T00-00-00-000Z.ndjson", "mid\n");
-        store.objects.set("backups/cirrus-backup-2026-06-02T00-00-00-000Z.ndjson.manifest.json", "{}");
+        store.objects.set("backups/lunora-backup-2026-06-01T00-00-00-000Z.ndjson", "old\n");
+        store.objects.set("backups/lunora-backup-2026-06-01T00-00-00-000Z.ndjson.manifest.json", "{}");
+        store.objects.set("backups/lunora-backup-2026-06-02T00-00-00-000Z.ndjson", "mid\n");
+        store.objects.set("backups/lunora-backup-2026-06-02T00-00-00-000Z.ndjson.manifest.json", "{}");
 
         const worker = createWorker({
             adminToken: ADMIN_TOKEN,
@@ -236,9 +236,9 @@ describe("createWorker — scheduled backup", () => {
         // Firing adds a third (newest) snapshot; retain=2 must drop the oldest.
         await fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME });
 
-        expect(store.objects.has("backups/cirrus-backup-2026-06-01T00-00-00-000Z.ndjson")).toBe(false);
-        expect(store.objects.has("backups/cirrus-backup-2026-06-02T00-00-00-000Z.ndjson")).toBe(true);
-        expect(store.objects.has("backups/cirrus-backup-2026-06-03T12-00-00-000Z.ndjson")).toBe(true);
+        expect(store.objects.has("backups/lunora-backup-2026-06-01T00-00-00-000Z.ndjson")).toBe(false);
+        expect(store.objects.has("backups/lunora-backup-2026-06-02T00-00-00-000Z.ndjson")).toBe(true);
+        expect(store.objects.has("backups/lunora-backup-2026-06-03T12-00-00-000Z.ndjson")).toBe(true);
     });
 
     it("honors a custom backupPrefix and backupTables", async () => {
@@ -257,7 +257,7 @@ describe("createWorker — scheduled backup", () => {
 
         await fire(worker, { cron: BACKUP_CRON, scheduledTime: SCHEDULED_TIME });
 
-        const manifestKey = "snapshots/cirrus-backup-2026-06-03T12-00-00-000Z.ndjson.manifest.json";
+        const manifestKey = "snapshots/lunora-backup-2026-06-03T12-00-00-000Z.ndjson.manifest.json";
 
         expect(store.objects.has(manifestKey)).toBe(true);
 

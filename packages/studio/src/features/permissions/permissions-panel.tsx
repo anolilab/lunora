@@ -20,7 +20,7 @@ interface PermissionsPanelProps {
 
     /**
      * Loopback-dev gate for the local policy/role scaffolder (plan 025 Item 3).
-     * The scaffolder writes to `cirrus/` + reruns codegen, so it renders only
+     * The scaffolder writes to `lunora/` + reruns codegen, so it renders only
      * when set — absent from a deployed/read-only studio. Shares the schema
      * editor's capability flag.
      */
@@ -53,7 +53,7 @@ export const PermissionsPanel = ({ functions, runAsIdentity = false, schemaEdita
     }, []);
 
     return (
-        <div className="flex flex-col gap-8" data-testid="cirrus-permissions">
+        <div className="flex flex-col gap-8" data-testid="lunora-permissions">
             <section className="flex flex-col gap-2">
                 <h2 className="text-sm font-semibold text-foreground">{t("Permissions")}</h2>
                 <PermissionsMatrix onProbe={onProbe} />

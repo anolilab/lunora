@@ -19,9 +19,9 @@ const silentLogger = (): Logger => {
 
 let workdir: string;
 
-describe("cirrus dev", () => {
+describe("lunora dev", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-cli-dev-"));
+        workdir = mkdtempSync(join(tmpdir(), "lunora-cli-dev-"));
     });
 
     afterEach(() => {
@@ -92,7 +92,7 @@ describe("cirrus dev", () => {
         it("appends `--config <temp>` and lists remoted bindings when --remote is on", () => {
             expect.assertions(4);
 
-            const generatedConfig = join(workdir, "cirrus-remote", "wrangler.remote.jsonc");
+            const generatedConfig = join(workdir, "lunora-remote", "wrangler.remote.jsonc");
             const plan = planDevCommand({
                 cwd: workdir,
                 logger: silentLogger(),

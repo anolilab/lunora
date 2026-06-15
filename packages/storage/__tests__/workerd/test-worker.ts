@@ -1,5 +1,5 @@
 /**
- * Test entry-point Worker for `@cirrus/storage` integration tests.
+ * Test entry-point Worker for `@lunora/storage` integration tests.
  *
  * Provides an R2 binding (`BUCKET`) backed by Miniflare's in-process R2
  * emulator. Tests drive `createStorage(env.BUCKET)` directly via

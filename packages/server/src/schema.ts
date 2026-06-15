@@ -1,5 +1,5 @@
-import type { Validator } from "@cirrus/values";
-import { isOrWrapsFromValidator } from "@cirrus/values";
+import type { Validator } from "@lunora/values";
+import { isOrWrapsFromValidator } from "@lunora/values";
 
 import type { PrefixedTables, SchemaExtension } from "./plugin";
 import { mergeSchemaExtension } from "./plugin";

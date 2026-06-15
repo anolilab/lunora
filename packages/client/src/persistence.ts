@@ -38,9 +38,9 @@ const createInMemoryPersistence = (): PersistenceAdapter => {
     };
 };
 
-// eslint-disable-next-line unicorn/prevent-abbreviations -- public exported type name; renaming breaks @cirrus/client consumers
+// eslint-disable-next-line unicorn/prevent-abbreviations -- public exported type name; renaming breaks @lunora/client consumers
 interface IndexedDbPersistenceOptions {
-    /** Database name; defaults to `"cirrus"`. */
+    /** Database name; defaults to `"lunora"`. */
     databaseName?: string;
     /** Injectable `IDBFactory` (e.g. `fake-indexeddb` in tests); defaults to the global `indexedDB`. */
     indexedDB?: IDBFactory;
@@ -48,7 +48,7 @@ interface IndexedDbPersistenceOptions {
     storeName?: string;
 }
 
-const DEFAULT_DATABASE = "cirrus";
+const DEFAULT_DATABASE = "lunora";
 const DEFAULT_STORE = "offline-mutations";
 /** Secondary index on the mutation id — the store's primary key is an autoincrement seq that preserves FIFO order. */
 const ID_INDEX = "by_id";
@@ -73,7 +73,7 @@ const promisifyRequest = <T>(request: IDBRequest<T>): Promise<T> =>
  * ops reuse one connection. Throws eagerly if no `IDBFactory` is available —
  * callers in non-browser environments should use {@link createInMemoryPersistence}.
  */
-// eslint-disable-next-line unicorn/prevent-abbreviations -- public exported function name; renaming breaks @cirrus/client consumers
+// eslint-disable-next-line unicorn/prevent-abbreviations -- public exported function name; renaming breaks @lunora/client consumers
 const createIndexedDbPersistence = (options: IndexedDbPersistenceOptions = {}): PersistenceAdapter => {
     const factory = options.indexedDB ?? (typeof indexedDB === "undefined" ? undefined : indexedDB);
 

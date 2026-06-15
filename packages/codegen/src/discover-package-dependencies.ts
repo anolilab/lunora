@@ -7,8 +7,8 @@ import { join } from "node:path";
  * (`dependencies`, `devDependencies`, `peerDependencies`, `optionalDependencies`).
  *
  * Studio nav gating OR's this into the per-feature visibility: a package wired
- * only in the worker entry (`src/server`) — not under `cirrus/` — is invisible to
- * the `cirrus/`-scoped usage scan, but its presence here keeps the feature's page
+ * only in the worker entry (`src/server`) — not under `lunora/` — is invisible to
+ * the `lunora/`-scoped usage scan, but its presence here keeps the feature's page
  * shown. Reading declared deps (rather than walking the worker entry) keeps the
  * signal cheap and robust to however the app composes its worker.
  *

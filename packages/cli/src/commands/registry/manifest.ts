@@ -19,7 +19,7 @@ const VALID_ENV_NAME = /^[A-Za-z_]\w*$/u;
 
 /**
  * A valid registry item `name`. It is used as a path segment, as the lock key,
- * and — for schema-extension items — spliced into `cirrus/schema.ts` as both an
+ * and — for schema-extension items — spliced into `lunora/schema.ts` as both an
  * import specifier (`./${name}/schema`) and an identifier (`.extend(${name}.extension)`).
  * Restricting it to a single safe identifier segment stops a hostile manifest
  * from injecting a path separator or breaking out of the import to smuggle code.

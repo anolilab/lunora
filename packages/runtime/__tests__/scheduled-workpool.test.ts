@@ -62,7 +62,7 @@ const schedulerSpy = (): SchedulerSpy => {
 
 const dispatch = (worker: ReturnType<typeof createWorker>, body: Record<string, unknown>): Promise<Response> =>
     worker.fetch(
-        new Request("https://app.example/_cirrus/scheduler/dispatch", {
+        new Request("https://app.example/_lunora/scheduler/dispatch", {
             body: JSON.stringify(body),
             headers: { authorization: `Bearer ${ADMIN}`, "content-type": "application/json" },
             method: "POST",

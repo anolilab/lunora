@@ -1,47 +1,47 @@
 /**
- * Shared formatter for the structured log events the Cirrus runtime emits to the
+ * Shared formatter for the structured log events the Lunora runtime emits to the
  * worker's `console` during development. Both the CLI `dev` command and the Vite
- * plugin pipe worker output through `formatCirrusEvent` so a developer sees
+ * plugin pipe worker output through `formatLunoraEvent` so a developer sees
  * attributed, readable lines instead of raw JSON.
  *
  * The runtime emits two event shapes, each a single `console` line tagged
- * `source: "cirrus"` (see `@cirrus/do`'s `request-log.ts`): a `type: "log"`
+ * `source: "lunora"` (see `@lunora/do`'s `request-log.ts`): a `type: "log"`
  * event per `ctx.log.*` call, and a `type: "request"` event per RPC dispatch
  * (opt-in for successful calls, always for errors).
  *
  * This module is intentionally dependency-free and colour-free: it returns the
  * severity plus a plain display string, leaving ANSI/level colouring to each
  * caller (the CLI routes through its `pail` logger; the Vite plugin dims inline).
- * Any line that is not a cirrus event returns `undefined`, signalling the caller
+ * Any line that is not a lunora event returns `undefined`, signalling the caller
  * to pass it through unchanged.
  */
 
 /** Severity a formatted line should be surfaced at, mapped onto the three logger channels. */
-type CirrusLineLevel = "error" | "info" | "warn";
+type LunoraLineLevel = "error" | "info" | "warn";
 
-/** A formatted cirrus event: the channel to surface it on, the display text, and which event produced it. */
-interface CirrusFormattedLine {
+/** A formatted lunora event: the channel to surface it on, the display text, and which event produced it. */
+interface LunoraFormattedLine {
     /** `"log"` for a `ctx.log.*` line, `"rpc"` for a dispatch summary. */
     kind: "log" | "rpc";
     /** Logger channel — callers colour by this. */
-    level: CirrusLineLevel;
-    /** Human-readable, colour-free line content (no `[cirrus]` tag — callers add their own). */
+    level: LunoraLineLevel;
+    /** Human-readable, colour-free line content (no `[lunora]` tag — callers add their own). */
     text: string;
 }
 
-/** Stable `source` tag every cirrus console event carries. Mirrors `REQUEST_LOG_EVENT_SOURCE` in `@cirrus/do`. */
-const CIRRUS_EVENT_SOURCE = "cirrus";
+/** Stable `source` tag every lunora console event carries. Mirrors `REQUEST_LOG_EVENT_SOURCE` in `@lunora/do`. */
+const LUNORA_EVENT_SOURCE = "lunora";
 
 /**
  * Internal name of the unnamed default Durable Object (the single-DO topology).
- * Mirrors `ROOT_SHARD_NAME` in `@cirrus/do`. A dispatch against it is *not*
+ * Mirrors `ROOT_SHARD_NAME` in `@lunora/do`. A dispatch against it is *not*
  * sharded from the developer's point of view, so the formatter treats this
  * sentinel as "no shard" and never appends a noisy `@__root__` suffix.
  */
 const ROOT_SHARD_NAME = "__root__";
 
-/** Raw shape of a parsed cirrus event line; fields are validated before use. */
-interface CirrusEvent {
+/** Raw shape of a parsed lunora event line; fields are validated before use. */
+interface LunoraEvent {
     cacheHit?: unknown;
     /** `type: "container"` — the container export name. */
     container?: unknown;
@@ -72,7 +72,7 @@ const asStringList = (value: unknown): string[] => (Array.isArray(value) ? value
 const formatDuration = (value: unknown): string => (typeof value === "number" && Number.isFinite(value) ? `${String(Math.round(value))}ms` : "?ms");
 
 /** Map a raw `ctx.log` level string onto one of the three logger channels. */
-const toLineLevel = (rawLevel: string): CirrusLineLevel => {
+const toLineLevel = (rawLevel: string): LunoraLineLevel => {
     if (rawLevel === "error") {
         return "error";
     }
@@ -84,11 +84,11 @@ const toLineLevel = (rawLevel: string): CirrusLineLevel => {
     return "info";
 };
 
-/** Parse a worker-output line into a cirrus event, or `undefined` when it isn't one. Never throws. */
-const parseCirrusEvent = (line: string): CirrusEvent | undefined => {
+/** Parse a worker-output line into a lunora event, or `undefined` when it isn't one. Never throws. */
+const parseLunoraEvent = (line: string): LunoraEvent | undefined => {
     const trimmed = line.trim();
 
-    // Fast reject: every cirrus event is a single JSON object literal.
+    // Fast reject: every lunora event is a single JSON object literal.
     if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
         return undefined;
     }
@@ -105,9 +105,9 @@ const parseCirrusEvent = (line: string): CirrusEvent | undefined => {
         return undefined;
     }
 
-    const event: CirrusEvent = parsed;
+    const event: LunoraEvent = parsed;
 
-    return event.source === CIRRUS_EVENT_SOURCE ? event : undefined;
+    return event.source === LUNORA_EVENT_SOURCE ? event : undefined;
 };
 
 /**
@@ -115,14 +115,14 @@ const parseCirrusEvent = (line: string): CirrusEvent | undefined => {
  * the bare function path. The default single-DO root ({@link ROOT_SHARD_NAME})
  * is treated as no shard so the common case reads `function`, not `function@__root__`.
  */
-const labelFor = (functionPath: string, event: CirrusEvent): string => {
+const labelFor = (functionPath: string, event: LunoraEvent): string => {
     const shard = asString(event.shard);
 
     return shard === "" || shard === ROOT_SHARD_NAME ? functionPath : `${functionPath}@${shard}`;
 };
 
 /** Format a `type: "request"` dispatch summary. */
-const formatRequest = (event: CirrusEvent, functionPath: string): CirrusFormattedLine => {
+const formatRequest = (event: LunoraEvent, functionPath: string): LunoraFormattedLine => {
     const failed = event.outcome === "error";
     const parts = [labelFor(functionPath, event), failed ? "error" : "ok", formatDuration(event.durationMs)];
 
@@ -155,7 +155,7 @@ const formatRequest = (event: CirrusEvent, functionPath: string): CirrusFormatte
  * The instance id is truncated to keep the line readable — it's a correlation
  * hint, not a value to copy. Errors surface on the `error` channel.
  */
-const formatContainer = (event: CirrusEvent): CirrusFormattedLine => {
+const formatContainer = (event: LunoraEvent): LunoraFormattedLine => {
     const name = asString(event.container) || "<unknown>";
     const instance = asString(event.instance);
     const transition = asString(event.event) || "event";
@@ -172,13 +172,13 @@ const formatContainer = (event: CirrusEvent): CirrusFormattedLine => {
 };
 
 /**
- * Parse a single worker-output line and, when it is a cirrus structured event,
+ * Parse a single worker-output line and, when it is a lunora structured event,
  * return its severity plus display text. Returns `undefined` for anything else —
- * non-JSON lines, JSON that isn't a cirrus event, or an unrecognised event type
+ * non-JSON lines, JSON that isn't a lunora event, or an unrecognised event type
  * — so the caller passes the original line through untouched. Pure and total.
  */
-const formatCirrusEvent = (line: string): CirrusFormattedLine | undefined => {
-    const event = parseCirrusEvent(line);
+const formatLunoraEvent = (line: string): LunoraFormattedLine | undefined => {
+    const event = parseLunoraEvent(line);
 
     if (!event) {
         return undefined;
@@ -201,5 +201,5 @@ const formatCirrusEvent = (line: string): CirrusFormattedLine | undefined => {
     return undefined;
 };
 
-export { CIRRUS_EVENT_SOURCE, formatCirrusEvent };
-export type { CirrusFormattedLine, CirrusLineLevel };
+export { LUNORA_EVENT_SOURCE, formatLunoraEvent };
+export type { LunoraFormattedLine, LunoraLineLevel };

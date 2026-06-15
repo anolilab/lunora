@@ -1,17 +1,17 @@
-import type { Preloaded, ReturnOf } from "@cirrus/client";
-import { createMutation, hydratePreloaded } from "@cirrus/solid";
-import { createServerClient, preloadQuery } from "@cirrus/solid/server";
+import type { Preloaded, ReturnOf } from "@lunora/client";
+import { createMutation, hydratePreloaded } from "@lunora/solid";
+import { createServerClient, preloadQuery } from "@lunora/solid/server";
 import { createFileRoute } from "@tanstack/solid-router";
 import { createServerFn } from "@tanstack/solid-start";
 import { createSignal } from "solid-js";
 
-import { api } from "../../cirrus/_generated/api";
+import { api } from "../../lunora/_generated/api";
 
 const channelId = "channel:demo" as const;
 
 /**
  * SSR loader: runs on the server (Cloudflare Worker) before the route renders.
- * Builds a request-scoped CirrusClient that uses the HTTP RPC path (/_cirrus/rpc).
+ * Builds a request-scoped LunoraClient that uses the HTTP RPC path (/_lunora/rpc).
  *
  * `createServerFn` is imported from "@tanstack/solid-start" (the client-safe
  * entry). The handler closure is tree-shaken away from the client bundle — only
@@ -24,7 +24,7 @@ const loadMessages = createServerFn().handler(async () => {
     // Worker URL: in Cloudflare's module-worker SSR the worker and SSR renderer share
     // the same process, so loopback to localhost works. The env var lets operators
     // point at a remote worker in preview deploys.
-    const workerUrl = typeof process !== "undefined" ? (process.env["CIRRUS_WORKER_URL"] ?? "http://localhost:8787") : "http://localhost:8787";
+    const workerUrl = typeof process !== "undefined" ? (process.env["LUNORA_WORKER_URL"] ?? "http://localhost:8787") : "http://localhost:8787";
 
     const client = createServerClient({ url: workerUrl });
 
@@ -60,7 +60,7 @@ function HomePage() {
     return (
         <div style={{ "font-family": "system-ui", padding: "24px" }}>
             <h1>{"{{name}}"}</h1>
-            <p>TanStack Start (Solid) + Cirrus realtime queries.</p>
+            <p>TanStack Start (Solid) + Lunora realtime queries.</p>
             <pre>{JSON.stringify(data(), undefined, 2)}</pre>
             <form
                 onSubmit={(event) => {

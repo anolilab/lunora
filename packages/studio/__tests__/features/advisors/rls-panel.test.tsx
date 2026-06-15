@@ -1,4 +1,4 @@
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraProvider } from "@lunora/react";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
@@ -34,9 +34,9 @@ const createRlsClient = (result: RlsPoliciesResult = METADATA): MockClientHooks 
     });
 
 const renderPanel = (mock: MockClientHooks): ReactElement => (
-    <CirrusProvider client={mock.asClient}>
+    <LunoraProvider client={mock.asClient}>
         <RlsPanel />
-    </CirrusProvider>
+    </LunoraProvider>
 );
 
 describe("rlsPanel", () => {

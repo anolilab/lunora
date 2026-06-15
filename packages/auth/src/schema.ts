@@ -1,10 +1,10 @@
-import type { TableDefinition } from "@cirrus/server";
-import { defineTable } from "@cirrus/server";
-import type { ColumnValidator, Validator } from "@cirrus/values";
-import { v } from "@cirrus/values";
+import type { TableDefinition } from "@lunora/server";
+import { defineTable } from "@lunora/server";
+import type { ColumnValidator, Validator } from "@lunora/values";
+import { v } from "@lunora/values";
 import { getAuthTables } from "better-auth/db";
 
-import type { CirrusAuthOptions } from "./create-auth";
+import type { LunoraAuthOptions } from "./create-auth";
 
 /**
  * The better-auth field-attribute shape we read, derived from `getAuthTables`'s
@@ -24,7 +24,7 @@ const baseValidator = (attribute: AuthFieldAttribute): Validator => {
 
     const { type } = attribute;
 
-    // A `type` that is an array of string literals is a better-auth enum; Cirrus
+    // A `type` that is an array of string literals is a better-auth enum; Lunora
     // has no literal validator, so it widens to `string` (the stored type).
     if (Array.isArray(type)) {
         return v.string();
@@ -58,7 +58,7 @@ const baseValidator = (attribute: AuthFieldAttribute): Validator => {
 };
 
 /**
- * Map one better-auth field attribute to a Cirrus validator. `required: false`
+ * Map one better-auth field attribute to a Lunora validator. `required: false`
  * becomes `.nullable()` (the column is optional/absent), `unique` becomes
  * `.unique()`, and a `references` to another model becomes a typed `v.id(model)`
  * so the foreign key is type-checked end-to-end. Defaults are intentionally
@@ -84,8 +84,8 @@ const fieldValidator = (attribute: AuthFieldAttribute): Validator => {
 };
 
 /**
- * Derive Cirrus table definitions from a better-auth config — the bridge that
- * makes the **full** better-auth plugin ecosystem first-class Cirrus data.
+ * Derive Lunora table definitions from a better-auth config — the bridge that
+ * makes the **full** better-auth plugin ecosystem first-class Lunora data.
  *
  * better-auth's own `getAuthTables(options)` already merges every configured
  * plugin's `schema` into one table map (core `user`/`session`/`account`/
@@ -94,7 +94,7 @@ const fieldValidator = (attribute: AuthFieldAttribute): Validator => {
  * organization plugin, `role`/`banned`/… columns from admin, `passkey`,
  * `twoFactor`, `jwks`, …). This walks that map and emits an equivalent
  * `defineTable` for each, so adding a plugin to `options.plugins` automatically
- * surfaces its tables in the Cirrus schema — no hand-written table definitions
+ * surfaces its tables in the Lunora schema — no hand-written table definitions
  * to keep in sync.
  *
  * Spread the result into `defineSchema` alongside your app tables (the keys are
@@ -106,7 +106,7 @@ const fieldValidator = (attribute: AuthFieldAttribute): Validator => {
  * throws on collision):
  *
  * ```ts
- * import { authTables } from "@cirrus/auth";
+ * import { authTables } from "@lunora/auth";
  * const authOptions = { emailAndPassword: { enabled: true }, plugins: [organization(), admin()] };
  * export const schema = defineSchema({
  *     ...authTables(authOptions),
@@ -118,11 +118,11 @@ const fieldValidator = (attribute: AuthFieldAttribute): Validator => {
  * uniqueness + FK ids). It deliberately does not carry better-auth's
  * `defaultValue`/`onUpdate` (filled by better-auth's own write layer), `index`
  * hints, or `bigint` precision (`bigint` fields map to `v.number()`). Those only
- * matter once better-auth's writes are routed through Cirrus's ORM — a separate
+ * matter once better-auth's writes are routed through Lunora's ORM — a separate
  * adapter follow-up; today the auth rows are still written by better-auth's D1
  * adapter and these tables make them typed + queryable via `ctx.db`.
  */
-const authTables = (options: CirrusAuthOptions): Record<string, TableDefinition> => {
+const authTables = (options: LunoraAuthOptions): Record<string, TableDefinition> => {
     const tables = getAuthTables(options);
     const schema: Record<string, TableDefinition> = {};
 
@@ -131,7 +131,7 @@ const authTables = (options: CirrusAuthOptions): Record<string, TableDefinition>
 
         for (const [fieldKey, attribute] of Object.entries(table.fields)) {
             // better-auth lets a field override its stored column via `fieldName`;
-            // the adapter reads/writes that name, so the Cirrus column must match.
+            // the adapter reads/writes that name, so the Lunora column must match.
             shape[attribute.fieldName ?? fieldKey] = fieldValidator(attribute);
         }
 

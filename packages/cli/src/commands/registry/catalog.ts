@@ -9,7 +9,7 @@ import { join } from "@visulima/path";
 
 import parseManifest from "./manifest";
 
-/** One catalog entry as `cirrus registry list` reports it. */
+/** One catalog entry as `lunora registry list` reports it. */
 interface CatalogItem {
     description?: string;
     name: string;
@@ -58,7 +58,7 @@ const collectCatalog = (root: string): CatalogItem[] => {
 
 /**
  * Build the catalog (`index.json` contents) from a local registry root by
- * reading every item's `registry.json`. Used by both `cirrus registry build`
+ * reading every item's `registry.json`. Used by both `lunora registry build`
  * and the registry tests so the committed index can't drift from the item dirs.
  */
 const buildRegistryIndex = (root: string): { items: IndexItem[] } => {

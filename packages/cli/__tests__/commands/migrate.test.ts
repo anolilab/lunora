@@ -19,9 +19,9 @@ const silentLogger = (): Logger => {
 
 let workdir: string;
 
-describe("cirrus migrate", () => {
+describe("lunora migrate", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-cli-migrate-"));
+        workdir = mkdtempSync(join(tmpdir(), "lunora-cli-migrate-"));
     });
 
     afterEach(() => {
@@ -29,15 +29,15 @@ describe("cirrus migrate", () => {
     });
 
     const writeSchema = (source: string): void => {
-        const cirrus = join(workdir, "cirrus");
+        const lunora = join(workdir, "lunora");
 
-        mkdirSync(cirrus, { recursive: true });
-        writeFileSync(join(cirrus, "schema.ts"), source, "utf8");
+        mkdirSync(lunora, { recursive: true });
+        writeFileSync(join(lunora, "schema.ts"), source, "utf8");
     };
 
     const fixedNow = (): Date => new Date("2024-04-01T12:34:56.000Z");
 
-    describe("cirrus migrate generate", () => {
+    describe("lunora migrate generate", () => {
         it("errors when schema.ts is missing", () => {
             expect.assertions(3);
 
@@ -52,14 +52,14 @@ describe("cirrus migrate", () => {
             const message = errors.join("\n");
 
             expect(message).toContain("schema not found");
-            expect(message).toContain("vis generate cirrus-table --name=<name>");
+            expect(message).toContain("vis generate lunora-table --name=<name>");
         });
 
         it("first run on a global table emits CREATE TABLE", () => {
             expect.assertions(10);
 
             writeSchema(
-                `import { defineSchema, defineTable, v } from "@cirrus/server";
+                `import { defineSchema, defineTable, v } from "@lunora/server";
 
 export const schema = defineSchema({
     users: defineTable({
@@ -89,7 +89,7 @@ export const schema = defineSchema({
             expect(sql).toContain('CREATE UNIQUE INDEX IF NOT EXISTS "users_by_email"');
 
             // Snapshot file is written next to the migration.
-            const snapshotPath = join(workdir, "cirrus", "migrations", ".snapshot.json");
+            const snapshotPath = join(workdir, "lunora", "migrations", ".snapshot.json");
 
             expect(existsSync(snapshotPath)).toBe(true);
 
@@ -102,7 +102,7 @@ export const schema = defineSchema({
             expect.assertions(3);
 
             writeSchema(
-                `import { defineSchema, defineTable, v } from "@cirrus/server";
+                `import { defineSchema, defineTable, v } from "@lunora/server";
 
 export const schema = defineSchema({
     messages: defineTable({
@@ -128,7 +128,7 @@ export const schema = defineSchema({
             expect.assertions(4);
 
             writeSchema(
-                `import { defineSchema, defineTable, v } from "@cirrus/server";
+                `import { defineSchema, defineTable, v } from "@lunora/server";
 
 export const schema = defineSchema({
     users: defineTable({ email: v.string() }).global(),
@@ -156,7 +156,7 @@ export const schema = defineSchema({
             expect.assertions(4);
 
             writeSchema(
-                `import { defineSchema, defineTable, v } from "@cirrus/server";
+                `import { defineSchema, defineTable, v } from "@lunora/server";
 
 export const schema = defineSchema({
     users: defineTable({ email: v.string() }).global(),
@@ -167,7 +167,7 @@ export const schema = defineSchema({
             runMigrateGenerateCommand({ cwd: workdir, logger: silentLogger(), name: "init", now: fixedNow });
 
             writeSchema(
-                `import { defineSchema, defineTable, v } from "@cirrus/server";
+                `import { defineSchema, defineTable, v } from "@lunora/server";
 
 export const schema = defineSchema({
     users: defineTable({
@@ -198,7 +198,7 @@ export const schema = defineSchema({
             expect.assertions(2);
 
             writeSchema(
-                `import { defineSchema, defineTable, v } from "@cirrus/server";
+                `import { defineSchema, defineTable, v } from "@lunora/server";
 
 export const schema = defineSchema({
     sessions: defineTable({ token: v.string() }).global(),
@@ -209,7 +209,7 @@ export const schema = defineSchema({
             runMigrateGenerateCommand({ cwd: workdir, logger: silentLogger(), name: "init", now: fixedNow });
 
             writeSchema(
-                `import { defineSchema, defineTable } from "@cirrus/server";
+                `import { defineSchema, defineTable } from "@lunora/server";
 
 export const schema = defineSchema({});
 `,
@@ -233,7 +233,7 @@ export const schema = defineSchema({});
             expect.assertions(4);
 
             writeSchema(
-                `import { defineSchema, defineTable, v } from "@cirrus/server";
+                `import { defineSchema, defineTable, v } from "@lunora/server";
 
 export const schema = defineSchema({
     users: defineTable({
@@ -247,7 +247,7 @@ export const schema = defineSchema({
             runMigrateGenerateCommand({ cwd: workdir, logger: silentLogger(), name: "init", now: fixedNow });
 
             writeSchema(
-                `import { defineSchema, defineTable, v } from "@cirrus/server";
+                `import { defineSchema, defineTable, v } from "@lunora/server";
 
 export const schema = defineSchema({
     users: defineTable({ email: v.string() }).global(),
@@ -275,16 +275,16 @@ export const schema = defineSchema({
     });
 
     const writeMigrations = (source: string): void => {
-        const cirrus = join(workdir, "cirrus");
+        const lunora = join(workdir, "lunora");
 
-        mkdirSync(cirrus, { recursive: true });
-        writeFileSync(join(cirrus, "migrations.ts"), source, "utf8");
+        mkdirSync(lunora, { recursive: true });
+        writeFileSync(join(lunora, "migrations.ts"), source, "utf8");
     };
 
-    const migrationsFile = (): string => join(workdir, "cirrus", "migrations.ts");
+    const migrationsFile = (): string => join(workdir, "lunora", "migrations.ts");
 
-    describe("cirrus migrate create", () => {
-        it("scaffolds cirrus/migrations.ts with a defineMigration block", () => {
+    describe("lunora migrate create", () => {
+        it("scaffolds lunora/migrations.ts with a defineMigration block", () => {
             expect.assertions(7);
 
             const result = runMigrateCreateCommand({ cwd: workdir, logger: silentLogger(), name: "Backfill Read By", table: "messages" });
@@ -294,7 +294,7 @@ export const schema = defineSchema({
 
             const content = readFileSync(result.file, "utf8");
 
-            expect(content).toContain('import { defineMigration } from "@cirrus/server";');
+            expect(content).toContain('import { defineMigration } from "@lunora/server";');
             expect(content).toContain("export const backfillReadBy = defineMigration({");
             expect(content).toContain('id: "backfill-read-by",');
             expect(content).toContain('table: "messages",');
@@ -350,7 +350,7 @@ export const schema = defineSchema({
         });
     });
 
-    const MIGRATIONS_SOURCE = `import { defineMigration } from "@cirrus/server";
+    const MIGRATIONS_SOURCE = `import { defineMigration } from "@lunora/server";
 
 export const backfillReadBy = defineMigration({
     id: "backfill-read-by",
@@ -383,12 +383,12 @@ export const backfillReadBy = defineMigration({
         };
     };
 
-    describe("cirrus migrate up/down/status", () => {
+    describe("lunora migrate up/down/status", () => {
         beforeEach(() => {
             writeMigrations(MIGRATIONS_SOURCE);
         });
 
-        it("up POSTs a runMigration admin RPC to /_cirrus/migrate with the resolved table and bearer", async () => {
+        it("up POSTs a runMigration admin RPC to /_lunora/migrate with the resolved table and bearer", async () => {
             expect.assertions(5);
 
             const calls: CapturedCall[] = [];
@@ -404,11 +404,11 @@ export const backfillReadBy = defineMigration({
             });
 
             expect(result.code).toBe(0);
-            expect(result.requestUrl).toBe("http://localhost:9999/_cirrus/migrate");
+            expect(result.requestUrl).toBe("http://localhost:9999/_lunora/migrate");
             expect(calls).toHaveLength(1);
             expect(calls[0]?.body).toEqual({
                 args: { direction: "up", id: "backfill-read-by" },
-                functionPath: "__cirrus_admin__:runMigration",
+                functionPath: "__lunora_admin__:runMigration",
                 table: "messages",
             });
             expect(calls[0]?.headers?.authorization).toBe("Bearer s3cret");
@@ -465,17 +465,17 @@ export const backfillReadBy = defineMigration({
                 token: "s3cret",
             });
 
-            expect(calls[0]?.body.functionPath).toBe("__cirrus_admin__:migrationStatus");
+            expect(calls[0]?.body.functionPath).toBe("__lunora_admin__:migrationStatus");
             expect(calls[0]?.body.args).toEqual({ id: "backfill-read-by" });
         });
 
-        it("falls back to CIRRUS_ADMIN_TOKEN when --token is omitted", async () => {
+        it("falls back to LUNORA_ADMIN_TOKEN when --token is omitted", async () => {
             expect.hasAssertions();
 
             const calls: CapturedCall[] = [];
-            const previous = process.env.CIRRUS_ADMIN_TOKEN;
+            const previous = process.env.LUNORA_ADMIN_TOKEN;
 
-            process.env.CIRRUS_ADMIN_TOKEN = "from-env";
+            process.env.LUNORA_ADMIN_TOKEN = "from-env";
 
             try {
                 await runMigrateDataCommand({
@@ -487,9 +487,9 @@ export const backfillReadBy = defineMigration({
                 });
             } finally {
                 if (previous === undefined) {
-                    delete process.env.CIRRUS_ADMIN_TOKEN;
+                    delete process.env.LUNORA_ADMIN_TOKEN;
                 } else {
-                    process.env.CIRRUS_ADMIN_TOKEN = previous;
+                    process.env.LUNORA_ADMIN_TOKEN = previous;
                 }
             }
 
@@ -500,9 +500,9 @@ export const backfillReadBy = defineMigration({
             expect.hasAssertions();
 
             const errors: string[] = [];
-            const previous = process.env.CIRRUS_ADMIN_TOKEN;
+            const previous = process.env.LUNORA_ADMIN_TOKEN;
 
-            delete process.env.CIRRUS_ADMIN_TOKEN;
+            delete process.env.LUNORA_ADMIN_TOKEN;
 
             try {
                 const result = await runMigrateDataCommand({
@@ -516,14 +516,14 @@ export const backfillReadBy = defineMigration({
                 expect(result.code).toBe(1);
             } finally {
                 if (previous !== undefined) {
-                    process.env.CIRRUS_ADMIN_TOKEN = previous;
+                    process.env.LUNORA_ADMIN_TOKEN = previous;
                 }
             }
 
             expect(errors.join("\n")).toContain("admin token required");
         });
 
-        it("errors when the migration id is not declared under cirrus/", async () => {
+        it("errors when the migration id is not declared under lunora/", async () => {
             expect.assertions(2);
 
             const errors: string[] = [];

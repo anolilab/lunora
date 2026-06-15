@@ -6,34 +6,34 @@
  * `metrics`/`functionStats` on `ShardDO` reset on every cold start, which is
  * fine for a "since this instance woke" readout but loses the lifetime picture
  * an operator wants. This table is the durable source of truth the
- * `__cirrus_admin__:getFunctionStats` / `getMetrics` RPCs read from.
+ * `__lunora_admin__:getFunctionStats` / `getMetrics` RPCs read from.
  *
  * Modelled on the reserved-table helpers in `audit-log.ts`
  * (`ensureAuditTable`/`appendAuditEntry`/`readAuditLog`) and the CDC-log helpers
  * in `ctx-db.ts`. Four reserved tables back this feature.
  *
- * `__cirrus_metrics` holds one row per function path with the lifetime
+ * `__lunora_metrics` holds one row per function path with the lifetime
  * accumulators (calls, errors, summed/min/max latency, last-called/last-error
  * timestamps). A function call is a single cheap `INSERT … ON CONFLICT … DO
  * UPDATE` upsert against this row, on the hot path.
  *
- * `__cirrus_metrics_buckets` holds coarse time-bucketed counters
+ * `__lunora_metrics_buckets` holds coarse time-bucketed counters
  * (`path` × `bucketMs`) giving a basic per-function time series the studio
  * can chart. Bucketing the timestamp to a fixed window keeps the row count
  * bounded (one row per function per window) while still surviving restart.
  *
- * `__cirrus_metrics_scans` holds the causal full-scan attribution
+ * `__lunora_metrics_scans` holds the causal full-scan attribution
  * (`path` × `table`): how many times the function full-scanned each table (a
  * read with no index / point lookup, stamped via `SCAN_DEP` in `ctx-db.ts`).
  * This is the raw signal behind the Insights "missing index" / "full scan"
  * reads — it lets the studio say "`feed:list` is slow BECAUSE it
  * full-scanned `posts`" rather than flagging the slow function as an isolated
  * symptom. Keyed by `(path, table)` so the row count is bounded by the
- * (functions × tables) the app actually scans. The `__cirrus_metrics` row also
+ * (functions × tables) the app actually scans. The `__lunora_metrics` row also
  * carries an aggregate `scans` counter so a function's total scan volume is a
  * single-row read.
  *
- * `__cirrus_metrics_index` holds the per-`(table, index)` hit counter: how many
+ * `__lunora_metrics_index` holds the per-`(table, index)` hit counter: how many
  * recorded reads USED each declared index to narrow (the complement of the
  * scans table, stamped via `onIndexUse` in `ctx-db.ts`). It's the durable
  * producer behind the advisor `index_utilization` dead-index lint — a declared
@@ -46,24 +46,24 @@
  * the index, not the function, since the dead-index signal is per-index across
  * the whole workload.
  *
- * All four tables carry the reserved `__cirrus` prefix, so the data browser
+ * All four tables carry the reserved `__lunora` prefix, so the data browser
  * hides them automatically.
  */
 
 import type { SqlCursor, SqlExec } from "./ctx-db";
 import type { FunctionCallStat, FunctionScanAttribution } from "./introspect";
 
-/** Reserved per-function accumulator table. Auto-hidden from the data browser by the `__cirrus` prefix. */
-const FUNCTION_METRICS_TABLE = "__cirrus_metrics";
+/** Reserved per-function accumulator table. Auto-hidden from the data browser by the `__lunora` prefix. */
+const FUNCTION_METRICS_TABLE = "__lunora_metrics";
 
 /** Reserved coarse time-series table: per-function call/error counts bucketed by a fixed window. */
-const FUNCTION_METRICS_BUCKETS_TABLE = "__cirrus_metrics_buckets";
+const FUNCTION_METRICS_BUCKETS_TABLE = "__lunora_metrics_buckets";
 
 /** Reserved causal full-scan attribution table: per-(function, table) full-scan counts. */
-const FUNCTION_METRICS_SCANS_TABLE = "__cirrus_metrics_scans";
+const FUNCTION_METRICS_SCANS_TABLE = "__lunora_metrics_scans";
 
 /** Reserved per-(table, index) hit-counter table backing the advisor dead-index lint. */
-const FUNCTION_METRICS_INDEX_TABLE = "__cirrus_metrics_index";
+const FUNCTION_METRICS_INDEX_TABLE = "__lunora_metrics_index";
 
 /**
  * Width of one history bucket, in milliseconds. 60s gives a minute-resolution
@@ -128,7 +128,7 @@ interface RecordFunctionMetricInput {
     /**
      * Distinct declared indexes this dispatch exercised (used to narrow a read),
      * collected from the `onIndexUse` signal. Each entry bumps the
-     * per-`(table, index)` hit counter in `__cirrus_metrics_index`, the durable
+     * per-`(table, index)` hit counter in `__lunora_metrics_index`, the durable
      * producer behind the advisor dead-index lint. Omitted/empty when the
      * dispatch used no declared index, keeping the hot path unchanged.
      */
@@ -178,7 +178,7 @@ const dedupeIndexHits = (hits: ReadonlyArray<IndexHit>): IndexHit[] => {
  * row per declared index the app exercises).
  *
  * The accumulator's `scans` column is added via a guarded `ALTER TABLE` rather
- * than baked into the `CREATE` so a shard whose `__cirrus_metrics` predates the
+ * than baked into the `CREATE` so a shard whose `__lunora_metrics` predates the
  * causal-attribution feature gains the column on the next call without a
  * migration. SQLite has no `ADD COLUMN IF NOT EXISTS`, so the duplicate-column
  * error from a re-run is swallowed.
@@ -201,7 +201,7 @@ const ensureFunctionMetricsTables = (sql: SqlExec): void => {
         )`,
     );
 
-    // Back-fill columns added after the original `__cirrus_metrics` shape, for
+    // Back-fill columns added after the original `__lunora_metrics` shape, for
     // shards created before each feature landed. SQLite has no
     // `ADD COLUMN IF NOT EXISTS`, so the duplicate-column error from a re-run
     // (or the freshly-created schema above) is swallowed per column.
@@ -421,7 +421,7 @@ const readFunctionMetricIndexHits = (sql: SqlExec): FunctionMetricIndexHit[] => 
 /**
  * Fold a dispatch's distinct full-scanned tables into an in-memory attribution
  * list, mirroring the per-`(path, table)` upsert {@link recordFunctionMetric}
- * applies to the durable `__cirrus_metrics_scans` table. Kept here, beside its
+ * applies to the durable `__lunora_metrics_scans` table. Kept here, beside its
  * SQL twin, so the one rule (one occurrence = +1 scan for that table, list
  * re-sorted busiest-first) lives in a single module — the in-memory copy exists
  * only for the warm-instance fallback when the durable read is unavailable.

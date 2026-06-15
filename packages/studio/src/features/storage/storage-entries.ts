@@ -1,4 +1,4 @@
-import type { StorageObject } from "@cirrus/client";
+import type { StorageObject } from "@lunora/client";
 
 /**
  * Share-link lifetimes offered by the file browser's "Link expiry" control —

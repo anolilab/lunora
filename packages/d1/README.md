@@ -6,7 +6,7 @@
 
 </a>
 
-<h3 align="center">D1 adapter for Cirrus .global() tables, wrapping the Sessions API for read-your-writes</h3>
+<h3 align="center">D1 adapter for Lunora .global() tables, wrapping the Sessions API for read-your-writes</h3>
 
 <!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
@@ -34,28 +34,28 @@
 
 ---
 
-The D1 adapter for Cirrus `.global()` tables. `D1Client` wraps a D1 binding and opens per-request sessions through the D1 Sessions API for read-your-writes consistency across replicas, while `MigrationRunner` applies SQL migrations sequentially. This is what backs cross-shard, globally-replicated tables in a Cirrus deployment.
+The D1 adapter for Lunora `.global()` tables. `D1Client` wraps a D1 binding and opens per-request sessions through the D1 Sessions API for read-your-writes consistency across replicas, while `MigrationRunner` applies SQL migrations sequentially. This is what backs cross-shard, globally-replicated tables in a Lunora deployment.
 
-Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
+Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
 ## Install
 
 ```sh
-npm install @cirrus/d1
+npm install @lunora/d1
 ```
 
 ```sh
-yarn add @cirrus/d1
+yarn add @lunora/d1
 ```
 
 ```sh
-pnpm add @cirrus/d1
+pnpm add @lunora/d1
 ```
 
 ## Usage
 
 ```ts
-import { D1Client } from "@cirrus/d1";
+import { D1Client } from "@lunora/d1";
 
 // env.DB is the D1 binding configured in wrangler.jsonc.
 const client = new D1Client(env.DB);
@@ -66,13 +66,13 @@ const session = client.withSession(bookmark);
 const { results } = await session.prepare("SELECT * FROM users WHERE email = ?").bind(email).all();
 ```
 
-> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/api/d1)**.
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/api/d1)**.
 
 ## Related
 
-- [`@cirrus/do`](https://www.npmjs.com/package/@cirrus/do) — the per-shard SQLite Durable Objects; `.global()` tables live here in D1 instead.
-- [`@cirrus/runtime`](https://www.npmjs.com/package/@cirrus/runtime) — the query coordinator that fans reads across shards and D1.
-- [`@cirrus/server`](https://www.npmjs.com/package/@cirrus/server) — `defineTable(...).global()` marks a table as D1-backed.
+- [`@lunora/do`](https://www.npmjs.com/package/@lunora/do) — the per-shard SQLite Durable Objects; `.global()` tables live here in D1 instead.
+- [`@lunora/runtime`](https://www.npmjs.com/package/@lunora/runtime) — the query coordinator that fans reads across shards and D1.
+- [`@lunora/server`](https://www.npmjs.com/package/@lunora/server) — `defineTable(...).global()` marks a table as D1-backed.
 
 ## Supported Node.js Versions
 
@@ -81,14 +81,14 @@ Here's [a post on why we think this is important](https://medium.com/the-node-js
 
 ## Contributing
 
-If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/lunora/issues) and check our [Contributing](https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
 > **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
 ## Credits
 
 - [Daniel Bannert](https://github.com/prisis)
-- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
+- [All Contributors](https://github.com/anolilab/lunora/graphs/contributors)
 
 ## Made with ❤️ at Anolilab
 
@@ -96,17 +96,17 @@ This is an open source project and will always remain free to use. If you think 
 
 ## License
 
-The Cirrus d1 package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The Lunora d1 package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
 
 <!-- badges -->
 
 [license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
-[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
-[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/d1?style=for-the-badge
-[npm-version]: https://www.npmjs.com/package/@cirrus/d1
-[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/d1?style=for-the-badge
-[npm-downloads]: https://www.npmjs.com/package/@cirrus/d1
+[license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@lunora/d1?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@lunora/d1
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@lunora/d1?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@lunora/d1
 [prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
-[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[prs-welcome]: https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md
 [typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
 [typescript-url]: https://www.typescriptlang.org/

@@ -1,4 +1,4 @@
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraProvider } from "@lunora/react";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
@@ -24,9 +24,9 @@ const createClient = (): MockClientHooks =>
     });
 
 const renderStudio = (mock: MockClientHooks) => (
-    <CirrusProvider client={mock.asClient}>
+    <LunoraProvider client={mock.asClient}>
         <Studio />
-    </CirrusProvider>
+    </LunoraProvider>
 );
 
 describe("command palette", () => {
@@ -34,7 +34,7 @@ describe("command palette", () => {
         expect.assertions(1);
 
         render(renderStudio(createClient()));
-        await screen.findByTestId("cirrus-studio");
+        await screen.findByTestId("lunora-studio");
 
         fireEvent.keyDown(document.body, { key: "k", metaKey: true });
 
@@ -45,7 +45,7 @@ describe("command palette", () => {
         expect.assertions(2);
 
         render(renderStudio(createClient()));
-        await screen.findByTestId("cirrus-studio");
+        await screen.findByTestId("lunora-studio");
 
         act(() => {
             openCommandPalette();
@@ -60,6 +60,6 @@ describe("command palette", () => {
 
         fireEvent.keyDown(input, { key: "Enter" });
 
-        await expect(screen.findByTestId("cirrus-security-advisor")).resolves.toBeDefined();
+        await expect(screen.findByTestId("lunora-security-advisor")).resolves.toBeDefined();
     });
 });

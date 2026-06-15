@@ -48,12 +48,12 @@ const DestinationRow = ({ destination }: { readonly destination: DestinationCard
 /**
  * Read-only **Log Drains** / log-export guidance.
  *
- * Cirrus deliberately does not implement durable log shipping — that is the
- * platform's job (see `LogBuffer` in `@cirrus/do`). So this panel is a guided
+ * Lunora deliberately does not implement durable log shipping — that is the
+ * platform's job (see `LogBuffer` in `@lunora/do`). So this panel is a guided
  * setup view, not a writable drain config: it explains the Cloudflare-native
  * forwarding paths (Workers Logs / Logpush / Tail Workers), deep-links to the
  * Cloudflare observability dashboard, and offers a client-side webhook test so
- * an operator can POST a sample Cirrus request-log envelope at a downstream
+ * an operator can POST a sample Lunora request-log envelope at a downstream
  * collector and confirm it is reachable. Nothing here is persisted server-side.
  */
 // eslint-disable-next-line import/prefer-default-export -- studio panels are named exports, mounted by name in studio.tsx
@@ -105,7 +105,7 @@ export const LogDrainsPanel = (): ReactElement => {
             function: "messages:list",
             outcome: "ok",
             shard: "root",
-            source: "cirrus",
+            source: "lunora",
             tablesRead: ["messages"],
             tablesWritten: [],
             ts: new Date().toISOString(),
@@ -153,7 +153,7 @@ export const LogDrainsPanel = (): ReactElement => {
             </div>
 
             <p className="text-sm text-muted-foreground" data-testid="drain-readonly-note">
-                {t("Cirrus does not ship logs itself — forwarding is handled by Cloudflare. Configure a destination below, then test your collector.")}
+                {t("Lunora does not ship logs itself — forwarding is handled by Cloudflare. Configure a destination below, then test your collector.")}
             </p>
 
             <section className="flex flex-col gap-3" data-testid="drain-destinations">
@@ -167,7 +167,7 @@ export const LogDrainsPanel = (): ReactElement => {
             <section className="rounded-md border border-border p-3" data-testid="drain-webhook">
                 <h3 className="mb-1 text-sm font-semibold">{t("Webhook test")}</h3>
                 <p className="mb-2 text-sm text-muted-foreground">
-                    {t("POST a sample Cirrus request-log envelope to your collector to confirm it is reachable.")}
+                    {t("POST a sample Lunora request-log envelope to your collector to confirm it is reachable.")}
                 </p>
 
                 <div className="flex flex-wrap items-center gap-2">

@@ -25,14 +25,14 @@ export class CodegenDiagnosticError extends Error {
  * location and whose `file`/`line`/`column` properties are set from the
  * ts-morph `Node`'s position in its source file.
  *
- * Message format: `@cirrus/codegen: &lt;detail> (&lt;file>:&lt;line>:&lt;column>)`
+ * Message format: `@lunora/codegen: &lt;detail> (&lt;file>:&lt;line>:&lt;column>)`
  */
 export const diagnosticAt = (node: Node, detail: string): CodegenDiagnosticError => {
     const sourceFile = node.getSourceFile();
     const file = sourceFile.getFilePath();
     const line = node.getStartLineNumber();
     const { column } = sourceFile.getLineAndColumnAtPos(node.getStart());
-    const message = `@cirrus/codegen: ${detail} (${file}:${line.toString()}:${column.toString()})`;
+    const message = `@lunora/codegen: ${detail} (${file}:${line.toString()}:${column.toString()})`;
 
     return new CodegenDiagnosticError(message, file, line, column);
 };

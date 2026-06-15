@@ -1,17 +1,17 @@
 /**
- * Integration test worker for `@cirrus/client`.
+ * Integration test worker for `@lunora/client`.
  *
- * Boots the real `@cirrus/runtime` (HTTP routing + shard forwarding) on top of
+ * Boots the real `@lunora/runtime` (HTTP routing + shard forwarding) on top of
  * a real `ShardDO` (WebSocket Hibernation API + SQLite-in-DO). The test uses
- * `SELF.fetch` against this worker to exercise `CirrusClient` end-to-end.
+ * `SELF.fetch` against this worker to exercise `LunoraClient` end-to-end.
  *
  * `TestShardDO` is a thin subclass that captures the most recent RPC call and
- * lets the test trigger a broadcast — that's the contract `CirrusClient`
+ * lets the test trigger a broadcast — that's the contract `LunoraClient`
  * actually depends on (function dispatch + delta fan-out).
  */
-import type { MutationDelta, ShardDOState } from "@cirrus/do";
-import { ShardDO } from "@cirrus/do";
-import { createWorker } from "@cirrus/runtime";
+import type { MutationDelta, ShardDOState } from "@lunora/do";
+import { ShardDO } from "@lunora/do";
+import { createWorker } from "@lunora/runtime";
 import { DurableObject } from "cloudflare:workers";
 
 interface Env {

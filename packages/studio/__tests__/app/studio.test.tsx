@@ -1,4 +1,4 @@
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
@@ -45,15 +45,15 @@ const createClient = (features?: Partial<StudioFeaturesResult>): MockClientHooks
     });
 
 const renderStudio = (mock: MockClientHooks) => (
-    <CirrusProvider client={mock.asClient}>
+    <LunoraProvider client={mock.asClient}>
         <Studio />
-    </CirrusProvider>
+    </LunoraProvider>
 );
 
 /**
  * Canonical key set of `StudioFeaturesResult`. This hand-mirror lives in
- * `@cirrus/studio` because it can't import `@cirrus/do`; the same tuple and guard
- * live in `@cirrus/do`'s `shard-do.admin.test.ts`. `lint:types` fails here if the
+ * `@lunora/studio` because it can't import `@lunora/do`; the same tuple and guard
+ * live in `@lunora/do`'s `shard-do.admin.test.ts`. `lint:types` fails here if the
  * studio copy of the type drifts from this tuple — keeping both packages' copies
  * of the wire contract in lockstep.
  */
@@ -94,7 +94,7 @@ describe("studio", () => {
         fireEvent.click(await screen.findByTestId("dash-rail-logs"));
         fireEvent.click(await screen.findByTestId("dash-tab-schedule"));
 
-        const scheduledJobs = await screen.findByTestId("cirrus-scheduled-jobs");
+        const scheduledJobs = await screen.findByTestId("lunora-scheduled-jobs");
 
         expect(scheduledJobs).toBeDefined();
     });
@@ -107,7 +107,7 @@ describe("studio", () => {
         fireEvent.click(await screen.findByTestId("dash-rail-advisors"));
         fireEvent.click(await screen.findByTestId("dash-tab-security"));
 
-        await expect(screen.findByTestId("cirrus-security-advisor")).resolves.toBeDefined();
+        await expect(screen.findByTestId("lunora-security-advisor")).resolves.toBeDefined();
     });
 
     it("switches the active panel when a sub-page is clicked", async () => {
@@ -118,9 +118,9 @@ describe("studio", () => {
         fireEvent.click(await screen.findByTestId("dash-rail-database"));
         fireEvent.click(await screen.findByTestId("dash-tab-migrations"));
 
-        await screen.findByTestId("cirrus-migrations");
+        await screen.findByTestId("lunora-migrations");
 
-        expect(screen.queryByTestId("cirrus-home")).toBeNull();
+        expect(screen.queryByTestId("lunora-home")).toBeNull();
     });
 
     it("collapses and re-expands the secondary nav from the rail toggle", async () => {
@@ -203,7 +203,7 @@ describe("studio", () => {
         expect(document.activeElement).toBe(auditTab);
     });
 
-    it("keeps the studio's StudioFeaturesResult mirror in lockstep with @cirrus/do's contract", () => {
+    it("keeps the studio's StudioFeaturesResult mirror in lockstep with @lunora/do's contract", () => {
         expect.assertions(2);
 
         // The compile-time guard (STUDIO_FEATURES_KEY_GUARD) fails the build on drift;

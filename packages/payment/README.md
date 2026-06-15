@@ -6,7 +6,7 @@
 
 </a>
 
-<h3 align="center">Provider-agnostic payments for Cirrus: Stripe-first adapter, webhook sync, and subscription/payment state machine</h3>
+<h3 align="center">Provider-agnostic payments for Lunora: Stripe-first adapter, webhook sync, and subscription/payment state machine</h3>
 
 <!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
@@ -34,16 +34,16 @@
 
 ---
 
-Payments for Cirrus. One provider-agnostic API over Stripe and Polar (the providers Convex ships components for) with webhook-driven sync into a durable store, an explicit payment/subscription state machine that makes duplicate and out-of-order webhooks safe by construction, outbound idempotency keys, and per-caller authorization on every mutation.
+Payments for Lunora. One provider-agnostic API over Stripe and Polar (the providers Convex ships components for) with webhook-driven sync into a durable store, an explicit payment/subscription state machine that makes duplicate and out-of-order webhooks safe by construction, outbound idempotency keys, and per-caller authorization on every mutation.
 
-Switching providers is a configuration change, not a rewrite — see the [design plan](https://github.com/anolilab/cirrus/blob/alpha/docs/plans/payment-package.md).
+Switching providers is a configuration change, not a rewrite — see the [design plan](https://github.com/anolilab/lunora/blob/alpha/docs/plans/payment-package.md).
 
-Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
+Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
 ## Install
 
 ```sh
-pnpm add @cirrus/payment stripe
+pnpm add @lunora/payment stripe
 ```
 
 `stripe` is an optional peer dependency — install only the provider SDK you use; the adapter takes the client by injection.
@@ -53,7 +53,7 @@ pnpm add @cirrus/payment stripe
 ```ts
 import Stripe from "stripe";
 
-import { createPayment, createStripeAdapter, MemoryPaymentStore } from "@cirrus/payment";
+import { createPayment, createStripeAdapter, MemoryPaymentStore } from "@lunora/payment";
 
 const payment = createPayment({
     adapter: createStripeAdapter({
@@ -81,13 +81,13 @@ routes: {
 }
 ```
 
-> This README covers the basics. For the full API and design rationale, see the **[plan](https://github.com/anolilab/cirrus/blob/alpha/docs/plans/payment-package.md)**.
+> This README covers the basics. For the full API and design rationale, see the **[plan](https://github.com/anolilab/lunora/blob/alpha/docs/plans/payment-package.md)**.
 
 ## Related
 
-- [`@cirrus/server`](https://www.npmjs.com/package/@cirrus/server) — call payments from actions; mirror tables into your schema.
-- [`@cirrus/scheduler`](https://www.npmjs.com/package/@cirrus/scheduler) — webhook side-effects and the reconciliation sweep.
-- [`@cirrus/auth`](https://www.npmjs.com/package/@cirrus/auth) — resolve the caller identity behind `referenceId`.
+- [`@lunora/server`](https://www.npmjs.com/package/@lunora/server) — call payments from actions; mirror tables into your schema.
+- [`@lunora/scheduler`](https://www.npmjs.com/package/@lunora/scheduler) — webhook side-effects and the reconciliation sweep.
+- [`@lunora/auth`](https://www.npmjs.com/package/@lunora/auth) — resolve the caller identity behind `referenceId`.
 
 ## Supported Node.js Versions
 
@@ -96,14 +96,14 @@ Here's [a post on why we think this is important](https://medium.com/the-node-js
 
 ## Contributing
 
-If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/lunora/issues) and check our [Contributing](https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
 > **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
 ## Credits
 
 - [Daniel Bannert](https://github.com/prisis)
-- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
+- [All Contributors](https://github.com/anolilab/lunora/graphs/contributors)
 
 ## Made with ❤️ at Anolilab
 
@@ -111,17 +111,17 @@ This is an open source project and will always remain free to use. If you think 
 
 ## License
 
-The Cirrus payment package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The Lunora payment package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
 
 <!-- badges -->
 
 [license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
-[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
-[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/payment?style=for-the-badge
-[npm-version]: https://www.npmjs.com/package/@cirrus/payment
-[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/payment?style=for-the-badge
-[npm-downloads]: https://www.npmjs.com/package/@cirrus/payment
+[license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@lunora/payment?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@lunora/payment
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@lunora/payment?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@lunora/payment
 [prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
-[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[prs-welcome]: https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md
 [typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
 [typescript-url]: https://www.typescriptlang.org/

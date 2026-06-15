@@ -1,15 +1,15 @@
 {
-    "name": "@cirrus/config",
+    "name": "@lunora/config",
     "version": "0.0.0",
     "license": "FSL-1.1-Apache-2.0",
-    "description": "Internal shared CLI + Vite config layer for Cirrus: wrangler.jsonc validation, binding inference, and .dev.vars scaffolding",
-    "homepage": "https://cirrus.dev",
+    "description": "Internal shared CLI + Vite config layer for Lunora: wrangler.jsonc validation, binding inference, and .dev.vars scaffolding",
+    "homepage": "https://lunora.sh",
     "bugs": {
-        "url": "https://github.com/anolilab/cirrus/issues"
+        "url": "https://github.com/anolilab/lunora/issues"
     },
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/anolilab/cirrus.git",
+        "url": "git+https://github.com/anolilab/lunora.git",
         "directory": "packages/config"
     },
     "author": {
@@ -17,7 +17,7 @@
         "email": "d.bannert@anolilab.de"
     },
     "keywords": [
-        "cirrus",
+        "lunora",
         "cloudflare",
         "workers",
         "durable-objects",
@@ -60,9 +60,9 @@
         "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
-        "@cirrus/codegen": "workspace:*",
-        "@cirrus/container": "workspace:*",
-        "@cirrus/seed": "workspace:*",
+        "@lunora/codegen": "workspace:*",
+        "@lunora/container": "workspace:*",
+        "@lunora/seed": "workspace:*",
         "es-module-lexer": "catalog:vite",
         "jsonc-parser": "catalog:vite",
         "ts-morph": "catalog:tooling"
@@ -76,10 +76,10 @@
         "vitest": "catalog:test"
     },
     "peerDependencies": {
-        "@cirrus/studio": "workspace:*"
+        "@lunora/studio": "workspace:*"
     },
     "peerDependenciesMeta": {
-        "@cirrus/studio": {
+        "@lunora/studio": {
             "optional": true
         }
     },

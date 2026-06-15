@@ -38,7 +38,7 @@ describe("createWorker — auth introspection endpoints", () => {
 
         const worker = createWorker({ adminToken: ADMIN_TOKEN, authIntrospector: introspector(), shardDO: noopNamespace });
 
-        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/auth/users", { method: "GET" }), {}, fakeContext);
+        const response = await worker.fetch(new Request("https://app.example/_lunora/admin/auth/users", { method: "GET" }), {}, fakeContext);
 
         expect(response.status).toBe(403);
     });
@@ -48,7 +48,7 @@ describe("createWorker — auth introspection endpoints", () => {
 
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace });
 
-        const response = await worker.fetch(authed("https://app.example/_cirrus/admin/auth/users"), {}, fakeContext);
+        const response = await worker.fetch(authed("https://app.example/_lunora/admin/auth/users"), {}, fakeContext);
 
         expect(response.status).toBe(400);
 
@@ -63,7 +63,7 @@ describe("createWorker — auth introspection endpoints", () => {
         const intro = introspector();
         const worker = createWorker({ adminToken: ADMIN_TOKEN, authIntrospector: intro, shardDO: noopNamespace });
 
-        const response = await worker.fetch(authed("https://app.example/_cirrus/admin/auth/users?limit=10&offset=5"), {}, fakeContext);
+        const response = await worker.fetch(authed("https://app.example/_lunora/admin/auth/users?limit=10&offset=5"), {}, fakeContext);
 
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toEqual(USERS);
@@ -76,7 +76,7 @@ describe("createWorker — auth introspection endpoints", () => {
         const intro = introspector();
         const worker = createWorker({ adminToken: ADMIN_TOKEN, authIntrospector: intro, shardDO: noopNamespace });
 
-        const response = await worker.fetch(authed("https://app.example/_cirrus/admin/auth/sessions?userId=u1&limit=20"), {}, fakeContext);
+        const response = await worker.fetch(authed("https://app.example/_lunora/admin/auth/sessions?userId=u1&limit=20"), {}, fakeContext);
 
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toEqual(SESSIONS);
@@ -89,7 +89,7 @@ describe("createWorker — auth introspection endpoints", () => {
         const intro = introspector();
         const worker = createWorker({ adminToken: ADMIN_TOKEN, authIntrospector: intro, shardDO: noopNamespace });
 
-        await worker.fetch(authed("https://app.example/_cirrus/admin/auth/sessions"), {}, fakeContext);
+        await worker.fetch(authed("https://app.example/_lunora/admin/auth/sessions"), {}, fakeContext);
 
         expect(intro.listSessions).toHaveBeenCalledWith({ limit: undefined, offset: undefined, userId: undefined });
     });
@@ -100,7 +100,7 @@ describe("createWorker — auth introspection endpoints", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, authIntrospector: introspector(), shardDO: noopNamespace });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/auth/users", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "POST" }),
+            new Request("https://app.example/_lunora/admin/auth/users", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "POST" }),
             {},
             fakeContext,
         );
@@ -148,7 +148,7 @@ describe("createWorker — auth admin mutation endpoints", () => {
         const admin = authAdmin();
         const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: admin, shardDO: noopNamespace });
 
-        await worker.fetch(authed("https://app.example/_cirrus/admin/auth/users?search=ann&filterField=role&filterValue=admin"), {}, fakeContext);
+        await worker.fetch(authed("https://app.example/_lunora/admin/auth/users?search=ann&filterField=role&filterValue=admin"), {}, fakeContext);
 
         expect(admin.listUsers).toHaveBeenCalledWith(expect.objectContaining({ filterField: "role", filterValue: "admin", search: "ann" }));
     });
@@ -159,7 +159,7 @@ describe("createWorker — auth admin mutation endpoints", () => {
         const admin = authAdmin();
         const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: admin, shardDO: noopNamespace });
 
-        const response = await worker.fetch(post("https://app.example/_cirrus/admin/auth/users/ban", { reason: "spam", userId: "u1" }), {}, fakeContext);
+        const response = await worker.fetch(post("https://app.example/_lunora/admin/auth/users/ban", { reason: "spam", userId: "u1" }), {}, fakeContext);
 
         expect(response.status).toBe(200);
         expect(admin.banUser).toHaveBeenCalledWith(expect.objectContaining({ reason: "spam", userId: "u1" }));
@@ -171,7 +171,7 @@ describe("createWorker — auth admin mutation endpoints", () => {
         const admin = authAdmin();
         const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: admin, shardDO: noopNamespace });
 
-        const response = await worker.fetch(post("https://app.example/_cirrus/admin/auth/sessions/revoke", { sessionId: "s1" }), {}, fakeContext);
+        const response = await worker.fetch(post("https://app.example/_lunora/admin/auth/sessions/revoke", { sessionId: "s1" }), {}, fakeContext);
 
         expect(response.status).toBe(200);
         expect(admin.revokeUserSession).toHaveBeenCalledWith({ sessionId: "s1" });
@@ -182,7 +182,7 @@ describe("createWorker — auth admin mutation endpoints", () => {
 
         const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: authAdmin(), shardDO: noopNamespace });
 
-        const response = await worker.fetch(post("https://app.example/_cirrus/admin/auth/users/ban", {}), {}, fakeContext);
+        const response = await worker.fetch(post("https://app.example/_lunora/admin/auth/users/ban", {}), {}, fakeContext);
         const body: { error: { code: string } } = await response.json();
 
         expect(response.status).toBe(400);
@@ -195,7 +195,7 @@ describe("createWorker — auth admin mutation endpoints", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: authAdmin(), shardDO: noopNamespace });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/auth/users/ban", { body: "{}", headers: { "content-type": "application/json" }, method: "POST" }),
+            new Request("https://app.example/_lunora/admin/auth/users/ban", { body: "{}", headers: { "content-type": "application/json" }, method: "POST" }),
             {},
             fakeContext,
         );
@@ -209,7 +209,7 @@ describe("createWorker — auth admin mutation endpoints", () => {
         // A read-only introspector satisfies the reads but has no `banUser`.
         const worker = createWorker({ adminToken: ADMIN_TOKEN, authIntrospector: introspector(), shardDO: noopNamespace });
 
-        const response = await worker.fetch(post("https://app.example/_cirrus/admin/auth/users/ban", { userId: "u1" }), {}, fakeContext);
+        const response = await worker.fetch(post("https://app.example/_lunora/admin/auth/users/ban", { userId: "u1" }), {}, fakeContext);
         const body: { error: { code: string } } = await response.json();
 
         expect(response.status).toBe(400);
@@ -221,7 +221,7 @@ describe("createWorker — auth admin mutation endpoints", () => {
 
         const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: authAdmin(), shardDO: noopNamespace });
 
-        const response = await worker.fetch(authed("https://app.example/_cirrus/admin/auth/users/ban"), {}, fakeContext);
+        const response = await worker.fetch(authed("https://app.example/_lunora/admin/auth/users/ban"), {}, fakeContext);
 
         expect(response.status).toBe(405);
     });
@@ -231,7 +231,7 @@ describe("createWorker — auth admin mutation endpoints", () => {
 
         const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: authAdmin(), shardDO: noopNamespace });
 
-        const response = await worker.fetch(authed("https://app.example/_cirrus/admin/auth/capabilities"), {}, fakeContext);
+        const response = await worker.fetch(authed("https://app.example/_lunora/admin/auth/capabilities"), {}, fakeContext);
         const body: { admin: boolean; organization: boolean } = await response.json();
 
         expect(body.admin).toBe(true);
@@ -244,7 +244,7 @@ describe("createWorker — auth admin mutation endpoints", () => {
         // `authAdmin()` has no `listOrganizations` (org plugin not configured).
         const worker = createWorker({ adminToken: ADMIN_TOKEN, authAdmin: authAdmin(), shardDO: noopNamespace });
 
-        const response = await worker.fetch(authed("https://app.example/_cirrus/admin/auth/organizations"), {}, fakeContext);
+        const response = await worker.fetch(authed("https://app.example/_lunora/admin/auth/organizations"), {}, fakeContext);
         const body: { error: { code: string } } = await response.json();
 
         expect(response.status).toBe(400);

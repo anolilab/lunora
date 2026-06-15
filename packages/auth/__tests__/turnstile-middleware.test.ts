@@ -1,4 +1,4 @@
-import type { Middleware } from "@cirrus/server";
+import type { Middleware } from "@lunora/server";
 import { describe, expect, it, vi } from "vitest";
 
 import type { FetchLike } from "../src/turnstile";
@@ -26,8 +26,8 @@ const jsonResponse = (body: unknown, init: { ok?: boolean } = {}): Response =>
 // eslint-disable-next-line sonarjs/no-hardcoded-ip -- fixed test fixture: the request body and assertion must share the same literal IP
 const TEST_REMOTE_IP = "9.9.9.9";
 
-/** Shape of a thrown structural `CirrusError` as read in the assertions. */
-interface CirrusErrorShape {
+/** Shape of a thrown structural `LunoraError` as read in the assertions. */
+interface LunoraErrorShape {
     code?: string;
     name?: string;
     status?: number;
@@ -79,9 +79,9 @@ describe("verifyTurnstileMiddleware", () => {
         const fetch = vi.fn<FetchLike>(async () => jsonResponse({ success: true }));
         const mw = verifyTurnstileMiddleware<Ctx>({ fetch, secret: "sek", token: (c) => c.turnstileToken });
 
-        const error = (await run(mw, {}).catch((error_: unknown) => error_)) as CirrusErrorShape;
+        const error = (await run(mw, {}).catch((error_: unknown) => error_)) as LunoraErrorShape;
 
-        expect(error.name).toBe("CirrusError");
+        expect(error.name).toBe("LunoraError");
         expect(error.code).toBe("FORBIDDEN");
         expect(fetch).not.toHaveBeenCalled();
     });
@@ -92,7 +92,7 @@ describe("verifyTurnstileMiddleware", () => {
         const fetch = vi.fn<FetchLike>(async () => jsonResponse({ "error-codes": ["invalid-input-response"], success: false }));
         const mw = verifyTurnstileMiddleware<Ctx>({ fetch, secret: "sek", token: (c) => c.turnstileToken });
 
-        const error = (await run(mw, { turnstileToken: "bad" }).catch((error_: unknown) => error_)) as CirrusErrorShape;
+        const error = (await run(mw, { turnstileToken: "bad" }).catch((error_: unknown) => error_)) as LunoraErrorShape;
 
         expect(error.code).toBe("FORBIDDEN");
         expect(error.status).toBe(403);
@@ -107,7 +107,7 @@ describe("verifyTurnstileMiddleware", () => {
         const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
         const mw = verifyTurnstileMiddleware<Ctx>({ fetch, secret: "sek", token: (c) => c.turnstileToken });
 
-        const error = (await run(mw, { turnstileToken: "good" }).catch((error_: unknown) => error_)) as CirrusErrorShape;
+        const error = (await run(mw, { turnstileToken: "good" }).catch((error_: unknown) => error_)) as LunoraErrorShape;
 
         expect(error.status).toBe(403);
         expect(consoleError).toHaveBeenCalledTimes(1);

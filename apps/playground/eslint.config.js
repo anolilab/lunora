@@ -1,6 +1,6 @@
 import { createConfig } from "@anolilab/eslint-config";
 
-// Self-contained flat config for @cirrus/playground. Each package owns its own
+// Self-contained flat config for @lunora/playground. Each package owns its own
 // setup (no shared local preset); rules build on @anolilab/eslint-config.
 export default createConfig(
     {
@@ -63,7 +63,7 @@ export default createConfig(
                 },
             ],
             // Leading-underscore identifiers that are framework API by design: _id /
-            // _creationTime are the public document fields; __cirrus* are internal markers;
+            // _creationTime are the public document fields; __lunora* are internal markers;
             // _meta/__doc__ are data-model internals; __name is a bundler helper. Accidental
             // dangles (and the trailing-underscore variety) are still flagged.
             "no-underscore-dangle": [
@@ -79,12 +79,12 @@ export default createConfig(
                         "_chunk",
                         "__doc__",
                         "__name",
-                        "__cirrusRef",
-                        "__cirrusVisibility",
-                        "__cirrusProcedure",
-                        "__cirrusCtx",
-                        "__cirrusTable",
-                        "__cirrusPreloaded",
+                        "__lunoraRef",
+                        "__lunoraVisibility",
+                        "__lunoraProcedure",
+                        "__lunoraCtx",
+                        "__lunoraTable",
+                        "__lunoraPreloaded",
                     ],
                 },
             ],
@@ -151,22 +151,22 @@ export default createConfig(
         },
     },
     // ── App-scoped allowances (example app; not blanket rule-off) ──────────────
-    // Cirrus function modules (cirrus/*.ts) and the worker entry export *named*
+    // Lunora function modules (lunora/*.ts) and the worker entry export *named*
     // queries/mutations/actions and the DO/handler bindings by design — codegen
     // and wrangler reference them by name, so a single-export file is still
     // idiomatically a named export, and the worker entry interleaves type/binding
     // exports with logic. Defaulting them would break the by-name references.
     {
-        files: ["cirrus/**/*.ts", "src/**/*.{ts,tsx}"],
+        files: ["lunora/**/*.ts", "src/**/*.{ts,tsx}"],
         rules: {
             "import/exports-last": "off",
             "import/prefer-default-export": "off",
         },
     },
-    // Cirrus function modules: `void expr` marks a validated arg that's
+    // Lunora function modules: `void expr` marks a validated arg that's
     // intentionally forwarded by the client rather than read server-side.
     {
-        files: ["cirrus/**/*.ts"],
+        files: ["lunora/**/*.ts"],
         rules: {
             "no-void": "off",
             "sonarjs/void-use": "off",

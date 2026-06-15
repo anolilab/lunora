@@ -1,10 +1,10 @@
 "use client";
 
-import type { ArgsOf, FunctionReference, OptimisticUpdate, ReturnOf } from "@cirrus/client";
+import type { ArgsOf, FunctionReference, OptimisticUpdate, ReturnOf } from "@lunora/client";
 import { useMutation as useTanStackMutation } from "@tanstack/react-query";
 import { useCallback, useRef, useState } from "react";
 
-import { useCirrus } from "./cirrus-provider";
+import { useLunora } from "./lunora-provider";
 import type { UseMutationCallOptions } from "./types";
 
 type CallOptions<F extends FunctionReference> = UseMutationCallOptions<unknown, unknown, ArgsOf<F>>;
@@ -50,11 +50,11 @@ interface MutationHook<F extends FunctionReference> {
  *
  * Optimistic updates stay client-owned: the `optimistic` / `optimisticUpdate`
  * call options pass straight through to `client.mutation`, which applies and
- * rolls them back against the Cirrus subscription cache (Convex parity) — not
+ * rolls them back against the Lunora subscription cache (Convex parity) — not
  * through TanStack's `onMutate`.
  */
 const useMutation = <F extends FunctionReference>(function_: F): MutationHook<F> => {
-    const client = useCirrus();
+    const client = useLunora();
 
     // Local, ref-counted pending across overlapping calls of this hook instance.
     const pendingCountRef = useRef(0);

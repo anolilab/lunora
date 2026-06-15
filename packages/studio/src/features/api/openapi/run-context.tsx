@@ -1,4 +1,4 @@
-import { useCirrus } from "@cirrus/react";
+import { useLunora } from "@lunora/react";
 import type { ReactElement, ReactNode } from "react";
 import { createContext, use, useCallback, useMemo, useState } from "react";
 
@@ -51,7 +51,7 @@ interface OperationRunProviderProps {
 
 /**
  * Owns the live "try it" state for one operation and shares it with both the
- * request console (centre) and the response panel (right rail). Cirrus RPC
+ * request console (centre) and the response panel (right rail). Lunora RPC
  * operations dispatch through the kind-appropriate client method
  * (`query` / `mutation` / `action`) by `functionPath`; a plain REST route falls
  * back to a `fetch` of its path. The provider is keyed on the operation by its
@@ -63,7 +63,7 @@ interface OperationRunProviderProps {
  */
 const OperationRunProvider = ({ children, operation }: OperationRunProviderProps): ReactElement => {
     const t = useT();
-    const client = useCirrus();
+    const client = useLunora();
 
     const [argsText, setArgsText] = useState<string>(() => seedArgs(operation));
     const [shardKey, setShardKey] = useState<string>("");

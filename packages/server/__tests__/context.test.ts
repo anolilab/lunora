@@ -38,7 +38,7 @@ describe("queryCtx.storage / MutationCtx.storage", () => {
     it("does NOT expose write operations on QueryCtx.storage at the type level", () => {
         expect.assertions(1);
 
-        // `upload` lives only on the full `cirrus-storage` Storage / on
+        // `upload` lives only on the full `lunora-storage` Storage / on
         // `ActionCtx`. Asserting at compile-time that `QueryCtx["storage"]`
         // never grows it back guards against accidental regressions where
         // someone widens the type back to the full surface.

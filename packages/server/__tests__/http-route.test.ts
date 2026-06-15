@@ -1,17 +1,17 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 
-import type { CirrusRouteHandler, HttpActionCtx as HttpActionContext } from "../src/index";
+import type { LunoraRouteHandler, HttpActionCtx as HttpActionContext } from "../src/index";
 import { httpRoute, httpRouter, v } from "../src/index";
 
 const context = {} as HttpActionContext;
 
 /** Mount a built route on a fresh hono app at `method path` and dispatch `request` with an injected ctx. */
-const dispatch = async (route: CirrusRouteHandler, method: string, path: string, request: Request): Promise<Response> => {
+const dispatch = async (route: LunoraRouteHandler, method: string, path: string, request: Request): Promise<Response> => {
     const app = httpRouter();
 
     app.on(method, path, route);
 
-    return app.fetch(request, { __cirrusCtx: context });
+    return app.fetch(request, { __lunoraCtx: context });
 };
 
 describe("httpRoute terminal shape", () => {
@@ -291,7 +291,7 @@ describe("httpRoute composition", () => {
         const app = httpRouter();
 
         app.get("/api/ctx", route);
-        await app.fetch(new Request("https://x/api/ctx"), { __cirrusCtx: marker });
+        await app.fetch(new Request("https://x/api/ctx"), { __lunoraCtx: marker });
 
         expect(seen[0]).toBe(marker);
     });

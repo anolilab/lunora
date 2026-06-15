@@ -1,4 +1,4 @@
-import { useCirrus } from "@cirrus/react";
+import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -67,20 +67,20 @@ const badgeVariant = (state: string): "default" | "destructive" | "outline" => {
     return ALERT_STATES.has(state) ? "destructive" : "outline";
 };
 
-const readRows = async (client: ReturnType<typeof useCirrus>, table: string, limit: number): Promise<Row[]> => {
+const readRows = async (client: ReturnType<typeof useLunora>, table: string, limit: number): Promise<Row[]> => {
     const page = (await client.query(READ_TABLE_PAGE, { filters: [], limit, offset: 0, orderBy: [], search: "", table }, callOptions(""))) as TablePage;
 
     return page.rows;
 };
 
 /**
- * Read-only operational view of the `@cirrus/payment` sync store: webhook-synced
+ * Read-only operational view of the `@lunora/payment` sync store: webhook-synced
  * subscriptions (with state) and the recent webhook `events` log. Backed by the
  * generic `readTablePage` admin RPC — payment tables are ordinary app tables, so
  * no payment-specific server endpoint is needed.
  */
 const PaymentsPanel = ({ limit = 100 }: PaymentsPanelProps): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const t = useT();
 
     const [subscriptions, setSubscriptions] = useState<Row[]>([]);

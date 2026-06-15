@@ -1,6 +1,6 @@
 import { createConfig } from "@anolilab/eslint-config";
 
-// Self-contained flat config for @cirrus/astro. Each package owns its own
+// Self-contained flat config for @lunora/astro. Each package owns its own
 // setup (no shared local preset); rules build on @anolilab/eslint-config.
 export default createConfig(
     {
@@ -14,7 +14,7 @@ export default createConfig(
         // `astro` in this package's deps (here: the optional `astro` peer). That
         // block imports `eslint-plugin-astro`, which the monorepo doesn't install —
         // and this package ships NO `.astro` files (only TS sources + a re-export
-        // of `@cirrus/client/ssr`). Disable it explicitly so lint doesn't fail to resolve
+        // of `@lunora/client/ssr`). Disable it explicitly so lint doesn't fail to resolve
         // a plugin we don't need. (The Astro *templates* live under `templates/`,
         // which is outside any workspace package and isn't linted here.)
         astro: false,
@@ -46,13 +46,13 @@ export default createConfig(
             // Web platform globals present in the workerd + browser deploy runtimes (and
             // modern Node); eslint-plugin-n's Node-version data flags them conservatively.
             "n/no-unsupported-features/node-builtins": ["error", { ignores: ["crypto", "CryptoKey", "SubtleCrypto"] }],
-            // Leading-underscore identifiers that are framework API by design: __cirrus*
+            // Leading-underscore identifiers that are framework API by design: __lunora*
             // are internal markers; _id / _creationTime are the public document fields.
             // Accidental dangles (and the trailing-underscore variety) are still flagged.
             "no-underscore-dangle": [
                 "error",
                 {
-                    allow: ["_id", "_creationTime", "__cirrusRef", "__cirrusPreloaded"],
+                    allow: ["_id", "_creationTime", "__lunoraRef", "__lunoraPreloaded"],
                 },
             ],
         },

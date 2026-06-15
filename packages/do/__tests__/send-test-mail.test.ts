@@ -45,7 +45,7 @@ describe("shardDO sendTestMail admin RPC", () => {
     it("records a synthetic message readable via readCapturedMail", async () => {
         expect.assertions(6);
 
-        const shard = new TestMailShardDO(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new TestMailShardDO(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(adminRequest({}));
 
@@ -58,15 +58,15 @@ describe("shardDO sendTestMail admin RPC", () => {
         const { entries } = readCapturedMail(database.sql);
 
         expect(entries).toHaveLength(1);
-        expect(entries[0]?.subject).toBe("Cirrus test email");
-        expect(entries[0]?.to).toBe("test@cirrus.dev");
+        expect(entries[0]?.subject).toBe("Lunora test email");
+        expect(entries[0]?.to).toBe("test@lunora.sh");
         expect(entries[0]?.html ?? "").toContain("https://example.test/verify?token=demo");
     });
 
     it("honors a custom `to`", async () => {
         expect.assertions(1);
 
-        const shard = new TestMailShardDO(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new TestMailShardDO(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         await shard.fetch(adminRequest({ to: "alice@example.test" }));
 
@@ -78,7 +78,7 @@ describe("shardDO sendTestMail admin RPC", () => {
     it("rejects a non-string `to` with a 400", async () => {
         expect.assertions(1);
 
-        const shard = new TestMailShardDO(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new TestMailShardDO(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(adminRequest({ to: 42 }));
 

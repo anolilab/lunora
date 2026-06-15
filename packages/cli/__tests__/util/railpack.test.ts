@@ -43,10 +43,10 @@ describe(buildRailpackImages, () => {
             ],
         });
 
-        expect(result.builtTags).toStrictEqual(["cirrus-transcoder:build", "cirrus-image-resizer:build"]);
+        expect(result.builtTags).toStrictEqual(["lunora-transcoder:build", "lunora-image-resizer:build"]);
         expect(calls).toHaveLength(4);
-        expect(calls[0]?.descriptor).toMatchObject({ args: ["build", "./services/transcoder", "--name", "cirrus-transcoder:build"], command: "railpack" });
-        expect(calls[1]?.descriptor).toMatchObject({ args: ["exec", "wrangler", "containers", "push", "cirrus-transcoder:build"], command: "pnpm" });
+        expect(calls[0]?.descriptor).toMatchObject({ args: ["build", "./services/transcoder", "--name", "lunora-transcoder:build"], command: "railpack" });
+        expect(calls[1]?.descriptor).toMatchObject({ args: ["exec", "wrangler", "containers", "push", "lunora-transcoder:build"], command: "pnpm" });
     });
 
     it("blocks when Railpack/BuildKit is unavailable, without spawning", async () => {

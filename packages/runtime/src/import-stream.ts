@@ -10,7 +10,7 @@
  */
 import { MAX_BODY_BYTES } from "./body-readers";
 import type { ShardingInfo, WorkerOptions } from "./create-worker";
-import { CirrusError } from "./errors";
+import { LunoraError } from "./errors";
 
 interface AdminBatch {
     rows: { doc: Record<string, unknown>; table: string }[];
@@ -97,7 +97,7 @@ interface BucketedImport {
  */
 const bucketImportStream = async (request: Request, options: WorkerOptions, defaultShard: string): Promise<BucketedImport> => {
     if (!request.body) {
-        throw new CirrusError("Import endpoint requires a request body", { code: "BAD_REQUEST", status: 400 });
+        throw new LunoraError("Import endpoint requires a request body", { code: "BAD_REQUEST", status: 400 });
     }
 
     const errors: ImportRowError[] = [];
@@ -183,7 +183,7 @@ const bucketImportStream = async (request: Request, options: WorkerOptions, defa
                 // eslint-disable-next-line no-await-in-loop -- one-shot cleanup on the over-budget abort path before throwing
                 await reader.cancel().catch(() => {});
 
-                throw new CirrusError("Body too large", { code: "PAYLOAD_TOO_LARGE", status: 413 });
+                throw new LunoraError("Body too large", { code: "PAYLOAD_TOO_LARGE", status: 413 });
             }
         }
 
@@ -262,7 +262,7 @@ const streamingImport = async (
         const coordinator = options.queryCoordinator;
 
         if (!coordinator) {
-            throw new CirrusError("Import endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
+            throw new LunoraError("Import endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
         }
 
         const result = await coordinator.orchestrateImport(options.shardDO, {

@@ -10,10 +10,10 @@
  * arrive, not only from the header. Each reader aborts with a 413 the moment
  * cumulative bytes exceed the budget, before the oversized payload is buffered.
  */
-import { CirrusError } from "./errors";
+import { LunoraError } from "./errors";
 
 /**
- * The maximum request-body size (1 MiB) the worker's `/_cirrus/*` plane accepts.
+ * The maximum request-body size (1 MiB) the worker's `/_lunora/*` plane accepts.
  * Enforced in two layers: a cheap (forgeable) `Content-Length` fast-path at the
  * entry point, and an authoritative byte budget applied while reading the body —
  * `parseEnvelope`, `parseMigrateRequest`, `parseExportBody`, and `streamingImport`
@@ -60,7 +60,7 @@ const readBodyTextWithLimit = async (request: Request, limit: number = MAX_BODY_
                 // eslint-disable-next-line no-await-in-loop -- one-shot cleanup on the over-budget abort path before throwing
                 await reader.cancel().catch(() => {});
 
-                throw new CirrusError("Body too large", { code: "PAYLOAD_TOO_LARGE", status: 413 });
+                throw new LunoraError("Body too large", { code: "PAYLOAD_TOO_LARGE", status: 413 });
             }
 
             text += decoder.decode(value, { stream: true });
@@ -105,7 +105,7 @@ const readBodyBytesWithLimit = async (request: Request, limit: number = MAX_BODY
                 // eslint-disable-next-line no-await-in-loop -- one-shot cleanup on the over-budget abort path before throwing
                 await reader.cancel().catch(() => {});
 
-                throw new CirrusError("Body too large", { code: "PAYLOAD_TOO_LARGE", status: 413 });
+                throw new LunoraError("Body too large", { code: "PAYLOAD_TOO_LARGE", status: 413 });
             }
 
             chunks.push(value);
@@ -137,11 +137,11 @@ const readJsonBodyWithLimit = async (request: Request): Promise<Record<string, u
 
         return text === "" ? {} : (JSON.parse(text) as Record<string, unknown>);
     } catch (error) {
-        if (error instanceof CirrusError) {
+        if (error instanceof LunoraError) {
             throw error;
         }
 
-        throw new CirrusError("Request body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
+        throw new LunoraError("Request body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
     }
 };
 

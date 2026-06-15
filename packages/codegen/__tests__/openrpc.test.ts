@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { FunctionIR } from "../src/ir";
 import { emitOpenRpc, OPENRPC_VERSION } from "../src/openrpc";
-import { CIRRUS_ERROR_CODES } from "../src/schema-ir";
+import { LUNORA_ERROR_CODES } from "../src/schema-ir";
 
 const makeFunction = (overrides: Partial<FunctionIR> = {}): FunctionIR => {
     return {
@@ -20,7 +20,7 @@ interface OpenRpcMethod {
     name: string;
     params: { name: string; required: boolean; schema: Record<string, unknown> }[];
     result: { name: string; schema: Record<string, unknown> };
-    "x-cirrus-function-kind"?: string;
+    "x-lunora-function-kind"?: string;
     "x-tags"?: { name: string }[];
 }
 
@@ -37,7 +37,7 @@ describe("emitOpenRpc", () => {
         const document = JSON.parse(emitOpenRpc({ functions: [] })) as OpenRpcDocument;
 
         expect(document.openrpc).toBe(OPENRPC_VERSION);
-        expect(document.info.title).toBe("Cirrus RPC");
+        expect(document.info.title).toBe("Lunora RPC");
         expect(document.info.version).toBe("0.0.0");
         expect(document.methods).toStrictEqual([]);
     });
@@ -100,13 +100,13 @@ describe("emitOpenRpc", () => {
         expect(document.methods.some((method) => method.name === "messages:purge" || method.name === "messages:feed")).toBe(false);
     });
 
-    it("enumerates the standard Cirrus error codes under each method's errors", () => {
+    it("enumerates the standard Lunora error codes under each method's errors", () => {
         expect.assertions(3);
 
         const document = JSON.parse(emitOpenRpc({ functions: [makeFunction()] })) as OpenRpcDocument;
         const errors = document.methods[0]!.errors ?? [];
 
-        expect(errors).toHaveLength(CIRRUS_ERROR_CODES.length);
+        expect(errors).toHaveLength(LUNORA_ERROR_CODES.length);
 
         const codes = errors.map((error) => error.data.code);
 
@@ -122,7 +122,7 @@ describe("emitOpenRpc", () => {
         ) as OpenRpcDocument;
         const method = document.methods[0]!;
 
-        expect(method["x-cirrus-function-kind"]).toBe("mutation");
+        expect(method["x-lunora-function-kind"]).toBe("mutation");
         // `rooms/index` collapses to the `rooms` namespace.
         expect(method["x-tags"]).toStrictEqual([{ name: "rooms" }]);
     });

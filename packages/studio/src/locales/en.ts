@@ -14,8 +14,8 @@ import type { Messages } from "@lingui/core";
  * register it via `createStudioI18n(locale, { en: enMessages, de: deMessages })`.
  */
 const MESSAGE_IDS = [
-    "Cirrus AI rules aren't installed.",
-    "lets your coding agent use Cirrus correctly.",
+    "Lunora AI rules aren't installed.",
+    "lets your coding agent use Lunora correctly.",
     "Dismiss",
     ", changed",
     "(no subject)",
@@ -69,7 +69,7 @@ const MESSAGE_IDS = [
     "Cc",
     "changed",
     "Chart widgets backed by saved read-only SQL queries.",
-    "Cirrus surfaces slow functions, error spikes, and cache problems here.",
+    "Lunora surfaces slow functions, error spikes, and cache problems here.",
     "Clear",
     "Clear inbox",
     "Columns unavailable",
@@ -263,7 +263,7 @@ const MESSAGE_IDS = [
     "Inspect access policies per table, and probe a function as any identity.",
     // Policy/role scaffolder (plan 025 Item 3) — local-dev only.
     "Scaffold access rules",
-    "Writes a new deny-by-default policy file under cirrus/, or wires one into a procedure, then reruns codegen. Local dev only.",
+    "Writes a new deny-by-default policy file under lunora/, or wires one into a procedure, then reruns codegen. Local dev only.",
     "New policy file",
     "Wire into a procedure",
     "Policy name",
@@ -506,7 +506,7 @@ const MESSAGE_IDS = [
     "Nothing to report for this deployment.",
     "Security and performance findings for your deployment.",
     "Review admin gates, credentials, and log redaction.",
-    "Cirrus checks admin-token strength, the live-subscription gate, and request-log redaction here.",
+    "Lunora checks admin-token strength, the live-subscription gate, and request-log redaction here.",
     "No security issues detected.",
     "Weak admin token",
     "Live admin subscriptions are ungated",
@@ -517,7 +517,7 @@ const MESSAGE_IDS = [
     "Apply index on {table}",
     "Apply?",
     "CREATE INDEX SQL copied to clipboard.",
-    "CIRRUS_WS_BEARER is unset, so the WebSocket upgrade gate is open: live admin subscriptions need no credential. Set it to gate them like the HTTP admin RPCs.",
+    "LUNORA_WS_BEARER is unset, so the WebSocket upgrade gate is open: live admin subscriptions need no credential. Set it to gate them like the HTTP admin RPCs.",
     "This worker reports a development environment, so the request log stores raw args and identity. Confirm it isn't a mislabeled production deploy.",
     // Audit panel.
     "Audit",
@@ -654,7 +654,7 @@ const MESSAGE_IDS = [
     "Log drains",
     "Forward logs to Logpush, Tail Workers, or a webhook collector.",
     "Cloudflare destinations",
-    "Cirrus does not ship logs itself — forwarding is handled by Cloudflare. Configure a destination below, then test your collector.",
+    "Lunora does not ship logs itself — forwarding is handled by Cloudflare. Configure a destination below, then test your collector.",
     "Logpush",
     "Stream every request log to R2, a SIEM, or a third-party log service.",
     "Tail Workers",
@@ -662,7 +662,7 @@ const MESSAGE_IDS = [
     "Workers Logs",
     "Retain and query recent request logs directly in Cloudflare's dashboard.",
     "Webhook test",
-    "POST a sample Cirrus request-log envelope to your collector to confirm it is reachable.",
+    "POST a sample Lunora request-log envelope to your collector to confirm it is reachable.",
     "https://example.com/logs",
     "Send test event",
     "Delivered — status {status} in {latency}ms",
@@ -713,7 +713,7 @@ const MESSAGE_IDS = [
     "Snippets",
     "Couldn't load the OpenAPI spec: {message}",
     "No OpenAPI spec configured",
-    "Run `cirrus codegen` and wire `_generated/openapi.json` to the worker to render the API reference here.",
+    "Run `lunora codegen` and wire `_generated/openapi.json` to the worker to render the API reference here.",
     // API tab — shared native reference UI (OpenAPI + OpenRPC).
     "API operations",
     "Filter operations",
@@ -744,7 +744,7 @@ const MESSAGE_IDS = [
     "JSON-RPC request",
     "Couldn't load the OpenRPC spec: {message}",
     "No OpenRPC spec configured",
-    "Run `cirrus codegen --api-spec openrpc` and wire `_generated/openrpc.json` to the worker to render the OpenRPC reference here.",
+    "Run `lunora codegen --api-spec openrpc` and wire `_generated/openrpc.json` to the worker to render the OpenRPC reference here.",
     // File browser — records↔files join (PLAN3 §1.3).
     "used by",
     "Orphan",
@@ -806,7 +806,7 @@ const MESSAGE_IDS = [
     "Binding",
     "Class",
     "No workflows defined",
-    "No defineWorkflow is declared in cirrus/workflows.ts in this deployment. Add one to run a durable, multi-step workflow.",
+    "No defineWorkflow is declared in lunora/workflows.ts in this deployment. Add one to run a durable, multi-step workflow.",
     "Workflows are declared in code with defineWorkflow and run as durable Cloudflare Workflows. This view is read-only.",
     "Workflows are declared in code with defineWorkflow and run as durable Cloudflare Workflows. Start an instance and observe its status below.",
     "Start instance",
@@ -878,7 +878,7 @@ const MESSAGE_IDS = [
     "Schema updated.",
     "Codegen reported diagnostics:",
     "Editing the schema is only available in local dev.",
-    "Adds a table, column, or index to cirrus/schema.ts and reruns codegen.",
+    "Adds a table, column, or index to lunora/schema.ts and reruns codegen.",
 ] as const;
 
 /** A known studio message id — one of the entries in {@link MESSAGE_IDS}. */

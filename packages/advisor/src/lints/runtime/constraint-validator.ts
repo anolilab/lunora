@@ -52,7 +52,7 @@ const checkFkRelation = (
         }
 
         // Safe coercion: fkValue originates from a SQLite row; FK id columns are
-        // always strings in Cirrus (v.id()), so String() is correct here.
+        // always strings in Lunora (v.id()), so String() is correct here.
         // eslint-disable-next-line @typescript-eslint/no-base-to-string -- id column is always a primitive string from SQLite
         const fkString = String(fkValue);
 

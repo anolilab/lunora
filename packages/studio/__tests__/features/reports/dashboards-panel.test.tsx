@@ -1,4 +1,4 @@
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it } from "vitest";
@@ -30,9 +30,9 @@ const numericMock = (): MockClientHooks =>
     });
 
 const renderPanel = (mock: MockClientHooks): ReactElement => (
-    <CirrusProvider client={mock.asClient}>
+    <LunoraProvider client={mock.asClient}>
         <DashboardsPanel />
-    </CirrusProvider>
+    </LunoraProvider>
 );
 
 const addWidget = (title: string, sql: string): void => {
@@ -108,7 +108,7 @@ describe("dashboardsPanel", () => {
         addWidget("Persisted", "SELECT author, COUNT(*) AS messages FROM messages GROUP BY author;");
         await screen.findByTestId("sql-chart");
 
-        const stored = JSON.parse(localStorage.getItem("cirrus-studio-dashboards") ?? "[]") as unknown[];
+        const stored = JSON.parse(localStorage.getItem("lunora-studio-dashboards") ?? "[]") as unknown[];
 
         expect(stored).toHaveLength(1);
 

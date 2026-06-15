@@ -1,9 +1,9 @@
 import type { Dialog, Request, Route } from "@playwright/test";
 
-import { expect, test } from "../fixtures/cirrus.js";
+import { expect, test } from "../fixtures/lunora.js";
 
 /**
- * Optimistic update E2E — verifies `useMutation` in `@cirrus/react` shows
+ * Optimistic update E2E — verifies `useMutation` in `@lunora/react` shows
  * the pending row immediately, swaps to a real id on ack, and rolls back on
  * server rejection.
  *
@@ -55,10 +55,10 @@ test("failed mutation rolls back the optimistic value", async ({ signedInPage })
     await signedInPage.getByRole("button", { name: "+ New channel" }).click();
     await signedInPage.getByRole("button", { name: "rollback-channel" }).click();
 
-    // Force the next /_cirrus/rpc call to fail. Playwright's request
+    // Force the next /_lunora/rpc call to fail. Playwright's request
     // interception is route-scoped to the page, so we can simulate a server
     // 500 without touching real state.
-    await signedInPage.route("**/_cirrus/rpc", async (route: Route, request: Request) => {
+    await signedInPage.route("**/_lunora/rpc", async (route: Route, request: Request) => {
         const body = request.postData() ?? "";
 
         if (body.includes('"messages:send"')) {

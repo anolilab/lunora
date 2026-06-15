@@ -7,7 +7,7 @@ import type { MailTransport, SendPayload } from "./types";
 /**
  * Sends a raw RFC 822 message through a Worker's Email send binding. The Workers
  * runtime owns the binding, so the caller supplies this thin callback — keeping
- * `@cirrus/mail` free of a `cloudflare:email` import and unit-testable. Wire it
+ * `@lunora/mail` free of a `cloudflare:email` import and unit-testable. Wire it
  * in your project as:
  *
  * ```ts

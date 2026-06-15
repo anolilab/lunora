@@ -1,5 +1,5 @@
-import type { AuthSession } from "@cirrus/client";
-import { useCirrus } from "@cirrus/react";
+import type { AuthSession } from "@lunora/client";
+import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 
@@ -22,7 +22,7 @@ const SESSION_LIMIT = 200;
  */
 // eslint-disable-next-line import/prefer-default-export -- studio panels are named exports, mounted by name in studio.tsx
 export const AuthSessionsPanel = (): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const t = useT();
 
     const [sessions, setSessions] = useState<AuthSession[] | null>(null);

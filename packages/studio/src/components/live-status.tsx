@@ -12,7 +12,7 @@ export interface LiveErrorProps {
 /**
  * Inline "Live unavailable" notice for a panel whose admin subscription is
  * always on. It surfaces a rejected subscription — e.g. the client carries no
- * admin `wsToken` because `CIRRUS_ADMIN_TOKEN` isn't set — so the user knows why
+ * admin `wsToken` because `LUNORA_ADMIN_TOKEN` isn't set — so the user knows why
  * the panel has stopped updating. The one-shot seed remains the source of truth;
  * the panel simply won't receive live pushes. Renders nothing when healthy.
  */

@@ -1,15 +1,15 @@
 {
-    "name": "@cirrus/studio",
+    "name": "@lunora/studio",
     "version": "0.0.0",
     "license": "FSL-1.1-Apache-2.0",
-    "description": "The Cirrus Studio: a local admin UI for your schema, data, logs, and advisors",
-    "homepage": "https://cirrus.dev",
+    "description": "The Lunora Studio: a local admin UI for your schema, data, logs, and advisors",
+    "homepage": "https://lunora.sh",
     "bugs": {
-        "url": "https://github.com/anolilab/cirrus/issues"
+        "url": "https://github.com/anolilab/lunora/issues"
     },
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/anolilab/cirrus.git",
+        "url": "git+https://github.com/anolilab/lunora.git",
         "directory": "packages/studio"
     },
     "author": {
@@ -17,7 +17,7 @@
         "email": "d.bannert@anolilab.de"
     },
     "keywords": [
-        "cirrus",
+        "lunora",
         "cloudflare",
         "workers",
         "durable-objects",
@@ -67,10 +67,10 @@
     "dependencies": {
         "@base-ui/react": "catalog:ui",
         "html-to-image": "catalog:frontend",
-        "@cirrus/advisor": "workspace:*",
-        "@cirrus/analytics": "workspace:*",
-        "@cirrus/client": "workspace:*",
-        "@cirrus/react": "workspace:*",
+        "@lunora/advisor": "workspace:*",
+        "@lunora/analytics": "workspace:*",
+        "@lunora/client": "workspace:*",
+        "@lunora/react": "workspace:*",
         "@hugeicons/core-free-icons": "catalog:ui",
         "@hugeicons/react": "catalog:ui",
         "@lingui/core": "catalog:i18n",
@@ -84,7 +84,7 @@
         "tailwind-merge": "catalog:ui"
     },
     "devDependencies": {
-        "@cirrus/mail": "workspace:*",
+        "@lunora/mail": "workspace:*",
         "@tailwindcss/cli": "catalog:vite",
         "@testing-library/dom": "catalog:frontend",
         "@testing-library/react": "catalog:frontend",

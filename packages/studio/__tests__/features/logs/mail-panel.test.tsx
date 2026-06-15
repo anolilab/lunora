@@ -1,4 +1,4 @@
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
@@ -34,13 +34,13 @@ const createClient = (entries: CapturedMail[] = ENTRIES): MockClientHooks =>
     });
 
 const renderPanel = (mock: MockClientHooks): ReactElement => (
-    <CirrusProvider client={mock.asClient}>
+    <LunoraProvider client={mock.asClient}>
         <MailPanel />
-    </CirrusProvider>
+    </LunoraProvider>
 );
 
 const calledWith = (mock: MockClientHooks, reference: string): boolean =>
-    mock.query.mock.calls.some((call) => (call[0] as { __cirrusRef: string }).__cirrusRef === reference);
+    mock.query.mock.calls.some((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === reference);
 
 const cleared = (mock: MockClientHooks): boolean => calledWith(mock, ADMIN_FUNCTIONS.clearCapturedMail);
 

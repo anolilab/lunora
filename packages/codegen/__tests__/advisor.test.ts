@@ -12,7 +12,7 @@ import { runCodegen } from "../src/index";
 /** Build a `SchemaIR` from in-memory schema source (no disk). */
 const irFrom = (schemaSource: string) => {
     const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: true });
-    const schemaPath = "/virtual/cirrus/schema.ts";
+    const schemaPath = "/virtual/lunora/schema.ts";
 
     project.createSourceFile(schemaPath, schemaSource);
 
@@ -20,7 +20,7 @@ const irFrom = (schemaSource: string) => {
 };
 
 const UNINDEXED = `
-    import { defineSchema, defineTable, v } from "@cirrus/server";
+    import { defineSchema, defineTable, v } from "@lunora/server";
 
     export const schema = defineSchema({
         users: defineTable({ name: v.string() }),
@@ -31,7 +31,7 @@ const UNINDEXED = `
 `;
 
 const INDEXED = `
-    import { defineSchema, defineTable, v } from "@cirrus/server";
+    import { defineSchema, defineTable, v } from "@lunora/server";
 
     export const schema = defineSchema({
         users: defineTable({ name: v.string() }),
@@ -71,7 +71,7 @@ describe("formatAdvisories", () => {
 
         const out = formatAdvisories(lintSchema(irFrom(UNINDEXED)));
 
-        expect(out).toContain("@cirrus/codegen: 1 schema advisor finding");
+        expect(out).toContain("@lunora/codegen: 1 schema advisor finding");
         expect(out).toContain("[INFO] unindexed_foreign_key:");
     });
 });
@@ -80,9 +80,9 @@ describe("runCodegen lint integration", () => {
     let workdir: string;
 
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-advisor-"));
-        mkdirSync(join(workdir, "cirrus"), { recursive: true });
-        writeFileSync(join(workdir, "cirrus", "schema.ts"), UNINDEXED, "utf8");
+        workdir = mkdtempSync(join(tmpdir(), "lunora-advisor-"));
+        mkdirSync(join(workdir, "lunora"), { recursive: true });
+        writeFileSync(join(workdir, "lunora", "schema.ts"), UNINDEXED, "utf8");
     });
 
     afterEach(() => {
@@ -117,8 +117,8 @@ describe("runCodegen lint integration", () => {
 
         // A query function that filters `posts` without narrowing by an index.
         writeFileSync(
-            join(workdir, "cirrus", "posts.ts"),
-            `import { query } from "@cirrus/server";\nexport const list = query({ args: {}, handler: (ctx) => ctx.db.query("posts").filter((row) => row.published).collect() });\n`,
+            join(workdir, "lunora", "posts.ts"),
+            `import { query } from "@lunora/server";\nexport const list = query({ args: {}, handler: (ctx) => ctx.db.query("posts").filter((row) => row.published).collect() });\n`,
             "utf8",
         );
 
@@ -135,7 +135,7 @@ describe("runCodegen lint integration", () => {
 
         // The generated subclass overrides `advisories()` with the baked list,
         // so the DO's `getAdvisories` admin RPC can serve them to the studio.
-        expect(shard).toContain("const CIRRUS_ADVISORIES: AdvisoryFinding[] =");
+        expect(shard).toContain("const LUNORA_ADVISORIES: AdvisoryFinding[] =");
         expect(shard).toContain("protected override advisories(): AdvisoryFinding[]");
         expect(shard).toContain("unindexed_foreign_key");
     });
@@ -143,6 +143,6 @@ describe("runCodegen lint integration", () => {
     it("emits an empty advisory list under `lint: false`", () => {
         expect.assertions(1);
 
-        expect(runCodegen({ lint: false, projectRoot: workdir }).generated.shard).toContain("const CIRRUS_ADVISORIES: AdvisoryFinding[] = [];");
+        expect(runCodegen({ lint: false, projectRoot: workdir }).generated.shard).toContain("const LUNORA_ADVISORIES: AdvisoryFinding[] = [];");
     });
 });

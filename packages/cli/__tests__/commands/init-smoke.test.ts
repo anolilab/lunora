@@ -1,12 +1,12 @@
 /**
  * Phase 5 verification gate: a scaffolded project is loadable by the rest of
  * the toolchain. Rather than booting Vite (slow + flaky) we compose-test the
- * pieces a real `cirrus dev` would invoke: `cirrus init -t vite` scaffolds the
+ * pieces a real `lunora dev` would invoke: `lunora init -t vite` scaffolds the
  * project (offline, via --from), `runCodegen` parses schema + function files,
  * and `validateWranglerProject` asserts bindings line up with the schema.
  *
  * If any step throws, the scaffold is broken — exactly the failure a fresh
- * `cirrus init &amp;& cirrus dev` would hit on a clean machine.
+ * `lunora init &amp;& lunora dev` would hit on a clean machine.
  *
  * The unit suite must work offline, so we use `--from` to point at the local
  * templates root rather than hitting GitHub through giget. The remote-fetch
@@ -18,8 +18,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { runCodegen } from "@cirrus/codegen";
-import { validateWranglerProject } from "@cirrus/config";
+import { runCodegen } from "@lunora/codegen";
+import { validateWranglerProject } from "@lunora/config";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { runInitCommand } from "../../src/commands/init/handler";
@@ -39,16 +39,16 @@ const templatesRoot = resolve(testDirectory, "..", "..", "..", "..", "templates"
 
 let workdir: string;
 
-describe("cirrus init smoke", () => {
+describe("lunora init smoke", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-cli-init-smoke-"));
+        workdir = mkdtempSync(join(tmpdir(), "lunora-cli-init-smoke-"));
     });
 
     afterEach(() => {
         rmSync(workdir, { force: true, recursive: true });
     });
 
-    describe("cirrus init → codegen → wrangler validator (Phase 5 smoke)", () => {
+    describe("lunora init → codegen → wrangler validator (Phase 5 smoke)", () => {
         it("vite template produces a project that codegen + wrangler validator accept", async () => {
             expect.assertions(7);
 

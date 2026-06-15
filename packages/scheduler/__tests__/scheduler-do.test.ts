@@ -72,7 +72,7 @@ describe("schedulerDO", () => {
         expect.assertions(3);
 
         const state = createFakeState();
-        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
         const scheduledFor = Date.now() + 60_000;
 
         const response = await scheduler.fetch(
@@ -98,7 +98,7 @@ describe("schedulerDO", () => {
         expect.assertions(1);
 
         const state = createFakeState();
-        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
         const later = Date.now() + 60_000;
         const sooner = Date.now() + 1000;
 
@@ -112,7 +112,7 @@ describe("schedulerDO", () => {
         expect.assertions(3);
 
         const state = createFakeState();
-        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
         const later = Date.now() + 60_000;
         const sooner = Date.now() + 1000;
 
@@ -134,7 +134,7 @@ describe("schedulerDO", () => {
         expect.assertions(1);
 
         const state = createFakeState();
-        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
         const response = await scheduler.fetch(post("/cancel", { id: "missing" }));
         const body = await readCancel(response);
 
@@ -145,7 +145,7 @@ describe("schedulerDO", () => {
         expect.assertions(3);
 
         const state = createFakeState();
-        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
         const now = Date.now();
 
         await scheduler.fetch(post("/schedule", { args: { x: 1 }, functionPath: "due", originUrl: "https://x.test", scheduledFor: now - 1000 }));
@@ -163,7 +163,7 @@ describe("schedulerDO", () => {
         expect.assertions(4);
 
         const state = createFakeState();
-        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
         const scheduledFor = Date.now() + 60_000;
 
         const id = await scheduledId(await scheduler.fetch(post("/schedule", { args: { text: "hi" }, functionPath: "messages.send", scheduledFor })));
@@ -185,7 +185,7 @@ describe("schedulerDO", () => {
         expect.assertions(1);
 
         const state = createFakeState();
-        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
         const response = await scheduler.fetch(get("/get"));
 
         expect(response.status).toBe(400);
@@ -195,7 +195,7 @@ describe("schedulerDO", () => {
         expect.assertions(1);
 
         const state = createFakeState();
-        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
         const response = await scheduler.fetch(new Request("https://scheduler.internal/nope", { method: "POST" }));
 
         expect(response.status).toBe(404);
@@ -205,7 +205,7 @@ describe("schedulerDO", () => {
         expect.assertions(1);
 
         const state = createFakeState();
-        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
         const response = await scheduler.fetch(post("/schedule", { args: {} }));
 
         expect(response.status).toBe(400);
@@ -224,7 +224,7 @@ describe("schedulerDO — live subscriptions", () => {
         expect.assertions(2);
 
         const state = createFakeStateWithSockets();
-        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
 
         // Simulate an already-connected subscriber.
         state.acceptWebSocket?.(createFakeSocket() as never);
@@ -241,7 +241,7 @@ describe("schedulerDO — live subscriptions", () => {
         expect.assertions(1);
 
         const state = createFakeStateWithSockets();
-        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
 
         const scheduled = await scheduler.fetch(
             post("/schedule", { args: {}, functionPath: "a", originUrl: "https://x.test", scheduledFor: Date.now() + 10_000 }),
@@ -261,7 +261,7 @@ describe("schedulerDO — live subscriptions", () => {
         expect.assertions(1);
 
         const state = createFakeState();
-        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
 
         // No WS hooks on the plain fake — broadcast must be a silent no-op.
         const response = await scheduler.fetch(
@@ -275,7 +275,7 @@ describe("schedulerDO — live subscriptions", () => {
         expect.assertions(1);
 
         const state = createFakeState();
-        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
 
         const response = await scheduler.fetch(new Request("https://scheduler.internal/ws", { headers: { Upgrade: "websocket" } }));
 
@@ -292,7 +292,7 @@ describe("schedulerDO — retry / dead-letter pipeline", () => {
         expect.assertions(4);
 
         const state = createFakeState();
-        const scheduler = new FailingScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" }, Number.POSITIVE_INFINITY);
+        const scheduler = new FailingScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" }, Number.POSITIVE_INFINITY);
         const now = Date.now();
 
         const id = await scheduledId(await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: now - 1000 })));
@@ -314,7 +314,7 @@ describe("schedulerDO — retry / dead-letter pipeline", () => {
         expect.assertions(2);
 
         const state = createFakeState();
-        const scheduler = new FailingScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" }, Number.POSITIVE_INFINITY);
+        const scheduler = new FailingScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" }, Number.POSITIVE_INFINITY);
 
         await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: Date.now() - 1000 }));
 
@@ -351,7 +351,7 @@ describe("schedulerDO — retry / dead-letter pipeline", () => {
         expect.assertions(4);
 
         const state = createFakeState();
-        const scheduler = new FailingScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" }, Number.POSITIVE_INFINITY);
+        const scheduler = new FailingScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" }, Number.POSITIVE_INFINITY);
 
         const id = await scheduledId(await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: Date.now() - 1000 })));
 
@@ -384,7 +384,7 @@ describe("schedulerDO — retry / dead-letter pipeline", () => {
         expect.assertions(2);
 
         const state = createFakeState();
-        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
 
         await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: Date.now() - 1000 }));
         await scheduler.alarm();
@@ -396,14 +396,14 @@ describe("schedulerDO — retry / dead-letter pipeline", () => {
         expect(state.storageMap.size).toBe(0);
     });
 
-    it("preserves the job for retry when CIRRUS_ORIGIN_URL is unset at fire time", async () => {
+    it("preserves the job for retry when LUNORA_ORIGIN_URL is unset at fire time", async () => {
         expect.assertions(3);
 
         // Schedule with origin configured, then remove it before the alarm
         // (simulates a deploy/binding regression). The job must be retried, not
         // silently deleted.
         const state = createFakeState();
-        const scheduler = new SchedulerDO(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
+        const scheduler = new SchedulerDO(state, { LUNORA_ORIGIN_URL: "https://app.test" });
 
         const id = await scheduledId(await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: Date.now() - 1000 })));
 
@@ -437,7 +437,7 @@ describe("schedulerDO — alarm contract (fake clock)", () => {
         factory: (state: ConstructorParameters<typeof SchedulerDO>[0], env: ConstructorParameters<typeof SchedulerDO>[1]) => T,
         now: number,
     ) => {
-        const created = createAlarmHarness(factory, { env: { CIRRUS_ORIGIN_URL: "https://app.test" }, now });
+        const created = createAlarmHarness(factory, { env: { LUNORA_ORIGIN_URL: "https://app.test" }, now });
 
         dispose = created.dispose;
 

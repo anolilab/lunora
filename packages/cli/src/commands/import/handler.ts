@@ -4,14 +4,14 @@ import { runImportCommand } from "../data-transfer";
 import type { ImportOptions } from "./index";
 
 /**
- * `cirrus import &lt;file>` handler. Requires a source NDJSON file (positional).
+ * `lunora import &lt;file>` handler. Requires a source NDJSON file (positional).
  * Bulk-inserts via {@link runImportCommand}.
  */
 const execute: CommandHandler<ImportOptions> = defineHandler<ImportOptions>(({ argument, cwd, logger, options }) => {
     const file = argument[0];
 
     if (!file) {
-        logger.error("import requires a file. Usage: cirrus import <path> [--table <name>]");
+        logger.error("import requires a file. Usage: lunora import <path> [--table <name>]");
 
         return { code: 1 };
     }

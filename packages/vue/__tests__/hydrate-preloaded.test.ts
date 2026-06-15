@@ -1,4 +1,4 @@
-import type { FunctionReference, Preloaded } from "@cirrus/client";
+import type { FunctionReference, Preloaded } from "@lunora/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { effectScope } from "vue";
 
@@ -6,11 +6,11 @@ import { hydratePreloaded } from "../src/hydrate-preloaded";
 import { subscribeToQuery, useQuery } from "../src/use-query";
 import { createFakeClient } from "./fake-client";
 
-const listMessages: FunctionReference = { __cirrusRef: "messages:list" };
+const listMessages: FunctionReference = { __lunoraRef: "messages:list" };
 
 const makePreloaded = <T>(value: T, overrides: Partial<Preloaded<T>> = {}): Preloaded<T> => {
     return {
-        __cirrusPreloaded: true,
+        __lunoraPreloaded: true,
         args: { channelId: "channel:demo" },
         functionPath: "messages:list",
         value,
@@ -169,7 +169,7 @@ describe(useQuery, () => {
             scope.run(() => {
                 useQuery(listMessages, { channelId: "c1" });
             }),
-        ).toThrow("no CirrusClient provided");
+        ).toThrow("no LunoraClient provided");
 
         scope.stop();
     });

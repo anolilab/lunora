@@ -1,7 +1,7 @@
 /**
- * Minimal `defineSchema({ … })` reader for the `cirrus-collections` generator:
+ * Minimal `defineSchema({ … })` reader for the `lunora-collections` generator:
  * enumerate each table, its `shardBy(field)` (if any), and its declared column
- * names — enough to scaffold a `@cirrus/db` `defineCollections` call.
+ * names — enough to scaffold a `@lunora/db` `defineCollections` call.
  */
 import type { ObjectLiteralExpression, PropertyAssignment } from "ts-morph";
 import { Project, SyntaxKind } from "ts-morph";
@@ -12,7 +12,7 @@ export interface SchemaTable {
     shardBy?: string;
 }
 
-/** Parse the tables out of a `cirrus/schema.ts` source string. */
+/** Parse the tables out of a `lunora/schema.ts` source string. */
 export const parseSchemaTables = (source: string): SchemaTable[] => {
     const project = new Project({ compilerOptions: { allowJs: true }, useInMemoryFileSystem: true });
     const sourceFile = project.createSourceFile("schema.ts", source, { overwrite: true });

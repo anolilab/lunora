@@ -34,7 +34,7 @@ describe("createWorker — storage admin endpoint", () => {
 
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageList: async () => PAGE });
 
-        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/storage", { method: "GET" }), {}, fakeContext);
+        const response = await worker.fetch(new Request("https://app.example/_lunora/admin/storage", { method: "GET" }), {}, fakeContext);
 
         expect(response.status).toBe(403);
     });
@@ -45,7 +45,7 @@ describe("createWorker — storage admin endpoint", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/storage", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
+            new Request("https://app.example/_lunora/admin/storage", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
             {},
             fakeContext,
         );
@@ -64,7 +64,7 @@ describe("createWorker — storage admin endpoint", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageList });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/storage?prefix=avatars/&cursor=z&limit=25&bucket=media", {
+            new Request("https://app.example/_lunora/admin/storage?prefix=avatars/&cursor=z&limit=25&bucket=media", {
                 headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
                 method: "GET",
             }),
@@ -83,7 +83,7 @@ describe("createWorker — storage admin endpoint", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageBuckets: ["default", "media"] });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/storage/buckets", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
+            new Request("https://app.example/_lunora/admin/storage/buckets", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
             {},
             fakeContext,
         );
@@ -98,7 +98,7 @@ describe("createWorker — storage admin endpoint", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/storage/buckets", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
+            new Request("https://app.example/_lunora/admin/storage/buckets", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
             {},
             fakeContext,
         );
@@ -113,7 +113,7 @@ describe("createWorker — storage admin endpoint", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageList: async () => PAGE });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/storage", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "PATCH" }),
+            new Request("https://app.example/_lunora/admin/storage", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "PATCH" }),
             {},
             fakeContext,
         );
@@ -128,7 +128,7 @@ describe("createWorker — storage admin delete", () => {
 
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageDelete: async () => undefined });
 
-        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/storage?key=a.png", { method: "DELETE" }), {}, fakeContext);
+        const response = await worker.fetch(new Request("https://app.example/_lunora/admin/storage?key=a.png", { method: "DELETE" }), {}, fakeContext);
 
         expect(response.status).toBe(403);
     });
@@ -139,7 +139,7 @@ describe("createWorker — storage admin delete", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/storage?key=a.png", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "DELETE" }),
+            new Request("https://app.example/_lunora/admin/storage?key=a.png", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "DELETE" }),
             {},
             fakeContext,
         );
@@ -157,7 +157,7 @@ describe("createWorker — storage admin delete", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageDelete: async () => undefined });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/storage", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "DELETE" }),
+            new Request("https://app.example/_lunora/admin/storage", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "DELETE" }),
             {},
             fakeContext,
         );
@@ -172,7 +172,7 @@ describe("createWorker — storage admin delete", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageDelete });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/storage?key=avatars/a.png", {
+            new Request("https://app.example/_lunora/admin/storage?key=avatars/a.png", {
                 headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
                 method: "DELETE",
             }),
@@ -193,7 +193,7 @@ describe("createWorker — storage admin upload", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/storage?key=a.txt", {
+            new Request("https://app.example/_lunora/admin/storage?key=a.txt", {
                 body: "hi",
                 headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
                 method: "PUT",
@@ -218,7 +218,7 @@ describe("createWorker — storage admin upload", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageUpload });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/storage?key=docs/readme.txt", {
+            new Request("https://app.example/_lunora/admin/storage?key=docs/readme.txt", {
                 body: "hello",
                 headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "text/plain" },
                 method: "PUT",
@@ -247,7 +247,7 @@ describe("createWorker — storage admin upload", () => {
         // One byte past the 1 MiB MAX_BODY_BYTES cap.
         const oversized = "x".repeat(1_048_577);
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/storage?key=docs/big.bin", {
+            new Request("https://app.example/_lunora/admin/storage?key=docs/big.bin", {
                 body: oversized,
                 headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/octet-stream" },
                 method: "PUT",
@@ -268,7 +268,7 @@ describe("createWorker — storage admin signed URL", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/storage/url?key=a.png", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
+            new Request("https://app.example/_lunora/admin/storage/url?key=a.png", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
             {},
             fakeContext,
         );
@@ -287,7 +287,7 @@ describe("createWorker — storage admin signed URL", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageSignedUrl });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/storage/url?key=avatars/a.png", {
+            new Request("https://app.example/_lunora/admin/storage/url?key=avatars/a.png", {
                 headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
                 method: "GET",
             }),
@@ -308,7 +308,7 @@ describe("createWorker — storage admin signed URL", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageSignedUrl });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/storage/url?key=a.png&expiresIn=900", {
+            new Request("https://app.example/_lunora/admin/storage/url?key=a.png&expiresIn=900", {
                 headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
                 method: "GET",
             }),
@@ -327,7 +327,7 @@ describe("createWorker — storage admin signed URL", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageSignedUrl });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/storage/url?key=a.png&expiresIn=999999999", {
+            new Request("https://app.example/_lunora/admin/storage/url?key=a.png&expiresIn=999999999", {
                 headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
                 method: "GET",
             }),

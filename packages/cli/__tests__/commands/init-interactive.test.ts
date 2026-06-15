@@ -1,5 +1,5 @@
 /**
- * End-to-end wiring of the interactive `cirrus init` offer: scaffold a project
+ * End-to-end wiring of the interactive `lunora init` offer: scaffold a project
  * from the local templates root, then drive the post-scaffold auth/email offer
  * with injected prompts + the local registry root (no network). Proves the
  * offer actually applies the chosen registry item into the new project.
@@ -30,9 +30,9 @@ const registryRoot = resolve(testDirectory, "..", "..", "..", "..", "registry");
 
 let workdir: string;
 
-describe("cirrus init — interactive offer", () => {
+describe("lunora init — interactive offer", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-cli-init-offer-"));
+        workdir = mkdtempSync(join(tmpdir(), "lunora-cli-init-offer-"));
     });
 
     afterEach(() => {
@@ -57,7 +57,7 @@ describe("cirrus init — interactive offer", () => {
         });
 
         expect(result.code).toBe(0);
-        expect(existsSync(join(workdir, "app", "cirrus", "auth", "index.ts"))).toBe(true);
+        expect(existsSync(join(workdir, "app", "lunora", "auth", "index.ts"))).toBe(true);
     });
 
     it("skips the offer and prints a hint under --yes", async () => {
@@ -75,7 +75,7 @@ describe("cirrus init — interactive offer", () => {
         });
 
         expect(result.code).toBe(0);
-        expect(existsSync(join(workdir, "app2", "cirrus", "auth", "index.ts"))).toBe(false);
-        expect(lines.join("\n")).toMatch(/cirrus add auth/);
+        expect(existsSync(join(workdir, "app2", "lunora", "auth", "index.ts"))).toBe(false);
+        expect(lines.join("\n")).toMatch(/lunora add auth/);
     });
 });

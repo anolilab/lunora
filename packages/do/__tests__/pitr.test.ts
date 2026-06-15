@@ -112,7 +112,7 @@ describe("pitr admin RPC", () => {
     it("getPitrBookmark returns current + for-time, admin-gated", async () => {
         expect.assertions(3);
 
-        const shard = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getPitrBookmark, { time: "2026-01-01T00:00:00Z" }, ADMIN_TOKEN));
 
         expect(response.status).toBe(200);
@@ -126,7 +126,7 @@ describe("pitr admin RPC", () => {
     it("pitrRestore arms recovery and returns the undo bookmark without restarting by default", async () => {
         expect.assertions(4);
 
-        const shard = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.pitrRestore, { time: "2026-01-01T00:00:00Z" }, ADMIN_TOKEN));
         const body = await response.json<{ result: { restarted: boolean } & { restartedAt?: string; restoredTo: string; undoBookmark: string } }>();
 
@@ -140,7 +140,7 @@ describe("pitr admin RPC", () => {
     it("pitrRestore with restart aborts the DO to apply recovery immediately", async () => {
         expect.assertions(1);
 
-        const shard = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         await shard.fetch(adminRequest(ADMIN_FUNCTIONS.pitrRestore, { bookmark: "bm-x", restart: true }, ADMIN_TOKEN));
 
@@ -150,7 +150,7 @@ describe("pitr admin RPC", () => {
     it("pitrRestore is gated by the admin bearer", async () => {
         expect.assertions(2);
 
-        const shard = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const missing = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.pitrRestore, { bookmark: "bm-x" }));
         const wrong = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.pitrRestore, { bookmark: "bm-x" }, "nope"));

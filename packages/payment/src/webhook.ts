@@ -4,7 +4,7 @@
  * Verification runs over the **raw, unparsed request body** — never re-serialize JSON before
  * checking the signature. Uses WebCrypto (`crypto.subtle`), available in both workerd and Node.
  */
-import { CirrusPaymentError } from "./errors";
+import { LunoraPaymentError } from "./errors";
 
 const encoder = new TextEncoder();
 
@@ -91,7 +91,7 @@ export interface VerifyStripeSignatureInput {
 /**
  * Verify a Stripe-scheme webhook signature: `HMAC_SHA256(secret, "{t}.{payload}")` compared
  * against the header's `v1` values, with a timestamp tolerance to reject replays. Throws a
- * {@link CirrusPaymentError} on any failure.
+ * {@link LunoraPaymentError} on any failure.
  */
 export const verifyStripeSignature = async (input: VerifyStripeSignatureInput): Promise<void> => {
     const toleranceSeconds = input.toleranceSeconds ?? 300;
@@ -99,17 +99,17 @@ export const verifyStripeSignature = async (input: VerifyStripeSignatureInput): 
     const { signatures, timestamp } = parseStripeSignatureHeader(input.signatureHeader);
 
     if (!Number.isFinite(timestamp) || signatures.length === 0) {
-        throw new CirrusPaymentError("WEBHOOK_SIGNATURE_INVALID", "malformed signature header");
+        throw new LunoraPaymentError("WEBHOOK_SIGNATURE_INVALID", "malformed signature header");
     }
 
     if (Math.abs(Math.floor(nowMs / 1000) - timestamp) > toleranceSeconds) {
-        throw new CirrusPaymentError("WEBHOOK_TIMESTAMP_INVALID", "signature timestamp outside tolerance");
+        throw new LunoraPaymentError("WEBHOOK_TIMESTAMP_INVALID", "signature timestamp outside tolerance");
     }
 
     const expected = await hmacSha256Hex(input.secret, `${String(timestamp)}.${input.payload}`);
 
     if (!signatures.some((candidate) => constantTimeEqual(candidate, expected))) {
-        throw new CirrusPaymentError("WEBHOOK_SIGNATURE_INVALID", "no matching signature");
+        throw new LunoraPaymentError("WEBHOOK_SIGNATURE_INVALID", "no matching signature");
     }
 };
 
@@ -133,7 +133,7 @@ export interface VerifyStandardWebhookInput {
 /**
  * Verify a Standard Webhooks signature (the scheme Polar and svix use):
  * `base64(HMAC_SHA256(key, "{id}.{timestamp}.{payload}"))` compared against the header's `v1`
- * entries, with a replay-window check. Throws a {@link CirrusPaymentError} on any failure.
+ * entries, with a replay-window check. Throws a {@link LunoraPaymentError} on any failure.
  */
 export const verifyStandardWebhook = async (input: VerifyStandardWebhookInput): Promise<void> => {
     const toleranceSeconds = input.toleranceSeconds ?? 300;
@@ -141,11 +141,11 @@ export const verifyStandardWebhook = async (input: VerifyStandardWebhookInput): 
     const timestamp = Number(input.webhookTimestamp);
 
     if (!input.webhookId || !input.webhookSignature || !Number.isFinite(timestamp)) {
-        throw new CirrusPaymentError("WEBHOOK_SIGNATURE_INVALID", "missing standard-webhooks headers");
+        throw new LunoraPaymentError("WEBHOOK_SIGNATURE_INVALID", "missing standard-webhooks headers");
     }
 
     if (Math.abs(Math.floor(nowMs / 1000) - timestamp) > toleranceSeconds) {
-        throw new CirrusPaymentError("WEBHOOK_TIMESTAMP_INVALID", "signature timestamp outside tolerance");
+        throw new LunoraPaymentError("WEBHOOK_TIMESTAMP_INVALID", "signature timestamp outside tolerance");
     }
 
     const rawSecret = input.secret.startsWith(SYMMETRIC_PREFIX) ? input.secret.slice(SYMMETRIC_PREFIX.length) : input.secret;
@@ -160,6 +160,6 @@ export const verifyStandardWebhook = async (input: VerifyStandardWebhookInput): 
         .filter(Boolean);
 
     if (!provided.some((candidate) => constantTimeEqual(candidate, expected))) {
-        throw new CirrusPaymentError("WEBHOOK_SIGNATURE_INVALID", "no matching signature");
+        throw new LunoraPaymentError("WEBHOOK_SIGNATURE_INVALID", "no matching signature");
     }
 };

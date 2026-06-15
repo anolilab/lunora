@@ -1,4 +1,4 @@
-import { useCirrus } from "@cirrus/react";
+import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 
@@ -74,8 +74,8 @@ const DASH = <span className="text-muted-foreground">—</span>;
  * connected WebSocket on the shard's Durable Object and the live subscriptions
  * it tracks — the `functionPath`/`table`/args each watches, whether the socket
  * is an admin socket, and the aggregate connection / subscription counts. Reads
- * via the `__cirrus_admin__:listSubscriptions` RPC over the {@link useCirrus}
- * client; gated by the server's `CIRRUS_ADMIN_TOKEN`.
+ * via the `__lunora_admin__:listSubscriptions` RPC over the {@link useLunora}
+ * client; gated by the server's `LUNORA_ADMIN_TOKEN`.
  *
  * This is a point-in-time read (sockets and their subscriptions are derived live
  * from the DO, nothing durable). A connect/disconnect isn't a write-flush, so
@@ -85,7 +85,7 @@ const DASH = <span className="text-muted-foreground">—</span>;
  * label, not a stable identifier across reads.
  */
 const SubscriptionsPanel = ({ initialShardKey }: SubscriptionsPanelProps): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const t = useT();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");

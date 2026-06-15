@@ -1,5 +1,5 @@
-import type { AnalyticsSqlResult } from "@cirrus/analytics";
-import { createAnalyticsSqlClient } from "@cirrus/analytics";
+import type { AnalyticsSqlResult } from "@lunora/analytics";
+import { createAnalyticsSqlClient } from "@lunora/analytics";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -46,7 +46,7 @@ const DEFAULT_DATASET = "ANALYTICS";
 
 /**
  * One named usage panel: a title and the SQL that backs it. The columns are
- * `@cirrus/analytics`'s `track()` layout — `blob1` is the event name, `blob2`
+ * `@lunora/analytics`'s `track()` layout — `blob1` is the event name, `blob2`
  * the function path, `double1` the handler duration — so these read against the
  * data points `ctx.analytics.track("function_call", …)` emits.
  */
@@ -244,7 +244,7 @@ export const AnalyticsPanel = ({ config, dataset = DEFAULT_DATASET, runQuery }: 
     }
 
     return (
-        <div className="flex flex-col gap-4" data-testid="cirrus-analytics-panel">
+        <div className="flex flex-col gap-4" data-testid="lunora-analytics-panel">
             {PANEL_QUERIES.map((panel) => (
                 <PanelResult key={panel.key} state={states[panel.key] ?? INITIAL_PANEL_STATE} title={panel.title} />
             ))}

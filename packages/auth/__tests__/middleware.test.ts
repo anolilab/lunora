@@ -2,7 +2,7 @@ import { memoryAdapter } from "better-auth/adapters/memory";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it } from "vitest";
 
 import { createAuth } from "../src/create-auth";
-import { CirrusAuthHeadersError, withAuthPlugins } from "../src/middleware";
+import { LunoraAuthHeadersError, withAuthPlugins } from "../src/middleware";
 import { admin, organization } from "../src/plugins";
 
 /**
@@ -24,7 +24,7 @@ interface MockHandlerContext {
 const SECRET = "x".repeat(32);
 
 /**
- * Drive a middleware the same way `@cirrus/server`'s builder runs them:
+ * Drive a middleware the same way `@lunora/server`'s builder runs them:
  * `next({ ctx })` returns the merged context, and the middleware's return
  * value becomes what the handler eventually sees.
  *
@@ -147,7 +147,7 @@ describe("withAuthPlugins", () => {
         // Pretend an upstream middleware has already installed `userId` on
         // the ctx. The middleware under test must layer authApi on top
         // *without* dropping userId — that's the regression the type fix
-        // guards (the prior shape returned just `CirrusAuthApiContext<Auth>`,
+        // guards (the prior shape returned just `LunoraAuthApiContext<Auth>`,
         // erasing whatever the upstream had installed).
         const contextIn = { userId: "u_42" };
 
@@ -159,7 +159,7 @@ describe("withAuthPlugins", () => {
         });
 
         // Both fields must survive into the downstream ctx — the regression
-        // dropped `userId`. The type-level narrowing (`CtxIn & CirrusAuthApiContext<Auth>`)
+        // dropped `userId`. The type-level narrowing (`CtxIn & LunoraAuthApiContext<Auth>`)
         // is also asserted below via the typed access.
         expect(contextOut).toMatchObject({ userId: "u_42" });
         expect(contextOut.authApi).toBeDefined();
@@ -205,14 +205,14 @@ describe("withAuthPlugins — runtime header guard", () => {
         return context.authApi;
     };
 
-    it("throws CirrusAuthHeadersError on a header-less privileged call (safe default)", async () => {
+    it("throws LunoraAuthHeadersError on a header-less privileged call (safe default)", async () => {
         expect.assertions(3);
 
         const calls: { options: unknown }[] = [];
         const authApi = await installAuthApi(stubAuth(calls));
 
         // No headers → guard throws and the underlying endpoint is never reached.
-        await expect(authApi.banUser({ body: { userId: "u_1" } })).rejects.toBeInstanceOf(CirrusAuthHeadersError);
+        await expect(authApi.banUser({ body: { userId: "u_1" } })).rejects.toBeInstanceOf(LunoraAuthHeadersError);
         await expect(authApi.banUser({ body: { userId: "u_1" } })).rejects.toThrow(/banUser/u);
         expect(calls).toHaveLength(0);
     });
@@ -224,13 +224,13 @@ describe("withAuthPlugins — runtime header guard", () => {
         const authApi = await installAuthApi(stubAuth(calls));
 
         // `headers: undefined` is the same bypass as omitting it.
-        await expect(authApi.banUser({ body: { userId: "u_1" }, headers: undefined })).rejects.toBeInstanceOf(CirrusAuthHeadersError);
+        await expect(authApi.banUser({ body: { userId: "u_1" }, headers: undefined })).rejects.toBeInstanceOf(LunoraAuthHeadersError);
 
         // A `null` headers value is the bypass too — cast through `unknown` since
         // the stub's signature only admits `Headers | undefined`.
         const callWithNullHeaders = authApi.banUser as unknown as (o: { body: { userId: string }; headers: null }) => Promise<unknown>;
 
-        await expect(callWithNullHeaders({ body: { userId: "u_1" }, headers: null })).rejects.toBeInstanceOf(CirrusAuthHeadersError);
+        await expect(callWithNullHeaders({ body: { userId: "u_1" }, headers: null })).rejects.toBeInstanceOf(LunoraAuthHeadersError);
         expect(calls).toHaveLength(0);
     });
 
@@ -303,13 +303,13 @@ describe("withAuthPlugins — runtime header guard", () => {
         }>(middleware, {});
 
         // Header-less privileged call → guard throws (would have escalated).
-        await expect(context.authApi.createOrganization({ body: { name: "Acme", slug: "acme" } })).rejects.toBeInstanceOf(CirrusAuthHeadersError);
+        await expect(context.authApi.createOrganization({ body: { name: "Acme", slug: "acme" } })).rejects.toBeInstanceOf(LunoraAuthHeadersError);
 
         // With headers, the call reaches better-auth (which then enforces its
         // own session check — an unauthenticated empty Headers is rejected by
         // better-auth, NOT by our guard). Either way the guard let it through.
         await expect(context.authApi.createOrganization({ body: { name: "Acme", slug: "acme" }, headers: new Headers() })).rejects.not.toBeInstanceOf(
-            CirrusAuthHeadersError,
+            LunoraAuthHeadersError,
         );
     });
 });

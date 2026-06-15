@@ -1,8 +1,8 @@
 import { handle } from "@astrojs/cloudflare/handler";
-import { withCirrus } from "@cirrus/astro";
-import type { ShardNamespaceLike } from "@cirrus/runtime";
+import { withLunora } from "@lunora/astro";
+import type { ShardNamespaceLike } from "@lunora/runtime";
 
-import { createShardDO } from "../cirrus/_generated/shard.js";
+import { createShardDO } from "../lunora/_generated/shard.js";
 
 /**
  * The Durable Object that backs every shard's SQLite state. `createShardDO`
@@ -17,11 +17,11 @@ export const ShardDO = createShardDO();
  * Astro 6 + `@astrojs/cloudflare` v13 no longer emit `dist/_worker.js`; the
  * supported custom-entry pattern is to import `handle` from
  * `@astrojs/cloudflare/handler` (the adapter's built-in SSR handler) and wrap
- * it with `withCirrus` so Cirrus realtime mounts in the same worker.
+ * it with `withLunora` so Lunora realtime mounts in the same worker.
  *
- * `withCirrus` wraps the `handle` fetch function so:
+ * `withLunora` wraps the `handle` fetch function so:
  *
- *   - `/_cirrus/rpc`, `/_cirrus/ws`, `/_cirrus/admin/*` → Cirrus realtime
+ *   - `/_lunora/rpc`, `/_lunora/ws`, `/_lunora/admin/*` → Lunora realtime
  *     (forwarded to the `ShardDO` on `env.SHARD`)
  *   - everything else                                   → Astro SSR via `handle`
  *
@@ -35,7 +35,7 @@ interface Env {
     SHARD: ShardNamespaceLike;
 }
 
-export default withCirrus(
+export default withLunora(
     // `handle` is the Astro adapter's SSR fetch handler (Astro 6 /
     // @astrojs/cloudflare v13 pattern). It resolves the routes Astro's build
     // emits and serves static assets via env.ASSETS — no manifest import needed.

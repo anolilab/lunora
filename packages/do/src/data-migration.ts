@@ -10,7 +10,7 @@
  * Two properties make it safe to interrupt and re-invoke:
  *
  * - **Resumable.** Progress (cursor, counts, status) is persisted to a reserved
- * `__cirrus_migrations` table after every batch. A run that resumes the same
+ * `__lunora_migrations` table after every batch. A run that resumes the same
  * id+direction picks up from the stored cursor instead of rescanning.
  * - **Idempotent on completion.** Re-running a migration already `completed` in
  * the same direction is a no-op that returns the recorded counts.
@@ -26,8 +26,8 @@
 
 import type { DatabaseWriterLike, SqlCursor, SqlExec } from "./ctx-db";
 
-/** Reserved table the per-shard runner tracks migration progress in. Auto-hidden from the data browser by the `__cirrus` prefix. */
-const DATA_MIGRATION_STATE_TABLE = "__cirrus_migrations";
+/** Reserved table the per-shard runner tracks migration progress in. Auto-hidden from the data browser by the `__lunora` prefix. */
+const DATA_MIGRATION_STATE_TABLE = "__lunora_migrations";
 
 /** Rows fetched and rewritten per batch when neither the migration nor the caller specifies one. */
 const DEFAULT_BATCH_SIZE = 100;
@@ -73,8 +73,8 @@ type DataMigrationDocument = Record<string, unknown>;
 type DataMigrationTransform = (document: DataMigrationDocument) => DataMigrationDocument | undefined;
 
 /**
- * Structural projection of `@cirrus/server`'s `RegisteredMigration` the runner
- * reads. Kept local so this package takes no dependency on `@cirrus/server`
+ * Structural projection of `@lunora/server`'s `RegisteredMigration` the runner
+ * reads. Kept local so this package takes no dependency on `@lunora/server`
  * (which consumes ShardDO types — depending back would cycle).
  */
 interface DataMigrationLike {

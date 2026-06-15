@@ -1,5 +1,5 @@
-import type { StorageListPage } from "@cirrus/client";
-import { CirrusProvider } from "@cirrus/react";
+import type { StorageListPage } from "@lunora/client";
+import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -40,9 +40,9 @@ const DOCS_PAGE: StorageListPage = {
 };
 
 const renderBrowser = (mock: MockClientHooks): ReactElement => (
-    <CirrusProvider client={mock.asClient}>
+    <LunoraProvider client={mock.asClient}>
         <FileBrowser />
-    </CirrusProvider>
+    </LunoraProvider>
 );
 
 describe("fileBrowser", () => {

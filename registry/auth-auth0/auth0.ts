@@ -1,11 +1,11 @@
 /**
- * Sign in with Auth0 — added by `cirrus registry add auth-auth0`.
+ * Sign in with Auth0 — added by `lunora registry add auth-auth0`.
  *
  * This file is YOURS: it's copied into your project so you own and edit it.
  * Auth0 is wired as a generic OIDC provider through better-auth's
- * `genericOAuth` plugin. `@cirrus/auth` also re-exports it as
- * `import { genericOAuth } from "@cirrus/auth/plugins"` — switch to that if you
- * prefer the Cirrus-namespaced import path; it's the same factory. We import the
+ * `genericOAuth` plugin. `@lunora/auth` also re-exports it as
+ * `import { genericOAuth } from "@lunora/auth/plugins"` — switch to that if you
+ * prefer the Lunora-namespaced import path; it's the same factory. We import the
  * documented better-auth path here so the snippet has no extra coupling. The
  * plugin discovers Auth0's authorization, token,
  * and userinfo endpoints from its OIDC discovery document at
@@ -16,13 +16,13 @@
  *
  * # Wire it into your auth instance
  *
- * Merge this plugin into the `plugins` array in `cirrus/auth/index.ts`:
+ * Merge this plugin into the `plugins` array in `lunora/auth/index.ts`:
  *
  * ```ts
- * // cirrus/auth/index.ts
+ * // lunora/auth/index.ts
  * import { auth0 } from "./auth0.js";
  *
- * export const buildAuth = (env: AuthEnv): CirrusAuth =>
+ * export const buildAuth = (env: AuthEnv): LunoraAuth =>
  *     createAuth({
  *         baseURL: env.BETTER_AUTH_URL,
  *         database: env.DB as never,
@@ -32,7 +32,7 @@
  *     });
  * ```
  *
- * Widen `AuthEnv` (in `cirrus/auth/index.ts`) with the Auth0 vars, or import
+ * Widen `AuthEnv` (in `lunora/auth/index.ts`) with the Auth0 vars, or import
  * {@link Auth0Env} from here.
  *
  * # Auth0 studio setup

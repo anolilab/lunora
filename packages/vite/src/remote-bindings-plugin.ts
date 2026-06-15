@@ -1,24 +1,24 @@
 /**
- * Remote-binding dev for the Vite path (`vite dev`), mirroring `cirrus dev`.
+ * Remote-binding dev for the Vite path (`vite dev`), mirroring `lunora dev`.
  *
- * When remote mode is on (the `--remote`-equivalent `CIRRUS_REMOTE` env, or the
- * `remote` key in `cirrus.json`), the worker `@cloudflare/vite-plugin` boots
+ * When remote mode is on (the `--remote`-equivalent `LUNORA_REMOTE` env, or the
+ * `remote` key in `lunora.json`), the worker `@cloudflare/vite-plugin` boots
  * should read/write the project's **deployed** D1/KV/R2/Vectorize/Queues/
  * Services/AI instead of empty local resources. We get there exactly like the
  * CLI: materialize a temp wrangler config with `"remote": true` injected on each
  * eligible binding (DO shards stay local) and point the cloudflare plugin's
  * `configPath` at it. All the decision + materialization logic is reused from
- * `@cirrus/config` — this module only wires it into the Vite plugin lifecycle.
+ * `@lunora/config` — this module only wires it into the Vite plugin lifecycle.
  *
  * Cleanup runs when Vite's dev server closes (the `buildEnd`/`closeBundle`
  * hooks), so the temp config never leaks past the dev session.
  */
-import { materializeRemoteWranglerConfig, readProjectRemotePreference, resolveRemoteEnabled } from "@cirrus/config";
+import { materializeRemoteWranglerConfig, readProjectRemotePreference, resolveRemoteEnabled } from "@lunora/config";
 import type { Plugin } from "vite";
 
 import type { CloudflarePluginOptions } from "./types";
 
-/** The cloudflare-plugin option Cirrus sets to point the worker at our temp config. */
+/** The cloudflare-plugin option Lunora sets to point the worker at our temp config. */
 interface RemoteCloudflareOptions {
     configPath?: string;
 }
@@ -44,11 +44,11 @@ interface ViteRemotePlan {
 interface PlanViteRemoteOptions {
     /** Injection seam — defaults to the real materializer. */
     materialize?: typeof materializeRemoteWranglerConfig;
-    /** Project root containing `wrangler.jsonc` + the optional `cirrus.json`. */
+    /** Project root containing `wrangler.jsonc` + the optional `lunora.json`. */
     projectRoot: string;
-    /** Injection seam — defaults to the real `cirrus.json` reader. */
+    /** Injection seam — defaults to the real `lunora.json` reader. */
     readPreference?: typeof readProjectRemotePreference;
-    /** The raw `CIRRUS_REMOTE` env value; defaults to `process.env.CIRRUS_REMOTE`. */
+    /** The raw `LUNORA_REMOTE` env value; defaults to `process.env.LUNORA_REMOTE`. */
     remoteEnv?: string;
 }
 
@@ -59,14 +59,14 @@ const noopCleanup = (): void => {};
  * materialize the temp config. Pure decision + a single fs write via the
  * injected materializer; returns a `cleanup` for the dev server's close hook.
  *
- * There is no `--remote` flag on the Vite path (Vite has no Cirrus CLI flags),
- * so the precedence reduces to `CIRRUS_REMOTE` env > `cirrus.json` `remote`.
+ * There is no `--remote` flag on the Vite path (Vite has no Lunora CLI flags),
+ * so the precedence reduces to `LUNORA_REMOTE` env > `lunora.json` `remote`.
  */
 const planViteRemoteBindings = (options: PlanViteRemoteOptions): ViteRemotePlan => {
     const readPreference = options.readPreference ?? readProjectRemotePreference;
     const enabled = resolveRemoteEnabled({
         configPreference: readPreference(options.projectRoot),
-        envValue: options.remoteEnv ?? process.env["CIRRUS_REMOTE"],
+        envValue: options.remoteEnv ?? process.env["LUNORA_REMOTE"],
     });
 
     if (!enabled) {
@@ -131,7 +131,7 @@ const remoteBindingsCleanupPlugin = (cleanup: () => void): Plugin => {
             cleanup();
         },
         enforce: "pre",
-        name: "cirrus:remote-bindings-cleanup",
+        name: "lunora:remote-bindings-cleanup",
     };
 };
 

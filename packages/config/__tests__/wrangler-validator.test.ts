@@ -17,7 +17,7 @@ import {
 const SHARD_BINDING_ERROR_RE = /SHARD.+ShardDO/u;
 const WRANGLER_NOT_FOUND_RE = /wrangler\.jsonc not found/u;
 
-const SCHEMA_WITH_GLOBAL = `import { defineSchema, defineTable, v } from "@cirrus/server";
+const SCHEMA_WITH_GLOBAL = `import { defineSchema, defineTable, v } from "@lunora/server";
 
 export const schema = defineSchema({
     messages: defineTable({
@@ -32,7 +32,7 @@ export const schema = defineSchema({
 });
 `;
 
-const SCHEMA_NO_GLOBAL = `import { defineSchema, defineTable, v } from "@cirrus/server";
+const SCHEMA_NO_GLOBAL = `import { defineSchema, defineTable, v } from "@lunora/server";
 
 export const schema = defineSchema({
     messages: defineTable({
@@ -42,7 +42,7 @@ export const schema = defineSchema({
 });
 `;
 
-const SCHEMA_WITH_VECTOR = `import { defineSchema, defineTable, v } from "@cirrus/server";
+const SCHEMA_WITH_VECTOR = `import { defineSchema, defineTable, v } from "@lunora/server";
 import { embed } from "../app/embed";
 
 export const schema = defineSchema({
@@ -56,27 +56,27 @@ export const schema = defineSchema({
 `;
 
 const VALID_WRANGLER = `{
-    "name": "cirrus-app",
+    "name": "lunora-app",
     "main": "src/index.ts",
     "compatibility_date": "${REQUIRED_COMPATIBILITY_DATE}",
     "compatibility_flags": ["nodejs_compat", "${REQUIRED_FLAG}"],
     "durable_objects": {
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
     },
-    "d1_databases": [{ "binding": "DB", "database_name": "cirrus-global", "database_id": "x" }]
+    "d1_databases": [{ "binding": "DB", "database_name": "lunora-global", "database_id": "x" }]
 }
 `;
 
 let workdir: string;
 
 const writeSchema = (source: string): void => {
-    mkdirSync(join(workdir, "cirrus"), { recursive: true });
-    writeFileSync(join(workdir, "cirrus", "schema.ts"), source, "utf8");
+    mkdirSync(join(workdir, "lunora"), { recursive: true });
+    writeFileSync(join(workdir, "lunora", "schema.ts"), source, "utf8");
 };
 
 describe("wrangler-validator", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-config-wrangler-"));
+        workdir = mkdtempSync(join(tmpdir(), "lunora-config-wrangler-"));
     });
 
     afterEach(() => {

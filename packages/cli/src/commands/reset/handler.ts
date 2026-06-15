@@ -1,6 +1,6 @@
 import { existsSync, rmSync } from "node:fs";
 
-import { promptYesNo } from "@cirrus/config";
+import { promptYesNo } from "@lunora/config";
 import { join } from "@visulima/path";
 
 import type { CommandHandler } from "../../util/command";
@@ -28,7 +28,7 @@ const runResetCommand = async (options: ResetCommandOptions): Promise<ResetComma
     const targets: string[] = [join(cwd, ".wrangler", "state")];
 
     if (options.all) {
-        targets.push(join(cwd, ".cirrus-cache"));
+        targets.push(join(cwd, ".lunora-cache"));
     }
 
     if (!options.yes) {
@@ -65,7 +65,7 @@ const runResetCommand = async (options: ResetCommandOptions): Promise<ResetComma
     return { code: 0, removed };
 };
 
-/** `cirrus reset` handler (lazy-loaded via the command's `loader`). */
+/** `lunora reset` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<ResetOptions> = defineHandler<ResetOptions>(({ cwd, logger, options }) =>
     runResetCommand({ all: options.all === true, cwd, logger, yes: options.yes === true }),
 );

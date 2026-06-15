@@ -17,7 +17,7 @@ export type ConflictKind = "conflict" | "occ" | "restrict" | "trigger" | "unique
  * refetch + retry or surface the conflict. `code` / `status` / `kind` are
  * declared as own properties (not just inherited prototype state) so structural
  * callers across packages — which deliberately avoid taking a hard runtime
- * dependency on `@cirrus/do` — can recognise the shape without an `instanceof`
+ * dependency on `@lunora/do` — can recognise the shape without an `instanceof`
  * check.
  */
 export class ConflictError extends Error {

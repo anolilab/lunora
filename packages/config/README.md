@@ -6,7 +6,7 @@
 
 </a>
 
-<h3 align="center">Internal shared CLI + Vite config layer for Cirrus: wrangler.jsonc validation, binding inference, and .dev.vars scaffolding</h3>
+<h3 align="center">Internal shared CLI + Vite config layer for Lunora: wrangler.jsonc validation, binding inference, and .dev.vars scaffolding</h3>
 
 <!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
@@ -34,28 +34,28 @@
 
 ---
 
-The internal shared CLI + Vite config layer for Cirrus: `wrangler.jsonc` validation, binding inference and reconciliation, and `.dev.vars` scaffolding. **This package is internal** — it is consumed by [`@cirrus/cli`](https://www.npmjs.com/package/@cirrus/cli) and [`@cirrus/vite`](https://www.npmjs.com/package/@cirrus/vite) so they stay in lock-step. It is published for transparency; depend on the CLI or the Vite plugin and let them call into it rather than using it directly.
+The internal shared CLI + Vite config layer for Lunora: `wrangler.jsonc` validation, binding inference and reconciliation, and `.dev.vars` scaffolding. **This package is internal** — it is consumed by [`@lunora/cli`](https://www.npmjs.com/package/@lunora/cli) and [`@lunora/vite`](https://www.npmjs.com/package/@lunora/vite) so they stay in lock-step. It is published for transparency; depend on the CLI or the Vite plugin and let them call into it rather than using it directly.
 
-Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
+Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
 ## Install
 
 ```sh
-npm install @cirrus/config
+npm install @lunora/config
 ```
 
 ```sh
-yarn add @cirrus/config
+yarn add @lunora/config
 ```
 
 ```sh
-pnpm add @cirrus/config
+pnpm add @lunora/config
 ```
 
 ## Usage
 
 ```ts
-import { validateWrangler } from "@cirrus/config";
+import { validateWrangler } from "@lunora/config";
 
 const wrangler = JSON.parse(readFileSync("wrangler.jsonc", "utf8"));
 const { valid, errors } = validateWrangler(wrangler, { hasGlobalTable: true });
@@ -65,13 +65,13 @@ if (!valid) {
 }
 ```
 
-> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/deployment)**.
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/deployment)**.
 
 ## Related
 
-- [`@cirrus/cli`](https://www.npmjs.com/package/@cirrus/cli) — the CLI that drives this layer; use it instead of depending here directly.
-- [`@cirrus/vite`](https://www.npmjs.com/package/@cirrus/vite) — the Vite plugin that shares the same validator.
-- [`@cirrus/codegen`](https://www.npmjs.com/package/@cirrus/codegen) — discovers schema info used during validation.
+- [`@lunora/cli`](https://www.npmjs.com/package/@lunora/cli) — the CLI that drives this layer; use it instead of depending here directly.
+- [`@lunora/vite`](https://www.npmjs.com/package/@lunora/vite) — the Vite plugin that shares the same validator.
+- [`@lunora/codegen`](https://www.npmjs.com/package/@lunora/codegen) — discovers schema info used during validation.
 
 ## Supported Node.js Versions
 
@@ -80,14 +80,14 @@ Here's [a post on why we think this is important](https://medium.com/the-node-js
 
 ## Contributing
 
-If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/lunora/issues) and check our [Contributing](https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
 > **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
 ## Credits
 
 - [Daniel Bannert](https://github.com/prisis)
-- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
+- [All Contributors](https://github.com/anolilab/lunora/graphs/contributors)
 
 ## Made with ❤️ at Anolilab
 
@@ -95,17 +95,17 @@ This is an open source project and will always remain free to use. If you think 
 
 ## License
 
-The Cirrus config package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The Lunora config package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
 
 <!-- badges -->
 
 [license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
-[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
-[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/config?style=for-the-badge
-[npm-version]: https://www.npmjs.com/package/@cirrus/config
-[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/config?style=for-the-badge
-[npm-downloads]: https://www.npmjs.com/package/@cirrus/config
+[license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@lunora/config?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@lunora/config
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@lunora/config?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@lunora/config
 [prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
-[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[prs-welcome]: https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md
 [typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
 [typescript-url]: https://www.typescriptlang.org/

@@ -8,7 +8,7 @@ const WelcomeEmail = ({ name }: { name: string }) => (
     <html lang="en">
         <body>
             <h1>Welcome, {name}!</h1>
-            <p>Thanks for joining Cirrus.</p>
+            <p>Thanks for joining Lunora.</p>
         </body>
     </html>
 );

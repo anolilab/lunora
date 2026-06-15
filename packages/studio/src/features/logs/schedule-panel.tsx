@@ -46,7 +46,7 @@ export const SchedulePanel = ({ loadCronJobs, scheduledCancel, scheduledLoad }: 
     }, []);
 
     return (
-        <div className="flex flex-col gap-4" data-testid="cirrus-schedule">
+        <div className="flex flex-col gap-4" data-testid="lunora-schedule">
             <div aria-label={t("Schedule view")} className="flex gap-1.5" data-testid="schedule-view-toggle" role="tablist">
                 {VIEW_KEYS.map((key) => (
                     <Button

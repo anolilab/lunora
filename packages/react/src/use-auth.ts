@@ -2,12 +2,12 @@
 
 import { useSyncExternalStore } from "react";
 
-import { useCirrus } from "./cirrus-provider";
-import type { CirrusClient, UseAuthResult, User } from "./types";
+import { useLunora } from "./lunora-provider";
+import type { LunoraClient, UseAuthResult, User } from "./types";
 
 /**
  * Per-client identity store. The authenticated user lives on the shared
- * `CirrusClient`, but the client itself is framework-agnostic and exposes only
+ * `LunoraClient`, but the client itself is framework-agnostic and exposes only
  * an async `getCurrentUser()` plus `onAuthTokenChange`. This module bridges that
  * to React's `useSyncExternalStore`: one store per client holds the last
  * resolved `user`, the set of mounted-hook listeners, and the token-change
@@ -25,9 +25,9 @@ interface IdentityStore {
 }
 
 // WeakMap keyed by client so a discarded client's store is GC'd with it.
-const stores = new WeakMap<CirrusClient, IdentityStore>();
+const stores = new WeakMap<LunoraClient, IdentityStore>();
 
-const createStore = (client: CirrusClient): IdentityStore => {
+const createStore = (client: LunoraClient): IdentityStore => {
     const listeners = new Set<() => void>();
     // eslint-disable-next-line unicorn/no-null -- `user` is `User | null`; `null` is the signed-out sentinel
     let user: User | null = null;
@@ -104,7 +104,7 @@ const createStore = (client: CirrusClient): IdentityStore => {
     };
 };
 
-const getStore = (client: CirrusClient): IdentityStore => {
+const getStore = (client: LunoraClient): IdentityStore => {
     let store = stores.get(client);
 
     if (!store) {
@@ -116,7 +116,7 @@ const getStore = (client: CirrusClient): IdentityStore => {
 };
 
 /**
- * Token + identity plumbing. The token lives on the shared `CirrusClient`;
+ * Token + identity plumbing. The token lives on the shared `LunoraClient`;
  * `setToken(jwt)` after a sign-in makes subsequent RPC calls carry the
  * `Authorization` header. `user` is resolved from better-auth's `get-session`
  * endpoint via `client.getCurrentUser()` — fetched on mount and refetched
@@ -128,7 +128,7 @@ const getStore = (client: CirrusClient): IdentityStore => {
  * hook with the freshly-resolved user.
  */
 const useAuth = (): UseAuthResult => {
-    const client = useCirrus();
+    const client = useLunora();
     const store = getStore(client);
 
     // No manual memoization: React Compiler (enabled in the build) stabilises

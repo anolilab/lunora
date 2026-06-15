@@ -6,7 +6,7 @@
 
 </a>
 
-<h3 align="center">Cirrus Durable Objects: ShardDO (SQLite, OCC, hibernated WebSocket subscriptions) and SessionDO</h3>
+<h3 align="center">Lunora Durable Objects: ShardDO (SQLite, OCC, hibernated WebSocket subscriptions) and SessionDO</h3>
 
 <!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
@@ -34,29 +34,29 @@
 
 ---
 
-The Durable Object base classes for Cirrus. `ShardDO` is a SQLite-backed shard with optimistic concurrency, the WebSocket Hibernation API, and a live subscription registry; `SessionDO` pins auth sessions. Subclass these from a Worker that uses [`@cirrus/runtime`](https://www.npmjs.com/package/@cirrus/runtime). It also ships the `createShardCtxDb` adapter and `runShardMigrations` helper that generated functions build on.
+The Durable Object base classes for Lunora. `ShardDO` is a SQLite-backed shard with optimistic concurrency, the WebSocket Hibernation API, and a live subscription registry; `SessionDO` pins auth sessions. Subclass these from a Worker that uses [`@lunora/runtime`](https://www.npmjs.com/package/@lunora/runtime). It also ships the `createShardCtxDb` adapter and `runShardMigrations` helper that generated functions build on.
 
-Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
+Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
 ## Install
 
 ```sh
-npm install @cirrus/do
+npm install @lunora/do
 ```
 
 ```sh
-yarn add @cirrus/do
+yarn add @lunora/do
 ```
 
 ```sh
-pnpm add @cirrus/do
+pnpm add @lunora/do
 ```
 
 ## Usage
 
 ```ts
-import { createShardCtxDb, runShardMigrations, ShardDO } from "@cirrus/do";
-import schema from "../cirrus/schema";
+import { createShardCtxDb, runShardMigrations, ShardDO } from "@lunora/do";
+import schema from "../lunora/schema";
 
 export class MyShard extends ShardDO {
     private migrated = false;
@@ -78,13 +78,13 @@ export class MyShard extends ShardDO {
 }
 ```
 
-> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/api/do)**.
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/api/do)**.
 
 ## Related
 
-- [`@cirrus/runtime`](https://www.npmjs.com/package/@cirrus/runtime) — the Worker entry that routes RPC and WebSocket traffic into these Durable Objects.
-- [`@cirrus/d1`](https://www.npmjs.com/package/@cirrus/d1) — backs `.global()` tables, which `ShardDO` skips.
-- [`@cirrus/server`](https://www.npmjs.com/package/@cirrus/server) — defines the schema `runShardMigrations` and `createShardCtxDb` consume.
+- [`@lunora/runtime`](https://www.npmjs.com/package/@lunora/runtime) — the Worker entry that routes RPC and WebSocket traffic into these Durable Objects.
+- [`@lunora/d1`](https://www.npmjs.com/package/@lunora/d1) — backs `.global()` tables, which `ShardDO` skips.
+- [`@lunora/server`](https://www.npmjs.com/package/@lunora/server) — defines the schema `runShardMigrations` and `createShardCtxDb` consume.
 
 ## Supported Node.js Versions
 
@@ -93,14 +93,14 @@ Here's [a post on why we think this is important](https://medium.com/the-node-js
 
 ## Contributing
 
-If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/lunora/issues) and check our [Contributing](https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
 > **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
 ## Credits
 
 - [Daniel Bannert](https://github.com/prisis)
-- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
+- [All Contributors](https://github.com/anolilab/lunora/graphs/contributors)
 
 ## Made with ❤️ at Anolilab
 
@@ -108,17 +108,17 @@ This is an open source project and will always remain free to use. If you think 
 
 ## License
 
-The Cirrus do package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The Lunora do package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
 
 <!-- badges -->
 
 [license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
-[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
-[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/do?style=for-the-badge
-[npm-version]: https://www.npmjs.com/package/@cirrus/do
-[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/do?style=for-the-badge
-[npm-downloads]: https://www.npmjs.com/package/@cirrus/do
+[license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@lunora/do?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@lunora/do
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@lunora/do?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@lunora/do
 [prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
-[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[prs-welcome]: https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md
 [typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
 [typescript-url]: https://www.typescriptlang.org/

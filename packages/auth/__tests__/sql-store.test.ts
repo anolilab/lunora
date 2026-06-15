@@ -3,7 +3,7 @@ import { DatabaseSync } from "node:sqlite";
 import { getAuthTables } from "better-auth/db";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { cirrusAuthAdapter } from "../src/adapter";
+import { lunoraAuthAdapter } from "../src/adapter";
 import { createAuth } from "../src/create-auth";
 import type { SqlExecutor } from "../src/sql-store";
 import { createSqlAuthStore } from "../src/sql-store";
@@ -155,7 +155,7 @@ describe("createSqlAuthStore — CRUD over node:sqlite", () => {
 });
 
 describe("createSqlAuthStore — better-auth end to end on SQLite", () => {
-    const options = { emailAndPassword: { enabled: true }, secret: "cirrus-test-secret-cirrus-test-secret-xx" };
+    const options = { emailAndPassword: { enabled: true }, secret: "lunora-test-secret-lunora-test-secret-xx" };
     const email = "ada@example.com";
     // test-only credential for an in-memory better-auth instance — never a real secret
     const password = "correct-horse-battery-staple"; // secret-scanner:allow
@@ -176,7 +176,7 @@ describe("createSqlAuthStore — better-auth end to end on SQLite", () => {
     beforeEach(() => {
         database = new DatabaseSync(":memory:");
 
-        // Cirrus owns the auth schema; here we materialise it straight from
+        // Lunora owns the auth schema; here we materialise it straight from
         // better-auth's own table map so the store writes into real tables.
         for (const table of Object.values(getAuthTables(options))) {
             const columns = [
@@ -194,7 +194,7 @@ describe("createSqlAuthStore — better-auth end to end on SQLite", () => {
         database.close();
     });
 
-    const buildAuth = () => createAuth({ ...options, baseURL: "http://localhost:3000", database: cirrusAuthAdapter(createSqlAuthStore(executor)) });
+    const buildAuth = () => createAuth({ ...options, baseURL: "http://localhost:3000", database: lunoraAuthAdapter(createSqlAuthStore(executor)) });
 
     it("routes sign-up and sign-in through the SQL store onto SQLite", async () => {
         expect.hasAssertions();

@@ -1,4 +1,4 @@
-// Builds a self-contained, browser-ready studio bundle for the `@cirrus/vite`
+// Builds a self-contained, browser-ready studio bundle for the `@lunora/vite`
 // dev route. Unlike `dist/index.mjs` / `dist/mount.mjs` (library output with
 // react externalised), this bundle inlines react and every dependency so it can
 // be served as a plain static script — no host bundler, no HMR, not editable.
@@ -21,22 +21,22 @@ if (mountEntry === undefined) {
 
 // Synthetic entry: pull the named export from the built library and mount it,
 // reading per-server config the host injects on `globalThis` before this loads
-// (the `@cirrus/vite` dev route sets the mount basepath and, on loopback, the
+// (the `@lunora/vite` dev route sets the mount basepath and, on loopback, the
 // admin token). Both are optional — absent, the studio mounts at the root and
 // prompts for a token, as a plain static deploy would.
 const entry = [
     `import { mountStudio } from "./${mountEntry}";`,
     "const g = globalThis;",
     "mountStudio({",
-    '  basePath: typeof g.__CIRRUS_BASE_PATH__ === "string" ? g.__CIRRUS_BASE_PATH__ : "/",',
-    '  adminToken: typeof g.__CIRRUS_ADMIN_TOKEN__ === "string" && g.__CIRRUS_ADMIN_TOKEN__ !== "" ? g.__CIRRUS_ADMIN_TOKEN__ : undefined,',
+    '  basePath: typeof g.__LUNORA_BASE_PATH__ === "string" ? g.__LUNORA_BASE_PATH__ : "/",',
+    '  adminToken: typeof g.__LUNORA_ADMIN_TOKEN__ === "string" && g.__LUNORA_ADMIN_TOKEN__ !== "" ? g.__LUNORA_ADMIN_TOKEN__ : undefined,',
     // Editing and the run-as tool are opt-in: the loopback dev hosts inject
-    // `__CIRRUS_DATA_EDITABLE__` / `__CIRRUS_RUN_AS_IDENTITY__`, so a plain static
+    // `__LUNORA_DATA_EDITABLE__` / `__LUNORA_RUN_AS_IDENTITY__`, so a plain static
     // deploy stays read-only and can't forge an identity unless the embedder opts in.
-    "  studio: { dataEditable: g.__CIRRUS_DATA_EDITABLE__ === true, runAsIdentity: g.__CIRRUS_RUN_AS_IDENTITY__ === true, schemaEditable: g.__CIRRUS_SCHEMA_EDITABLE__ === true },",
-    // The loopback dev hosts inject `__CIRRUS_RULES_INSTALLED__=false` when the
+    "  studio: { dataEditable: g.__LUNORA_DATA_EDITABLE__ === true, runAsIdentity: g.__LUNORA_RUN_AS_IDENTITY__ === true, schemaEditable: g.__LUNORA_SCHEMA_EDITABLE__ === true },",
+    // The loopback dev hosts inject `__LUNORA_RULES_INSTALLED__=false` when the
     // project's agent skills are missing; absent (static deploy) means installed.
-    "  rulesInstalled: g.__CIRRUS_RULES_INSTALLED__ !== false,",
+    "  rulesInstalled: g.__LUNORA_RULES_INSTALLED__ !== false,",
     "});",
 ].join("\n");
 

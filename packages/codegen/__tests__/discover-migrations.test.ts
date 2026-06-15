@@ -14,7 +14,7 @@ let workdir: string;
 
 describe("discover-migrations", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-migrate-disco-"));
+        workdir = mkdtempSync(join(tmpdir(), "lunora-migrate-disco-"));
     });
 
     afterEach(() => {
@@ -37,7 +37,7 @@ describe("discover-migrations", () => {
             writeSource(
                 "migrations.ts",
                 `
-            import { defineMigration } from "@cirrus/server";
+            import { defineMigration } from "@lunora/server";
             export const backfill = defineMigration({
                 id: "backfill-read-by",
                 table: "messages",
@@ -57,7 +57,7 @@ describe("discover-migrations", () => {
             writeSource(
                 "migrations.ts",
                 `
-            import { defineMigration as dm } from "@cirrus/server";
+            import { defineMigration as dm } from "@lunora/server";
             export const m = dm({ id: "aliased", table: "users", up: (d) => d });
         `,
             );
@@ -68,7 +68,7 @@ describe("discover-migrations", () => {
             expect(result[0]?.id).toBe("aliased");
         });
 
-        it("ignores a local `defineMigration` not imported from @cirrus/server", () => {
+        it("ignores a local `defineMigration` not imported from @lunora/server", () => {
             expect.assertions(1);
 
             writeSource(
@@ -90,7 +90,7 @@ describe("discover-migrations", () => {
             writeSource(
                 "migrations.ts",
                 `
-            import { defineMigration } from "@cirrus/server";
+            import { defineMigration } from "@lunora/server";
             const TABLE = "messages";
             export const m = defineMigration({ id: "dyn-table", table: TABLE, up: (d) => d });
         `,
@@ -107,14 +107,14 @@ describe("discover-migrations", () => {
             writeSource(
                 "a.ts",
                 `
-            import { defineMigration } from "@cirrus/server";
+            import { defineMigration } from "@lunora/server";
             export const second = defineMigration({ id: "b-second", table: "t", up: (d) => d });
         `,
             );
             writeSource(
                 "z.ts",
                 `
-            import { defineMigration } from "@cirrus/server";
+            import { defineMigration } from "@lunora/server";
             export const first = defineMigration({ id: "a-first", table: "t", up: (d) => d });
         `,
             );
@@ -130,7 +130,7 @@ describe("discover-migrations", () => {
             writeSource(
                 "migrations.ts",
                 `
-            import { defineMigration } from "@cirrus/server";
+            import { defineMigration } from "@lunora/server";
             const dynamicId = "nope";
             export const m = defineMigration({ id: dynamicId, table: "t", up: (d) => d });
         `,
@@ -148,7 +148,7 @@ describe("discover-migrations", () => {
                 caught = error;
             }
 
-            expect(caught).toMatchObject({ code: "MIGRATION_ID_NOT_STATIC", name: "CirrusError", status: 500 });
+            expect(caught).toMatchObject({ code: "MIGRATION_ID_NOT_STATIC", name: "LunoraError", status: 500 });
         });
 
         it("throws DUPLICATE_MIGRATION_ID when two declarations share an id", () => {
@@ -157,14 +157,14 @@ describe("discover-migrations", () => {
             writeSource(
                 "one.ts",
                 `
-            import { defineMigration } from "@cirrus/server";
+            import { defineMigration } from "@lunora/server";
             export const a = defineMigration({ id: "dup", table: "t", up: (d) => d });
         `,
             );
             writeSource(
                 "two.ts",
                 `
-            import { defineMigration } from "@cirrus/server";
+            import { defineMigration } from "@lunora/server";
             export const b = defineMigration({ id: "dup", table: "t", up: (d) => d });
         `,
             );
@@ -181,7 +181,7 @@ describe("discover-migrations", () => {
                 caught = error;
             }
 
-            expect(caught).toMatchObject({ code: "DUPLICATE_MIGRATION_ID", id: "dup", name: "CirrusError", status: 500 });
+            expect(caught).toMatchObject({ code: "DUPLICATE_MIGRATION_ID", id: "dup", name: "LunoraError", status: 500 });
             expect((caught as { paths: string[] }).paths).toEqual(expect.arrayContaining(["one", "two"]));
         });
     });

@@ -1,4 +1,4 @@
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
@@ -31,9 +31,9 @@ const createClient = (): MockClientHooks =>
     });
 
 const renderPanel = (mock: MockClientHooks) => (
-    <CirrusProvider client={mock.asClient}>
+    <LunoraProvider client={mock.asClient}>
         <ExportImportPanel />
-    </CirrusProvider>
+    </LunoraProvider>
 );
 
 describe("exportImportPanel", () => {
@@ -66,7 +66,7 @@ describe("exportImportPanel", () => {
         const error = await screen.findByTestId("ei-error");
 
         expect(error.textContent).toContain("Invalid NDJSON");
-        expect(mock.query.mock.calls.some((call) => call[0].__cirrusRef === ADMIN_FUNCTIONS.importShard)).toBe(false);
+        expect(mock.query.mock.calls.some((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.importShard)).toBe(false);
     });
 
     it("imports NDJSON and summarises the result", async () => {

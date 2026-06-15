@@ -1,4 +1,4 @@
-import type { CirrusClient } from "@cirrus/client";
+import type { LunoraClient } from "@lunora/client";
 import { describe, expect, it, vi } from "vitest";
 
 import { callTool, TOOL_DEFINITIONS } from "../src/tools";
@@ -6,7 +6,7 @@ import { callTool, TOOL_DEFINITIONS } from "../src/tools";
 /** Minimal mock exposing only the methods the tools touch. */
 const mockClient = (): {
     action: ReturnType<typeof vi.fn>;
-    asClient: CirrusClient;
+    asClient: LunoraClient;
     listFunctions: ReturnType<typeof vi.fn>;
     listGlobalTables: ReturnType<typeof vi.fn>;
     mutation: ReturnType<typeof vi.fn>;
@@ -24,7 +24,7 @@ const mockClient = (): {
         return { count: 7 };
     });
 
-    const client = { action, listFunctions, listGlobalTables, mutation, query } as unknown as CirrusClient;
+    const client = { action, listFunctions, listGlobalTables, mutation, query } as unknown as LunoraClient;
 
     return { action, asClient: client, listFunctions, listGlobalTables, mutation, query };
 };
@@ -35,45 +35,45 @@ describe("tOOL_DEFINITIONS", () => {
 
         const names = TOOL_DEFINITIONS.map((tool) => tool.name);
 
-        expect(names).toStrictEqual(["cirrus_list_functions", "cirrus_list_tables", "cirrus_run_query", "cirrus_run_mutation", "cirrus_run_action"]);
+        expect(names).toStrictEqual(["lunora_list_functions", "lunora_list_tables", "lunora_run_query", "lunora_run_mutation", "lunora_run_action"]);
         expect(TOOL_DEFINITIONS.every((tool) => tool.inputSchema.type === "object")).toBe(true);
     });
 });
 
 describe("callTool", () => {
-    it("cirrus_list_functions returns the function list as JSON text", async () => {
+    it("lunora_list_functions returns the function list as JSON text", async () => {
         expect.assertions(3);
 
         const mock = mockClient();
-        const result = await callTool(mock.asClient, "cirrus_list_functions", {});
+        const result = await callTool(mock.asClient, "lunora_list_functions", {});
 
         expect(mock.listFunctions).toHaveBeenCalledTimes(1);
         expect(result.isError).toBeUndefined();
         expect(JSON.parse(result.content[0]!.text)).toStrictEqual([{ kind: "query", path: "messages:list" }]);
     });
 
-    it("cirrus_run_query forwards the function reference, args, and shardKey", async () => {
+    it("lunora_run_query forwards the function reference, args, and shardKey", async () => {
         expect.assertions(2);
 
         const mock = mockClient();
-        const result = await callTool(mock.asClient, "cirrus_run_query", {
+        const result = await callTool(mock.asClient, "lunora_run_query", {
             args: { limit: 3 },
             functionPath: "messages:list",
             shardKey: "room-1",
         });
 
-        expect(mock.query).toHaveBeenCalledWith({ __cirrusRef: "messages:list" }, { limit: 3 }, { shardKey: "room-1" });
+        expect(mock.query).toHaveBeenCalledWith({ __lunoraRef: "messages:list" }, { limit: 3 }, { shardKey: "room-1" });
         expect(JSON.parse(result.content[0]!.text)).toStrictEqual({ count: 7 });
     });
 
-    it("cirrus_run_mutation defaults args to an empty object when omitted", async () => {
+    it("lunora_run_mutation defaults args to an empty object when omitted", async () => {
         expect.assertions(1);
 
         const mock = mockClient();
 
-        await callTool(mock.asClient, "cirrus_run_mutation", { functionPath: "messages:send" });
+        await callTool(mock.asClient, "lunora_run_mutation", { functionPath: "messages:send" });
 
-        expect(mock.mutation).toHaveBeenCalledWith({ __cirrusRef: "messages:send" }, {}, { shardKey: undefined });
+        expect(mock.mutation).toHaveBeenCalledWith({ __lunoraRef: "messages:send" }, {}, { shardKey: undefined });
     });
 
     it("coerces a non-object args payload (e.g. an array) to an empty bag", async () => {
@@ -81,16 +81,16 @@ describe("callTool", () => {
 
         const mock = mockClient();
 
-        await callTool(mock.asClient, "cirrus_run_query", { args: [1, 2, 3], functionPath: "messages:list" });
+        await callTool(mock.asClient, "lunora_run_query", { args: [1, 2, 3], functionPath: "messages:list" });
 
-        expect(mock.query).toHaveBeenCalledWith({ __cirrusRef: "messages:list" }, {}, { shardKey: undefined });
+        expect(mock.query).toHaveBeenCalledWith({ __lunoraRef: "messages:list" }, {}, { shardKey: undefined });
     });
 
     it("returns an error result when functionPath is missing", async () => {
         expect.assertions(2);
 
         const mock = mockClient();
-        const result = await callTool(mock.asClient, "cirrus_run_query", {});
+        const result = await callTool(mock.asClient, "lunora_run_query", {});
 
         expect(result.isError).toBe(true);
         expect(mock.query).not.toHaveBeenCalled();
@@ -100,7 +100,7 @@ describe("callTool", () => {
         expect.assertions(1);
 
         const mock = mockClient();
-        const result = await callTool(mock.asClient, "cirrus_nope", {});
+        const result = await callTool(mock.asClient, "lunora_nope", {});
 
         expect(result.isError).toBe(true);
     });
@@ -113,7 +113,7 @@ describe("callTool", () => {
         // A mutation/action that returns nothing resolves to `undefined`.
         mock.mutation.mockResolvedValueOnce(undefined);
 
-        const result = await callTool(mock.asClient, "cirrus_run_mutation", { functionPath: "messages:send" });
+        const result = await callTool(mock.asClient, "lunora_run_mutation", { functionPath: "messages:send" });
 
         expect(result.isError).toBeUndefined();
         // `text` must always be a string per the MCP TextContent contract;
@@ -129,7 +129,7 @@ describe("callTool", () => {
 
         mock.action.mockRejectedValueOnce(new Error("boom"));
 
-        const result = await callTool(mock.asClient, "cirrus_run_action", { functionPath: "x:y" });
+        const result = await callTool(mock.asClient, "lunora_run_action", { functionPath: "x:y" });
 
         expect(result.isError).toBe(true);
         expect(result.content[0]!.text).toContain("boom");

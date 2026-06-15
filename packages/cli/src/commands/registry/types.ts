@@ -1,5 +1,5 @@
 /**
- * Shared types for the component-registry commands (`cirrus registry
+ * Shared types for the component-registry commands (`lunora registry
  * add|list|view|build`). The manifest shape mirrors `registry.json`; the option
  * / result types are shared across the four command orchestrators.
  */
@@ -11,7 +11,7 @@ interface RegistryFile {
     from: string;
     /** Merge strategy. `create-or-skip` writes whole files; `schema-extension` AST-merges schema.ts. */
     merge: "create-or-skip" | "schema-extension";
-    /** Destination relative to the project root (e.g. `cirrus/ratelimit/index.ts`). */
+    /** Destination relative to the project root (e.g. `lunora/ratelimit/index.ts`). */
     to: string;
 }
 
@@ -83,7 +83,7 @@ interface AddCommandOptions {
     out?: string;
     /** Force-overwrite existing files (take the incoming copy) instead of skipping/conflicting. */
     overwrite?: boolean;
-    /** Override the remote registry source base (default gh:anolilab/cirrus/registry). */
+    /** Override the remote registry source base (default gh:anolilab/lunora/registry). */
     source?: string;
     /** Skip the package.json mutation confirmation prompt. */
     yes?: boolean;

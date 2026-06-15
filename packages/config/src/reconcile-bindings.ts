@@ -1,5 +1,5 @@
 /**
- * Write the bindings implied by `inferCirrusBindings` into the project's
+ * Write the bindings implied by `inferLunoraBindings` into the project's
  * `wrangler.jsonc`, idempotently and comment-preservingly.
  *
  * Mirrors `reconcileWranglerCrons`: structural edits via `jsonc-parser`'s
@@ -16,7 +16,7 @@
  */
 import { writeFileSync } from "node:fs";
 
-import { containerBuildTag } from "@cirrus/container";
+import { containerBuildTag } from "@lunora/container";
 import { applyEdits, modify } from "jsonc-parser";
 
 import type { DurableObjectSpec, InferredBindings, InferredContainer, InferredWorkflow } from "./infer-bindings";
@@ -62,16 +62,16 @@ interface WranglerShape {
     containers?: ReadonlyArray<ContainerEntry>;
     d1_databases?: ReadonlyArray<{ binding?: string }>;
     durable_objects?: { bindings?: ReadonlyArray<DurableObjectBinding> };
-    // Hint-only: the `id` is a remote Hyperdrive resource Cirrus can't mint — warned, never written.
+    // Hint-only: the `id` is a remote Hyperdrive resource Lunora can't mint — warned, never written.
     hyperdrive?: ReadonlyArray<{ binding?: string; id?: string }>;
     // Self-describing: a parameterless { binding } — auto-writeable like `ai` (see reconcileImages).
     images?: { binding?: string };
-    // Hint-only: the namespace `id` is a remote KV resource Cirrus can't mint — warned, never written.
+    // Hint-only: the namespace `id` is a remote KV resource Lunora can't mint — warned, never written.
     kv_namespaces?: ReadonlyArray<{ binding?: string; id?: string }>;
     migrations?: ReadonlyArray<MigrationEntry>;
     name?: string;
     observability?: { enabled?: boolean };
-    // Hint-only: the `pipeline` name is a remote resource Cirrus can't mint — warned, never written.
+    // Hint-only: the `pipeline` name is a remote resource Lunora can't mint — warned, never written.
     pipelines?: ReadonlyArray<{ binding?: string; pipeline?: string }>;
     r2_buckets?: ReadonlyArray<{ binding?: string }>;
     workflows?: ReadonlyArray<WorkflowEntry>;
@@ -89,7 +89,7 @@ interface WranglerShape {
 interface ExportGap {
     /** Generated class wrangler needs exported, e.g. `OrderPipelineWorkflow`. */
     className: string;
-    /** The `cirrus/{containers,workflows}.ts` export name, e.g. `orderPipeline`. */
+    /** The `lunora/{containers,workflows}.ts` export name, e.g. `orderPipeline`. */
     exportName: string;
     /** Which declaration is unexported. */
     kind: "container" | "workflow";
@@ -147,7 +147,7 @@ interface ReconcileStep {
 }
 
 /**
- * Collect hint-only binding warnings. Each carries a remote id/name Cirrus
+ * Collect hint-only binding warnings. Each carries a remote id/name Lunora
  * can't mint (a KV namespace id, a Hyperdrive id, a Pipelines pipeline name);
  * like R2's user-defined bucket name they are warned, never auto-written, and
  * the warning is suppressed once the corresponding binding array is already
@@ -158,15 +158,15 @@ const collectHintBindingWarnings = (inferred: InferredBindings, parsed?: Wrangle
     const rules: ReadonlyArray<[boolean, string]> = [
         [
             inferred.usesKv && (parsed?.kv_namespaces?.length ?? 0) === 0,
-            "@cirrus/kv is used but no kv_namespaces binding exists; add a kv_namespaces entry ({ binding, id }) and pass env.<BINDING> to createKv() — the namespace id can't be auto-provisioned.",
+            "@lunora/kv is used but no kv_namespaces binding exists; add a kv_namespaces entry ({ binding, id }) and pass env.<BINDING> to createKv() — the namespace id can't be auto-provisioned.",
         ],
         [
             inferred.usesHyperdrive && (parsed?.hyperdrive?.length ?? 0) === 0,
-            "@cirrus/hyperdrive is used but no hyperdrive binding exists; run 'wrangler hyperdrive create' and add a 'hyperdrive' binding ({ binding, id }) — the id can't be auto-provisioned.",
+            "@lunora/hyperdrive is used but no hyperdrive binding exists; run 'wrangler hyperdrive create' and add a 'hyperdrive' binding ({ binding, id }) — the id can't be auto-provisioned.",
         ],
         [
             inferred.usesPipelines && (parsed?.pipelines?.length ?? 0) === 0,
-            "@cirrus/pipelines is used but no pipelines binding exists; run 'wrangler pipelines create <name>' and add a 'pipelines' binding ({ binding, pipeline }) — the pipeline resource can't be auto-provisioned.",
+            "@lunora/pipelines is used but no pipelines binding exists; run 'wrangler pipelines create <name>' and add a 'pipelines' binding ({ binding, pipeline }) — the pipeline resource can't be auto-provisioned.",
         ],
     ];
 
@@ -179,7 +179,7 @@ const collectHintBindingWarnings = (inferred: InferredBindings, parsed?: Wrangle
  * `wrangler.jsonc`, when one was read) suppresses a hint whose binding is already
  * configured, so a correctly-wired project starts the dev server clean.
  *
- * Storage is silent once any `r2_buckets` binding exists (cirrus can't pick the bucket name, but if one is already declared there's nothing to add). Auth is silent once sessions have a store — a `DB` D1 binding (the default, D1-backed) or an exported `SessionDO` (DO-backed); only a project with neither has nowhere to put sessions, so only that case warns. Scheduler keys on the `SchedulerDO` export, the safe binding signal. Payment has no binding at all — state rides the app's existing `ShardDO` via `ctx.db`; its only need is the provider secret pair, which lives in `.dev.vars` (not `wrangler.jsonc`), so the reminder fires whenever payment is used and nothing here can confirm it away.
+ * Storage is silent once any `r2_buckets` binding exists (lunora can't pick the bucket name, but if one is already declared there's nothing to add). Auth is silent once sessions have a store — a `DB` D1 binding (the default, D1-backed) or an exported `SessionDO` (DO-backed); only a project with neither has nowhere to put sessions, so only that case warns. Scheduler keys on the `SchedulerDO` export, the safe binding signal. Payment has no binding at all — state rides the app's existing `ShardDO` via `ctx.db`; its only need is the provider secret pair, which lives in `.dev.vars` (not `wrangler.jsonc`), so the reminder fires whenever payment is used and nothing here can confirm it away.
  */
 const collectWarnings = (inferred: InferredBindings, parsed?: WranglerShape): string[] => {
     const exported = new Set(inferred.durableObjects.map((object) => object.className));
@@ -192,24 +192,24 @@ const collectWarnings = (inferred: InferredBindings, parsed?: WranglerShape): st
 
     if (inferred.usesStorage && !hasR2Bucket) {
         warnings.push(
-            "@cirrus/storage is used but R2 bucket bindings have user-defined names; add an r2_buckets entry and pass env.<BINDING> to createStorage().",
+            "@lunora/storage is used but R2 bucket bindings have user-defined names; add an r2_buckets entry and pass env.<BINDING> to createStorage().",
         );
     }
 
     if (inferred.usesAuth && !exported.has("SessionDO") && !hasSessionStore) {
         warnings.push(
-            "@cirrus/auth is used but the worker entry exports no SessionDO; sessions are D1-backed, or export SessionDO to enable DO-backed sessions.",
+            "@lunora/auth is used but the worker entry exports no SessionDO; sessions are D1-backed, or export SessionDO to enable DO-backed sessions.",
         );
     }
 
     if (inferred.usesScheduler && !exported.has("SchedulerDO")) {
-        warnings.push("@cirrus/scheduler is used but the worker entry exports no SchedulerDO; export it so the SCHEDULER binding can be provisioned.");
+        warnings.push("@lunora/scheduler is used but the worker entry exports no SchedulerDO; export it so the SCHEDULER binding can be provisioned.");
     }
 
     for (const container of inferred.containers) {
         if (!container.exported) {
             warnings.push(
-                `container "${container.exportName}" is declared but ${container.className} is not exported by the worker entry; add \`export * from "./cirrus/_generated/containers"\` so its binding can be provisioned.`,
+                `container "${container.exportName}" is declared but ${container.className} is not exported by the worker entry; add \`export * from "./lunora/_generated/containers"\` so its binding can be provisioned.`,
             );
         }
     }
@@ -217,7 +217,7 @@ const collectWarnings = (inferred: InferredBindings, parsed?: WranglerShape): st
     for (const workflow of inferred.workflows) {
         if (!workflow.exported) {
             warnings.push(
-                `workflow "${workflow.exportName}" is declared but ${workflow.className} is not exported by the worker entry; add \`export * from "./cirrus/_generated/workflows"\` so its binding can be provisioned.`,
+                `workflow "${workflow.exportName}" is declared but ${workflow.className} is not exported by the worker entry; add \`export * from "./lunora/_generated/workflows"\` so its binding can be provisioned.`,
             );
         }
     }
@@ -235,7 +235,7 @@ const collectWarnings = (inferred: InferredBindings, parsed?: WranglerShape): st
         // live in .dev.vars (not wrangler.jsonc) and the scaffolder can't
         // fabricate. We always remind, since wrangler.jsonc can't confirm them.
         warnings.push(
-            "@cirrus/payment is used; set the provider secrets in .dev.vars — STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET (Stripe) or POLAR_ACCESS_TOKEN + POLAR_WEBHOOK_SECRET (Polar).",
+            "@lunora/payment is used; set the provider secrets in .dev.vars — STRIPE_SECRET_KEY + STRIPE_WEBHOOK_SECRET (Stripe) or POLAR_ACCESS_TOKEN + POLAR_WEBHOOK_SECRET (Polar).",
         );
     }
 
@@ -305,7 +305,7 @@ const reconcileD1 = (text: string, parsed: WranglerShape): ReconcileStep => {
         return { added: [], text };
     }
 
-    const databaseName = typeof parsed.name === "string" && parsed.name.length > 0 ? parsed.name : "cirrus";
+    const databaseName = typeof parsed.name === "string" && parsed.name.length > 0 ? parsed.name : "lunora";
     const nextD1 = [...d1Bindings, { binding: "DB", database_id: D1_PLACEHOLDER_ID, database_name: databaseName }];
 
     return { added: ["DB (D1)"], text: applyModify(text, ["d1_databases"], nextD1) };
@@ -328,7 +328,7 @@ const reconcileSelfDescribing = (text: string, parsed: WranglerShape, key: "ai" 
 };
 
 /**
- * Add the `analytics_engine_datasets` binding for `@cirrus/analytics` usage, if
+ * Add the `analytics_engine_datasets` binding for `@lunora/analytics` usage, if
  * absent. Self-describing: the `dataset` name is user-chosen and created lazily
  * on first write (no remote id to mint), so it auto-writes like the DO bindings.
  * The dataset defaults to the binding name on Cloudflare's side; we write it
@@ -378,7 +378,7 @@ const imageRefFor = (container: InferredContainer): string => {
         return container.image.reference;
     }
 
-    // A Railpack `{ build }` source: `cirrus deploy` builds + pushes this local
+    // A Railpack `{ build }` source: `lunora deploy` builds + pushes this local
     // tag (derived from the export name) before wrangler runs, so wrangler.jsonc
     // references the pushed tag. See `containerBuildTag`.
     return containerBuildTag(container.exportName);
@@ -395,7 +395,7 @@ const containerEntryFor = (container: InferredContainer): Record<string, unknown
         entry.image_build_context = container.image.buildContext;
     }
 
-    // Build args (image_vars) only make sense for an image cirrus builds.
+    // Build args (image_vars) only make sense for an image lunora builds.
     if (container.buildArgs !== undefined && container.image.kind !== "registry") {
         entry.image_vars = container.buildArgs;
     }

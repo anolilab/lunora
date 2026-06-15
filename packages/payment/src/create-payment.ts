@@ -8,7 +8,7 @@
 import type { PaymentAdapter } from "./adapter";
 import type { Entitlements, EntitlementsConfig } from "./entitlements";
 import { featureNames, hasActivePrice, resolveEntitlements, usagePeriodStart } from "./entitlements";
-import { CirrusPaymentError } from "./errors";
+import { LunoraPaymentError } from "./errors";
 import idempotencyKey from "./idempotency";
 import type { PaymentObserver } from "./observability";
 import { notifyObserver } from "./observability";
@@ -47,11 +47,11 @@ export interface CreatePaymentOptions {
     readonly store: PaymentStore;
 }
 
-export interface CirrusPayment {
+export interface LunoraPayment {
     readonly adapter: PaymentAdapter;
 
     /**
-     * Subscribe a reference to a plan — a plan-oriented alias of {@link CirrusPayment.createCheckout}
+     * Subscribe a reference to a plan — a plan-oriented alias of {@link LunoraPayment.createCheckout}
      * with `mode` defaulting to `"subscription"`. Returns a hosted-checkout URL to redirect to.
      */
     attach: (input: AttachInput) => Promise<CheckoutResult>;
@@ -81,7 +81,7 @@ export interface CirrusPayment {
     track: (input: TrackInput) => Promise<TrackResult>;
 }
 
-export const createPayment = (options: CreatePaymentOptions): CirrusPayment => {
+export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
     const { adapter, store } = options;
 
     const ensureAuthorized = async (referenceId: string): Promise<void> => {
@@ -95,11 +95,11 @@ export const createPayment = (options: CreatePaymentOptions): CirrusPayment => {
             allowed = await options.authorize(referenceId);
         } catch {
             // A throwing authorizer denies by policy.
-            throw new CirrusPaymentError("FORBIDDEN", `caller not authorized for reference "${referenceId}"`);
+            throw new LunoraPaymentError("FORBIDDEN", `caller not authorized for reference "${referenceId}"`);
         }
 
         if (!allowed) {
-            throw new CirrusPaymentError("FORBIDDEN", `caller not authorized for reference "${referenceId}"`);
+            throw new LunoraPaymentError("FORBIDDEN", `caller not authorized for reference "${referenceId}"`);
         }
     };
 
@@ -158,7 +158,7 @@ export const createPayment = (options: CreatePaymentOptions): CirrusPayment => {
             const existing = await store.getSubscription(adapter.identifier, subscriptionId);
 
             if (!existing) {
-                throw new CirrusPaymentError("NOT_FOUND", `subscription "${subscriptionId}" not found`);
+                throw new LunoraPaymentError("NOT_FOUND", `subscription "${subscriptionId}" not found`);
             }
 
             await ensureAuthorized(existing.referenceId);
@@ -182,11 +182,11 @@ export const createPayment = (options: CreatePaymentOptions): CirrusPayment => {
             }
 
             if (input.featureId === undefined) {
-                throw new CirrusPaymentError("CONFIG_INVALID", "check() requires a featureId or priceId");
+                throw new LunoraPaymentError("CONFIG_INVALID", "check() requires a featureId or priceId");
             }
 
             if (!options.entitlements) {
-                throw new CirrusPaymentError("CONFIG_INVALID", "check() requires `entitlements` to be configured");
+                throw new LunoraPaymentError("CONFIG_INVALID", "check() requires `entitlements` to be configured");
             }
 
             const entitlements = resolveEntitlements(options.entitlements, subscriptions);
@@ -203,7 +203,7 @@ export const createPayment = (options: CreatePaymentOptions): CirrusPayment => {
             const customer = await store.getCustomerByReference(adapter.identifier, referenceId);
 
             if (!customer) {
-                throw new CirrusPaymentError("NOT_FOUND", `no customer for reference "${referenceId}"`);
+                throw new LunoraPaymentError("NOT_FOUND", `no customer for reference "${referenceId}"`);
             }
 
             return adapter.createPortalSession({ customerId: customer.id, returnUrl });
@@ -218,7 +218,7 @@ export const createPayment = (options: CreatePaymentOptions): CirrusPayment => {
                 action = await adapter.parseWebhook({ headers: request.headers, payload });
             } catch (error) {
                 // Only surface our own (non-sensitive) error messages; mask anything unexpected.
-                if (error instanceof CirrusPaymentError) {
+                if (error instanceof LunoraPaymentError) {
                     return jsonResponse({ error: error.message }, error.status);
                 }
 
@@ -235,7 +235,7 @@ export const createPayment = (options: CreatePaymentOptions): CirrusPayment => {
             await ensureAuthorized(referenceId);
 
             if (!options.entitlements) {
-                throw new CirrusPaymentError("CONFIG_INVALID", "listBalances() requires `entitlements` to be configured");
+                throw new LunoraPaymentError("CONFIG_INVALID", "listBalances() requires `entitlements` to be configured");
             }
 
             const subscriptions = await store.listSubscriptionsByReference(referenceId);

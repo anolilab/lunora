@@ -4,10 +4,10 @@ const migrateCommand: Command = {
     argument: { description: "generate | create | up | down | status [name|id]", name: "subcommand", type: String },
     description: "Schema (generate) and online data (create | up | down | status) migrations",
     examples: [
-        ["cirrus migrate generate", "Diff cirrus/schema.ts and emit a SQL migration"],
-        ["cirrus migrate create add_users_email", "Scaffold a data migration"],
-        ["cirrus migrate up backfill-names", "Run a data migration across shards"],
-        ["cirrus migrate status backfill-names", "Report a migration's per-shard status"],
+        ["lunora migrate generate", "Diff lunora/schema.ts and emit a SQL migration"],
+        ["lunora migrate create add_users_email", "Scaffold a data migration"],
+        ["lunora migrate up backfill-names", "Run a data migration across shards"],
+        ["lunora migrate status backfill-names", "Report a migration's per-shard status"],
     ],
     group: "Data",
     loader: () =>
@@ -23,7 +23,7 @@ const migrateCommand: Command = {
         { description: "Cap batches processed this run (maps to the runner's maxBatches)", name: "steps", type: Number },
         { description: "Target production — requires an explicit --url", name: "prod", type: Boolean },
         { description: "Worker URL (default http://localhost:8787)", name: "url", type: String },
-        { description: "Admin bearer token (or CIRRUS_ADMIN_TOKEN)", name: "token", type: String },
+        { description: "Admin bearer token (or LUNORA_ADMIN_TOKEN)", name: "token", type: String },
         { description: "Required with --prod for up/down — confirms running against production", name: "yes", type: Boolean },
     ],
 };

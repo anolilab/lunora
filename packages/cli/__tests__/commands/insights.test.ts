@@ -120,15 +120,15 @@ describe("runInsightsCommand", () => {
     let savedToken: string | undefined;
 
     beforeEach(() => {
-        savedToken = process.env.CIRRUS_ADMIN_TOKEN;
-        delete process.env.CIRRUS_ADMIN_TOKEN;
+        savedToken = process.env.LUNORA_ADMIN_TOKEN;
+        delete process.env.LUNORA_ADMIN_TOKEN;
     });
 
     afterEach(() => {
         if (savedToken === undefined) {
-            delete process.env.CIRRUS_ADMIN_TOKEN;
+            delete process.env.LUNORA_ADMIN_TOKEN;
         } else {
-            process.env.CIRRUS_ADMIN_TOKEN = savedToken;
+            process.env.LUNORA_ADMIN_TOKEN = savedToken;
         }
     });
 
@@ -162,9 +162,9 @@ describe("runInsightsCommand", () => {
         });
 
         expect(result.code).toBe(0);
-        expect(calls[0]?.url).toBe("http://localhost:8787/_cirrus/rpc");
+        expect(calls[0]?.url).toBe("http://localhost:8787/_lunora/rpc");
         expect(calls[0]?.headers?.authorization).toBe("Bearer secret");
-        expect((calls[0]?.body as { functionPath?: string }).functionPath).toBe("__cirrus_admin__:getFunctionStats");
+        expect((calls[0]?.body as { functionPath?: string }).functionPath).toBe("__lunora_admin__:getFunctionStats");
     });
 
     it("forwards --shard as the shardKey", async () => {

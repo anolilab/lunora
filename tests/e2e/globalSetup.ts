@@ -18,8 +18,8 @@ import type { FullConfig } from "@playwright/test";
  *
  * Worker env comes from `.dev.vars` (the plugin loads it, like real dev). We
  * write a deterministic e2e `.dev.vars` on setup and restore the developer's on
- * teardown — `CIRRUS_E2E=true` is what gates the `/test/*` routes, and
- * `CIRRUS_WORKER_ORIGIN` points the scheduler's HTTP callbacks back at :5173.
+ * teardown — `LUNORA_E2E=true` is what gates the `/test/*` routes, and
+ * `LUNORA_WORKER_ORIGIN` points the scheduler's HTTP callbacks back at :5173.
  */
 const ROOT = new URL("../../", import.meta.url).pathname;
 const PLAYGROUND = join(ROOT, "apps/playground");
@@ -29,13 +29,13 @@ const E2E_DEV_VARS = `# Written by tests/e2e/globalSetup.ts; restored on teardow
 AUTH_SECRET="e2e-deterministic-secret-do-not-use-in-prod"
 AUTH_URL="http://localhost:5173"
 STORAGE_SECRET="e2e-deterministic-storage-secret"
-CIRRUS_E2E="true"
-CIRRUS_WORKER_ORIGIN="http://localhost:5173"
-CIRRUS_ORIGIN_URL="http://localhost:5173"
+LUNORA_E2E="true"
+LUNORA_WORKER_ORIGIN="http://localhost:5173"
+LUNORA_ORIGIN_URL="http://localhost:5173"
 PUBLIC_STORAGE_BASE_URL="http://localhost:5173"
-CIRRUS_ADMIN_TOKEN="e2e-deterministic-admin-token"
-MAIL_FROM="Cirrus E2E <noreply@cirrus.test>"
-CIRRUS_MAIL_CAPTURE="1"
+LUNORA_ADMIN_TOKEN="e2e-deterministic-admin-token"
+MAIL_FROM="Lunora E2E <noreply@lunora.test>"
+LUNORA_MAIL_CAPTURE="1"
 `;
 
 interface SpawnedProcess {
@@ -45,9 +45,9 @@ interface SpawnedProcess {
 
 declare global {
     // eslint-disable-next-line vars-on-top, no-var -- module-scoped handle shared with globalTeardown
-    var CIRRUS_E2E_PROCS: SpawnedProcess[] | undefined;
+    var LUNORA_E2E_PROCS: SpawnedProcess[] | undefined;
     // eslint-disable-next-line vars-on-top, no-var -- developer's .dev.vars, restored on teardown (null = none existed)
-    var CIRRUS_E2E_DEV_VARS_BACKUP: null | string | undefined;
+    var LUNORA_E2E_DEV_VARS_BACKUP: null | string | undefined;
 }
 
 const waitForUrl = async (url: string, timeoutMs: number, label: string): Promise<void> => {
@@ -89,19 +89,19 @@ const spawnProc = (name: string, command: string, args: string[], cwd: string, e
 
 /** Swap in the deterministic e2e `.dev.vars`, remembering the developer's file. */
 const installDevVars = (): void => {
-    globalThis.CIRRUS_E2E_DEV_VARS_BACKUP = existsSync(DEV_VARS_PATH) ? readFileSync(DEV_VARS_PATH, "utf8") : null;
+    globalThis.LUNORA_E2E_DEV_VARS_BACKUP = existsSync(DEV_VARS_PATH) ? readFileSync(DEV_VARS_PATH, "utf8") : null;
     writeFileSync(DEV_VARS_PATH, E2E_DEV_VARS, "utf8");
 };
 
 const globalSetup = async (_config: FullConfig): Promise<void> => {
-    if (process.env.CIRRUS_E2E === "skip") {
+    if (process.env.LUNORA_E2E === "skip") {
         // eslint-disable-next-line no-console
-        console.warn("[e2e] CIRRUS_E2E=skip — bypassing globalSetup");
+        console.warn("[e2e] LUNORA_E2E=skip — bypassing globalSetup");
 
         return;
     }
 
-    if (process.env.CIRRUS_E2E_EXTERNAL === "true") {
+    if (process.env.LUNORA_E2E_EXTERNAL === "true") {
         // An external orchestrator already started the playground (`pnpm dev` in
         // another terminal). Just wait for it.
         await waitForUrl("http://localhost:5173/api/auth/ok", 10_000, "worker");
@@ -113,16 +113,16 @@ const globalSetup = async (_config: FullConfig): Promise<void> => {
 
     const procs: SpawnedProcess[] = [];
 
-    // `CIRRUS_E2E` in the process env tells `vite.config.ts` to make storage
+    // `LUNORA_E2E` in the process env tells `vite.config.ts` to make storage
     // ephemeral; the same flag in `.dev.vars` (above) gates the worker's /test routes.
-    procs.push(spawnProc("vite", "pnpm", ["exec", "vite", "--port", "5173", "--strictPort"], PLAYGROUND, { CIRRUS_E2E: "true" }));
+    procs.push(spawnProc("vite", "pnpm", ["exec", "vite", "--port", "5173", "--strictPort"], PLAYGROUND, { LUNORA_E2E: "true" }));
 
     await waitForUrl("http://localhost:5173", 60_000, "vite");
     // Hit a worker route so the embedded worker boots + runs the better-auth
     // migration once, before the first test (so none pays it inside its timeout).
     await waitForUrl("http://localhost:5173/api/auth/ok", 60_000, "worker");
 
-    globalThis.CIRRUS_E2E_PROCS = procs;
+    globalThis.LUNORA_E2E_PROCS = procs;
 };
 
 export { DEV_VARS_PATH };

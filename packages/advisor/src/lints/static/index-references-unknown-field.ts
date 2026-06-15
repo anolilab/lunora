@@ -3,7 +3,7 @@ import type { Lint } from "../../types";
 import { tableColumnSet } from "../helpers";
 
 /**
- * A correctness lint with no splinter analogue — it exploits Cirrus's static
+ * A correctness lint with no splinter analogue — it exploits Lunora's static
  * edge: the schema is fully declared, so a typo'd index column is catchable at
  * codegen time rather than surfacing as a runtime error or a silently
  * never-matching index.

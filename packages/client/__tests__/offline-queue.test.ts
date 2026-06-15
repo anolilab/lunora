@@ -280,7 +280,7 @@ describe("offlineQueue — persistence error reporting", () => {
             await Promise.resolve();
 
             expect(warnSpy).toHaveBeenCalledTimes(1);
-            expect(warnSpy.mock.calls[0]?.[0]).toContain("[cirrus] offline-queue persistence append failed");
+            expect(warnSpy.mock.calls[0]?.[0]).toContain("[lunora] offline-queue persistence append failed");
         } finally {
             warnSpy.mockRestore();
         }

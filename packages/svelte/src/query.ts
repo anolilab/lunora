@@ -1,13 +1,13 @@
-import type { ArgsOf, CirrusClient, FunctionReference, ReturnOf, SubscriptionErrorCallback } from "@cirrus/client";
-import { createQuerySubscription } from "@cirrus/client/query";
+import type { ArgsOf, LunoraClient, FunctionReference, ReturnOf, SubscriptionErrorCallback } from "@lunora/client";
+import { createQuerySubscription } from "@lunora/client/query";
 import type { Readable } from "svelte/store";
 import { readable } from "svelte/store";
 
-import { getCirrusClient } from "./context";
+import { getLunoraClient } from "./context";
 
-/** Narrow an unknown value to a {@link FunctionReference} by its `__cirrusRef` marker. */
+/** Narrow an unknown value to a {@link FunctionReference} by its `__lunoraRef` marker. */
 const isFunctionReference = (value: unknown): value is FunctionReference =>
-    typeof value === "object" && value !== null && typeof (value as { __cirrusRef?: unknown }).__cirrusRef === "string";
+    typeof value === "object" && value !== null && typeof (value as { __lunoraRef?: unknown }).__lunoraRef === "string";
 
 /** Options accepted by {@link query}. */
 export interface QueryStoreOptions {
@@ -35,31 +35,31 @@ export type QueryStore<F extends FunctionReference> = Readable<ReturnOf<F> | und
  * when the last subscriber goes away — so a store that's never read opens no
  * socket, and a component that unmounts releases its subscription. Sharing one
  * store across several components shares a single underlying subscription
- * (the `CirrusClient` de-dupes by `(fn, args, shardKey)`).
+ * (the `LunoraClient` de-dupes by `(fn, args, shardKey)`).
  *
  * Pass `client` explicitly, or omit it to resolve the ambient client published
- * by `setCirrusClient` (which must therefore be called during component init,
+ * by `setLunoraClient` (which must therefore be called during component init,
  * before this runs).
  */
 export function query<F extends FunctionReference>(function_: F, args: ArgsOf<F>, options?: QueryStoreOptions): QueryStore<F>;
-export function query<F extends FunctionReference>(client: CirrusClient, function_: F, args: ArgsOf<F>, options?: QueryStoreOptions): QueryStore<F>;
+export function query<F extends FunctionReference>(client: LunoraClient, function_: F, args: ArgsOf<F>, options?: QueryStoreOptions): QueryStore<F>;
 export function query<F extends FunctionReference>(
-    clientOrFunction: CirrusClient | F,
+    clientOrFunction: LunoraClient | F,
     functionOrArguments: ArgsOf<F> | F,
     argumentsOrOptions?: ArgsOf<F> | QueryStoreOptions,
     maybeOptions?: QueryStoreOptions,
 ): QueryStore<F> {
     // Resolve the overload: when the first arg is a function reference (carries
-    // `__cirrusRef`), the ambient context client is used; otherwise the explicit
+    // `__lunoraRef`), the ambient context client is used; otherwise the explicit
     // client was passed first.
     const hasExplicitClient = !isFunctionReference(clientOrFunction);
-    const client = hasExplicitClient ? clientOrFunction : getCirrusClient();
+    const client = hasExplicitClient ? clientOrFunction : getLunoraClient();
     const functionRef = (hasExplicitClient ? functionOrArguments : clientOrFunction) as F;
     const args = (hasExplicitClient ? argumentsOrOptions : functionOrArguments) as ArgsOf<F>;
     const options = (hasExplicitClient ? maybeOptions : (argumentsOrOptions as QueryStoreOptions | undefined)) ?? {};
 
     return readable<ReturnOf<F> | undefined>(undefined, (set) =>
-        // The shared `@cirrus/client/query` state machine owns the subscribe +
+        // The shared `@lunora/client/query` state machine owns the subscribe +
         // cleanup: it replays the last value synchronously when one exists and
         // pushes every subsequent delta into the store, and its returned teardown
         // is the store's stop callback, so the WS subscription closes when the

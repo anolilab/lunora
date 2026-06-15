@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import discoverWorkflowCalls from "../src/discover-workflow-calls";
 
 const CHANNELS = `
-    import { mutation } from "@cirrus/server";
+    import { mutation } from "@lunora/server";
 
     const dynamicName = "channelWelcome";
 
@@ -46,9 +46,9 @@ let project: Project;
 
 describe("discoverWorkflowCalls", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-wf-calls-"));
-        mkdirSync(join(workdir, "cirrus"), { recursive: true });
-        writeFileSync(join(workdir, "cirrus", "channels.ts"), CHANNELS, "utf8");
+        workdir = mkdtempSync(join(tmpdir(), "lunora-wf-calls-"));
+        mkdirSync(join(workdir, "lunora"), { recursive: true });
+        writeFileSync(join(workdir, "lunora", "channels.ts"), CHANNELS, "utf8");
         project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
     });
 
@@ -59,7 +59,7 @@ describe("discoverWorkflowCalls", () => {
     it("attributes each workflow get call to its exported function and file", () => {
         expect.assertions(2);
 
-        const calls = discoverWorkflowCalls(project, join(workdir, "cirrus")).map(({ exportName, file, workflow }) => {
+        const calls = discoverWorkflowCalls(project, join(workdir, "lunora")).map(({ exportName, file, workflow }) => {
             return { exportName, file, workflow };
         });
 
@@ -71,7 +71,7 @@ describe("discoverWorkflowCalls", () => {
     it("records a non-literal name argument as an empty workflow", () => {
         expect.assertions(1);
 
-        const dynamic = discoverWorkflowCalls(project, join(workdir, "cirrus")).find((call) => call.exportName === "dynamic");
+        const dynamic = discoverWorkflowCalls(project, join(workdir, "lunora")).find((call) => call.exportName === "dynamic");
 
         expect(dynamic).toMatchObject({ workflow: "" });
     });
@@ -79,7 +79,7 @@ describe("discoverWorkflowCalls", () => {
     it("ignores `.get(...)` calls whose receiver isn't `workflows`", () => {
         expect.assertions(1);
 
-        const calls = discoverWorkflowCalls(project, join(workdir, "cirrus"));
+        const calls = discoverWorkflowCalls(project, join(workdir, "lunora"));
 
         expect(calls.some((call) => call.exportName === "headers")).toBe(false);
     });
@@ -87,7 +87,7 @@ describe("discoverWorkflowCalls", () => {
     it("drops calls that aren't inside an exported declaration", () => {
         expect.assertions(1);
 
-        const calls = discoverWorkflowCalls(project, join(workdir, "cirrus"));
+        const calls = discoverWorkflowCalls(project, join(workdir, "lunora"));
 
         expect(calls.some((call) => call.workflow === "secret")).toBe(false);
     });

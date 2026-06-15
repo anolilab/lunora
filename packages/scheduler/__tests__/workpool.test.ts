@@ -69,7 +69,7 @@ describe("schedulerDO — workpool concurrency", () => {
         expect.assertions(3);
 
         const state = createFakeState();
-        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
 
         await enqueuePool(scheduler, "p", 2, 5);
         await scheduler.alarm();
@@ -88,7 +88,7 @@ describe("schedulerDO — workpool concurrency", () => {
         expect.assertions(3);
 
         const state = createFakeState();
-        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
 
         await enqueuePool(scheduler, "p", 1, 3);
         await scheduler.alarm();
@@ -120,7 +120,7 @@ describe("schedulerDO — workpool concurrency", () => {
         expect.assertions(2);
 
         const state = createFakeState();
-        const scheduler = new FailingScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
+        const scheduler = new FailingScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
 
         await enqueuePool(scheduler, "p", 1, 1);
         await scheduler.alarm();
@@ -136,7 +136,7 @@ describe("schedulerDO — workpool concurrency", () => {
         expect.assertions(3);
 
         const state = createFakeState();
-        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
 
         // Two slots; dispatch two jobs so both hold a slot, queue one more.
         await enqueuePool(scheduler, "p", 2, 3);
@@ -164,7 +164,7 @@ describe("schedulerDO — workpool concurrency", () => {
         expect.assertions(2);
 
         const state = createFakeState();
-        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
 
         // 1 slot, 2 jobs: one dispatched (holds the slot), one stays queued.
         const ids = await enqueuePool(scheduler, "p", 1, 2);
@@ -187,7 +187,7 @@ describe("schedulerDO — workpool concurrency", () => {
         expect.assertions(3);
 
         const state = createFakeState();
-        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
 
         await enqueuePool(scheduler, "p", 2, 4);
         await scheduler.alarm();
@@ -205,7 +205,7 @@ describe("schedulerDO — workpool concurrency", () => {
         expect.assertions(5);
 
         const state = createFakeState();
-        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
 
         // Pool "a": cap 2, 4 jobs -> 2 kicked (inFlight 2), 2 queued.
         await enqueuePool(scheduler, "a", 2, 4);
@@ -247,7 +247,7 @@ describe("schedulerDO — workpool concurrency", () => {
         expect.assertions(3);
 
         const state = createFakeState();
-        const scheduler = new TestScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
 
         const statusResponse = await scheduler.fetch(get("/status"));
         const status = await statusResponse.json<{ backlog: number; inFlight: number; pools: unknown[] }>();
@@ -297,7 +297,7 @@ describe("schedulerDO — configurable retry policy", () => {
         expect.assertions(2);
 
         const state = createFakeState();
-        const scheduler = new FailingScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
+        const scheduler = new FailingScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
         const id = await scheduledId(
             await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", retry: { maxAttempts: 2 }, scheduledFor: Date.now() - 1000 })),
         );
@@ -317,7 +317,7 @@ describe("schedulerDO — configurable retry policy", () => {
         expect.assertions(2);
 
         const state = createFakeState();
-        const scheduler = new FailingScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
+        const scheduler = new FailingScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
 
         await scheduler.fetch(
             post("/schedule", { args: {}, functionPath: "f", retry: { backoff: "linear", baseMs: 1000, maxAttempts: 10 }, scheduledFor: Date.now() - 1000 }),
@@ -338,7 +338,7 @@ describe("schedulerDO — configurable retry policy", () => {
         expect.assertions(1);
 
         const state = createFakeState();
-        const scheduler = new FailingScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" });
+        const scheduler = new FailingScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
 
         await scheduler.fetch(
             post("/schedule", {
@@ -363,7 +363,7 @@ describe("schedulerDO — configurable retry policy", () => {
         expect.assertions(1);
 
         const state = createFakeState();
-        const scheduler = new CountingScheduler(state, { CIRRUS_ORIGIN_URL: "https://app.test" }, Number.POSITIVE_INFINITY);
+        const scheduler = new CountingScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" }, Number.POSITIVE_INFINITY);
         const id = await scheduledId(await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: Date.now() - 1000 })));
 
         // Exhaust the default budget.
@@ -375,7 +375,7 @@ describe("schedulerDO — configurable retry policy", () => {
     });
 });
 
-const fnRef: FunctionReference = { __cirrusRef: "stripe.sync" };
+const fnRef: FunctionReference = { __lunoraRef: "stripe.sync" };
 
 const fakeNamespace = (
     responses: Record<string, unknown> = {},

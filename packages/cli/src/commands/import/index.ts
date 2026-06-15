@@ -3,7 +3,7 @@ import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/
 const importCommand: Command = {
     argument: { description: "Source NDJSON file", name: "file", type: String },
     description: "Bulk-insert rows from an NDJSON file via the worker's admin endpoint",
-    examples: [["cirrus import backup.ndjson", "Bulk-insert rows from an NDJSON file"]],
+    examples: [["lunora import backup.ndjson", "Bulk-insert rows from an NDJSON file"]],
     group: "Data",
     loader: () =>
         import("./handler").then((m) => {
@@ -15,7 +15,7 @@ const importCommand: Command = {
         { description: "Rows per HTTP request (default 500)", name: "batch-size", type: Number },
         { description: "Target production — requires an explicit --url", name: "prod", type: Boolean },
         { description: "Worker URL (default http://localhost:8787)", name: "url", type: String },
-        { description: "Admin bearer token (or CIRRUS_ADMIN_TOKEN)", name: "token", type: String },
+        { description: "Admin bearer token (or LUNORA_ADMIN_TOKEN)", name: "token", type: String },
     ],
 };
 

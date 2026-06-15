@@ -16,7 +16,7 @@ describe(defineContainer, () => {
 
         const definition = defineContainer({ defaultPort: 8080, image: "./containers/transcoder", instanceType: "standard-1", maxInstances: 5 });
 
-        expect(definition.isCirrusContainer).toBe(true);
+        expect(definition.isLunoraContainer).toBe(true);
         expect(isContainerDefinition(definition)).toBe(true);
     });
 
@@ -96,7 +96,7 @@ describe(defineContainer, () => {
     it("accepts a Railpack { build } image source", () => {
         expect.assertions(1);
 
-        expect(defineContainer({ image: { build: "./services/worker" } }).isCirrusContainer).toBe(true);
+        expect(defineContainer({ image: { build: "./services/worker" } }).isLunoraContainer).toBe(true);
     });
 
     it("accepts buildArgs and rollout config", () => {
@@ -152,8 +152,8 @@ describe(containerBuildTag, () => {
     it("derives the deterministic Railpack build tag", () => {
         expect.assertions(2);
 
-        expect(containerBuildTag("transcoder")).toBe("cirrus-transcoder:build");
-        expect(containerBuildTag("imageResizer")).toBe("cirrus-image-resizer:build");
+        expect(containerBuildTag("transcoder")).toBe("lunora-transcoder:build");
+        expect(containerBuildTag("imageResizer")).toBe("lunora-image-resizer:build");
     });
 });
 

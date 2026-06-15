@@ -1,4 +1,4 @@
-import { useCirrus } from "@cirrus/react";
+import { useLunora } from "@lunora/react";
 import type { ChangeEvent, ReactElement } from "react";
 import { useCallback, useState } from "react";
 
@@ -23,7 +23,7 @@ interface UserCreateDialogProps {
  * role is optional and falls back to the auth config's `defaultRole`.
  */
 export const UserCreateDialog = ({ onClose, onCreated }: UserCreateDialogProps): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const t = useT();
 
     const [email, setEmail] = useState<string>("");

@@ -1,4 +1,4 @@
-import type { OptimisticUpdate, User } from "@cirrus/client";
+import type { OptimisticUpdate, User } from "@lunora/client";
 
 export interface UseQueryOptions {
     shardKey?: string;
@@ -89,11 +89,11 @@ export interface UseAuthResult {
 
 export {
     type ArgsOf,
-    type CirrusClient,
+    type LunoraClient,
     type FunctionReference,
     type OptimisticLocalStore,
     type OptimisticUpdate,
     type Preloaded,
     type ReturnOf,
     type User,
-} from "@cirrus/client";
+} from "@lunora/client";

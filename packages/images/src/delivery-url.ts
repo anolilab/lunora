@@ -1,6 +1,6 @@
 /**
  * URL-based image transform / delivery builder — a **pure string builder**, no
- * I/O. Mirrors the structure of `@cirrus/storage`'s `buildSignedUrl` (minus the
+ * I/O. Mirrors the structure of `@lunora/storage`'s `buildSignedUrl` (minus the
  * crypto): deterministic, so it's safe to call from any handler (query, mutation,
  * action) without tripping the determinism advisor.
  *
@@ -77,7 +77,7 @@ export const buildImageDeliveryUrl = (options: ImageDeliveryUrlOptions): string 
     }
 
     if (options.key === undefined) {
-        throw new Error("@cirrus/images: buildImageDeliveryUrl requires either `imageId` or `key`");
+        throw new Error("@lunora/images: buildImageDeliveryUrl requires either `imageId` or `key`");
     }
 
     const optionString = options.transform === undefined ? "" : serializeTransform(options.transform);

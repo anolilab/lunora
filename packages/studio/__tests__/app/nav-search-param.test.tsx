@@ -1,4 +1,4 @@
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -20,9 +20,9 @@ const mock = createMockClient({
 
 const renderStudio = () =>
     render(
-        <CirrusProvider client={mock.asClient}>
+        <LunoraProvider client={mock.asClient}>
             <Studio />
-        </CirrusProvider>,
+        </LunoraProvider>,
     );
 
 /**

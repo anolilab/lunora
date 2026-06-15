@@ -1,13 +1,13 @@
-import type { CirrusClient, FunctionReference, Unsubscribe } from "@cirrus/client";
+import type { LunoraClient, FunctionReference, Unsubscribe } from "@lunora/client";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import { CirrusProvider } from "../src/cirrus-provider";
+import { LunoraProvider } from "../src/lunora-provider";
 import { usePaginatedQuery } from "../src/use-paginated-query";
 
 const makeRef = (ref: string): FunctionReference => {
-    return { __cirrusRef: ref };
+    return { __lunoraRef: ref };
 };
 
 interface PaginationOpts {
@@ -106,7 +106,7 @@ const createReactiveBackend = (initial: string[]) => {
         query,
         setAuthToken: vi.fn<(token: string | null) => void>(),
         subscribe,
-    } as unknown as CirrusClient;
+    } as unknown as LunoraClient;
 
     return { asClient, insert, query, remove, subscribe, subCount: () => subs.size };
 };
@@ -134,14 +134,14 @@ const renderTwoPages = async (backend: ReturnType<typeof createReactiveBackend>)
     let loadMore: (numberItems: number) => void = (_numberItems) => undefined;
 
     render(
-        <CirrusProvider client={backend.asClient}>
+        <LunoraProvider client={backend.asClient}>
             <Harness
                 // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback capturing the hook's `loadMore`.
                 onLoadMore={(next) => {
                     loadMore = next;
                 }}
             />
-        </CirrusProvider>,
+        </LunoraProvider>,
     );
 
     await waitFor(() => {
@@ -220,14 +220,14 @@ describe("usePaginatedQuery — reactive ranges", () => {
         let loadMore: (numberItems: number) => void = (_numberItems) => undefined;
 
         render(
-            <CirrusProvider client={backend.asClient}>
+            <LunoraProvider client={backend.asClient}>
                 <Harness
                     // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback capturing the hook's `loadMore`.
                     onLoadMore={(next) => {
                         loadMore = next;
                     }}
                 />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         // Page 1 = (null, b] = {a, b}. Open a tiny page 2 so page 1 becomes bounded.

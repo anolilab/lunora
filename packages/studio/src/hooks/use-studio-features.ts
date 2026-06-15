@@ -1,4 +1,4 @@
-import { useCirrus } from "@cirrus/react";
+import { useLunora } from "@lunora/react";
 import { useEffect, useState } from "react";
 
 import type { StudioFeaturesResult } from "../lib/admin";
@@ -9,7 +9,7 @@ const STUDIO_FEATURES = adminRef(ADMIN_FUNCTIONS.studioFeatures);
 
 /**
  * Which optional, package-backed nav pages this deployment should show. Every
- * flag defaults `true` until `__cirrus_admin__:studioFeatures` resolves, so a
+ * flag defaults `true` until `__lunora_admin__:studioFeatures` resolves, so a
  * worker predating the RPC (it returns nothing / errors) keeps showing every
  * page — the gating only ever *hides* pages once the worker positively reports a
  * feature as disabled. Codegen discovers the flags statically per deployment, so
@@ -45,19 +45,19 @@ const coerceFeatures = (raw: unknown): StudioFeaturesResult => {
 
 /**
  * Fetch the worker's optional-feature flags once (fixed per deployment — which
- * `@cirrus/*` packages the app wires up). Returns {@link DEFAULT_STUDIO_FEATURES}
+ * `@lunora/*` packages the app wires up). Returns {@link DEFAULT_STUDIO_FEATURES}
  * (everything shown) until the fetch settles, and keeps them if it fails. The
  * studio nav filters its groups/tabs on the result, hiding pages whose backing
  * package isn't enabled.
  *
  * `StudioFeaturesResult` is the wire contract codegen emits into the generated
- * ShardDO's `studioFeatures()` override; `@cirrus/do` and this hook each
- * hand-mirror its key set (the studio can't import `@cirrus/do`). A
+ * ShardDO's `studioFeatures()` override; `@lunora/do` and this hook each
+ * hand-mirror its key set (the studio can't import `@lunora/do`). A
  * key-exhaustiveness drift guard in each package's tests fails the build if the
  * shapes ever diverge.
  */
 const useStudioFeatures = (): StudioFeaturesResult => {
-    const client = useCirrus();
+    const client = useLunora();
     const [features, setFeatures] = useState<StudioFeaturesResult>(DEFAULT_STUDIO_FEATURES);
 
     useEffect(() => {

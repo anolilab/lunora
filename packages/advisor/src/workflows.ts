@@ -1,7 +1,7 @@
 /**
  * The two workflow-shaped inputs the `workflow_*` lints consume, produced by the
  * codegen feeder. {@link AdvisorWorkflow} is the declaration side (one per
- * `defineWorkflow` export in `cirrus/workflows.ts`); {@link AdvisorWorkflowCall}
+ * `defineWorkflow` export in `lunora/workflows.ts`); {@link AdvisorWorkflowCall}
  * is the use side (one per `ctx.workflows.get("name")` call discovered in a
  * function body). Runtime callers don't supply either, so the workflow lints
  * simply find nothing there.
@@ -12,9 +12,9 @@
  * `InsertWriteIR`).
  */
 
-/** One workflow declared via a `defineWorkflow()` export in `cirrus/workflows.ts`. */
+/** One workflow declared via a `defineWorkflow()` export in `lunora/workflows.ts`. */
 export interface AdvisorWorkflow {
-    /** The `cirrus/workflows.ts` export name, e.g. `orderPipeline`. */
+    /** The `lunora/workflows.ts` export name, e.g. `orderPipeline`. */
     exportName: string;
 }
 
@@ -22,7 +22,7 @@ export interface AdvisorWorkflow {
 export interface AdvisorWorkflowCall {
     /** The exported function performing the call (e.g. `create`). */
     exportName: string;
-    /** Source file the call appears in (relative to the cirrus dir, no extension). */
+    /** Source file the call appears in (relative to the lunora dir, no extension). */
     file: string;
     /** 1-based line of the `get(...)` call, or `0` when unknown. */
     line: number;

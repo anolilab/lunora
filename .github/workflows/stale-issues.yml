@@ -11,4 +11,4 @@
     "stale-issues":
         "uses": "anolilab/workflows/.github/workflows/stale-issues.yml@3c54b71af67bdd990513c4a17fa2fde078db7b74" # main
         "with":
-            "target-repo": "anolilab/cirrus"
+            "target-repo": "anolilab/lunora"

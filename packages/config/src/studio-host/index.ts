@@ -1,11 +1,11 @@
 /**
- * `@cirrus/config/studio-host` — internal, build-time-shared helpers for hosting
- * the prebuilt `@cirrus/studio` SPA during local dev.
+ * `@lunora/config/studio-host` — internal, build-time-shared helpers for hosting
+ * the prebuilt `@lunora/studio` SPA during local dev.
  *
  * Two surfaces inline this code so the dev studio behaves identically
  * regardless of how the project is run:
- * - `@cirrus/vite` serves the studio from a Vite middleware at `/__cirrus`.
- * - `@cirrus/cli` (`cirrus dev`) serves it from a standalone Node HTTP server.
+ * - `@lunora/vite` serves the studio from a Vite middleware at `/__lunora`.
+ * - `@lunora/cli` (`lunora dev`) serves it from a standalone Node HTTP server.
  *
  * Each owns its own transport (Connect middleware vs `node:http`) and routing;
  * the genuinely shared parts live here: render the host HTML with per-server

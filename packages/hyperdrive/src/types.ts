@@ -1,15 +1,15 @@
 /**
- * Public types for `@cirrus/hyperdrive`.
+ * Public types for `@lunora/hyperdrive`.
  *
- * Hyperdrive points at a database **Cirrus does not own**. Everything here is
+ * Hyperdrive points at a database **Lunora does not own**. Everything here is
  * deliberately structural (no hard dependency on `@cloudflare/workers-types` or
  * any SQL driver) so unit tests can pass plain-object doubles, exactly like the
- * `D1DatabaseLike` projection in `@cirrus/d1`.
+ * `D1DatabaseLike` projection in `@lunora/d1`.
  *
  * The hard constraint, restated wherever this surface is used: Hyperdrive
  * queries are **non-deterministic** (forbidden in `query`/`mutation`, allowed
  * only in `action`s — see the `hyperdrive_outside_action` advisor lint), and
- * external writes are **invisible to Cirrus live queries** — a subscription will
+ * external writes are **invisible to Lunora live queries** — a subscription will
  * NOT re-run when an external Postgres/MySQL row changes.
  */
 
@@ -57,7 +57,7 @@ export interface HyperdriveConnection {
  * The driver-agnostic SQL surface bound to `ctx.sql` on **`ActionCtx` only**.
  *
  * This is the exact type the generated ctx imports as
- * `import("@cirrus/hyperdrive").SqlClient`. Keep the name and shape stable — the
+ * `import("@lunora/hyperdrive").SqlClient`. Keep the name and shape stable — the
  * codegen ctx wiring (Phase 1) depends on it.
  *
  * It is intentionally minimal — a single parameterised `query` — so it maps onto
@@ -69,7 +69,7 @@ export interface HyperdriveConnection {
  * MySQL); the package does not rewrite SQL.
  *
  * Reminder (also on the emitted JSDoc): non-deterministic, action-only,
- * non-reactive — writes here are not tracked by Cirrus live queries.
+ * non-reactive — writes here are not tracked by Lunora live queries.
  */
 export interface SqlClient {
     /**

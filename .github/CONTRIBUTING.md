@@ -1,6 +1,6 @@
-# Contributing to Cirrus
+# Contributing to Lunora
 
-Thanks for being here. Cirrus is **v0.1-alpha** and we triage issues + PRs against the [`alpha`](https://github.com/anolilab/cirrus/tree/alpha) branch.
+Thanks for being here. Lunora is **v0.1-alpha** and we triage issues + PRs against the [`alpha`](https://github.com/anolilab/lunora/tree/alpha) branch.
 
 This guide covers what you need to hack on the monorepo. By participating you agree to follow the [Code of Conduct](./CODE_OF_CONDUCT.md).
 
@@ -14,8 +14,8 @@ This guide covers what you need to hack on the monorepo. By participating you ag
 ## Repo setup
 
 ```bash
-git clone git@github.com:anolilab/cirrus.git
-cd cirrus
+git clone git@github.com:anolilab/lunora.git
+cd lunora
 pnpm install
 pnpm test          # all packages, vitest, parallel via @visulima/vis
 pnpm lint:types    # tsc --noEmit across the workspace
@@ -61,16 +61,16 @@ Allowed `<type>` values:
 | `deps`     | Dependency updates (mostly Renovate / Dependabot).                   |
 | `revert`   | Reverting a previous commit.                                         |
 
-`<scope>` is the package name minus the `@cirrus/` prefix. Examples:
+`<scope>` is the package name minus the `@lunora/` prefix. Examples:
 
 ```
-feat(cirrus-auth): add OAuth PKCE provider for github
-fix(cirrus-runtime): correct ws subprotocol negotiation
-docs(cirrus-d1): document migration runner ordering
+feat(lunora-auth): add OAuth PKCE provider for github
+fix(lunora-runtime): correct ws subprotocol negotiation
+docs(lunora-d1): document migration runner ordering
 chore(deps): bump vitest to 3.2.4
 ```
 
-Subject line: imperative, lowercase, no trailing period, ≤ 50 characters where you can. Breaking changes get a `!` after the scope (`feat(cirrus-server)!: ...`) and a `BREAKING CHANGE:` footer.
+Subject line: imperative, lowercase, no trailing period, ≤ 50 characters where you can. Breaking changes get a `!` after the scope (`feat(lunora-server)!: ...`) and a `BREAKING CHANGE:` footer.
 
 ## Testing
 
@@ -80,8 +80,8 @@ pnpm test
 pnpm test:affected     # only projects touched since main
 
 # One package
-pnpm --filter "@cirrus/runtime" test
-pnpm --filter "@cirrus/runtime" test:coverage
+pnpm --filter "@lunora/runtime" test
+pnpm --filter "@lunora/runtime" test:coverage
 ```
 
 Tests run on **vitest** with mocked `DurableObjectState` / `D1Database` by default — fast, no Cloudflare account needed.
@@ -89,10 +89,10 @@ Tests run on **vitest** with mocked `DurableObjectState` / `D1Database` by defau
 For real-runtime integration tests against `workerd` + Miniflare, set the opt-in environment flag:
 
 ```bash
-CIRRUS_WORKERD_TESTS=1 pnpm test
+LUNORA_WORKERD_TESTS=1 pnpm test
 ```
 
-`CIRRUS_WORKERD_TESTS` is opt-in because the workerd pool is slower and currently only meaningful for `@cirrus/runtime` and `@cirrus/do`. Most contributions don't need it; CI runs both modes.
+`LUNORA_WORKERD_TESTS` is opt-in because the workerd pool is slower and currently only meaningful for `@lunora/runtime` and `@lunora/do`. Most contributions don't need it; CI runs both modes.
 
 ## Linting and types
 
@@ -110,7 +110,7 @@ Pre-commit hooks (Husky + `vis staged` / `vis secrets`, configured in the `stage
 
 1. Pick the closest existing package to copy from (`packages/runtime/` is a good template for runtime code; `packages/values/` for pure utility libs).
 2. Copy it into `packages/<name>/` and rename:
-    - `package.json` → set `"name": "@cirrus/<name>"`, clear `version`/`description`, update keywords.
+    - `package.json` → set `"name": "@lunora/<name>"`, clear `version`/`description`, update keywords.
     - `project.json` → update `"name"`, `"sourceRoot"`, and vis tags. Every package gets `type:package` and a `category:<slug>` tag (see [`AGENTS.md`](../AGENTS.md) for the categories).
     - `README.md` → write a 4–8 line description plus a minimal example.
 3. Run `pnpm install` from the repo root so pnpm picks up the new workspace project.
@@ -127,4 +127,4 @@ Until a package has been wired with its own `.releaserc.json` (extending `@anoli
 
 ## Help
 
-Open a [Discussion](https://github.com/anolilab/cirrus/discussions) for questions, an [Issue](https://github.com/anolilab/cirrus/issues/new/choose) for bugs / features, or email `d.bannert@anolilab.de` for anything sensitive.
+Open a [Discussion](https://github.com/anolilab/lunora/discussions) for questions, an [Issue](https://github.com/anolilab/lunora/issues/new/choose) for bugs / features, or email `d.bannert@anolilab.de` for anything sensitive.

@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
-import { CirrusEnvError, defineEnv, redactSecrets, v } from "../src/index";
+import { LunoraEnvError, defineEnv, redactSecrets, v } from "../src/index";
 
 // Fake credentials are assembled at runtime from harmless fragments so the
 // repo's secret scanners (`no-secrets`, `sonarjs/no-hardcoded-secrets`) don't
@@ -15,17 +15,17 @@ const fakeSlackToken = ["xoxb", "1234", "5678", pad(12)].join("-");
 const fakeHighEntropy = pad(30);
 const secretValue = ["hun", "ter", "2"].join("");
 
-/** Run `fn`, assert it threw a {@link CirrusEnvError}, and return it for further assertions. */
-const captureEnvError = (function_: () => unknown): CirrusEnvError => {
-    expect(function_).toThrow(CirrusEnvError);
+/** Run `fn`, assert it threw a {@link LunoraEnvError}, and return it for further assertions. */
+const captureEnvError = (function_: () => unknown): LunoraEnvError => {
+    expect(function_).toThrow(LunoraEnvError);
 
     try {
         function_();
     } catch (error) {
-        return error as CirrusEnvError;
+        return error as LunoraEnvError;
     }
 
-    throw new Error("expected a CirrusEnvError to be thrown");
+    throw new Error("expected a LunoraEnvError to be thrown");
 };
 
 describe("defineEnv", () => {
@@ -37,9 +37,9 @@ describe("defineEnv", () => {
             PORT: v.optional(v.number()),
         });
 
-        const env = config({ APP_NAME: "cirrus", PORT: "8080" });
+        const env = config({ APP_NAME: "lunora", PORT: "8080" });
 
-        expect(env.APP_NAME).toBe("cirrus");
+        expect(env.APP_NAME).toBe("lunora");
         expect(env.PORT).toBe(8080);
 
         expectTypeOf(env.APP_NAME).toEqualTypeOf<string>();
@@ -75,7 +75,7 @@ describe("defineEnv", () => {
         expect(config({ FLAG: "off" }).FLAG).toBe(false);
     });
 
-    it("throws CirrusEnvError naming a missing required key", () => {
+    it("throws LunoraEnvError naming a missing required key", () => {
         expect.assertions(4);
 
         const config = defineEnv({ DATABASE_URL: v.string() });
@@ -121,7 +121,7 @@ describe("defineEnv", () => {
             expect(missingSpy).not.toHaveBeenCalled();
 
             // Touching MISSING now throws — proving it was only deferred, not skipped.
-            expect(() => env.MISSING).toThrow(CirrusEnvError);
+            expect(() => env.MISSING).toThrow(LunoraEnvError);
             expect(missingSpy).toHaveBeenCalledTimes(1);
         });
 
@@ -166,13 +166,13 @@ describe("defineEnv", () => {
         });
     });
 
-    it("throws a redacted CirrusEnvError when env is not an object", () => {
+    it("throws a redacted LunoraEnvError when env is not an object", () => {
         expect.assertions(2);
 
         const config = defineEnv({ X: v.string() });
 
-        expect(() => config(undefined)).toThrow(CirrusEnvError);
-        expect(() => config.parse(null)).toThrow(CirrusEnvError);
+        expect(() => config(undefined)).toThrow(LunoraEnvError);
+        expect(() => config.parse(null)).toThrow(LunoraEnvError);
     });
 
     describe("secret redaction in error messages", () => {

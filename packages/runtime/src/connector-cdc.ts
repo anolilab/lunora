@@ -1,6 +1,6 @@
 /**
  * Pure CDC-connector helpers, extracted from `create-worker.ts`. These back the
- * turn-key warehouse-connector sync endpoint (`/_cirrus/admin/connector/sync`):
+ * turn-key warehouse-connector sync endpoint (`/_lunora/admin/connector/sync`):
  * the opaque cursor codec (a base64url token wrapping the per-shard + global CDC
  * positions) and the change-folding that flattens each source's raw CDC page into
  * the connector wire shape. All functions here are pure — no worker options, no

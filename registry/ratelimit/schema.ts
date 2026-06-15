@@ -1,12 +1,12 @@
 /**
- * Rate-limit schema extension + plugin — added by `cirrus add ratelimit`.
+ * Rate-limit schema extension + plugin — added by `lunora add ratelimit`.
  *
- * This file is YOURS to own and edit. `cirrus add` splices a managed
- * `.extend(ratelimit.extension)` into `cirrus/schema.ts` so the `buckets` table
+ * This file is YOURS to own and edit. `lunora add` splices a managed
+ * `.extend(ratelimit.extension)` into `lunora/schema.ts` so the `buckets` table
  * below merges into your schema as **`ratelimit_buckets`** (extension tables are
  * auto-prefixed with the plugin key — write the bare name here).
  *
- * The column layout matches what `@cirrus/ratelimit`'s `createDbStore` reads and
+ * The column layout matches what `@lunora/ratelimit`'s `createDbStore` reads and
  * writes for every `(limit-name, key)` pair:
  *
  *   - `key`   — opaque storage key the limiter derives from the limit name + sub-key.
@@ -16,10 +16,10 @@
  *
  * The `by_key` index is what `createDbStore` looks rows up by; keep it.
  */
-import type { Middleware } from "@cirrus/server";
-import { defineSchemaExtension, defineTable, definePlugin, v } from "@cirrus/server";
-import { createDbStore, RateLimiter } from "@cirrus/ratelimit";
-import type { RateLimitConfigMap } from "@cirrus/ratelimit";
+import type { Middleware } from "@lunora/server";
+import { defineSchemaExtension, defineTable, definePlugin, v } from "@lunora/server";
+import { createDbStore, RateLimiter } from "@lunora/ratelimit";
+import type { RateLimitConfigMap } from "@lunora/ratelimit";
 
 /**
  * Named limits this app enforces. Edit freely — add your own named limits and
@@ -50,7 +50,7 @@ export const makeRateLimiter = (ctx: { db: unknown }): RateLimiter<LimitName> =>
 /**
  * Middleware that injects `ctx.api.ratelimit` — a per-request limiter helper —
  * for any procedure that opts in with `.use(ratelimit.middleware)`. Convention
- * (see `@cirrus/server` `definePlugin`): helpers hang off `ctx.api.<key>`.
+ * (see `@lunora/server` `definePlugin`): helpers hang off `ctx.api.<key>`.
  */
 const middleware: Middleware<{ api?: Record<string, unknown>; db: unknown }, { api: Record<string, unknown>; db: unknown }> = ({ ctx, next }) =>
     next({
@@ -62,7 +62,7 @@ const middleware: Middleware<{ api?: Record<string, unknown>; db: unknown }, { a
 
 /**
  * The rate-limit plugin: a schema extension (`ratelimit_buckets`) + middleware
- * (`ctx.api.ratelimit`). `cirrus/schema.ts` wires the extension in via the
+ * (`ctx.api.ratelimit`). `lunora/schema.ts` wires the extension in via the
  * managed `.extend(ratelimit.extension)` block; attach the middleware yourself
  * with `c.mutation.use(ratelimit.middleware)`.
  */

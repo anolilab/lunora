@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { CirrusPaymentError } from "../src/errors";
+import { LunoraPaymentError } from "../src/errors";
 import { constantTimeEqual, hmacSha256Hex, parseStripeSignatureHeader, verifyStripeSignature } from "../src/webhook";
 
 const sign = async (secret: string, payload: string, timestamp: number): Promise<string> => {
@@ -24,7 +24,7 @@ describe("webhook verification", () => {
     it("rejects a tampered body", async () => {
         const signatureHeader = await sign(secret, payload, timestamp);
 
-        await expect(verifyStripeSignature({ now, payload: `${payload} `, secret, signatureHeader })).rejects.toBeInstanceOf(CirrusPaymentError);
+        await expect(verifyStripeSignature({ now, payload: `${payload} `, secret, signatureHeader })).rejects.toBeInstanceOf(LunoraPaymentError);
     });
 
     it("rejects an out-of-tolerance timestamp (replay)", async () => {

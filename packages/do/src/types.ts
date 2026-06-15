@@ -72,8 +72,8 @@ export interface RpcRequest {
  */
 export interface SocketAttachment {
     /**
-     * `true` when the upgrade presented a token matching `CIRRUS_ADMIN_TOKEN`,
-     * gating the reserved `__cirrus_admin__:*` introspection subscriptions to
+     * `true` when the upgrade presented a token matching `LUNORA_ADMIN_TOKEN`,
+     * gating the reserved `__lunora_admin__:*` introspection subscriptions to
      * the same credential as the HTTP admin RPCs. Absent/`false` on ordinary
      * user-subscription sockets, which may never read admin data over the wire.
      */

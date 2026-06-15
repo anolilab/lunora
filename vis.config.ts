@@ -28,9 +28,9 @@ export default defineConfig({
             inputs: ["production", "^production"],
             outputs: ["{projectRoot}/dist"],
         },
-        // App codegen (docs: fumadocs-mdx; playground: cirrus codegen) emits the
-        // generated dirs the apps' source imports. `cirrus codegen` loads
-        // @cirrus/codegen + the @cirrus deps, so build the upstream packages first.
+        // App codegen (docs: fumadocs-mdx; playground: lunora codegen) emits the
+        // generated dirs the apps' source imports. `lunora codegen` loads
+        // @lunora/codegen + the @lunora deps, so build the upstream packages first.
         codegen: {
             cache: true,
             dependsOn: ["^build"],
@@ -39,8 +39,8 @@ export default defineConfig({
             cache: true,
             // Type-aware ESLint rules (no-unsafe-*, no-unnecessary-condition) need the
             // upstream packages' declarations built, same as lint:types — without ^build
-            // cross-package @cirrus types resolve to `any` and trigger a no-unsafe cascade.
-            // `codegen` (self) emits each app's generated dir (.source / cirrus/_generated)
+            // cross-package @lunora types resolve to `any` and trigger a no-unsafe cascade.
+            // `codegen` (self) emits each app's generated dir (.source / lunora/_generated)
             // that its source imports — vis runs eslint via its own integration (not the
             // package's lint:eslint script), so the codegen must come through dependsOn.
             dependsOn: ["codegen", "^build", "default", "^public"],

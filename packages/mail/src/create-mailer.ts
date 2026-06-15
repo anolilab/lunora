@@ -4,7 +4,7 @@ import { createCloudflareTransport } from "./cloudflare-transport";
 import { toQueuedPayload } from "./queue";
 import renderEmail from "./render";
 import createResendTransport from "./resend-transport";
-import type { CirrusMailOptions, Mailer, MailTransport, SendOptions, SendPayload } from "./types";
+import type { LunoraMailOptions, Mailer, MailTransport, SendOptions, SendPayload } from "./types";
 
 /**
  * Pick the default transport when no explicit `transport` is supplied. The
@@ -14,7 +14,7 @@ import type { CirrusMailOptions, Mailer, MailTransport, SendOptions, SendPayload
  * selects the Resend transport (bring-your-own-provider escape hatch). Anything
  * else is a misconfiguration — fail loudly with an actionable message.
  */
-const buildDefaultTransport = (options: CirrusMailOptions): MailTransport => {
+const buildDefaultTransport = (options: LunoraMailOptions): MailTransport => {
     if (options.cloudflareSend) {
         return createCloudflareTransport({ from: options.from, send: options.cloudflareSend });
     }
@@ -23,12 +23,12 @@ const buildDefaultTransport = (options: CirrusMailOptions): MailTransport => {
         return createResendTransport(options.apiKey, options.from);
     }
 
-    throw new Error("@cirrus/mail: a transport is required — pass `transport`, `cloudflareSend` (Cloudflare Email Workers, the default), or `apiKey` (Resend)");
+    throw new Error("@lunora/mail: a transport is required — pass `transport`, `cloudflareSend` (Cloudflare Email Workers, the default), or `apiKey` (Resend)");
 };
 
-const createMailer = (options: CirrusMailOptions): Mailer => {
+const createMailer = (options: LunoraMailOptions): Mailer => {
     if (!options.from) {
-        throw new Error("@cirrus/mail: `from` is required");
+        throw new Error("@lunora/mail: `from` is required");
     }
 
     const transport = options.transport ?? buildDefaultTransport(options);
@@ -93,7 +93,7 @@ const createMailer = (options: CirrusMailOptions): Mailer => {
         if (!options.queue) {
             // Dev capture mode has no Queue binding, so a real enqueue is
             // impossible. Rather than throw (which would break any auth/registry
-            // flow that uses `queue()` in `cirrus dev`), route the send straight
+            // flow that uses `queue()` in `lunora dev`), route the send straight
             // through the capture transport so the message still lands in the
             // studio inbox. Production paths always pass a real `queue` binding
             // and never hit this branch, so real-queue behavior is unchanged.
@@ -105,7 +105,7 @@ const createMailer = (options: CirrusMailOptions): Mailer => {
                 return { queued: true };
             }
 
-            throw new Error("@cirrus/mail: `queue` binding is required for mailer.queue()");
+            throw new Error("@lunora/mail: `queue` binding is required for mailer.queue()");
         }
 
         // React elements are NOT structured-cloneable, so the queue body

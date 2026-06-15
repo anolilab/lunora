@@ -1,7 +1,7 @@
 /**
  * Durable Object that owns auth session state.
  *
- * `@cirrus/auth` used to write sessions directly into D1 alongside user
+ * `@lunora/auth` used to write sessions directly into D1 alongside user
  * records. That worked but coupled session lifecycle to a global database —
  * every read had to cross the region, every write contended with user
  * inserts. SessionDO owns sessions in a DO-local KV store: same-prefix
@@ -15,16 +15,16 @@
  * with one of:
  *
  * POST   /create   body: { token, userId, ttlSeconds }
- * GET    /get      header: `x-cirrus-session-token: &lt;token>`
- * DELETE /revoke   header: `x-cirrus-session-token: &lt;token>`
+ * GET    /get      header: `x-lunora-session-token: &lt;token>`
+ * DELETE /revoke   header: `x-lunora-session-token: &lt;token>`
  *
- * Every request must additionally carry an `x-cirrus-session-secret` header
+ * Every request must additionally carry an `x-lunora-session-secret` header
  * whose value matches `env.SESSION_DO_SECRET`. The DO is reachable from any
  * worker bound to its namespace, so a shared secret is the only thing that
  * prevents a compromised or misbehaving worker from reading arbitrary
  * sessions — the binding alone is not an auth surface.
  *
- * The DO returns JSON bodies that `@cirrus/auth` reshapes into its public
+ * The DO returns JSON bodies that `@lunora/auth` reshapes into its public
  * `AuthSession` type. Keep the surface narrow — anything more elaborate
  * should ride on top via a wrapper, not by widening this contract.
  *
@@ -36,17 +36,17 @@
  * the unit tests is preserved so plain-object doubles still work.
  */
 
-/** Default TTL for new sessions (7 days), matching `@cirrus/auth`. */
+/** Default TTL for new sessions (7 days), matching `@lunora/auth`. */
 const SESSION_DO_TTL_DEFAULT: number = 7 * 24 * 60 * 60;
 
 /** Hard ceiling on the requested TTL — 90 days. Longer sessions should ride on top via refresh. */
 const SESSION_DO_TTL_MAX: number = 90 * 24 * 60 * 60;
 
 /** Header used to authenticate the calling worker to the SessionDO. */
-const SESSION_SECRET_HEADER = "x-cirrus-session-do-secret";
+const SESSION_SECRET_HEADER = "x-lunora-session-do-secret";
 
 /** Header used to carry the session token on `/get` and `/revoke`. */
-const SESSION_TOKEN_HEADER = "x-cirrus-session-token";
+const SESSION_TOKEN_HEADER = "x-lunora-session-token";
 
 /** Allowed character class for session tokens — base64url-ish so cookies stay clean. */
 const SESSION_TOKEN_PATTERN = /^[\w-]+$/;
@@ -82,7 +82,7 @@ interface SessionDOState {
  * Worker declares; we only enumerate the ones this DO depends on.
  *
  * - `SESSION_DO_SECRET` — shared secret every caller must present in the
- * `x-cirrus-session-do-secret` header. Provisioned via `wrangler secret`.
+ * `x-lunora-session-do-secret` header. Provisioned via `wrangler secret`.
  * When unset, every request is rejected with 401 (closed by default).
  */
 interface SessionDOEnv {
@@ -179,7 +179,7 @@ const validateToken = (value: unknown): string | undefined => {
  * Concrete (not abstract) DO class. Subclass and register the subclass as
  * the `SESSION` binding in `wrangler.jsonc`:
  *
- * `import { SessionDO } from "@cirrus/do";`
+ * `import { SessionDO } from "@lunora/do";`
  *
  * `export class AppSessionDO extends SessionDO {}`
  *

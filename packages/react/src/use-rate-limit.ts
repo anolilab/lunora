@@ -1,7 +1,7 @@
 "use client";
 
-import type { RateLimitConfig, RateLimitStatus, RateLimitValue } from "@cirrus/ratelimit";
-import { evaluate } from "@cirrus/ratelimit";
+import type { RateLimitConfig, RateLimitStatus, RateLimitValue } from "@lunora/ratelimit";
+import { evaluate } from "@lunora/ratelimit";
 import { useCallback, useEffect, useReducer, useRef } from "react";
 
 export interface UseRateLimitOptions {
@@ -33,7 +33,7 @@ export interface UseRateLimitResult {
 /**
  * Client-side mirror of a rate limit for instant UX — disable a button or show
  * a countdown without a round-trip. It runs the same token-bucket / fixed-window
- * math as `@cirrus/ratelimit` on the server, so the prediction agrees with the
+ * math as `@lunora/ratelimit` on the server, so the prediction agrees with the
  * authoritative check; the server remains the source of truth.
  *
  * `config` is read on every render; pass a stable reference (module constant or

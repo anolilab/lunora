@@ -1,15 +1,15 @@
 {
-    "name": "@cirrus/vectors",
+    "name": "@lunora/vectors",
     "version": "0.0.0",
-    "description": "Cloudflare Vectorize adapter for Cirrus: typed vector indexes and similarity search",
+    "description": "Cloudflare Vectorize adapter for Lunora: typed vector indexes and similarity search",
     "license": "FSL-1.1-Apache-2.0",
-    "homepage": "https://cirrus.dev",
+    "homepage": "https://lunora.sh",
     "bugs": {
-        "url": "https://github.com/anolilab/cirrus/issues"
+        "url": "https://github.com/anolilab/lunora/issues"
     },
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/anolilab/cirrus.git",
+        "url": "git+https://github.com/anolilab/lunora.git",
         "directory": "packages/vectors"
     },
     "author": {
@@ -17,7 +17,7 @@
         "email": "d.bannert@anolilab.de"
     },
     "keywords": [
-        "cirrus",
+        "lunora",
         "cloudflare",
         "workers",
         "durable-objects",

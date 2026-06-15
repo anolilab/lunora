@@ -117,7 +117,7 @@ interface PoolOptions {
 interface ContainerBindingSpec {
     /** Durable Object binding name, e.g. `CONTAINER_TRANSCODER`. */
     binding: string;
-    /** The `cirrus/containers.ts` export name, e.g. `transcoder`. */
+    /** The `lunora/containers.ts` export name, e.g. `transcoder`. */
     exportName: string;
     /** Pool size default for `.any()`. */
     maxInstances?: number;
@@ -153,7 +153,7 @@ const lifecycleCall = async <Result>(
     const rpc = stub[method];
 
     if (typeof rpc !== "function") {
-        throw new TypeError(`ctx.containers: the "${binding}" container DO does not expose ${method}() — is @cirrus/container/do up to date?`);
+        throw new TypeError(`ctx.containers: the "${binding}" container DO does not expose ${method}() — is @lunora/container/do up to date?`);
     }
 
     return (rpc as (argument?: unknown) => Promise<Result>)(argument);
@@ -244,7 +244,7 @@ const accessorFor = (namespace: ContainerNamespaceLike, spec: ContainerBindingSp
 const missingBindingAccessor = (spec: ContainerBindingSpec): ContainerAccessor => {
     const fail = (): never => {
         throw new Error(
-            `ctx.containers.${spec.exportName}: no "${spec.binding}" Durable Object binding found. Run \`cirrus dev\` (or \`cirrus deploy\`) to reconcile wrangler.jsonc, and make sure the worker entry re-exports the generated container classes.`,
+            `ctx.containers.${spec.exportName}: no "${spec.binding}" Durable Object binding found. Run \`lunora dev\` (or \`lunora deploy\`) to reconcile wrangler.jsonc, and make sure the worker entry re-exports the generated container classes.`,
         );
     };
 
@@ -254,7 +254,7 @@ const missingBindingAccessor = (spec: ContainerBindingSpec): ContainerAccessor =
 /**
  * Build the `ctx.containers` record from the Worker `env`. Called by the
  * generated ShardDO with the specs codegen derived from
- * `cirrus/containers.ts`. A missing binding doesn't throw here — only when the
+ * `lunora/containers.ts`. A missing binding doesn't throw here — only when the
  * handle is actually used — so one unprovisioned container never breaks
  * unrelated functions.
  */

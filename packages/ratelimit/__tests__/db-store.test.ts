@@ -1,5 +1,5 @@
-import type { DatabaseWriter } from "@cirrus/server";
-import type { Id } from "@cirrus/values";
+import type { DatabaseWriter } from "@lunora/server";
+import type { Id } from "@lunora/values";
 import { describe, expect, it } from "vitest";
 
 import { RateLimiter } from "../src/rate-limiter";
@@ -11,7 +11,7 @@ import type {
 import { createDbStore as createDatabaseStore } from "../src/store";
 
 /**
- * A faithful in-memory stand-in for the Cirrus ORM writer: real row storage and
+ * A faithful in-memory stand-in for the Lunora ORM writer: real row storage and
  * a real `withIndex(...).eq(...).first()` lookup, not a mock. It exercises the
  * adapter's read-then-write logic the same way `ctx.db` would.
  */

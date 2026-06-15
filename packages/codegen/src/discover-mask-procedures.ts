@@ -1,7 +1,7 @@
 import type { CallExpression, Node as TsNode, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { cirrusRelativePath, classifyProcedureCall, listCirrusSourceFiles } from "./discover-functions";
+import { lunoraRelativePath, classifyProcedureCall, listLunoraSourceFiles } from "./discover-functions";
 import type { MaskColumnMetadataIR, MaskMetadataIR, MaskProcedureIR } from "./ir";
 
 // ---------------------------------------------------------------------------
@@ -229,18 +229,18 @@ const procedureIrFromDeclaration = (declaration: TsNode, relativePath: string): 
 };
 
 /**
- * Discover masking usage for every exported Cirrus procedure under the cirrus
+ * Discover masking usage for every exported Lunora procedure under the lunora
  * source directory — the column-level twin of `discoverRlsProcedures`. For each
  * procedure, records whether its builder chain includes `.use(mask(...))`, which
  * `(table, column)` pairs that mask declares, and which tables it reads/writes
  * through `ctx.db`. Feeds the `mask_uncovered_pii_column` advisor lint.
  */
-const discoverMaskProcedures = (project: Project, cirrusDirectory: string): MaskProcedureIR[] => {
+const discoverMaskProcedures = (project: Project, lunoraDirectory: string): MaskProcedureIR[] => {
     const procedures: MaskProcedureIR[] = [];
 
-    for (const filePath of listCirrusSourceFiles(cirrusDirectory)) {
+    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-        const relativePath = cirrusRelativePath(cirrusDirectory, filePath);
+        const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
 
         for (const statement of sourceFile.getVariableStatements()) {
             if (!statement.isExported()) {
@@ -358,10 +358,10 @@ const exportedProcedureChains = (sourceFile: SourceFile): TsNode[] => {
  * column)` with the first declaration winning, so a column masked by several
  * procedures lists once — the same evidence the advisor lint uses.
  */
-const discoverMaskMetadata = (project: Project, cirrusDirectory: string): MaskMetadataIR => {
+const discoverMaskMetadata = (project: Project, lunoraDirectory: string): MaskMetadataIR => {
     const columnsByKey = new Map<string, MaskColumnMetadataIR>();
 
-    for (const filePath of listCirrusSourceFiles(cirrusDirectory)) {
+    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
 
         for (const receiver of exportedProcedureChains(sourceFile)) {

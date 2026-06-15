@@ -1,7 +1,7 @@
 import type { Plugin } from "vite";
 
 /**
- * When a module under `cirrus/` throws while the Worker entry is first
+ * When a module under `lunora/` throws while the Worker entry is first
  * evaluated, `@cloudflare/vite-plugin` surfaces the failure from deep inside
  * its `runner-worker` running in `workerd`. The real error crosses a workerd
  * RPC boundary on the way out, which drops the user-code stack frames — so all
@@ -13,7 +13,7 @@ import type { Plugin } from "vite";
  *     at getWorkerEntryExportTypes (workers/runner-worker/index.js:246:24)
  * ```
  *
- * The classic cause is a **circular import**: a `cirrus/` query/mutation/action
+ * The classic cause is a **circular import**: a `lunora/` query/mutation/action
  * module runs `mutation({ args: { x: v.string() } })` at the top level while the
  * module it imported `v`/`query`/`mutation` from is still mid-initialization, so
  * those bindings read as `undefined`. The message names a validator method
@@ -25,22 +25,22 @@ import type { Plugin } from "vite";
  */
 const WORKER_STARTUP_HINT: string = [
     "",
-    "  ┌─ Cirrus ──────────────────────────────────────────────────────────────",
+    "  ┌─ Lunora ──────────────────────────────────────────────────────────────",
     "  │ Your Worker entry threw while loading, so the dev server couldn't read",
     "  │ its exports. The TypeError above comes from inside the Cloudflare",
     "  │ runtime and hides the file that actually failed. It is almost always:",
     "  │",
-    "  │   • A circular import in cirrus/. A query/mutation/action module ran at",
+    "  │   • A circular import in lunora/. A query/mutation/action module ran at",
     "  │     the top level before `v`/`query`/`mutation` finished initializing,",
     "  │     so they were `undefined` (hence `reading 'string'`/`'id'`/…).",
-    "  │     → Import `v`/`query`/`mutation` only from `cirrus/_generated/server`,",
-    "  │       and don't import one cirrus/ function module from another at the",
+    "  │     → Import `v`/`query`/`mutation` only from `lunora/_generated/server`,",
+    "  │       and don't import one lunora/ function module from another at the",
     "  │       top level.",
     "  │",
     "  │   • Stale or missing generated files.",
-    "  │     → Re-run `cirrus codegen`, then restart the dev server.",
+    "  │     → Re-run `lunora codegen`, then restart the dev server.",
     "  │",
-    "  │ Tip: check the cirrus/ files you edited most recently — the throw is at",
+    "  │ Tip: check the lunora/ files you edited most recently — the throw is at",
     "  │ their module top level.",
     "  └───────────────────────────────────────────────────────────────────────",
 ].join("\n");
@@ -67,7 +67,7 @@ const isWorkerEntryEvalError = (error: unknown): boolean => {
 };
 
 /** Sentinel so we never append the hint twice if the error is rethrown through several wrapped hooks. */
-const HINTED = Symbol.for("cirrus.workerStartupHintApplied");
+const HINTED = Symbol.for("lunora.workerStartupHintApplied");
 
 /**
  * Append {@link WORKER_STARTUP_HINT} to a recognised Worker-entry eval error
@@ -106,7 +106,7 @@ const augmentWorkerStartupError = (error: unknown): unknown => {
 
 type HookFunction = (...arguments_: never[]) => unknown;
 
-/** Wrap a hook function so a thrown Worker-entry eval error gets the Cirrus hint. */
+/** Wrap a hook function so a thrown Worker-entry eval error gets the Lunora hint. */
 const wrapHookFunction =
     (function_: HookFunction): HookFunction =>
     async (...arguments_: never[]): Promise<unknown> => {
@@ -138,7 +138,7 @@ const WRAPPED_HOOKS = ["configureServer", "buildStart"] as const;
 
 /**
  * Wrap the startup hooks of `@cloudflare/vite-plugin`'s plugins so a Worker-entry
- * evaluation failure carries the Cirrus hint. Returns a new array; the input
+ * evaluation failure carries the Lunora hint. Returns a new array; the input
  * plugins are shallow-cloned (never mutated in place) so re-using the cloudflare
  * plugin instances elsewhere stays safe.
  */

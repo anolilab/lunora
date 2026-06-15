@@ -5,7 +5,7 @@
  * supply it, so the lint simply finds nothing there.
  */
 export interface AdvisorQueryRead {
-    /** Source file the read appears in (relative to the cirrus dir, no extension). */
+    /** Source file the read appears in (relative to the lunora dir, no extension). */
     file: string;
     /** True when the chain calls `.filter(...)`. */
     hasFilter: boolean;

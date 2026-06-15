@@ -1,14 +1,14 @@
-import type { FunctionReference } from "@cirrus/client";
+import type { FunctionReference } from "@lunora/client";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import { CirrusProvider } from "../src/cirrus-provider";
+import { LunoraProvider } from "../src/lunora-provider";
 import useSubscription from "../src/use-subscription";
 import { createMockClient } from "./mock-client";
 
 const makeRef = (ref: string): FunctionReference => {
-    return { __cirrusRef: ref };
+    return { __lunoraRef: ref };
 };
 
 // Module-level stable default so it isn't recreated as an inline `as` expression
@@ -32,9 +32,9 @@ describe("useSubscription", () => {
         const mock = createMockClient();
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <Display />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         // No initial HTTP fetch — only the WS subscribe.
@@ -59,9 +59,9 @@ describe("useSubscription", () => {
         const mock = createMockClient();
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <Display args="skip" />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         expect(mock.subscribe).not.toHaveBeenCalled();
@@ -74,9 +74,9 @@ describe("useSubscription", () => {
         const mock = createMockClient();
 
         const view = render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <Display />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         await waitFor(() => {
@@ -91,9 +91,9 @@ describe("useSubscription", () => {
 
         // Flip args to "skip": the subscription is torn down and prior data cleared.
         view.rerender(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <Display args="skip" />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         await waitFor(() => {
@@ -124,9 +124,9 @@ describe("useSubscription", () => {
         });
 
         const view = render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <Display />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         await waitFor(() => {
@@ -148,9 +148,9 @@ describe("useSubscription", () => {
         });
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <Display />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         await waitFor(() => {

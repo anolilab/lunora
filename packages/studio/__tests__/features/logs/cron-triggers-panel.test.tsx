@@ -1,5 +1,5 @@
-import type { CronJobInfo } from "@cirrus/client";
-import { CirrusProvider } from "@cirrus/react";
+import type { CronJobInfo } from "@lunora/client";
+import { LunoraProvider } from "@lunora/react";
 import { render, screen } from "@testing-library/react";
 import type { ReactElement, ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -17,7 +17,7 @@ const JOBS: CronJobInfo[] = [
 
 const loadEmpty = async (): Promise<CronJobInfo[]> => [];
 
-const withProvider = (mock: MockClientHooks, children: ReactNode): ReactElement => <CirrusProvider client={mock.asClient}>{children}</CirrusProvider>;
+const withProvider = (mock: MockClientHooks, children: ReactNode): ReactElement => <LunoraProvider client={mock.asClient}>{children}</LunoraProvider>;
 
 describe("cronTriggersPanel", () => {
     it("renders triggers sorted by name with cron + function + shard", async () => {

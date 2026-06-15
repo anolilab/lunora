@@ -1,4 +1,4 @@
-import type { StorageObject } from "@cirrus/client";
+import type { StorageObject } from "@lunora/client";
 import type { CSSProperties, ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 

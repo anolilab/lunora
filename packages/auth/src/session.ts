@@ -1,9 +1,9 @@
 import type { BetterAuthOptions } from "better-auth";
 
 /**
- * Cirrus-friendly view over better-auth's `session` option.
+ * Lunora-friendly view over better-auth's `session` option.
  *
- * This is a typed alias for better-auth's own `session` shape — Cirrus stays a
+ * This is a typed alias for better-auth's own `session` shape — Lunora stays a
  * thin wrapper, so we don't reimplement the fields, we just give them a named,
  * documented home so callers get autocomplete without reaching into
  * `BetterAuthOptions`. The most relevant fields for session rotation / richer
@@ -47,7 +47,7 @@ const validateSessionPolicy = (policy: SessionPolicy): SessionPolicy => {
         }
 
         if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-            throw new TypeError(`@cirrus/auth: \`session.${field}\` must be a non-negative, finite number of seconds`);
+            throw new TypeError(`@lunora/auth: \`session.${field}\` must be a non-negative, finite number of seconds`);
         }
     }
 
@@ -59,7 +59,7 @@ const validateSessionPolicy = (policy: SessionPolicy): SessionPolicy => {
  * expiry trade-offs. Spread or override fields as needed:
  *
  * ```ts
- * import { createAuth, sessionPresets } from "@cirrus/auth";
+ * import { createAuth, sessionPresets } from "@lunora/auth";
  *
  * export const auth = createAuth({
  *     secret: env.AUTH_SECRET,

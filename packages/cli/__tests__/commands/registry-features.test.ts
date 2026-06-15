@@ -1,5 +1,5 @@
 /**
- * The shadcn-parity manifest/CLI features for `cirrus add`: devDependencies,
+ * The shadcn-parity manifest/CLI features for `lunora add`: devDependencies,
  * env-var scaffolding, per-item docs, `--diff` preview, `--overwrite`, the
  * `registry view` inspector, and `registry build` index generation. Driven
  * against a controllable temp registry.
@@ -30,7 +30,7 @@ const writeItem = (manifest: Record<string, unknown>, source = "export const v =
     mkdirSync(join(registryRoot, "foo"), { recursive: true });
     writeFileSync(
         join(registryRoot, "foo", "registry.json"),
-        JSON.stringify({ files: [{ from: "foo.ts", merge: "create-or-skip", to: "cirrus/foo/index.ts" }], name: "foo", ...manifest }, undefined, 2),
+        JSON.stringify({ files: [{ from: "foo.ts", merge: "create-or-skip", to: "lunora/foo/index.ts" }], name: "foo", ...manifest }, undefined, 2),
         "utf8",
     );
     writeFileSync(join(registryRoot, "foo", "foo.ts"), source, "utf8");
@@ -44,13 +44,13 @@ const addFoo = async (extra: Record<string, unknown> = {}): Promise<{ lines: str
     return { lines };
 };
 
-const destination = (): string => join(workdir, "cirrus", "foo", "index.ts");
+const destination = (): string => join(workdir, "lunora", "foo", "index.ts");
 
-describe("cirrus add — shadcn-parity features", () => {
+describe("lunora add — shadcn-parity features", () => {
     beforeEach(() => {
-        registryRoot = mkdtempSync(join(tmpdir(), "cirrus-reg-"));
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-proj-"));
-        mkdirSync(join(workdir, "cirrus"), { recursive: true });
+        registryRoot = mkdtempSync(join(tmpdir(), "lunora-reg-"));
+        workdir = mkdtempSync(join(tmpdir(), "lunora-proj-"));
+        mkdirSync(join(workdir, "lunora"), { recursive: true });
         writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: {}, name: "demo" }, undefined, 4), "utf8");
     });
 
@@ -113,7 +113,7 @@ describe("cirrus add — shadcn-parity features", () => {
 
         expect(existsSync(destination())).toBe(false);
         // The new file shows as an addition in the preview.
-        expect(lines.join("\n")).toContain("+ cirrus/foo/index.ts");
+        expect(lines.join("\n")).toContain("+ lunora/foo/index.ts");
         expect(lines.join("\n")).toContain("preview only");
     });
 
@@ -166,7 +166,7 @@ describe("cirrus add — shadcn-parity features", () => {
         mkdirSync(join(registryRoot, "bar"), { recursive: true });
         writeFileSync(
             join(registryRoot, "bar", "registry.json"),
-            JSON.stringify({ files: [{ from: "x.ts", merge: "create-or-skip", to: "cirrus/bar/index.ts" }], name: "bar" }),
+            JSON.stringify({ files: [{ from: "x.ts", merge: "create-or-skip", to: "lunora/bar/index.ts" }], name: "bar" }),
             "utf8",
         );
 

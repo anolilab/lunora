@@ -1,7 +1,7 @@
 /**
- * `@cirrus/client/query` — the framework-neutral live-query state machine shared
- * by every Cirrus UI adapter (React, Vue, Svelte, Solid). It owns the seam
- * between a `CirrusClient` subscription and a framework's reactivity primitive:
+ * `@lunora/client/query` — the framework-neutral live-query state machine shared
+ * by every Lunora UI adapter (React, Vue, Svelte, Solid). It owns the seam
+ * between a `LunoraClient` subscription and a framework's reactivity primitive:
  * the subscribe → snapshot → error/reset → cleanup lifecycle, with the
  * skip-handling, value/error fan-out, attach-throw normalisation, and
  * cancellation-guarded teardown all in one place. Nothing here imports a UI

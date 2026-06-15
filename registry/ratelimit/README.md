@@ -1,32 +1,32 @@
 # ratelimit
 
-Durable, ORM-backed rate limiting for Cirrus. Wraps [`@cirrus/ratelimit`](../../packages/ratelimit)'s `RateLimiter` over a `ctx.db`-backed store, so limits are persisted in your app's schema and survive Durable Object hibernation/eviction.
+Durable, ORM-backed rate limiting for Lunora. Wraps [`@lunora/ratelimit`](../../packages/ratelimit)'s `RateLimiter` over a `ctx.db`-backed store, so limits are persisted in your app's schema and survive Durable Object hibernation/eviction.
 
-Supports token-bucket, fixed-window, and sliding-window algorithms (see `@cirrus/ratelimit`).
+Supports token-bucket, fixed-window, and sliding-window algorithms (see `@lunora/ratelimit`).
 
 ## Install
 
 ```bash
-cirrus registry add ratelimit
+lunora registry add ratelimit
 ```
 
 This:
 
-1. Adds `@cirrus/ratelimit` and `@cirrus/server` to your `package.json` (run `pnpm install` afterwards).
-2. Copies `cirrus/ratelimit/schema.ts` (the limiter config + the `buckets` table + the plugin) and `cirrus/ratelimit/index.ts` (the `consume` / `check` / `reset` functions) into your project — these are **yours** to edit.
-3. Splices a managed `.extend(ratelimit.extension)` into `cirrus/schema.ts`, merging the `buckets` table in as **`ratelimit_buckets`** (extension tables are auto-prefixed with the plugin key).
+1. Adds `@lunora/ratelimit` and `@lunora/server` to your `package.json` (run `pnpm install` afterwards).
+2. Copies `lunora/ratelimit/schema.ts` (the limiter config + the `buckets` table + the plugin) and `lunora/ratelimit/index.ts` (the `consume` / `check` / `reset` functions) into your project — these are **yours** to edit.
+3. Splices a managed `.extend(ratelimit.extension)` into `lunora/schema.ts`, merging the `buckets` table in as **`ratelimit_buckets`** (extension tables are auto-prefixed with the plugin key).
 
 Then regenerate types:
 
 ```bash
-cirrus codegen
+lunora codegen
 ```
 
 ## Wire it up
 
 ### Configure your limits
 
-Edit `cirrus/ratelimit/schema.ts` — add named limits to the `limits` map:
+Edit `lunora/ratelimit/schema.ts` — add named limits to the `limits` map:
 
 ```ts
 export const limits = {
@@ -37,10 +37,10 @@ export const limits = {
 
 ### Expose the functions
 
-Re-export from your `cirrus/` entry so codegen discovers them (they emit as `ratelimit/consume`, `ratelimit/check`, `ratelimit/reset`):
+Re-export from your `lunora/` entry so codegen discovers them (they emit as `ratelimit/consume`, `ratelimit/check`, `ratelimit/reset`):
 
 ```ts
-// cirrus/index.ts (or wherever you aggregate functions)
+// lunora/index.ts (or wherever you aggregate functions)
 export { check, consume, reset } from "./ratelimit/index.js";
 ```
 
@@ -58,11 +58,11 @@ if (!status.ok) {
 The plugin also ships middleware that injects `ctx.api.ratelimit` (a per-request limiter bound to `ctx.db`). Attach it to any procedure with `.use(...)`:
 
 ```ts
-import { initCirrus } from "@cirrus/server";
+import { initLunora } from "@lunora/server";
 import type { DataModel } from "./_generated/dataModel.js";
 import { ratelimit } from "./ratelimit/index.js";
 
-const c = initCirrus.dataModel<DataModel>().create();
+const c = initLunora.dataModel<DataModel>().create();
 
 export const sendMessage = c.mutation.use(ratelimit.middleware).handler(async (ctx, args) => {
     const status = await ctx.api.ratelimit.limit("default", { key: ctx.userId });
@@ -75,4 +75,4 @@ export const sendMessage = c.mutation.use(ratelimit.middleware).handler(async (c
 
 ## What you own
 
-Everything under `cirrus/ratelimit/` is copied into your repo — change the limit configs, the table columns, the algorithm, or the functions however you like. `@cirrus/ratelimit` provides the algorithm + store helpers; this component is the idiomatic Cirrus glue around them.
+Everything under `lunora/ratelimit/` is copied into your repo — change the limit configs, the table columns, the algorithm, or the functions however you like. `@lunora/ratelimit` provides the algorithm + store helpers; this component is the idiomatic Lunora glue around them.

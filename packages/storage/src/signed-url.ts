@@ -3,7 +3,7 @@
  *
  * Why not R2's native S3 presigned URLs? A presigned URL is a self-contained
  * bearer credential: anyone holding it reaches the object directly on R2's S3
- * endpoint, bypassing the Worker. Cirrus signs URLs that resolve back through
+ * endpoint, bypassing the Worker. Lunora signs URLs that resolve back through
  * your own Worker (`publicBaseUrl` → `GET /storage/:key`), so the request still
  * passes your app's gates — auth/session checks, per-object policy, rate limits,
  * audit — before {@link verifySignedUrl} validates the signature + expiry and
@@ -120,11 +120,11 @@ export const buildSignedUrl = async (
     // already-expired URL that verify silently rejects) and enforce a ceiling
     // so a bogus value can't mint an effectively non-expiring URL.
     if (!Number.isFinite(expiresInSeconds) || expiresInSeconds <= 0) {
-        throw new Error("@cirrus/storage: expiresInSeconds must be a positive finite number");
+        throw new Error("@lunora/storage: expiresInSeconds must be a positive finite number");
     }
 
     if (expiresInSeconds > MAX_EXPIRES_IN_SECONDS) {
-        throw new Error(`@cirrus/storage: expiresInSeconds must not exceed ${String(MAX_EXPIRES_IN_SECONDS)} (7 days)`);
+        throw new Error(`@lunora/storage: expiresInSeconds must not exceed ${String(MAX_EXPIRES_IN_SECONDS)} (7 days)`);
     }
 
     // contentType is a PUT-only pin: a GET URL has no request body to constrain,

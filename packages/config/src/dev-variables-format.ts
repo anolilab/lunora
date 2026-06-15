@@ -1,7 +1,7 @@
 /**
  * The `.dev.vars` line grammar — one owner, shared by every reader/writer of the
- * file so the format can't drift between packages. `@cirrus/cli`'s `env`
- * command (parse/serialize) and `@cirrus/config`'s scaffolder (comment-
+ * file so the format can't drift between packages. `@lunora/cli`'s `env`
+ * command (parse/serialize) and `@lunora/config`'s scaffolder (comment-
  * preserving rewrite) do different *transforms*, but they agree on these
  * primitives: the filename, what a `KEY` looks like, how lines split, and how
  * quotes strip.

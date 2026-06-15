@@ -1,19 +1,19 @@
 /**
- * AST-merge helper for `cirrus add` registry items that ship a schema
+ * AST-merge helper for `lunora add` registry items that ship a schema
  * extension. Mirrors the table/cron generators in
- * `.vis/templates/_helpers/insert-*.ts` — it loads `cirrus/schema.ts` into a
+ * `.vis/templates/_helpers/insert-*.ts` — it loads `lunora/schema.ts` into a
  * ts-morph in-memory project and chains a `.extend(&lt;key>.extension)` onto the
  * existing `defineSchema(...)` call, plus the matching managed import.
  *
  * Ownership / idempotency: both the import and the `.extend(...)` are wrapped in
- * `// cirrus:add:&lt;key>` managed-block markers. Re-running `add` for the same
+ * `// lunora:add:&lt;key>` managed-block markers. Re-running `add` for the same
  * item detects the marker and is a no-op, so user edits elsewhere in the file
  * survive untouched. ts-morph itself doesn't model leading-comment trivia as
  * editable nodes, so we operate on the raw text for the markers and only use
  * ts-morph to locate the `defineSchema(...)` call + verify the structure.
  *
  * Kept dependency-light: `ts-morph` is already a (lazily-loaded) dependency of
- * `@cirrus/cli`; this module is only imported from the `add` command's reconcile
+ * `@lunora/cli`; this module is only imported from the `add` command's reconcile
  * path, never at CLI start.
  */
 import type { CallExpression } from "ts-morph";
@@ -22,13 +22,13 @@ import { Project, SyntaxKind } from "ts-morph";
 type InsertSchemaExtensionResult = { ok: true; text: string } | { ok: false; reason: "already-applied" | "no-define-schema" | "non-object-argument" };
 
 /** Marker that brackets the managed import + `.extend()` for a given item key. */
-const startMarker = (key: string): string => `// cirrus:add:${key}:start`;
-const endMarker = (key: string): string => `// cirrus:add:${key}:end`;
+const startMarker = (key: string): string => `// lunora:add:${key}:start`;
+const endMarker = (key: string): string => `// lunora:add:${key}:end`;
 
 /**
  * The default module specifier a freshly-added item is imported from. The item
- * ships `cirrus/&lt;key>/schema.ts` exporting `&lt;key>` (the plugin object whose
- * `.extension` is the schema extension). Relative to `cirrus/schema.ts` that is
+ * ships `lunora/&lt;key>/schema.ts` exporting `&lt;key>` (the plugin object whose
+ * `.extension` is the schema extension). Relative to `lunora/schema.ts` that is
  * `./&lt;key>/schema`.
  */
 const extensionImportSpecifier = (key: string): string => `./${key}/schema`;
@@ -49,9 +49,9 @@ const findDefineSchemaCall = (callExpressions: ReadonlyArray<CallExpression>): C
 
 /**
  * Append `.extend(&lt;key>.extension)` and a managed import to an existing
- * `cirrus/schema.ts`. Idempotent: a second call for the same `key` returns
+ * `lunora/schema.ts`. Idempotent: a second call for the same `key` returns
  * `already-applied` and leaves the text unchanged.
- * @param source the current `cirrus/schema.ts` contents
+ * @param source the current `lunora/schema.ts` contents
  * @param key the registry item key (e.g. `"ratelimit"`)
  */
 const insertSchemaExtension = (source: string, key: string): InsertSchemaExtensionResult => {

@@ -30,7 +30,7 @@
 "jobs":
     "shellcheck":
         "name": "ShellCheck (install.sh)"
-        "if": "github.repository == 'anolilab/cirrus'"
+        "if": "github.repository == 'anolilab/lunora'"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 5
         "steps":
@@ -53,7 +53,7 @@
 
     "psscriptanalyzer":
         "name": "PSScriptAnalyzer (install.ps1)"
-        "if": "github.repository == 'anolilab/cirrus'"
+        "if": "github.repository == 'anolilab/lunora'"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 5
         "steps":

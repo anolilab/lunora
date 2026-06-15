@@ -1,16 +1,16 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import type { WranglerConfig } from "@cirrus/config";
+import type { WranglerConfig } from "@lunora/config";
 import {
     DEV_VARS_FILE,
     findWranglerFile,
-    inferCirrusBindings,
+    inferLunoraBindings,
     isPlaceholderValue,
     parseDevVariableEntries,
     readWranglerJsonc,
     validateWranglerConfig,
-} from "@cirrus/config";
+} from "@lunora/config";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
@@ -76,7 +76,7 @@ const readWrangler = (cwd: string): { parsed: WranglerConfig | undefined; path: 
 const checkWrangler = (parsed: WranglerConfig | undefined, path: string | undefined, findings: Finding[]): void => {
     if (path === undefined) {
         findings.push({
-            fix: "Run `cirrus init` (or `cirrus dev`) to scaffold and reconcile wrangler.jsonc.",
+            fix: "Run `lunora init` (or `lunora dev`) to scaffold and reconcile wrangler.jsonc.",
             level: "fail",
             message: "wrangler.jsonc not found.",
         });
@@ -96,7 +96,7 @@ const checkWrangler = (parsed: WranglerConfig | undefined, path: string | undefi
     if (shardError === undefined) {
         findings.push({ level: "pass", message: "wrangler.jsonc present with a SHARD durable-object binding." });
     } else {
-        findings.push({ fix: "Run `cirrus dev` to auto-reconcile, or add the binding manually.", level: "fail", message: shardError });
+        findings.push({ fix: "Run `lunora dev` to auto-reconcile, or add the binding manually.", level: "fail", message: shardError });
     }
 };
 
@@ -168,25 +168,25 @@ const checkDevVariables = (cwd: string, findings: Finding[]): void => {
 
     if (unfilled.length > 0) {
         findings.push({
-            fix: "Run `cirrus dev` to auto-generate secrets, or fill them in by hand.",
+            fix: "Run `lunora dev` to auto-generate secrets, or fill them in by hand.",
             level: "warn",
             message: `${DEV_VARS_FILE} has unfilled secret value(s): ${unfilled.join(", ")}.`,
         });
     }
 };
 
-/** `CIRRUS_ADMIN_TOKEN` not set → INFO (studio/admin RPCs need it, but it's optional locally). */
+/** `LUNORA_ADMIN_TOKEN` not set → INFO (studio/admin RPCs need it, but it's optional locally). */
 const checkAdminToken = (findings: Finding[]): void => {
-    const token = process.env.CIRRUS_ADMIN_TOKEN;
+    const token = process.env.LUNORA_ADMIN_TOKEN;
 
     if (token === undefined || token.trim() === "") {
         findings.push({
-            fix: "Set CIRRUS_ADMIN_TOKEN (env or `.dev.vars`) to enable admin RPCs / studio.",
+            fix: "Set LUNORA_ADMIN_TOKEN (env or `.dev.vars`) to enable admin RPCs / studio.",
             level: "info",
-            message: "CIRRUS_ADMIN_TOKEN is not set.",
+            message: "LUNORA_ADMIN_TOKEN is not set.",
         });
     } else {
-        findings.push({ level: "pass", message: "CIRRUS_ADMIN_TOKEN is set." });
+        findings.push({ level: "pass", message: "LUNORA_ADMIN_TOKEN is set." });
     }
 };
 
@@ -198,10 +198,10 @@ const checkAdminToken = (findings: Finding[]): void => {
  * entry can still miss it). Skips cleanly when no containers are declared.
  */
 const checkContainers = async (cwd: string, findings: Finding[]): Promise<void> => {
-    let containers: Awaited<ReturnType<typeof inferCirrusBindings>>["containers"];
+    let containers: Awaited<ReturnType<typeof inferLunoraBindings>>["containers"];
 
     try {
-        ({ containers } = await inferCirrusBindings({ projectRoot: cwd }));
+        ({ containers } = await inferLunoraBindings({ projectRoot: cwd }));
     } catch {
         return; // inference is best-effort; other checks own the real failures.
     }
@@ -211,7 +211,7 @@ const checkContainers = async (cwd: string, findings: Finding[]): Promise<void> 
             findings.push({ level: "pass", message: `container "${container.exportName}" is exported by the worker entry.` });
         } else {
             findings.push({
-                fix: 'Add `export * from "./cirrus/_generated/containers"` to your worker entry (or re-run `vis generate cirrus-container`).',
+                fix: 'Add `export * from "./lunora/_generated/containers"` to your worker entry (or re-run `vis generate lunora-container`).',
                 level: "fail",
                 message: `container "${container.exportName}" is declared but ${container.className} is not exported by the worker entry.`,
             });
@@ -247,7 +247,7 @@ const LEVEL_LABEL: Record<FindingLevel, string> = { fail: "FAIL", info: "INFO", 
 
 /** Print the doctor report, then a one-line summary; routes FAIL→error, WARN→warn, else info. */
 const renderReport = (result: DoctorResult, logger: Logger): void => {
-    logger.info("cirrus doctor — project preflight");
+    logger.info("lunora doctor — project preflight");
 
     for (const finding of result.findings) {
         const line = `[${LEVEL_LABEL[finding.level]}] ${finding.message}`;
@@ -277,7 +277,7 @@ const renderReport = (result: DoctorResult, logger: Logger): void => {
     }
 };
 
-/** `cirrus doctor` handler (lazy-loaded via the command's `loader`). */
+/** `lunora doctor` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<DoctorOptions> = defineHandler<DoctorOptions>(async ({ cwd, logger }) => {
     const result = await runDoctor({ cwd, logger });
 

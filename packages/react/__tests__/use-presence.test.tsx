@@ -1,15 +1,15 @@
-import type { FunctionReference } from "@cirrus/client";
+import type { FunctionReference } from "@lunora/client";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { CirrusProvider } from "../src/cirrus-provider";
+import { LunoraProvider } from "../src/lunora-provider";
 import type { HeartbeatReference, ListPresentReference } from "../src/use-presence";
 import { usePresence } from "../src/use-presence";
 import { createMockClient } from "./mock-client";
 
-const HEARTBEAT = { __cirrusRef: "presence:heartbeat" } as unknown as HeartbeatReference;
-const LIST_PRESENT = { __cirrusRef: "presence:listPresent" } as unknown as ListPresentReference;
+const HEARTBEAT = { __lunoraRef: "presence:heartbeat" } as unknown as HeartbeatReference;
+const LIST_PRESENT = { __lunoraRef: "presence:listPresent" } as unknown as ListPresentReference;
 
 const Roster = ({ roomId = "room-1" }: { roomId?: string }): ReactElement => {
     const { present, sessionId } = usePresence(roomId, {
@@ -41,9 +41,9 @@ describe("usePresence", () => {
         const mock = createMockClient();
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <Roster />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         // Immediate heartbeat on mount.
@@ -51,7 +51,7 @@ describe("usePresence", () => {
             expect(mock.mutation).toHaveBeenCalledTimes(1);
         });
 
-        expect(mock.mutation.mock.calls[0]?.[0]).toMatchObject({ __cirrusRef: "presence:heartbeat" });
+        expect(mock.mutation.mock.calls[0]?.[0]).toMatchObject({ __lunoraRef: "presence:heartbeat" });
         expect(mock.mutation.mock.calls[0]?.[1]).toMatchObject({ roomId: "room-1", sessionId: "sess-fixed" });
 
         // Two interval ticks → two more heartbeats.
@@ -68,16 +68,16 @@ describe("usePresence", () => {
         const mock = createMockClient();
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <Roster />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         await waitFor(() => {
             expect(mock.subscribe).toHaveBeenCalledTimes(1);
         });
 
-        expect(mock.subscribe.mock.calls[0]?.[0]).toMatchObject({ __cirrusRef: "presence:listPresent" });
+        expect(mock.subscribe.mock.calls[0]?.[0]).toMatchObject({ __lunoraRef: "presence:listPresent" });
         expect(mock.subscribe.mock.calls[0]?.[1]).toMatchObject({ roomId: "room-1" });
         expect(screen.getByTestId("roster").textContent).toBe("pending");
 
@@ -109,9 +109,9 @@ describe("usePresence", () => {
 
         try {
             render(
-                <CirrusProvider client={mock.asClient}>
+                <LunoraProvider client={mock.asClient}>
                     <Anon />
-                </CirrusProvider>,
+                </LunoraProvider>,
             );
 
             const id = screen.getByTestId("anon").textContent;
@@ -144,9 +144,9 @@ describe("usePresence", () => {
         });
 
         const view = render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <Roster />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         await waitFor(() => {

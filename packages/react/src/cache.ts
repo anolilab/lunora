@@ -1,4 +1,4 @@
-import type { CirrusClient, FunctionReference, Unsubscribe } from "@cirrus/client";
+import type { LunoraClient, FunctionReference, Unsubscribe } from "@lunora/client";
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 
 import { keyHash } from "./query-key";
@@ -24,7 +24,7 @@ interface RegistryEntry {
  * TanStack {@link QueryClient}. The flow on every push is
  * `client.subscribe(fn, args, value => qc.setQueryData(queryKey, value))`.
  *
- * Every hook that mounts a `useQuery({queryKey: ["cirrus", fn, args, shard]})`
+ * Every hook that mounts a `useQuery({queryKey: ["lunora", fn, args, shard]})`
  * also calls `registry.attach(qc, queryKey, fn, args, shardKey)`; the registry
  * dedupes by hashed queryKey so two components observing the same query open a
  * single WS subscription. On the last `detach()` the subscription is closed
@@ -34,10 +34,10 @@ interface RegistryEntry {
  * the registry installs a 5s interval that calls `qc.invalidateQueries({
  * queryKey })`, letting TanStack's own `refetch` loop drive freshness.
  */
-class CirrusSubscriptionRegistry {
+class LunoraSubscriptionRegistry {
     private readonly entries = new Map<string, RegistryEntry>();
 
-    public constructor(private readonly client: CirrusClient) {}
+    public constructor(private readonly client: LunoraClient) {}
 
     /**
      * Hash a TanStack `queryKey` to the internal registry index. Exposed so a
@@ -116,19 +116,19 @@ class CirrusSubscriptionRegistry {
     }
 }
 
-const registryByClient = new WeakMap<CirrusClient, CirrusSubscriptionRegistry>();
+const registryByClient = new WeakMap<LunoraClient, LunoraSubscriptionRegistry>();
 
 /** Returns the shared subscription registry for `client`, creating it on first access. */
-const getSubscriptionRegistry = (client: CirrusClient): CirrusSubscriptionRegistry => {
+const getSubscriptionRegistry = (client: LunoraClient): LunoraSubscriptionRegistry => {
     let registry = registryByClient.get(client);
 
     if (!registry) {
-        registry = new CirrusSubscriptionRegistry(client);
+        registry = new LunoraSubscriptionRegistry(client);
         registryByClient.set(client, registry);
     }
 
     return registry;
 };
 
-export { CirrusSubscriptionRegistry, getSubscriptionRegistry };
-export { cirrusQueryKey, serializeQueryKey, stableStringify } from "./query-key";
+export { LunoraSubscriptionRegistry, getSubscriptionRegistry };
+export { lunoraQueryKey, serializeQueryKey, stableStringify } from "./query-key";

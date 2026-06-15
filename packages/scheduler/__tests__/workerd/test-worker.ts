@@ -1,5 +1,5 @@
 /**
- * Test entry-point Worker for `@cirrus/scheduler` integration tests.
+ * Test entry-point Worker for `@lunora/scheduler` integration tests.
  *
  * Boots a real `SchedulerDO` so tests can drive `/schedule`, `/cancel`, and
  * the alarm fire path through the actual workerd alarm scheduler — which the

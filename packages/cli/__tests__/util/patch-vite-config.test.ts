@@ -36,11 +36,11 @@ import { defineConfig } from "vite";
 export default {};
 `;
 
-const ALREADY_HAS_CIRRUS = `\
+const ALREADY_HAS_LUNORA = `\
 import { defineConfig } from "vite";
-import { cirrus } from "@cirrus/vite";
+import { lunora } from "@lunora/vite";
 
-export default defineConfig({ plugins: [cirrus()] });
+export default defineConfig({ plugins: [lunora()] });
 `;
 
 const NO_RECOGNISABLE_EXPORT = `\
@@ -65,14 +65,14 @@ export default defineConfig({
 
 describe("patchViteConfig", () => {
     describe("idempotency", () => {
-        it("returns changed:false when cirrus() is already present", () => {
+        it("returns changed:false when lunora() is already present", () => {
             expect.assertions(3);
 
-            const result = patchViteConfig(ALREADY_HAS_CIRRUS);
+            const result = patchViteConfig(ALREADY_HAS_LUNORA);
 
             expect(result.changed).toBe(false);
-            expect(result.code).toBe(ALREADY_HAS_CIRRUS);
-            expect(result.reason).toBe("cirrus plugin already present");
+            expect(result.code).toBe(ALREADY_HAS_LUNORA);
+            expect(result.reason).toBe("lunora plugin already present");
         });
 
         it("is idempotent when called twice on the same source", () => {
@@ -101,21 +101,21 @@ describe("patchViteConfig", () => {
     });
 
     describe("import injection", () => {
-        it("adds the @cirrus/vite import when it is missing", () => {
+        it("adds the @lunora/vite import when it is missing", () => {
             expect.assertions(2);
 
             const result = patchViteConfig(NO_PLUGINS_KEY);
 
             expect(result.changed).toBe(true);
-            expect(result.code).toContain('import { cirrus } from "@cirrus/vite"');
+            expect(result.code).toContain('import { lunora } from "@lunora/vite"');
         });
 
-        it("does NOT duplicate the import when @cirrus/vite is already imported", () => {
+        it("does NOT duplicate the import when @lunora/vite is already imported", () => {
             expect.assertions(2);
 
             // Patch once so the import is present, then count occurrences.
             const first = patchViteConfig(NO_PLUGINS_KEY);
-            const occurrences = (first.code.match(/@cirrus\/vite/gu) ?? []).length;
+            const occurrences = (first.code.match(/@lunora\/vite/gu) ?? []).length;
 
             expect(first.changed).toBe(true);
             expect(occurrences).toBe(1);
@@ -123,15 +123,15 @@ describe("patchViteConfig", () => {
     });
 
     describe("defineConfig({ plugins: [...] }) — existing entries", () => {
-        it("prepends cirrus() before existing plugins", () => {
+        it("prepends lunora() before existing plugins", () => {
             expect.assertions(3);
 
             const result = patchViteConfig(WITH_PLUGINS_REACT);
 
             expect(result.changed).toBe(true);
-            expect(result.code).toContain("cirrus()");
-            // cirrus() must appear before react()
-            expect(result.code.indexOf("cirrus()")).toBeLessThan(result.code.indexOf("react()"));
+            expect(result.code).toContain("lunora()");
+            // lunora() must appear before react()
+            expect(result.code.indexOf("lunora()")).toBeLessThan(result.code.indexOf("react()"));
         });
 
         it("preserves the existing plugin entries", () => {
@@ -144,59 +144,59 @@ describe("patchViteConfig", () => {
     });
 
     describe("defineConfig({ plugins: [] }) — empty array", () => {
-        it("fills the empty plugins array with cirrus()", () => {
+        it("fills the empty plugins array with lunora()", () => {
             expect.assertions(2);
 
             const result = patchViteConfig(WITH_PLUGINS_EMPTY);
 
             expect(result.changed).toBe(true);
-            expect(result.code).toContain("cirrus()");
+            expect(result.code).toContain("lunora()");
         });
     });
 
     describe("defineConfig({}) — no plugins key", () => {
-        it("adds a plugins: [cirrus()] property", () => {
+        it("adds a plugins: [lunora()] property", () => {
             expect.assertions(3);
 
             const result = patchViteConfig(NO_PLUGINS_KEY);
 
             expect(result.changed).toBe(true);
             expect(result.code).toContain("plugins:");
-            expect(result.code).toContain("cirrus()");
+            expect(result.code).toContain("lunora()");
         });
     });
 
     describe("plain export default { ... } (no defineConfig wrapper)", () => {
-        it("prepends cirrus() into an existing plugins array", () => {
+        it("prepends lunora() into an existing plugins array", () => {
             expect.assertions(3);
 
             const result = patchViteConfig(PLAIN_OBJECT_WITH_PLUGINS);
 
             expect(result.changed).toBe(true);
-            expect(result.code).toContain("cirrus()");
-            expect(result.code.indexOf("cirrus()")).toBeLessThan(result.code.indexOf("react()"));
+            expect(result.code).toContain("lunora()");
+            expect(result.code.indexOf("lunora()")).toBeLessThan(result.code.indexOf("react()"));
         });
 
-        it("adds plugins: [cirrus()] to an empty plain-object config", () => {
+        it("adds plugins: [lunora()] to an empty plain-object config", () => {
             expect.assertions(3);
 
             const result = patchViteConfig(PLAIN_OBJECT_NO_PLUGINS);
 
             expect(result.changed).toBe(true);
             expect(result.code).toContain("plugins:");
-            expect(result.code).toContain("cirrus()");
+            expect(result.code).toContain("lunora()");
         });
     });
 
     describe("multi-line plugins array", () => {
-        it("prepends cirrus() as the first entry in a multiline plugins array", () => {
+        it("prepends lunora() as the first entry in a multiline plugins array", () => {
             expect.assertions(4);
 
             const result = patchViteConfig(MULTILINE_PLUGINS);
 
             expect(result.changed).toBe(true);
-            expect(result.code).toContain("cirrus()");
-            expect(result.code.indexOf("cirrus()")).toBeLessThan(result.code.indexOf("react()"));
+            expect(result.code).toContain("lunora()");
+            expect(result.code.indexOf("lunora()")).toBeLessThan(result.code.indexOf("react()"));
             // Existing entries survive
             expect(result.code).toContain("tsconfigPaths()");
         });

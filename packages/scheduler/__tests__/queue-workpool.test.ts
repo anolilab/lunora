@@ -4,7 +4,7 @@ import { createQueueConsumer, createQueueWorkpool, httpDispatcher } from "../src
 import type { FunctionReference, MessageBatchLike, QueueJob, QueueLike, QueueMessageLike, QueueSendOptionsLike } from "../src/types";
 
 const fnRef = (ref: string): FunctionReference => {
-    return { __cirrusRef: ref };
+    return { __lunoraRef: ref };
 };
 
 interface SentMessage {
@@ -176,7 +176,7 @@ describe("httpDispatcher", () => {
 
         const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
 
-        expect(url).toBe("https://app.example/_cirrus/scheduler/dispatch");
+        expect(url).toBe("https://app.example/_lunora/scheduler/dispatch");
         expect((init.headers as Record<string, string>).authorization).toBe("Bearer admintok");
         expect(JSON.parse(init.body as string)).toStrictEqual({ args: { x: 1 }, functionPath: "jobs:a", shardKey: "s1" });
     });

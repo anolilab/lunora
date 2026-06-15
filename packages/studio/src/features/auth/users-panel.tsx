@@ -1,5 +1,5 @@
-import type { AuthUser } from "@cirrus/client";
-import { useCirrus } from "@cirrus/react";
+import type { AuthUser } from "@lunora/client";
+import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 
@@ -24,7 +24,7 @@ interface UsersPanelProps {
 const DEFAULT_PAGE_SIZE = 50;
 
 /**
- * Full user-management dashboard, backed by the admin-gated `/_cirrus/admin/auth/*`
+ * Full user-management dashboard, backed by the admin-gated `/_lunora/admin/auth/*`
  * endpoints (the worker must be built with an `authAdmin` and `adminToken`).
  * Lists users with server-side search + role filter, opens a per-user detail
  * drawer (all fields, sessions, and admin actions — set role, ban/unban, set
@@ -32,7 +32,7 @@ const DEFAULT_PAGE_SIZE = 50;
  * identity metadata only — never password hashes or session tokens.
  */
 export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {}): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const t = useT();
 
     const [users, setUsers] = useState<AuthUser[] | null>(null);
@@ -88,7 +88,7 @@ export const UsersPanel = ({ pageSize = DEFAULT_PAGE_SIZE }: UsersPanelProps = {
     const selectedUser = selectedUserId === null ? null : (users?.find((user) => user.id === selectedUserId) ?? null);
 
     return (
-        <div className="flex flex-col gap-4" data-testid="cirrus-users">
+        <div className="flex flex-col gap-4" data-testid="lunora-users">
             <div className="flex flex-wrap items-center gap-2">
                 <Input
                     aria-label={t("Search users")}

@@ -4,7 +4,7 @@ import { useEffect } from "react";
 import { describe, expect, it } from "vitest";
 
 import { Authenticated, AuthLoading, Unauthenticated } from "../src/auth-gates";
-import { CirrusProvider } from "../src/cirrus-provider";
+import { LunoraProvider } from "../src/lunora-provider";
 import useAuth from "../src/use-auth";
 import { createMockClient } from "./mock-client";
 
@@ -39,9 +39,9 @@ describe("auth gate components", () => {
         const mock = createMockClient();
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <Gates />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         expect(screen.getByTestId("out").textContent).toBe("out");
@@ -57,9 +57,9 @@ describe("auth gate components", () => {
         mock.getAuthToken.mockReturnValue("seeded-token");
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <Gates />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         expect(screen.getByTestId("in").textContent).toBe("in");
@@ -72,9 +72,9 @@ describe("auth gate components", () => {
         const mock = createMockClient();
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <Gates />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         expect(screen.getByTestId("out").textContent).toBe("out");

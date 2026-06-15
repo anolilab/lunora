@@ -1,10 +1,10 @@
-import type { SchemaLike } from "@cirrus/do";
-import { createShardCtxDb, runShardMigrations } from "@cirrus/do";
+import type { SchemaLike } from "@lunora/do";
+import { createShardCtxDb, runShardMigrations } from "@lunora/do";
 import type {
     ActionCtx,
     ArgsValidator,
     AuthState,
-    CirrusLogger,
+    LunoraLogger,
     DatabaseWriter,
     InferArgs,
     MutationCtx,
@@ -14,13 +14,13 @@ import type {
     RegisteredQuery,
     Schema,
     TableDefinition,
-} from "@cirrus/server";
+} from "@lunora/server";
 
 import { createSqlExec } from "./node-sqlite";
 
 /**
- * The schema value produced by `@cirrus/server`'s `defineSchema`. Accepted
- * structurally; internally it is handed to `@cirrus/do`'s `runShardMigrations` /
+ * The schema value produced by `@lunora/server`'s `defineSchema`. Accepted
+ * structurally; internally it is handed to `@lunora/do`'s `runShardMigrations` /
  * `createShardCtxDb`, whose `SchemaLike` is the same shape declared in the DO
  * package — the two are structurally compatible at runtime (only their
  * independently-declared trigger nesting drifts at the type level), so the
@@ -43,7 +43,7 @@ type InlineMutationFunction<R> = (context: MutationCtx) => Promise<R> | R;
 type InlineActionFunction<R> = (context: ActionCtx) => Promise<R> | R;
 
 /**
- * The in-memory test harness returned by {@link cirrusTest}. Mirrors the first
+ * The in-memory test harness returned by {@link lunoraTest}. Mirrors the first
  * five methods of Convex's `convexTest`: `query` / `mutation` / `action` / `run`
  * / `withIdentity`. All five share one in-memory `node:sqlite` backend, so a
  * write from one method is visible to a read from another (including across a
@@ -96,7 +96,7 @@ const registeredFunctionVisibility = (value: unknown): "internal" | "public" =>
  * functions that never reach for it still run.
  */
 const unavailable = (surface: string): never => {
-    throw new Error(`ctx.${surface} is not available in the in-memory @cirrus/testing harness (v1)`);
+    throw new Error(`ctx.${surface} is not available in the in-memory @lunora/testing harness (v1)`);
 };
 
 const stubProxy = (surface: string): unknown =>
@@ -108,7 +108,7 @@ const stubProxy = (surface: string): unknown =>
         },
     );
 
-const noopLog: CirrusLogger = {
+const noopLog: LunoraLogger = {
     debug: () => undefined,
     error: () => undefined,
     info: () => undefined,
@@ -117,18 +117,18 @@ const noopLog: CirrusLogger = {
 };
 
 /**
- * Spin up an in-memory Cirrus function harness for `schema`.
+ * Spin up an in-memory Lunora function harness for `schema`.
  *
- * `cirrusTest(schema)` runs the migrations against a fresh `node:sqlite`
+ * `lunoraTest(schema)` runs the migrations against a fresh `node:sqlite`
  * database, builds the same `ctx.db` writer the real Durable Object builds (via
- * `@cirrus/do`'s `createShardCtxDb`), and returns a harness whose `query` /
+ * `@lunora/do`'s `createShardCtxDb`), and returns a harness whose `query` /
  * `mutation` / `action` / `run` execute a registered function's `handler`
  * directly — no Durable Object, no `wrangler`, no network.
  *
  * v1 stubs `ctx.storage`, `ctx.scheduler`, `ctx.vectors`, and action `ctx.fetch`:
  * each throws a clear error the first time a handler touches it.
  */
-const cirrusTest = (schema: TestSchema): TestHarness => {
+const lunoraTest = (schema: TestSchema): TestHarness => {
     const { close, sql } = createSqlExec();
     const ddlSchema = schema as unknown as SchemaLike;
 
@@ -266,5 +266,5 @@ const cirrusTest = (schema: TestSchema): TestHarness => {
     return makeHarness(null);
 };
 
-export { cirrusTest };
+export { lunoraTest };
 export type { TestHarness, TestIdentity };

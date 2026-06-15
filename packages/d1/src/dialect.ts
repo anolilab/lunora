@@ -1,19 +1,19 @@
 /**
- * The Cirrus **D1 dialect** — the single source of truth for how `.global()`
+ * The Lunora **D1 dialect** — the single source of truth for how `.global()`
  * tables are physically shaped in D1.
  *
  * Both the runtime (`runD1GlobalTableMigrations` in `d1-ctx-db.ts`, which
- * auto-provisions tables) and the `cirrus migrate generate` SQL emitter
- * (`@cirrus/cli`'s `migration-diff.ts`) derive their DDL from these helpers, so
+ * auto-provisions tables) and the `lunora migrate generate` SQL emitter
+ * (`@lunora/cli`'s `migration-diff.ts`) derive their DDL from these helpers, so
  * the table a migration writes is byte-identical to the one the runtime creates.
  * Previously each encoded the dialect independently and a comment begged them to
  * stay "in lockstep"; this module makes the lockstep structural.
  *
- * Exposed as the `@cirrus/d1/dialect` subpath. Pure — no runtime dependencies —
+ * Exposed as the `@lunora/d1/dialect` subpath. Pure — no runtime dependencies —
  * so the CLI can import it without pulling the D1 runtime.
  */
 
-/** SQLite column type affinities Cirrus emits. */
+/** SQLite column type affinities Lunora emits. */
 export type SqlAffinity = "BLOB" | "INTEGER" | "REAL" | "TEXT";
 
 /** Double-quote (and escape) a SQL identifier. */

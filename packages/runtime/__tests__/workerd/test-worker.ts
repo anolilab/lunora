@@ -1,5 +1,5 @@
 /**
- * Test entry-point Worker for `@cirrus/runtime` integration tests.
+ * Test entry-point Worker for `@lunora/runtime` integration tests.
  *
  * Boots a real worker built from the production `createWorker(...)` factory,
  * pointed at a tiny in-process `TestShardDO` that echoes the forwarded
@@ -12,7 +12,7 @@ import { DurableObject } from "cloudflare:workers";
 
 import type { Route, ScheduledControllerLike } from "../../src/create-worker";
 import { createWorker } from "../../src/create-worker";
-import { CirrusError } from "../../src/errors";
+import { LunoraError } from "../../src/errors";
 import type { QueryCoordinator } from "../../src/query-coordinator";
 
 interface Env {
@@ -89,8 +89,8 @@ const echoMethodRoute: Route = (request) =>
             status: 200,
         },
     );
-const throwsCirrusRoute: Route = () => {
-    throw new CirrusError("nope", { code: "FORBIDDEN", status: 403 });
+const throwsLunoraRoute: Route = () => {
+    throw new LunoraError("nope", { code: "FORBIDDEN", status: 403 });
 };
 const throwsGenericRoute: Route = () => {
     throw new Error("internal-detail-that-must-not-leak");
@@ -105,7 +105,7 @@ const buildTestWorker = (env: Env): ReturnType<typeof createWorker> =>
         backupStore: env.BACKUPS,
         queryCoordinator: backupCoordinator,
         routes: {
-            "/boom-cirrus": throwsCirrusRoute,
+            "/boom-lunora": throwsLunoraRoute,
             "/boom-generic": throwsGenericRoute,
             "GET /healthz": healthzRoute,
             // Same path, different method — exercise the "METHOD path" key form.

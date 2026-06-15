@@ -1,5 +1,5 @@
-import type { AuthCapabilities, AuthSession } from "@cirrus/client";
-import { useCirrus } from "@cirrus/react";
+import type { AuthCapabilities, AuthSession } from "@lunora/client";
+import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 
@@ -30,7 +30,7 @@ const SectionHeading = ({ children }: { readonly children: string }): ReactEleme
  * shared `runAction` so the list (and the rest of the drawer) refetch on success.
  */
 export const UserSessionsPanel = ({ busy, runAction, userId, version }: RelatedPanelProps): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const t = useT();
 
     const [sessions, setSessions] = useState<AuthSession[] | null>(null);
@@ -120,7 +120,7 @@ export const UserSessionsPanel = ({ busy, runAction, userId, version }: RelatedP
 
 /** The user's linked accounts (credential / OAuth providers), each unlinkable. Gated on `capabilities.accounts`. */
 export const UserAccountsPanel = ({ busy, runAction, userId, version }: RelatedPanelProps): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const t = useT();
 
     const [accounts, setAccounts] = useState<Record<string, unknown>[] | null>(null);
@@ -212,7 +212,7 @@ export const UserSecurityPanel = ({
     userId,
     version,
 }: RelatedPanelProps & { readonly capabilities: AuthCapabilities }): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const t = useT();
 
     const [passkeys, setPasskeys] = useState<Record<string, unknown>[] | null>(null);

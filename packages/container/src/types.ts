@@ -1,5 +1,5 @@
 /**
- * Public configuration types for `@cirrus/container`.
+ * Public configuration types for `@lunora/container`.
  *
  * Everything in this module is pure data — no Cloudflare runtime imports — so
  * it is safe to import from Node tooling (codegen, the config layer) as well
@@ -44,7 +44,7 @@ interface RegistryImageSource {
 
 /**
  * A Dockerfile-less build via [Railpack](https://railpack.com): point at a
- * source directory and `cirrus deploy` builds an OCI image with Railpack
+ * source directory and `lunora deploy` builds an OCI image with Railpack
  * (needs a BuildKit instance) and pushes it to the Cloudflare Registry before
  * wrangler runs. Opt-in — the Dockerfile path is the zero-extra-deps default.
  */
@@ -138,8 +138,8 @@ interface ContainerConfig {
  * codegen discovery and the generated Container DO class key on.
  */
 interface ContainerDefinition extends ContainerConfig {
-    /** Brand marking a value as a Cirrus container definition. */
-    readonly isCirrusContainer: true;
+    /** Brand marking a value as a Lunora container definition. */
+    readonly isLunoraContainer: true;
 }
 
 /** A normalized image source, as written into `wrangler.jsonc`. */

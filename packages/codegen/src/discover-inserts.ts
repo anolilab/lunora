@@ -1,7 +1,7 @@
 import type { CallExpression, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { cirrusRelativePath, listCirrusSourceFiles } from "./discover-functions";
+import { lunoraRelativePath, listLunoraSourceFiles } from "./discover-functions";
 import type { InsertWriteIR } from "./ir";
 
 /**
@@ -49,17 +49,17 @@ const enclosingExportName = (call: CallExpression): string => {
 };
 
 /**
- * Discover `ctx.db.insert("table", …)` writes under the cirrus source directory
+ * Discover `ctx.db.insert("table", …)` writes under the lunora source directory
  * and attribute each to the exported function (and file) performing it. Calls
  * with a non-literal table argument, or outside an exported declaration, are
  * dropped (`table === ""` / no enclosing export).
  */
-const discoverInserts = (project: Project, cirrusDirectory: string): InsertWriteIR[] => {
+const discoverInserts = (project: Project, lunoraDirectory: string): InsertWriteIR[] => {
     const writes: InsertWriteIR[] = [];
 
-    for (const filePath of listCirrusSourceFiles(cirrusDirectory)) {
+    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-        const relativePath = cirrusRelativePath(cirrusDirectory, filePath);
+        const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
 
         for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
             if (!isDatabaseInsertCall(call)) {

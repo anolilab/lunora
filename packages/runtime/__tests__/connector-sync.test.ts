@@ -77,7 +77,7 @@ const createSyncWorker = (store: FakeStore) => {
 
 const post = (worker: { fetch: (request: Request, env: unknown, context: ExecutionContextLike) => Promise<Response> }, body: unknown, token = ADMIN_TOKEN) =>
     worker.fetch(
-        new Request("https://app.example/_cirrus/admin/connector/sync", {
+        new Request("https://app.example/_lunora/admin/connector/sync", {
             body: JSON.stringify(body),
             headers: { authorization: `Bearer ${token}` },
             method: "POST",
@@ -101,7 +101,7 @@ describe("connector sync endpoint", () => {
 
         const { worker } = createSyncWorker({ logs: { c1: [] } });
 
-        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/connector/sync", { body: "{}", method: "POST" }), {}, fakeContext);
+        const response = await worker.fetch(new Request("https://app.example/_lunora/admin/connector/sync", { body: "{}", method: "POST" }), {}, fakeContext);
 
         expect(response.status).toBe(403);
 
@@ -291,8 +291,8 @@ describe("toAirbyteMessages", () => {
 
         expect(messages).toHaveLength(3);
         expect(messages[0]).toEqual({ record: { data: { _id: "m1" }, emitted_at: 1000, stream: "messages" }, type: "RECORD" });
-        // A delete is marked with `_cirrus_deleted` so a downstream step can tombstone.
-        expect(messages[1]).toMatchObject({ record: { data: { _cirrus_deleted: true } }, type: "RECORD" });
+        // A delete is marked with `_lunora_deleted` so a downstream step can tombstone.
+        expect(messages[1]).toMatchObject({ record: { data: { _lunora_deleted: true } }, type: "RECORD" });
         expect(messages[2]).toEqual({ state: { data: { cursor: "TOKEN" } }, type: "STATE" });
     });
 });

@@ -1,10 +1,10 @@
-import { ensureMigrated, handleAuthRequest } from "@cirrus/auth";
-import type { ExecutionContextLike, ShardNamespaceLike } from "@cirrus/runtime";
-import { createWorker } from "@cirrus/runtime";
+import { ensureMigrated, handleAuthRequest } from "@lunora/auth";
+import type { ExecutionContextLike, ShardNamespaceLike } from "@lunora/runtime";
+import { createWorker } from "@lunora/runtime";
 
-import { openApiSpec } from "../../cirrus/_generated/openapi.js";
-import { createShardDO } from "../../cirrus/_generated/shard.js";
-import { buildAuth, buildMigrationAuth } from "../../cirrus/auth.js";
+import { openApiSpec } from "../../lunora/_generated/openapi.js";
+import { createShardDO } from "../../lunora/_generated/shard.js";
+import { buildAuth, buildMigrationAuth } from "../../lunora/auth.js";
 
 export const ShardDO = createShardDO();
 
@@ -24,7 +24,7 @@ let authInstance: ReturnType<typeof buildAuth> | null = null;
  *
  * 1. `/api/auth/*` — `handleAuthRequest` delegates the request to better-auth's
  *    own router (sign-up, sign-in, OAuth callbacks, org/admin endpoints).
- * 2. Everything else — falls through to Cirrus's RPC + HTTP-action surface.
+ * 2. Everything else — falls through to Lunora's RPC + HTTP-action surface.
  *
  * `ensureMigrated` runs better-auth's migration sweep against the raw D1 binding
  * (the Kysely migrator that creates the tables the runtime SQL adapter then uses)
@@ -48,7 +48,7 @@ export default {
 
         if (!worker) {
             worker = createWorker({
-                // `openApiSpec` (regenerated on every `cirrus/` change) backs the
+                // `openApiSpec` (regenerated on every `lunora/` change) backs the
                 // studio's always-current API-reference tab.
                 openApiSpec,
                 resolveIdentity: async (identityRequest) => {

@@ -1,6 +1,6 @@
 import { DatabaseSync } from "node:sqlite";
 
-import type { AggregateIndexDefinitionLike, DatabaseWriterLike, RankIndexDefinitionLike, SchemaLike, ValidatorLike } from "@cirrus/do";
+import type { AggregateIndexDefinitionLike, DatabaseWriterLike, RankIndexDefinitionLike, SchemaLike, ValidatorLike } from "@lunora/do";
 import { bench, describe } from "vitest";
 
 import type { D1Exec } from "../src/d1-ctx-db";

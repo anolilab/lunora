@@ -1,4 +1,4 @@
-import { runCodegen } from "@cirrus/codegen";
+import { runCodegen } from "@lunora/codegen";
 
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
@@ -75,7 +75,7 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
     if (result.cronTriggers.length > CRON_TRIGGER_LIMIT) {
         logger.warn(
             `${result.cronTriggers.length.toString()} distinct cron expressions declared — Cloudflare allows at most ${CRON_TRIGGER_LIMIT.toString()} Cron Triggers per Worker. ` +
-                `Consolidate schedules (jobs can share one expression) or move finer-grained work to Durable Object alarms via @cirrus/scheduler (runAfter/runAt).`,
+                `Consolidate schedules (jobs can share one expression) or move finer-grained work to Durable Object alarms via @lunora/scheduler (runAfter/runAt).`,
         );
     }
 
@@ -86,7 +86,7 @@ const runCodegenCommand = (options: CodegenCommandOptions): CodegenCommandResult
     return commandResult;
 };
 
-/** `cirrus codegen` handler (lazy-loaded via the command's `loader`). */
+/** `lunora codegen` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<CodegenOptions> = defineHandler<CodegenOptions>(({ cwd, logger, options }) => {
     const result = runCodegenCommand({ apiSpec: parseApiSpec(options.apiSpec), cwd, format: options.format, logger });
 

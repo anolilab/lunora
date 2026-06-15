@@ -11,7 +11,7 @@ and both are **opt-in per procedure** — a procedure without `.use(mask(...))`
 sees raw values, even if another procedure masks the same column.
 
 ```ts
-import { mask } from "@cirrus/server";
+import { mask } from "@lunora/server";
 
 import { query } from "./_generated/server";
 
@@ -51,7 +51,7 @@ the permissions that back `auth.can(...)` through the `roles` option, and use
 `bypass` to skip masking entirely for privileged callers:
 
 ```ts
-import { mask, definePermission, defineRole } from "@cirrus/server";
+import { mask, definePermission, defineRole } from "@lunora/server";
 
 import { query } from "./_generated/server";
 

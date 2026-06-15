@@ -1,16 +1,16 @@
 /**
- * Rate-limit functions — added by `cirrus add ratelimit`.
+ * Rate-limit functions — added by `lunora add ratelimit`.
  *
- * This file is YOURS: it's a normal Cirrus module, copied into your project so
- * you own and edit it. Re-export the functions you want from your `cirrus/`
+ * This file is YOURS: it's a normal Lunora module, copied into your project so
+ * you own and edit it. Re-export the functions you want from your `lunora/`
  * entry so codegen picks them up (they'll surface in the generated `api` as
  * `ratelimit/consume`, `ratelimit/check`, `ratelimit/reset`).
  *
- * The actual limiting is done by `@cirrus/ratelimit`'s `RateLimiter` over a
+ * The actual limiting is done by `@lunora/ratelimit`'s `RateLimiter` over a
  * durable, `ctx.db`-backed store (see `./schema`). `consume` and `reset` are
  * mutations (they persist token state); `check` is a query (read-only peek).
  */
-import { mutation, query, v } from "@cirrus/server";
+import { mutation, query, v } from "@lunora/server";
 
 import { limits, makeRateLimiter } from "./schema.js";
 

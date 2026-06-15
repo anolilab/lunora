@@ -2,21 +2,21 @@ import type { Plugin } from "vite";
 
 import type { FrameworkDetection } from "./detect-framework";
 import { detectFramework } from "./detect-framework";
-import type { ResolvedCirrusPluginOptions } from "./types";
+import type { ResolvedLunoraPluginOptions } from "./types";
 
 /**
- * Mutable, plugin-shared context. The `cirrus()` factory creates one instance
- * and threads it through every Cirrus sub-plugin, so detection runs once and
+ * Mutable, plugin-shared context. The `lunora()` factory creates one instance
+ * and threads it through every Lunora sub-plugin, so detection runs once and
  * downstream plugins (codegen, composition, the dev hint) read the same result
  * without re-scanning `package.json`. PLAN4 §2.4.
  */
-interface CirrusPluginContext {
+interface LunoraPluginContext {
     /** The detected framework + class, populated during `config` / `configResolved`. `undefined` until detection runs. */
     framework?: FrameworkDetection;
 }
 
-/** Create an empty shared context object for one `cirrus()` invocation. */
-const createPluginContext = (): CirrusPluginContext => {
+/** Create an empty shared context object for one `lunora()` invocation. */
+const createPluginContext = (): LunoraPluginContext => {
     return {};
 };
 
@@ -33,28 +33,28 @@ const FRAMEWORK_LABELS: Record<FrameworkDetection["framework"], string> = {
 };
 
 /**
- * Build the single dev log line announcing the detected framework + how Cirrus
+ * Build the single dev log line announcing the detected framework + how Lunora
  * will compose with it. Kept pure so it is trivially unit-testable.
  */
 const formatFrameworkDetection = (detection: FrameworkDetection): string => {
     const label = FRAMEWORK_LABELS[detection.framework];
 
     if (detection.framework === "none") {
-        return "[cirrus] no meta-framework detected — running standalone (class C).";
+        return "[lunora] no meta-framework detected — running standalone (class C).";
     }
 
     if (detection.class === "B") {
         // Class-B (own CF adapter) composition is hook-injection and lands in a
         // later milestone; we still surface the detection so the dev knows.
-        return `[cirrus] detected ${label} (class B) — hook-injection composition is handled by the framework adapter (not yet wired here).`;
+        return `[lunora] detected ${label} (class B) — hook-injection composition is handled by the framework adapter (not yet wired here).`;
     }
 
-    return `[cirrus] detected ${label} (class ${detection.class}) — composing the Cirrus worker into one Cloudflare Worker.`;
+    return `[lunora] detected ${label} (class ${detection.class}) — composing the Lunora worker into one Cloudflare Worker.`;
 };
 
 /**
  * Vite plugin that detects the host meta-framework from `package.json` and
- * surfaces the result on the shared plugin context so downstream Cirrus plugins
+ * surfaces the result on the shared plugin context so downstream Lunora plugins
  * (and codegen) can read it. Logs the detection once in dev.
  *
  * Additive and safe: for a class-A framework the existing binding reconcile (the
@@ -63,7 +63,7 @@ const formatFrameworkDetection = (detection: FrameworkDetection): string => {
  * standalone SPA flow. Class-B is detected + logged only — the full
  * hook-injection composition is a separate milestone (PLAN4 M4).
  */
-const frameworkDetectPlugin = (options: ResolvedCirrusPluginOptions, context: CirrusPluginContext): Plugin => {
+const frameworkDetectPlugin = (options: ResolvedLunoraPluginOptions, context: LunoraPluginContext): Plugin => {
     let logged = false;
 
     const detect = (): void => {
@@ -72,7 +72,7 @@ const frameworkDetectPlugin = (options: ResolvedCirrusPluginOptions, context: Ci
 
     return {
         config() {
-            // Run detection as early as possible so any later Cirrus hook can
+            // Run detection as early as possible so any later Lunora hook can
             // read `context.framework`. `config` fires before `configResolved`.
             detect();
         },
@@ -81,19 +81,19 @@ const frameworkDetectPlugin = (options: ResolvedCirrusPluginOptions, context: Ci
         },
         configureServer() {
             // Announce the detected framework once, dev-only, matching the
-            // repo's `[cirrus] …` log convention.
+            // repo's `[lunora] …` log convention.
             detect();
 
             if (!logged && context.framework !== undefined) {
                 logged = true;
-                // eslint-disable-next-line no-console -- dev-only one-line announcement, matches the other cirrus plugins.
+                // eslint-disable-next-line no-console -- dev-only one-line announcement, matches the other lunora plugins.
                 console.info(formatFrameworkDetection(context.framework));
             }
         },
-        name: "cirrus:framework-detect",
+        name: "lunora:framework-detect",
     };
 };
 
-export type { CirrusPluginContext };
+export type { LunoraPluginContext };
 export { createPluginContext, formatFrameworkDetection };
 export default frameworkDetectPlugin;

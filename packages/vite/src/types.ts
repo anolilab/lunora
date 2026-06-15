@@ -1,4 +1,4 @@
-import type { CodegenOptions } from "@cirrus/codegen";
+import type { CodegenOptions } from "@lunora/codegen";
 import type errorOverlayPlugin from "@visulima/vite-overlay";
 import type { Plugin } from "vite";
 
@@ -13,7 +13,7 @@ export type CloudflarePluginOptions = Record<string, unknown>;
  */
 export type OverlayPluginOptions = NonNullable<Parameters<typeof errorOverlayPlugin>[0]>;
 
-export interface CirrusPluginOptions {
+export interface LunoraPluginOptions {
     /**
      * Which machine-readable API spec(s) codegen emits into `_generated/`.
      * `"openapi"` (default) writes `openapi.json` (OpenAPI 3.1; RPC + REST),
@@ -24,7 +24,7 @@ export interface CirrusPluginOptions {
     apiSpec?: CodegenOptions["apiSpec"];
     /** Pass through to `@cloudflare/vite-plugin`. Pass `false` to opt out. Defaults to `true`. */
     cloudflare?: boolean | CloudflarePluginOptions;
-    /** Directory name (relative to `projectRoot`) where generated files are written. Defaults to `"cirrus/_generated"`. */
+    /** Directory name (relative to `projectRoot`) where generated files are written. Defaults to `"lunora/_generated"`. */
     generatedDir?: string;
 
     /**
@@ -33,18 +33,18 @@ export interface CirrusPluginOptions {
      * Defaults to `true`.
      */
     overlay?: boolean | OverlayPluginOptions;
-    /** Project root containing the `cirrus/` directory. Defaults to `process.cwd()`. */
+    /** Project root containing the `lunora/` directory. Defaults to `process.cwd()`. */
     projectRoot?: string;
-    /** Directory name (relative to `projectRoot`) containing `schema.ts` and function files. Defaults to `"cirrus"`. */
+    /** Directory name (relative to `projectRoot`) containing `schema.ts` and function files. Defaults to `"lunora"`. */
     schemaDir?: string;
-    /** Serve the Cirrus studio at `/__cirrus` during dev. Pass `false` to opt out. Defaults to `true`. */
+    /** Serve the Lunora studio at `/__lunora` during dev. Pass `false` to opt out. Defaults to `true`. */
     studio?: boolean;
     /** Validate that `wrangler.jsonc` declares the bindings the schema implies. Defaults to `true`. */
     validateWrangler?: boolean;
 }
 
 /** Resolved options after merging defaults. */
-export interface ResolvedCirrusPluginOptions {
+export interface ResolvedLunoraPluginOptions {
     apiSpec: NonNullable<CodegenOptions["apiSpec"]>;
     cloudflare: false | CloudflarePluginOptions;
     generatedDir: string;
@@ -56,8 +56,8 @@ export interface ResolvedCirrusPluginOptions {
 }
 
 /**
- * The plugins `cirrus()` returns. A mutable `Plugin[]` (not `ReadonlyArray`) so
+ * The plugins `lunora()` returns. A mutable `Plugin[]` (not `ReadonlyArray`) so
  * it slots directly into Vite's `plugins` — which recursively flattens nested
- * plugin arrays — without a spread: `plugins: [cirrus()]`.
+ * plugin arrays — without a spread: `plugins: [lunora()]`.
  */
-export type CirrusPlugins = Plugin[];
+export type LunoraPlugins = Plugin[];

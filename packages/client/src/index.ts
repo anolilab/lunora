@@ -1,6 +1,6 @@
 export { default as createInMemoryBookmarkStorage } from "./bookmark";
-export type { ConnectionStatus, MutationCallOptions } from "./cirrus-client";
-export { CirrusClient } from "./cirrus-client";
+export type { ConnectionStatus, MutationCallOptions } from "./lunora-client";
+export { LunoraClient } from "./lunora-client";
 export type { MutationDelta } from "./delta-merge";
 export { applyDelta, isMutationDelta } from "./delta-merge";
 export { CONFLICT_ERROR_CODE, isConflictError } from "./errors";
@@ -27,7 +27,7 @@ export type {
     AuthSession,
     AuthUser,
     BookmarkStorage,
-    CirrusClientOptions,
+    LunoraClientOptions,
     ClientMessage,
     CronJobInfo,
     FunctionArgumentDescriptor,

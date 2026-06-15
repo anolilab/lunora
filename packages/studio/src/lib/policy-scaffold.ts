@@ -1,19 +1,19 @@
 /**
  * Tiny client for the studio's local policy-scaffold endpoint (plan 025
  * Item 3) — the RLS sibling of {@link ./schema-edit}. Like the schema editor it
- * is NOT a worker admin RPC: it talks to the dev host (the `@cirrus/vite`
- * middleware or the `cirrus dev` studio server) over a same-origin `fetch`, and
+ * is NOT a worker admin RPC: it talks to the dev host (the `@lunora/vite`
+ * middleware or the `lunora dev` studio server) over a same-origin `fetch`, and
  * the host writes a new policy stub (or appends `.use(rls(...))` to a procedure)
  * + reruns codegen on disk. Reachable only in local dev (the host 403s the route
  * on a non-loopback bind), so it carries no admin token.
  *
  * Both hosts mount the handler at the absolute path below — independent of the
  * studio's `basePath`. Keep this in sync with `POLICY_SCAFFOLD_ENDPOINT` in
- * `@cirrus/config/studio-host`.
+ * `@lunora/config/studio-host`.
  */
 
 /** Endpoint both dev hosts mount the policy-scaffold handler at. */
-const POLICY_SCAFFOLD_ENDPOINT = "/__cirrus/policy-scaffold";
+const POLICY_SCAFFOLD_ENDPOINT = "/__lunora/policy-scaffold";
 
 /** Write a new deny-by-default `name.policies.ts` stub. */
 interface ScaffoldPolicyRequest {
@@ -28,7 +28,7 @@ interface ScaffoldPolicyRequest {
 interface WireRlsRequest {
     /** Exported procedure name to wire, e.g. `listInvoices`. */
     readonly exportName: string;
-    /** Cirrus-relative module path of the procedure file (no extension), e.g. `messages`. */
+    /** Lunora-relative module path of the procedure file (no extension), e.g. `messages`. */
     readonly filePath: string;
     readonly kind: "wireRls";
     /** Identifier of the policy set passed to `rls(...)`, e.g. `invoicesPolicies`. */

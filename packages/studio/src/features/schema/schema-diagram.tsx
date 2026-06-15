@@ -58,7 +58,7 @@ interface SchemaDiagramProps {
 
 /**
  * The PK column an FK edge attaches to: the `pk`-flagged column when the schema
- * marks one (Cirrus tables), else the Cirrus system PK `_id`, else the `id`
+ * marks one (Lunora tables), else the Lunora system PK `_id`, else the `id`
  * column external tables use (e.g. better-auth's), else the first column. The
  * `id` fallback matters for global→global edges into external auth tables, whose
  * PRAGMA-sourced columns carry no `pk` flag and no `_id`.

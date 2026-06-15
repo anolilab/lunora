@@ -28,7 +28,7 @@ interface CommandPaletteProps {
  * React state with this component; a window event bridges the two without
  * threading a callback across the `RouterProvider` boundary.
  */
-const OPEN_EVENT = "cirrus:command-palette";
+const OPEN_EVENT = "lunora:command-palette";
 
 /** Open the command palette from anywhere (e.g. the top-bar Search button). */
 const openCommandPalette = (): void => {

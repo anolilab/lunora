@@ -4,7 +4,7 @@
  * The real binding is workers-types' `AnalyticsEngineDataset`. We mirror it
  * **structurally** (`AnalyticsEngineDatasetLike`) so plain-object test doubles
  * satisfy the contract without pulling workerd into a unit test — the same
- * approach `@cirrus/d1` takes with `D1DatabaseLike`
+ * approach `@lunora/d1` takes with `D1DatabaseLike`
  * (`packages/d1/src/d1-client.ts`).
  */
 
@@ -71,7 +71,7 @@ export interface TrackSchema {
 
 /**
  * The write-side client bound to `ctx.analytics` (the generated context imports
- * this exact type as `import("@cirrus/analytics").AnalyticsClient`). Telemetry
+ * this exact type as `import("@lunora/analytics").AnalyticsClient`). Telemetry
  * is fire-and-forget and sampled — never read a data point back in-handler.
  */
 export interface AnalyticsClient {

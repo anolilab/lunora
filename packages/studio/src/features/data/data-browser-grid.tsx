@@ -108,7 +108,7 @@ const rowId = (row: TableRow): null | string => {
 };
 
 /**
- * A stable React key for a row. Cirrus tables always carry a primary key, so
+ * A stable React key for a row. Lunora tables always carry a primary key, so
  * prefer it; the positional fallback only applies to the rare idless page and is
  * hidden behind this helper so it isn't an inline array-index key.
  */

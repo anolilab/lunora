@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { loadJsonArray, newId, saveJson } from "../../src/lib/browser-storage";
 
-const KEY = "cirrus-studio-test";
+const KEY = "lunora-studio-test";
 
 describe("browserStorage", () => {
     afterEach(() => {

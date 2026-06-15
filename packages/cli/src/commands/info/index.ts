@@ -1,10 +1,10 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
 const infoCommand: Command = {
-    description: "Print resolved project config: @cirrus/* versions, wrangler summary, schema overview",
+    description: "Print resolved project config: @lunora/* versions, wrangler summary, schema overview",
     examples: [
-        ["cirrus info", "Print resolved project config"],
-        ["cirrus info --json", "Emit a JSON snapshot"],
+        ["lunora info", "Print resolved project config"],
+        ["lunora info --json", "Emit a JSON snapshot"],
     ],
     group: "Project",
     loader: () =>

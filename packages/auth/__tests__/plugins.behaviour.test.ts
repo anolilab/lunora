@@ -5,7 +5,7 @@ import { createAuth } from "../src/create-auth";
 import { admin, organization } from "../src/plugins";
 
 /**
- * Round-trip behaviour for the two highest-value better-auth plugins Cirrus
+ * Round-trip behaviour for the two highest-value better-auth plugins Lunora
  * wraps — `admin` (ban/impersonate) and `organization` (orgs/teams). The
  * tests exercise the real better-auth runtime against an in-memory adapter:
  * no mocks, no stubs.
@@ -13,7 +13,7 @@ import { admin, organization } from "../src/plugins";
  * We never get to the workerd-backed D1 path here because the migration
  * runner only supports the kysely adapter. That's fine — the migration code
  * itself is covered elsewhere, and these tests are about confirming the
- * plugin endpoints we re-export from `@cirrus/auth/plugins` do the right
+ * plugin endpoints we re-export from `@lunora/auth/plugins` do the right
  * thing end-to-end when wired against an auth instance.
  */
 

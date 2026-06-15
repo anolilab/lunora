@@ -1,4 +1,4 @@
-import type { Middleware } from "@cirrus/server";
+import type { Middleware } from "@lunora/server";
 
 import type { FetchLike } from "./turnstile";
 import { verifyTurnstile } from "./turnstile";
@@ -8,7 +8,7 @@ interface VerifyTurnstileMiddlewareOptions<Context> {
      * Behavior when the siteverify call itself throws (network error, non-2xx).
      * Defaults to `false` (**fail closed**: reject with 403). Set `true` only
      * when degraded availability is preferable to denying traffic — a failing
-     * siteverify then admits every request. Mirrors `@cirrus/ratelimit`'s
+     * siteverify then admits every request. Mirrors `@lunora/ratelimit`'s
      * `rateLimit` failure policy.
      */
     failOpen?: boolean;
@@ -44,17 +44,17 @@ interface VerifyTurnstileMiddlewareOptions<Context> {
  * from `ctx` via the provided selectors — because the procedure context does
  * not carry raw request headers, the token must be passed through the function
  * `args`. To gate the better-auth sign-in/sign-up flow itself, prefer
- * better-auth's native `captcha` plugin (re-exported from `@cirrus/auth/plugins`)
- * — this middleware is for non-auth Cirrus procedures.
+ * better-auth's native `captcha` plugin (re-exported from `@lunora/auth/plugins`)
+ * — this middleware is for non-auth Lunora procedures.
  *
  * On a `success: false` verdict (or a missing token) it throws a structural
- * `CirrusError` (`{ name: "CirrusError", code: "FORBIDDEN", status: 403 }`) —
+ * `LunoraError` (`{ name: "LunoraError", code: "FORBIDDEN", status: 403 }`) —
  * the runtime maps it to the matching RPC/HTTP status without any runtime
- * import of `@cirrus/server` (the `Middleware` import is type-only).
+ * import of `@lunora/server` (the `Middleware` import is type-only).
  *
  * **Failure policy:** if the siteverify call itself throws, the middleware
  * **fails closed by default** (logs and rejects with 403). Pass
- * `failOpen: true` to admit the request instead — mirrors `@cirrus/ratelimit`.
+ * `failOpen: true` to admit the request instead — mirrors `@lunora/ratelimit`.
  */
 export const verifyTurnstileMiddleware =
     <Context>(options: VerifyTurnstileMiddlewareOptions<Context>): Middleware<Context, Context> =>
@@ -64,7 +64,7 @@ export const verifyTurnstileMiddleware =
         if (token === undefined || token === "") {
             throw Object.assign(new Error(options.message ?? "turnstile token missing"), {
                 code: "FORBIDDEN",
-                name: "CirrusError",
+                name: "LunoraError",
                 status: 403,
             });
         }
@@ -82,7 +82,7 @@ export const verifyTurnstileMiddleware =
             // No logger available at this layer; emit via console so the host
             // captures the failure regardless of platform (workerd, Node).
             // eslint-disable-next-line no-console -- intentional: no injected logger
-            console.error(`@cirrus/auth: verifyTurnstileMiddleware siteverify threw; ${options.failOpen ? "failing open" : "failing closed"}`, error);
+            console.error(`@lunora/auth: verifyTurnstileMiddleware siteverify threw; ${options.failOpen ? "failing open" : "failing closed"}`, error);
 
             if (options.failOpen) {
                 return next();
@@ -91,7 +91,7 @@ export const verifyTurnstileMiddleware =
             throw Object.assign(new Error(options.message ?? "turnstile verification unavailable"), {
                 cause: error,
                 code: "FORBIDDEN",
-                name: "CirrusError",
+                name: "LunoraError",
                 status: 403,
             });
         }
@@ -100,7 +100,7 @@ export const verifyTurnstileMiddleware =
             throw Object.assign(new Error(options.message ?? "turnstile verification failed"), {
                 code: "FORBIDDEN",
                 errorCodes: result.errorCodes,
-                name: "CirrusError",
+                name: "LunoraError",
                 status: 403,
             });
         }

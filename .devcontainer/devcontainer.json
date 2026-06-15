@@ -1,6 +1,6 @@
 {
     "$schema": "https://raw.githubusercontent.com/devcontainers/spec/main/schemas/devContainer.schema.json",
-    "name": "Cirrus",
+    "name": "Lunora",
     "image": "mcr.microsoft.com/devcontainers/typescript-node:22",
     "features": {
         "ghcr.io/devcontainers-contrib/features/pnpm:2": {

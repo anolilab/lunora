@@ -7,7 +7,7 @@ import type { MailTransport, SendPayload } from "./types";
 /**
  * Build a Resend-backed transport via `@visulima/email`. Wraps the provider's
  * `sendEmail()` into the minimal `{ send(payload) -> { id } }` shape the rest of
- * `@cirrus/mail` consumes. Kept reachable as a named export so a project that
+ * `@lunora/mail` consumes. Kept reachable as a named export so a project that
  * prefers Resend over the Cloudflare default can pass
  * `transport: createResendTransport(apiKey, from)` to `createMailer`.
  */

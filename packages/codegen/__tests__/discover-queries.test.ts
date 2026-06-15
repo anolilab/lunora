@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import discoverQueries from "../src/discover-queries";
 
 const FUNCTIONS = `
-    import { query } from "@cirrus/server";
+    import { query } from "@lunora/server";
 
     const dynamicTable = "messages";
 
@@ -29,9 +29,9 @@ let project: Project;
 
 describe("discoverQueries", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-queries-"));
-        mkdirSync(join(workdir, "cirrus"), { recursive: true });
-        writeFileSync(join(workdir, "cirrus", "messages.ts"), FUNCTIONS, "utf8");
+        workdir = mkdtempSync(join(tmpdir(), "lunora-queries-"));
+        mkdirSync(join(workdir, "lunora"), { recursive: true });
+        writeFileSync(join(workdir, "lunora", "messages.ts"), FUNCTIONS, "utf8");
         project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
     });
 
@@ -42,7 +42,7 @@ describe("discoverQueries", () => {
     it("returns only filtered reads, tagging index presence and table", () => {
         expect.assertions(4);
 
-        const reads = discoverQueries(project, join(workdir, "cirrus"));
+        const reads = discoverQueries(project, join(workdir, "lunora"));
 
         // `noFilter` is dropped; the other three filter.
         expect(reads).toHaveLength(3);
@@ -59,7 +59,7 @@ describe("discoverQueries", () => {
     it("records the file (relative, no extension) and a 1-based line", () => {
         expect.assertions(2);
 
-        const reads = discoverQueries(project, join(workdir, "cirrus"));
+        const reads = discoverQueries(project, join(workdir, "lunora"));
         const scan = reads.find((read) => !read.hasIndex && read.table === "messages");
 
         expect(scan?.file).toBe("messages");

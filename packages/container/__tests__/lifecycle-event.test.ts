@@ -7,7 +7,7 @@ afterEach(() => {
 });
 
 describe(emitContainerLifecycle, () => {
-    it("prints a cirrus container event to console.log for non-error transitions", () => {
+    it("prints a lunora container event to console.log for non-error transitions", () => {
         expect.assertions(2);
 
         const spy = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -20,7 +20,7 @@ describe(emitContainerLifecycle, () => {
             event: "start",
             instance: "abc123",
             level: "info",
-            source: "cirrus",
+            source: "lunora",
             type: "container",
         });
     });

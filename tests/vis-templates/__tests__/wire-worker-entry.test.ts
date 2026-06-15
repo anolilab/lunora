@@ -15,8 +15,8 @@ const write = (relativePath: string, content: string): void => {
     writeFileSync(full, content, "utf8");
 };
 
-const CLASS_BC_ENTRY = `import { createWorker } from "@cirrus/runtime";
-import { createShardDO } from "../cirrus/_generated/shard.js";
+const CLASS_BC_ENTRY = `import { createWorker } from "@lunora/runtime";
+import { createShardDO } from "../lunora/_generated/shard.js";
 
 export const ShardDO = createShardDO();
 export default createWorker({});
@@ -24,7 +24,7 @@ export default createWorker({});
 
 describe("wireWorkerEntryReexport", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-wire-"));
+        workdir = mkdtempSync(join(tmpdir(), "lunora-wire-"));
     });
 
     afterEach(() => {
@@ -38,7 +38,7 @@ describe("wireWorkerEntryReexport", () => {
         const result = wireWorkerEntryReexport(workdir);
 
         expect(result?.relativePath).toBe("src/server.ts");
-        expect(result?.content).toContain('export * from "../cirrus/_generated/containers.js"');
+        expect(result?.content).toContain('export * from "../lunora/_generated/containers.js"');
         // The original entry survives.
         expect(result?.content).toContain("export const ShardDO = createShardDO();");
     });
@@ -50,7 +50,7 @@ describe("wireWorkerEntryReexport", () => {
         const result = wireWorkerEntryReexport(workdir);
 
         expect(result?.relativePath).toBe("src/server/index.ts");
-        expect(result?.content).toContain('export * from "../../cirrus/_generated/containers.js"');
+        expect(result?.content).toContain('export * from "../../lunora/_generated/containers.js"');
     });
 
     test("falls back to the conventional locations when wrangler main is absent", () => {
@@ -61,7 +61,7 @@ describe("wireWorkerEntryReexport", () => {
 
     test("is idempotent — returns undefined when already wired", () => {
         write("wrangler.jsonc", `{ "main": "src/server.ts" }`);
-        write("src/server.ts", `${CLASS_BC_ENTRY}export * from "../cirrus/_generated/containers.js";\n`);
+        write("src/server.ts", `${CLASS_BC_ENTRY}export * from "../lunora/_generated/containers.js";\n`);
 
         expect(wireWorkerEntryReexport(workdir)).toBeUndefined();
     });
@@ -73,13 +73,13 @@ describe("wireWorkerEntryReexport", () => {
         const result = wireWorkerEntryReexport(workdir, WORKFLOWS_TARGET);
 
         expect(result?.relativePath).toBe("src/server.ts");
-        expect(result?.content).toContain('export * from "../cirrus/_generated/workflows.js"');
+        expect(result?.content).toContain('export * from "../lunora/_generated/workflows.js"');
         expect(result?.content).toContain("export const ShardDO = createShardDO();");
     });
 
     test("workflows target is idempotent independently of the containers re-export", () => {
         write("wrangler.jsonc", `{ "main": "src/server.ts" }`);
-        write("src/server.ts", `${CLASS_BC_ENTRY}export * from "../cirrus/_generated/workflows.js";\n`);
+        write("src/server.ts", `${CLASS_BC_ENTRY}export * from "../lunora/_generated/workflows.js";\n`);
 
         expect(wireWorkerEntryReexport(workdir, WORKFLOWS_TARGET)).toBeUndefined();
     });
@@ -88,7 +88,7 @@ describe("wireWorkerEntryReexport", () => {
         // wrangler main points at the framework/virtual worker; the file (if any)
         // doesn't call createShardDO.
         write("wrangler.jsonc", `{ "main": "src/worker.ts" }`);
-        write("src/worker.ts", `export { default } from "virtual:cirrus/worker";\n`);
+        write("src/worker.ts", `export { default } from "virtual:lunora/worker";\n`);
 
         expect(wireWorkerEntryReexport(workdir)).toBeUndefined();
     });

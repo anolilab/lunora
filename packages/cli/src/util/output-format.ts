@@ -2,7 +2,7 @@ import type { Logger } from "./logger";
 import { createStderrLogger } from "./logger";
 
 /**
- * Machine-readable output formats Cirrus commands understand. `pretty` is the
+ * Machine-readable output formats Lunora commands understand. `pretty` is the
  * default human-facing rendering; `json` serializes the command's structured
  * result as a single JSON document on stdout.
  *

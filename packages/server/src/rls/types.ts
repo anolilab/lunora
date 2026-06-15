@@ -10,12 +10,12 @@
  * RLS is opt-in per procedure, never global.
  *
  * NOTE on the `WhereInput` shape: re-declared structurally here to avoid a
- * runtime dependency on `@cirrus/do`. It must stay assignable to
- * `@cirrus/do`'s `WhereInput` — the runtime threads policy predicates
+ * runtime dependency on `@lunora/do`. It must stay assignable to
+ * `@lunora/do`'s `WhereInput` — the runtime threads policy predicates
  * through that package's compiler unchanged.
  */
 
-/** Structural mirror of `@cirrus/do`'s `WhereInput`. */
+/** Structural mirror of `@lunora/do`'s `WhereInput`. */
 export interface WhereInput {
     [field: string]: unknown;
     AND?: WhereInput[];
@@ -33,13 +33,13 @@ export type PolicyOperation = "delete" | "insert" | "read" | "update";
  * query against the table — the row is invisible unless it matches. On writes
  * it is evaluated against the candidate document (`insert`) or the pre-write
  * row (`update`/`delete`); a mismatch denies the write with
- * `CirrusError("FORBIDDEN")`. Same operator set as the SQL compiler
+ * `LunoraError("FORBIDDEN")`. Same operator set as the SQL compiler
  * (`eq`/`ne`/`in`/`notIn`/`lt`/`lte`/`gt`/`gte`/`isNull`/`contains` +
  * `AND`/`OR`/`NOT`).
  * - `true`: unrestricted. On reads no predicate is merged; on writes the row is
  * allowed.
  * - `false`: deny. On reads the table is forced to match zero rows (a sentinel
- * predicate); on writes the operation throws `CirrusError("FORBIDDEN")`.
+ * predicate); on writes the operation throws `LunoraError("FORBIDDEN")`.
  *
  * Returning `undefined` opts this specific policy out (rare; useful when
  * branching on `ctx.auth.roles`).
@@ -94,7 +94,7 @@ export interface DefinePolicyInput<Context = unknown> {
      * predicate; `true` allows; `false` denies; `undefined` skips this policy.
      *
      * NOTE: `count()` is **unsupported** on a policy-restricted table — the
-     * reader throws `CirrusError("COUNT_RLS_UNSUPPORTED")` (422). This mirrors
+     * reader throws `LunoraError("COUNT_RLS_UNSUPPORTED")` (422). This mirrors
      * kitcn's documented behavior.
      */
     when: (context: PolicyContext<Context>) => PolicyDecision;

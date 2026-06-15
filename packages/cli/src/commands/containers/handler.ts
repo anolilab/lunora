@@ -36,7 +36,7 @@ interface ContainersCommandResult {
 }
 
 /**
- * Forward a `cirrus containers …` invocation to `wrangler containers …`,
+ * Forward a `lunora containers …` invocation to `wrangler containers …`,
  * preserving positional arguments and mapping the curated options. Build/push
  * get a Docker preflight so the failure is a one-line directive instead of a
  * wrangler stack trace.
@@ -46,7 +46,7 @@ const runContainersCommand = async (options: ContainersCommandOptions): Promise<
 
     if (subcommand === undefined || !SUBCOMMANDS.has(subcommand)) {
         options.logger.error(
-            `cirrus containers requires a subcommand: ${[...SUBCOMMANDS].toSorted((a, b) => a.localeCompare(b)).join(" | ")}. Example: cirrus containers build ./containers/app --tag app:v1 --push`,
+            `lunora containers requires a subcommand: ${[...SUBCOMMANDS].toSorted((a, b) => a.localeCompare(b)).join(" | ")}. Example: lunora containers build ./containers/app --tag app:v1 --push`,
         );
 
         return { code: 1 };
@@ -84,7 +84,7 @@ const runContainersCommand = async (options: ContainersCommandOptions): Promise<
     return { code: result.code, descriptor };
 };
 
-/** `cirrus containers` handler (lazy-loaded via the command's `loader`). */
+/** `lunora containers` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<ContainersOptions> = defineHandler<ContainersOptions>(async ({ argument, cwd, logger, options }) => {
     const result = await runContainersCommand({
         argument,

@@ -6,7 +6,7 @@
 
 </a>
 
-<h3 align="center">Cloudflare Images for Cirrus: ctx.images transforms (resize/format/optimize) and signed delivery URLs</h3>
+<h3 align="center">Cloudflare Images for Lunora: ctx.images transforms (resize/format/optimize) and signed delivery URLs</h3>
 
 <!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
@@ -34,37 +34,37 @@
 
 ---
 
-Cloudflare **Images** for Cirrus. Wraps the `IMAGES` binding (`env.IMAGES.input(stream).transform(...).output(...)`) with a small typed client for resize / reformat / optimize, plus pure URL builders for the `/cdn-cgi/image/...` transform endpoint and for **worker-signed, app-gated delivery URLs**.
+Cloudflare **Images** for Lunora. Wraps the `IMAGES` binding (`env.IMAGES.input(stream).transform(...).output(...)`) with a small typed client for resize / reformat / optimize, plus pure URL builders for the `/cdn-cgi/image/...` transform endpoint and for **worker-signed, app-gated delivery URLs**.
 
-Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
+Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
 ## Install
 
 ```sh
-npm install @cirrus/images
+npm install @lunora/images
 ```
 
 ```sh
-pnpm add @cirrus/images
+pnpm add @lunora/images
 ```
 
 ## Action-only — and why
 
-`ctx.images` (the binding-backed `transform`/`info`) is **available on `ActionCtx` only**. The Images transform pipeline is network / compute I/O — a non-deterministic side effect — so it must not run inside a query or mutation, which Cirrus expects to be deterministic (see `@cirrus/advisor`'s `nondeterministic-query-mutation` lint). This is the same seam as `ctx.ai` and `ctx.fetch`.
+`ctx.images` (the binding-backed `transform`/`info`) is **available on `ActionCtx` only**. The Images transform pipeline is network / compute I/O — a non-deterministic side effect — so it must not run inside a query or mutation, which Lunora expects to be deterministic (see `@lunora/advisor`'s `nondeterministic-query-mutation` lint). This is the same seam as `ctx.ai` and `ctx.fetch`.
 
 The pure **URL builders** (`buildImageDeliveryUrl`, `buildSignedImageUrl`, `verifySignedImageUrl`) only mint / verify a string — they do no I/O, so they're deterministic and safe to import and call from **any** handler (query, mutation, or action).
 
 ## Usage — transform on serve, paired with R2 storage
 
-The most common flow: an object lives in R2 (`@cirrus/storage`), and an action downloads it, transforms it, and returns the result.
+The most common flow: an object lives in R2 (`@lunora/storage`), and an action downloads it, transforms it, and returns the result.
 
 ```ts
-import { action } from "@cirrus/server";
+import { action } from "@lunora/server";
 
 export const thumbnail = action({
     args: { key: v.string() },
     handler: async (ctx, { key }) => {
-        // ctx.storage from @cirrus/storage, ctx.images from @cirrus/images — both on ActionCtx.
+        // ctx.storage from @lunora/storage, ctx.images from @lunora/images — both on ActionCtx.
         const object = await ctx.storage.download(key);
 
         const result = await ctx.images.transform(
@@ -85,7 +85,7 @@ export const thumbnail = action({
 `buildImageDeliveryUrl` produces the Cloudflare on-the-fly transform path, `/cdn-cgi/image/<options>/<source>`, or the hosted-Images delivery-variant form. Pure string building — call it anywhere.
 
 ```ts
-import { buildImageDeliveryUrl } from "@cirrus/images";
+import { buildImageDeliveryUrl } from "@lunora/images";
 
 // /cdn-cgi/image/width=256,fit=cover/uploads/avatar.png
 buildImageDeliveryUrl({ baseUrl: "https://cdn.acme.test", key: "uploads/avatar.png", transform: { width: 256, fit: "cover" } });
@@ -99,7 +99,7 @@ buildImageDeliveryUrl({ baseUrl: "https://cdn.acme.test", imageId: "abc-123", va
 `buildSignedImageUrl` mints a Worker-signed URL (HMAC-SHA256) that resolves back through your Worker route, so the request still passes your app's gates — auth, per-image policy, rate limits — before `verifySignedImageUrl` validates the signature + expiry and you serve (or transform) the image. The requested transform is bound into the signature, so a client can't alter the render under the same URL.
 
 ```ts
-import { buildSignedImageUrl, verifySignedImageUrl } from "@cirrus/images";
+import { buildSignedImageUrl, verifySignedImageUrl } from "@lunora/images";
 
 const url = await buildSignedImageUrl({
     baseUrl: "https://cdn.acme.test",
@@ -114,13 +114,13 @@ const result = await verifySignedImageUrl(request.url, env.IMAGES_SIGNING_SECRET
 if (!result.valid) return new Response("Forbidden", { status: 403 }); // never echo result.reason to clients
 ```
 
-> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/addons/images)**.
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/addons/images)**.
 
 ## Related
 
-- [`@cirrus/storage`](https://www.npmjs.com/package/@cirrus/storage) — R2 source for the transform-on-serve flow; `ctx.storage.download(key)` pipes straight into `ctx.images.transform(...)`.
-- [`@cirrus/server`](https://www.npmjs.com/package/@cirrus/server) — call `ctx.images` from actions.
-- [`@cirrus/advisor`](https://www.npmjs.com/package/@cirrus/advisor) — the determinism lint that keeps the binding transform out of queries/mutations.
+- [`@lunora/storage`](https://www.npmjs.com/package/@lunora/storage) — R2 source for the transform-on-serve flow; `ctx.storage.download(key)` pipes straight into `ctx.images.transform(...)`.
+- [`@lunora/server`](https://www.npmjs.com/package/@lunora/server) — call `ctx.images` from actions.
+- [`@lunora/advisor`](https://www.npmjs.com/package/@lunora/advisor) — the determinism lint that keeps the binding transform out of queries/mutations.
 
 ## Supported Node.js Versions
 
@@ -129,14 +129,14 @@ Here's [a post on why we think this is important](https://medium.com/the-node-js
 
 ## Contributing
 
-If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/lunora/issues) and check our [Contributing](https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
 > **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
 ## Credits
 
 - [Daniel Bannert](https://github.com/prisis)
-- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
+- [All Contributors](https://github.com/anolilab/lunora/graphs/contributors)
 
 ## Made with ❤️ at Anolilab
 
@@ -144,17 +144,17 @@ This is an open source project and will always remain free to use. If you think 
 
 ## License
 
-The Cirrus images package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The Lunora images package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
 
 <!-- badges -->
 
 [license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
-[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
-[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/images?style=for-the-badge
-[npm-version]: https://www.npmjs.com/package/@cirrus/images
-[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/images?style=for-the-badge
-[npm-downloads]: https://www.npmjs.com/package/@cirrus/images
+[license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@lunora/images?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@lunora/images
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@lunora/images?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@lunora/images
 [prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
-[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[prs-welcome]: https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md
 [typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
 [typescript-url]: https://www.typescriptlang.org/

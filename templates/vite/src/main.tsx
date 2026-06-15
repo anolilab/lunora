@@ -1,4 +1,4 @@
-import { CirrusProvider, useMutation, useQuery } from "@cirrus/react";
+import { LunoraProvider, useMutation, useQuery } from "@lunora/react";
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
 
@@ -32,9 +32,9 @@ const root = document.querySelector("#root");
 if (root) {
     createRoot(root).render(
         <StrictMode>
-            <CirrusProvider url={globalThis.location.origin}>
+            <LunoraProvider url={globalThis.location.origin}>
                 <Chat />
-            </CirrusProvider>
+            </LunoraProvider>
         </StrictMode>,
     );
 }

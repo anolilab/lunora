@@ -6,7 +6,7 @@
 
 </a>
 
-<h3 align="center">R2-backed storage for Cirrus: typed buckets and signed URLs</h3>
+<h3 align="center">R2-backed storage for Lunora: typed buckets and signed URLs</h3>
 
 <!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
@@ -34,28 +34,28 @@
 
 ---
 
-R2-backed file storage for Cirrus. Wraps a Cloudflare `R2Bucket` binding with a small typed API (`upload`, `download`, `delete`, `list`, multipart), worker-signed URLs for app-gated access, and native S3 presigned URLs for direct-to-R2 transfer.
+R2-backed file storage for Lunora. Wraps a Cloudflare `R2Bucket` binding with a small typed API (`upload`, `download`, `delete`, `list`, multipart), worker-signed URLs for app-gated access, and native S3 presigned URLs for direct-to-R2 transfer.
 
-Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
+Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
 ## Install
 
 ```sh
-npm install @cirrus/storage
+npm install @lunora/storage
 ```
 
 ```sh
-yarn add @cirrus/storage
+yarn add @lunora/storage
 ```
 
 ```sh
-pnpm add @cirrus/storage
+pnpm add @lunora/storage
 ```
 
 ## Usage
 
 ```ts
-import { createStorage } from "@cirrus/storage";
+import { createStorage } from "@lunora/storage";
 
 const storage = createStorage({
     bucket: env.UPLOADS,
@@ -68,13 +68,13 @@ await storage.upload("uploads/avatar.png", bytes, { contentType: "image/png" });
 const url = await storage.getSignedUrl("uploads/avatar.png", { expiresInSeconds: 600 });
 ```
 
-> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/addons/storage)**.
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/addons/storage)**.
 
 ## Related
 
-- [`@cirrus/server`](https://www.npmjs.com/package/@cirrus/server) — call storage from queries, mutations, and actions.
-- [`@cirrus/runtime`](https://www.npmjs.com/package/@cirrus/runtime) — the Worker runtime that serves gated `GET /storage/:key` routes.
-- [`@cirrus/d1`](https://www.npmjs.com/package/@cirrus/d1) — store object metadata alongside your data.
+- [`@lunora/server`](https://www.npmjs.com/package/@lunora/server) — call storage from queries, mutations, and actions.
+- [`@lunora/runtime`](https://www.npmjs.com/package/@lunora/runtime) — the Worker runtime that serves gated `GET /storage/:key` routes.
+- [`@lunora/d1`](https://www.npmjs.com/package/@lunora/d1) — store object metadata alongside your data.
 
 ## Supported Node.js Versions
 
@@ -83,14 +83,14 @@ Here's [a post on why we think this is important](https://medium.com/the-node-js
 
 ## Contributing
 
-If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/lunora/issues) and check our [Contributing](https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
 > **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
 ## Credits
 
 - [Daniel Bannert](https://github.com/prisis)
-- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
+- [All Contributors](https://github.com/anolilab/lunora/graphs/contributors)
 
 ## Made with ❤️ at Anolilab
 
@@ -98,17 +98,17 @@ This is an open source project and will always remain free to use. If you think 
 
 ## License
 
-The Cirrus storage package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The Lunora storage package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
 
 <!-- badges -->
 
 [license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
-[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
-[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/storage?style=for-the-badge
-[npm-version]: https://www.npmjs.com/package/@cirrus/storage
-[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/storage?style=for-the-badge
-[npm-downloads]: https://www.npmjs.com/package/@cirrus/storage
+[license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@lunora/storage?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@lunora/storage
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@lunora/storage?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@lunora/storage
 [prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
-[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[prs-welcome]: https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md
 [typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
 [typescript-url]: https://www.typescriptlang.org/

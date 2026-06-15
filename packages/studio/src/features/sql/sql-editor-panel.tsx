@@ -1,4 +1,4 @@
-import { useCirrus } from "@cirrus/react";
+import { useLunora } from "@lunora/react";
 import type { CSSProperties, ReactElement } from "react";
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 
@@ -32,8 +32,8 @@ interface SqlEditorPanelProps {
 }
 
 const RUN_SQL = adminRef(ADMIN_FUNCTIONS.runSql);
-const STORAGE_KEY = "cirrus-studio-sql-queries";
-const HISTORY_KEY = "cirrus-studio-sql-history";
+const STORAGE_KEY = "lunora-studio-sql-queries";
+const HISTORY_KEY = "lunora-studio-sql-history";
 /** How many recent distinct queries the history keeps. */
 const HISTORY_LIMIT = 25;
 /** Line-number gutter sizing, aligned to the editor textarea's padding + line height. */
@@ -90,12 +90,12 @@ const SqlResultTable = ({ result }: { readonly result: SqlConsoleResult }): Reac
  * A full-height, Supabase-style SQL editor: a left query sidebar (search + new,
  * a browser-persisted PRIVATE list, and REFERENCE templates), a line-numbered
  * editor pane, and a Results / Explain pane with a Run control + shard selector.
- * Read-only — the `__cirrus_admin__:runSql` RPC rejects everything but
+ * Read-only — the `__lunora_admin__:runSql` RPC rejects everything but
  * SELECT / WITH / EXPLAIN, so raw writes can't desync the doc-store's shadow
  * tables (use the Data grid's inline edit for mutations).
  */
 export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const t = useT();
 
     const [queries, setQueries] = usePersistedList<SavedQuery>(STORAGE_KEY);
@@ -542,7 +542,7 @@ export const SqlEditorPanel = ({ initialShardKey }: SqlEditorPanelProps): ReactE
         `border-b-2 px-3 py-2 text-sm outline-none transition-colors ${selected ? "border-foreground font-medium text-foreground" : "border-transparent text-muted-foreground hover:text-foreground"}`;
 
     return (
-        <div className="flex h-full min-w-0" data-testid="cirrus-sql-editor">
+        <div className="flex h-full min-w-0" data-testid="lunora-sql-editor">
             <SqlQuerySidebar
                 activeId={activeId}
                 history={history}

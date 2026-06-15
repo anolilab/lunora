@@ -1,7 +1,7 @@
 /**
  * Durable Object that owns the live set of shard keys per sharded table.
  *
- * The query coordinator (`@cirrus/runtime`) fans out cross-shard reads to
+ * The query coordinator (`@lunora/runtime`) fans out cross-shard reads to
  * every live shard. With the static registry, the app supplies the shard
  * key list at boot — which is fine for fixed-cardinality deployments
  * (a known set of tenants) and unworkable for dynamic ones (one shard per
@@ -15,7 +15,7 @@
  * user-facing write doesn't pay the registry round-trip);
  * - calls `POST /unregister {table, shardKey}` when a shard is decommissioned;
  * - calls `GET /list?table=X` to materialise the fan-out target list. The
- * client (`createDynamicShardRegistry` in `@cirrus/runtime`) caches the
+ * client (`createDynamicShardRegistry` in `@lunora/runtime`) caches the
  * answer with a small TTL so a wide fan-out doesn't pay a registry
  * round-trip on every call.
  *
@@ -36,7 +36,7 @@
  */
 
 /** Conventional DO instance name, passed to `idFromName` to address the single registry instance. */
-const SHARD_REGISTRY_DO_NAME: string = "__cirrus_shard_registry__";
+const SHARD_REGISTRY_DO_NAME: string = "__lunora_shard_registry__";
 
 /** Single key under which the full `table → [keys]` snapshot is persisted. */
 const STORAGE_KEY = "__tables__";

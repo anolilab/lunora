@@ -188,7 +188,7 @@ describe("createBrowser", () => {
             const launch = fakeLaunch();
             const browser = createBrowser({ binding: fakeBinding(), launch });
 
-            await expect(browser.screenshot(url)).rejects.toThrow(/@cirrus\/browser/);
+            await expect(browser.screenshot(url)).rejects.toThrow(/@lunora\/browser/);
             expect(launch.browsers).toHaveLength(0);
         });
 
@@ -222,7 +222,7 @@ describe("createBrowser", () => {
             const launch = fakeLaunch();
             const browser = createBrowser({ allowPrivateTargets: true, binding: fakeBinding(), launch });
 
-            await expect(browser.screenshot("file:///etc/passwd")).rejects.toThrow(/@cirrus\/browser/);
+            await expect(browser.screenshot("file:///etc/passwd")).rejects.toThrow(/@lunora\/browser/);
             expect(launch.browsers).toHaveLength(0);
         });
     });

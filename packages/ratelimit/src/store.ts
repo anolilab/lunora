@@ -1,4 +1,4 @@
-import type { Id } from "@cirrus/values";
+import type { Id } from "@lunora/values";
 
 import type { RateLimitStore, RateLimitValue } from "./types";
 
@@ -31,7 +31,7 @@ interface SqlLike {
 
 interface SqlStoreOptions {
     sql: SqlLike;
-    /** Table name. Created if missing. Defaults to `_cirrus_rate_limits`. */
+    /** Table name. Created if missing. Defaults to `_lunora_rate_limits`. */
     table?: string;
 }
 
@@ -58,7 +58,7 @@ const runSql = <Row = Record<string, unknown>>(sql: SqlLike, query: string, ...p
  */
 const createSqlStore = (options: SqlStoreOptions): RateLimitStore => {
     const { sql } = options;
-    const table = options.table ?? "_cirrus_rate_limits";
+    const table = options.table ?? "_lunora_rate_limits";
 
     runSql(sql, `CREATE TABLE IF NOT EXISTS "${table}" (k TEXT PRIMARY KEY, value REAL NOT NULL, ts INTEGER NOT NULL, prev REAL)`);
 
@@ -98,7 +98,7 @@ const createSqlStore = (options: SqlStoreOptions): RateLimitStore => {
 };
 
 /**
- * The slice of an index-range builder the store uses. Mirrors `@cirrus/server`'s
+ * The slice of an index-range builder the store uses. Mirrors `@lunora/server`'s
  * `IndexRangeBuilder` field-for-field so the real `ctx.db` query builder is
  * assignable; only `eq` is exercised.
  */
@@ -117,10 +117,10 @@ interface RateLimitDatabaseQuery {
 }
 
 /**
- * The slice of the Cirrus ORM writer (`ctx.db` on a mutation/action) the store
+ * The slice of the Lunora ORM writer (`ctx.db` on a mutation/action) the store
  * needs. The real `DatabaseWriter` is structurally assignable, so pass `ctx.db`
- * directly — declared here (rather than imported) to keep `@cirrus/ratelimit`
- * free of a runtime dependency on `@cirrus/server`.
+ * directly — declared here (rather than imported) to keep `@lunora/ratelimit`
+ * free of a runtime dependency on `@lunora/server`.
  */
 interface RateLimitDatabase {
     delete: <T extends string>(id: Id<T>) => Promise<void>;
@@ -130,7 +130,7 @@ interface RateLimitDatabase {
 }
 
 interface DatabaseStoreOptions {
-    /** The Cirrus ORM writer — `ctx.db` inside a mutation or action. */
+    /** The Lunora ORM writer — `ctx.db` inside a mutation or action. */
     db: RateLimitDatabase;
     /** Index that resolves a row by its key column. Defaults to `by_key`. */
     index?: string;
@@ -141,7 +141,7 @@ interface DatabaseStoreOptions {
 }
 
 /**
- * Store backed by a Cirrus table through `ctx.db`, for durable per-DO limits
+ * Store backed by a Lunora table through `ctx.db`, for durable per-DO limits
  * inside a procedure (the procedure context exposes no raw SQL). Declare a
  * table with the key column and its index, e.g.
  *

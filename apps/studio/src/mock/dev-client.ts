@@ -1,23 +1,23 @@
-// A backend-free CirrusClient stand-in for design iteration on the studio.
+// A backend-free LunoraClient stand-in for design iteration on the studio.
 //
 // The real worker can't always run locally (e.g. the Cloudflare Vite plugin
 // fails to boot in some sandboxes), and the studio's look-and-feel work needs
 // representative data in every panel. This mock answers the same admin RPC
-// references the panels call (see `@cirrus/studio`'s `ADMIN_FUNCTIONS`) with
+// references the panels call (see `@lunora/studio`'s `ADMIN_FUNCTIONS`) with
 // fixed, plausible data — mirroring how the package's own tests render panels
 // from a mock client, minus the vitest spies.
 //
 // Dev-only: imported solely by `main.mock.tsx`, never by the shipped studio.
 //
-// Every method is `async` to match @cirrus/studio's Promise-returning
-// `CirrusClient` surface, yet returns fixed data synchronously — so a blanket
+// Every method is `async` to match @lunora/studio's Promise-returning
+// `LunoraClient` surface, yet returns fixed data synchronously — so a blanket
 // require-await disable is intentional here, not a smell.
 /* eslint-disable @typescript-eslint/require-await -- mock implements an async client interface with synchronous fixtures */
-import type { CirrusClient } from "@cirrus/studio";
-import { ADMIN_FUNCTIONS } from "@cirrus/studio";
+import type { LunoraClient } from "@lunora/studio";
+import { ADMIN_FUNCTIONS } from "@lunora/studio";
 
 interface Ref {
-    readonly __cirrusRef: string;
+    readonly __lunoraRef: string;
 }
 
 /** Image-extension test for the signed-URL mock; module-scoped so it isn't recompiled per call. */
@@ -45,7 +45,7 @@ const PAGES: Record<string, { columns: string[]; rows: Record<string, unknown>[]
     posts: {
         columns: ["id", "title", "published", "views"],
         rows: [
-            { id: "post_7", title: "Edge-native state with Cirrus", published: true, views: 1284 },
+            { id: "post_7", title: "Edge-native state with Lunora", published: true, views: 1284 },
             { id: "post_6", title: "Sharding by tenant", published: true, views: 642 },
             { id: "post_5", title: "Realtime without the ceremony", published: false, views: 0 },
         ],
@@ -230,7 +230,7 @@ const dataFor = (reference: string, args: unknown): unknown => {
                         id: 1,
                         subscriptions: [{ args: { since: now - 60_000 }, functionPath: "feed:recent", table: "posts" }],
                     },
-                    { admin: true, id: 2, subscriptions: [{ functionPath: "__cirrus_admin__:getMetrics" }] },
+                    { admin: true, id: 2, subscriptions: [{ functionPath: "__lunora_admin__:getMetrics" }] },
                 ],
                 totalConnections: 3,
                 totalSubscriptions: 4,
@@ -307,8 +307,8 @@ const dataFor = (reference: string, args: unknown): unknown => {
 
 const noop = (): void => {};
 
-/** A plain mock client cast to {@link CirrusClient}, for the dev harness only. */
-const createDevMockClient = (): CirrusClient =>
+/** A plain mock client cast to {@link LunoraClient}, for the dev harness only. */
+const createDevMockClient = (): LunoraClient =>
     ({
         action: async (): Promise<unknown> => {
             return {};
@@ -393,10 +393,10 @@ const createDevMockClient = (): CirrusClient =>
         },
         fetchOpenApi: async (): Promise<unknown> => {
             return {
-                info: { title: "Cirrus API (mock)", version: "0.0.0" },
+                info: { title: "Lunora API (mock)", version: "0.0.0" },
                 openapi: "3.1.0",
                 paths: {
-                    "/_cirrus/rpc#messages:list": {
+                    "/_lunora/rpc#messages:list": {
                         post: {
                             operationId: "messages:list",
                             responses: { default: { description: "RPC error." } },
@@ -404,7 +404,7 @@ const createDevMockClient = (): CirrusClient =>
                             tags: ["messages"],
                         },
                     },
-                    "/_cirrus/rpc#messages:send": {
+                    "/_lunora/rpc#messages:send": {
                         post: {
                             operationId: "messages:send",
                             responses: { default: { description: "RPC error." } },
@@ -412,7 +412,7 @@ const createDevMockClient = (): CirrusClient =>
                             tags: ["messages"],
                         },
                     },
-                    "/_cirrus/rpc#posts:publish": {
+                    "/_lunora/rpc#posts:publish": {
                         post: {
                             operationId: "posts:publish",
                             responses: { default: { description: "RPC error." } },
@@ -426,7 +426,7 @@ const createDevMockClient = (): CirrusClient =>
         },
         fetchOpenRpc: async (): Promise<unknown> => {
             return {
-                info: { title: "Cirrus RPC (mock)", version: "0.0.0" },
+                info: { title: "Lunora RPC (mock)", version: "0.0.0" },
                 methods: [
                     {
                         name: "messages:list",
@@ -437,21 +437,21 @@ const createDevMockClient = (): CirrusClient =>
                             },
                         ],
                         result: { name: "result", schema: {} },
-                        "x-cirrus-function-kind": "query",
+                        "x-lunora-function-kind": "query",
                         "x-tags": [{ name: "messages" }],
                     },
                     {
                         name: "messages:send",
                         params: [{ name: "args", schema: { properties: { text: { type: "string" } }, required: ["text"], type: "object" } }],
                         result: { name: "result", schema: {} },
-                        "x-cirrus-function-kind": "mutation",
+                        "x-lunora-function-kind": "mutation",
                         "x-tags": [{ name: "messages" }],
                     },
                     {
                         name: "posts:publish",
                         params: [{ name: "args", schema: { properties: { id: { type: "string" } }, required: ["id"], type: "object" } }],
                         result: { name: "result", schema: {} },
-                        "x-cirrus-function-kind": "mutation",
+                        "x-lunora-function-kind": "mutation",
                         "x-tags": [{ name: "posts" }],
                     },
                 ],
@@ -508,7 +508,7 @@ const createDevMockClient = (): CirrusClient =>
             return {};
         },
         onConnectionStatus: (): (() => void) => noop,
-        query: async (function_: Ref, args: unknown): Promise<unknown> => dataFor(function_.__cirrusRef, args),
+        query: async (function_: Ref, args: unknown): Promise<unknown> => dataFor(function_.__lunoraRef, args),
         readGlobalTablePage: async (): Promise<unknown> => {
             return {
                 columns: ["key", "enabled", "rollout"],
@@ -585,7 +585,7 @@ const createDevMockClient = (): CirrusClient =>
             // Emit once on the next tick so the panel paints with data, the same
             // shape its `query` path would return.
             queueMicrotask(() => {
-                callback(dataFor(function_.__cirrusRef, args));
+                callback(dataFor(function_.__lunoraRef, args));
             });
 
             return noop;
@@ -597,6 +597,6 @@ const createDevMockClient = (): CirrusClient =>
 
             return noop;
         },
-    }) as unknown as CirrusClient;
+    }) as unknown as LunoraClient;
 
 export default createDevMockClient;

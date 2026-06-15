@@ -1,9 +1,9 @@
 ---
-title: "@cirrus/payment"
-description: Provider-agnostic payments for Cirrus — Stripe/Polar adapters, webhook sync, and a payment/subscription state machine.
+title: "@lunora/payment"
+description: Provider-agnostic payments for Lunora — Stripe/Polar adapters, webhook sync, and a payment/subscription state machine.
 ---
 
-`@cirrus/payment` is one provider-agnostic API over Stripe and Polar. Webhook
+`@lunora/payment` is one provider-agnostic API over Stripe and Polar. Webhook
 events are verified, normalized, and applied through an explicit
 payment/subscription state machine that makes duplicate and out-of-order
 deliveries safe by construction — synced into a durable store that rides the
@@ -15,20 +15,20 @@ authorized per-caller. The package never imports a provider SDK — you inject t
 client, so `stripe` stays an optional peer dependency.
 
 ```sh
-pnpm add @cirrus/payment stripe
+pnpm add @lunora/payment stripe
 ```
 
 ## Configure
 
-`ctx.payments` is wired by codegen onto `ActionCtx` whenever a `cirrus/` source
-imports `@cirrus/payment` or reads `ctx.payments`. The adapter — which carries
+`ctx.payments` is wired by codegen onto `ActionCtx` whenever a `lunora/` source
+imports `@lunora/payment` or reads `ctx.payments`. The adapter — which carries
 provider secrets — comes from a `config.payment(env)` thunk you pass to
 `createShardDO()`. The store is built per request from `ctx.db`, and the default
 authorizer ties `referenceId` to `ctx.auth.userId`.
 
 ```ts
-import type { StripeClientLike } from "@cirrus/payment";
-import { createStripeAdapter } from "@cirrus/payment";
+import type { StripeClientLike } from "@lunora/payment";
+import { createStripeAdapter } from "@lunora/payment";
 import { createShardDO } from "./_generated/shard";
 import Stripe from "stripe";
 
@@ -66,7 +66,7 @@ The thunk returns `PaymentsFromContextOptions`:
 Both adapters take their client by injection and verify inbound webhooks:
 
 ```ts
-import { createPolarAdapter, createStripeAdapter } from "@cirrus/payment";
+import { createPolarAdapter, createStripeAdapter } from "@lunora/payment";
 
 const stripe = createStripeAdapter({ client, webhookSecret, webhookToleranceSeconds: 300 });
 const polar = createPolarAdapter({ client, webhookSecret });
@@ -174,8 +174,8 @@ runs at the Worker edge via `httpAction` (no `ctx.db`). It forwards the raw body
   store exist:
 
 ```ts
-// cirrus/http.ts
-import { httpAction, httpRouter } from "@cirrus/server";
+// lunora/http.ts
+import { httpAction, httpRouter } from "@lunora/server";
 import { processWebhook } from "./billing";
 
 export const app = httpRouter();
@@ -192,7 +192,7 @@ app.post(
 ```
 
 ```ts
-// cirrus/billing.ts
+// lunora/billing.ts
 import { internalAction, v } from "./_generated/server";
 
 export const processWebhook = internalAction({
@@ -221,15 +221,15 @@ append-only `events` log for idempotency and audit.
 > Webhooks are eventually-but-not-guaranteed: an endpoint down past the
 > provider's retry window can drop an event for good. `reconcile` re-fetches the
 > provider's current truth for given payment/subscription ids and overwrites the
-> store when it has drifted — pair it with a `@cirrus/scheduler` job that sweeps
+> store when it has drifted — pair it with a `@lunora/scheduler` job that sweeps
 > non-terminal rows.
 
 ## Data it stores
 
-Codegen discovers tables by parsing your `cirrus/schema.ts` AST, so it **cannot**
+Codegen discovers tables by parsing your `lunora/schema.ts` AST, so it **cannot**
 resolve a cross-package `defineSchema({ ...paymentTables })` spread. Declare the
-tables you use **inline** in your own `cirrus/schema.ts`, mirroring the columns
-in `@cirrus/payment`'s exported `paymentTables` (the canonical column reference
+tables you use **inline** in your own `lunora/schema.ts`, mirroring the columns
+in `@lunora/payment`'s exported `paymentTables` (the canonical column reference
 the store reads/writes). Declaring them locally also lets you chain `.global()`
 on read-heavy tables (e.g. `subscriptions`) for cross-region reads from D1.
 
@@ -250,7 +250,7 @@ payments in use.
 
 ## See also
 
-- [@cirrus/server](/docs/api/server) — `ctx.payments`, mirror tables into your schema
-- [@cirrus/scheduler](/docs/addons/scheduler) — drive the reconciliation sweep
+- [@lunora/server](/docs/api/server) — `ctx.payments`, mirror tables into your schema
+- [@lunora/scheduler](/docs/addons/scheduler) — drive the reconciliation sweep
 - [Studio](/docs/addons/studio) — the Payments panel
 - [Architecture](/docs/architecture)

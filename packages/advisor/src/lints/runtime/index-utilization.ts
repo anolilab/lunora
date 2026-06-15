@@ -18,7 +18,7 @@ const HOT_SCAN_THRESHOLD = 25;
  * is pure overhead: every write maintains it, every byte of storage holds it,
  * and nothing reads through it. Fired off the per-index hit feed
  * (`context.indexHits`); a declared index whose recorded `reads` is `0` is dead.
- * The runtime records this in the durable `__cirrus_metrics_index` table (every
+ * The runtime records this in the durable `__lunora_metrics_index` table (every
  * index use stamps a per-`(table, index)` counter via `onIndexUse`) and surfaces
  * it through the `getMetrics` admin RPC; the studio sums the per-shard arrays
  * into `context.indexHits` (see `AdvisorIndexHit`). The counter is cumulative and
@@ -27,7 +27,7 @@ const HOT_SCAN_THRESHOLD = 25;
  *
  * Hot unindexed scan — a table read hot with no index at all. Fired off the
  * full-scan attribution the runtime does record (`context.tableScans`, sourced
- * from `__cirrus_metrics_scans` / `FunctionCallStat.scannedTables`): a table
+ * from `__lunora_metrics_scans` / `FunctionCallStat.scannedTables`): a table
  * whose scan count clears `HOT_SCAN_THRESHOLD` is one the app keeps
  * full-scanning, the runtime-confirmed counterpart to the static
  * `filter_without_index` advisory.
@@ -45,7 +45,7 @@ const indexUtilization: Lint = {
         const findings = [];
 
         // Dead-index half: a declared index with zero recorded reads, off the
-        // durable `__cirrus_metrics_index` hit feed the runtime now records.
+        // durable `__lunora_metrics_index` hit feed the runtime now records.
         for (const hit of context.indexHits ?? []) {
             if (hit.reads > 0) {
                 continue;

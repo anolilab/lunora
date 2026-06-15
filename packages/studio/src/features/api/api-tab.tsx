@@ -18,13 +18,13 @@ interface ApiTabProps {
 
     /**
      * Inline OpenAPI document for the reference sub-view. When omitted the
-     * reference fetches the worker's `GET /_cirrus/admin/openapi` endpoint.
+     * reference fetches the worker's `GET /_lunora/admin/openapi` endpoint.
      */
     readonly openApiSpec?: unknown;
 
     /**
      * Inline OpenRPC document for the reference sub-view's OpenRPC format. When
-     * omitted the OpenRPC view fetches the worker's `GET /_cirrus/admin/openrpc`
+     * omitted the OpenRPC view fetches the worker's `GET /_lunora/admin/openrpc`
      * endpoint. OpenRPC is the RPC-native spec (RPC functions only); OpenAPI
      * additionally covers `httpRouter()` REST routes.
      */
@@ -75,7 +75,7 @@ const ApiTab = ({ functions, initialShardKey, openApiSpec, openRpcSpec }: ApiTab
     }, []);
 
     return (
-        <div className="flex min-h-0 flex-1 flex-col" data-testid="cirrus-api-tab">
+        <div className="flex min-h-0 flex-1 flex-col" data-testid="lunora-api-tab">
             {/* Sticky sub-toolbar: stays pinned while the panel below scrolls. */}
             <div className="flex shrink-0 flex-wrap items-center gap-3 border-b border-border px-6 py-3">
                 <div aria-label={t("API view")} className="flex gap-1.5" data-testid="api-view-toggle" role="tablist">

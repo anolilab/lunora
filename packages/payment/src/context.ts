@@ -1,5 +1,5 @@
 /**
- * Build a payment facade from a Cirrus function context.
+ * Build a payment facade from a Lunora function context.
  *
  * This is what codegen wires `ctx.payments` to: the store rides the request's `ctx.db` (the app's
  * ShardDO), and authorization defaults to "the caller may only act on their own `userId`" — apps
@@ -7,25 +7,25 @@
  * adapter is supplied by the caller (typically from a `config.payment(env)` thunk).
  */
 import type { PaymentAdapter } from "./adapter";
-import type { AuthorizeReference, CirrusPayment } from "./create-payment";
+import type { AuthorizeReference, LunoraPayment } from "./create-payment";
 import { createPayment } from "./create-payment";
 import type { PaymentDatabase, PaymentRow } from "./database-store";
 import { createDatabasePaymentStore } from "./database-store";
 import type { EntitlementsConfig } from "./entitlements";
 import type { PaymentObserver } from "./observability";
 
-/** Structural subset of Cirrus's `ctx.db` (the `findFirst`/`findMany(tableName, { where })` form). */
-export interface CirrusDatabaseLike {
+/** Structural subset of Lunora's `ctx.db` (the `findFirst`/`findMany(tableName, { where })` form). */
+export interface LunoraDatabaseLike {
     findFirst: (table: string, args?: { where?: Record<string, unknown> }) => Promise<Record<string, unknown> | null>;
     findMany: (table: string, args?: { where?: Record<string, unknown> }) => Promise<{ page: Record<string, unknown>[] }>;
     insert: (table: string, document: Record<string, unknown>) => Promise<string>;
     patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
 }
 
-/** Structural subset of a Cirrus function context used to build payments. */
+/** Structural subset of a Lunora function context used to build payments. */
 export interface PaymentContextLike {
     auth?: { userId?: null | string };
-    db: CirrusDatabaseLike;
+    db: LunoraDatabaseLike;
 }
 
 export interface PaymentsFromContextOptions {
@@ -38,8 +38,8 @@ export interface PaymentsFromContextOptions {
     readonly observability?: PaymentObserver;
 }
 
-/** Adapt a Cirrus `ctx.db` to the {@link PaymentDatabase} port the store writes through. */
-export const cirrusDatabaseToPaymentDatabase = (database: CirrusDatabaseLike): PaymentDatabase => {
+/** Adapt a Lunora `ctx.db` to the {@link PaymentDatabase} port the store writes through. */
+export const lunoraDatabaseToPaymentDatabase = (database: LunoraDatabaseLike): PaymentDatabase => {
     return {
         findFirst: async (table, where) => (await database.findFirst(table, { where })) as PaymentRow | null,
         findMany: async (table, where) => {
@@ -52,7 +52,7 @@ export const cirrusDatabaseToPaymentDatabase = (database: CirrusDatabaseLike): P
     };
 };
 
-export const paymentsFromContext = (context: PaymentContextLike, options: PaymentsFromContextOptions): CirrusPayment => {
+export const paymentsFromContext = (context: PaymentContextLike, options: PaymentsFromContextOptions): LunoraPayment => {
     const userId = context.auth?.userId ?? undefined;
 
     return createPayment({
@@ -60,6 +60,6 @@ export const paymentsFromContext = (context: PaymentContextLike, options: Paymen
         authorize: options.authorize ?? ((referenceId) => userId !== undefined && referenceId === userId),
         entitlements: options.entitlements,
         observability: options.observability,
-        store: createDatabasePaymentStore(cirrusDatabaseToPaymentDatabase(context.db)),
+        store: createDatabasePaymentStore(lunoraDatabaseToPaymentDatabase(context.db)),
     });
 };

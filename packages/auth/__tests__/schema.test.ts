@@ -2,10 +2,10 @@ import { passkey } from "@better-auth/passkey";
 import { admin, jwt, organization, twoFactor, username } from "better-auth/plugins";
 import { describe, expect, it } from "vitest";
 
-import type { CirrusAuthOptions } from "../src/create-auth";
+import type { LunoraAuthOptions } from "../src/create-auth";
 import authTables from "../src/schema";
 
-const baseOptions: CirrusAuthOptions = {
+const baseOptions: LunoraAuthOptions = {
     emailAndPassword: { enabled: true },
     secret: "test-secret-test-secret-test-secret",
 };
@@ -19,7 +19,7 @@ describe("authTables", () => {
         expect(Object.keys(tables).toSorted((a, b) => a.localeCompare(b))).toEqual(["account", "session", "user", "verification"]);
     });
 
-    it("maps field types to the matching Cirrus validators", () => {
+    it("maps field types to the matching Lunora validators", () => {
         expect.assertions(4);
 
         const tables = authTables(baseOptions);

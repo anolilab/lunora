@@ -70,7 +70,7 @@ describe("savedQueries", () => {
     it("drops malformed entries when loading", () => {
         expect.assertions(1);
 
-        localStorage.setItem("cirrus-studio-saved-queries", JSON.stringify([{ name: "ok", view: {} }, { name: 42 }, "garbage", { view: {} }]));
+        localStorage.setItem("lunora-studio-saved-queries", JSON.stringify([{ name: "ok", view: {} }, { name: 42 }, "garbage", { view: {} }]));
 
         expect(loadSavedQueries().map((entry) => entry.name)).toEqual(["ok"]);
     });

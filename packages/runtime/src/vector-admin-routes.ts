@@ -1,5 +1,5 @@
 /**
- * The `/_cirrus/admin/vector/*` route cluster, extracted from `create-worker.ts`
+ * The `/_lunora/admin/vector/*` route cluster, extracted from `create-worker.ts`
  * (mirrors `./auth-admin-routes`). Backs the studio's vector browser: list the
  * indexes (static registry + live `describe()` stats) and run a similarity query.
  * Both reach the admin gate + the injected `vectorIntrospector` through
@@ -7,10 +7,10 @@
  * `create-worker`.
  */
 import type { VectorIntrospector } from "./create-worker";
-import { CirrusError } from "./errors";
+import { LunoraError } from "./errors";
 
-const VECTOR_INDEXES_PATH = "/_cirrus/admin/vector/indexes";
-const VECTOR_QUERY_PATH = "/_cirrus/admin/vector/query";
+const VECTOR_INDEXES_PATH = "/_lunora/admin/vector/indexes";
+const VECTOR_QUERY_PATH = "/_lunora/admin/vector/query";
 
 /** The worker internals the vector routes reach through injection rather than closure. */
 interface VectorAdminRouteDeps {
@@ -22,13 +22,13 @@ interface VectorAdminRouteDeps {
     vectorIntrospector?: VectorIntrospector;
 }
 
-/** Build the `/_cirrus/admin/vector/*` route map merged into the worker's internal route table. */
+/** Build the `/_lunora/admin/vector/*` route map merged into the worker's internal route table. */
 const buildVectorAdminRoutes = (deps: VectorAdminRouteDeps): Record<string, (request: Request) => Promise<Response>> => {
     const { readJsonBody, requireAdminOption } = deps;
 
     const handleVectorIndexes = async (request: Request): Promise<Response> => {
         if (request.method !== "GET") {
-            throw new CirrusError("Vector-indexes endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+            throw new LunoraError("Vector-indexes endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
         const introspector = requireAdminOption(request, deps.vectorIntrospector, {
@@ -41,7 +41,7 @@ const buildVectorAdminRoutes = (deps: VectorAdminRouteDeps): Record<string, (req
 
     const handleVectorQuery = async (request: Request): Promise<Response> => {
         if (request.method !== "POST") {
-            throw new CirrusError("Vector-query endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+            throw new LunoraError("Vector-query endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
         const introspector = requireAdminOption(request, deps.vectorIntrospector, {
@@ -50,22 +50,22 @@ const buildVectorAdminRoutes = (deps: VectorAdminRouteDeps): Record<string, (req
         });
 
         if (introspector.queryIndex === undefined) {
-            throw new CirrusError("vector index querying is not enabled on this worker", { code: "VECTOR_QUERY_UNSUPPORTED", status: 400 });
+            throw new LunoraError("vector index querying is not enabled on this worker", { code: "VECTOR_QUERY_UNSUPPORTED", status: 400 });
         }
 
         const body = await readJsonBody(request);
         const candidate = body as { name?: unknown; text?: unknown; topK?: unknown };
 
         if (typeof candidate.name !== "string" || candidate.name === "") {
-            throw new CirrusError("Vector-query request requires a `name` string", { code: "BAD_REQUEST", status: 400 });
+            throw new LunoraError("Vector-query request requires a `name` string", { code: "BAD_REQUEST", status: 400 });
         }
 
         if (typeof candidate.text !== "string" || candidate.text === "") {
-            throw new CirrusError("Vector-query request requires a `text` string", { code: "BAD_REQUEST", status: 400 });
+            throw new LunoraError("Vector-query request requires a `text` string", { code: "BAD_REQUEST", status: 400 });
         }
 
         if (candidate.topK !== undefined && (typeof candidate.topK !== "number" || !Number.isInteger(candidate.topK) || candidate.topK < 1)) {
-            throw new CirrusError("Vector-query `topK` must be a positive integer", { code: "BAD_REQUEST", status: 400 });
+            throw new LunoraError("Vector-query `topK` must be a positive integer", { code: "BAD_REQUEST", status: 400 });
         }
 
         const result = await introspector.queryIndex({ name: candidate.name, text: candidate.text, topK: candidate.topK });

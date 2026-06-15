@@ -1,7 +1,7 @@
-import type { FunctionReference, Preloaded } from "@cirrus/client";
+import type { FunctionReference, Preloaded } from "@lunora/client";
 import type { Ref } from "vue";
 
-import { useCirrus } from "./cirrus-provider";
+import { useLunora } from "./lunora-provider";
 import { subscribeToQuery } from "./use-query";
 
 /**
@@ -18,16 +18,16 @@ import { subscribeToQuery } from "./use-query";
  * The subscription tears down with the surrounding effect scope (component
  * unmount or `effectScope().stop()`), inherited from `subscribeToQuery`.
  */
-// eslint-disable-next-line import/prefer-default-export -- the package barrel re-exports every composable by name; a default here would break the `import { hydratePreloaded } from "@cirrus/vue"` surface.
+// eslint-disable-next-line import/prefer-default-export -- the package barrel re-exports every composable by name; a default here would break the `import { hydratePreloaded } from "@lunora/vue"` surface.
 export const hydratePreloaded = <T>(preloaded: Preloaded<T>): Ref<T | undefined> => {
-    const client = useCirrus();
+    const client = useLunora();
 
     const { args, functionPath, shardKey, value } = preloaded;
 
     // Rebuild a minimal FunctionReference from the serialized path. The token
     // carries no phantom types across the wire; the consumer supplies `T`, which
     // re-establishes the return type on the ref.
-    const functionReference: FunctionReference = { __cirrusRef: functionPath };
+    const functionReference: FunctionReference = { __lunoraRef: functionPath };
 
     return subscribeToQuery<FunctionReference, T>(client, functionReference, args, {
         seed: value,

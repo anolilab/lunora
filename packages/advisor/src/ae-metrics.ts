@@ -4,9 +4,9 @@
  * The runtime lints (`hot_shard`, `index_utilization`) are pure over the
  * {@link LintContext} arrays `shardTraffic` / `tableScans` / `indexHits`. By
  * default the studio backend fills those from each shard's durable in-DO
- * counters (`__cirrus_metrics*`). This module is the **alternative feeder**:
+ * counters (`__lunora_metrics*`). This module is the **alternative feeder**:
  * given a read client over the Analytics Engine SQL API (the one
- * `@cirrus/analytics` exposes as `createAnalyticsSqlClient`), it produces the
+ * `@lunora/analytics` exposes as `createAnalyticsSqlClient`), it produces the
  * same arrays from real, cross-shard scan-attribution data — so the advisors can
  * be backed by AE instead of (or alongside) the in-DO counters.
  *
@@ -21,7 +21,7 @@
  * The arrays are reconstructed from data points the runtime mirrors into AE via
  * `ctx.analytics.track(name, { dimensions })`. `track` reserves `blob1` for the
  * event name and lays dimensions out from `blob2` in key order (see
- * `@cirrus/analytics`' `createAnalytics`). The event names + dimension columns
+ * `@lunora/analytics`' `createAnalytics`). The event names + dimension columns
  * this reader expects are the {@link AE_METRIC_EVENTS} constants below; the
  * un-sampled count is AE's `sum(_sample_interval)`.
  */
@@ -33,9 +33,9 @@ import type { LintContext } from "./types";
 const DATASET_NAME_PATTERN = /^[\w.-]+$/u;
 
 /**
- * Minimal structural view of the `@cirrus/analytics` SQL client — just its
+ * Minimal structural view of the `@lunora/analytics` SQL client — just its
  * `query(sql)` method. Kept structural (not an `import type` from
- * `@cirrus/analytics`) so the advisor needn't depend on the analytics package;
+ * `@lunora/analytics`) so the advisor needn't depend on the analytics package;
  * the real `AnalyticsSqlClient` satisfies it, as does a plain test double.
  */
 interface AnalyticsMetricsSource {
@@ -47,12 +47,12 @@ interface AnalyticsMetricsSource {
  * reader reads. `blob1` is the event name; dimensions start at `blob2`.
  */
 const AE_METRIC_EVENTS = {
-    /** `cirrus.index.hit` — one row per `(table, index)` use. `blob2`=table, `blob3`=index. */
-    indexHit: { event: "cirrus.index.hit", index: "blob3", table: "blob2" },
-    /** `cirrus.shard.request` — one row per shard dispatch. `blob2`=shardKey, `blob3`=group. */
-    shardRequest: { event: "cirrus.shard.request", group: "blob3", shardKey: "blob2" },
-    /** `cirrus.table.scan` — one row per full-scan. `blob2`=table. */
-    tableScan: { event: "cirrus.table.scan", table: "blob2" },
+    /** `lunora.index.hit` — one row per `(table, index)` use. `blob2`=table, `blob3`=index. */
+    indexHit: { event: "lunora.index.hit", index: "blob3", table: "blob2" },
+    /** `lunora.shard.request` — one row per shard dispatch. `blob2`=shardKey, `blob3`=group. */
+    shardRequest: { event: "lunora.shard.request", group: "blob3", shardKey: "blob2" },
+    /** `lunora.table.scan` — one row per full-scan. `blob2`=table. */
+    tableScan: { event: "lunora.table.scan", table: "blob2" },
 } as const;
 
 /** Options for the AE-backed runtime-metrics feeder. */
@@ -112,7 +112,7 @@ const toText = (value: unknown): string => {
  */
 const assertDataset = (dataset: string): void => {
     if (!DATASET_NAME_PATTERN.test(dataset)) {
-        throw new Error(`@cirrus/advisor: invalid Analytics Engine dataset name "${dataset}" — expected a bare table identifier.`);
+        throw new Error(`@lunora/advisor: invalid Analytics Engine dataset name "${dataset}" — expected a bare table identifier.`);
     }
 };
 

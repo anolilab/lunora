@@ -18,7 +18,7 @@ describe("createStorage (workerd + Miniflare R2 integration)", () => {
         expect.assertions(6);
 
         const sut = storage();
-        const payload = new TextEncoder().encode("hello cirrus");
+        const payload = new TextEncoder().encode("hello lunora");
 
         const putResult = await sut.upload("greetings/hello.txt", payload.buffer, {
             contentType: "text/plain",
@@ -34,7 +34,7 @@ describe("createStorage (workerd + Miniflare R2 integration)", () => {
 
         expect(got).not.toBeNull();
         expect(got!.key).toBe("greetings/hello.txt");
-        await expect(got!.text()).resolves.toBe("hello cirrus");
+        await expect(got!.text()).resolves.toBe("hello lunora");
     });
 
     it("download with a byte range streams only the requested window", async () => {

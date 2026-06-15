@@ -9,7 +9,7 @@ export type { SchedulerDOState, SchedulerEnv, SchedulerPoolStatus, SchedulerStat
 export { SchedulerDO } from "./scheduler-do";
 export type {
     ArgsOf,
-    CirrusSchedulerOptions,
+    LunoraSchedulerOptions,
     DurableObjectIdLike,
     DurableObjectNamespaceLike,
     DurableObjectStubLike,

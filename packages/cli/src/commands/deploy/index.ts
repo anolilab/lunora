@@ -5,9 +5,9 @@ import { API_SPEC_HELP } from "../../util/api-spec";
 const deployCommand: Command = {
     description: "Codegen, validate wrangler, then wrangler deploy",
     examples: [
-        ["cirrus deploy", "Deploy to Cloudflare"],
-        ["cirrus deploy --env production", "Deploy to a named environment"],
-        ["cirrus deploy --migrate", "Deploy, then run pending data migrations"],
+        ["lunora deploy", "Deploy to Cloudflare"],
+        ["lunora deploy --env production", "Deploy to a named environment"],
+        ["lunora deploy --migrate", "Deploy, then run pending data migrations"],
     ],
     group: "Deploy",
     loader: () =>
@@ -21,10 +21,10 @@ const deployCommand: Command = {
         { description: "Cloudflare environment name", name: "env", type: String },
         { description: "Output format: pretty (default) or json", name: "format", type: String },
         { description: "After a successful deploy, run pending data migrations against the live worker", name: "migrate", type: Boolean },
-        { description: "Admin bearer token for --migrate (falls back to CIRRUS_ADMIN_TOKEN)", name: "migrate-token", type: String },
+        { description: "Admin bearer token for --migrate (falls back to LUNORA_ADMIN_TOKEN)", name: "migrate-token", type: String },
         { description: "Worker URL for --migrate (defaults to the deploy target)", name: "migrate-url", type: String },
         {
-            description: "Re-bless the committed schema baseline (cirrus/.cirrus-schema.json) with the current shape",
+            description: "Re-bless the committed schema baseline (lunora/.lunora-schema.json) with the current shape",
             name: "update-schema-baseline",
             type: Boolean,
         },

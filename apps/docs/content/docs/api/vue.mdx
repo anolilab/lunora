@@ -1,10 +1,10 @@
 ---
-title: "@cirrus/vue"
-description: Vue 3 composables built on @cirrus/client — live queries, optimistic mutations, and an SSR hydration handoff.
+title: "@lunora/vue"
+description: Vue 3 composables built on @lunora/client — live queries, optimistic mutations, and an SSR hydration handoff.
 ---
 
-`@cirrus/vue` is the Vue 3 adapter for Cirrus. It's a thin, idiomatic layer over
-the framework-neutral [`@cirrus/client`](/docs/api/client) — which owns the
+`@lunora/vue` is the Vue 3 adapter for Lunora. It's a thin, idiomatic layer over
+the framework-neutral [`@lunora/client`](/docs/api/client) — which owns the
 WebSocket transport, subscription registry, offline queue, and delta-merge — and
 re-expresses that contract as Vue composables. A live query is just a
 `shallowRef` the socket writes to; an optimistic mutation is a small bundle of
@@ -16,57 +16,57 @@ refs plus an awaitable `mutate`.
 > full live-loader path. See [Bring your framework](/docs/frameworks/bring-your-framework).
 
 ```ts
-import { CirrusClient } from "@cirrus/client";
-import { createCirrus } from "@cirrus/vue";
+import { LunoraClient } from "@lunora/client";
+import { createLunora } from "@lunora/vue";
 import { createApp } from "vue";
 
-import { api } from "./cirrus/_generated/api";
+import { api } from "./lunora/_generated/api";
 import App from "./App.vue";
 
-const client = new CirrusClient({ url: import.meta.env.VITE_CIRRUS_URL });
+const client = new LunoraClient({ url: import.meta.env.VITE_LUNORA_URL });
 
-createApp(App).use(createCirrus(client)).mount("#app");
+createApp(App).use(createLunora(client)).mount("#app");
 ```
 
 ## Exports
 
 | Symbol                 | Kind          | Role                                                                                         |
 | ---------------------- | ------------- | -------------------------------------------------------------------------------------------- |
-| `createCirrus`         | plugin        | `app.use(createCirrus(client))` — provide the shared client to the whole app.                |
-| `provideCirrus`        | composable    | `provide` the client to a subtree from inside a parent `setup()`.                            |
-| `useCirrus`            | composable    | Read the `CirrusClient` from the nearest provider. Throws if none is mounted.                |
-| `CIRRUS_INJECTION_KEY` | injection key | The `InjectionKey` the provider uses — for advanced manual `inject()`.                       |
+| `createLunora`         | plugin        | `app.use(createLunora(client))` — provide the shared client to the whole app.                |
+| `provideLunora`        | composable    | `provide` the client to a subtree from inside a parent `setup()`.                            |
+| `useLunora`            | composable    | Read the `LunoraClient` from the nearest provider. Throws if none is mounted.                |
+| `LUNORA_INJECTION_KEY` | injection key | The `InjectionKey` the provider uses — for advanced manual `inject()`.                       |
 | `useQuery`             | composable    | Live query as a `ref`. Reactive args re-subscribe; `"skip"` short-circuits.                  |
 | `useMutation`          | composable    | Optimistic mutation handle: `{ data, error, pending, mutate, reset }` refs.                  |
 | `subscribeToQuery`     | function      | Low-level: subscribe with **fixed** args into a `ref` (the primitive behind hydration).      |
 | `hydratePreloaded`     | composable    | Seed a `ref` synchronously from an SSR `Preloaded` token, then attach the live subscription. |
 
-Re-exported types: `ArgsOf`, `CirrusClient`, `FunctionReference`,
+Re-exported types: `ArgsOf`, `LunoraClient`, `FunctionReference`,
 `MutationCallOptions`, `OptimisticLocalStore`, `OptimisticUpdate`, `Preloaded`,
 `ReturnOf`, `Unsubscribe`, `User`, `UseQueryOptions`, and the `MutationHandle`
 interface.
 
-## Provider — `createCirrus` / `provideCirrus` / `useCirrus`
+## Provider — `createLunora` / `provideLunora` / `useLunora`
 
-Mount the single app-wide `CirrusClient` so every composable can resolve it. Use
-the plugin form at the app root, or `provideCirrus` inside a parent component's
+Mount the single app-wide `LunoraClient` so every composable can resolve it. Use
+the plugin form at the app root, or `provideLunora` inside a parent component's
 `setup()` to scope a client to a subtree:
 
 ```ts
-import { createCirrus, provideCirrus, useCirrus } from "@cirrus/vue";
+import { createLunora, provideLunora, useLunora } from "@lunora/vue";
 
 // Plugin form (app root):
-createApp(App).use(createCirrus(client)).mount("#app");
+createApp(App).use(createLunora(client)).mount("#app");
 
 // Composition form (inside a parent <script setup>):
-provideCirrus(client);
+provideLunora(client);
 
 // Anywhere below: read the client directly.
-const client = useCirrus();
+const client = useLunora();
 ```
 
-`useCirrus()` throws a clear error when called outside a
-`createCirrus`/`provideCirrus` scope, so a missing provider fails loudly instead
+`useLunora()` throws a clear error when called outside a
+`createLunora`/`provideLunora` scope, so a missing provider fails loudly instead
 of surfacing as a later `undefined` dereference.
 
 ## `useQuery(fn, args, options?)`
@@ -84,10 +84,10 @@ client de-dupes by `(fn, args, shardKey)`).
 
 ```vue
 <script setup lang="ts">
-import { useQuery } from "@cirrus/vue";
+import { useQuery } from "@lunora/vue";
 import { ref } from "vue";
 
-import { api } from "./cirrus/_generated/api";
+import { api } from "./lunora/_generated/api";
 
 const channelId = ref("general");
 
@@ -129,9 +129,9 @@ it only flips back to `false` once every concurrent call has settled.
 
 ```vue
 <script setup lang="ts">
-import { useMutation } from "@cirrus/vue";
+import { useMutation } from "@lunora/vue";
 
-import { api } from "./cirrus/_generated/api";
+import { api } from "./lunora/_generated/api";
 
 const { mutate, pending, error } = useMutation(api.messages.send);
 
@@ -151,7 +151,7 @@ async function send(channelId: string, text: string) {
 Optimistic updates stay client-owned and are passed **per call** via
 `mutate`'s `MutationCallOptions` — the `optimistic` / `optimisticUpdate` options
 pass straight through to `client.mutation`, which applies them against the live
-Cirrus subscription cache and rolls them back on failure. Any `useQuery` /
+Lunora subscription cache and rolls them back on failure. Any `useQuery` /
 `hydratePreloaded` ref reading the same data reflects the change immediately and
 reverts if the server rejects.
 
@@ -173,7 +173,7 @@ await mutate(
 ## Reactive loaders — `hydratePreloaded`
 
 The SSR-seed-to-live handoff: the Vue half of "your loaders are live". Run the
-query on the server with `preloadQuery` (from `@cirrus/vue/server`), pass the
+query on the server with `preloadQuery` (from `@lunora/vue/server`), pass the
 serializable `Preloaded` token to the client, and `hydratePreloaded` seeds a
 `ref` **synchronously** from `preloaded.value` — so the first read during
 hydration shows the server value with no loading flash and no hydration
@@ -183,8 +183,8 @@ the ref exactly like `useQuery`.
 
 ```vue
 <script setup lang="ts">
-import { hydratePreloaded } from "@cirrus/vue";
-import type { Preloaded } from "@cirrus/vue";
+import { hydratePreloaded } from "@lunora/vue";
+import type { Preloaded } from "@lunora/vue";
 
 const props = defineProps<{ preloaded: Preloaded<Array<{ _id: string; title: string }>> }>();
 
@@ -205,20 +205,20 @@ primitive `hydratePreloaded` builds on — it subscribes with **fixed** args
 already hold a client and immutable args; otherwise prefer `useQuery` or
 `hydratePreloaded`.
 
-## `@cirrus/vue/server`
+## `@lunora/vue/server`
 
-Server-side preload helpers, re-exported from `@cirrus/client/ssr` — the
+Server-side preload helpers, re-exported from `@lunora/client/ssr` — the
 framework-neutral server contract shared by every adapter. This entry opens no
 WebSocket and touches no browser globals, so it is safe to import from a
 Nuxt/Nitro server route or any SSR context.
 
 ```ts
-import { createServerClient, preloadQuery } from "@cirrus/vue/server";
+import { createServerClient, preloadQuery } from "@lunora/vue/server";
 
-import { api } from "./cirrus/_generated/api";
+import { api } from "./lunora/_generated/api";
 
 // Per request — never reuse a client across requests (token leakage).
-const client = createServerClient({ url: process.env.CIRRUS_URL!, token });
+const client = createServerClient({ url: process.env.LUNORA_URL!, token });
 const preloaded = await preloadQuery(client, api.posts.list, {});
 // → pass `preloaded` to the component, hand it to hydratePreloaded on the client.
 ```
@@ -227,27 +227,27 @@ Exports: `createServerClient`, `preloadQuery`, `serializePreloaded`,
 `deserializePreloaded`, `preloadedQueryResult`, `getServerSession`, plus the
 `Preloaded` / `ServerClientOptions` / `ServerSession` types.
 
-## `@cirrus/vue/worker`
+## `@lunora/vue/worker`
 
 Single-worker composition helper for frameworks whose build exposes the emitted
-fetch handler as an importable module. Re-exports `withCirrus`
-(`withFrameworkWorker` from [`@cirrus/runtime`](/docs/api/runtime)), which wraps a
-framework handler as Cirrus's fallback `httpRouter` and mounts only the reserved
-`/_cirrus/*` plane plus `ShardDO`.
+fetch handler as an importable module. Re-exports `withLunora`
+(`withFrameworkWorker` from [`@lunora/runtime`](/docs/api/runtime)), which wraps a
+framework handler as Lunora's fallback `httpRouter` and mounts only the reserved
+`/_lunora/*` plane plus `ShardDO`.
 
 > **Nuxt caveat.** Nitro does not expose its emitted fetch handler as an
-> importable virtual module, so single-worker `withCirrus` composition is **not**
+> importable virtual module, so single-worker `withLunora` composition is **not**
 > achievable for Nuxt. The supported Nuxt integration is a two-worker split: the
-> Nuxt/Nitro SSR worker plus a separate standalone Cirrus worker owning
-> `/_cirrus/*` + `ShardDO`, wired by `NUXT_PUBLIC_CIRRUS_URL`. `withCirrus`
+> Nuxt/Nitro SSR worker plus a separate standalone Lunora worker owning
+> `/_lunora/*` + `ShardDO`, wired by `NUXT_PUBLIC_LUNORA_URL`. `withLunora`
 > stays useful for other frameworks that do expose their handler.
 
 ## See also
 
-- [@cirrus/react](/docs/api/react) — the same contract for React
-- [@cirrus/solid](/docs/api/solid) — the SolidJS adapter
-- [@cirrus/svelte](/docs/api/svelte) — the Svelte adapter
-- [@cirrus/client](/docs/api/client) — the framework-neutral SDK this wraps
+- [@lunora/react](/docs/api/react) — the same contract for React
+- [@lunora/solid](/docs/api/solid) — the SolidJS adapter
+- [@lunora/svelte](/docs/api/svelte) — the Svelte adapter
+- [@lunora/client](/docs/api/client) — the framework-neutral SDK this wraps
 - [Bring your framework](/docs/frameworks/bring-your-framework) — composition + adapter maturity
 - [Reactive loaders](/docs/frameworks/reactive-loaders) — the hydrate-then-subscribe handoff
 - [Real-time](/docs/concepts/realtime)

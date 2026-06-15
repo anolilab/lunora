@@ -80,8 +80,8 @@ interface RankSortKeyLike {
 }
 
 /**
- * Structural mirror of `@cirrus/server`'s `RankIndexDefinition` — kept local
- * so this package doesn't take a hard dep on `@cirrus/server` (same reasoning
+ * Structural mirror of `@lunora/server`'s `RankIndexDefinition` — kept local
+ * so this package doesn't take a hard dep on `@lunora/server` (same reasoning
  * as `AggregateIndexDefinitionLike` in aggregates.ts).
  */
 interface RankIndexDefinitionLike {
@@ -196,7 +196,7 @@ interface RankPageRow {
 /**
  * A single shard's `rankPageRows()` payload — the structural contract the query
  * coordinator's `orchestrateRankPage` consumes (mirrored as `ShardRankPageResult`
- * in `@cirrus/runtime`). `rows` is the shard's local ranked slice (already in
+ * in `@lunora/runtime`). `rows` is the shard's local ranked slice (already in
  * `(__partition__, sortcols, __id__)` order); `hasMore` says whether the shard
  * had rows beyond the slice it returned.
  */

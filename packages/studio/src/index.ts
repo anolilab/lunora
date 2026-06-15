@@ -113,6 +113,6 @@ export type {
 export { ADMIN_FUNCTION_PREFIX, ADMIN_FUNCTIONS } from "./lib/admin";
 export { default as STUDIO_ROOT_CLASS } from "./lib/theme-constants";
 export type { FunctionDescriptor, FunctionKind, RunStatus } from "./lib/types";
-export type { CirrusClient } from "@cirrus/client";
-export type { StorageObject } from "@cirrus/client";
-export type { ScheduleRecord } from "@cirrus/client";
+export type { LunoraClient } from "@lunora/client";
+export type { StorageObject } from "@lunora/client";
+export type { ScheduleRecord } from "@lunora/client";

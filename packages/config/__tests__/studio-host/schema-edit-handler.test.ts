@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { handleSchemaEditRequest } from "../../src/studio-host/schema-edit-handler";
 
-const SCHEMA = `import { defineSchema, defineTable, v } from "@cirrus/server";
+const SCHEMA = `import { defineSchema, defineTable, v } from "@lunora/server";
 
 export default defineSchema({
     todos: defineTable({
@@ -21,13 +21,13 @@ describe("handleSchemaEditRequest", () => {
     let schemaPath: string;
 
     const writeSchema = (source: string): void => {
-        mkdirSync(join(projectRoot, "cirrus"), { recursive: true });
+        mkdirSync(join(projectRoot, "lunora"), { recursive: true });
         writeFileSync(schemaPath, source, "utf8");
     };
 
     beforeEach(() => {
-        projectRoot = mkdtempSync(join(tmpdir(), "cirrus-schema-edit-"));
-        schemaPath = join(projectRoot, "cirrus", "schema.ts");
+        projectRoot = mkdtempSync(join(tmpdir(), "lunora-schema-edit-"));
+        schemaPath = join(projectRoot, "lunora", "schema.ts");
     });
 
     afterEach(() => {
@@ -113,7 +113,7 @@ describe("handleSchemaEditRequest", () => {
     it("reports an aliased define-schema as unsupported (422)", () => {
         expect.assertions(2);
 
-        writeSchema(`import { defineSchema as ds, defineTable, v } from "@cirrus/server";\nexport default ds({ a: defineTable({ x: v.string() }) });\n`);
+        writeSchema(`import { defineSchema as ds, defineTable, v } from "@lunora/server";\nexport default ds({ a: defineTable({ x: v.string() }) });\n`);
         const before = readFileSync(schemaPath, "utf8");
 
         const result = handleSchemaEditRequest({ body: { kind: "addTable", table: "b" }, method: "POST", projectRoot });

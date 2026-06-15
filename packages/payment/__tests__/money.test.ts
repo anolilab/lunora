@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { CirrusPaymentError } from "../src/errors";
+import { LunoraPaymentError } from "../src/errors";
 import {
     addMoney,
     allocateMoney,
@@ -27,7 +27,7 @@ describe("money", () => {
     });
 
     it("rejects mixing currencies", () => {
-        expect(() => addMoney(money(1, "USD"), money(1, "EUR"))).toThrow(CirrusPaymentError);
+        expect(() => addMoney(money(1, "USD"), money(1, "EUR"))).toThrow(LunoraPaymentError);
     });
 
     it("compares amounts", () => {

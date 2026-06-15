@@ -3,7 +3,7 @@ import { relative, sep } from "node:path";
 import type { CallExpression, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { listCirrusSourceFiles } from "./discover-functions";
+import { listLunoraSourceFiles } from "./discover-functions";
 import type { AuthApiCallIR } from "./ir";
 
 /** Strips a trailing `.ts` extension from a relative source path. */
@@ -95,15 +95,15 @@ const enclosingExportName = (call: CallExpression): string => {
 
 /**
  * Discover `ctx.authApi.&lt;method>(...)` (and bare `authApi.&lt;method>(...)`) calls
- * under the cirrus source directory and attribute each to the exported function
+ * under the lunora source directory and attribute each to the exported function
  * (and file) performing it. Calls outside an exported declaration are dropped.
  */
-const discoverAuthApiCalls = (project: Project, cirrusDirectory: string): AuthApiCallIR[] => {
+const discoverAuthApiCalls = (project: Project, lunoraDirectory: string): AuthApiCallIR[] => {
     const calls: AuthApiCallIR[] = [];
 
-    for (const filePath of listCirrusSourceFiles(cirrusDirectory)) {
+    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-        const relativePath = relative(cirrusDirectory, filePath).replace(TS_EXTENSION_RE, "").split(sep).join("/");
+        const relativePath = relative(lunoraDirectory, filePath).replace(TS_EXTENSION_RE, "").split(sep).join("/");
 
         for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
             if (!isAuthApiCall(call)) {

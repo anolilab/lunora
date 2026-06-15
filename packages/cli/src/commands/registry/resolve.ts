@@ -12,14 +12,14 @@ import type { Logger } from "../../util/logger";
 import parseManifest from "./manifest";
 import type { AddCommandOptions, RegistryManifest, ResolvedItem } from "./types";
 
-const DEFAULT_SOURCE_BASE = "gh:anolilab/cirrus/registry";
+const DEFAULT_SOURCE_BASE = "gh:anolilab/lunora/registry";
 const DEFAULT_SOURCE_REF = "alpha";
 
 /**
  * A registry item name is a single path segment / identifier. It becomes a
  * filesystem path segment (`join(--from, name)`), a remote giget subpath
  * (`&lt;base>/&lt;name>#&lt;ref>`), and — for schema-extension items — an import
- * specifier and identifier spliced into `cirrus/schema.ts`. Allow only
+ * specifier and identifier spliced into `lunora/schema.ts`. Allow only
  * letters/digits/`-`/`_`, no leading dot, so a name can never traverse out of
  * the registry root (`../../etc`), inject a path separator, or smuggle code
  * into the generated import.
@@ -64,7 +64,7 @@ const sourceGateError = (command: string, options: AddCommandOptions): string | 
  * failure. `label` names the staging subdir (and the temp prefix).
  */
 const fetchToStaging = async (remote: string, label: string, logger: Logger): Promise<{ cleanup: () => void; directory: string }> => {
-    const stagingRoot = mkdtempSync(join(tmpdir(), `cirrus-${label}-fetch-`));
+    const stagingRoot = mkdtempSync(join(tmpdir(), `lunora-${label}-fetch-`));
     const stagingDirectory = join(stagingRoot, label);
 
     logger.info(`fetching ${remote}`);

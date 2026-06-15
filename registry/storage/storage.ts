@@ -1,8 +1,8 @@
 /**
- * Storage functions — added by `cirrus registry add storage`.
+ * Storage functions — added by `lunora registry add storage`.
  *
- * This file is YOURS: it's a normal Cirrus module, copied into your project so
- * you own and edit it. Re-export the functions you want from your `cirrus/`
+ * This file is YOURS: it's a normal Lunora module, copied into your project so
+ * you own and edit it. Re-export the functions you want from your `lunora/`
  * entry (or rely on file-based discovery) so codegen picks them up — they
  * surface in the generated `api` as `storage/generateUploadUrl`,
  * `storage/getDownloadUrl`, `storage/deleteObject`, `storage/listObjects`
@@ -28,9 +28,9 @@
  */
 import { env } from "cloudflare:workers";
 
-import { createStorage, scopeKey } from "@cirrus/storage";
-import type { Storage } from "@cirrus/storage";
-import { action, mutation, query, v } from "@cirrus/server";
+import { createStorage, scopeKey } from "@lunora/storage";
+import type { Storage } from "@lunora/storage";
+import { action, mutation, query, v } from "@lunora/server";
 
 /** The R2 bucket binding type `createStorage` expects. */
 type StorageBucket = Parameters<typeof createStorage>[0]["bucket"];
@@ -39,13 +39,13 @@ type StorageBucket = Parameters<typeof createStorage>[0]["bucket"];
  * Read a required string env var/secret or throw a clear, actionable error.
  * (`cloudflare:workers`' `env` values are typed `unknown`, so we narrow here —
  * a missing `STORAGE_SIGNING_SECRET` fails loudly instead of producing an opaque
- * HMAC error deep in `@cirrus/storage`.)
+ * HMAC error deep in `@lunora/storage`.)
  */
 const requireEnv = (name: string): string => {
     const value = env[name];
 
     if (typeof value !== "string" || value === "") {
-        throw new Error(`@cirrus/storage registry item: missing env var \`${name}\` — set it in .dev.vars (and \`wrangler secret put ${name}\` for secrets).`);
+        throw new Error(`@lunora/storage registry item: missing env var \`${name}\` — set it in .dev.vars (and \`wrangler secret put ${name}\` for secrets).`);
     }
 
     return value;
@@ -61,7 +61,7 @@ const makeStorage = (): Storage => {
     const bucket = env.UPLOADS as StorageBucket | undefined;
 
     if (!bucket) {
-        throw new Error("@cirrus/storage registry item: missing R2 binding `UPLOADS` — add it to wrangler.jsonc (see the README).");
+        throw new Error("@lunora/storage registry item: missing R2 binding `UPLOADS` — add it to wrangler.jsonc (see the README).");
     }
 
     return createStorage({

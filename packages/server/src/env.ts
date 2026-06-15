@@ -1,17 +1,17 @@
-import type { Infer, Validator } from "@cirrus/values";
-import { optionalInner } from "@cirrus/values";
+import type { Infer, Validator } from "@lunora/values";
+import { optionalInner } from "@lunora/values";
 
 /**
- * Typed, lazily-validated env accessor — the Cirrus answer to void's
+ * Typed, lazily-validated env accessor — the Lunora answer to void's
  * `defineEnv`. Validates `env` per key against a map of `v.*` validators, masks
  * secret values out of any error it throws, and infers the output type from the
- * validators (reusing `@cirrus/values`' `Infer`).
+ * validators (reusing `@lunora/values`' `Infer`).
  *
- * Why this lives in `@cirrus/server`: it is app-facing, alongside
+ * Why this lives in `@lunora/server`: it is app-facing, alongside
  * `defineSchema`/`query`/`mutation`/`action`. Workers receive their secrets on
  * the `env` argument of `fetch`/`scheduled` and on `ctx.env` in actions, so a
  * handler can do `const { STRIPE_KEY } = config(env)` at the top and get a typed,
- * validated, coercion-aware value — or a clear `CirrusEnvError` listing exactly
+ * validated, coercion-aware value — or a clear `LunoraEnvError` listing exactly
  * which keys are missing/invalid, with secrets redacted.
  *
  * Validation model: **lazy, per-key, cached per env identity** (a `WeakMap`),
@@ -54,10 +54,10 @@ const STANDALONE_TOKEN = /^[\w./+-]+$/u;
 const REDACTED = "[redacted]";
 
 /**
- * Keys whose **value** is a secret. Mirrors `@cirrus/config`'s `.dev.vars`
+ * Keys whose **value** is a secret. Mirrors `@lunora/config`'s `.dev.vars`
  * scaffolder regex (`packages/config/src/scaffold-dev-variables.ts`, `SECRET_KEY`)
  * so the runtime validator and the scaffolder agree on what "looks secret". Kept
- * as a small local copy rather than importing `@cirrus/config` — `@cirrus/server`
+ * as a small local copy rather than importing `@lunora/config` — `@lunora/server`
  * is the app runtime and must not take a build/CLI-layer dependency on the config
  * package. If you change this, change it there too.
  *
@@ -151,8 +151,8 @@ interface EnvKeyFailure {
  *
  * Named export only (no default) per the repo export convention.
  */
-class CirrusEnvError extends Error {
-    public override readonly name = "CirrusEnvError";
+class LunoraEnvError extends Error {
+    public override readonly name = "LunoraEnvError";
 
     public readonly failures: ReadonlyArray<EnvKeyFailure>;
 
@@ -203,7 +203,7 @@ const unwrapKind = (validator: Validator): string => {
         return validator.kind;
     }
 
-    // Read the wrapped child through `@cirrus/values`' own accessor rather than
+    // Read the wrapped child through `@lunora/values`' own accessor rather than
     // reaching into the validator's internal `_meta` here — that internal layout
     // is owned by the values package.
     const inner = optionalInner(validator);
@@ -293,7 +293,7 @@ const validateKey = (
 /** Guard that `env` is a non-null object, throwing a redacted error otherwise. */
 const requireEnvObject = (env: unknown): Record<string, unknown> => {
     if (typeof env !== "object" || env === null) {
-        throw new CirrusEnvError([{ key: "<env>", message: `expected an object, received ${env === null ? "null" : typeof env}` }]);
+        throw new LunoraEnvError([{ key: "<env>", message: `expected an object, received ${env === null ? "null" : typeof env}` }]);
     }
 
     return env as Record<string, unknown>;
@@ -305,7 +305,7 @@ const requireEnvObject = (env: unknown): Record<string, unknown> => {
  * per `env` identity) and infers its output type from the validators.
  *
  * ```ts
- * import { defineEnv, v } from "@cirrus/server";
+ * import { defineEnv, v } from "@lunora/server";
  *
  * const config = defineEnv({
  *     STRIPE_KEY: v.string(),
@@ -320,7 +320,7 @@ const requireEnvObject = (env: unknown): Record<string, unknown> => {
  * };
  * ```
  *
- * Throws {@link CirrusEnvError} (secrets redacted) when a key is missing or
+ * Throws {@link LunoraEnvError} (secrets redacted) when a key is missing or
  * invalid — lazily on first access of that key, or eagerly via `config.parse(env)`.
  */
 const defineEnv = <S extends EnvShape>(shape: S): EnvAccessor<S> => {
@@ -349,7 +349,7 @@ const defineEnv = <S extends EnvShape>(shape: S): EnvAccessor<S> => {
             const outcome = validateKey(property, shape[property] as Validator, source, failures);
 
             if (!outcome.ok) {
-                throw new CirrusEnvError(failures);
+                throw new LunoraEnvError(failures);
             }
 
             cached.set(property, outcome.value);
@@ -395,7 +395,7 @@ const defineEnv = <S extends EnvShape>(shape: S): EnvAccessor<S> => {
         }
 
         if (failures.length > 0) {
-            throw new CirrusEnvError(failures);
+            throw new LunoraEnvError(failures);
         }
 
         return out as InferEnv<S>;
@@ -405,4 +405,4 @@ const defineEnv = <S extends EnvShape>(shape: S): EnvAccessor<S> => {
 };
 
 export type { EnvAccessor, EnvKeyFailure, EnvShape, InferEnv };
-export { CirrusEnvError, defineEnv, redactSecrets };
+export { LunoraEnvError, defineEnv, redactSecrets };

@@ -1,19 +1,19 @@
 /**
- * Zero-config binding inference for Cirrus.
+ * Zero-config binding inference for Lunora.
  *
  * Mirrors the technique voidzero's `void` plugin uses for Cloudflare apps:
  * detect from code which resources a project uses, then reconcile the implied
  * bindings into `wrangler.jsonc` instead of making the user hand-write them.
  *
- * For Cirrus the authoritative, *safe* signal is the worker entry's Durable
+ * For Lunora the authoritative, *safe* signal is the worker entry's Durable
  * Object **exports**. wrangler refuses to deploy a `durable_objects` binding
  * whose `class_name` is not exported by the worker, so binding provisioning is
  * driven strictly by which DO classes the entry actually exports — write
  * `export const ShardDO = …` and the binding appears. Capability imports
- * (`@cirrus/auth`, `@cirrus/scheduler`, `@cirrus/storage`, `@cirrus/payment`)
- * are softer signals: a project can import `@cirrus/auth` with D1-backed
+ * (`@lunora/auth`, `@lunora/scheduler`, `@lunora/storage`, `@lunora/payment`)
+ * are softer signals: a project can import `@lunora/auth` with D1-backed
  * sessions and never wire a `SessionDO`, so those drive *hints*, not writes.
- * `@cirrus/payment` is softer still — it has no binding at all (payment state
+ * `@lunora/payment` is softer still — it has no binding at all (payment state
  * rides the app's existing `ShardDO` via `ctx.db`), so its only config need is
  * the provider secret pair the user must put in `.dev.vars`, which the
  * scaffolder can't fabricate; we surface that as a hint. `.global()` schemas
@@ -36,10 +36,10 @@ import { readWranglerJsonc, WRANGLER_FILES } from "./wrangler-path";
 const SOURCE_EXTENSIONS = new Set([".cjs", ".cts", ".js", ".jsx", ".mjs", ".mts", ".ts", ".tsx"]);
 
 /** Directories never worth descending into during a capability scan. */
-const IGNORED_DIRECTORIES = new Set([".cirrus-cache", ".git", ".wrangler", "_generated", "dist", "node_modules"]);
+const IGNORED_DIRECTORIES = new Set([".lunora-cache", ".git", ".wrangler", "_generated", "dist", "node_modules"]);
 
 /** Directories scanned for capability signals when the caller does not override. */
-const DEFAULT_SCAN_DIRECTORIES = ["cirrus", "src"] as const;
+const DEFAULT_SCAN_DIRECTORIES = ["lunora", "src"] as const;
 
 /** Worker-entry candidates probed when `wrangler.main` is absent. */
 const WORKER_ENTRY_FALLBACKS = ["src/server/index.ts", "src/server/index.tsx", "src/index.ts", "src/worker.ts"] as const;
@@ -77,7 +77,7 @@ const TYPE_ONLY_IMPORT_PATTERN = /^\s*import\s+type\b/;
 
 /**
  * The single source of truth for import-driven capabilities: each capability
- * flag → the `@cirrus/*` package whose import implies it, plus the regex used by
+ * flag → the `@lunora/*` package whose import implies it, plus the regex used by
  * the {@link regexCapabilities} fallback when `es-module-lexer` can't parse a
  * mid-edit file. Everything else that enumerates capabilities — the
  * {@link Capabilities} type, {@link NO_CAPABILITIES}, {@link mergeCapabilities},
@@ -86,24 +86,24 @@ const TYPE_ONLY_IMPORT_PATTERN = /^\s*import\s+type\b/;
  * binding is a one-line entry rather than a seven-site edit.
  */
 // Provisioning behaviour per package (see plans 027/028/031/032/035/036):
-//   @cirrus/kv         → kv_namespaces             → hint (un-mintable namespace id)
-//   @cirrus/hyperdrive → hyperdrive                → hint (un-mintable remote id)
-//   @cirrus/browser    → browser                   → self-describing (binding name only)
-//   @cirrus/images     → images                    → self-describing (binding name only)
-//   @cirrus/analytics  → analytics_engine_datasets → self-describing (dataset == binding name)
-//   @cirrus/pipelines  → pipelines                 → hint (un-mintable remote pipeline name)
+//   @lunora/kv         → kv_namespaces             → hint (un-mintable namespace id)
+//   @lunora/hyperdrive → hyperdrive                → hint (un-mintable remote id)
+//   @lunora/browser    → browser                   → self-describing (binding name only)
+//   @lunora/images     → images                    → self-describing (binding name only)
+//   @lunora/analytics  → analytics_engine_datasets → self-describing (dataset == binding name)
+//   @lunora/pipelines  → pipelines                 → hint (un-mintable remote pipeline name)
 const CAPABILITY_SOURCES = {
-    usesAi: { pattern: /\bfrom\s+["']@cirrus\/ai["']/, source: "@cirrus/ai" },
-    usesAnalytics: { pattern: /\bfrom\s+["']@cirrus\/analytics["']/, source: "@cirrus/analytics" },
-    usesAuth: { pattern: /\bfrom\s+["']@cirrus\/auth["']/, source: "@cirrus/auth" },
-    usesBrowser: { pattern: /\bfrom\s+["']@cirrus\/browser["']/, source: "@cirrus/browser" },
-    usesHyperdrive: { pattern: /\bfrom\s+["']@cirrus\/hyperdrive["']/, source: "@cirrus/hyperdrive" },
-    usesImages: { pattern: /\bfrom\s+["']@cirrus\/images["']/, source: "@cirrus/images" },
-    usesKv: { pattern: /\bfrom\s+["']@cirrus\/kv["']/, source: "@cirrus/kv" },
-    usesPayment: { pattern: /\bfrom\s+["']@cirrus\/payment["']/, source: "@cirrus/payment" },
-    usesPipelines: { pattern: /\bfrom\s+["']@cirrus\/pipelines["']/, source: "@cirrus/pipelines" },
-    usesScheduler: { pattern: /\bfrom\s+["']@cirrus\/scheduler["']/, source: "@cirrus/scheduler" },
-    usesStorage: { pattern: /\bfrom\s+["']@cirrus\/storage["']/, source: "@cirrus/storage" },
+    usesAi: { pattern: /\bfrom\s+["']@lunora\/ai["']/, source: "@lunora/ai" },
+    usesAnalytics: { pattern: /\bfrom\s+["']@lunora\/analytics["']/, source: "@lunora/analytics" },
+    usesAuth: { pattern: /\bfrom\s+["']@lunora\/auth["']/, source: "@lunora/auth" },
+    usesBrowser: { pattern: /\bfrom\s+["']@lunora\/browser["']/, source: "@lunora/browser" },
+    usesHyperdrive: { pattern: /\bfrom\s+["']@lunora\/hyperdrive["']/, source: "@lunora/hyperdrive" },
+    usesImages: { pattern: /\bfrom\s+["']@lunora\/images["']/, source: "@lunora/images" },
+    usesKv: { pattern: /\bfrom\s+["']@lunora\/kv["']/, source: "@lunora/kv" },
+    usesPayment: { pattern: /\bfrom\s+["']@lunora\/payment["']/, source: "@lunora/payment" },
+    usesPipelines: { pattern: /\bfrom\s+["']@lunora\/pipelines["']/, source: "@lunora/pipelines" },
+    usesScheduler: { pattern: /\bfrom\s+["']@lunora\/scheduler["']/, source: "@lunora/scheduler" },
+    usesStorage: { pattern: /\bfrom\s+["']@lunora\/storage["']/, source: "@lunora/storage" },
 } as const satisfies Record<string, { pattern: RegExp; source: string }>;
 
 /** The import-driven capability flag names (every key of {@link CAPABILITY_SOURCES}). */
@@ -112,7 +112,7 @@ type CapabilityFlag = keyof typeof CAPABILITY_SOURCES;
 const CAPABILITY_FLAGS = Object.keys(CAPABILITY_SOURCES) as CapabilityFlag[];
 
 /**
- * The provider secret pairs `@cirrus/payment` reads at runtime. The package is
+ * The provider secret pairs `@lunora/payment` reads at runtime. The package is
  * provider-agnostic (Stripe-or-Polar, Convex parity); since we can't tell which
  * adapter a project wires from the import alone, the hint names both pairs so
  * the user knows exactly which secrets belong in `.dev.vars`.
@@ -146,7 +146,7 @@ interface InferredWorkflow extends WorkflowIR {
 }
 
 interface InferredBindings {
-    /** Containers declared in `cirrus/containers.ts` (exported or not — see {@link InferredContainer.exported}). */
+    /** Containers declared in `lunora/containers.ts` (exported or not — see {@link InferredContainer.exported}). */
     containers: InferredContainer[];
     /** Durable Objects the worker entry exports → safe to bind. */
     durableObjects: DurableObjectSpec[];
@@ -154,29 +154,29 @@ interface InferredBindings {
     needsD1: boolean;
     /** Human-readable provenance for each inferred binding / hint, for logging. */
     signals: string[];
-    /** `@cirrus/ai` is imported or `env.AI` is used → needs the `ai` Workers AI binding. */
+    /** `@lunora/ai` is imported or `env.AI` is used → needs the `ai` Workers AI binding. */
     usesAi: boolean;
-    /** `@cirrus/analytics` is imported → self-describing `analytics_engine_datasets` binding (auto-writeable). */
+    /** `@lunora/analytics` is imported → self-describing `analytics_engine_datasets` binding (auto-writeable). */
     usesAnalytics: boolean;
-    /** `@cirrus/auth` is imported (sessions may be D1- or `SessionDO`-backed). */
+    /** `@lunora/auth` is imported (sessions may be D1- or `SessionDO`-backed). */
     usesAuth: boolean;
-    /** `@cirrus/browser` is imported → self-describing `browser` binding (auto-writeable). */
+    /** `@lunora/browser` is imported → self-describing `browser` binding (auto-writeable). */
     usesBrowser: boolean;
-    /** `@cirrus/hyperdrive` is imported (binding needs an un-mintable remote `id`; hint-only). */
+    /** `@lunora/hyperdrive` is imported (binding needs an un-mintable remote `id`; hint-only). */
     usesHyperdrive: boolean;
-    /** `@cirrus/images` is imported → self-describing `images` binding (auto-writeable). */
+    /** `@lunora/images` is imported → self-describing `images` binding (auto-writeable). */
     usesImages: boolean;
-    /** `@cirrus/kv` is imported (namespace binding name + id are user-defined; hint-only). */
+    /** `@lunora/kv` is imported (namespace binding name + id are user-defined; hint-only). */
     usesKv: boolean;
-    /** `@cirrus/payment` is imported (provider secrets must be set in `.dev.vars`; no binding). */
+    /** `@lunora/payment` is imported (provider secrets must be set in `.dev.vars`; no binding). */
     usesPayment: boolean;
-    /** `@cirrus/pipelines` is imported (binding needs an un-mintable remote pipeline name; hint-only). */
+    /** `@lunora/pipelines` is imported (binding needs an un-mintable remote pipeline name; hint-only). */
     usesPipelines: boolean;
-    /** `@cirrus/scheduler` is imported. */
+    /** `@lunora/scheduler` is imported. */
     usesScheduler: boolean;
-    /** `@cirrus/storage` is imported (R2 bucket binding name is user-defined). */
+    /** `@lunora/storage` is imported (R2 bucket binding name is user-defined). */
     usesStorage: boolean;
-    /** Workflows declared in `cirrus/workflows.ts` (exported or not — see {@link InferredWorkflow.exported}). */
+    /** Workflows declared in `lunora/workflows.ts` (exported or not — see {@link InferredWorkflow.exported}). */
     workflows: InferredWorkflow[];
 }
 
@@ -259,7 +259,7 @@ const regexCapabilities = (code: string): Capabilities => {
     return capabilities;
 };
 
-/** Detect, for a single source file, which Cirrus capabilities it pulls in. */
+/** Detect, for a single source file, which Lunora capabilities it pulls in. */
 const capabilitiesFromSource = (code: string): Capabilities => {
     let capabilities: Capabilities;
 
@@ -301,9 +301,9 @@ const collectSourceFiles = (directory: string, accumulator: string[]): void => {
 
 interface InferOptions {
     projectRoot: string;
-    /** Directories (relative to root) to scan. Defaults to `cirrus` + `src`. */
+    /** Directories (relative to root) to scan. Defaults to `lunora` + `src`. */
     scanDirs?: ReadonlyArray<string>;
-    /** Cirrus source directory holding `schema.ts`. Defaults to `cirrus`. */
+    /** Lunora source directory holding `schema.ts`. Defaults to `lunora`. */
     schemaDir?: string;
 }
 
@@ -378,7 +378,7 @@ const CONTAINERS_STAR_REEXPORT_PATTERN = /\bexport\s*\*\s*from\s*["'][^"']*_gene
 /**
  * Whether the worker entry exports each generated container class: a named
  * export of the class (covered by `es-module-lexer`'s export list) or the
- * conventional `export * from "./cirrus/_generated/containers"` star
+ * conventional `export * from "./lunora/_generated/containers"` star
  * re-export. Mirrors `detectExportedDurableObjects` — exports are the only
  * safe provisioning signal, since wrangler validates `class_name` against the
  * worker's exports at deploy.
@@ -426,7 +426,7 @@ const WORKFLOWS_STAR_REEXPORT_PATTERN = /\bexport\s*\*\s*from\s*["'][^"']*_gener
 /**
  * Whether the worker entry exports each generated `WorkflowEntrypoint` class: a
  * named export of the class or the conventional
- * `export * from "./cirrus/_generated/workflows"` star re-export. Mirrors
+ * `export * from "./lunora/_generated/workflows"` star re-export. Mirrors
  * {@link detectContainerExports} — exports are the only safe provisioning
  * signal, since wrangler validates `class_name` against the worker's exports.
  */
@@ -497,12 +497,12 @@ const describeDeclaredExports = (containers: ReadonlyArray<InferredContainer>, w
     ...containers.map((container) =>
         container.exported
             ? `${container.bindingName}/${container.className} (container "${container.exportName}" declared and exported)`
-            : `hint: container "${container.exportName}" is declared but ${container.className} is not exported by the worker entry — add \`export * from "./cirrus/_generated/containers"\``,
+            : `hint: container "${container.exportName}" is declared but ${container.className} is not exported by the worker entry — add \`export * from "./lunora/_generated/containers"\``,
     ),
     ...workflows.map((workflow) =>
         workflow.exported
             ? `${workflow.bindingName}/${workflow.className} (workflow "${workflow.exportName}" declared and exported)`
-            : `hint: workflow "${workflow.exportName}" is declared but ${workflow.className} is not exported by the worker entry — add \`export * from "./cirrus/_generated/workflows"\``,
+            : `hint: workflow "${workflow.exportName}" is declared but ${workflow.className} is not exported by the worker entry — add \`export * from "./lunora/_generated/workflows"\``,
     ),
 ];
 
@@ -512,33 +512,33 @@ const describeDeclaredExports = (containers: ReadonlyArray<InferredContainer>, w
  */
 const describeCapabilitySignals = (capabilities: Capabilities, exported: ReadonlySet<string>): string[] => {
     const rules: ReadonlyArray<[boolean, string]> = [
-        [capabilities.usesAi, "AI (@cirrus/ai imported or env.AI used)"],
+        [capabilities.usesAi, "AI (@lunora/ai imported or env.AI used)"],
         [
             capabilities.usesAuth && !exported.has("SessionDO"),
-            "hint: @cirrus/auth is imported but no SessionDO is exported (sessions are D1-backed, or export SessionDO for DO-backed sessions)",
+            "hint: @lunora/auth is imported but no SessionDO is exported (sessions are D1-backed, or export SessionDO for DO-backed sessions)",
         ],
-        [capabilities.usesScheduler && !exported.has("SchedulerDO"), "hint: @cirrus/scheduler is imported but no SchedulerDO is exported by the worker entry"],
-        [capabilities.usesStorage, "hint: @cirrus/storage is imported; add an r2_buckets binding (bucket binding names are user-defined)"],
-        [capabilities.usesPayment, `hint: @cirrus/payment is imported; set the provider secrets in .dev.vars — ${PAYMENT_PROVIDER_SECRETS}`],
+        [capabilities.usesScheduler && !exported.has("SchedulerDO"), "hint: @lunora/scheduler is imported but no SchedulerDO is exported by the worker entry"],
+        [capabilities.usesStorage, "hint: @lunora/storage is imported; add an r2_buckets binding (bucket binding names are user-defined)"],
+        [capabilities.usesPayment, `hint: @lunora/payment is imported; set the provider secrets in .dev.vars — ${PAYMENT_PROVIDER_SECRETS}`],
         // Self-describing bindings: the binding name is the whole config (no remote
         // id to mint), so reconcile auto-writes them like the DO/D1 bindings.
-        [capabilities.usesBrowser, "browser (@cirrus/browser imported) — self-describing { binding: BROWSER }"],
-        [capabilities.usesImages, "images (@cirrus/images imported) — self-describing { binding: IMAGES }"],
-        [capabilities.usesAnalytics, "analytics_engine_datasets (@cirrus/analytics imported) — self-describing { binding: ANALYTICS, dataset }"],
-        // Hint bindings: each needs a remote resource Cirrus can't fabricate (a KV
+        [capabilities.usesBrowser, "browser (@lunora/browser imported) — self-describing { binding: BROWSER }"],
+        [capabilities.usesImages, "images (@lunora/images imported) — self-describing { binding: IMAGES }"],
+        [capabilities.usesAnalytics, "analytics_engine_datasets (@lunora/analytics imported) — self-describing { binding: ANALYTICS, dataset }"],
+        // Hint bindings: each needs a remote resource Lunora can't fabricate (a KV
         // namespace id, a Hyperdrive id, a Pipelines pipeline name), so they surface
         // as hints — never an auto-write — exactly like R2's user-defined bucket name.
         [
             capabilities.usesKv,
-            "hint: @cirrus/kv is imported; add a kv_namespaces binding ({ binding, id }) and pass env.<BINDING> to createKv() — the namespace id can't be auto-provisioned",
+            "hint: @lunora/kv is imported; add a kv_namespaces binding ({ binding, id }) and pass env.<BINDING> to createKv() — the namespace id can't be auto-provisioned",
         ],
         [
             capabilities.usesHyperdrive,
-            "hint: @cirrus/hyperdrive is imported; run 'wrangler hyperdrive create' and add a 'hyperdrive' binding ({ binding, id }) — the id can't be auto-provisioned",
+            "hint: @lunora/hyperdrive is imported; run 'wrangler hyperdrive create' and add a 'hyperdrive' binding ({ binding, id }) — the id can't be auto-provisioned",
         ],
         [
             capabilities.usesPipelines,
-            "hint: @cirrus/pipelines is imported; run 'wrangler pipelines create <name>' and add a 'pipelines' binding ({ binding, pipeline }) — the pipeline resource can't be auto-provisioned",
+            "hint: @lunora/pipelines is imported; run 'wrangler pipelines create <name>' and add a 'pipelines' binding ({ binding, pipeline }) — the pipeline resource can't be auto-provisioned",
         ],
     ];
 
@@ -566,15 +566,15 @@ const describeSignals = (
 };
 
 /**
- * Scan a Cirrus project and report which Cloudflare bindings its code implies.
+ * Scan a Lunora project and report which Cloudflare bindings its code implies.
  * Read-only: performs no writes. Binding provisioning is driven by the worker
  * entry's Durable Object exports plus the schema's D1 need; capability imports
  * surface as hints.
  */
-const inferCirrusBindings = async (options: InferOptions): Promise<InferredBindings> => {
+const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindings> => {
     await initLexer;
 
-    const schemaDirectory = options.schemaDir ?? "cirrus";
+    const schemaDirectory = options.schemaDir ?? "lunora";
     const scanDirectories = options.scanDirs ?? DEFAULT_SCAN_DIRECTORIES;
 
     const capabilities = scanCapabilities(options.projectRoot, scanDirectories);
@@ -604,4 +604,4 @@ const inferCirrusBindings = async (options: InferOptions): Promise<InferredBindi
 };
 
 export type { DurableObjectClass, DurableObjectSpec, InferOptions, InferredBindings, InferredContainer, InferredWorkflow };
-export { inferCirrusBindings };
+export { inferLunoraBindings };

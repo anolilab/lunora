@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-label="Cirrus — type-safe real-time backend on your own Cloudflare account">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-label="Lunora — type-safe real-time backend on your own Cloudflare account">
     <rect width="1200" height="630" fill="#0B0F19" />
     <!-- Subtle decorative streaks (low opacity, hint at the mark scale) -->
     <g opacity="0.06">
@@ -20,7 +20,7 @@
         font-weight="600"
         letter-spacing="-6"
         fill="#FFFFFF"
-    >cirrus</text>
+    >lunora</text>
     <!-- Accent dot on "i" -->
     <circle cx="664" cy="200" r="13" fill="#FCC419" />
     <!-- Tagline -->
@@ -48,5 +48,5 @@
         font-size="22"
         font-weight="400"
         fill="#FCC419"
-    >github.com/anolilab/cirrus</text>
+    >github.com/anolilab/lunora</text>
 </svg>

@@ -9,16 +9,16 @@ import type { DeployInfo, SettingEntry, SettingsResult } from "./introspect";
 const SECRET_NAME_PATTERN = /key|secret|token|password|passwd|credential|private|auth|bearer|session|cookie|salt|signature|dsn|webhook/iu;
 
 /**
- * Reserved Cirrus control vars that aren't application config and shouldn't be
+ * Reserved Lunora control vars that aren't application config and shouldn't be
  * surfaced as ordinary settings rows. They're either secrets the framework owns
- * (`CIRRUS_ADMIN_TOKEN`, `CIRRUS_WS_BEARER`) — which, if ever shown, are masked
+ * (`LUNORA_ADMIN_TOKEN`, `LUNORA_WS_BEARER`) — which, if ever shown, are masked
  * anyway via {@link SECRET_NAME_PATTERN} — or plumbing. Listed here so the view
  * stays focused on the user's own deployment config.
  */
-const CIRRUS_INTERNAL_VARS = new Set<string>(["CIRRUS_ADMIN_TOKEN", "CIRRUS_WS_BEARER"]);
+const LUNORA_INTERNAL_VARS = new Set<string>(["LUNORA_ADMIN_TOKEN", "LUNORA_WS_BEARER"]);
 
 /** Vars whose value is a public deployment URL, surfaced in {@link DeployInfo.workerUrl}. */
-const WORKER_URL_VARS = ["CF_PAGES_URL", "WORKER_URL", "CIRRUS_WORKER_URL"] as const;
+const WORKER_URL_VARS = ["CF_PAGES_URL", "WORKER_URL", "LUNORA_WORKER_URL"] as const;
 
 /** Vars whose value names the Cloudflare environment, surfaced in {@link DeployInfo.environment}. */
 const ENVIRONMENT_VARS = ["CF_ENV", "ENVIRONMENT", "WORKER_ENV", "NODE_ENV"] as const;
@@ -130,7 +130,7 @@ const DEV_ENVIRONMENT_PATTERN = /^(?:dev(?:elopment)?|local(?:host)?|test)$/iu;
  *
  * Defaults to FALSE (production-safe): a real deploy that sets none of these
  * vars is treated as production and stays redacted. Only an explicit dev-like
- * value (`development`, `local`, `test`, …) — which the cirrus dev server sets —
+ * value (`development`, `local`, `test`, …) — which the lunora dev server sets —
  * flips it on, so PII can never leak from a misdetected production environment.
  */
 const isDevEnvironment = (rawEnv: unknown): boolean => {
@@ -151,7 +151,7 @@ const isDevEnvironment = (rawEnv: unknown): boolean => {
  * Build the read-only settings view from the Worker `env`. String entries are
  * classified `secret` (masked, name- or framework-driven) or `var` (masked
  * preview); every non-string binding becomes a `binding` entry exposing only its
- * name and a coarse {@link bindingType}. Reserved Cirrus control vars are
+ * name and a coarse {@link bindingType}. Reserved Lunora control vars are
  * skipped. Entries are sorted by name for a stable table. The raw value of a
  * secret is **never** included.
  */
@@ -160,7 +160,7 @@ const buildSettings = (rawEnv: unknown): SettingsResult => {
     const settings: SettingEntry[] = [];
 
     for (const [name, value] of Object.entries(env)) {
-        if (CIRRUS_INTERNAL_VARS.has(name)) {
+        if (LUNORA_INTERNAL_VARS.has(name)) {
             continue;
         }
 

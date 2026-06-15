@@ -1,9 +1,9 @@
-import type { ArgsOf, FunctionReference, MutationCallOptions, ReturnOf } from "@cirrus/client";
-import { createMutationRunner } from "@cirrus/client";
+import type { ArgsOf, FunctionReference, MutationCallOptions, ReturnOf } from "@lunora/client";
+import { createMutationRunner } from "@lunora/client";
 import type { Accessor } from "solid-js";
 import { createSignal } from "solid-js";
 
-import { useCirrus } from "./context";
+import { useLunora } from "./context";
 
 export interface MutationHandle<F extends FunctionReference> {
     /** The latest invocation's resolved value, or `undefined` before the first success. */
@@ -21,7 +21,7 @@ export interface MutationHandle<F extends FunctionReference> {
 /**
  * The transport surface {@link createMutation} actually needs — just
  * `client.mutation`. Narrowed so the primitive can be exercised against a stub
- * in tests without constructing a full `CirrusClient`.
+ * in tests without constructing a full `LunoraClient`.
  */
 export interface MutationClient<F extends FunctionReference> {
     mutation: (function_: F, args: ArgsOf<F>, options?: MutationCallOptions<unknown, unknown, ArgsOf<F>>) => Promise<ReturnOf<F>>;
@@ -31,7 +31,7 @@ export interface MutationClient<F extends FunctionReference> {
  * Build a mutation handle bound to an explicit client. Internal seam used by the
  * provider-bound {@link createMutation}; exported for tests that inject a stub.
  * The ref-counted pending + error-normalize orchestration is the shared
- * `createMutationRunner` from `@cirrus/client`; only the reactive sinks (Solid
+ * `createMutationRunner` from `@lunora/client`; only the reactive sinks (Solid
  * signals) are adapter-specific.
  */
 export const createMutationForClient = <F extends FunctionReference>(client: MutationClient<F>, function_: F): MutationHandle<F> => {
@@ -59,22 +59,22 @@ export const createMutationForClient = <F extends FunctionReference>(client: Mut
 
 /**
  * Returns a reactive handle `{ mutate, pending, data, error, reset }` for the
- * given mutation reference, bound to the `CirrusClient` from the nearest
- * `&lt;CirrusProvider>`.
+ * given mutation reference, bound to the `LunoraClient` from the nearest
+ * `&lt;LunoraProvider>`.
  *
  * Optimistic updates stay client-owned: the `optimistic` / `optimisticUpdate`
  * call options pass straight through to `client.mutation`, which applies and
- * rolls them back against the live Cirrus subscription cache — the same
+ * rolls them back against the live Lunora subscription cache — the same
  * machinery `createQuery`/`hydratePreloaded` subscribe to, so an optimistic
  * write reflects in those accessors immediately and reverts on failure.
  *
  * `pending` is ref-counted across overlapping invocations of *this* handle, so
  * it only flips back to `false` once every concurrent call has settled. The
- * mutation also engages `@cirrus/client`'s offline queue when the socket is
+ * mutation also engages `@lunora/client`'s offline queue when the socket is
  * down, so `mutate` stays durable across reconnects.
  */
 export const createMutation = <F extends FunctionReference>(function_: F): MutationHandle<F> => {
-    const client = useCirrus();
+    const client = useLunora();
 
     return createMutationForClient<F>(
         {

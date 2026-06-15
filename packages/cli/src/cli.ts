@@ -120,14 +120,14 @@ interface BuildCliResult {
 const buildCli = (options: RunCliOptions): BuildCliResult => {
     const exitCode = { value: 0 };
 
-    const cli = createCerebro("cirrus", {
+    const cli = createCerebro("lunora", {
         argv: options.argv === undefined ? undefined : [...options.argv],
         cwd: options.cwd,
         exit: (code?: number) => {
             exitCode.value = typeof code === "number" ? code : 0;
         },
         logger: options.logger,
-        packageName: "@cirrus/cli",
+        packageName: "@lunora/cli",
         packageVersion: VERSION,
     });
 

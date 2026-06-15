@@ -1,5 +1,5 @@
 /**
- * Generates an OG SVG for every @cirrus/* package from the shared
+ * Generates an OG SVG for every @lunora/* package from the shared
  * .github/assets/package_og.jpg template (the package name is overlaid as text)
  * and injects it into each package README between the OG placeholder markers.
  *
@@ -15,7 +15,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const rootDir = resolve(__dirname, "..");
 
-const SCOPE = "@cirrus/";
+const SCOPE = "@lunora/";
 
 /**
  * Converts a JPG image to a base64 data URI.
@@ -44,7 +44,7 @@ const capitalize = (text) =>
 
 /**
  * Generates an SVG with the package name overlaid on the template image.
- * @param {string} packageName - Package name without the @cirrus/ prefix
+ * @param {string} packageName - Package name without the @lunora/ prefix
  * @param {string} imageDataUri - Base64 data URI of the template image
  * @returns {string} SVG string
  */
@@ -83,7 +83,7 @@ ${tspanElements}
 };
 
 /**
- * Finds all @cirrus/* packages under packages/.
+ * Finds all @lunora/* packages under packages/.
  * @returns {Array<{name: string, path: string, packageName: string, description: string}>}
  */
 const findPackages = () => {
@@ -150,7 +150,7 @@ const END_PLACEHOLDER = "<!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->";
  * Injects the OG image + description between the placeholder markers in a README.
  * @param {string} readmePath - Path to README.md
  * @param {string} svgPath - Relative path to the SVG file
- * @param {string} packageName - Package name without the @cirrus/ prefix
+ * @param {string} packageName - Package name without the @lunora/ prefix
  * @param {string} packageDescription - Package description from package.json
  * @returns {boolean} True if the file was updated
  */

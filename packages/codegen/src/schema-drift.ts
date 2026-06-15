@@ -1,20 +1,20 @@
 /**
  * Schema-drift detection for the pre-deploy gate.
  *
- * Cirrus's `defineSchema` (tables/indexes/relations) is applied to each DO's
+ * Lunora's `defineSchema` (tables/indexes/relations) is applied to each DO's
  * SQLite at runtime, and `defineMigration` declarations are hand-written DATA
  * migrations — there is no schema→migration-file mapping to diff the way a
  * Drizzle/Prisma stack would. So instead of regenerating migration DDL, this
  * module captures a deterministic STRUCTURAL snapshot of the schema (per table:
  * field kinds + optionality, indexes, relations, shard mode) plus the set of
  * declared migration ids, and diffs the current schema against a COMMITTED
- * baseline (`cirrus/.cirrus-schema.json`).
+ * baseline (`lunora/.lunora-schema.json`).
  *
  * Each change is classified `safe` (additive — new table, new optional field,
  * added index/relation, a required field made optional) or `breaking` (needs a
  * data migration — dropped table/field, field-kind change, optional→required,
  * a new REQUIRED field on an existing table, a changed shard mode, a
- * removed/renamed index or relation). The CLI gate (`cirrus deploy`/`verify`/
+ * removed/renamed index or relation). The CLI gate (`lunora deploy`/`verify`/
  * `prepare`) blocks a deploy when there is breaking drift AND no NEW migration
  * id has been added since the baseline — the footgun this closes is shipping a
  * schema change that needs a backfill with no migration to perform it.
@@ -175,7 +175,7 @@ const buildSchemaSnapshot = (schema: SchemaIR, migrationIds: ReadonlyArray<strin
     };
 };
 
-/** Serialize a snapshot to the exact bytes written to `cirrus/.cirrus-schema.json` (trailing newline). */
+/** Serialize a snapshot to the exact bytes written to `lunora/.lunora-schema.json` (trailing newline). */
 const serializeSchemaSnapshot = (snapshot: SchemaSnapshot): string => `${JSON.stringify(snapshot, undefined, 2)}\n`;
 
 /**
@@ -445,7 +445,7 @@ const evaluateSchemaDrift = (options: { allowDrift?: boolean; baseline: SchemaSn
 
     const reason =
         `deploy blocked: ${String(breaking.length)} breaking schema change(s) need a data migration, but none was added since the last blessed schema baseline:\n${breakingSummary}\n\n` +
-        `Either add a \`defineMigration({ id, table, up })\` in cirrus/ to handle the change, then re-run \`cirrus codegen\` to re-bless the baseline (cirrus/.cirrus-schema.json) — or, if the change is intentionally safe, pass \`--allow-schema-drift\` to override.`;
+        `Either add a \`defineMigration({ id, table, up })\` in lunora/ to handle the change, then re-run \`lunora codegen\` to re-bless the baseline (lunora/.lunora-schema.json) — or, if the change is intentionally safe, pass \`--allow-schema-drift\` to override.`;
 
     if (allowDrift) {
         return { blocked: false, changes: drift.changes, newMigrationIds, reason: `${reason}\n\n(overridden by --allow-schema-drift)` };

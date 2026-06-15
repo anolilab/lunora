@@ -1,7 +1,7 @@
 import { bench, describe } from "vitest";
 
 import type { Middleware, Policy } from "../src/index";
-import { definePolicy, initCirrus, rls } from "../src/index";
+import { definePolicy, initLunora, rls } from "../src/index";
 
 /**
  * RLS `get()` / id-keyed write round-trip cost as the number of policy-gated
@@ -11,7 +11,7 @@ import { definePolicy, initCirrus, rls } from "../src/index";
  * must discover which policy table owns an id. The legacy path issues
  * `1 base.get` + `N findFirst` membership probes (one per policy table) on
  * every call — ~O(K) storage round-trips. When the underlying writer exposes
- * the optional `getWithTable(id)` seam (which `@cirrus/do` can answer from its
+ * the optional `getWithTable(id)` seam (which `@lunora/do` can answer from its
  * internal `lookupById` index in one shot), the wrapper collapses that to a
  * single lookup.
  *
@@ -90,7 +90,7 @@ const makeWriter = (tableCount: number, withTable: boolean): CountingWriter => {
     return writer;
 };
 
-const cirrus = initCirrus.dataModel<Record<string, never>>().create();
+const lunora = initLunora.dataModel<Record<string, never>>().create();
 
 interface BenchContext {
     auth: { roles?: ReadonlyArray<string>; userId: null | string };
@@ -119,7 +119,7 @@ const buildContext = (writer: CountingWriter): BenchContext => {
 };
 
 const makeGetHandler = (tableCount: number) =>
-    cirrus.query.use(rlsAsAny<BenchContext>(policiesFor(tableCount))).query(async ({ ctx }) => {
+    lunora.query.use(rlsAsAny<BenchContext>(policiesFor(tableCount))).query(async ({ ctx }) => {
         await (ctx.db as unknown as CountingWriter).get(TARGET_ID);
 
         return null;

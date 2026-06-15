@@ -1,7 +1,7 @@
 /**
  * Shared `node:http` transport glue for the local-dev studio endpoints (schema
- * edit, policy scaffold). Both dev hosts — the `@cirrus/vite` `/__cirrus`
- * middleware and the `cirrus dev` studio server — route their local endpoints
+ * edit, policy scaffold). Both dev hosts — the `@lunora/vite` `/__lunora`
+ * middleware and the `lunora dev` studio server — route their local endpoints
  * through {@link serveJsonHandler} so the "read body → parse JSON → call the
  * transport-agnostic handler → respond" adapter lives in exactly one place
  * instead of being copy-pasted into each host (and drifting per endpoint).
@@ -22,9 +22,9 @@ interface LocalEndpointRequest {
     readonly body?: unknown;
     /** HTTP method. */
     readonly method: string;
-    /** Project root containing the `cirrus/` directory. */
+    /** Project root containing the `lunora/` directory. */
     readonly projectRoot: string;
-    /** Override the cirrus subdirectory name. Defaults to `"cirrus"`. */
+    /** Override the lunora subdirectory name. Defaults to `"lunora"`. */
     readonly schemaDirectory?: string;
 }
 

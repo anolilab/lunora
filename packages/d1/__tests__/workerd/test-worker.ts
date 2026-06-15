@@ -1,5 +1,5 @@
 /**
- * Test entry-point Worker for `@cirrus/d1` integration tests.
+ * Test entry-point Worker for `@lunora/d1` integration tests.
  *
  * The worker exposes the production `D1Client` against a real D1 binding
  * provided by Miniflare. Tests drive the worker's `fetch` handler to

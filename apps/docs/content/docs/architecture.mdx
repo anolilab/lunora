@@ -3,13 +3,13 @@ title: Architecture
 description: How Worker, ShardDO, SchedulerDO, D1, R2 and Queues fit together.
 ---
 
-A Cirrus deployment is a small constellation of Cloudflare primitives glued
-together by `@cirrus/runtime`. Each piece is single-purpose and replaceable.
+A Lunora deployment is a small constellation of Cloudflare primitives glued
+together by `@lunora/runtime`. Each piece is single-purpose and replaceable.
 
 ```text
             ┌────────────────────────────────────────────────┐
             │                  Worker (Edge)                 │
-            │    @cirrus/runtime · createWorker({ ... })     │
+            │    @lunora/runtime · createWorker({ ... })     │
             └────────────────────────┬───────────────────────┘
                                      │
         ┌────────────────┬───────────┼────────────┬───────────────┐
@@ -39,21 +39,21 @@ Reasoning rules:
 `.global()` tables move to Cloudflare D1. Use this for identities, billing,
 cross-tenant audit logs — anything that needs to be queryable across shards.
 Reads can be served by regional replicas; writes route to the primary.
-`@cirrus/d1` threads the `withSession(bookmark)` API so your client gets
+`@lunora/d1` threads the `withSession(bookmark)` API so your client gets
 read-your-writes without a sticky-session router.
 
 ## Tier 3 — Blob + async
 
-- **R2** — `@cirrus/storage` issues signed URLs; the browser uploads
+- **R2** — `@lunora/storage` issues signed URLs; the browser uploads
   directly without proxying through the Worker.
-- **Queues** — for fire-and-forget work; Cirrus emits jobs from a mutation
+- **Queues** — for fire-and-forget work; Lunora emits jobs from a mutation
   via `ctx.queue.send(...)`. Idempotency is on you.
-- **KV** — useful for edge-cached config and feature flags. Cirrus does not
+- **KV** — useful for edge-cached config and feature flags. Lunora does not
   ship a wrapper; use the binding directly.
 
 ## Why this beats single-DO
 
-Zeroback's single-DO model dies at **10 GB SQLite + ~1 000 req/s**. Cirrus's
+Zeroback's single-DO model dies at **10 GB SQLite + ~1 000 req/s**. Lunora's
 opt-in sharding moves both ceilings to **`N × 10 GB`** and **`N × 1 000 req/s`**
 without changing your call sites. The cost is purely tooling: codegen has to
 know how to address shards, and the docs have to be honest about cross-shard

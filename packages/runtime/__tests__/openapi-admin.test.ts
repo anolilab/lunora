@@ -21,9 +21,9 @@ const noopNamespace: ShardNamespaceLike = {
 const ADMIN_TOKEN = "admin-bear";
 
 const SPEC = {
-    info: { title: "Cirrus API", version: "1.2.3" },
+    info: { title: "Lunora API", version: "1.2.3" },
     openapi: "3.1.0",
-    paths: { "/_cirrus/rpc#messages:list": { post: { operationId: "messages:list" } } },
+    paths: { "/_lunora/rpc#messages:list": { post: { operationId: "messages:list" } } },
 };
 
 describe("createWorker — openapi admin endpoint", () => {
@@ -32,7 +32,7 @@ describe("createWorker — openapi admin endpoint", () => {
 
         const worker = createWorker({ adminToken: ADMIN_TOKEN, openApiSpec: SPEC, shardDO: noopNamespace });
 
-        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/openapi", { method: "GET" }), {}, fakeContext);
+        const response = await worker.fetch(new Request("https://app.example/_lunora/admin/openapi", { method: "GET" }), {}, fakeContext);
 
         expect(response.status).toBe(403);
     });
@@ -43,7 +43,7 @@ describe("createWorker — openapi admin endpoint", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, openApiSpec: SPEC, shardDO: noopNamespace });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/openapi", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
+            new Request("https://app.example/_lunora/admin/openapi", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
             {},
             fakeContext,
         );
@@ -58,7 +58,7 @@ describe("createWorker — openapi admin endpoint", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/openapi", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
+            new Request("https://app.example/_lunora/admin/openapi", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
             {},
             fakeContext,
         );
@@ -70,7 +70,7 @@ describe("createWorker — openapi admin endpoint", () => {
         expect(body.openapi).toBe("3.1.0");
         expect(body.paths).toEqual({});
         // The empty fallback is still well-formed (carries an `info` block).
-        expect(body).toHaveProperty("info.title", "Cirrus API");
+        expect(body).toHaveProperty("info.title", "Lunora API");
     });
 
     it("rejects non-GET (405)", async () => {
@@ -79,7 +79,7 @@ describe("createWorker — openapi admin endpoint", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, openApiSpec: SPEC, shardDO: noopNamespace });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/openapi", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "POST" }),
+            new Request("https://app.example/_lunora/admin/openapi", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "POST" }),
             {},
             fakeContext,
         );

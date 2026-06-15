@@ -1,25 +1,25 @@
-import type { CirrusAuth, CirrusAuthOptions } from "@cirrus/auth";
-import { cirrusD1Adapter, createAuth, createAuthAdmin, ensureMigrated, handleAuthRequest } from "@cirrus/auth";
-import { admin, organization, passkey, twoFactor } from "@cirrus/auth/plugins";
-import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@cirrus/d1";
-import { createD1CtxDb, facetGlobalColumn, listGlobalTables, readGlobalTablePage } from "@cirrus/d1";
-import { createMailerFromEnv } from "@cirrus/mail";
-import type { ForwardableEmailMessageLike, ShardNamespaceLike as InboundShardNamespaceLike } from "@cirrus/mail/inbound";
-import { createInboundEmailHandler, dispatchToCirrusFunction, parseInboundEmail } from "@cirrus/mail/inbound";
-import type { ExecutionContextLike, GlobalIntrospector, ScheduledControllerLike, ShardNamespaceLike } from "@cirrus/runtime";
-import { createCrossShardRelationCapabilities, createWorker } from "@cirrus/runtime";
-import type { DurableObjectNamespaceLike } from "@cirrus/scheduler";
-import { createScheduler } from "@cirrus/scheduler";
-import type { R2BucketLike } from "@cirrus/storage";
-import { buildSignedUrl, createBucketStorage, createStorage, verifySignedUrl } from "@cirrus/storage";
+import type { LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
+import { lunoraD1Adapter, createAuth, createAuthAdmin, ensureMigrated, handleAuthRequest } from "@lunora/auth";
+import { admin, organization, passkey, twoFactor } from "@lunora/auth/plugins";
+import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";
+import { createD1CtxDb, facetGlobalColumn, listGlobalTables, readGlobalTablePage } from "@lunora/d1";
+import { createMailerFromEnv } from "@lunora/mail";
+import type { ForwardableEmailMessageLike, ShardNamespaceLike as InboundShardNamespaceLike } from "@lunora/mail/inbound";
+import { createInboundEmailHandler, dispatchToLunoraFunction, parseInboundEmail } from "@lunora/mail/inbound";
+import type { ExecutionContextLike, GlobalIntrospector, ScheduledControllerLike, ShardNamespaceLike } from "@lunora/runtime";
+import { createCrossShardRelationCapabilities, createWorker } from "@lunora/runtime";
+import type { DurableObjectNamespaceLike } from "@lunora/scheduler";
+import { createScheduler } from "@lunora/scheduler";
+import type { R2BucketLike } from "@lunora/storage";
+import { buildSignedUrl, createBucketStorage, createStorage, verifySignedUrl } from "@lunora/storage";
 
-import { CIRRUS_CRONS } from "../../cirrus/_generated/crons.js";
-import { CIRRUS_FUNCTIONS } from "../../cirrus/_generated/functions.js";
-import { openApiSpec } from "../../cirrus/_generated/openapi.js";
-import { createShardDO } from "../../cirrus/_generated/shard.js";
-import schema from "../../cirrus/schema.js";
+import { LUNORA_CRONS } from "../../lunora/_generated/crons.js";
+import { LUNORA_FUNCTIONS } from "../../lunora/_generated/functions.js";
+import { openApiSpec } from "../../lunora/_generated/openapi.js";
+import { createShardDO } from "../../lunora/_generated/shard.js";
+import schema from "../../lunora/schema.js";
 
-/** Adapt the raw D1 binding to `@cirrus/d1`'s `D1Exec`. Reads go through `all`; admin browsing never writes. */
+/** Adapt the raw D1 binding to `@lunora/d1`'s `D1Exec`. Reads go through `all`; admin browsing never writes. */
 const buildExec = (database: D1DatabaseLike): D1Exec => {
     return {
         all: async (sql, parameters) => {
@@ -53,15 +53,15 @@ const d1Introspector = (database: D1DatabaseLike): GlobalIntrospector => {
     };
 };
 
-// WorkflowEntrypoint class for `cirrus/workflows.ts` — wrangler requires every
+// WorkflowEntrypoint class for `lunora/workflows.ts` — wrangler requires every
 // declared `workflows[].class_name` to be exported by the worker entry.
-export { ChannelWelcomeWorkflow } from "../../cirrus/_generated/workflows.js";
+export { ChannelWelcomeWorkflow } from "../../lunora/_generated/workflows.js";
 export { SchedulerDO } from "./scheduler-do.js";
 
 interface ShardEnv {
     /** Second R2 bucket, demonstrating multi-bucket `ctx.storage` — reached via `ctx.storage.bucket("avatars")`. */
     AVATARS?: R2BucketLike;
-    CIRRUS_WORKER_ORIGIN?: string;
+    LUNORA_WORKER_ORIGIN?: string;
     /** D1 binding backing `.global()` tables — wired into the DO so generic `ctx.db` writes to a global table route to it. */
     DB?: D1DatabaseLike;
     FILES?: R2BucketLike;
@@ -86,15 +86,15 @@ export const ShardDO = createShardDO({
         // the D1 ctx-db cross-shard reader/counter capabilities so a `.global()`
         // parent can load a shard-local child relation by fanning the read out
         // across every shard (forwarding the originating caller identity). The
-        // fan-out POSTs `__cirrus_relation__:read`/`:count` to `/_cirrus/rpc`, so
+        // fan-out POSTs `__lunora_relation__:read`/`:count` to `/_lunora/rpc`, so
         // a multi-shard deployment must additionally configure `queryCoordinator`
         // + `authorizeFanOut` on `buildWorker` (see the note there). Without an
         // origin the capabilities are omitted and the ctx-db throws its clear
         // "wire a cross-shard reader" error if such a relation is loaded.
-        const crossShard = shardEnv.CIRRUS_WORKER_ORIGIN
+        const crossShard = shardEnv.LUNORA_WORKER_ORIGIN
             ? createCrossShardRelationCapabilities({
                   identity: request?.identity,
-                  origin: shardEnv.CIRRUS_WORKER_ORIGIN,
+                  origin: shardEnv.LUNORA_WORKER_ORIGIN,
                   userId: request?.userId,
               })
             : undefined;
@@ -113,8 +113,8 @@ export const ShardDO = createShardDO({
     scheduler: (env) => {
         const shardEnv = env as ShardEnv;
 
-        return shardEnv.SCHEDULER && shardEnv.CIRRUS_WORKER_ORIGIN
-            ? createScheduler({ namespace: shardEnv.SCHEDULER, originUrl: shardEnv.CIRRUS_WORKER_ORIGIN })
+        return shardEnv.SCHEDULER && shardEnv.LUNORA_WORKER_ORIGIN
+            ? createScheduler({ namespace: shardEnv.SCHEDULER, originUrl: shardEnv.LUNORA_WORKER_ORIGIN })
             : undefined;
     },
     storage: (env) => {
@@ -142,18 +142,18 @@ interface Env {
     /** Second R2 bucket for the studio file browser's bucket picker. */
     AVATARS?: R2BucketLike;
     /** Bearer token gating the admin export/import and scheduled-job endpoints. */
-    CIRRUS_ADMIN_TOKEN?: string;
+    LUNORA_ADMIN_TOKEN?: string;
 
     /**
      * When set to the literal string `"true"`, the worker exposes a small
      * surface of `/test/*` helpers (reset DO state, mint a short-lived signed
-     * URL, schedule a job, etc.) used by the `@cirrus/e2e` Playwright suite.
+     * URL, schedule a job, etc.) used by the `@lunora/e2e` Playwright suite.
      * The flag is read in `apps/playground/wrangler.jsonc` and injected via
      * `tests/e2e/globalSetup.ts` — *never* set this in production.
      */
-    CIRRUS_E2E?: string;
+    LUNORA_E2E?: string;
     /** Origin the SchedulerDO dispatches HTTP callbacks back to (job execution). */
-    CIRRUS_WORKER_ORIGIN?: string;
+    LUNORA_WORKER_ORIGIN?: string;
     DB: unknown;
     FILES: R2BucketLike;
     /** Sender address for auth (verification / reset) email; captured into the studio Mail tab in dev. */
@@ -166,7 +166,7 @@ interface Env {
 }
 
 /**
- * Worker entry — composes `@cirrus/auth` (better-auth) and `@cirrus/runtime`.
+ * Worker entry — composes `@lunora/auth` (better-auth) and `@lunora/runtime`.
  *
  * Better-auth handles its own arbitrarily nested routes under `/api/auth/*`
  * via a single handler, which doesn't fit the runtime's exact-path router.
@@ -176,7 +176,7 @@ interface Env {
  * through to the runtime for RPC + WebSocket traffic.
  */
 let worker: ReturnType<typeof createWorker> | null = null;
-let auth: CirrusAuth | null = null;
+let auth: LunoraAuth | null = null;
 
 /**
  * Auth config shared by the runtime instance and the migration instance — same
@@ -185,7 +185,7 @@ let auth: CirrusAuth | null = null;
  * `createAuthAdmin`): `admin` → user management; `organization` → the
  * Organizations section; `twoFactor` → 2FA disable; `passkey` → passkey list.
  */
-const authOptions = (env: Env): CirrusAuthOptions => {
+const authOptions = (env: Env): LunoraAuthOptions => {
     if (!env.AUTH_SECRET) {
         throw new Error("AUTH_SECRET is required");
     }
@@ -194,7 +194,7 @@ const authOptions = (env: Env): CirrusAuthOptions => {
         baseURL: env.AUTH_URL,
         emailAndPassword: {
             enabled: true,
-            // Forgot-password mail routes through @cirrus/mail; in dev (and the
+            // Forgot-password mail routes through @lunora/mail; in dev (and the
             // E2E run) it's captured into the studio's Mail tab — see mail-reset.spec.ts.
             sendResetPassword: async ({ url, user }) => {
                 await createMailerFromEnv(env as unknown as Record<string, unknown>).send({
@@ -210,16 +210,16 @@ const authOptions = (env: Env): CirrusAuthOptions => {
 };
 
 /**
- * The runtime auth instance, backed by `@cirrus/auth`'s SQL adapter over D1.
- * `cirrusD1Adapter` wires the adapter explicitly rather than passing the raw
+ * The runtime auth instance, backed by `@lunora/auth`'s SQL adapter over D1.
+ * `lunoraD1Adapter` wires the adapter explicitly rather than passing the raw
  * `env.DB`, so the better-auth Kysely dynamic-import doesn't hang the embedded
  * worker under `@cloudflare/vite-plugin` (see its doc comment). Table creation
  * stays on the Kysely migration path ({@link migrateAuth}).
  */
-const buildAuth = (env: Env): CirrusAuth =>
+const buildAuth = (env: Env): LunoraAuth =>
     createAuth({
         ...authOptions(env),
-        database: cirrusD1Adapter(env.DB as never),
+        database: lunoraD1Adapter(env.DB as never),
     });
 
 /**
@@ -229,13 +229,13 @@ const buildAuth = (env: Env): CirrusAuth =>
  * and writes). Its `$context` is never touched, so the dynamic-import hang above
  * never applies here.
  */
-const migrateAuth = (env: Env): CirrusAuth => createAuth({ ...authOptions(env), database: env.DB as never });
+const migrateAuth = (env: Env): LunoraAuth => createAuth({ ...authOptions(env), database: env.DB as never });
 
 const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
     createWorker({
         // When set, enables the admin-gated export/import and scheduled-job
-        // endpoints the @cirrus/studio panels call.
-        adminToken: env.CIRRUS_ADMIN_TOKEN,
+        // endpoints the @lunora/studio panels call.
+        adminToken: env.LUNORA_ADMIN_TOKEN,
         // Dispatch better-auth's `/api/auth/*` routes INSIDE the worker (rather
         // than ahead of it) so the runtime instruments auth attempts/failures
         // for the app-level auth-failure SLO. Lazy like `resolveIdentity`: the
@@ -243,24 +243,24 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
         // The default `authBasePath` (`/api/auth`) matches `handleAuthRequest`,
         // so it's omitted.
         authHandler: (request) => (auth ? handleAuthRequest(auth, request) : Promise.resolve(undefined)),
-        // Exposes /_cirrus/admin/auth/* so the studio's user dashboard can browse
+        // Exposes /_lunora/admin/auth/* so the studio's user dashboard can browse
         // and manage users (create/ban/role/revoke/impersonate/delete). Built from
         // the same lazy `auth` the `authHandler` uses — non-null here since the
         // fetch entry builds `auth` before `buildWorker`.
         authAdmin: auth ? createAuthAdmin(auth) : undefined,
         // Code-first crons: the worker's `scheduled()` entry dispatches every job
-        // declared in `cirrus/crons.ts` (compiled into the generated CIRRUS_CRONS
+        // declared in `lunora/crons.ts` (compiled into the generated LUNORA_CRONS
         // map) on its firing trigger. Empty until a `crons.ts` is added.
-        cronJobs: CIRRUS_CRONS,
+        cronJobs: LUNORA_CRONS,
         d1: env.DB,
-        // Exposes /_cirrus/admin/functions so the studio's runner can
+        // Exposes /_lunora/admin/functions so the studio's runner can
         // auto-discover queries/mutations/actions. `FunctionRegistryLike` accepts
         // the generated registry directly (the endpoint omits `stream` entries).
-        functions: CIRRUS_FUNCTIONS,
-        // Exposes /_cirrus/admin/global/* so the studio can browse `.global()`
+        functions: LUNORA_FUNCTIONS,
+        // Exposes /_lunora/admin/global/* so the studio can browse `.global()`
         // (D1-backed) tables.
         globalIntrospector: env.DB ? d1Introspector(env.DB as D1DatabaseLike) : undefined,
-        // The generated OpenAPI document (regenerated on every `cirrus/` change)
+        // The generated OpenAPI document (regenerated on every `lunora/` change)
         // backs the studio's always-current API-reference tab.
         openApiSpec,
         resolveIdentity: async (request) => {
@@ -275,11 +275,11 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
         // The runtime's route map can stay empty: better-auth routes are
         // dispatched inside the worker via the `authHandler` option above.
         routes: {},
-        // Exposes /_cirrus/admin/scheduled so the studio can list/cancel jobs.
+        // Exposes /_lunora/admin/scheduled so the studio can list/cancel jobs.
         schedulerDO: env.SCHEDULER,
         // Reverse cross-backend relations (a `.global()` parent loading a
         // shard-local child) fan a read out across every shard via
-        // `__cirrus_relation__:read`/`:count` on `/_cirrus/rpc`. A multi-shard
+        // `__lunora_relation__:read`/`:count` on `/_lunora/rpc`. A multi-shard
         // (`.shardBy()`) deployment that uses them must add a `queryCoordinator`
         // (over a shard registry) plus an `authorizeFanOut` that permits those
         // two reserved paths — omitted here because the playground runs the
@@ -288,7 +288,7 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
         // The `d1` factory above still wires the cross-shard capabilities so the
         // path is ready the moment a real shard topology configures the above.
         shardDO: env.SHARD,
-        // Exposes /_cirrus/admin/storage so the studio's file browser can
+        // Exposes /_lunora/admin/storage so the studio's file browser can
         // page through R2 objects, delete, and upload. Omitted when no bucket is
         // bound. The signed-URL action additionally needs a public base URL +
         // signing secret, so it's wired only when both are configured.
@@ -415,19 +415,19 @@ const handleTestSchedule = async (request: Request, env: Env): Promise<Response>
     const scheduler = createScheduler({ namespace: env.SCHEDULER, originUrl });
     const scheduledFor = body.scheduledFor ?? Date.now() + (body.delayMs ?? 0);
 
-    const result = await scheduler.runAt(scheduledFor, { __cirrusRef: body.functionPath }, body.args ?? {});
+    const result = await scheduler.runAt(scheduledFor, { __lunoraRef: body.functionPath }, body.args ?? {});
 
     return Response.json({ jobId: result.id, scheduledFor: result.scheduledFor });
 };
 
 /**
- * E2E-only test helpers. Each route is a no-op unless `env.CIRRUS_E2E ===
+ * E2E-only test helpers. Each route is a no-op unless `env.LUNORA_E2E ===
  * "true"`; in production traffic the dispatch falls through to the main
  * worker. We mount them *before* the main router so the runtime never sees
  * a `/test/*` path when the gate is closed.
  */
 const handleTestRoute = async (request: Request, env: Env): Promise<Response | null> => {
-    if (env.CIRRUS_E2E !== "true") {
+    if (env.LUNORA_E2E !== "true") {
         return null;
     }
 
@@ -454,11 +454,11 @@ const handleTestRoute = async (request: Request, env: Env): Promise<Response | n
     if (url.pathname === "/test/job-status" && method === "GET") {
         const id = url.searchParams.get("id");
 
-        if (!id || !env.SCHEDULER || !env.CIRRUS_WORKER_ORIGIN) {
+        if (!id || !env.SCHEDULER || !env.LUNORA_WORKER_ORIGIN) {
             return Response.json({ status: "unknown" });
         }
 
-        const scheduler = createScheduler({ namespace: env.SCHEDULER, originUrl: env.CIRRUS_WORKER_ORIGIN });
+        const scheduler = createScheduler({ namespace: env.SCHEDULER, originUrl: env.LUNORA_WORKER_ORIGIN });
         const record = await scheduler.get(id);
 
         // The SchedulerDO deletes a job's rows once it completes successfully, so
@@ -470,13 +470,13 @@ const handleTestRoute = async (request: Request, env: Env): Promise<Response | n
 };
 
 /**
- * Serve `@cirrus/storage` signed URLs. The signer mints a URL under
+ * Serve `@lunora/storage` signed URLs. The signer mints a URL under
  * `PUBLIC_STORAGE_BASE_URL` carrying the object key plus expiry/method/signature
  * query params; in production that base is a CDN/Worker route, but in dev the
  * Worker shares its origin, so the signed URL lands back here. We verify the
  * HMAC + expiry, then stream the R2 body (GET) or store the uploaded bytes
  * (PUT). The `avatars/` prefix is the only key namespace
- * the playground signs, and it can't collide with the `/_cirrus`, `/api/auth`,
+ * the playground signs, and it can't collide with the `/_lunora`, `/api/auth`,
  * `/test` routes the Worker otherwise owns.
  */
 const handleStorageAsset = async (request: Request, env: Env): Promise<null | Response> => {
@@ -523,13 +523,13 @@ const handleStorageAsset = async (request: Request, env: Env): Promise<null | Re
 };
 
 /**
- * Inbound Email Routing entry (`@cirrus/mail/inbound`).
+ * Inbound Email Routing entry (`@lunora/mail/inbound`).
  *
  * Cloudflare delivers received mail to this top-level `email(message, env, ctx)`
  * export — a sibling of `fetch`/`scheduled`. The handler reads `message.raw`,
  * parses it with `parseInboundEmail`, and dispatches the normalised message into
  * the `inbound:onEmail` mutation over the root shard's admin RPC (authorized by
- * `CIRRUS_ADMIN_TOKEN`). `resolveArgs` narrows the parsed `InboundEmail` to the
+ * `LUNORA_ADMIN_TOKEN`). `resolveArgs` narrows the parsed `InboundEmail` to the
  * mutation's validated args — including the receive timestamp, stamped here
  * (a non-deterministic context) so the `onEmail` mutation handler stays
  * deterministic. Built lazily because the `SHARD` namespace lives on the
@@ -544,7 +544,7 @@ const handleStorageAsset = async (request: Request, env: Env): Promise<null | Re
  */
 export const email = async (message: ForwardableEmailMessageLike, env: Env, context: ExecutionContextLike): Promise<void> => {
     const handler = createInboundEmailHandler({
-        dispatch: dispatchToCirrusFunction({
+        dispatch: dispatchToLunoraFunction({
             functionPath: "inbound:onEmail",
             resolveArgs: (parsed) => ({
                 from: parsed.from,
@@ -597,7 +597,7 @@ export default {
     // Cron Triggers (wrangler `triggers.crons`) land here. The runtime
     // dispatches them to any registered `crons` handlers and runs the built-in
     // R2 backup when the firing expression matches `backupCron` — see
-    // `@cirrus/runtime`'s "Scheduled backups". Enabling the backup additionally
+    // `@lunora/runtime`'s "Scheduled backups". Enabling the backup additionally
     // needs a `queryCoordinator` + `backupStore` on `buildWorker`.
     async scheduled(controller: ScheduledControllerLike, env: Env, context: ExecutionContextLike): Promise<void> {
         worker ??= buildWorker(env);

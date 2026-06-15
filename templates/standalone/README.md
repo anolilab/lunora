@@ -1,6 +1,6 @@
 # {{name}}
 
-A standalone Cirrus Worker app (no frontend).
+A standalone Lunora Worker app (no frontend).
 
 ## Develop
 

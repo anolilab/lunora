@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { AGENT_RULES_DIR, AGENT_RULES_HINT_ENV, CIRRUS_SKILL_NAMES, claimAgentRulesHint, detectAgentRules } from "../src/agent-rules";
+import { AGENT_RULES_DIR, AGENT_RULES_HINT_ENV, LUNORA_SKILL_NAMES, claimAgentRulesHint, detectAgentRules } from "../src/agent-rules";
 
 let workdir: string;
 
@@ -18,7 +18,7 @@ const installSkill = (name: string): void => {
 
 describe("detectAgentRules", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-agent-rules-"));
+        workdir = mkdtempSync(join(tmpdir(), "lunora-agent-rules-"));
     });
 
     afterEach(() => {
@@ -32,32 +32,32 @@ describe("detectAgentRules", () => {
 
         expect(status.installed).toBe(false);
         expect(status.present).toHaveLength(0);
-        expect(status.missing).toStrictEqual([...CIRRUS_SKILL_NAMES]);
+        expect(status.missing).toStrictEqual([...LUNORA_SKILL_NAMES]);
     });
 
     it("counts the router skill as installed even when others are missing", () => {
         expect.assertions(3);
 
-        installSkill("cirrus");
+        installSkill("lunora");
 
         const status = detectAgentRules(workdir);
 
         expect(status.installed).toBe(true);
-        expect(status.present).toStrictEqual(["cirrus"]);
-        expect(status.missing).not.toContain("cirrus");
+        expect(status.present).toStrictEqual(["lunora"]);
+        expect(status.missing).not.toContain("lunora");
     });
 
     it("lists every installed skill as present", () => {
         expect.assertions(2);
 
-        for (const name of CIRRUS_SKILL_NAMES) {
+        for (const name of LUNORA_SKILL_NAMES) {
             installSkill(name);
         }
 
         const status = detectAgentRules(workdir);
 
         expect(status.installed).toBe(true);
-        expect(status.present).toStrictEqual([...CIRRUS_SKILL_NAMES]);
+        expect(status.present).toStrictEqual([...LUNORA_SKILL_NAMES]);
     });
 });
 

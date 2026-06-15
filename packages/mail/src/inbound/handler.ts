@@ -5,12 +5,12 @@
  * Cloudflare delivers inbound mail to a Worker's exported `email(message, env,
  * ctx)` handler, where `message` is a `ForwardableEmailMessage`. This factory
  * returns exactly that callback, typed against a **structural**
- * `ForwardableEmailMessageLike` so `@cirrus/mail` needs no `cloudflare:email`
+ * `ForwardableEmailMessageLike` so `@lunora/mail` needs no `cloudflare:email`
  * import — the host's generated entry supplies the real binding. The handler
  * reads `message.raw`, parses it, and dispatches the normalised message into a
- * Cirrus mutation/action via a caller-supplied `dispatch`.
+ * Lunora mutation/action via a caller-supplied `dispatch`.
  *
- * `dispatchToCirrusFunction` is the batteries-included `dispatch`: it posts an
+ * `dispatchToLunoraFunction` is the batteries-included `dispatch`: it posts an
  * `RpcEnvelope` to the root shard stub over the same admin-RPC-over-shard path
  * the dev capture sink uses (`from-env.ts`).
  */
@@ -21,7 +21,7 @@ import type { ShardNamespaceLike } from "./shard";
  * Structural projection of Cloudflare's `ForwardableEmailMessage` (verified
  * against `@cloudflare/workers-types`' `ForwardableEmailMessage`). Only the
  * members the handler touches are modelled, so the host can pass the real
- * runtime object without `@cirrus/mail` importing `cloudflare:email`.
+ * runtime object without `@lunora/mail` importing `cloudflare:email`.
  */
 interface ForwardableEmailMessageLike {
     /** Forward this message to a verified destination address. */
@@ -50,12 +50,12 @@ interface InboundDispatchContext<TEnv = Record<string, unknown>> {
     message: ForwardableEmailMessageLike;
 }
 
-/** Routes a parsed message into a Cirrus function (or anywhere). */
+/** Routes a parsed message into a Lunora function (or anywhere). */
 type InboundDispatch<TEnv = Record<string, unknown>> = (email: InboundEmail, context: InboundDispatchContext<TEnv>) => Promise<void>;
 
 /** Options for {@link createInboundEmailHandler}. */
 interface InboundEmailHandlerOptions<TEnv = Record<string, unknown>> {
-    /** Routes the parsed message onward (e.g. {@link dispatchToCirrusFunction}). */
+    /** Routes the parsed message onward (e.g. {@link dispatchToLunoraFunction}). */
     dispatch: InboundDispatch<TEnv>;
 
     /**
@@ -97,18 +97,18 @@ const createInboundEmailHandler = <TEnv = Record<string, unknown>>(options: Inbo
     };
 };
 
-/** The `RpcEnvelope` shape the runtime's `/_cirrus/rpc` path consumes. */
+/** The `RpcEnvelope` shape the runtime's `/_lunora/rpc` path consumes. */
 interface RpcEnvelope {
     args: unknown;
     functionPath: string;
     shardKey?: string;
 }
 
-/** Options for {@link dispatchToCirrusFunction}. */
-interface DispatchToCirrusFunctionOptions<TEnv = Record<string, unknown>> {
+/** Options for {@link dispatchToLunoraFunction}. */
+interface DispatchToLunoraFunctionOptions<TEnv = Record<string, unknown>> {
     /**
      * Admin bearer authorizing the shard RPC. Defaults to reading
-     * `env.CIRRUS_ADMIN_TOKEN` at dispatch time.
+     * `env.LUNORA_ADMIN_TOKEN` at dispatch time.
      */
     adminToken?: string;
     /** `functionPath` of the target mutation/action (e.g. `"inbound:onEmail"`). */
@@ -130,21 +130,21 @@ const DEFAULT_ROOT_SHARD = "__root__";
 /**
  * Build a {@link InboundDispatch} that posts an {@link RpcEnvelope} to the root
  * shard stub — the same admin-RPC-over-shard path the dev capture sink uses
- * (`from-env.ts`) — routing the parsed message into a named Cirrus
+ * (`from-env.ts`) — routing the parsed message into a named Lunora
  * mutation/action. Throws on a non-2xx RPC or a missing admin token so the
  * handler's `onError` (default `setReject`) bounces the message.
  */
-const dispatchToCirrusFunction = <TEnv extends Record<string, unknown> = Record<string, unknown>>(
-    options: DispatchToCirrusFunctionOptions<TEnv>,
+const dispatchToLunoraFunction = <TEnv extends Record<string, unknown> = Record<string, unknown>>(
+    options: DispatchToLunoraFunctionOptions<TEnv>,
 ): InboundDispatch<TEnv> => {
     const shardKey = options.shardKey ?? DEFAULT_ROOT_SHARD;
     const resolveArgs = options.resolveArgs ?? ((email: InboundEmail) => email);
 
     return async (email, context) => {
-        const adminToken = options.adminToken ?? (typeof context.env["CIRRUS_ADMIN_TOKEN"] === "string" ? context.env["CIRRUS_ADMIN_TOKEN"] : undefined);
+        const adminToken = options.adminToken ?? (typeof context.env["LUNORA_ADMIN_TOKEN"] === "string" ? context.env["LUNORA_ADMIN_TOKEN"] : undefined);
 
         if (adminToken === undefined || adminToken === "") {
-            throw new Error("@cirrus/mail/inbound: missing CIRRUS_ADMIN_TOKEN — cannot authorize inbound dispatch to the shard RPC.");
+            throw new Error("@lunora/mail/inbound: missing LUNORA_ADMIN_TOKEN — cannot authorize inbound dispatch to the shard RPC.");
         }
 
         const envelope: RpcEnvelope = {
@@ -163,7 +163,7 @@ const dispatchToCirrusFunction = <TEnv extends Record<string, unknown> = Record<
         // A shard stub returns a Fetch `Response`; treat a non-2xx (or an error
         // envelope) as a dispatch failure so the message is rejected upstream.
         if (response.ok === false) {
-            throw new Error(`@cirrus/mail/inbound: dispatch to \`${options.functionPath}\` failed (HTTP ${String(response.status ?? "?")}).`);
+            throw new Error(`@lunora/mail/inbound: dispatch to \`${options.functionPath}\` failed (HTTP ${String(response.status ?? "?")}).`);
         }
 
         const body: unknown = await response.json();
@@ -172,15 +172,15 @@ const dispatchToCirrusFunction = <TEnv extends Record<string, unknown> = Record<
             const { error } = body as { error?: unknown };
 
             if (error !== undefined && error !== null) {
-                throw new Error(`@cirrus/mail/inbound: dispatch to \`${options.functionPath}\` returned an error: ${JSON.stringify(error)}`);
+                throw new Error(`@lunora/mail/inbound: dispatch to \`${options.functionPath}\` returned an error: ${JSON.stringify(error)}`);
             }
         }
     };
 };
 
-export { createInboundEmailHandler, dispatchToCirrusFunction };
+export { createInboundEmailHandler, dispatchToLunoraFunction };
 export type {
-    DispatchToCirrusFunctionOptions,
+    DispatchToLunoraFunctionOptions,
     ForwardableEmailMessageLike,
     InboundDispatch,
     InboundDispatchContext,

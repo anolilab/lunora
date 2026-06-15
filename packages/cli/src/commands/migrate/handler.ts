@@ -1,14 +1,14 @@
 /**
- * `cirrus migrate generate` — diff `cirrus/schema.ts` (filtered to `.global()`
- * tables) against `cirrus/migrations/.snapshot.json` and emit a timestamped
+ * `lunora migrate generate` — diff `lunora/schema.ts` (filtered to `.global()`
+ * tables) against `lunora/migrations/.snapshot.json` and emit a timestamped
  * SQL migration file.
  *
- * The applied migrations themselves still go through `@cirrus/d1`'s
+ * The applied migrations themselves still go through `@lunora/d1`'s
  * `MigrationRunner` at deploy time — this command only **produces** the SQL.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
-import { discoverMigrations, discoverSchema } from "@cirrus/codegen";
+import { discoverMigrations, discoverSchema } from "@lunora/codegen";
 import { join } from "@visulima/path";
 import { Project } from "ts-morph";
 
@@ -97,10 +97,10 @@ const loadSnapshot = (path: string): SchemaSnapshot | undefined => {
 
 const runMigrateGenerateCommand = (options: MigrateGenerateCommandOptions): MigrateGenerateCommandResult => {
     const cwd = options.cwd ?? process.cwd();
-    const schemaPath = join(cwd, "cirrus", "schema.ts");
+    const schemaPath = join(cwd, "lunora", "schema.ts");
 
     if (!existsSync(schemaPath)) {
-        options.logger.error(`schema not found: ${schemaPath} — run \`vis generate cirrus-table --name=<name>\` to create one`);
+        options.logger.error(`schema not found: ${schemaPath} — run \`vis generate lunora-table --name=<name>\` to create one`);
 
         return { code: 1, empty: true, migrationFile: "" };
     }
@@ -110,7 +110,7 @@ const runMigrateGenerateCommand = (options: MigrateGenerateCommandOptions): Migr
     const schemaIr = discoverSchema(project, schemaPath);
     const nextSnapshot = schemaIrToSnapshot(schemaIr);
 
-    const migrationsDirectory = join(cwd, "cirrus", "migrations");
+    const migrationsDirectory = join(cwd, "lunora", "migrations");
     const snapshotPath = join(migrationsDirectory, SNAPSHOT_FILENAME);
 
     let previousSnapshot: SchemaSnapshot | undefined;
@@ -156,10 +156,10 @@ const runMigrateGenerateCommand = (options: MigrateGenerateCommandOptions): Migr
 
 const DATA_MIGRATIONS_FILENAME = "migrations.ts";
 const IDENTIFIER_PATTERN = /^[A-Za-z_]\w*$/u;
-const DEFINE_MIGRATION_IMPORT = `import { defineMigration } from "@cirrus/server";`;
-const RUN_MIGRATION_OP = "__cirrus_admin__:runMigration";
-const MIGRATION_STATUS_OP = "__cirrus_admin__:migrationStatus";
-const MIGRATE_ENDPOINT_PATH = "/_cirrus/migrate";
+const DEFINE_MIGRATION_IMPORT = `import { defineMigration } from "@lunora/server";`;
+const RUN_MIGRATION_OP = "__lunora_admin__:runMigration";
+const MIGRATION_STATUS_OP = "__lunora_admin__:migrationStatus";
+const MIGRATE_ENDPOINT_PATH = "/_lunora/migrate";
 
 /** Convert a free-text migration name to kebab-case — the `id` and per-shard run-state key. */
 const kebabCase = (input: string): string => trimChar(input.trim().toLowerCase().replaceAll(NON_ALPHANUMERIC, "-"), "-");
@@ -189,13 +189,13 @@ interface MigrateCreateCommandOptions {
 
 interface MigrateCreateCommandResult {
     code: number;
-    /** Absolute path to `cirrus/migrations.ts` (empty string on failure). */
+    /** Absolute path to `lunora/migrations.ts` (empty string on failure). */
     file: string;
 }
 
 /**
- * `cirrus migrate create &lt;name>` — scaffold a `defineMigration({...})` block in
- * `cirrus/migrations.ts`, appending to the file (and creating it with the
+ * `lunora migrate create &lt;name>` — scaffold a `defineMigration({...})` block in
+ * `lunora/migrations.ts`, appending to the file (and creating it with the
  * import) when it already exists. Refuses to clobber an existing migration of
  * the same id or export name.
  */
@@ -214,15 +214,15 @@ const runMigrateCreateCommand = (options: MigrateCreateCommandOptions): MigrateC
 
     // `table` is written verbatim into generated TypeScript (`table: "..."`),
     // so it must be a bare identifier — otherwise a crafted `--table` value can
-    // inject arbitrary source into cirrus/migrations.ts.
+    // inject arbitrary source into lunora/migrations.ts.
     if (!IDENTIFIER_PATTERN.test(table)) {
         options.logger.error(`invalid --table: "${table}" — must be a valid identifier ([A-Za-z_][A-Za-z0-9_]*)`);
 
         return { code: 1, file: "" };
     }
 
-    const cirrusDirectory = join(cwd, "cirrus");
-    const file = join(cirrusDirectory, DATA_MIGRATIONS_FILENAME);
+    const lunoraDirectory = join(cwd, "lunora");
+    const file = join(lunoraDirectory, DATA_MIGRATIONS_FILENAME);
 
     let content = existsSync(file) ? readFileSync(file, "utf8") : "";
 
@@ -244,7 +244,7 @@ const runMigrateCreateCommand = (options: MigrateCreateCommandOptions): MigrateC
     up: (document) => document,
 });`;
 
-    mkdirSync(cirrusDirectory, { recursive: true });
+    mkdirSync(lunoraDirectory, { recursive: true });
     writeFileSync(file, `${content.trimEnd()}\n\n${block}\n`, "utf8");
 
     options.logger.success(`scaffolded migration "${slug}" in ${file}`);
@@ -271,7 +271,7 @@ interface MigrateDataCommandOptions {
     /** Guard: refuse to target the implicit localhost URL. */
     prod?: boolean;
     subcommand: "down" | "status" | "up";
-    /** Admin bearer token; falls back to `CIRRUS_ADMIN_TOKEN`. */
+    /** Admin bearer token; falls back to `LUNORA_ADMIN_TOKEN`. */
     token?: string;
     /** Worker URL (default `http://localhost:8787`). */
     url?: string;
@@ -285,10 +285,10 @@ interface MigrateDataCommandResult {
     requestUrl: string;
 }
 
-/** Resolve a migration id to its declared table by scanning `cirrus/`. */
+/** Resolve a migration id to its declared table by scanning `lunora/`. */
 const resolveMigrationTable = (cwd: string, id: string): string | undefined => {
     const project = new Project({ skipAddingFilesFromTsConfig: true });
-    const migrations = discoverMigrations(project, join(cwd, "cirrus"));
+    const migrations = discoverMigrations(project, join(cwd, "lunora"));
 
     return migrations.find((migration) => migration.id === id)?.table;
 };
@@ -313,7 +313,7 @@ const resolveValidatedTable = (cwd: string, options: MigrateDataCommandOptions):
     }
 
     if (table === undefined) {
-        options.logger.error(`migration "${options.id}" not found under cirrus/ — declare it with defineMigration({ id: "${options.id}", ... })`);
+        options.logger.error(`migration "${options.id}" not found under lunora/ — declare it with defineMigration({ id: "${options.id}", ... })`);
 
         return undefined;
     }
@@ -346,10 +346,10 @@ const resolveMigrateDataRequest = (options: MigrateDataCommandOptions): MigrateD
         return undefined;
     }
 
-    const token = options.token ?? process.env.CIRRUS_ADMIN_TOKEN;
+    const token = options.token ?? process.env.LUNORA_ADMIN_TOKEN;
 
     if (!token) {
-        options.logger.error("admin token required — pass --token or set CIRRUS_ADMIN_TOKEN");
+        options.logger.error("admin token required — pass --token or set LUNORA_ADMIN_TOKEN");
 
         return undefined;
     }
@@ -401,9 +401,9 @@ const buildMigrateArgs = (options: MigrateDataCommandOptions): Record<string, un
 };
 
 /**
- * `cirrus migrate up|down|status &lt;id>` — drive the cross-shard data-migration
+ * `lunora migrate up|down|status &lt;id>` — drive the cross-shard data-migration
  * orchestrator. Resolves the migration's table locally, then POSTs a migration
- * admin RPC to the Worker's `/_cirrus/migrate` endpoint, which fans it out to
+ * admin RPC to the Worker's `/_lunora/migrate` endpoint, which fans it out to
  * every live shard of that table and rolls up the per-shard outcomes.
  */
 const runMigrateDataCommand = async (options: MigrateDataCommandOptions): Promise<MigrateDataCommandResult> => {
@@ -440,7 +440,7 @@ const runMigrateDataCommand = async (options: MigrateDataCommandOptions): Promis
     return { body, code: response.ok ? 0 : 1, requestUrl };
 };
 
-/** `cirrus migrate &lt;subcommand>` handler (lazy-loaded via the command's `loader`). */
+/** `lunora migrate &lt;subcommand>` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<MigrateOptions> = defineHandler<MigrateOptions>(({ argument, cwd, logger, options }) => {
     const sub = argument[0];
 
@@ -452,7 +452,7 @@ const execute: CommandHandler<MigrateOptions> = defineHandler<MigrateOptions>(({
         const name = argument[1] ?? options.name;
 
         if (!name) {
-            logger.error("migrate create requires a name. Usage: cirrus migrate create <name> [--table <table>]");
+            logger.error("migrate create requires a name. Usage: lunora migrate create <name> [--table <table>]");
 
             return { code: 1 };
         }
@@ -464,7 +464,7 @@ const execute: CommandHandler<MigrateOptions> = defineHandler<MigrateOptions>(({
         const id = argument[1] ?? options.name;
 
         if (!id) {
-            logger.error(`migrate ${sub} requires a migration id. Usage: cirrus migrate ${sub} <id>`);
+            logger.error(`migrate ${sub} requires a migration id. Usage: lunora migrate ${sub} <id>`);
 
             return { code: 1 };
         }

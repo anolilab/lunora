@@ -1,16 +1,16 @@
 ---
-title: "@cirrus/runtime"
+title: "@lunora/runtime"
 description: The Worker entrypoint — createWorker, RPC envelope, shard routing.
 ---
 
-`@cirrus/runtime` is the low-level Worker runtime. Your project's
+`@lunora/runtime` is the low-level Worker runtime. Your project's
 `src/server/index.ts` defaults to a single `export default createWorker({ … })`
 call — that's the entrypoint Wrangler boots.
 
 ```ts
-import { createWorker } from "@cirrus/runtime";
-import { schema } from "../../cirrus/schema";
-import * as messages from "../../cirrus/messages";
+import { createWorker } from "@lunora/runtime";
+import { schema } from "../../lunora/schema";
+import * as messages from "../../lunora/messages";
 import { MyShardDO } from "./shard";
 
 export default createWorker({
@@ -29,9 +29,9 @@ Returns a `{ fetch, scheduled }` object suitable for the Worker's default
 export — `fetch` handles HTTP/WebSocket traffic, `scheduled` handles Cron
 Triggers (see [Scheduled backups](#scheduled-backups)). Internally it:
 
-1. Decodes the RPC envelope (`POST /_cirrus/rpc`).
+1. Decodes the RPC envelope (`POST /_lunora/rpc`).
 2. Routes to the right `ShardDO` via [`resolveShard`](#resolveShard).
-3. Validates the function args (via `@cirrus/values`).
+3. Validates the function args (via `@lunora/values`).
 4. Invokes the registered `query`/`mutation`/`action`.
 5. Encodes the response back into the envelope.
 
@@ -40,7 +40,7 @@ Options:
 | Option           | Required | Purpose                                                           |
 | ---------------- | -------- | ----------------------------------------------------------------- |
 | `schema`         | yes      | The result of `defineSchema(...)`                                 |
-| `functions`      | yes      | Map of `cirrus/<file>.ts` modules                                 |
+| `functions`      | yes      | Map of `lunora/<file>.ts` modules                                 |
 | `bindings`       | yes      | Logical → wrangler binding name (`SHARD`, `D1`, `R2`, etc.)       |
 | `durableObjects` | yes      | Logical → DO class (must be re-exported from the Worker file)     |
 | `addOns`         | no       | `{ auth, mail, scheduler, storage }` — mounts the matching routes |
@@ -48,7 +48,7 @@ Options:
 ## `defineRpcEnvelope`
 
 Helper for building a custom transport (e.g. a CLI driver). Wraps a
-JSON-serializable payload in the same envelope `@cirrus/client` speaks:
+JSON-serializable payload in the same envelope `@lunora/client` speaks:
 
 ```ts
 const envelope = defineRpcEnvelope({ functionPath: "messages:send", args: { … } });
@@ -82,7 +82,7 @@ from your Worker so Wrangler can deliver Cron Triggers:
 
 ```ts
 const worker = createWorker({
-    adminToken: env.CIRRUS_ADMIN_TOKEN,
+    adminToken: env.LUNORA_ADMIN_TOKEN,
     queryCoordinator, // required — the backup fans the export out across shards
     shardDO: env.SHARD,
     // Built-in backup: on this cron, export every table to NDJSON and write
@@ -102,10 +102,10 @@ export default {
 
 Each run writes two objects under `backupPrefix`:
 
-- `cirrus-backup-<id>.ndjson` — the snapshot, one `{ table, doc }` per line
-  (the same NDJSON shape the `/_cirrus/admin/export` endpoint and
-  `cirrus backup create` produce).
-- `cirrus-backup-<id>.ndjson.manifest.json` — a `BackupManifest`
+- `lunora-backup-<id>.ndjson` — the snapshot, one `{ table, doc }` per line
+  (the same NDJSON shape the `/_lunora/admin/export` endpoint and
+  `lunora backup create` produce).
+- `lunora-backup-<id>.ndjson.manifest.json` — a `BackupManifest`
   (`{ id, createdAt, cron, file, rows, bytes, scheduledTime, tables? }`).
 
 The `id` is the trigger's `scheduledTime` as an ISO timestamp, so a snapshot
@@ -129,18 +129,18 @@ built-in backup.
 
 The `crons` array must contain the exact `backupCron` string; Wrangler only
 delivers triggers it declares. To restore a scheduled snapshot, download the
-NDJSON object and feed it to `cirrus backup restore <file>` (optionally with
+NDJSON object and feed it to `lunora backup restore <file>` (optionally with
 `--to <time>` for point-in-time replay).
 
-## `CirrusError` / `toErrorResponse` / `CirrusErrorBody`
+## `LunoraError` / `toErrorResponse` / `LunoraErrorBody`
 
-The runtime's typed error class. Throwing a `CirrusError(code, message)`
+The runtime's typed error class. Throwing a `LunoraError(code, message)`
 inside a handler causes a `{ error: { code, message, ... } }` body to come
 back over RPC instead of an HTTP 500. `toErrorResponse(err)` is the same
 mapping exposed for add-ons.
 
 ## See also
 
-- [@cirrus/do](/docs/api/do)
-- [@cirrus/d1](/docs/api/d1)
+- [@lunora/do](/docs/api/do)
+- [@lunora/d1](/docs/api/d1)
 - [Architecture](/docs/architecture)

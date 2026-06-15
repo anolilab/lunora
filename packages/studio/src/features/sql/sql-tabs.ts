@@ -18,8 +18,8 @@ interface SqlTab {
     readonly sql: string;
 }
 
-const TABS_KEY = "cirrus-studio-sql-tabs";
-const ACTIVE_KEY = "cirrus-studio-sql-active-tab";
+const TABS_KEY = "lunora-studio-sql-tabs";
+const ACTIVE_KEY = "lunora-studio-sql-active-tab";
 
 /** Cap open tabs so the strip stays usable and storage bounded. */
 const MAX_TABS = 12;

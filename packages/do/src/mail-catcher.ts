@@ -1,29 +1,29 @@
 /**
  * Dev mail catcher — durable storage for captured outbound email.
  *
- * `@cirrus/mail`'s capture transport (wired in dev by the mail registry
+ * `@lunora/mail`'s capture transport (wired in dev by the mail registry
  * scaffold) intercepts every send and POSTs it to the **root shard** via the
- * reserved `__cirrus_admin__:recordMail` admin RPC, so the studio's Mail inbox
- * shows ONE unified list of everything the app sent — including `@cirrus/auth`'s
+ * reserved `__lunora_admin__:recordMail` admin RPC, so the studio's Mail inbox
+ * shows ONE unified list of everything the app sent — including `@lunora/auth`'s
  * verification and forgot-password mail — regardless of which shard/function
  * sent it. Recorded against the root shard so a single read returns the whole
  * inbox, mirroring `auth-metrics.ts` (read it as the template).
  *
- * One reserved `__cirrus_mail` table, the same `runSql` indirection, the same
- * bounded-trim idiom on write. The `__cirrus` prefix auto-hides it from the data
+ * One reserved `__lunora_mail` table, the same `runSql` indirection, the same
+ * bounded-trim idiom on write. The `__lunora` prefix auto-hides it from the data
  * browser.
  */
 
-// `@cirrus/mail` owns the canonical captured-mail wire type, but `@cirrus/do`
-// CANNOT depend on it — even type-only — without a build cycle: `@cirrus/mail`
-// → `@cirrus/react` → `@cirrus/client` → `@cirrus/do`, so `do → mail` would
+// `@lunora/mail` owns the canonical captured-mail wire type, but `@lunora/do`
+// CANNOT depend on it — even type-only — without a build cycle: `@lunora/mail`
+// → `@lunora/react` → `@lunora/client` → `@lunora/do`, so `do → mail` would
 // close the loop. The mirrors below (`RecordMailInput` / `CapturedMailRow`) are
 // therefore hand-maintained copies of mail's `SendPayload` / `CapturedMail`;
 // keep them in sync manually (the studio consumer imports mail's type directly).
 import type { SqlCursor, SqlExec } from "./ctx-db";
 
-/** Reserved captured-mail table. Auto-hidden from the data browser by the `__cirrus` prefix. */
-const MAIL_TABLE = "__cirrus_mail";
+/** Reserved captured-mail table. Auto-hidden from the data browser by the `__lunora` prefix. */
+const MAIL_TABLE = "__lunora_mail";
 
 /**
  * Most recent captured messages kept; older rows are trimmed after each write so
@@ -46,11 +46,11 @@ const capBody = (value: string | undefined): string | undefined =>
 /**
  * Fields recorded for one captured message — the rendered, validated payload.
  *
- * Hand-maintained mirror of `@cirrus/mail`'s `SendPayload` (the captured-mail
+ * Hand-maintained mirror of `@lunora/mail`'s `SendPayload` (the captured-mail
  * wire type minus the sink-assigned `id`/`capturedAt`). The DO can't import
- * `@cirrus/mail` (it would close a `mail → react → client → do` build cycle), so
+ * `@lunora/mail` (it would close a `mail → react → client → do` build cycle), so
  * the fields are restated here and kept in sync by hand. Source of truth:
- * `@cirrus/mail`'s `types.ts` / `capture-transport.ts`.
+ * `@lunora/mail`'s `types.ts` / `capture-transport.ts`.
  */
 interface RecordMailInput {
     bcc?: string[];
@@ -65,12 +65,12 @@ interface RecordMailInput {
 }
 
 /**
- * One captured message as served by `__cirrus_admin__:getCapturedMail`.
+ * One captured message as served by `__lunora_admin__:getCapturedMail`.
  *
- * Hand-maintained mirror of `@cirrus/mail`'s canonical `CapturedMail`
+ * Hand-maintained mirror of `@lunora/mail`'s canonical `CapturedMail`
  * (`SendPayload` + `id` + `capturedAt`). Restated here because the DO can't
- * import `@cirrus/mail` (build cycle); keep in sync by hand. Source of truth:
- * `@cirrus/mail`'s `capture-transport.ts`.
+ * import `@lunora/mail` (build cycle); keep in sync by hand. Source of truth:
+ * `@lunora/mail`'s `capture-transport.ts`.
  */
 interface CapturedMailRow {
     bcc?: string[];
@@ -236,12 +236,12 @@ const clearCapturedMail = (sql: SqlExec): { cleared: true } => {
 };
 
 /*
- * NOTE: `RecordMailInput` / `CapturedMailRow` mirror `@cirrus/mail`'s
+ * NOTE: `RecordMailInput` / `CapturedMailRow` mirror `@lunora/mail`'s
  * `SendPayload` / `CapturedMail` and must be kept in sync BY HAND — a build-time
- * structural guard would require importing those types from `@cirrus/mail`,
+ * structural guard would require importing those types from `@lunora/mail`,
  * which is impossible here (`do → mail` closes a `mail → react → client → do`
  * build cycle). The studio consumer imports the canonical types directly; only
- * this DO-side mirror is hand-maintained. Source of truth: `@cirrus/mail`'s
+ * this DO-side mirror is hand-maintained. Source of truth: `@lunora/mail`'s
  * `types.ts` / `capture-transport.ts`.
  */
 

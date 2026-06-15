@@ -4,9 +4,9 @@ const envCommand: Command = {
     argument: { description: "list | get <KEY> | set <KEY> <VALUE> | unset <KEY> | push | doctor", name: "subcommand", type: String },
     description: "Manage .dev.vars and push secrets via wrangler (list | get | set | unset | push | doctor)",
     examples: [
-        ["cirrus env list", "List .dev.vars keys"],
-        ["cirrus env set API_KEY secret", "Set a local variable"],
-        ["cirrus env push --yes", "Upload secrets to Cloudflare"],
+        ["lunora env list", "List .dev.vars keys"],
+        ["lunora env set API_KEY secret", "Set a local variable"],
+        ["lunora env push --yes", "Upload secrets to Cloudflare"],
     ],
     group: "Data",
     loader: () =>

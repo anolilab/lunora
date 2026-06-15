@@ -1,4 +1,4 @@
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
@@ -12,9 +12,9 @@ import { createMockClient } from "../../mock-client";
 const FUNCTIONS: FunctionDescriptor[] = [{ args: [], kind: "query", path: "listDocuments" }];
 
 const renderPlayground = (mock: MockClientHooks, runAsIdentity: boolean): ReactElement => (
-    <CirrusProvider client={mock.asClient}>
+    <LunoraProvider client={mock.asClient}>
         <PermissionsPlayground functions={FUNCTIONS} runAsIdentity={runAsIdentity} />
-    </CirrusProvider>
+    </LunoraProvider>
 );
 
 describe("permissionsPlayground", () => {

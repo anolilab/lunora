@@ -1,16 +1,16 @@
-import type { FunctionReference } from "@cirrus/client";
+import type { FunctionReference } from "@lunora/client";
 import { QueryClient } from "@tanstack/react-query";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { useRef } from "react";
 import { describe, expect, it } from "vitest";
 
-import { CirrusProvider } from "../src/cirrus-provider";
+import { LunoraProvider } from "../src/lunora-provider";
 import { usePaginatedQuery } from "../src/use-paginated-query";
 import { createMockClient } from "./mock-client";
 
 const makeRef = (ref: string): FunctionReference => {
-    return { __cirrusRef: ref };
+    return { __lunoraRef: ref };
 };
 
 /** Keyset paginator over a fixed list; cursor = next offset as a string. */
@@ -58,9 +58,9 @@ describe("cache-event filtering (paginated hook)", () => {
         };
 
         render(
-            <CirrusProvider client={mock.asClient} queryClient={queryClient}>
+            <LunoraProvider client={mock.asClient} queryClient={queryClient}>
                 <Harness onRenderCount={recordRenderCount} />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         await waitFor(() => {
@@ -73,7 +73,7 @@ describe("cache-event filtering (paginated hook)", () => {
         // through the shared QueryCache. The fix early-returns on these, so the
         // hook must not re-render.
         const cache = queryClient.getQueryCache();
-        const unrelated = cache.build(queryClient, { queryKey: ["cirrus", "other:list", {}, null] });
+        const unrelated = cache.build(queryClient, { queryKey: ["lunora", "other:list", {}, null] });
 
         act(() => {
             for (let index = 0; index < 25; index += 1) {
@@ -94,9 +94,9 @@ describe("cache-event filtering (paginated hook)", () => {
         const queryClient = new QueryClient({ defaultOptions: { queries: { retry: 0, staleTime: Number.POSITIVE_INFINITY } } });
 
         render(
-            <CirrusProvider client={mock.asClient} queryClient={queryClient}>
+            <LunoraProvider client={mock.asClient} queryClient={queryClient}>
                 <Harness />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         await waitFor(() => {

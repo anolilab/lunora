@@ -1,4 +1,4 @@
-/* eslint-disable unicorn/prevent-abbreviations -- "docs" is the user-facing CLI command name (cirrus docs); renaming the identifiers would diverge from the command users type */
+/* eslint-disable unicorn/prevent-abbreviations -- "docs" is the user-facing CLI command name (lunora docs); renaming the identifiers would diverge from the command users type */
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
@@ -19,7 +19,7 @@ interface DocsCommandResult {
     url: string;
 }
 
-const DEFAULT_DOCS_URL = "https://cirrus.anolilab.dev/docs";
+const DEFAULT_DOCS_URL = "https://lunora.anolilab.dev/docs";
 
 /** Strip leading and trailing `/` characters without a backtracking regex. */
 const trimSlashes = (value: string): string => {
@@ -69,7 +69,7 @@ const runDocsCommand = async (options: DocsCommandOptions): Promise<DocsCommandR
     return { code: 0, url };
 };
 
-/** `cirrus docs [section]` handler (lazy-loaded via the command's `loader`). `docs` takes no options. */
+/** `lunora docs [section]` handler (lazy-loaded via the command's `loader`). `docs` takes no options. */
 const execute: CommandHandler<Record<string, never>> = defineHandler<Record<string, never>>(({ argument, logger }) =>
     runDocsCommand({ logger, section: argument[0] }),
 );

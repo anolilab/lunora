@@ -15,7 +15,7 @@ export interface AiBindingLike {
  * A Workers AI provider instance — the value returned by `createWorkersAI(...)`.
  * Calling it with a model id yields an AI SDK {@link LanguageModel}; the
  * optional `textEmbeddingModel` factory yields an {@link EmbeddingModel}.
- * Typed structurally so `@cirrus/ai` neither re-declares the provider's full
+ * Typed structurally so `@lunora/ai` neither re-declares the provider's full
  * surface nor hard-pins its exact type across minor releases.
  */
 export interface WorkersAiProviderLike {
@@ -32,7 +32,7 @@ export interface AiGatewayOptions {
     id: string;
 }
 
-export interface CirrusAiOptions {
+export interface LunoraAiOptions {
     /**
      * The Workers `AI` binding (`env.AI`). Required for the zero-config Workers
      * AI default and for the raw `ai.run(...)` passthrough. May be omitted when
@@ -52,7 +52,7 @@ export interface CirrusAiOptions {
      * Pre-built Workers AI provider. When omitted, one is constructed from
      * `binding` via `createWorkersAI`. Supplying it directly is the seam used by
      * tests and advanced setups; it also lets callers configure the provider
-     * (e.g. `safePrompt`) before handing it to `@cirrus/ai`.
+     * (e.g. `safePrompt`) before handing it to `@lunora/ai`.
      */
     provider?: WorkersAiProviderLike;
 }
@@ -76,11 +76,11 @@ export type EmbeddingModelInput = EmbeddingModel | string;
  * The `ctx.ai` surface. `model`/`embeddingModel` resolve a Workers AI model from
  * a string (the default provider) and pass any non-string model straight through,
  * so both accept Workers AI and bring-your-own providers. Feed the resolved model
- * to the AI SDK functions re-exported from `@cirrus/ai` (`generateText`,
+ * to the AI SDK functions re-exported from `@lunora/ai` (`generateText`,
  * `streamText`, `generateObject`, `embed`, …); `run` is the raw binding escape
  * hatch, and `workersai` is the underlying provider for direct model access.
  */
-export interface CirrusAi {
+export interface LunoraAi {
     /** Resolve an {@link EmbeddingModel}: a string → Workers AI, an object → passthrough. */
     embeddingModel: (model?: EmbeddingModelInput) => EmbeddingModel;
     /** Resolve a {@link LanguageModel}: a string → Workers AI, an object → passthrough. */

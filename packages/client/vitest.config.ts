@@ -29,16 +29,16 @@ const coverage = {
  *  - `mocks`   — fast unit suite over fake WebSocket / fetch doubles, plain
  *               Node, always enabled.
  *  - `workerd` — Phase 3 verification gate. Spins up a real workerd via
- *               `@cloudflare/vitest-pool-workers`, mounts `@cirrus/runtime` on
- *               top of `ShardDO`, and drives the standalone `CirrusClient`
- *               through `SELF.fetch`. Gated by `CIRRUS_WORKERD_TESTS=1`
+ *               `@cloudflare/vitest-pool-workers`, mounts `@lunora/runtime` on
+ *               top of `ShardDO`, and drives the standalone `LunoraClient`
+ *               through `SELF.fetch`. Gated by `LUNORA_WORKERD_TESTS=1`
  *               because the pool needs unrestricted localhost-loopback
  *               between workerd and the test host — sandboxed CI blocks
  *               that. On a developer workstation:
  *
- *                   CIRRUS_WORKERD_TESTS=1 pnpm --filter @cirrus/client test
+ *                   LUNORA_WORKERD_TESTS=1 pnpm --filter @lunora/client test
  */
-const runWorkerd = process.env.CIRRUS_WORKERD_TESTS === "1";
+const runWorkerd = process.env.LUNORA_WORKERD_TESTS === "1";
 
 export default defineConfig({
     test: {

@@ -1,4 +1,4 @@
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -87,13 +87,13 @@ const renderButton = (overrides: Partial<{ fields: ReadonlyArray<string>; indexN
         ...overrides,
     };
 
-    // ApplyIndexButton uses useT — wrap in a CirrusProvider that supplies i18n.
+    // ApplyIndexButton uses useT — wrap in a LunoraProvider that supplies i18n.
     const mock = createMockClient();
 
     return render(
-        <CirrusProvider client={mock.asClient}>
+        <LunoraProvider client={mock.asClient}>
             <ApplyIndexButton fields={props.fields} indexName={props.indexName} table={props.table} testId={props.testId} />
-        </CirrusProvider>,
+        </LunoraProvider>,
     );
 };
 
@@ -206,13 +206,13 @@ describe("insights panel — apply-index action on FK findings", () => {
         const mock = createClient([FK_ADVISORY]);
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <InsightsPanel />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         // unindexed_foreign_key is INFO-severity → switch to the Info tab.
-        fireEvent.click(await screen.findByTestId("cirrus-insights-tab-info"));
+        fireEvent.click(await screen.findByTestId("lunora-insights-tab-info"));
         await screen.findByText("Unindexed foreign key");
 
         // The apply-index button should be visible on the row.
@@ -235,12 +235,12 @@ describe("insights panel — apply-index action on FK findings", () => {
         const mock = createClient([advisory]);
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <InsightsPanel />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
-        fireEvent.click(await screen.findByTestId("cirrus-insights-tab-info"));
+        fireEvent.click(await screen.findByTestId("lunora-insights-tab-info"));
         await screen.findByText("Other advisory");
 
         // No apply button present (different name, no suggestedIndex).

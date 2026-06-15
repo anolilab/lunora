@@ -5,7 +5,7 @@ import { createWorker } from "../src/create-worker";
 import type { ShardNamespaceLike } from "../src/resolve-shard";
 
 /**
- * `POST /_cirrus/rpc` is the hot path for every dispatched query/mutation.
+ * `POST /_lunora/rpc` is the hot path for every dispatched query/mutation.
  * The bench measures the worker.fetch chain from envelope parse →
  * resolveForwardContext → forwardToShard against an in-process shard stub
  * that returns instantly. What we're isolating is the orchestration cost
@@ -14,9 +14,9 @@ import type { ShardNamespaceLike } from "../src/resolve-shard";
  *
  * - **no auth** — bare envelope, no `resolveIdentity`. The dispatch floor.
  * - **+ resolveIdentity (userId only)** — adds the auth claim resolution
- * pass that builds `x-cirrus-userid`. One extra await + header set.
+ * pass that builds `x-lunora-userid`. One extra await + header set.
  * - **+ resolveIdentity (userId + claims)** — same path but with richer
- * claims that JSON-encode into `x-cirrus-identity`.
+ * claims that JSON-encode into `x-lunora-identity`.
  * - **with shardKey** — envelope picks a specific shard rather than
  * the default `__root__`. Same path; different shard lookup.
  */
@@ -41,7 +41,7 @@ const makeShard = (): ShardNamespaceLike => {
 };
 
 const buildRequest = (body: Record<string, unknown>): Request =>
-    new Request("https://app.example/_cirrus/rpc", {
+    new Request("https://app.example/_lunora/rpc", {
         body: JSON.stringify(body),
         method: "POST",
     });
@@ -72,7 +72,7 @@ describe("worker.fetch — RPC dispatch through forwardToShard", () => {
         await useridWorker.fetch(buildRequest(bareEnvelope), {}, fakeContext);
     });
 
-    bench("+ resolveIdentity (userId + claims → x-cirrus-identity)", async () => {
+    bench("+ resolveIdentity (userId + claims → x-lunora-identity)", async () => {
         await claimsWorker.fetch(buildRequest(bareEnvelope), {}, fakeContext);
     });
 

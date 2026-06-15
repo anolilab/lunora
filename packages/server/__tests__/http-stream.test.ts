@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import type { CirrusRouteHandler, HttpActionCtx as HttpActionContext } from "../src/index";
-import { CirrusError, httpRoute, httpRouter, v } from "../src/index";
+import type { LunoraRouteHandler, HttpActionCtx as HttpActionContext } from "../src/index";
+import { LunoraError, httpRoute, httpRouter, v } from "../src/index";
 
 const context = {} as HttpActionContext;
 
-const dispatch = async (route: CirrusRouteHandler, method: string, path: string, request: Request): Promise<Response> => {
+const dispatch = async (route: LunoraRouteHandler, method: string, path: string, request: Request): Promise<Response> => {
     const app = httpRouter();
 
     app.on(method, path, route);
 
-    return app.fetch(request, { __cirrusCtx: context });
+    return app.fetch(request, { __lunoraCtx: context });
 };
 
 const readSse = async (response: Response): Promise<{ events: { data: unknown; event: string }[]; raw: string }> => {
@@ -87,12 +87,12 @@ describe("httpRoute stream() terminal", () => {
         ]);
     });
 
-    it("surfaces a thrown CirrusError as an event:error frame", async () => {
+    it("surfaces a thrown LunoraError as an event:error frame", async () => {
         expect.assertions(2);
 
         // eslint-disable-next-line require-yield, sonarjs/generator-without-yield -- intentional: this generator only throws.
         const route = httpRoute.get("/api/boom").stream(async function* boomGen() {
-            throw new CirrusError("FORBIDDEN", "nope");
+            throw new LunoraError("FORBIDDEN", "nope");
         });
 
         const response = await dispatch(route, "GET", "/api/boom", new Request("https://x/api/boom"));

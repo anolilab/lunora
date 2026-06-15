@@ -1,18 +1,18 @@
-import { defineCollections } from "@cirrus/db";
-import type { CirrusClient } from "@cirrus/react";
+import { defineCollections } from "@lunora/db";
+import type { LunoraClient } from "@lunora/react";
 import type { Collection, Transaction } from "@tanstack/db";
 import type { OfflineExecutor } from "@tanstack/offline-transactions";
 
-import { api } from "../../cirrus/_generated/api.js";
+import { api } from "../../lunora/_generated/api.js";
 // eslint-disable-next-line unicorn/prevent-abbreviations -- "Doc" is the generated dataModel type name; aliasing it breaks codegen
-import type { Doc, Id } from "../../cirrus/_generated/dataModel.js";
+import type { Doc, Id } from "../../lunora/_generated/dataModel.js";
 
 /** Author projection mirrored from `users.list` (id + display name only). */
 export type UserRow = Pick<Doc<"users">, "_id" | "name">;
 
 /**
  * The chat data layer — channels/messages/users live collections plus the
- * offline outbox — declared in one `defineCollections` call from `@cirrus/db`.
+ * offline outbox — declared in one `defineCollections` call from `@lunora/db`.
  * All the sync glue (snapshot diffing, scoped subscriptions, the executor, the
  * retry-vs-rollback policy, the online detector, client-id generation) lives in
  * the package; this file only names the tables and their optimistic shapes.
@@ -33,10 +33,10 @@ export interface MessagesStore {
 let store: MessagesStore | undefined;
 
 /**
- * Build the singleton chat store over a `CirrusClient`. Idempotent — the first
+ * Build the singleton chat store over a `LunoraClient`. Idempotent — the first
  * call wins, so every component shares one collection set + outbox.
  */
-export const getMessagesStore = (client: CirrusClient): MessagesStore => {
+export const getMessagesStore = (client: LunoraClient): MessagesStore => {
     if (store) {
         return store;
     }

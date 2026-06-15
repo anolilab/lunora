@@ -1,7 +1,7 @@
 /**
  * Read-only D1 introspection for the studio's database browser.
  *
- * The DO twin (`@cirrus/do`'s `introspect.ts`) lists shard-local tables and
+ * The DO twin (`@lunora/do`'s `introspect.ts`) lists shard-local tables and
  * pages their rows from the DO's JSON-blob SQLite. This is the D1 counterpart.
  *
  * It surfaces **every** real table in the D1 database, not just the ones the
@@ -9,7 +9,7 @@
  * including tables managed by other libraries (e.g. better-auth's
  * `user`/`session`/`account`/`verification`). Two guardrails keep that safe:
  *
- * - Internal/bookkeeping tables (SQLite, Cloudflare D1, Cirrus companions for
+ * - Internal/bookkeeping tables (SQLite, Cloudflare D1, Lunora companions for
  * aggregate/rank/fts/cdc indexes) are filtered out — see {@link isInternalTable}.
  * - Values in obviously-sensitive columns (password/token/secret/hash/salt) are
  * redacted, so browsing an external auth table can't leak credentials.
@@ -18,7 +18,7 @@
  * shape (re-exposing `_id`, folding booleans); any other table is shown with its
  * real physical columns.
  */
-import type { SchemaLike } from "@cirrus/do";
+import type { SchemaLike } from "@lunora/do";
 
 import type { D1Exec } from "./d1-ctx-db";
 import { decodeGlobalRow, runD1GlobalTableMigrations } from "./d1-ctx-db";
@@ -122,7 +122,7 @@ const clamp = (value: number, min: number, max: number): number => Math.min(Math
 
 /**
  * Bookkeeping tables that must never surface in the browser: SQLite internals
- * (`sqlite_*`), Cloudflare D1 internals (`_cf_*`, `d1_*`), and Cirrus index
+ * (`sqlite_*`), Cloudflare D1 internals (`_cf_*`, `d1_*`), and Lunora index
  * companions (`__agg_`/`__rank_`/`__fts_` infixes, the `__cdc_log`). Everything
  * else — the schema's `.global()` tables and any external/auth tables — is fair
  * game.
@@ -180,7 +180,7 @@ const buildEqPredicate = (
 
     for (const filter of filters) {
         if (!displayColumns.includes(filter.column)) {
-            throw Object.assign(new Error(`unknown column: ${filter.column}`), { code: "UNKNOWN_COLUMN", name: "CirrusError", status: 404 });
+            throw Object.assign(new Error(`unknown column: ${filter.column}`), { code: "UNKNOWN_COLUMN", name: "LunoraError", status: 404 });
         }
 
         const quoted = quoteIdentifier(physicalColumnName(schema, table, filter.column));
@@ -303,7 +303,7 @@ const readGlobalTablePage = async (exec: D1Exec, schema: SchemaLike, options: Re
     const tableNames = await listTableNames(exec);
 
     if (!tableNames.includes(table)) {
-        throw Object.assign(new Error(`unknown table: ${table}`), { code: "UNKNOWN_TABLE", name: "CirrusError", status: 404 });
+        throw Object.assign(new Error(`unknown table: ${table}`), { code: "UNKNOWN_TABLE", name: "LunoraError", status: 404 });
     }
 
     const limit = clamp(Math.trunc(options.limit ?? DEFAULT_PAGE_SIZE), 1, MAX_PAGE_SIZE);
@@ -343,13 +343,13 @@ const facetGlobalColumn = async (exec: D1Exec, schema: SchemaLike, options: Face
     const tableNames = await listTableNames(exec);
 
     if (!tableNames.includes(table)) {
-        throw Object.assign(new Error(`unknown table: ${table}`), { code: "UNKNOWN_TABLE", name: "CirrusError", status: 404 });
+        throw Object.assign(new Error(`unknown table: ${table}`), { code: "UNKNOWN_TABLE", name: "LunoraError", status: 404 });
     }
 
     const columns = await resolveColumns(exec, schema, table);
 
     if (!columns.includes(column)) {
-        throw Object.assign(new Error(`unknown column: ${column}`), { code: "UNKNOWN_COLUMN", name: "CirrusError", status: 404 });
+        throw Object.assign(new Error(`unknown column: ${column}`), { code: "UNKNOWN_COLUMN", name: "LunoraError", status: 404 });
     }
 
     const quoted = quoteIdentifier(table);

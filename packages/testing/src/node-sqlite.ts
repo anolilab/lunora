@@ -1,17 +1,17 @@
 // eslint-disable-next-line n/no-unsupported-features/node-builtins -- `node:sqlite` is stable enough on the supported runtimes (Node ^22.15 || >=24.10) and is the deliberate in-memory engine for this Node-only harness
 import { DatabaseSync } from "node:sqlite";
 
-import type { SqlCursor, SqlExec } from "@cirrus/do";
+import type { SqlCursor, SqlExec } from "@lunora/do";
 
 /**
  * Adapts Node's built-in `node:sqlite` engine to the {@link SqlExec} surface
- * that `@cirrus/do`'s `createShardCtxDb` / `runShardMigrations` expect from
+ * that `@lunora/do`'s `createShardCtxDb` / `runShardMigrations` expect from
  * workerd's `SqlStorage`.
  *
  * This is a re-implementation of the test helper that lives at
  * `packages/do/__tests__/_helpers/node-sqlite.ts` — that file is a private test
  * fixture in another package and cannot be imported, so the ~50-line adapter is
- * ported here so `@cirrus/testing` runs the user's functions against a real
+ * ported here so `@lunora/testing` runs the user's functions against a real
  * SQLite build (so `json_extract`, expression indexes, UNIQUE constraints, type
  * affinity, and `ORDER BY` collation behave the way they will inside a Durable
  * Object).

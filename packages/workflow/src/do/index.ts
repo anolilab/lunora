@@ -1,5 +1,5 @@
 /**
- * `@cirrus/workflow/do` — the workerd-only half of the package.
+ * `@lunora/workflow/do` — the workerd-only half of the package.
  *
  * `cloudflare:workers` (the `WorkflowEntrypoint` base) is a runtime-only virtual
  * module, so anything touching it lives behind this subpath: the package root
@@ -15,22 +15,22 @@ import type { WorkflowDefinition, WorkflowStepLike } from "../types";
 /**
  * Base class for the generated `WorkflowEntrypoint` classes. Applies a
  * `defineWorkflow` definition onto Cloudflare's `WorkflowEntrypoint`: `run`
- * assembles the Cirrus context (native `step`/`event` + the `ctx.run` function
+ * assembles the Lunora context (native `step`/`event` + the `ctx.run` function
  * dispatcher + a logger) and invokes the user's handler.
  *
  * Generated subclasses stay one line of behavior:
  *
  * ```ts
- * export class OrderPipelineWorkflow extends CirrusWorkflow {
+ * export class OrderPipelineWorkflow extends LunoraWorkflow {
  *     constructor(ctx: ExecutionContext, env: Record&lt;string, unknown>) {
  *         super(ctx, env, orderPipeline, "orderPipeline");
  *     }
  * }
  * ```
  */
-class CirrusWorkflow<Params = Record<string, unknown>, Output = unknown> extends WorkflowEntrypoint<Record<string, unknown>, Params> {
-    /** The `cirrus/workflows.ts` export name, for log correlation. */
-    readonly #cirrusName: string;
+class LunoraWorkflow<Params = Record<string, unknown>, Output = unknown> extends WorkflowEntrypoint<Record<string, unknown>, Params> {
+    /** The `lunora/workflows.ts` export name, for log correlation. */
+    readonly #lunoraName: string;
 
     /** The `defineWorkflow` result this entrypoint runs. */
     readonly #definition: WorkflowDefinition<Params, Output>;
@@ -44,14 +44,14 @@ class CirrusWorkflow<Params = Record<string, unknown>, Output = unknown> extends
         super(context, env);
 
         this.#definition = definition;
-        this.#cirrusName = exportName ?? "workflow";
+        this.#lunoraName = exportName ?? "workflow";
     }
 
     public override async run(event: Readonly<WorkflowEvent<Params>>, step: WorkflowStep): Promise<Output> {
         const context = createWorkflowRunContext<Params>({
             env: this.env,
             event,
-            exportName: this.#cirrusName,
+            exportName: this.#lunoraName,
             step: step as unknown as WorkflowStepLike,
         });
 
@@ -59,4 +59,4 @@ class CirrusWorkflow<Params = Record<string, unknown>, Output = unknown> extends
     }
 }
 
-export default CirrusWorkflow;
+export default LunoraWorkflow;

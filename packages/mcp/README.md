@@ -6,7 +6,7 @@
 
 </a>
 
-<h3 align="center">Model Context Protocol server exposing a Cirrus deployment to AI agents</h3>
+<h3 align="center">Model Context Protocol server exposing a Lunora deployment to AI agents</h3>
 
 <!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
@@ -34,36 +34,36 @@
 
 ---
 
-A [Model Context Protocol](https://modelcontextprotocol.io) server that exposes a deployed Cirrus app to AI agents. It registers tools for introspecting a deployment (`cirrus_list_functions`, `cirrus_list_tables`) and invoking its functions (`cirrus_run_query`, `cirrus_run_mutation`, `cirrus_run_action`), each backed by `@cirrus/client` over HTTP RPC.
+A [Model Context Protocol](https://modelcontextprotocol.io) server that exposes a deployed Lunora app to AI agents. It registers tools for introspecting a deployment (`lunora_list_functions`, `lunora_list_tables`) and invoking its functions (`lunora_run_query`, `lunora_run_mutation`, `lunora_run_action`), each backed by `@lunora/client` over HTTP RPC.
 
-Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
+Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
 ## Install
 
 ```sh
-npm install @cirrus/mcp
+npm install @lunora/mcp
 ```
 
 ```sh
-yarn add @cirrus/mcp
+yarn add @lunora/mcp
 ```
 
 ```sh
-pnpm add @cirrus/mcp
+pnpm add @lunora/mcp
 ```
 
 ## Usage
 
-MCP clients spawn the `cirrus-mcp` binary over stdio. Configuration comes from `CIRRUS_URL` (required) and `CIRRUS_ADMIN_TOKEN` (optional bearer token):
+MCP clients spawn the `lunora-mcp` binary over stdio. Configuration comes from `LUNORA_URL` (required) and `LUNORA_ADMIN_TOKEN` (optional bearer token):
 
 ```jsonc
 {
     "mcpServers": {
-        "cirrus": {
-            "command": "cirrus-mcp",
+        "lunora": {
+            "command": "lunora-mcp",
             "env": {
-                "CIRRUS_URL": "https://app.example.workers.dev",
-                "CIRRUS_ADMIN_TOKEN": "...",
+                "LUNORA_URL": "https://app.example.workers.dev",
+                "LUNORA_ADMIN_TOKEN": "...",
             },
         },
     },
@@ -73,19 +73,19 @@ MCP clients spawn the `cirrus-mcp` binary over stdio. Configuration comes from `
 Or build a transport-agnostic server programmatically:
 
 ```ts
-import { createCirrusMcpServer } from "@cirrus/mcp";
+import { createLunoraMcpServer } from "@lunora/mcp";
 
-const server = createCirrusMcpServer({ url: "https://app.example.workers.dev", token: "..." });
+const server = createLunoraMcpServer({ url: "https://app.example.workers.dev", token: "..." });
 await server.connect(myTransport);
 ```
 
-> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs)**.
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs)**.
 
 ## Related
 
-- [`@cirrus/client`](https://www.npmjs.com/package/@cirrus/client) — the HTTP RPC client backing every tool.
-- [`@cirrus/cli`](https://www.npmjs.com/package/@cirrus/cli) — deploy the app the server introspects and invokes.
-- [`@cirrus/server`](https://www.npmjs.com/package/@cirrus/server) — defines the queries, mutations, and actions the tools call.
+- [`@lunora/client`](https://www.npmjs.com/package/@lunora/client) — the HTTP RPC client backing every tool.
+- [`@lunora/cli`](https://www.npmjs.com/package/@lunora/cli) — deploy the app the server introspects and invokes.
+- [`@lunora/server`](https://www.npmjs.com/package/@lunora/server) — defines the queries, mutations, and actions the tools call.
 
 ## Supported Node.js Versions
 
@@ -94,14 +94,14 @@ Here's [a post on why we think this is important](https://medium.com/the-node-js
 
 ## Contributing
 
-If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/lunora/issues) and check our [Contributing](https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
 > **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
 ## Credits
 
 - [Daniel Bannert](https://github.com/prisis)
-- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
+- [All Contributors](https://github.com/anolilab/lunora/graphs/contributors)
 
 ## Made with ❤️ at Anolilab
 
@@ -109,17 +109,17 @@ This is an open source project and will always remain free to use. If you think 
 
 ## License
 
-The Cirrus mcp package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The Lunora mcp package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
 
 <!-- badges -->
 
 [license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
-[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
-[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/mcp?style=for-the-badge
-[npm-version]: https://www.npmjs.com/package/@cirrus/mcp
-[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/mcp?style=for-the-badge
-[npm-downloads]: https://www.npmjs.com/package/@cirrus/mcp
+[license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@lunora/mcp?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@lunora/mcp
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@lunora/mcp?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@lunora/mcp
 [prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
-[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[prs-welcome]: https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md
 [typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
 [typescript-url]: https://www.typescriptlang.org/

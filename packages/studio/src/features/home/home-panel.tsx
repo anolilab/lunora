@@ -1,4 +1,4 @@
-import { useCirrus } from "@cirrus/react";
+import { useLunora } from "@lunora/react";
 import { useNavigate } from "@tanstack/react-router";
 import type { ReactElement, ReactNode } from "react";
 import { useCallback, useEffect, useState } from "react";
@@ -86,7 +86,7 @@ const AdvisorCard = ({ count, onView, testId, title }: AdvisorCardProps): ReactE
  * card showing a muted placeholder rather than blanking the page.
  */
 export const HomePanel = ({ initialShardKey }: HomePanelProps): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const t = useT();
     const navigate = useNavigate();
 
@@ -130,7 +130,7 @@ export const HomePanel = ({ initialShardKey }: HomePanelProps): ReactElement => 
     }, [navigate]);
 
     return (
-        <div className="flex flex-col gap-6" data-testid="cirrus-home">
+        <div className="flex flex-col gap-6" data-testid="lunora-home">
             {/* Health digest. */}
             <div className="grid gap-3 sm:grid-cols-3" data-testid="home-health">
                 <StatCard label={t("Requests")} value={(metrics?.requests ?? 0).toLocaleString()} />
@@ -174,9 +174,9 @@ export const HomePanel = ({ initialShardKey }: HomePanelProps): ReactElement => 
             <section className="flex flex-col gap-3" data-testid="home-get-connected">
                 <h2 className="text-sm font-semibold tracking-tight text-foreground">{t("Get connected")}</h2>
                 <div className="grid gap-3 sm:grid-cols-3">
-                    <ConnectCard command="npm i @cirrus/client" label={t("Client SDK")} />
-                    <ConnectCard command="npm i @cirrus/react" label={t("React")} />
-                    <ConnectCard command="cirrus dev" label={t("CLI")} />
+                    <ConnectCard command="npm i @lunora/client" label={t("Client SDK")} />
+                    <ConnectCard command="npm i @lunora/react" label={t("React")} />
+                    <ConnectCard command="lunora dev" label={t("CLI")} />
                 </div>
             </section>
 

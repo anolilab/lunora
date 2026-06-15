@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import { insertCronJob } from "../../../.vis/templates/_helpers/insert-cron.js";
 
-const baseCrons = `import { cronJobs } from "@cirrus/scheduler";
+const baseCrons = `import { cronJobs } from "@lunora/scheduler";
 
 import { internal } from "./_generated/api.js";
 
@@ -45,7 +45,7 @@ describe("insertCronJob", () => {
     });
 
     test("inserts after the registry when there are no jobs yet", () => {
-        const source = `import { cronJobs } from "@cirrus/scheduler";
+        const source = `import { cronJobs } from "@lunora/scheduler";
 
 import { internal } from "./_generated/api.js";
 

@@ -2,8 +2,8 @@ import { existsSync } from "node:fs";
 import { unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
-import { discoverSchema, schemaFromIr } from "@cirrus/codegen";
-import { seedPlan } from "@cirrus/seed";
+import { discoverSchema, schemaFromIr } from "@lunora/codegen";
+import { seedPlan } from "@lunora/seed";
 import { join } from "@visulima/path";
 import { Project } from "ts-morph";
 
@@ -93,7 +93,7 @@ const seedFailure = (code: number): SeedCommandResult => {
  */
 const guardSeedTargets = (options: SeedCommandOptions, schemaPath: string): SeedCommandResult | undefined => {
     if (!existsSync(schemaPath)) {
-        options.logger.error(`schema not found: ${schemaPath} — run \`vis generate cirrus-table --name=<name>\` to create one`);
+        options.logger.error(`schema not found: ${schemaPath} — run \`vis generate lunora-table --name=<name>\` to create one`);
 
         return seedFailure(1);
     }
@@ -115,7 +115,7 @@ const guardSeedTargets = (options: SeedCommandOptions, schemaPath: string): Seed
  * surface any skipped rows as conflicts, then clean up regardless of outcome.
  */
 const insertSeedRows = async (ndjson: string, generated: number, cwd: string, options: SeedCommandOptions): Promise<SeedCommandResult> => {
-    const temporaryFile = join(tmpdir(), `cirrus-seed-${String(process.pid)}-${String(Date.now())}.ndjson`);
+    const temporaryFile = join(tmpdir(), `lunora-seed-${String(process.pid)}-${String(Date.now())}.ndjson`);
 
     await writeFile(temporaryFile, ndjson, "utf8");
 
@@ -149,17 +149,17 @@ const insertSeedRows = async (ndjson: string, generated: number, cwd: string, op
 };
 
 /**
- * Generate deterministic seed data from `cirrus/schema.ts` and either print it
+ * Generate deterministic seed data from `lunora/schema.ts` and either print it
  * (`--dry-run`) or bulk-insert it through the existing import pipeline.
  *
  * The CLI never executes the user's schema module; it lifts the schema
- * statically via `@cirrus/codegen`'s `discoverSchema` and bridges the IR into
- * the runtime shape `@cirrus/seed` introspects ({@link schemaFromIr}). The plan
+ * statically via `@lunora/codegen`'s `discoverSchema` and bridges the IR into
+ * the runtime shape `@lunora/seed` introspects ({@link schemaFromIr}). The plan
  * is pure and deterministic — the same `--seed` always yields identical rows.
  */
 const runSeedCommand = async (options: SeedCommandOptions): Promise<SeedCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
-    const schemaPath = join(cwd, "cirrus", "schema.ts");
+    const schemaPath = join(cwd, "lunora", "schema.ts");
 
     const guard = guardSeedTargets(options, schemaPath);
 
@@ -223,7 +223,7 @@ const runSeedCommand = async (options: SeedCommandOptions): Promise<SeedCommandR
     return insertSeedRows(ndjson, generated, cwd, options);
 };
 
-/** `cirrus seed` handler (lazy-loaded via the command's `loader`). */
+/** `lunora seed` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<SeedOptions> = defineHandler<SeedOptions>(async ({ cwd, logger, options }) => {
     const result = await runSeedCommand({
         batchSize: options.batchSize,

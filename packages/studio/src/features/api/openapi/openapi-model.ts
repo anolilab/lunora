@@ -20,7 +20,7 @@ interface RawOperation {
     responses?: Record<string, RawResponse>;
     summary?: string;
     tags?: string[];
-    "x-cirrus-function-kind"?: string;
+    "x-lunora-function-kind"?: string;
 }
 
 interface RawDocument {
@@ -40,16 +40,16 @@ interface ApiResponse {
 
 /** A single operation, flattened from a path item for direct rendering. */
 interface ApiOperation {
-    /** The request-body JSON schema — for a Cirrus RPC op this is the `args` sub-schema; otherwise the whole body. */
+    /** The request-body JSON schema — for a Lunora RPC op this is the `args` sub-schema; otherwise the whole body. */
     argsSchema?: SchemaNode;
     description?: string;
-    /** The `functionPath` const for a Cirrus RPC op (drives the try-it transport). */
+    /** The `functionPath` const for a Lunora RPC op (drives the try-it transport). */
     functionPath?: string;
     /** The HTTP path the operation is served at (the part before any `#` disambiguator). */
     httpPath: string;
-    /** Stable identity (the raw path-item key, unique even when many ops share `/_cirrus/rpc`). */
+    /** Stable identity (the raw path-item key, unique even when many ops share `/_lunora/rpc`). */
     key: string;
-    /** Cirrus function kind (`query` / `mutation` / `action`) when this is an RPC op. */
+    /** Lunora function kind (`query` / `mutation` / `action`) when this is an RPC op. */
     kind?: string;
     method: string;
     operationId: string;
@@ -90,7 +90,7 @@ const buildResponses = (operation: RawOperation, document: RawDocument): ApiResp
     });
 
 /**
- * Flatten one raw operation into an {@link ApiOperation}. Cirrus's emitted RPC
+ * Flatten one raw operation into an {@link ApiOperation}. Lunora's emitted RPC
  * schema is recognised — the meaningful `args` sub-schema and the `functionPath`
  * const are lifted out so the request table and the live try-it console show the
  * function arguments rather than the transport envelope.
@@ -110,7 +110,7 @@ const flattenOperation = (pathKey: string, httpPath: string, method: string, ope
         functionPath,
         httpPath,
         key: pathKey,
-        kind: operation["x-cirrus-function-kind"],
+        kind: operation["x-lunora-function-kind"],
         method: method.toUpperCase(),
         operationId,
         requestSchema,

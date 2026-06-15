@@ -4,26 +4,26 @@
     "private": true,
     "type": "module",
     "scripts": {
-        "dev": "cirrus dev",
+        "dev": "lunora dev",
         "build": "nuxt build",
         "preview": "nuxt preview",
-        "codegen": "cirrus codegen",
-        "deploy:cirrus": "wrangler deploy --config wrangler.cirrus.jsonc",
+        "codegen": "lunora codegen",
+        "deploy:lunora": "wrangler deploy --config wrangler.lunora.jsonc",
         "deploy:nuxt": "nuxt build && wrangler deploy --config wrangler.jsonc",
-        "deploy": "pnpm run deploy:cirrus && pnpm run deploy:nuxt"
+        "deploy": "pnpm run deploy:lunora && pnpm run deploy:nuxt"
     },
     "dependencies": {
-        "@cirrus/client": "^0.0.0",
-        "@cirrus/do": "^0.0.0",
-        "@cirrus/runtime": "^0.0.0",
-        "@cirrus/server": "^0.0.0",
-        "@cirrus/vue": "^0.0.0",
+        "@lunora/client": "^0.0.0",
+        "@lunora/do": "^0.0.0",
+        "@lunora/runtime": "^0.0.0",
+        "@lunora/server": "^0.0.0",
+        "@lunora/vue": "^0.0.0",
         "nuxt": "^4.4.8",
         "vue": "^3.5.38"
     },
     "devDependencies": {
-        "@cirrus/cli": "^0.0.0",
-        "@cirrus/vite": "^0.0.0",
+        "@lunora/cli": "^0.0.0",
+        "@lunora/vite": "^0.0.0",
         "typescript": "^6.0.3",
         "wrangler": "^4.100.0"
     }

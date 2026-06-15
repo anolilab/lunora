@@ -1,9 +1,9 @@
 # {{name}}
 
-A Cirrus app on **TanStack Start (Solid)**, scaffolded by `cirrus init`.
+A Lunora app on **TanStack Start (Solid)**, scaffolded by `lunora init`.
 
-Real-time queries flow through Cirrus's WebSocket transport. Solid's
-fine-grained signals map directly onto Cirrus's per-subscription deltas, so a
+Real-time queries flow through Lunora's WebSocket transport. Solid's
+fine-grained signals map directly onto Lunora's per-subscription deltas, so a
 live query is just a signal the socket writes to. TanStack Router drives
 navigation, and SSR is wired through `preloadQuery` + `hydratePreloaded` so the
 initial paint hydrates without a fetch and then goes live with no refetch.
@@ -25,12 +25,12 @@ pnpm build
 ```
 
 `vite build` produces a Cloudflare Worker bundle with the TanStack Start SSR
-handler and the Cirrus `/_cirrus/*` RPC layer composed into a single worker.
-Deploy with `pnpm deploy` (which runs `cirrus deploy`).
+handler and the Lunora `/_lunora/*` RPC layer composed into a single worker.
+Deploy with `pnpm deploy` (which runs `lunora deploy`).
 
 ## Stack
 
 - `@tanstack/solid-start` — full-stack Solid framework
 - `@tanstack/solid-router` — type-safe file-based routing
-- `@cirrus/solid` — Solid adapter: `createQuery` / `createMutation` / `hydratePreloaded`
-- `@cirrus/*` — the realtime backend on Cloudflare Workers + Durable Objects
+- `@lunora/solid` — Solid adapter: `createQuery` / `createMutation` / `hydratePreloaded`
+- `@lunora/*` — the realtime backend on Cloudflare Workers + Durable Objects

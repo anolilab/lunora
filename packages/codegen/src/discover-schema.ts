@@ -449,7 +449,7 @@ const parseStandaloneVectorIndexes = (object: ObjectLiteralExpression): VectorIn
 
 /**
  * Apply the extension `key` prefix to a bare table name. Mirrors the runtime
- * `prefixTableName` in `@cirrus/server`'s `plugin.ts` so generated names match.
+ * `prefixTableName` in `@lunora/server`'s `plugin.ts` so generated names match.
  */
 const prefixTableName = (key: string, bareName: string): string => `${key}_${bareName}`;
 
@@ -719,7 +719,7 @@ const mergeExtendCall = (extendCall: CallExpression): MergedExtension | undefine
     if (!resolved) {
         // eslint-disable-next-line no-console -- codegen surfaces a clear, actionable warning when an extension cannot be resolved locally.
         console.warn(
-            `@cirrus/codegen: skipping \`.extend(${extendArgument.getText()})\` — its \`defineSchemaExtension(...)\` definition could not be resolved from local sources (cross-package node_modules/.d.ts resolution is a deferred phase). Extension tables will be absent from the generated types.`,
+            `@lunora/codegen: skipping \`.extend(${extendArgument.getText()})\` — its \`defineSchemaExtension(...)\` definition could not be resolved from local sources (cross-package node_modules/.d.ts resolution is a deferred phase). Extension tables will be absent from the generated types.`,
         );
 
         return undefined;
@@ -729,7 +729,7 @@ const mergeExtendCall = (extendCall: CallExpression): MergedExtension | undefine
 
     if (!parts) {
         // eslint-disable-next-line no-console -- malformed extension call; warn rather than crash.
-        console.warn(`@cirrus/codegen: skipping \`.extend(...)\` — \`defineSchemaExtension\` requires a string \`key\` and an options object literal.`);
+        console.warn(`@lunora/codegen: skipping \`.extend(...)\` — \`defineSchemaExtension\` requires a string \`key\` and an options object literal.`);
 
         return undefined;
     }
@@ -824,7 +824,7 @@ const applyExtensions = (defineSchemaCall: CallExpression, tables: TableIR[]): V
 };
 
 /**
- * Load `&lt;projectRoot>/cirrus/schema.ts`, find `defineSchema({...})`, and
+ * Load `&lt;projectRoot>/lunora/schema.ts`, find `defineSchema({...})`, and
  * return a structural IR. Throws if the file or call cannot be found.
  */
 const discoverSchema = (project: Project, schemaPath: string): SchemaIR => {

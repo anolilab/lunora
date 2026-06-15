@@ -1,10 +1,10 @@
 /**
- * Example internal cron target — added by `cirrus registry add crons`.
+ * Example internal cron target — added by `lunora registry add crons`.
  *
- * This file is YOURS: a normal Cirrus module copied into your project. It lives
- * at `cirrus/crons/jobs.ts`, so codegen surfaces its functions under the
+ * This file is YOURS: a normal Lunora module copied into your project. It lives
+ * at `lunora/crons/jobs.ts`, so codegen surfaces its functions under the
  * `crons_jobs` namespace — i.e. `internal.crons_jobs.run` (the ref the sample
- * job in `cirrus/crons.ts` fires).
+ * job in `lunora/crons.ts` fires).
  *
  * `run` is an **internalMutation**: server-only, so a client can never invoke
  * it directly — only the scheduler (or another server function via
@@ -15,7 +15,7 @@
  * Cron handlers should be idempotent: a missed tick may be retried, and a
  * long-running tick can overlap the next one.
  */
-import { internalMutation, v } from "@cirrus/server";
+import { internalMutation, v } from "@lunora/server";
 
 /**
  * The example periodic job. Returns the wall-clock time it ran so you can see

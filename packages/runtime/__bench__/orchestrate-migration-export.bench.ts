@@ -77,7 +77,7 @@ describe("orchestrateMigration — admin RPC fan-out", () => {
     bench("4 shards", async () => {
         await migrate4.coordinator.orchestrateMigration(migrate4.namespace, {
             args: { direction: "up", id: "backfill" },
-            functionPath: "__cirrus_admin__:runMigration",
+            functionPath: "__lunora_admin__:runMigration",
             table: "todos",
         });
     });
@@ -85,7 +85,7 @@ describe("orchestrateMigration — admin RPC fan-out", () => {
     bench("16 shards", async () => {
         await migrate16.coordinator.orchestrateMigration(migrate16.namespace, {
             args: { direction: "up", id: "backfill" },
-            functionPath: "__cirrus_admin__:runMigration",
+            functionPath: "__lunora_admin__:runMigration",
             table: "todos",
         });
     });

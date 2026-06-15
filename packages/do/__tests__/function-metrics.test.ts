@@ -346,7 +346,7 @@ describe("shardDO persisted metrics", () => {
         const database = createSqliteExec();
 
         try {
-            const shard = new CountingShard(makeState(database), { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+            const shard = new CountingShard(makeState(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
             await shard.fetch(userRequest("messages:list"));
 
@@ -369,7 +369,7 @@ describe("shardDO persisted metrics", () => {
         const database = createSqliteExec();
 
         try {
-            const shard = new ConflictingShard(makeState(database), { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+            const shard = new ConflictingShard(makeState(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
             // Two OCC conflicts and one unique-constraint breach — all 409s, all
             // errors; only the OCC pair is write contention.
@@ -377,7 +377,7 @@ describe("shardDO persisted metrics", () => {
             await shard.fetch(userRequest("occ:bump"));
             await shard.fetch(userRequest("unique:insert"));
 
-            const response = await shard.fetch(adminRequest("__cirrus_admin__:getFunctionStats"));
+            const response = await shard.fetch(adminRequest("__lunora_admin__:getFunctionStats"));
             const body = await response.json<{ result: { functions: FunctionCallStat[] } }>();
             const byPath = new Map(body.result.functions.map((s) => [s.path, s]));
 
@@ -395,14 +395,14 @@ describe("shardDO persisted metrics", () => {
         const database = createSqliteExec();
 
         try {
-            const shard = new ScanningShard(makeState(database), { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+            const shard = new ScanningShard(makeState(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
             // Two scanning dispatches of `feed:list`, one fully-indexed `users:get`.
             await shard.fetch(userRequest("feed:list"));
             await shard.fetch(userRequest("feed:list"));
             await shard.fetch(userRequest("users:get"));
 
-            const response = await shard.fetch(adminRequest("__cirrus_admin__:getFunctionStats"));
+            const response = await shard.fetch(adminRequest("__lunora_admin__:getFunctionStats"));
             const body = await response.json<{ result: { functions: FunctionCallStat[]; sinceMs: number } }>();
             const byPath = new Map(body.result.functions.map((s) => [s.path, s]));
 
@@ -422,13 +422,13 @@ describe("shardDO persisted metrics", () => {
         const database = createSqliteExec();
 
         try {
-            const shard = new CountingShard(makeState(database), { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+            const shard = new CountingShard(makeState(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
             await shard.fetch(userRequest("messages:list"));
             await shard.fetch(userRequest("messages:list"));
             await shard.fetch(userRequest("boom:explode"));
 
-            const response = await shard.fetch(adminRequest("__cirrus_admin__:getFunctionStats"));
+            const response = await shard.fetch(adminRequest("__lunora_admin__:getFunctionStats"));
             const body = await response.json<{ result: { functions: FunctionCallStat[]; sinceMs: number } }>();
             const byPath = new Map(body.result.functions.map((s) => [s.path, s]));
 
@@ -446,16 +446,16 @@ describe("shardDO persisted metrics", () => {
 
         try {
             // First instance records two calls, then is "lost" (hibernation/restart).
-            const first = new CountingShard(makeState(database), { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+            const first = new CountingShard(makeState(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
             await first.fetch(userRequest("messages:list"));
             await first.fetch(userRequest("boom:explode"));
 
             // A brand-new instance over the SAME storage — its in-memory counters
             // start at zero, so anything it reports must come from the durable table.
-            const second = new CountingShard(makeState(database), { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+            const second = new CountingShard(makeState(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
-            const metricsResponse = await second.fetch(adminRequest("__cirrus_admin__:getMetrics"));
+            const metricsResponse = await second.fetch(adminRequest("__lunora_admin__:getMetrics"));
             const metrics = await metricsResponse.json<{
                 result: { errors: number; functions: FunctionCallStat[]; history: unknown[]; requests: number };
             }>();
@@ -467,7 +467,7 @@ describe("shardDO persisted metrics", () => {
             expect(metrics.result.functions).toHaveLength(2);
             expect(metrics.result.history.length).toBeGreaterThan(0);
 
-            const statsResponse = await second.fetch(adminRequest("__cirrus_admin__:getFunctionStats"));
+            const statsResponse = await second.fetch(adminRequest("__lunora_admin__:getFunctionStats"));
             const stats = await statsResponse.json<{ result: { functions: FunctionCallStat[] } }>();
             const byPath = new Map(stats.result.functions.map((s) => [s.path, s]));
 
@@ -484,12 +484,12 @@ describe("shardDO persisted metrics", () => {
         const database = createSqliteExec();
 
         try {
-            const shard = new CountingShard(makeState(database), { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+            const shard = new CountingShard(makeState(database), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
             await shard.fetch(userRequest("messages:list"));
             await shard.fetch(userRequest("boom:explode"));
 
-            const response = await shard.fetch(adminRequest("__cirrus_admin__:getMetrics"));
+            const response = await shard.fetch(adminRequest("__lunora_admin__:getMetrics"));
             const body = await response.json<{ result: { cache: unknown; errors: number; requests: number; shard: string } }>();
 
             expect(body.result.requests).toBe(2);

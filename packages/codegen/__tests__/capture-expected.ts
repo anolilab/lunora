@@ -9,11 +9,11 @@ import { runCodegen } from "../src/index";
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "fixtures", "simple");
 
-const workdir = mkdtempSync(join(tmpdir(), "cirrus-capture-"));
+const workdir = mkdtempSync(join(tmpdir(), "lunora-capture-"));
 
-cpSync(join(fixtureRoot, "cirrus"), join(workdir, "cirrus"), { recursive: true });
+cpSync(join(fixtureRoot, "lunora"), join(workdir, "lunora"), { recursive: true });
 
-// `lint: false` keeps `CIRRUS_ADVISORIES` empty in the captured fixture so the
+// `lint: false` keeps `LUNORA_ADVISORIES` empty in the captured fixture so the
 // snapshot stays decoupled from advisor behaviour — matches the snapshot test.
 const result = runCodegen({ lint: false, projectRoot: workdir });
 const expectedDirectory = join(fixtureRoot, "expected", "_generated");

@@ -1,5 +1,5 @@
 /**
- * Builds the Cirrus-flavored context handed to a workflow body. Node-safe (no
+ * Builds the Lunora-flavored context handed to a workflow body. Node-safe (no
  * `cloudflare:workers` import) so the runner and context assembly are unit
  * testable; the workerd-only `src/do` base class consumes it.
  */
@@ -26,15 +26,15 @@ const trimTrailingSlashes = (value: string): string => {
 };
 
 interface RunnerOptions {
-    /** Worker `env` — read `CIRRUS_ORIGIN_URL` + `CIRRUS_ADMIN_TOKEN` at call time. */
+    /** Worker `env` — read `LUNORA_ORIGIN_URL` + `LUNORA_ADMIN_TOKEN` at call time. */
     env: Record<string, unknown>;
     /** Injectable fetch (tests); defaults to the global. */
     fetchImpl?: typeof fetch;
 }
 
 /**
- * Build a {@link WorkflowRunFunction} that invokes a Cirrus function by POSTing
- * to the Worker's `/_cirrus/scheduler/dispatch` endpoint — the same path the
+ * Build a {@link WorkflowRunFunction} that invokes a Lunora function by POSTing
+ * to the Worker's `/_lunora/scheduler/dispatch` endpoint — the same path the
  * SchedulerDO and the Queues workpool dispatch through — authenticated with the
  * admin bearer. The parsed JSON body (the function's return value) is resolved;
  * an empty/non-JSON body resolves to `undefined`.
@@ -46,30 +46,30 @@ const createWorkflowRunner = (options: RunnerOptions): WorkflowRunFunction => {
 
     return async <F extends FunctionReference>(function_: F, args?: ArgsOf<F>, runOptions: RunFunctionOptions = {}): Promise<unknown> => {
         if (typeof fetchImpl !== "function") {
-            throw new TypeError("@cirrus/workflow: no fetch implementation available — pass fetchImpl or run on a platform with global fetch");
+            throw new TypeError("@lunora/workflow: no fetch implementation available — pass fetchImpl or run on a platform with global fetch");
         }
 
-        const origin = options.env.CIRRUS_ORIGIN_URL;
+        const origin = options.env.LUNORA_ORIGIN_URL;
 
         if (typeof origin !== "string" || origin.length === 0) {
-            throw new Error("@cirrus/workflow: `CIRRUS_ORIGIN_URL` must be set on the Worker env so a workflow can call back into Cirrus functions");
+            throw new Error("@lunora/workflow: `LUNORA_ORIGIN_URL` must be set on the Worker env so a workflow can call back into Lunora functions");
         }
 
-        const token = options.env.CIRRUS_ADMIN_TOKEN;
+        const token = options.env.LUNORA_ADMIN_TOKEN;
 
         if (typeof token !== "string" || token.length === 0) {
-            throw new Error("@cirrus/workflow: `CIRRUS_ADMIN_TOKEN` must be set on the Worker env to authenticate workflow function dispatch");
+            throw new Error("@lunora/workflow: `LUNORA_ADMIN_TOKEN` must be set on the Worker env to authenticate workflow function dispatch");
         }
 
-        const url = `${trimTrailingSlashes(origin)}/_cirrus/scheduler/dispatch`;
+        const url = `${trimTrailingSlashes(origin)}/_lunora/scheduler/dispatch`;
         const response = await fetchImpl(url, {
-            body: JSON.stringify({ args: args ?? {}, functionPath: function_.__cirrusRef, shardKey: runOptions.shardKey }),
+            body: JSON.stringify({ args: args ?? {}, functionPath: function_.__lunoraRef, shardKey: runOptions.shardKey }),
             headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
             method: "POST",
         });
 
         if (!response.ok) {
-            throw new Error(`@cirrus/workflow: function dispatch failed (${String(response.status)}): ${await response.text()}`);
+            throw new Error(`@lunora/workflow: function dispatch failed (${String(response.status)}): ${await response.text()}`);
         }
 
         const text = await response.text();

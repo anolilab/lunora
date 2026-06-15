@@ -1,8 +1,8 @@
 import { coverageConfigDefaults, defineConfig } from "vitest/config";
 
-// @cirrus/seed is a build-time / test-time tool (schema introspection + a
+// @lunora/seed is a build-time / test-time tool (schema introspection + a
 // deterministic faker-backed generator), so the suite is plain-Node — no
-// workerd pool needed. The testing-adapter test drives @cirrus/testing's
+// workerd pool needed. The testing-adapter test drives @lunora/testing's
 // in-memory `node:sqlite` harness, which is also plain Node.
 const coverage = {
     ...coverageConfigDefaults,

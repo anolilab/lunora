@@ -11,7 +11,7 @@ export type {
     AuthUser,
     BackupManifest,
     BackupStore,
-    CirrusWorker,
+    LunoraWorker,
     CronHandler,
     CronJobDispatch,
     CronJobInfo,
@@ -48,8 +48,8 @@ export type { CrossShardCounter, CrossShardReader, CrossShardRelationCapabilitie
 export { createCrossShardRelationCapabilities } from "./cross-shard-relations";
 export type { DynamicShardRegistry, DynamicShardRegistryOptions } from "./dynamic-shard-registry";
 export { createDynamicShardRegistry, DEFAULT_REGISTRY_CACHE_TTL_MS, SHARD_REGISTRY_DO_NAME } from "./dynamic-shard-registry";
-export type { CirrusErrorBody } from "./errors";
-export { CirrusError, toErrorResponse } from "./errors";
+export type { LunoraErrorBody } from "./errors";
+export { LunoraError, toErrorResponse } from "./errors";
 export type { LogEvent, LogLevel, ObservabilityEvent, ObservabilitySink } from "./observability";
 export { emitLogEvent, emitRpcEvent } from "./observability";
 export type {

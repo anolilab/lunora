@@ -17,7 +17,7 @@ import type { ReconcileOptions, ReconcileOutcome, RegistryFile, ResolvedItem } f
 
 /**
  * Reconcile a `schema-extension` file: copy the extension source (if absent)
- * and AST-merge the item's `.extend(...)` into `cirrus/schema.ts`. In diff
+ * and AST-merge the item's `.extend(...)` into `lunora/schema.ts`. In diff
  * mode, just describe the intended merge.
  */
 const reconcileSchemaExtension = (
@@ -28,16 +28,16 @@ const reconcileSchemaExtension = (
     logger: Logger,
     diff: boolean,
 ): ReconcileOutcome => {
-    const schemaPath = join(projectRoot, "cirrus", "schema.ts");
+    const schemaPath = join(projectRoot, "lunora", "schema.ts");
 
     if (diff) {
-        logger.info(`~ would merge .extend(${itemKey}.extension) into cirrus/schema.ts (and create ${file.to} if absent)`);
+        logger.info(`~ would merge .extend(${itemKey}.extension) into lunora/schema.ts (and create ${file.to} if absent)`);
 
         return { kind: "skipped", path: schemaPath };
     }
 
     // The item's `to` points at where its extension *source* lives; copy that
-    // (create-if-absent) AND wire it into the shared cirrus/schema.ts.
+    // (create-if-absent) AND wire it into the shared lunora/schema.ts.
     const destinationPath = join(projectRoot, file.to);
 
     if (!existsSync(destinationPath)) {
@@ -47,20 +47,20 @@ const reconcileSchemaExtension = (
 
     const existingSchema = existsSync(schemaPath)
         ? readFileSync(schemaPath, "utf8")
-        : 'import { defineSchema } from "@cirrus/server";\n\nexport const schema = defineSchema({});\n';
+        : 'import { defineSchema } from "@lunora/server";\n\nexport const schema = defineSchema({});\n';
 
     const result = insertSchemaExtension(existingSchema, itemKey);
 
     if (result.ok) {
         mkdirSync(dirname(schemaPath), { recursive: true });
         writeFileSync(schemaPath, result.text, "utf8");
-        logger.success(`merged .extend(${itemKey}.extension) into cirrus/schema.ts`);
+        logger.success(`merged .extend(${itemKey}.extension) into lunora/schema.ts`);
 
         return { kind: "written", path: schemaPath };
     }
 
     if (result.reason === "already-applied") {
-        logger.warn(`cirrus/schema.ts already extends "${itemKey}" — skipping`);
+        logger.warn(`lunora/schema.ts already extends "${itemKey}" — skipping`);
 
         return { kind: "skipped", path: schemaPath };
     }
@@ -140,7 +140,7 @@ const reconcileWholeFile = (
 
     if (base === undefined) {
         // No provenance — leave a file `add` never wrote untouched.
-        logger.warn(`skip (exists, untracked): ${file.to} — refusing to overwrite a file cirrus didn't add (use --overwrite to force)`);
+        logger.warn(`skip (exists, untracked): ${file.to} — refusing to overwrite a file lunora didn't add (use --overwrite to force)`);
 
         return { kind: "skipped", path: destinationPath };
     }
@@ -159,7 +159,7 @@ const reconcileWholeFile = (
 
 /**
  * Reconcile one file into the project. `create-or-skip` writes whole files
- * (lock-aware upgrades); `schema-extension` AST-merges into `cirrus/schema.ts`.
+ * (lock-aware upgrades); `schema-extension` AST-merges into `lunora/schema.ts`.
  */
 const reconcileFile = (
     file: RegistryFile,
@@ -193,7 +193,7 @@ const reconcileItems = (
     // upgrade check). Read once, mutated as files are reconciled, persisted below.
     const lock = readLock(cwd);
 
-    // Sequential by design: reconciling cirrus/schema.ts is read-modify-write,
+    // Sequential by design: reconciling lunora/schema.ts is read-modify-write,
     // so two items extending the schema must not interleave their edits.
     for (const { directory, manifest } of items) {
         for (const file of manifest.files) {

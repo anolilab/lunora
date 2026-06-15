@@ -1,4 +1,4 @@
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraProvider } from "@lunora/react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
@@ -25,9 +25,9 @@ const createClient = (entries: AuditEntry[] = ENTRIES): MockClientHooks =>
     });
 
 const renderPanel = (mock: MockClientHooks) => (
-    <CirrusProvider client={mock.asClient}>
+    <LunoraProvider client={mock.asClient}>
         <AuditPanel />
-    </CirrusProvider>
+    </LunoraProvider>
 );
 
 /** Body rows (after the header), newest-first as the panel renders them. */
@@ -140,9 +140,9 @@ describe("auditPanel", () => {
 
         // No Live toggle: the subscription opens once the mount seed commits a shard.
         await waitFor(() => {
-            const ref = mock.subscribe.mock.calls.at(-1)?.[0] as { __cirrusRef: string } | undefined;
+            const ref = mock.subscribe.mock.calls.at(-1)?.[0] as { __lunoraRef: string } | undefined;
 
-            if (ref?.__cirrusRef !== ADMIN_FUNCTIONS.getAuditLog) {
+            if (ref?.__lunoraRef !== ADMIN_FUNCTIONS.getAuditLog) {
                 throw new Error("not subscribed yet");
             }
         });

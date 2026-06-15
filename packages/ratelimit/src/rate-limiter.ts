@@ -69,7 +69,7 @@ const shardKeysFor = (name: string, key: string | undefined, shards: number): st
 /**
  * Enforces named rate limits over a pluggable store. Construct one per app with
  * a config map; call {@link RateLimiter.limit} to consume and
- * {@link RateLimiter.check} to peek. Framework-agnostic — the `@cirrus/ratelimit`
+ * {@link RateLimiter.check} to peek. Framework-agnostic — the `@lunora/ratelimit`
  * middleware wraps it for procedures.
  */
 class RateLimiter<Names extends string = string> {

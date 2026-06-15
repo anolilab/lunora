@@ -1,10 +1,10 @@
 import { spawnSync } from "node:child_process";
 
-import type { WranglerConfig } from "@cirrus/config";
-import { readWranglerJsonc, validateWranglerProject } from "@cirrus/config";
+import type { WranglerConfig } from "@lunora/config";
+import { readWranglerJsonc, validateWranglerProject } from "@lunora/config";
 import type { Plugin } from "vite";
 
-import type { ResolvedCirrusPluginOptions } from "./types";
+import type { ResolvedLunoraPluginOptions } from "./types";
 
 /** Mirrors the config-layer heuristic: a container image that is a local path. */
 const isLocalImagePath = (image: string): boolean => image.startsWith("./") || image.startsWith("../") || image.startsWith("/") || image.includes("Dockerfile");
@@ -36,13 +36,13 @@ const warnWhenDockerMissing = (wranglerPath: string, dockerAvailable: () => bool
 
     // eslint-disable-next-line no-console
     console.warn(
-        "[cirrus] wrangler.jsonc declares containers built from a local Dockerfile, but no Docker-compatible engine is running. Start Docker (or Colima) before `vite dev`, or the container instances will fail to start.",
+        "[lunora] wrangler.jsonc declares containers built from a local Dockerfile, but no Docker-compatible engine is running. Start Docker (or Colima) before `vite dev`, or the container instances will fail to start.",
     );
 };
 
 const formatError = (wranglerPath: string, problems: ReadonlyArray<string>): Error => {
     const lines = [
-        "[cirrus] wrangler configuration is missing bindings required by your schema.",
+        "[lunora] wrangler configuration is missing bindings required by your schema.",
         `  file: ${wranglerPath}`,
         "",
         ...problems.map((problem) => `  - ${problem}`),
@@ -55,12 +55,12 @@ const formatError = (wranglerPath: string, problems: ReadonlyArray<string>): Err
 
 /**
  * Vite plugin that validates the project's `wrangler.jsonc` against the
- * bindings implied by `cirrus/schema.ts`. Throws (Vite renders nicely) on
+ * bindings implied by `lunora/schema.ts`. Throws (Vite renders nicely) on
  * missing requirements during `configResolved`. Delegates the parsing /
- * validation logic to `@cirrus/config` so the rules stay in lockstep with
- * the CLI (`cirrus deploy`).
+ * validation logic to `@lunora/config` so the rules stay in lockstep with
+ * the CLI (`lunora deploy`).
  */
-const wranglerValidatorPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
+const wranglerValidatorPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
     return {
         configResolved() {
             const result = validateWranglerProject({
@@ -71,7 +71,7 @@ const wranglerValidatorPlugin = (options: ResolvedCirrusPluginOptions): Plugin =
             if (!result.wranglerPath) {
                 throw new Error(
                     [
-                        "[cirrus] wrangler.jsonc not found.",
+                        "[lunora] wrangler.jsonc not found.",
                         `  searched in: ${options.projectRoot}`,
                         "  create a wrangler.jsonc declaring at least the SHARD durable object binding.",
                     ].join("\n"),
@@ -81,7 +81,7 @@ const wranglerValidatorPlugin = (options: ResolvedCirrusPluginOptions): Plugin =
             if (result.report.warnings.length > 0) {
                 for (const warning of result.report.warnings) {
                     // eslint-disable-next-line no-console
-                    console.warn(`[cirrus] wrangler validator: ${warning}`);
+                    console.warn(`[lunora] wrangler validator: ${warning}`);
                 }
             }
 
@@ -91,7 +91,7 @@ const wranglerValidatorPlugin = (options: ResolvedCirrusPluginOptions): Plugin =
 
             warnWhenDockerMissing(result.wranglerPath);
         },
-        name: "cirrus:wrangler-validator",
+        name: "lunora:wrangler-validator",
     };
 };
 

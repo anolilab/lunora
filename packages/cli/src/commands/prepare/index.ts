@@ -4,7 +4,7 @@ import { API_SPEC_HELP } from "../../util/api-spec";
 
 const prepareCommand: Command = {
     description: "Run codegen + binding reconcile + wrangler validation (no Vite) — for CI",
-    examples: [["cirrus prepare", "Codegen + binding reconcile + validate (CI, before deploy)"]],
+    examples: [["lunora prepare", "Codegen + binding reconcile + validate (CI, before deploy)"]],
     group: "Deploy",
     loader: () =>
         import("./handler").then((m) => {
@@ -15,7 +15,7 @@ const prepareCommand: Command = {
         { description: "Override the schema-drift gate (proceed even with breaking schema drift and no migration)", name: "allow-schema-drift", type: Boolean },
         { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
         {
-            description: "Re-bless the committed schema baseline (cirrus/.cirrus-schema.json) with the current shape",
+            description: "Re-bless the committed schema baseline (lunora/.lunora-schema.json) with the current shape",
             name: "update-schema-baseline",
             type: Boolean,
         },

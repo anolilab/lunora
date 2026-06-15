@@ -1,4 +1,4 @@
-import type { StorageObject } from "@cirrus/client";
+import type { StorageObject } from "@lunora/client";
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_SHARE_LIFETIME, deriveEntries, fileSortValue, SHARE_LIFETIMES, sortFiles } from "../../../src/features/storage/storage-entries";

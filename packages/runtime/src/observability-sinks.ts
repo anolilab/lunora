@@ -87,10 +87,10 @@ export const consoleSink = (options: OnlyErrorsOption = {}): ObservabilitySink =
             // are emitted whole so a developer still sees their `ctx.log` output.
             if (event.level === "error") {
                 // eslint-disable-next-line no-console
-                console.error("[cirrus:log]", event.functionPath, event.message);
+                console.error("[lunora:log]", event.functionPath, event.message);
             } else {
                 // eslint-disable-next-line no-console
-                console.log("[cirrus:log]", event.functionPath, event.message);
+                console.log("[lunora:log]", event.functionPath, event.message);
             }
         },
         onRpc: (event) => {
@@ -100,10 +100,10 @@ export const consoleSink = (options: OnlyErrorsOption = {}): ObservabilitySink =
 
             if (event.ok) {
                 // eslint-disable-next-line no-console
-                console.log("[cirrus:rpc]", event);
+                console.log("[lunora:rpc]", event);
             } else {
                 // eslint-disable-next-line no-console
-                console.error("[cirrus:rpc]", event);
+                console.error("[lunora:rpc]", event);
             }
         },
     };

@@ -3,7 +3,7 @@ export type FunctionKind = "action" | "mutation" | "query";
 
 /**
  * One argument of a registered function, derived from its `v.*` validator by the
- * worker's `/_cirrus/admin/functions` endpoint. A compact signature shape.
+ * worker's `/_lunora/admin/functions` endpoint. A compact signature shape.
  */
 export interface FunctionArgumentDescriptor {
     /** Element validator kind for an `array` arg (one level), e.g. `string`. */
@@ -19,7 +19,7 @@ export interface FunctionArgumentDescriptor {
 }
 
 /**
- * Runtime descriptor for a registered Cirrus function. The function's `kind` is
+ * Runtime descriptor for a registered Lunora function. The function's `kind` is
  * a compile-time-only phantom on `FunctionReference`, so the runner needs it
  * spelled out here to know which client method to call. `args` carries the
  * function's argument signature (absent on responses from an older worker).

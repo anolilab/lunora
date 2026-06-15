@@ -1,4 +1,4 @@
-import { CirrusError } from "./errors";
+import { LunoraError } from "./errors";
 
 /** A timestamp as better-auth stores it: epoch-ms, an ISO string, or absent. */
 type AuthTimestamp = null | number | string;
@@ -74,14 +74,14 @@ interface ListAuthUsersOptions {
 
 /**
  * The auth user-management plane backing the studio's auth dashboard. The host
- * wires this to better-auth (typically via `@cirrus/auth`'s `createAuthAdmin`);
- * the runtime stays free of a hard dependency on `@cirrus/auth`. The read
+ * wires this to better-auth (typically via `@lunora/auth`'s `createAuthAdmin`);
+ * the runtime stays free of a hard dependency on `@lunora/auth`. The read
  * methods back the GET browse endpoints; the optional mutations back the
  * admin-gated POST endpoints — a host that only needs read-only browsing can
  * omit them (the POST routes then respond `AUTH_OP_NOT_SUPPORTED`). Omit the
  * whole option and every `/auth/*` endpoint responds `AUTH_NOT_CONFIGURED`.
  *
- * Every method here runs behind the worker's `CIRRUS_ADMIN_TOKEN` gate — the
+ * Every method here runs behind the worker's `LUNORA_ADMIN_TOKEN` gate — the
  * implementation is a trusted server-side operator, not an end-user API.
  */
 interface AuthAdmin {
@@ -117,7 +117,7 @@ interface AuthAdmin {
 /**
  * Read-only subset of {@link AuthAdmin}, kept as an alias for the former
  * `authIntrospector` option (which the worker still honours as a browse-only
- * fallback). Prefer wiring `authAdmin` with `@cirrus/auth`'s `createAuthAdmin`
+ * fallback). Prefer wiring `authAdmin` with `@lunora/auth`'s `createAuthAdmin`
  * so the mutation endpoints light up too.
  */
 type AuthIntrospector = Pick<AuthAdmin, "listSessions" | "listUsers">;
@@ -145,7 +145,7 @@ interface AuthRouteContext {
 
 /** One auth-admin route: which `AuthAdmin` method it drives, how to build that method's input, and how to shape the reply. */
 interface AuthRouteDescriptor {
-    /** Build the method input from query (GET) or body (POST); throw `CirrusError` for invalid input. */
+    /** Build the method input from query (GET) or body (POST); throw `LunoraError` for invalid input. */
     build: (context: AuthRouteContext) => unknown;
     http: "GET" | "POST";
     method: keyof AuthAdmin;
@@ -153,7 +153,7 @@ interface AuthRouteDescriptor {
     returns?: "value" | "void";
 }
 
-const AUTH_BASE = "/_cirrus/admin/auth";
+const AUTH_BASE = "/_lunora/admin/auth";
 
 /** HTTP status for an `authAdmin` error code; everything else falls back to 400. */
 const AUTH_ADMIN_ERROR_STATUS: Record<string, number> = {
@@ -168,7 +168,7 @@ const requireBodyString = (body: Record<string, unknown>, field: string): string
     const value = body[field];
 
     if (typeof value !== "string" || value === "") {
-        throw new CirrusError(`\`${field}\` is required`, { code: "BAD_REQUEST", status: 400 });
+        throw new LunoraError(`\`${field}\` is required`, { code: "BAD_REQUEST", status: 400 });
     }
 
     return value;
@@ -179,7 +179,7 @@ const requireQuery = (query: (name: string) => string | undefined, name: string)
     const value = query(name);
 
     if (value === undefined) {
-        throw new CirrusError(`\`${name}\` query parameter is required`, { code: "BAD_REQUEST", status: 400 });
+        throw new LunoraError(`\`${name}\` query parameter is required`, { code: "BAD_REQUEST", status: 400 });
     }
 
     return value;
@@ -296,7 +296,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
             const { data } = body;
 
             if (typeof data !== "object" || data === null || Array.isArray(data)) {
-                throw new CirrusError("`data` object is required", { code: "BAD_REQUEST", status: 400 });
+                throw new LunoraError("`data` object is required", { code: "BAD_REQUEST", status: 400 });
             }
 
             return { data: data as Record<string, unknown>, userId: requireBodyString(body, "userId") };
@@ -311,7 +311,7 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
             // Reject a missing role AND an empty/whitespace one — `setRole("")` would
             // otherwise clear the user's role rather than being a no-op.
             if (role === undefined || (typeof role === "string" && role.trim() === "")) {
-                throw new CirrusError("`role` is required", { code: "BAD_REQUEST", status: 400 });
+                throw new LunoraError("`role` is required", { code: "BAD_REQUEST", status: 400 });
             }
 
             return { role, userId: requireBodyString(body, "userId") };
@@ -419,18 +419,18 @@ const AUTH_ROUTES: Record<string, AuthRouteDescriptor> = {
 };
 
 /**
- * Build the `/_cirrus/admin/auth/*` route map merged into the worker's internal
+ * Build the `/_lunora/admin/auth/*` route map merged into the worker's internal
  * route table. Every route shares one driver: admin-token gate → resolve the
  * auth plane → assert the method exists (`AUTH_OP_NOT_SUPPORTED` if the host
  * didn't wire it) → method guard → build input → run, mapping a thrown
- * `authAdmin` error onto a coded `CirrusError`.
+ * `authAdmin` error onto a coded `LunoraError`.
  */
 const buildAuthAdminRoutes = (deps: AuthAdminRouteDeps): Record<string, (request: Request) => Promise<Response>> => {
     const runAuthOp = async <R>(op: () => Promise<R>): Promise<R> => {
         try {
             return await op();
         } catch (error) {
-            if (error instanceof CirrusError) {
+            if (error instanceof LunoraError) {
                 throw error;
             }
 
@@ -438,13 +438,13 @@ const buildAuthAdminRoutes = (deps: AuthAdminRouteDeps): Record<string, (request
             const code = typeof candidate.code === "string" ? candidate.code : "AUTH_ADMIN_ERROR";
             const message = typeof candidate.message === "string" ? candidate.message : "auth admin operation failed";
 
-            throw new CirrusError(message, { code, status: AUTH_ADMIN_ERROR_STATUS[code] ?? 400 });
+            throw new LunoraError(message, { code, status: AUTH_ADMIN_ERROR_STATUS[code] ?? 400 });
         }
     };
 
     const handle = async (request: Request, descriptor: AuthRouteDescriptor): Promise<Response> => {
         if (request.method !== descriptor.http) {
-            throw new CirrusError(`Auth admin endpoint requires ${descriptor.http}`, { code: "METHOD_NOT_ALLOWED", status: 405 });
+            throw new LunoraError(`Auth admin endpoint requires ${descriptor.http}`, { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
         deps.assertAdmin(request);
@@ -452,13 +452,13 @@ const buildAuthAdminRoutes = (deps: AuthAdminRouteDeps): Record<string, (request
         const admin = deps.getAuthAdmin();
 
         if (admin === undefined) {
-            throw new CirrusError("auth endpoints require an `authAdmin` on the worker", { code: "AUTH_NOT_CONFIGURED", status: 400 });
+            throw new LunoraError("auth endpoints require an `authAdmin` on the worker", { code: "AUTH_NOT_CONFIGURED", status: 400 });
         }
 
         const method = admin[descriptor.method];
 
         if (method === undefined) {
-            throw new CirrusError(`auth admin does not support \`${descriptor.method}\``, { code: "AUTH_OP_NOT_SUPPORTED", status: 400 });
+            throw new LunoraError(`auth admin does not support \`${descriptor.method}\``, { code: "AUTH_OP_NOT_SUPPORTED", status: 400 });
         }
 
         const url = new URL(request.url);

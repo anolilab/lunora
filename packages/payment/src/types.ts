@@ -1,5 +1,5 @@
 /**
- * Core domain types for `@cirrus/payment`.
+ * Core domain types for `@lunora/payment`.
  *
  * The provider is a stateless translator; the store owns all state. These types are the
  * provider-agnostic vocabulary every adapter normalizes onto.

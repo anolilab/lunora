@@ -1,9 +1,9 @@
 /**
- * Backup functions — added by `cirrus registry add backup`.
+ * Backup functions — added by `lunora registry add backup`.
  *
- * This file is YOURS: it's a normal Cirrus module, copied into your project so
+ * This file is YOURS: it's a normal Lunora module, copied into your project so
  * you own and edit it. It is the in-deployment, scheduled counterpart to the
- * `cirrus backup` CLI — instead of an operator running an export, a cron fires
+ * `lunora backup` CLI — instead of an operator running an export, a cron fires
  * the {@link snapshot} internalAction on a schedule and streams a point-in-time
  * snapshot of your data into a dedicated R2 bucket.
  *
@@ -19,30 +19,30 @@
  *     snapshot loop is self-managing. Also *internal*; schedule it alongside
  *     `snapshot` as the second half of the PITR cron pair.
  *
- * Together with the `cirrus backup restore` CLI (which imports the nearest
+ * Together with the `lunora backup restore` CLI (which imports the nearest
  * snapshot and can roll the CDC changelog forward to an arbitrary `--to` time),
  * these two actions close the managed point-in-time-recovery loop:
- *   - **Table list is explicit.** Cirrus has no `ctx.db.listTables()`, so a
+ *   - **Table list is explicit.** Lunora has no `ctx.db.listTables()`, so a
  *     generic "snapshot everything" isn't reachable from an action context. You
- *     MUST keep {@link TABLES} in sync with your `cirrus/schema.ts` — see the
+ *     MUST keep {@link TABLES} in sync with your `lunora/schema.ts` — see the
  *     TODO below.
  *   - **Restore is out-of-band.** Pull an object back and feed it to
- *     `cirrus backup restore <id|file>` (the CLI imports NDJSON through the admin
+ *     `lunora backup restore <id|file>` (the CLI imports NDJSON through the admin
  *     `/apply` endpoint), optionally with `--to <ISO>` for CDC replay.
  */
-import { internalAction, v } from "@cirrus/server";
-import { createStorage } from "@cirrus/storage";
-import type { R2BucketLike } from "@cirrus/storage";
+import { internalAction, v } from "@lunora/server";
+import { createStorage } from "@lunora/storage";
+import type { R2BucketLike } from "@lunora/storage";
 // `env` from `cloudflare:workers` exposes the worker's configured bindings (here
 // the BACKUP_BUCKET R2 bucket) — the standard Workers way to reach a binding
 // outside the top-level `fetch`/`scheduled` handler. Ambient types come from
 // your project's `@cloudflare/workers-types` + generated `Env`.
 import { env } from "cloudflare:workers";
 
-// TODO: list every table you want backed up. Cirrus can't enumerate tables from
+// TODO: list every table you want backed up. Lunora can't enumerate tables from
 // an action context, so this list is the source of truth for what `snapshot`
 // dumps. Keep it in sync with the tables you `defineTable(...)` in
-// `cirrus/schema.ts` (a future codegen pass could emit this for you).
+// `lunora/schema.ts` (a future codegen pass could emit this for you).
 const TABLES: readonly string[] = [
     // "messages",
     // "users",
@@ -53,8 +53,8 @@ const BACKUP_PREFIX = "snapshots";
 
 /**
  * Serialise an array of rows as NDJSON (one JSON document per line). NDJSON is
- * the same line-delimited format `cirrus backup` / the admin export endpoint
- * emit, so a snapshot written here is consumable by `cirrus backup restore`.
+ * the same line-delimited format `lunora backup` / the admin export endpoint
+ * emit, so a snapshot written here is consumable by `lunora backup restore`.
  */
 const toNdjson = (rows: ReadonlyArray<Record<string, unknown>>): string => rows.map((row) => JSON.stringify(row)).join("\n");
 
@@ -81,7 +81,7 @@ export const snapshot = internalAction({
         const targets = tables ?? TABLES;
 
         if (targets.length === 0) {
-            throw new Error("backup/snapshot: no tables configured — edit the TABLES list in cirrus/backup/index.ts (or pass { tables }) before scheduling.");
+            throw new Error("backup/snapshot: no tables configured — edit the TABLES list in lunora/backup/index.ts (or pass { tables }) before scheduling.");
         }
 
         // `env` values are typed `unknown` (see the registry's cloudflare-workers
@@ -112,9 +112,9 @@ export const snapshot = internalAction({
 
         const body = `${chunks.filter((chunk) => chunk.length > 0).join("\n")}\n`;
         // Colons/periods are awkward in object keys across tooling; flatten them,
-        // mirroring how the `cirrus backup` CLI names its files.
+        // mirroring how the `lunora backup` CLI names its files.
         const stamp = new Date().toISOString().replaceAll(/[.:]/gu, "-");
-        const key = `${BACKUP_PREFIX}/cirrus-backup-${stamp}.ndjson`;
+        const key = `${BACKUP_PREFIX}/lunora-backup-${stamp}.ndjson`;
 
         await storage.store(key, new TextEncoder().encode(body).buffer as ArrayBuffer, {
             contentType: "application/x-ndjson",

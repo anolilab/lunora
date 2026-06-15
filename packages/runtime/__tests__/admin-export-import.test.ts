@@ -63,7 +63,7 @@ describe("createWorker — admin export endpoint", () => {
         });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/export", {
+            new Request("https://app.example/_lunora/admin/export", {
                 body: JSON.stringify({ tables: ["users"] }),
                 headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
                 method: "POST",
@@ -95,7 +95,7 @@ describe("createWorker — admin export endpoint", () => {
             shardDO: noopNamespace,
         });
 
-        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/export", { method: "POST" }), {}, fakeContext);
+        const response = await worker.fetch(new Request("https://app.example/_lunora/admin/export", { method: "POST" }), {}, fakeContext);
 
         expect(response.status).toBe(403);
     });
@@ -120,7 +120,7 @@ describe("createWorker — admin export endpoint", () => {
             shardDO: noopNamespace,
         });
 
-        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/export"), {}, fakeContext);
+        const response = await worker.fetch(new Request("https://app.example/_lunora/admin/export"), {}, fakeContext);
 
         expect(response.status).toBe(405);
     });
@@ -162,7 +162,7 @@ describe("createWorker — admin export endpoint", () => {
         });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/export", {
+            new Request("https://app.example/_lunora/admin/export", {
                 body: JSON.stringify({ tables: ["users"] }),
                 headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
                 method: "POST",
@@ -218,7 +218,7 @@ describe("createWorker — admin export endpoint", () => {
         });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/export", {
+            new Request("https://app.example/_lunora/admin/export", {
                 body: JSON.stringify({ tables: ["settings"] }),
                 headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
                 method: "POST",
@@ -287,7 +287,7 @@ describe("createWorker — admin import endpoint", () => {
             shardDO: noopNamespace,
         });
 
-        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/import", { method: "POST" }), {}, fakeContext);
+        const response = await worker.fetch(new Request("https://app.example/_lunora/admin/import", { method: "POST" }), {}, fakeContext);
 
         expect(response.status).toBe(403);
     });
@@ -322,7 +322,7 @@ describe("createWorker — admin import endpoint", () => {
         ].join("\n");
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/import", {
+            new Request("https://app.example/_lunora/admin/import", {
                 body: ndjson,
                 headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/x-ndjson" },
                 method: "POST",
@@ -373,7 +373,7 @@ describe("createWorker — admin import endpoint", () => {
         ].join("\n");
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/import", {
+            new Request("https://app.example/_lunora/admin/import", {
                 body: ndjson,
                 headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
                 method: "POST",
@@ -421,7 +421,7 @@ describe("createWorker — admin import endpoint", () => {
         ].join("\n");
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/import", {
+            new Request("https://app.example/_lunora/admin/import", {
                 body: ndjson,
                 headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
                 method: "POST",
@@ -474,7 +474,7 @@ describe("createWorker — admin import endpoint", () => {
         ].join("\n");
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/import", {
+            new Request("https://app.example/_lunora/admin/import", {
                 body: ndjson,
                 headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
                 method: "POST",
@@ -515,7 +515,7 @@ describe("createWorker — admin import endpoint", () => {
         const ndjson = JSON.stringify({ doc: { _id: "g1" }, table: "settings" });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/import", {
+            new Request("https://app.example/_lunora/admin/import", {
                 body: ndjson,
                 headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
                 method: "POST",
@@ -580,7 +580,7 @@ describe("import streaming — large body", () => {
         }
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/import", {
+            new Request("https://app.example/_lunora/admin/import", {
                 body: lines.join("\n"),
                 headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
                 method: "POST",
@@ -629,7 +629,7 @@ describe("import streaming — large body", () => {
         });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/export", {
+            new Request("https://app.example/_lunora/admin/export", {
                 body: JSON.stringify({ tables: ["users"] }),
                 headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
                 method: "POST",
@@ -715,7 +715,7 @@ describe("admin sync (CDC streaming export)", () => {
         });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/sync", {
+            new Request("https://app.example/_lunora/admin/sync", {
                 body: JSON.stringify({ cursors: { c1: 4 }, globalCursor: 1, tables: ["messages"] }),
                 headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
                 method: "POST",
@@ -757,7 +757,7 @@ describe("admin sync (CDC streaming export)", () => {
         });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/sync", {
+            new Request("https://app.example/_lunora/admin/sync", {
                 body: JSON.stringify({}),
                 headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
                 method: "POST",
@@ -795,7 +795,7 @@ describe("admin sync (CDC streaming export)", () => {
         });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/sync", {
+            new Request("https://app.example/_lunora/admin/sync", {
                 // Streamed body has no Content-Length, so the header fast-path
                 // can't see the size — the byte-budgeted reader must catch it.
                 body: oversizedStream(),
@@ -842,7 +842,7 @@ describe("admin apply (CDC replay)", () => {
         });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/apply", {
+            new Request("https://app.example/_lunora/admin/apply", {
                 body: JSON.stringify({
                     batches: [
                         { changes: [{ id: "a" }], shardKey: "c1" },
@@ -889,7 +889,7 @@ describe("admin apply (CDC replay)", () => {
         });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/apply", {
+            new Request("https://app.example/_lunora/admin/apply", {
                 body: oversizedStream(),
                 // @ts-expect-error -- duplex is required by the fetch spec for a streaming body but missing from the lib types here
                 duplex: "half",

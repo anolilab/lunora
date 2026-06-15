@@ -1,15 +1,15 @@
-# @cirrus/container
+# @lunora/container
 
-Cloudflare Containers for Cirrus: `defineContainer`, generated Container DO classes, and the `ctx.containers` action surface.
+Cloudflare Containers for Lunora: `defineContainer`, generated Container DO classes, and the `ctx.containers` action surface.
 
-Part of the [Cirrus](https://github.com/anolilab/cirrus) framework.
+Part of the [Lunora](https://github.com/anolilab/lunora) framework.
 
 ## Usage
 
-Declare containers in `cirrus/containers.ts`:
+Declare containers in `lunora/containers.ts`:
 
 ```ts
-import { defineContainer } from "@cirrus/container";
+import { defineContainer } from "@lunora/container";
 
 export const transcoder = defineContainer({
     image: "./containers/transcoder", // dir with a Dockerfile, or { registry: "docker.io/acme/transcoder:1.4" }
@@ -36,27 +36,27 @@ export const transcode = action({
 });
 ```
 
-The config layer (`cirrus dev` / `cirrus deploy`) reconciles the wrangler `containers[]` entry, the `CONTAINER_*` Durable Object binding, and the SQLite-class migration automatically; `wrangler deploy` builds the Dockerfile with local Docker and pushes it to the Cloudflare Registry.
+The config layer (`lunora dev` / `lunora deploy`) reconciles the wrangler `containers[]` entry, the `CONTAINER_*` Durable Object binding, and the SQLite-class migration automatically; `wrangler deploy` builds the Dockerfile with local Docker and pushes it to the Cloudflare Registry.
 
-## Calling Cirrus from inside a container
+## Calling Lunora from inside a container
 
 Container code calls back into your app's functions with the bridge client (any JS runtime), over the Worker's HTTP RPC endpoint:
 
 ```ts
-import { createContainerBridge } from "@cirrus/container/bridge";
+import { createContainerBridge } from "@lunora/container/bridge";
 
-const cirrus = createContainerBridge({ baseUrl: process.env.CIRRUS_URL!, token: process.env.CIRRUS_TOKEN });
+const lunora = createContainerBridge({ baseUrl: process.env.LUNORA_URL!, token: process.env.LUNORA_TOKEN });
 
-const pending = await cirrus.query("jobs:listPending", { limit: 10 });
-await cirrus.mutation("jobs:markDone", { id: pending[0].id });
+const pending = await lunora.query("jobs:listPending", { limit: 10 });
+await lunora.mutation("jobs:markDone", { id: pending[0].id });
 ```
 
-The token is a bearer your Worker's `resolveIdentity` recognizes — pass it to the container as a `secret`. Non-JS containers can `POST /_cirrus/rpc` with `{ functionPath, args }` directly.
+The token is a bearer your Worker's `resolveIdentity` recognizes — pass it to the container as a `secret`. Non-JS containers can `POST /_lunora/rpc` with `{ functionPath, args }` directly.
 
-Secure the bridge in `resolveIdentity`: read `request.headers.get("authorization")`, strip the `Bearer ` prefix, and compare the token against a Worker secret (e.g. `env.CIRRUS_CONTAINER_TOKEN`) you also forward to the container. Return a `{ userId }` identity only on a match and `null` otherwise — an unrecognised request then runs anonymously and is rejected by your functions' own authorization checks. See [Securing the bridge](https://cirrus.dev/docs/addons/containers#securing-the-bridge) for the full example.
+Secure the bridge in `resolveIdentity`: read `request.headers.get("authorization")`, strip the `Bearer ` prefix, and compare the token against a Worker secret (e.g. `env.LUNORA_CONTAINER_TOKEN`) you also forward to the container. Return a `{ userId }` identity only on a match and `null` otherwise — an unrecognised request then runs anonymously and is rejected by your functions' own authorization checks. See [Securing the bridge](https://lunora.sh/docs/addons/containers#securing-the-bridge) for the full example.
 
 ## Entry points
 
-- `@cirrus/container` — Node-safe: `defineContainer`, naming/normalization helpers, `createContainerContext`, and the Docker-free `createContainerTestContext` test double.
-- `@cirrus/container/do` — workerd-only: the `CirrusContainer` base class the generated DO classes extend (pulls in `@cloudflare/containers`).
-- `@cirrus/container/bridge` — runtime-agnostic: `createContainerBridge` for calling Cirrus functions from inside a container.
+- `@lunora/container` — Node-safe: `defineContainer`, naming/normalization helpers, `createContainerContext`, and the Docker-free `createContainerTestContext` test double.
+- `@lunora/container/do` — workerd-only: the `LunoraContainer` base class the generated DO classes extend (pulls in `@cloudflare/containers`).
+- `@lunora/container/bridge` — runtime-agnostic: `createContainerBridge` for calling Lunora functions from inside a container.

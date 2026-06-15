@@ -5,8 +5,8 @@ import { API_SPEC_HELP } from "../../util/api-spec";
 const verifyCommand: Command = {
     description: "Validate wrangler.jsonc + codegen dry-run + tsc --noEmit (no files written)",
     examples: [
-        ["cirrus verify", "Validate wrangler + codegen + tsc"],
-        ["cirrus verify --no-typecheck", "Skip the TypeScript type-check"],
+        ["lunora verify", "Validate wrangler + codegen + tsc"],
+        ["lunora verify --no-typecheck", "Skip the TypeScript type-check"],
     ],
     group: "Deploy",
     loader: () =>

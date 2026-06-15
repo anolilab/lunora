@@ -9,7 +9,7 @@
  * `aggregate`/`groupBy`/`rank`/`rankBefore`/`rankPage`. Per table with a `read`
  * policy, builds the effective `baseWhere` (intersection of role-applicable
  * predicates) and threads it through the underlying ORM via the public
- * `QueryArgs.baseWhere` seam (see `@cirrus/do/src/query-args.ts`).
+ * `QueryArgs.baseWhere` seam (see `@lunora/do/src/query-args.ts`).
  * `aggregate`/`groupBy` are scoped to `where`, so the `baseWhere` is AND-merged
  * and the reduction only sees policy-visible rows. `count` and the rank family
  * (`rank`/`rankBefore`/`rankPage`) are counts-of-partition that can't be safely
@@ -22,7 +22,7 @@
  * (RLS doesn't apply to the policy evaluator itself, only to the caller-visible
  * reader) and runs the matching write policy with `row` set; for `insert` it
  * runs the policy against the candidate document. A policy returning `false`
- * aborts the write with `CirrusError("FORBIDDEN")`.
+ * aborts the write with `LunoraError("FORBIDDEN")`.
  *
  * 3. **Opt-in scope** — a policy applies only inside procedures whose builder
  * chain includes this middleware. The `rls()` call site is the boundary;
@@ -43,14 +43,14 @@
  * so `.use(rls(policies))` slots in like any other middleware.
  */
 import type { Middleware } from "../builder/types";
-import { CirrusError } from "../error";
+import { LunoraError } from "../error";
 import type { FacadeEntry } from "../facade";
 import { bindOrm, bindTableFacade } from "../facade";
 import type { Permission, Policy, PolicyContext, RlsOptions, Role, WhereInput } from "./types";
 
 /**
- * Structural mirror of `@cirrus/do`'s `QueryArgs` and `CountArgs`. The
- * runtime ORM in `@cirrus/do`/`@cirrus/d1` reads `baseWhere` /
+ * Structural mirror of `@lunora/do`'s `QueryArgs` and `CountArgs`. The
+ * runtime ORM in `@lunora/do`/`@lunora/d1` reads `baseWhere` /
  * `restrictsCounts` straight off these option objects, so as long as the
  * fields here stay name-compatible the wrapper is portable across the two
  * dialects without an inter-package dependency.
@@ -71,7 +71,7 @@ interface CountArgs {
     where?: WhereInput;
 }
 
-/** Structural mirror of `@cirrus/do`'s `AggregateOptions` — only the fields the wrapper touches. */
+/** Structural mirror of `@lunora/do`'s `AggregateOptions` — only the fields the wrapper touches. */
 interface AggregateArgs {
     baseWhere?: WhereInput;
     field?: string;
@@ -80,7 +80,7 @@ interface AggregateArgs {
     where?: WhereInput;
 }
 
-/** Structural mirror of `@cirrus/do`'s `GroupByOptions`. */
+/** Structural mirror of `@lunora/do`'s `GroupByOptions`. */
 interface GroupByArgs {
     agg?: { field?: string; op: string };
     baseWhere?: WhereInput;
@@ -89,7 +89,7 @@ interface GroupByArgs {
     where?: WhereInput;
 }
 
-/** Structural mirror of `@cirrus/do`'s `RankOptions`. */
+/** Structural mirror of `@lunora/do`'s `RankOptions`. */
 interface RankArgs {
     baseWhere?: WhereInput;
     restrictsCounts?: boolean;
@@ -97,7 +97,7 @@ interface RankArgs {
     where?: WhereInput;
 }
 
-/** Structural mirror of `@cirrus/do`'s `RankBeforeOptions`. */
+/** Structural mirror of `@lunora/do`'s `RankBeforeOptions`. */
 interface RankBeforeArgs {
     partitionKey: string;
     restrictsCounts?: boolean;
@@ -105,7 +105,7 @@ interface RankBeforeArgs {
     sortValues: ReadonlyArray<unknown>;
 }
 
-/** Structural mirror of `@cirrus/do`'s `RankPageOptions`. */
+/** Structural mirror of `@lunora/do`'s `RankPageOptions`. */
 interface RankPageArgs {
     baseWhere?: WhereInput;
     cursor?: null | string;
@@ -132,16 +132,16 @@ interface TableReaderLike {
 
 /**
  * Structural projection of the runtime ORM writer. The wrapper relies only
- * on these fields, so it's interchangeable between `@cirrus/do`'s
- * `DatabaseWriterLike` and `@cirrus/d1`'s `DatabaseWriterLike`.
+ * on these fields, so it's interchangeable between `@lunora/do`'s
+ * `DatabaseWriterLike` and `@lunora/d1`'s `DatabaseWriterLike`.
  */
 interface DatabaseWriterLike {
     /**
      * Reduce matching rows to a scalar. The RLS wrapper AND-merges the read
      * `baseWhere` into `options` so the reduction only sees policy-visible rows
      * (safe: an aggregate scoped to `where` never reveals a hidden row — see
-     * `@cirrus/do`'s `RestrictableQueryOptions`). Required: the only writer ever
-     * wrapped is `@cirrus/do`'s `createShardCtxDb`, which always implements it.
+     * `@lunora/do`'s `RestrictableQueryOptions`). Required: the only writer ever
+     * wrapped is `@lunora/do`'s `createShardCtxDb`, which always implements it.
      */
     aggregate: (tableName: string, options: AggregateArgs) => Promise<null | number>;
     count: (tableName: string, whereOrArgs?: CountArgs | WhereInput) => Promise<number>;
@@ -152,7 +152,7 @@ interface DatabaseWriterLike {
     get: (id: string) => Promise<Record<string, unknown> | null>;
 
     /**
-     * Optional table-aware lookup. The underlying writer (e.g. `@cirrus/do`)
+     * Optional table-aware lookup. The underlying writer (e.g. `@lunora/do`)
      * already knows the owning table of an id internally (`lookupById`), so it
      * can return `{ row, tableName }` in a single round-trip. When present, the
      * RLS wrapper uses it to collapse the per-call membership-probe fan-out
@@ -195,10 +195,10 @@ interface DatabaseWriterLike {
 
 /**
  * What a procedure's `ctx.db` must structurally satisfy for the middleware
- * to wrap it. We deliberately mirror `@cirrus/do`'s `DatabaseWriterLike`
- * rather than `@cirrus/server`'s nominal `DatabaseWriter`/`DatabaseReader`:
+ * to wrap it. We deliberately mirror `@lunora/do`'s `DatabaseWriterLike`
+ * rather than `@lunora/server`'s nominal `DatabaseWriter`/`DatabaseReader`:
  * the runtime adapter that flows in is the `DatabaseWriterLike`-shaped one,
- * and structural matching keeps this module free of an `@cirrus/do`-typed
+ * and structural matching keeps this module free of an `@lunora/do`-typed
  * `ctx`.
  */
 type RlsDatabase = DatabaseWriterLike;
@@ -467,7 +467,7 @@ const matchesWhere = (document: Record<string, unknown>, where: WhereInput): boo
  * Decision semantics:
  *
  * - `true` → allow.
- * - `false` → deny (`CirrusError("FORBIDDEN")` at the call site).
+ * - `false` → deny (`LunoraError("FORBIDDEN")` at the call site).
  * - `WhereInput` → allow only when the candidate row (insert) or pre-write row
  * (update/delete) matches the predicate; a mismatch denies the write. Evaluated
  * by {@link matchesWhere} with the same operator set as the SQL compiler
@@ -490,7 +490,7 @@ const matchesWhere = (document: Record<string, unknown>, where: WhereInput): boo
  *
  * SYSTEM-FIELD LIMITATION (insert): on `insert` the candidate `context.row`
  * is the caller's document BEFORE the writer stamps `_id` / `_creationTime`
- * downstream (those are assigned by `@cirrus/do`/`@cirrus/d1` after the policy
+ * downstream (those are assigned by `@lunora/do`/`@lunora/d1` after the policy
  * runs). So an insert policy whose `when` returns a `WhereInput` referencing
  * `_id` or `_creationTime` cannot match — the field is absent on the candidate
  * — and the insert is DENIED. Author insert policies against user-supplied
@@ -654,7 +654,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
             const located = await base.getWithTable(id);
 
             if (!located) {
-                // eslint-disable-next-line unicorn/no-null -- absent row mirrors @cirrus/do's writer null sentinel
+                // eslint-disable-next-line unicorn/no-null -- absent row mirrors @lunora/do's writer null sentinel
                 return { row: null, tableName: undefined };
             }
 
@@ -665,7 +665,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
         const row = await base.get(id);
 
         if (!row) {
-            // eslint-disable-next-line unicorn/no-null -- absent row mirrors @cirrus/do's writer null sentinel
+            // eslint-disable-next-line unicorn/no-null -- absent row mirrors @lunora/do's writer null sentinel
             return { row: null, tableName: undefined };
         }
 
@@ -732,7 +732,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
             const writeOk = evaluateWrite(policies, op, { ...context, row: located.row }, nextRow);
 
             if (!writeOk) {
-                throw new CirrusError("FORBIDDEN", `${op} on "${located.tableName}" denied by policy`);
+                throw new LunoraError("FORBIDDEN", `${op} on "${located.tableName}" denied by policy`);
             }
         }
 
@@ -751,7 +751,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
         const { baseWhere, restricts } = readBase(tableName);
 
         if (restricts) {
-            throw new CirrusError("COUNT_RLS_UNSUPPORTED", `${method}() is not supported on "${tableName}" inside an RLS-restricted context`);
+            throw new LunoraError("COUNT_RLS_UNSUPPORTED", `${method}() is not supported on "${tableName}" inside an RLS-restricted context`);
         }
 
         return baseWhere;
@@ -803,7 +803,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
             const located = await locateRow(id);
 
             if (!located.row) {
-                // eslint-disable-next-line unicorn/no-null -- RlsDatabase.get structurally mirrors @cirrus/do's writer, which returns `null` for an absent row
+                // eslint-disable-next-line unicorn/no-null -- RlsDatabase.get structurally mirrors @lunora/do's writer, which returns `null` for an absent row
                 return null;
             }
 
@@ -826,7 +826,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
             // a hidden row from leaking.
             const allowed = await base.findFirst(located.tableName, { baseWhere, limit: 1, where: { _id: id } });
 
-            // eslint-disable-next-line unicorn/no-null -- null is the deliberate "denied" verdict surfaced by get(), mirroring @cirrus/do
+            // eslint-disable-next-line unicorn/no-null -- null is the deliberate "denied" verdict surfaced by get(), mirroring @lunora/do
             return allowed?.["_id"] === id ? allowed : null;
         },
 
@@ -837,7 +837,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
                 const writeOk = evaluateWrite(policies, "insert", { ...context, row: document });
 
                 if (!writeOk) {
-                    throw new CirrusError("FORBIDDEN", `insert on "${tableName}" denied by policy`);
+                    throw new LunoraError("FORBIDDEN", `insert on "${tableName}" denied by policy`);
                 }
             }
 

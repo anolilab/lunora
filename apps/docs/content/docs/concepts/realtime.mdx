@@ -3,14 +3,14 @@ title: Real-time
 description: How subscriptions, deltas, and hibernation fit together.
 ---
 
-Every Cirrus `query` doubles as a subscription. Calling `useQuery(api.x.y, args)`
+Every Lunora `query` doubles as a subscription. Calling `useQuery(api.x.y, args)`
 in React opens a multiplexed WebSocket to your Worker, registers the query
 with the resolving Durable Object, and re-renders the component whenever a
 matching mutation broadcasts a delta.
 
 ```tsx
-import { api } from "@/cirrus/_generated/api";
-import { useMutation, useQuery } from "@cirrus/react";
+import { api } from "@/lunora/_generated/api";
+import { useMutation, useQuery } from "@lunora/react";
 
 export const Chat = ({ channelId }: { channelId: string }) => {
     const messages = useQuery(api.messages.list, { channelId });
@@ -46,13 +46,13 @@ receive the delta, scoped further by index predicate.
 
 ## Reconnect
 
-The client (`@cirrus/client`) uses exponential backoff with jitter and
+The client (`@lunora/client`) uses exponential backoff with jitter and
 **resumes by bookmark**: it sends the last delta sequence it acknowledged so
 the server can replay anything that was missed during the disconnect.
 
 ## Why no MQTT / Pub/Sub
 
-Real-time fan-out in Cirrus is entirely Durable-Object-based: hibernated
+Real-time fan-out in Lunora is entirely Durable-Object-based: hibernated
 WebSocket subscriptions on `ShardDO`, type-safe and integrated end-to-end with
 your queries, with no external broker to run. Cloudflare **Pub/Sub** (an MQTT
 broker) is therefore a non-goal — it is in beta with gated onboarding and no
@@ -64,5 +64,5 @@ native-MQTT devices appears; until then there is nothing to configure.
 ## See also
 
 - [Sharding](/docs/concepts/sharding)
-- [API: @cirrus/react](/docs/api/react)
+- [API: @lunora/react](/docs/api/react)
 - [Deployment](/docs/deployment) — platform config & non-goals

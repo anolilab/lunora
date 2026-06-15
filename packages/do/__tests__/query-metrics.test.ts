@@ -244,6 +244,6 @@ describe("recordQueryMetric + readQueryMetrics", () => {
     it("uses the reserved table name", () => {
         expect.assertions(1);
 
-        expect(QUERY_METRICS_TABLE).toBe("__cirrus_metrics_queries");
+        expect(QUERY_METRICS_TABLE).toBe("__lunora_metrics_queries");
     });
 });

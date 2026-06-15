@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { CirrusClient } from "@cirrus/client";
+import { LunoraClient } from "@lunora/client";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
@@ -30,7 +30,7 @@ const resolveVersion = (): string => {
                 const pkg = JSON.parse(raw) as { name?: string; version?: string };
 
                 // Skip any nested package.json that isn't ours.
-                if (pkg.name === "@cirrus/mcp" && typeof pkg.version === "string" && pkg.version.length > 0) {
+                if (pkg.name === "@lunora/mcp" && typeof pkg.version === "string" && pkg.version.length > 0) {
                     return pkg.version;
                 }
             } catch {
@@ -53,33 +53,33 @@ const resolveVersion = (): string => {
 };
 
 /** Server name/version advertised in the MCP `initialize` handshake. */
-const SERVER_INFO = { name: "cirrus", version: resolveVersion() } as const;
+const SERVER_INFO = { name: "lunora", version: resolveVersion() } as const;
 
-interface CirrusMcpServerOptions {
+interface LunoraMcpServerOptions {
     /**
-     * Pre-built client (test injection). When omitted a `CirrusClient` is
+     * Pre-built client (test injection). When omitted a `LunoraClient` is
      * created from `url`/`token`/`fetch`.
      */
-    client?: CirrusClient;
+    client?: LunoraClient;
     /** `fetch` implementation; defaults to the ambient global. */
     fetch?: typeof fetch;
     /** Bearer token sent on every RPC (typically the admin token). */
     token?: string;
-    /** Base URL of the deployed Cirrus Worker. Required unless `client` is given. */
+    /** Base URL of the deployed Lunora Worker. Required unless `client` is given. */
     url?: string;
 }
 
-/** Build the `CirrusClient` the tools dispatch against. */
-const resolveClient = (options: CirrusMcpServerOptions): CirrusClient => {
+/** Build the `LunoraClient` the tools dispatch against. */
+const resolveClient = (options: LunoraMcpServerOptions): LunoraClient => {
     if (options.client !== undefined) {
         return options.client;
     }
 
     if (options.url === undefined) {
-        throw new Error("createCirrusMcpServer requires either a `client` or a `url`");
+        throw new Error("createLunoraMcpServer requires either a `client` or a `url`");
     }
 
-    const client = new CirrusClient({ fetch: options.fetch, url: options.url });
+    const client = new LunoraClient({ fetch: options.fetch, url: options.url });
 
     if (options.token !== undefined) {
         client.setAuthToken(options.token);
@@ -89,7 +89,7 @@ const resolveClient = (options: CirrusMcpServerOptions): CirrusClient => {
 };
 
 /**
- * Build an MCP `Server` whose tools talk to a Cirrus deployment. The server is
+ * Build an MCP `Server` whose tools talk to a Lunora deployment. The server is
  * transport-agnostic — call `.connect(transport)` yourself, or use
  * `connectStdio` for the common stdio case.
  *
@@ -97,7 +97,7 @@ const resolveClient = (options: CirrusMcpServerOptions): CirrusClient => {
  * over HTTP RPC. No WebSocket is opened (the tools never subscribe), so this is
  * safe to run as a short-lived stdio process.
  */
-const createCirrusMcpServer = (options: CirrusMcpServerOptions): Server => {
+const createLunoraMcpServer = (options: LunoraMcpServerOptions): Server => {
     const client = resolveClient(options);
     const server = new Server(SERVER_INFO, { capabilities: { tools: {} } });
 
@@ -119,16 +119,16 @@ const createCirrusMcpServer = (options: CirrusMcpServerOptions): Server => {
 
 /**
  * Build the server and connect it over stdio — the transport MCP clients use
- * when they spawn the `cirrus-mcp` binary. Resolves once the transport is
+ * when they spawn the `lunora-mcp` binary. Resolves once the transport is
  * connected; the process then stays alive serving requests.
  */
-const connectStdio = async (options: CirrusMcpServerOptions): Promise<Server> => {
-    const server = createCirrusMcpServer(options);
+const connectStdio = async (options: LunoraMcpServerOptions): Promise<Server> => {
+    const server = createLunoraMcpServer(options);
 
     await server.connect(new StdioServerTransport());
 
     return server;
 };
 
-export type { CirrusMcpServerOptions };
-export { connectStdio, createCirrusMcpServer };
+export type { LunoraMcpServerOptions };
+export { connectStdio, createLunoraMcpServer };

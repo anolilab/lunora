@@ -1,7 +1,7 @@
 import type { MaskColumnMetadata, MaskStrategy } from "./admin";
 
 /**
- * Client-side re-derivation of `@cirrus/server`'s mask strategies, for the data
+ * Client-side re-derivation of `@lunora/server`'s mask strategies, for the data
  * browser's **preview** toggle. This is render-only: the operator still has full
  * DB access and the stored rows are untouched — toggling on simply shows what a
  * non-privileged caller running a `.use(mask(...))` procedure would receive.

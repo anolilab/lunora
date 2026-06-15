@@ -1,5 +1,5 @@
-import type { AdvisorIndex, AdvisorSchema, Finding } from "@cirrus/advisor";
-import { runAdvisor } from "@cirrus/advisor";
+import type { AdvisorIndex, AdvisorSchema, Finding } from "@lunora/advisor";
+import { runAdvisor } from "@lunora/advisor";
 
 import type {
     AuthApiCallIR,
@@ -44,7 +44,7 @@ const flattenIndexes = (table: TableIR): AdvisorIndex[] => [
  * Collapse the AST-derived {@link SchemaIR} into the advisor's feeder-agnostic
  * {@link AdvisorSchema}. The IR already carries exactly what static lints read —
  * each table's columns (the `shape` keys), relations, and indexes. Codegen never
- * imports `@cirrus/server`, so it builds the advisor input from its own IR
+ * imports `@lunora/server`, so it builds the advisor input from its own IR
  * rather than going through `fromServerSchema`.
  */
 const toAdvisorSchema = (schema: SchemaIR): AdvisorSchema => {
@@ -121,7 +121,7 @@ export const formatAdvisories = (findings: ReadonlyArray<Finding>): string => {
         return "";
     }
 
-    const header = `@cirrus/codegen: ${String(findings.length)} schema advisor finding${findings.length === 1 ? "" : "s"}`;
+    const header = `@lunora/codegen: ${String(findings.length)} schema advisor finding${findings.length === 1 ? "" : "s"}`;
     const lines = findings.map((finding) => `  [${finding.level}] ${finding.name}: ${finding.detail}`);
 
     return [header, ...lines].join("\n");

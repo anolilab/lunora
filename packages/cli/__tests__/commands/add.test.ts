@@ -26,7 +26,7 @@ const makeLogger = (): { lines: string[]; logger: Logger } => {
 const testDirectory = dirname(fileURLToPath(import.meta.url));
 const registryRoot = resolve(testDirectory, "..", "fixtures", "registry");
 
-const BASE_SCHEMA = `import { defineSchema, defineTable, v } from "@cirrus/server";
+const BASE_SCHEMA = `import { defineSchema, defineTable, v } from "@lunora/server";
 
 export const schema = defineSchema({
     messages: defineTable({
@@ -38,18 +38,18 @@ export const schema = defineSchema({
 let workdir: string;
 
 const seedProject = (): void => {
-    const cirrusDir = join(workdir, "cirrus");
+    const lunoraDir = join(workdir, "lunora");
 
-    rmSync(cirrusDir, { force: true, recursive: true });
+    rmSync(lunoraDir, { force: true, recursive: true });
     writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: {}, name: "demo" }, null, 4), "utf8");
     writeFileSync(join(workdir, "wrangler.jsonc"), '{\n    // demo\n    "name": "demo"\n}\n', "utf8");
-    mkdirSync(cirrusDir, { recursive: true });
-    writeFileSync(join(cirrusDir, "schema.ts"), BASE_SCHEMA, "utf8");
+    mkdirSync(lunoraDir, { recursive: true });
+    writeFileSync(join(lunoraDir, "schema.ts"), BASE_SCHEMA, "utf8");
 };
 
-describe("cirrus add", () => {
+describe("lunora add", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-cli-add-"));
+        workdir = mkdtempSync(join(tmpdir(), "lunora-cli-add-"));
         seedProject();
     });
 
@@ -66,7 +66,7 @@ describe("cirrus add", () => {
 
             expect(manifest.name).toBe("ratelimit");
             expect(manifest.files).toHaveLength(2);
-            expect(manifest.deps).toStrictEqual({ "@cirrus/ratelimit": "workspace:*" });
+            expect(manifest.deps).toStrictEqual({ "@lunora/ratelimit": "workspace:*" });
         });
 
         it("throws on a missing files array", () => {
@@ -86,7 +86,7 @@ describe("cirrus add", () => {
         it("rejects path traversal in from (arbitrary host-file read)", () => {
             expect.assertions(1);
 
-            expect(() => parseManifest({ files: [{ from: "../../../../etc/passwd", merge: "create-or-skip", to: "cirrus/x.ts" }], name: "x" }, "x")).toThrow(
+            expect(() => parseManifest({ files: [{ from: "../../../../etc/passwd", merge: "create-or-skip", to: "lunora/x.ts" }], name: "x" }, "x")).toThrow(
                 /relative path/,
             );
         });
@@ -96,7 +96,7 @@ describe("cirrus add", () => {
 
             expect(() =>
                 parseManifest(
-                    { envVars: [{ name: "A", value: "x\nINJECTED=evil" }], files: [{ from: "a.ts", merge: "create-or-skip", to: "cirrus/x.ts" }], name: "x" },
+                    { envVars: [{ name: "A", value: "x\nINJECTED=evil" }], files: [{ from: "a.ts", merge: "create-or-skip", to: "lunora/x.ts" }], name: "x" },
                     "x",
                 ),
             ).toThrow(/newline/);
@@ -109,7 +109,7 @@ describe("cirrus add", () => {
                 parseManifest(
                     {
                         envVars: [{ name: "A\nINJECTED=evil", value: "ok" }],
-                        files: [{ from: "a.ts", merge: "create-or-skip", to: "cirrus/x.ts" }],
+                        files: [{ from: "a.ts", merge: "create-or-skip", to: "lunora/x.ts" }],
                         name: "x",
                     },
                     "x",
@@ -124,7 +124,7 @@ describe("cirrus add", () => {
                 parseManifest(
                     {
                         envVars: [{ name: "EXISTING=evil", secret: false, value: "v" }],
-                        files: [{ from: "a.ts", merge: "create-or-skip", to: "cirrus/x.ts" }],
+                        files: [{ from: "a.ts", merge: "create-or-skip", to: "lunora/x.ts" }],
                         name: "x",
                     },
                     "x",
@@ -135,8 +135,8 @@ describe("cirrus add", () => {
         it("rejects a path-traversing item name (manifest.name used as path segment + import)", () => {
             expect.assertions(2);
 
-            expect(() => parseManifest({ files: [{ from: "a.ts", merge: "create-or-skip", to: "cirrus/x.ts" }], name: "../../evil" }, "x")).toThrow(/name/u);
-            expect(() => parseManifest({ files: [{ from: "a.ts", merge: "create-or-skip", to: "cirrus/x.ts" }], name: 'x } from "evil"; //' }, "x")).toThrow(
+            expect(() => parseManifest({ files: [{ from: "a.ts", merge: "create-or-skip", to: "lunora/x.ts" }], name: "../../evil" }, "x")).toThrow(/name/u);
+            expect(() => parseManifest({ files: [{ from: "a.ts", merge: "create-or-skip", to: "lunora/x.ts" }], name: 'x } from "evil"; //' }, "x")).toThrow(
                 /name/u,
             );
         });
@@ -179,7 +179,7 @@ describe("cirrus add", () => {
             expect(lines.join("\n")).toContain("plan: ratelimit");
             expect(lines.join("\n")).toContain("dry-run");
             // schema.ts untouched.
-            expect(readFileSync(join(workdir, "cirrus", "schema.ts"), "utf8")).toStrictEqual(BASE_SCHEMA);
+            expect(readFileSync(join(workdir, "lunora", "schema.ts"), "utf8")).toStrictEqual(BASE_SCHEMA);
         });
     });
 
@@ -190,13 +190,13 @@ describe("cirrus add", () => {
             const first = await runAddCommand({ cwd: workdir, from: registryRoot, logger: makeLogger().logger, names: ["ratelimit"], yes: true });
 
             expect(first.code).toBe(0);
-            expect(existsSync(join(workdir, "cirrus", "ratelimit", "index.ts"))).toBe(true);
+            expect(existsSync(join(workdir, "lunora", "ratelimit", "index.ts"))).toBe(true);
 
             const { lines, logger } = makeLogger();
             const second = await runAddCommand({ cwd: workdir, from: registryRoot, logger, names: ["ratelimit"], yes: true });
 
             expect(second.code).toBe(0);
-            expect(lines.join("\n")).toContain("skip (exists): cirrus/ratelimit/index.ts");
+            expect(lines.join("\n")).toContain("skip (exists): lunora/ratelimit/index.ts");
         });
 
         it("schema-extension merges into schema.ts and is idempotent on re-run", async () => {
@@ -204,13 +204,13 @@ describe("cirrus add", () => {
 
             await runAddCommand({ cwd: workdir, from: registryRoot, logger: makeLogger().logger, names: ["ratelimit"], yes: true });
 
-            const afterFirst = readFileSync(join(workdir, "cirrus", "schema.ts"), "utf8");
+            const afterFirst = readFileSync(join(workdir, "lunora", "schema.ts"), "utf8");
 
             expect(afterFirst).toContain(".extend(ratelimit.extension)");
 
             await runAddCommand({ cwd: workdir, from: registryRoot, logger: makeLogger().logger, names: ["ratelimit"], yes: true });
 
-            const afterSecond = readFileSync(join(workdir, "cirrus", "schema.ts"), "utf8");
+            const afterSecond = readFileSync(join(workdir, "lunora", "schema.ts"), "utf8");
 
             // exactly one .extend — no duplication.
             expect(afterSecond.match(/\.extend\(ratelimit\.extension\)/gu)).toHaveLength(1);
@@ -222,12 +222,12 @@ describe("cirrus add", () => {
 
             const result = await runAddCommand({ cwd: workdir, from: registryRoot, logger: makeLogger().logger, names: ["ratelimit"], yes: true });
 
-            expect(result.deps).toContain("@cirrus/ratelimit");
+            expect(result.deps).toContain("@lunora/ratelimit");
 
             const pkg = readFileSync(join(workdir, "package.json"), "utf8");
             const wrangler = readFileSync(join(workdir, "wrangler.jsonc"), "utf8");
 
-            expect(pkg).toContain("@cirrus/ratelimit");
+            expect(pkg).toContain("@lunora/ratelimit");
             // comment preserved + binding applied.
             expect(wrangler).toContain("RATELIMIT_ENABLED");
         });
@@ -240,8 +240,8 @@ describe("cirrus add", () => {
             const result = await runAddCommand({ cwd: workdir, from: registryRoot, logger: makeLogger().logger, names: ["needs-ratelimit"], yes: true });
 
             expect(result.code).toBe(0);
-            expect(existsSync(join(workdir, "cirrus", "ratelimit", "index.ts"))).toBe(true);
-            expect(existsSync(join(workdir, "cirrus", "needs-ratelimit", "index.ts"))).toBe(true);
+            expect(existsSync(join(workdir, "lunora", "ratelimit", "index.ts"))).toBe(true);
+            expect(existsSync(join(workdir, "lunora", "needs-ratelimit", "index.ts"))).toBe(true);
         });
     });
 

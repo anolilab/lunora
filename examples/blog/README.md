@@ -1,6 +1,6 @@
-# @cirrus-example/blog
+# @lunora-example/blog
 
-A blogging app that exercises the full Cirrus add-on stack: email/password
+A blogging app that exercises the full Lunora add-on stack: email/password
 auth, R2-backed featured images, and a nightly scheduler that purges stale
 drafts.
 
@@ -8,30 +8,30 @@ drafts.
 
 - `.global()` on the `users` table — identity lives in D1 so it's queryable
   across every shard
-- Email/password auth via `@cirrus/auth` (signin + signup routes)
+- Email/password auth via `@lunora/auth` (signin + signup routes)
 - Direct-to-R2 uploads via `ctx.storage.getSignedUrl(..., { method: "PUT" })`
-- Cron-driven background work via `@cirrus/scheduler` + a Wrangler trigger
+- Cron-driven background work via `@lunora/scheduler` + a Wrangler trigger
 - A multi-route SPA (auth → dashboard) wired with `useAuth`
 
 ## Run it
 
 ```bash
 # One-time setup
-pnpm dlx wrangler d1 create cirrus-example-blog
-pnpm dlx wrangler r2 bucket create cirrus-example-blog-files
+pnpm dlx wrangler d1 create lunora-example-blog
+pnpm dlx wrangler r2 bucket create lunora-example-blog-files
 pnpm dlx wrangler secret put AUTH_SECRET
 pnpm dlx wrangler secret put STORAGE_SECRET
 
 # Paste the D1 database_id into wrangler.jsonc, then:
 pnpm install
-pnpm --filter @cirrus-example/blog dev
+pnpm --filter @lunora-example/blog dev
 ```
 
 The dev server listens on <http://localhost:5175>.
 
 ## Key snippets
 
-### Multi-tier schema (`cirrus/schema.ts`)
+### Multi-tier schema (`lunora/schema.ts`)
 
 ```ts
 users: defineTable({ /* ... */ })
@@ -49,7 +49,7 @@ drafts: defineTable({ /* ... */ })
 `posts` and `drafts` are root-scoped (per ShardDO) so writes stay SQLite-
 fast.
 
-### Direct-to-R2 upload (`cirrus/posts.ts`)
+### Direct-to-R2 upload (`lunora/posts.ts`)
 
 ```ts
 export const requestImageUpload = mutation({
@@ -65,7 +65,7 @@ export const requestImageUpload = mutation({
 Client then does `fetch(url, { method: "PUT", body: file })` — the Worker
 never touches the bytes.
 
-### Nightly cleanup (`wrangler.jsonc` + `cirrus/cleanup.ts`)
+### Nightly cleanup (`wrangler.jsonc` + `lunora/cleanup.ts`)
 
 ```jsonc
 "triggers": { "crons": ["0 3 * * *"] }

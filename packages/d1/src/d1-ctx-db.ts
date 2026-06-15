@@ -1,16 +1,16 @@
 /**
- * D1 column-dialect twin of the DO `createShardCtxDb` (`@cirrus/do`).
+ * D1 column-dialect twin of the DO `createShardCtxDb` (`@lunora/do`).
  *
  * Global (`.global()`) tables live in D1 with a real column-per-field physical
  * schema — not the DO's JSON blob — so `where`/`orderBy`/keyset-cursor refer to
  * actual columns (`"field"`) rather than `json_extract(...)`. The query and
  * cursor logic is identical to the DO path: it reuses the shared, dialect-
  * agnostic compiler (`compileWhere`), order-by builder, and keyset helpers from
- * `@cirrus/do`, swapping only the {@link WhereCompilerStrategy} (column refs +
+ * `@lunora/do`, swapping only the {@link WhereCompilerStrategy} (column refs +
  * value serialization) so the generated `ctx.db.&lt;table>` facade (1.2.7) is
  * backend-agnostic.
  */
-/* eslint-disable unicorn/prevent-abbreviations -- "d1-ctx-db" is the established public module name: src/index.ts and every test import it as "./d1-ctx-db.js", and it deliberately mirrors @cirrus/do's "ctx-db.ts" twin. Renaming would break those importers. */
+/* eslint-disable unicorn/prevent-abbreviations -- "d1-ctx-db" is the established public module name: src/index.ts and every test import it as "./d1-ctx-db.js", and it deliberately mirrors @lunora/do's "ctx-db.ts" twin. Renaming would break those importers. */
 import type {
     AggregateIndexDefinitionLike,
     AggregateOptions,
@@ -34,7 +34,7 @@ import type {
     ValidatorLike,
     WhereCompilerStrategy,
     WhereInput,
-} from "@cirrus/do";
+} from "@lunora/do";
 import {
     aggregateSqlFunction,
     aggregateTableName,
@@ -77,7 +77,7 @@ import {
     stringifySearchText,
     throwingScheduler,
     tokenizeSearch,
-} from "@cirrus/do";
+} from "@lunora/do";
 
 import { columnRef, frameworkColumnDdl, physicalIndexName, quoteIdentifier, sqlAffinityForKind } from "./dialect";
 
@@ -139,7 +139,7 @@ const MAX_TRIGGER_DEPTH = 50;
 
 /**
  * Structural shape of a `.searchIndex()` declaration. Kept local (not imported
- * from `@cirrus/do`) because that file owns the FTS surface and doesn't export
+ * from `@lunora/do`) because that file owns the FTS surface and doesn't export
  * the type — mirrored byte-for-byte so a parity test could compare the two.
  */
 interface SearchIndexDefinitionLike {
@@ -189,7 +189,7 @@ const isFtsAvailable = (exec: D1Exec): Promise<boolean> => {
         let available: boolean;
 
         try {
-            await exec.run(`CREATE VIRTUAL TABLE IF NOT EXISTS "__cirrus_fts_probe" USING fts5(x)`, []);
+            await exec.run(`CREATE VIRTUAL TABLE IF NOT EXISTS "__lunora_fts_probe" USING fts5(x)`, []);
             available = true;
         } catch {
             available = false;
@@ -197,7 +197,7 @@ const isFtsAvailable = (exec: D1Exec): Promise<boolean> => {
             // Always attempt the DROP so the probe table never lingers — if the
             // CREATE threw, the IF EXISTS makes the DROP a no-op.
             try {
-                await exec.run(`DROP TABLE IF EXISTS "__cirrus_fts_probe"`, []);
+                await exec.run(`DROP TABLE IF EXISTS "__lunora_fts_probe"`, []);
             } catch {
                 // The probe table cleanup is best-effort; swallow so the
                 // availability decision still propagates.
@@ -277,7 +277,7 @@ const decodeBigint = (raw: unknown): unknown => {
  * its present value exactly as `inner` would (boolean → 1/0, object → JSON, …).
  * The validator's own `kind` is `"optional"`, which hides that — unwrap to the
  * inner validator's kind so the decode reverses the real storage form. The inner
- * validator is stashed on `_meta.inner` by `@cirrus/values`' `createValidator`.
+ * validator is stashed on `_meta.inner` by `@lunora/values`' `createValidator`.
  */
 const effectiveColumnKind = (validator: ValidatorLike): string | undefined => {
     if (validator.kind !== "optional") {
@@ -897,7 +897,7 @@ const forEachRowPaged = async (
 /**
  * SQLite affinity for a column. Resolves the *effective* validator kind (so
  * `v.optional(inner)` stores as `inner` would) and defers to the shared dialect
- * (`@cirrus/d1/dialect`) — the same mapping the `cirrus migrate generate` SQL
+ * (`@lunora/d1/dialect`) — the same mapping the `lunora migrate generate` SQL
  * emitter uses, so auto-provisioned and hand-migrated tables stay identical.
  */
 const globalColumnAffinity = (validator: ValidatorLike): ReturnType<typeof sqlAffinityForKind> => sqlAffinityForKind(effectiveColumnKind(validator));
@@ -906,7 +906,7 @@ const globalColumnAffinity = (validator: ValidatorLike): ReturnType<typeof sqlAf
  * Auto-provision every `.global()` table from the schema: `CREATE TABLE IF NOT
  * EXISTS` with the physical `id`/`_creationTime` columns plus a typed column per
  * declared field, then its secondary and `.unique()` indexes. This is the D1
- * twin of `@cirrus/do`'s `runShardMigrations` (which self-creates shard-local
+ * twin of `@lunora/do`'s `runShardMigrations` (which self-creates shard-local
  * tables) — it makes the schema the single source of truth for global tables
  * too, so a fresh database serves them without a hand-applied migration. The
  * column set and dialect match exactly what this module reads and writes
@@ -980,7 +980,7 @@ const runD1GlobalTableMigrations = async (exec: D1Exec, schema: SchemaLike): Pro
 
 /**
  * Materialize the `__agg_&lt;index>` companion tables for every declared
- * `aggregateIndex` on a global table. Global tables in Cirrus ship their own
+ * `aggregateIndex` on a global table. Global tables in Lunora ship their own
  * DDL — counter tables are opt-in so production hosts can decide where they
  * live. Tests and dev hosts can call this once after their schema migration to
  * unlock O(1) counts.

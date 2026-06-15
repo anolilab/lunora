@@ -11,7 +11,7 @@ import { emitDataModel } from "../src/emit";
  */
 const projectWith = (schemaSource: string): { project: Project; schemaPath: string } => {
     const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: true });
-    const schemaPath = "/virtual/cirrus/schema.ts";
+    const schemaPath = "/virtual/lunora/schema.ts";
 
     project.createSourceFile(schemaPath, schemaSource);
 
@@ -23,7 +23,7 @@ describe("discoverSchema", () => {
         expect.assertions(3);
 
         const { project, schemaPath } = projectWith(`
-            import { defineSchema, defineTable, v } from "@cirrus/server";
+            import { defineSchema, defineTable, v } from "@lunora/server";
 
             export const schema = defineSchema({
                 messages: defineTable({
@@ -50,7 +50,7 @@ describe("discoverSchema", () => {
         expect.assertions(2);
 
         const { project, schemaPath } = projectWith(`
-            import { defineSchema, defineTable, v } from "@cirrus/server";
+            import { defineSchema, defineTable, v } from "@lunora/server";
 
             export const schema = defineSchema({
                 docs: defineTable({ body: v.string() }).searchIndex("by_body", { field: "body" }),
@@ -68,7 +68,7 @@ describe("discoverSchema", () => {
         expect.assertions(1);
 
         const { project, schemaPath } = projectWith(`
-            import { defineSchema, defineTable, v } from "@cirrus/server";
+            import { defineSchema, defineTable, v } from "@lunora/server";
 
             export const schema = defineSchema({
                 users: defineTable({ email: v.string() }),
@@ -84,7 +84,7 @@ describe("discoverSchema", () => {
         expect.assertions(3);
 
         const { project, schemaPath } = projectWith(`
-            import { defineSchema, defineTable, v } from "@cirrus/server";
+            import { defineSchema, defineTable, v } from "@lunora/server";
 
             export const schema = defineSchema({
                 messages: defineTable({
@@ -109,7 +109,7 @@ describe("discoverSchema", () => {
         expect.assertions(3);
 
         const { project, schemaPath } = projectWith(`
-            import { defineSchema, defineTable, v } from "@cirrus/server";
+            import { defineSchema, defineTable, v } from "@lunora/server";
 
             export const schema = defineSchema({
                 scores: defineTable({
@@ -132,7 +132,7 @@ describe("discoverSchema", () => {
 
         // `direction` defaults to "asc" when omitted on a sortBy key.
         const { project: project2, schemaPath: schemaPath2 } = projectWith(`
-            import { defineSchema, defineTable, v } from "@cirrus/server";
+            import { defineSchema, defineTable, v } from "@lunora/server";
 
             export const schema = defineSchema({
                 scores: defineTable({ points: v.number() }).rankIndex("g", { sortBy: [{ field: "points" }] }),
@@ -150,7 +150,7 @@ describe("discoverSchema", () => {
         expect.assertions(1);
 
         const { project, schemaPath } = projectWith(`
-            import { defineSchema, defineTable, v } from "@cirrus/server";
+            import { defineSchema, defineTable, v } from "@lunora/server";
 
             export const schema = defineSchema({
                 users: defineTable({ email: v.string() }),
@@ -166,7 +166,7 @@ describe("discoverSchema", () => {
         expect.assertions(4);
 
         const { project, schemaPath } = projectWith(`
-            import { defineSchema, defineTable, v } from "@cirrus/server";
+            import { defineSchema, defineTable, v } from "@lunora/server";
 
             export const schema = defineSchema({
                 scores: defineTable({ points: v.number() }).rankIndex("by_points", { sortBy: [{ field: "points" }] }),
@@ -190,7 +190,7 @@ describe("discoverSchema", () => {
         expect.assertions(2);
 
         const { project, schemaPath } = projectWith(`
-            import { defineSchema, defineSchemaExtension, defineTable, v } from "@cirrus/server";
+            import { defineSchema, defineSchemaExtension, defineTable, v } from "@lunora/server";
 
             export const schema = defineSchema({
                 todos: defineTable({ title: v.string() }),
@@ -217,7 +217,7 @@ describe("discoverSchema", () => {
         expect.assertions(1);
 
         const { project, schemaPath } = projectWith(`
-            import { defineSchema, defineTable, v } from "@cirrus/server";
+            import { defineSchema, defineTable, v } from "@lunora/server";
 
             export const schema = defineSchema({
                 users: defineTable({
@@ -237,7 +237,7 @@ describe("discoverSchema", () => {
         expect.assertions(1);
 
         const { project, schemaPath } = projectWith(`
-            import { defineSchema, defineTable, v } from "@cirrus/server";
+            import { defineSchema, defineTable, v } from "@lunora/server";
 
             const isUnique = true;
             export const schema = defineSchema({
@@ -255,7 +255,7 @@ describe("discoverSchema", () => {
         expect.assertions(2);
 
         const { project, schemaPath } = projectWith(`
-            import { defineSchema, defineTable, v } from "@cirrus/server";
+            import { defineSchema, defineTable, v } from "@lunora/server";
             import { embed } from "../app/embed";
 
             export const schema = defineSchema({
@@ -287,7 +287,7 @@ describe("discoverSchema", () => {
         expect.assertions(1);
 
         const { project, schemaPath } = projectWith(`
-            import { defineSchema, defineTable, defineVectorIndex, v } from "@cirrus/server";
+            import { defineSchema, defineTable, defineVectorIndex, v } from "@lunora/server";
             import { embed } from "../app/embed";
 
             export const schema = defineSchema(
@@ -321,7 +321,7 @@ describe("discoverSchema", () => {
         expect.assertions(6);
 
         const { project, schemaPath } = projectWith(`
-            import { defineSchema, defineTable, v } from "@cirrus/server";
+            import { defineSchema, defineTable, v } from "@lunora/server";
 
             export const schema = defineSchema({
                 todos: defineTable({
@@ -351,7 +351,7 @@ describe("discoverSchema", () => {
         expect.assertions(4);
 
         const { project, schemaPath } = projectWith(`
-            import { defineSchema, defineTable, v } from "@cirrus/server";
+            import { defineSchema, defineTable, v } from "@lunora/server";
 
             export const schema = defineSchema({
                 events: defineTable({
@@ -378,7 +378,7 @@ describe("discoverSchema", () => {
         expect.assertions(2);
 
         const { project, schemaPath } = projectWith(`
-            import { defineSchema, defineTable, v } from "@cirrus/server";
+            import { defineSchema, defineTable, v } from "@lunora/server";
 
             export const schema = defineSchema({
                 users: defineTable({ email: v.string() }).relations((r) => ({
@@ -405,7 +405,7 @@ describe("discoverSchema", () => {
         expect.assertions(1);
 
         const { project, schemaPath } = projectWith(`
-            import { defineSchema, defineTable, v } from "@cirrus/server";
+            import { defineSchema, defineTable, v } from "@lunora/server";
 
             export const schema = defineSchema({
                 orgs: defineTable({ slug: v.string() }).relations((r) => ({
@@ -424,7 +424,7 @@ describe("discoverSchema", () => {
         expect.assertions(1);
 
         const { project, schemaPath } = projectWith(`
-            import { defineSchema, defineTable, v } from "@cirrus/server";
+            import { defineSchema, defineTable, v } from "@lunora/server";
 
             export const schema = defineSchema({
                 users: defineTable({ email: v.string() }),
@@ -440,7 +440,7 @@ describe("discoverSchema", () => {
         expect.assertions(3);
 
         const { project, schemaPath } = projectWith(`
-            import { defineSchema, defineTable, v } from "@cirrus/server";
+            import { defineSchema, defineTable, v } from "@lunora/server";
 
             export const schema = defineSchema({
                 messages: defineTable({ authorId: v.id("users"), body: v.string() })
@@ -466,7 +466,7 @@ describe("discoverSchema", () => {
         expect.assertions(8);
 
         const { project, schemaPath } = projectWith(`
-            import { defineSchema, defineTable, v } from "@cirrus/server";
+            import { defineSchema, defineTable, v } from "@lunora/server";
 
             export const schema = defineSchema({
                 users: defineTable({ email: v.string() }).relations((r) => ({
@@ -488,18 +488,18 @@ describe("discoverSchema", () => {
 
         // The with-inference machinery binds the shipped generics to this
         // project's DataModel + Relations (the bodies live in
-        // `@cirrus/server/data-model`, so they never regenerate here).
+        // `@lunora/server/data-model`, so they never regenerate here).
         expect(dataModel).toContain("export type WithArg<T extends keyof DataModel> = WithArgOf<DataModel, Relations, T>;");
         expect(dataModel).toContain("export type LoadWith<T extends keyof DataModel, W> = LoadWithOf<DataModel, Relations, T, W>;");
         expect(dataModel).toContain("import type {\n    DatabaseReaderFacade as DatabaseReaderFacadeOf,");
-        expect(dataModel).toContain('} from "@cirrus/server/data-model";');
+        expect(dataModel).toContain('} from "@lunora/server/data-model";');
     });
 
     it("emits an empty Relations entry for tables that declare none", () => {
         expect.assertions(1);
 
         const { project, schemaPath } = projectWith(`
-            import { defineSchema, defineTable, v } from "@cirrus/server";
+            import { defineSchema, defineTable, v } from "@lunora/server";
 
             export const schema = defineSchema({
                 users: defineTable({ email: v.string() }),
@@ -515,7 +515,7 @@ describe("discoverSchema", () => {
         expect.assertions(1);
 
         const { project, schemaPath } = projectWith(`
-            import { defineSchema, defineTable, defineVectorIndex, v } from "@cirrus/server";
+            import { defineSchema, defineTable, defineVectorIndex, v } from "@lunora/server";
             import { embed } from "../app/embed";
 
             export const schema = defineSchema(
@@ -544,7 +544,7 @@ describe("discoverSchema", () => {
         expect.assertions(3);
 
         const { project, schemaPath } = projectWith(`
-            import { defineSchema, defineSchemaExtension, defineTable, v } from "@cirrus/server";
+            import { defineSchema, defineSchemaExtension, defineTable, v } from "@lunora/server";
 
             export const schema = defineSchema({
                 todos: defineTable({ title: v.string() }),
@@ -572,7 +572,7 @@ describe("discoverSchema", () => {
         expect.assertions(2);
 
         const { project, schemaPath } = projectWith(`
-            import { defineSchema, defineSchemaExtension, defineTable, v } from "@cirrus/server";
+            import { defineSchema, defineSchemaExtension, defineTable, v } from "@lunora/server";
 
             export const schema = defineSchema({
                 users: defineTable({ email: v.string() }),
@@ -601,7 +601,7 @@ describe("discoverSchema", () => {
         expect.assertions(2);
 
         const { project, schemaPath } = projectWith(`
-            import { defineSchema, defineSchemaExtension, defineTable, v } from "@cirrus/server";
+            import { defineSchema, defineSchemaExtension, defineTable, v } from "@lunora/server";
             import { embed } from "../app/embed";
 
             export const schema = defineSchema({
@@ -629,7 +629,7 @@ describe("discoverSchema", () => {
         expect.assertions(1);
 
         const { project, schemaPath } = projectWith(`
-            import { defineSchema, defineSchemaExtension, defineTable, defineVectorIndex, v } from "@cirrus/server";
+            import { defineSchema, defineSchemaExtension, defineTable, defineVectorIndex, v } from "@lunora/server";
             import { embed } from "../app/embed";
 
             export const schema = defineSchema({
@@ -665,7 +665,7 @@ describe("discoverSchema", () => {
         expect.assertions(1);
 
         const { project, schemaPath } = projectWith(`
-            import { defineSchema, defineSchemaExtension, defineTable, v } from "@cirrus/server";
+            import { defineSchema, defineSchemaExtension, defineTable, v } from "@lunora/server";
 
             const myExt = defineSchemaExtension("ext", {
                 tables: {
@@ -687,7 +687,7 @@ describe("discoverSchema", () => {
         expect.assertions(1);
 
         const { project, schemaPath } = projectWith(`
-            import { defineSchema, defineSchemaExtension, defineTable, v } from "@cirrus/server";
+            import { defineSchema, defineSchemaExtension, defineTable, v } from "@lunora/server";
 
             const plugin = {
                 key: "ext",
@@ -712,7 +712,7 @@ describe("discoverSchema", () => {
         expect.assertions(1);
 
         const { project, schemaPath } = projectWith(`
-            import { defineSchema, defineSchemaExtension, defineTable, v } from "@cirrus/server";
+            import { defineSchema, defineSchemaExtension, defineTable, v } from "@lunora/server";
 
             export const schema = defineSchema({
                 todos: defineTable({ title: v.string() }),
@@ -730,7 +730,7 @@ describe("discoverSchema", () => {
         expect.assertions(1);
 
         const { project, schemaPath } = projectWith(`
-            import { defineSchema, defineSchemaExtension, defineTable, v } from "@cirrus/server";
+            import { defineSchema, defineSchemaExtension, defineTable, v } from "@lunora/server";
 
             export const schema = defineSchema({
                 buckets: defineTable({ appField: v.string() }),
@@ -751,7 +751,7 @@ describe("discoverSchema", () => {
         expect.assertions(1);
 
         const { project, schemaPath } = projectWith(`
-            import { defineSchema, defineSchemaExtension, defineTable, v } from "@cirrus/server";
+            import { defineSchema, defineSchemaExtension, defineTable, v } from "@lunora/server";
 
             export const schema = defineSchema({
                 todos: defineTable({ title: v.string() }),
@@ -771,15 +771,15 @@ describe("discoverSchema", () => {
         // A node_modules declaration file is the only thing reachable for `vendorExt`.
         project.createSourceFile(
             "/virtual/node_modules/@vendor/plugin/index.d.ts",
-            `import type { SchemaExtension } from "@cirrus/server";
+            `import type { SchemaExtension } from "@lunora/server";
              export declare const vendorExt: SchemaExtension;`,
         );
 
-        const schemaPath = "/virtual/cirrus/schema.ts";
+        const schemaPath = "/virtual/lunora/schema.ts";
 
         project.createSourceFile(
             schemaPath,
-            `import { defineSchema, defineTable, v } from "@cirrus/server";
+            `import { defineSchema, defineTable, v } from "@lunora/server";
              import { vendorExt } from "@vendor/plugin";
 
              export const schema = defineSchema({
@@ -812,7 +812,7 @@ describe("discoverSchema", () => {
         expect.assertions(5);
 
         const { project, schemaPath } = projectWith(`
-            import { defineSchema, defineTable, v } from "@cirrus/server";
+            import { defineSchema, defineTable, v } from "@lunora/server";
 
             const someFlag = true;
             export const schema = defineSchema({

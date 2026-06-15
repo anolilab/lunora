@@ -1,16 +1,16 @@
 /**
  * Local schema-edit request handler for the visual schema editor (plan 024
- * Item 3). Transport-agnostic so both dev hosts — the `@cirrus/vite` `/__cirrus`
- * middleware and the `cirrus dev` studio server — can mount it; each adapts its
+ * Item 3). Transport-agnostic so both dev hosts — the `@lunora/vite` `/__lunora`
+ * middleware and the `lunora dev` studio server — can mount it; each adapts its
  * own request/response object to {@link SchemaEditRequest} / the returned
  * {@link SchemaEditResponse}.
  *
- * Local-dev-only by construction: it reads + writes `cirrus/schema.ts` and runs
+ * Local-dev-only by construction: it reads + writes `lunora/schema.ts` and runs
  * codegen, both of which need the project's filesystem and toolchain, so it is
  * never reachable from a deployed worker (which has no source tree). The dev
  * hosts mount it only on a loopback bind.
  *
- * `GET` parses `cirrus/schema.ts` and returns the structured schema. A `POST`
+ * `GET` parses `lunora/schema.ts` and returns the structured schema. A `POST`
  * additive edit applies via ts-morph, writes atomically, runs codegen, and
  * returns the new schema plus codegen diagnostics. A `POST` destructive edit
  * answers `409` with `{ needsMigration: true, ... }` and writes nothing; the
@@ -18,7 +18,7 @@
  */
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 
-import { CodegenDiagnosticError, runCodegen } from "@cirrus/codegen";
+import { CodegenDiagnosticError, runCodegen } from "@lunora/codegen";
 
 import join from "../path";
 import type { ApplyFailureReason, SchemaEdit } from "../schema-edit/mutate";
@@ -28,10 +28,10 @@ import { parseSchema } from "../schema-edit/parse";
 
 /**
  * Endpoint path both dev hosts mount the handler at. Distinct from the CLI's
- * `/_cirrus/*` worker proxy (single underscore), so a schema edit is never
+ * `/_lunora/*` worker proxy (single underscore), so a schema edit is never
  * forwarded to the worker.
  */
-const SCHEMA_EDIT_ENDPOINT = "/__cirrus/schema-edit";
+const SCHEMA_EDIT_ENDPOINT = "/__lunora/schema-edit";
 
 /** A request adapted from the host transport. */
 interface SchemaEditRequest {
@@ -39,9 +39,9 @@ interface SchemaEditRequest {
     readonly body?: unknown;
     /** HTTP method (`GET` / `POST`). */
     readonly method: string;
-    /** Project root containing the `cirrus/` directory. */
+    /** Project root containing the `lunora/` directory. */
     readonly projectRoot: string;
-    /** Override the cirrus subdirectory name. Defaults to `"cirrus"`. */
+    /** Override the lunora subdirectory name. Defaults to `"lunora"`. */
     readonly schemaDirectory?: string;
 }
 
@@ -99,7 +99,7 @@ const readSchema = (schemaPath: string): { response: SchemaEditResponse } | { ta
 
 /** Write the new schema source atomically (temp file + rename). */
 const writeSchemaAtomic = (schemaPath: string, text: string): void => {
-    const temporaryPath = `${schemaPath}.cirrus-tmp`;
+    const temporaryPath = `${schemaPath}.lunora-tmp`;
 
     writeFileSync(temporaryPath, text, "utf8");
     renameSync(temporaryPath, schemaPath);
@@ -147,7 +147,7 @@ const handlePost = (request: SchemaEditRequest, schemaPath: string): SchemaEditR
     let diagnostics: ReadonlyArray<string> = [];
 
     try {
-        runCodegen({ cirrusDirectory: request.schemaDirectory ?? "cirrus", projectRoot: request.projectRoot });
+        runCodegen({ lunoraDirectory: request.schemaDirectory ?? "lunora", projectRoot: request.projectRoot });
     } catch (error: unknown) {
         if (error instanceof CodegenDiagnosticError) {
             diagnostics = [error.message];
@@ -170,7 +170,7 @@ const handlePost = (request: SchemaEditRequest, schemaPath: string): SchemaEditR
  * temp project directory.
  */
 const handleSchemaEditRequest = (request: SchemaEditRequest): SchemaEditResponse => {
-    const schemaPath = join(request.projectRoot, request.schemaDirectory ?? "cirrus", "schema.ts");
+    const schemaPath = join(request.projectRoot, request.schemaDirectory ?? "lunora", "schema.ts");
 
     if (request.method === "GET") {
         const read = readSchema(schemaPath);

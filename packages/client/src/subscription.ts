@@ -61,12 +61,12 @@ export class SubscriptionRegistry {
     }
 
     public add(state: SubscriptionState): void {
-        this.byKey.set(SubscriptionRegistry.key(state.fn.__cirrusRef, state.args, state.shardKey), state);
+        this.byKey.set(SubscriptionRegistry.key(state.fn.__lunoraRef, state.args, state.shardKey), state);
         this.byId.set(state.id, state);
     }
 
     public remove(state: SubscriptionState): void {
-        this.byKey.delete(SubscriptionRegistry.key(state.fn.__cirrusRef, state.args, state.shardKey));
+        this.byKey.delete(SubscriptionRegistry.key(state.fn.__lunoraRef, state.args, state.shardKey));
         this.byId.delete(state.id);
     }
 

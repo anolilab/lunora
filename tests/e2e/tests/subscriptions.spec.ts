@@ -1,17 +1,17 @@
 import type { Dialog } from "@playwright/test";
 
-import { expect, test } from "../fixtures/cirrus.js";
+import { expect, test } from "../fixtures/lunora.js";
 
 /**
- * Real-time subscription E2E — the *load-bearing* test for Cirrus.
+ * Real-time subscription E2E — the *load-bearing* test for Lunora.
  *
  * Two browser tabs join the same channel. When tab A sends a message, the
  * ShardDO must broadcast a delta over the WebSocket subscription on
- * `/_cirrus/ws`, and tab B must render the new message without polling.
+ * `/_lunora/ws`, and tab B must render the new message without polling.
  *
  * Why we don't just unit-test this:
  *   - The DO's `broadcastDelta` is well-covered by Vitest workers-pool tests,
- *     but the *client* side — `@cirrus/react`'s `useQuery` subscription, the
+ *     but the *client* side — `@lunora/react`'s `useQuery` subscription, the
  *     React state batch, and the actual DOM update — only run for real in a
  *     browser. Mocking the WS in JSDom would leave a sizable confidence gap.
  */
@@ -103,7 +103,7 @@ test("offline → online replays queued messages and broadcasts to other tabs", 
     // Confirm B does NOT have it yet (offline → no flight).
     await expect(pageB.getByText(queued)).toBeHidden({ timeout: 500 });
 
-    // Bring A back online — the @cirrus/client mutation queue should drain
+    // Bring A back online — the @lunora/client mutation queue should drain
     // and the WS reconnect should hydrate B.
     await contextA.setOffline(false);
 

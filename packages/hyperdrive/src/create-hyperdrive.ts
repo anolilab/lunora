@@ -4,7 +4,7 @@ import type { HyperdriveConnection, HyperdriveLike, Mysql2Like, NodePgLike, Post
  * Surface a Cloudflare Hyperdrive binding as a connection ready to feed a
  * user-supplied SQL driver.
  *
- * `@cirrus/hyperdrive` deliberately **bundles no driver** — `postgres`, `pg` and
+ * `@lunora/hyperdrive` deliberately **bundles no driver** — `postgres`, `pg` and
  * `mysql2` are heavy and the choice is the user's (they are `optional`
  * `peerDependencies`, never `dependencies`). This factory's only job is to lift
  * the binding's connection details out; the user constructs their own driver
@@ -12,7 +12,7 @@ import type { HyperdriveConnection, HyperdriveLike, Mysql2Like, NodePgLike, Post
  * {@link fromNodePg} / {@link fromMysql2} adapters to get a {@link SqlClient}.
  * @example
  * ```ts
- * import { createHyperdrive, fromPostgresJs } from "@cirrus/hyperdrive";
+ * import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
  * import postgres from "postgres";
  *
  * // inside an action (never a query/mutation):
@@ -21,10 +21,10 @@ import type { HyperdriveConnection, HyperdriveLike, Mysql2Like, NodePgLike, Post
  * const rows = await ctx.sql.query("select id from users where org = $1", [orgId]);
  * ```
  * @remarks
- * Hyperdrive talks to an **external** database Cirrus has no visibility into.
+ * Hyperdrive talks to an **external** database Lunora has no visibility into.
  * Queries through `ctx.sql` are non-deterministic (action-only — enforced by the
  * `hyperdrive_outside_action` advisor lint) and external writes are NOT tracked
- * by Cirrus live queries: subscriptions will not re-run when external rows
+ * by Lunora live queries: subscriptions will not re-run when external rows
  * change. Use Hyperdrive to *integrate* an existing DB from an action; if you
  * want that data to be reactive, write a projection of it into a `defineSchema`
  * DO/D1 table.

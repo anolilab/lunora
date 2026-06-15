@@ -125,7 +125,7 @@ export interface SchemaIR {
 export interface FunctionIR {
     args: Record<string, ValidatorIR>;
     exportName: string;
-    /** Path relative to `&lt;projectRoot>/cirrus/` without extension, e.g. "messages". */
+    /** Path relative to `&lt;projectRoot>/lunora/` without extension, e.g. "messages". */
     filePath: string;
     kind: "action" | "mutation" | "query" | "stream";
 
@@ -133,7 +133,7 @@ export interface FunctionIR {
      * Serialized TS source for the handler's return type, with `Promise&lt;T>`
      * unwrapped so callers see `T` directly. Defaults to `"unknown"` when
      * ts-morph cannot resolve the type (typically because the consuming
-     * project lacks a tsconfig that can reach `@cirrus/server`).
+     * project lacks a tsconfig that can reach `@lunora/server`).
      */
     returnType: string;
 
@@ -146,15 +146,15 @@ export interface FunctionIR {
 }
 
 /**
- * A `defineMigration({...})` declaration discovered in the user's cirrus
- * sources. The emitted `CIRRUS_MIGRATIONS` registry keys on {@link MigrationIR.id}; the
+ * A `defineMigration({...})` declaration discovered in the user's lunora
+ * sources. The emitted `LUNORA_MIGRATIONS` registry keys on {@link MigrationIR.id}; the
  * import wiring needs {@link MigrationIR.exportName}/{@link MigrationIR.filePath}. {@link MigrationIR.table} is
  * informational (the runtime object carries the authoritative value).
  */
 export interface MigrationIR {
     /** Export binding name, used to reference the module member in generated imports. */
     exportName: string;
-    /** Path relative to `&lt;projectRoot>/cirrus/` without extension, e.g. "migrations". */
+    /** Path relative to `&lt;projectRoot>/lunora/` without extension, e.g. "migrations". */
     filePath: string;
     /** Stable migration id — the registry key and per-shard run-state key. */
     id: string;
@@ -163,10 +163,10 @@ export interface MigrationIR {
 }
 
 /**
- * A single cron job lifted from a `cronJobs()` builder in `cirrus/crons.ts`.
- * Mirrors `@cirrus/scheduler`'s `CronJob`: {@link CronJobIR.cron} is the compiled
+ * A single cron job lifted from a `cronJobs()` builder in `lunora/crons.ts`.
+ * Mirrors `@lunora/scheduler`'s `CronJob`: {@link CronJobIR.cron} is the compiled
  * standard cron expression, {@link CronJobIR.functionPath} is the target
- * `__cirrusRef` (`namespace:fn`), and {@link CronJobIR.args} is the static
+ * `__lunoraRef` (`namespace:fn`), and {@link CronJobIR.args} is the static
  * argument object passed at registration.
  */
 export interface CronJobIR {
@@ -182,10 +182,10 @@ export interface CronJobIR {
 
 /**
  * A container lifted from a `defineContainer()` export in
- * `cirrus/containers.ts`. Carries everything the emitters and the config layer
+ * `lunora/containers.ts`. Carries everything the emitters and the config layer
  * need to wire wrangler (`containers[]` + the Durable Object binding +
  * migration class) and the generated `_generated/containers.ts` DO class.
- * Names are derived via `@cirrus/container`'s shared helpers so codegen and
+ * Names are derived via `@lunora/container`'s shared helpers so codegen and
  * the config layer can never disagree.
  */
 export interface ContainerIR {
@@ -202,7 +202,7 @@ export interface ContainerIR {
      * platform default is `true`) or wasn't a literal. Lifted for the advisor.
      */
     enableInternet?: boolean;
-    /** The `cirrus/containers.ts` export name, e.g. `transcoder`. */
+    /** The `lunora/containers.ts` export name, e.g. `transcoder`. */
     exportName: string;
 
     /**
@@ -228,12 +228,12 @@ export interface ContainerIR {
 }
 
 /**
- * A workflow lifted from a `defineWorkflow()` export in `cirrus/workflows.ts`.
+ * A workflow lifted from a `defineWorkflow()` export in `lunora/workflows.ts`.
  * Carries what the emitters and the config layer need to wire the wrangler
  * `workflows[]` entry and the generated `_generated/workflows.ts`
  * `WorkflowEntrypoint` class. Unlike containers, workflows are NOT Durable
  * Objects — wrangler gets only a `workflows[]` entry, never a `durable_objects`
- * binding or a migration class. Names are derived via `@cirrus/workflow`'s
+ * binding or a migration class. Names are derived via `@lunora/workflow`'s
  * shared helpers so codegen and the config layer can never disagree.
  */
 export interface WorkflowIR {
@@ -241,7 +241,7 @@ export interface WorkflowIR {
     bindingName: string;
     /** Generated `WorkflowEntrypoint` class name, e.g. `OrderPipelineWorkflow`. */
     className: string;
-    /** The `cirrus/workflows.ts` export name, e.g. `orderPipeline`. */
+    /** The `lunora/workflows.ts` export name, e.g. `orderPipeline`. */
     exportName: string;
 
     /**
@@ -264,7 +264,7 @@ export interface WorkflowIR {
 export interface WorkflowCallIR {
     /** Export binding name of the function performing the call, e.g. `create`. */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/cirrus/`, without extension (the api namespace). */
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension (the api namespace). */
     file: string;
     /** 1-based line of the `get(...)` call. */
     line: number;
@@ -279,7 +279,7 @@ export interface WorkflowCallIR {
  * `query(...)` argument is not a string literal (a dynamic table — not lintable).
  */
 export interface QueryReadIR {
-    /** Source file relative to `&lt;projectRoot>/cirrus/`, without extension. */
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
     file: string;
     /** The chain calls `.filter(...)`. */
     hasFilter: boolean;
@@ -301,7 +301,7 @@ export interface QueryReadIR {
 export interface AuthApiCallIR {
     /** Export binding name of the function performing the call, e.g. "createOrg". */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/cirrus/`, without extension. */
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
     file: string;
     /** True when the call's argument object includes a `headers` property. */
     hasHeaders: boolean;
@@ -321,7 +321,7 @@ export interface AuthApiCallIR {
 export interface InsertWriteIR {
     /** Export binding name of the function performing the insert, e.g. "send". */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/cirrus/`, without extension (the api namespace). */
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension (the api namespace). */
     file: string;
     /** 1-based line of the `insert(...)` call. */
     line: number;
@@ -343,7 +343,7 @@ export interface NondeterministicCallIR {
     callee: string;
     /** Export binding name of the function performing the call, e.g. `sendMessage`. */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/cirrus/`, without extension (the api namespace). */
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension (the api namespace). */
     file: string;
     /** Which procedure kind the call lives in — only `query`/`mutation` handlers are recorded. */
     kind: "mutation" | "query";
@@ -361,7 +361,7 @@ export interface NondeterministicCallIR {
 export interface RlsProcedureIR {
     /** Export binding name of the procedure (e.g. `listDocuments`). */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/cirrus/`, without extension. */
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
     file: string;
 
     /**
@@ -389,7 +389,7 @@ export interface RlsProcedureIR {
 export interface MaskProcedureIR {
     /** Export binding name of the procedure (e.g. `listUsers`). */
     exportName: string;
-    /** Source file relative to `&lt;projectRoot>/cirrus/`, without extension. */
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
     file: string;
 
     /**
@@ -447,7 +447,7 @@ export interface MaskMetadataIR {
  * `discoverRlsProcedures` alongside the lint IR.
  */
 export interface RlsPolicyIR {
-    /** Source file (relative to `cirrus/`, without extension) the policy is declared in. */
+    /** Source file (relative to `lunora/`, without extension) the policy is declared in. */
     file: string;
     /** Operation the policy gates: `read` covers get/query/findMany, the rest are writes. */
     on: "delete" | "insert" | "read" | "update";
@@ -489,7 +489,7 @@ export interface RlsMetadataIR {
 /** One statically-discovered `defineStorageRule({ bucket, on, prefix })` entry from a `.use(storageRules(...))` chain. */
 export interface StorageRuleIR {
     bucket: string;
-    /** Relative to `cirrus/`. */
+    /** Relative to `lunora/`. */
     file: string;
     on: "delete" | "list" | "read" | "write";
     /** Optional key-prefix scope; absent ⇒ the whole bucket. */
@@ -510,7 +510,7 @@ export interface StorageRulesMetadataIR {
 
 /**
  * A typed REST route declared with the `httpRoute.&lt;verb>("/path")…` builder in
- * `@cirrus/server` and mounted on `httpRouter()`. Captured statically from the
+ * `@lunora/server` and mounted on `httpRouter()`. Captured statically from the
  * builder chain so the OpenAPI emitter can render a real `paths` entry: the verb
  * + path become the operation's method + URL, and the accumulated validator maps
  * become its query parameters, path parameters, and request body.
@@ -520,7 +520,7 @@ export interface HttpRouteIR {
     body: Record<string, ValidatorIR>;
     /** Export binding name of the route handler (used only for diagnostics / dedupe). */
     exportName: string;
-    /** Path relative to `&lt;projectRoot>/cirrus/` without extension, e.g. "http". */
+    /** Path relative to `&lt;projectRoot>/lunora/` without extension, e.g. "http". */
     filePath: string;
     /** HTTP verb the route binds to (uppercased), e.g. `"GET"`. */
     method: string;

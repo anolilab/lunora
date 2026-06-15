@@ -3,14 +3,14 @@ title: Schema
 description: Declarative tables, validators, indexes and sharding.
 ---
 
-A Cirrus schema is a single TypeScript file. It is the source of truth for
+A Lunora schema is a single TypeScript file. It is the source of truth for
 your storage layout, the input to codegen, and the contract the type-safe
 client is generated against. There is no separate migrations DSL — schema
 edits + a codegen run is the migration.
 
 ```ts
-// cirrus/schema.ts
-import { defineSchema, defineTable, v } from "@cirrus/server";
+// lunora/schema.ts
+import { defineSchema, defineTable, v } from "@lunora/server";
 
 export default defineSchema({
     channels: defineTable({

@@ -275,7 +275,7 @@ describe("ctx-db aggregates", () => {
 
             await expect(writer.count("todos", { restrictsCounts: true, where: { projectId: "p1" } })).rejects.toMatchObject({
                 code: "COUNT_RLS_UNSUPPORTED",
-                name: "CirrusError",
+                name: "LunoraError",
             });
         });
 

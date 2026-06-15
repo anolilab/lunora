@@ -1,14 +1,14 @@
-import type { FunctionReference } from "@cirrus/client";
+import type { FunctionReference } from "@lunora/client";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import { CirrusProvider } from "../src/cirrus-provider";
+import { LunoraProvider } from "../src/lunora-provider";
 import { useMutation } from "../src/use-mutation";
 import { createMockClient } from "./mock-client";
 
 const makeRef = (ref: string): FunctionReference => {
-    return { __cirrusRef: ref };
+    return { __lunoraRef: ref };
 };
 
 interface HarnessProps {
@@ -41,14 +41,14 @@ describe("useMutation", () => {
         let trigger: () => Promise<unknown> = async () => undefined;
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <Harness
                     // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback; a stable ref adds no value in a one-shot render.
                     onCall={(call) => {
                         trigger = call;
                     }}
                 />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         expect(screen.getByTestId("pending").textContent).toBe("no");
@@ -74,7 +74,7 @@ describe("useMutation", () => {
         });
 
         expect(resolved).toEqual({ id: "p1" });
-        expect(mock.mutation).toHaveBeenCalledWith(expect.objectContaining({ __cirrusRef: "posts:create" }), { title: "hello" }, undefined);
+        expect(mock.mutation).toHaveBeenCalledWith(expect.objectContaining({ __lunoraRef: "posts:create" }), { title: "hello" }, undefined);
         expect(screen.getByTestId("pending").textContent).toBe("no");
     });
 
@@ -106,16 +106,16 @@ describe("useMutation", () => {
         };
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <Probe />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         // fireEvent already wraps the dispatch in act(), so no outer act() is needed.
         fireEvent.click(screen.getByTestId("btn"));
 
         await waitFor(() => {
-            expect(mock.mutation).toHaveBeenCalledWith(expect.objectContaining({ __cirrusRef: "counter:inc" }), {}, { optimistic });
+            expect(mock.mutation).toHaveBeenCalledWith(expect.objectContaining({ __lunoraRef: "counter:inc" }), {}, { optimistic });
         });
     });
 
@@ -147,15 +147,15 @@ describe("useMutation", () => {
         };
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <Probe />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         fireEvent.click(screen.getByTestId("btn"));
 
         await waitFor(() => {
-            expect(mock.mutation).toHaveBeenCalledWith(expect.objectContaining({ __cirrusRef: "counter:inc" }), {}, { optimisticUpdate });
+            expect(mock.mutation).toHaveBeenCalledWith(expect.objectContaining({ __lunoraRef: "counter:inc" }), {}, { optimisticUpdate });
         });
     });
 
@@ -188,15 +188,15 @@ describe("useMutation", () => {
         };
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <Probe />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         fireEvent.click(screen.getByTestId("btn"));
 
         await waitFor(() => {
-            expect(mock.mutation).toHaveBeenCalledWith(expect.objectContaining({ __cirrusRef: "counter:inc" }), {}, { optimisticUpdate: perCall });
+            expect(mock.mutation).toHaveBeenCalledWith(expect.objectContaining({ __lunoraRef: "counter:inc" }), {}, { optimisticUpdate: perCall });
         });
     });
 });

@@ -1,4 +1,4 @@
-import { useCirrus } from "@cirrus/react";
+import { useLunora } from "@lunora/react";
 import type { ChangeEvent, ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -53,7 +53,7 @@ const formatValue = (value: unknown): string => (value === undefined ? "undefine
  * still renders but the run button is disabled.
  */
 export const PermissionsPlayground = ({ functions: functionsProp, prefill, runAsIdentity = false }: PermissionsPlaygroundProps = {}): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const t = useT();
     const probe = useRunAsProbe();
 
@@ -167,7 +167,7 @@ export const PermissionsPlayground = ({ functions: functionsProp, prefill, runAs
     }, []);
 
     return (
-        <div className="flex flex-col gap-3" data-testid="cirrus-permissions-playground">
+        <div className="flex flex-col gap-3" data-testid="lunora-permissions-playground">
             {discoverError !== null && (
                 <p className="text-sm text-destructive" data-testid="pp-discover-error" role="alert">
                     {discoverError}

@@ -1,5 +1,5 @@
 /**
- * Worker-route coverage for `POST /_cirrus/admin/shard-traffic` (`handleShardTraffic`).
+ * Worker-route coverage for `POST /_lunora/admin/shard-traffic` (`handleShardTraffic`).
  * The coordinator's `orchestrateShardTraffic` is unit-tested separately
  * (`query-coordinator.shard-traffic.test.ts`); this exercises the worker route
  * itself — the admin gate, the `queryCoordinator`-required guard, the method
@@ -19,7 +19,7 @@ const fakeContext: ExecutionContextLike = {
 };
 
 const ADMIN_TOKEN = "admin-bear";
-const TRAFFIC_URL = "https://app.example/_cirrus/admin/shard-traffic";
+const TRAFFIC_URL = "https://app.example/_lunora/admin/shard-traffic";
 
 interface ShardCall {
     authorization: null | string;
@@ -27,7 +27,7 @@ interface ShardCall {
     shardKey: string;
 }
 
-/** Capturing shard namespace serving `__cirrus_admin__:getMetrics` per shard. */
+/** Capturing shard namespace serving `__lunora_admin__:getMetrics` per shard. */
 const capturingNamespace = (calls: ShardCall[], requestsByShard: Record<string, number>): ShardNamespaceLike => {
     const stubFor = (shardKey: string) => {
         return {
@@ -74,7 +74,7 @@ describe("createWorker — admin shard-traffic endpoint", () => {
         ]);
         expect(result.ok).toBe(2);
         // Each shard saw the cheap getMetrics admin RPC carrying the forwarded bearer.
-        expect(calls.every((call) => call.functionPath === "__cirrus_admin__:getMetrics" && call.authorization === `Bearer ${ADMIN_TOKEN}`)).toBe(true);
+        expect(calls.every((call) => call.functionPath === "__lunora_admin__:getMetrics" && call.authorization === `Bearer ${ADMIN_TOKEN}`)).toBe(true);
     });
 
     it("rejects without the admin bearer (403)", async () => {

@@ -216,7 +216,7 @@ describe("shardDO streaming queries", () => {
         const ws = createFakeWebSocket();
 
         shard.registerSocket(ws, { admin: true, subs: {} });
-        await shard.driveMessage(ws, { id: "stream_4", query: { functionPath: "__cirrus_admin__:tick" }, type: "stream" });
+        await shard.driveMessage(ws, { id: "stream_4", query: { functionPath: "__lunora_admin__:tick" }, type: "stream" });
 
         const errorFrame = parseFrames(ws).find((f) => f.type === "error");
 

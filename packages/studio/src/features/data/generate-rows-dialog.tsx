@@ -37,7 +37,7 @@ interface GenerateRowsDialogProps {
 /**
  * A dialog that generates N dummy rows for the active table, then inserts them
  * through the schema-aware `writeRow` path. Generation runs server-side in the
- * dev host (`@cirrus/seed` over `@faker-js/faker`) so faker stays out of the
+ * dev host (`@lunora/seed` over `@faker-js/faker`) so faker stays out of the
  * browser bundle; the dialog fetches the rows from the local seed endpoint and
  * then sends them to the worker in batch.
  *

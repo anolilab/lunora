@@ -50,14 +50,14 @@ describe("buildSettings masking", () => {
         expect(greeting?.kind).toBe("var");
     });
 
-    it("classifies non-string bindings by kind with no value, and skips cirrus internal vars", () => {
+    it("classifies non-string bindings by kind with no value, and skips lunora internal vars", () => {
         expect.assertions(4);
 
         const r2Bucket = { delete() {}, get() {}, head() {}, list() {}, put() {} };
         const doNamespace = { get() {}, idFromName() {}, idFromString() {} };
 
         const result = buildSettings({
-            CIRRUS_ADMIN_TOKEN: "should-be-hidden",
+            LUNORA_ADMIN_TOKEN: "should-be-hidden",
             MY_BUCKET: r2Bucket,
             SHARD: doNamespace,
         });
@@ -68,7 +68,7 @@ describe("buildSettings masking", () => {
         expect(bucket).toEqual({ bindingType: "r2", kind: "binding", name: "MY_BUCKET", value: null });
         expect(shard?.bindingType).toBe("durable-object");
         // The reserved admin token is omitted from the view entirely.
-        expect(result.settings.some((entry) => entry.name === "CIRRUS_ADMIN_TOKEN")).toBe(false);
+        expect(result.settings.some((entry) => entry.name === "LUNORA_ADMIN_TOKEN")).toBe(false);
         expect(result.settings.every((entry) => entry.kind !== "secret" || typeof entry.value === "string")).toBe(true);
     });
 
@@ -118,7 +118,7 @@ describe("getSettings admin RPC", () => {
         expect.assertions(4);
 
         const secretValue = "tok_supersecretvalue";
-        const shard = new AdminShard(state, { API_TOKEN: secretValue, CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN, GREETING: "hi" });
+        const shard = new AdminShard(state, { API_TOKEN: secretValue, LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, GREETING: "hi" });
 
         const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getSettings, {}, ADMIN_TOKEN));
 
@@ -134,13 +134,13 @@ describe("getSettings admin RPC", () => {
 
         expect(token?.kind).toBe("secret");
         // The reserved admin token is not surfaced.
-        expect(body.result.settings.some((entry) => entry.name === "CIRRUS_ADMIN_TOKEN")).toBe(false);
+        expect(body.result.settings.some((entry) => entry.name === "LUNORA_ADMIN_TOKEN")).toBe(false);
     });
 
     it("is gated by the admin bearer like the sibling read-only RPCs", async () => {
         expect.assertions(2);
 
-        const shard = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN, GREETING: "hi" });
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, GREETING: "hi" });
 
         const missing = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getSettings, {}));
         const wrong = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getSettings, {}, "nope"));

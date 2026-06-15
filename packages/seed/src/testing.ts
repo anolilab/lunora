@@ -1,18 +1,18 @@
-import type { Schema } from "@cirrus/server";
-import type { TestHarness } from "@cirrus/testing";
+import type { Schema } from "@lunora/server";
+import type { TestHarness } from "@lunora/testing";
 
 import type { SeedOptions } from "./plan";
 import { seedPlan } from "./plan";
 
 /**
- * Seed an in-memory {@link TestHarness} (`@cirrus/testing`'s `cirrusTest`).
+ * Seed an in-memory {@link TestHarness} (`@lunora/testing`'s `lunoraTest`).
  *
  * Runs {@link seedPlan} and inserts every generated row through `ctx.db.insert`
  * with `allowExplicitId` so the planned `_id`s — and therefore every resolved
  * foreign key — are preserved. Tables are written in FK order (parents first).
  * @returns the inserted document ids keyed by table, for assertions.
  * @example
- * const harness = cirrusTest(schema);
+ * const harness = lunoraTest(schema);
  * const ids = await seed(harness, schema, { counts: { users: 5, posts: 20 } });
  * expect(ids.users).toHaveLength(5);
  */
@@ -43,5 +43,5 @@ const seed = async (harness: TestHarness, schema: Schema, options: SeedOptions =
     return ids;
 };
 
-// eslint-disable-next-line import/prefer-default-export -- named export: re-exported by name from `@cirrus/seed/testing`, per the repo's no-default-mixing convention
+// eslint-disable-next-line import/prefer-default-export -- named export: re-exported by name from `@lunora/seed/testing`, per the repo's no-default-mixing convention
 export { seed };

@@ -1,14 +1,14 @@
 import { existsSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 
-import { CodegenDiagnosticError, createCodegenProject, refreshCodegenProject, runCodegen } from "@cirrus/codegen";
-import type { ExportGap } from "@cirrus/config";
-import { inferCirrusBindings, reconcileWranglerBindings } from "@cirrus/config";
+import { CodegenDiagnosticError, createCodegenProject, refreshCodegenProject, runCodegen } from "@lunora/codegen";
+import type { ExportGap } from "@lunora/config";
+import { inferLunoraBindings, reconcileWranglerBindings } from "@lunora/config";
 import type { Project } from "ts-morph";
 import type { Plugin, ViteDevServer } from "vite";
 
 import { reconcileWranglerCrons } from "./cron-sync";
-import type { ResolvedCirrusPluginOptions } from "./types";
+import type { ResolvedLunoraPluginOptions } from "./types";
 
 const DEBOUNCE_MS = 100;
 
@@ -24,10 +24,10 @@ const TSCONFIG_VARIANT_RE = /[/\\]tsconfig\..+\.json$/u;
  */
 const formatExportGapOverlay = (gaps: ReadonlyArray<ExportGap>): string => {
     const lines = gaps.map((gap) => `  • ${gap.kind} "${gap.exportName}" — class ${gap.className} is not exported by your worker entry.`);
-    const hints = [...new Set(gaps.map((gap) => gap.module))].map((module) => `  export * from "./cirrus/_generated/${module}";`);
+    const hints = [...new Set(gaps.map((gap) => gap.module))].map((module) => `  export * from "./lunora/_generated/${module}";`);
 
     return [
-        `[cirrus] ${String(gaps.length)} declared ${gaps.length === 1 ? "binding is" : "bindings are"} not exported by your worker entry — \`wrangler deploy\` will fail.`,
+        `[lunora] ${String(gaps.length)} declared ${gaps.length === 1 ? "binding is" : "bindings are"} not exported by your worker entry — \`wrangler deploy\` will fail.`,
         ...lines,
         "",
         "Add to your worker entry:",
@@ -47,20 +47,20 @@ const formatExportGapOverlay = (gaps: ReadonlyArray<ExportGap>): string => {
  * error overlay in addition to the console warning.
  */
 const reconcileBindingsSafely = async (
-    options: Pick<ResolvedCirrusPluginOptions, "projectRoot" | "schemaDir">,
+    options: Pick<ResolvedLunoraPluginOptions, "projectRoot" | "schemaDir">,
     logger: { info?: (message: string) => void; warn: (message: string) => void },
     onExportGaps?: (gaps: ReadonlyArray<ExportGap>) => void,
 ): Promise<void> => {
     try {
-        const inferred = await inferCirrusBindings({ projectRoot: options.projectRoot, schemaDir: options.schemaDir });
+        const inferred = await inferLunoraBindings({ projectRoot: options.projectRoot, schemaDir: options.schemaDir });
         const reconciled = reconcileWranglerBindings(options.projectRoot, inferred);
 
         if (reconciled.changed) {
-            logger.info?.(`[cirrus] inferred bindings → ${reconciled.added.join(", ")} (written to ${reconciled.wranglerPath ?? "wrangler.jsonc"})`);
+            logger.info?.(`[lunora] inferred bindings → ${reconciled.added.join(", ")} (written to ${reconciled.wranglerPath ?? "wrangler.jsonc"})`);
         }
 
         for (const warning of reconciled.warnings) {
-            logger.warn(`[cirrus] ${warning}`);
+            logger.warn(`[lunora] ${warning}`);
         }
 
         if (reconciled.exportGaps.length > 0) {
@@ -69,7 +69,7 @@ const reconcileBindingsSafely = async (
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
 
-        logger.warn(`[cirrus] binding inference skipped: ${message}`);
+        logger.warn(`[lunora] binding inference skipped: ${message}`);
     }
 };
 
@@ -91,7 +91,7 @@ interface OverlayCallbacks {
  * behaviour.
  */
 const runCodegenSafely = (
-    options: Pick<ResolvedCirrusPluginOptions, "apiSpec" | "projectRoot" | "schemaDir">,
+    options: Pick<ResolvedLunoraPluginOptions, "apiSpec" | "projectRoot" | "schemaDir">,
     logger: { error: (message: string) => void; info?: (message: string) => void; warn: (message: string) => void },
     overlay?: OverlayCallbacks,
     project?: Project,
@@ -99,13 +99,13 @@ const runCodegenSafely = (
     const schemaPath = join(options.projectRoot, options.schemaDir, "schema.ts");
 
     if (!existsSync(schemaPath)) {
-        logger.warn(`[cirrus] schema.ts not found at ${schemaPath} — codegen skipped`);
+        logger.warn(`[lunora] schema.ts not found at ${schemaPath} — codegen skipped`);
 
         return undefined;
     }
 
     try {
-        const result = runCodegen({ apiSpec: options.apiSpec, cirrusDirectory: options.schemaDir, project, projectRoot: options.projectRoot });
+        const result = runCodegen({ apiSpec: options.apiSpec, lunoraDirectory: options.schemaDir, project, projectRoot: options.projectRoot });
 
         // Reconcile code-first cron definitions into wrangler.jsonc so the user
         // never hand-edits `triggers.crons`. Best-effort: a wrangler problem
@@ -114,19 +114,19 @@ const runCodegenSafely = (
             const reconciled = reconcileWranglerCrons(options.projectRoot, result.cronTriggers);
 
             if (reconciled.changed) {
-                logger.info?.(`[cirrus] synced ${result.cronTriggers.length.toFixed(0)} cron trigger(s) into ${reconciled.wranglerPath ?? "wrangler.jsonc"}`);
+                logger.info?.(`[lunora] synced ${result.cronTriggers.length.toFixed(0)} cron trigger(s) into ${reconciled.wranglerPath ?? "wrangler.jsonc"}`);
             }
         } catch (cronError: unknown) {
             const message = cronError instanceof Error ? cronError.message : String(cronError);
 
-            logger.warn(`[cirrus] cron trigger sync skipped: ${message}`);
+            logger.warn(`[lunora] cron trigger sync skipped: ${message}`);
         }
 
         // Surface static schema advisories (unindexed FKs, …) in the dev/build
         // log. Codegen returns them without printing; the richer error-overlay
         // presentation is a later step.
         for (const advisory of result.advisories) {
-            logger.warn(`[cirrus] schema advisory [${advisory.level}] ${advisory.name}: ${advisory.detail} — ${advisory.remediation}`);
+            logger.warn(`[lunora] schema advisory [${advisory.level}] ${advisory.name}: ${advisory.detail} — ${advisory.remediation}`);
         }
 
         // If the previous run failed, clear the browser error overlay now that
@@ -137,7 +137,7 @@ const runCodegenSafely = (
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
 
-        logger.error(`[cirrus] codegen failed: ${message}`);
+        logger.error(`[lunora] codegen failed: ${message}`);
 
         // In dev mode, surface the failure in the browser error overlay so the
         // user sees it immediately without leaving the browser.
@@ -148,10 +148,10 @@ const runCodegenSafely = (
 };
 
 /**
- * Vite plugin that runs `@cirrus/codegen` on startup and on file changes
- * inside the cirrus schema directory.
+ * Vite plugin that runs `@lunora/codegen` on startup and on file changes
+ * inside the lunora schema directory.
  */
-const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
+const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
     const absoluteSchemaDirectory = resolve(options.projectRoot, options.schemaDir);
 
     // Seed from the resolved option, but treat codegen's returned output dir as
@@ -238,7 +238,7 @@ const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
                     devServer?.hot.send({
                         err: {
                             loc,
-                            message: `[cirrus] codegen failed: ${message}`,
+                            message: `[lunora] codegen failed: ${message}`,
                             stack: error instanceof Error ? (error.stack ?? "") : "",
                         },
                         type: "error",
@@ -254,7 +254,7 @@ const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
 
             // True only for the directory itself or a real descendant — a bare
             // `startsWith` would also match a sibling whose name shares the
-            // prefix (e.g. `cirrus-foo/` for schemaDir `cirrus`).
+            // prefix (e.g. `lunora-foo/` for schemaDir `lunora`).
             const isInside = (path: string, directory: string): boolean => path === directory || path.startsWith(directory + sep);
 
             // Set once the server is torn down so a debounced callback that fires
@@ -407,7 +407,7 @@ const codegenPlugin = (options: ResolvedCirrusPluginOptions): Plugin => {
                 });
             };
         },
-        name: "cirrus:codegen",
+        name: "lunora:codegen",
     };
 };
 

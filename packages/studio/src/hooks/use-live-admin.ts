@@ -1,4 +1,4 @@
-import { useCirrus } from "@cirrus/react";
+import { useLunora } from "@lunora/react";
 import { useEffect, useRef } from "react";
 
 import { adminRef, callOptions } from "../lib/internal";
@@ -9,7 +9,7 @@ import { adminRef, callOptions } from "../lib/internal";
  *
  * Each server push — the initial seed plus every re-run triggered by a
  * write-flush on a table the query reads — invokes `onValue`. The subscription
- * is gated server-side by `CIRRUS_ADMIN_TOKEN` (the studio sends it as the
+ * is gated server-side by `LUNORA_ADMIN_TOKEN` (the studio sends it as the
  * client's `wsToken`). A client without that token gets the subscription
  * rejected, which arrives via `onError` so the panel can say so rather than
  * silently never updating; the one-shot load remains the source of truth.
@@ -27,7 +27,7 @@ const useLiveAdmin = (
     enabled = true,
     onError?: (message: string) => void,
 ): void => {
-    const client = useCirrus();
+    const client = useLunora();
     const callbackRef = useRef(onValue);
     const errorRef = useRef(onError);
     const argsRef = useRef(args);

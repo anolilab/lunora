@@ -94,7 +94,7 @@ describe("verifyTurnstile", () => {
         });
     });
 
-    it("throws a structural CirrusError on a non-2xx response", async () => {
+    it("throws a structural LunoraError on a non-2xx response", async () => {
         expect.assertions(2);
 
         const fetch = vi.fn<FetchLike>(async () => jsonResponse({}, { ok: false, status: 500 }));
@@ -105,11 +105,11 @@ describe("verifyTurnstile", () => {
             status?: number;
         };
 
-        expect(error.name).toBe("CirrusError");
+        expect(error.name).toBe("LunoraError");
         expect(error.status).toBe(503);
     });
 
-    it("throws a structural CirrusError on a transport failure", async () => {
+    it("throws a structural LunoraError on a transport failure", async () => {
         expect.assertions(3);
 
         const fetch = vi.fn<FetchLike>(async () => {
@@ -122,7 +122,7 @@ describe("verifyTurnstile", () => {
             status?: number;
         };
 
-        expect(error.name).toBe("CirrusError");
+        expect(error.name).toBe("LunoraError");
         expect(error.code).toBe("SERVICE_UNAVAILABLE");
         expect(error.status).toBe(503);
     });

@@ -1,19 +1,19 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-import { containerBindingName, containerClassName, normalizeContainerImage } from "@cirrus/container";
+import { containerBindingName, containerClassName, normalizeContainerImage } from "@lunora/container";
 import type { CallExpression, Expression, Identifier, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "./diagnostics";
 import type { ContainerIR } from "./ir";
 
-/** The only file containers may be declared in — mirrors `cirrus/crons.ts`. */
+/** The only file containers may be declared in — mirrors `lunora/crons.ts`. */
 const CONTAINERS_FILENAME = "containers.ts";
 
 /**
  * Decide whether a callee identifier refers to `defineContainer` from
- * `@cirrus/container`. Mirrors `isCronJobsFactory`: trust the import
+ * `@lunora/container`. Mirrors `isCronJobsFactory`: trust the import
  * declaration when the checker has a symbol (so aliasing survives), and fall
  * back to the surface text when no symbol is available.
  */
@@ -29,7 +29,7 @@ const isDefineContainer = (identifier: Identifier): boolean => {
             continue;
         }
 
-        if (declaration.getImportDeclaration().getModuleSpecifierValue() !== "@cirrus/container") {
+        if (declaration.getImportDeclaration().getModuleSpecifierValue() !== "@lunora/container") {
             return false;
         }
 
@@ -318,13 +318,13 @@ const containersFromSource = (source: SourceFile): ContainerIR[] => {
 
 /**
  * Discover every container the project declares: exported `defineContainer()`
- * calls in `cirrus/containers.ts`. Returns `[]` when the file doesn't exist.
+ * calls in `lunora/containers.ts`. Returns `[]` when the file doesn't exist.
  * Wrangler-relevant fields (`image`, `instanceType`, `maxInstances`, `name`)
  * must be static literals; runtime-only fields (`env`, `sleepAfter`, …) may be
  * any expression since the generated class imports the definition object.
  */
-const discoverContainers = (project: Project, cirrusDirectory: string): ContainerIR[] => {
-    const containersPath = join(cirrusDirectory, CONTAINERS_FILENAME);
+const discoverContainers = (project: Project, lunoraDirectory: string): ContainerIR[] => {
+    const containersPath = join(lunoraDirectory, CONTAINERS_FILENAME);
 
     if (!existsSync(containersPath)) {
         return [];

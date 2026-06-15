@@ -1,14 +1,14 @@
 ---
-title: "@cirrus/auth"
+title: "@lunora/auth"
 description: First-party auth — email/password, GitHub, Google, sessions in D1.
 ---
 
-`@cirrus/auth` is a Cloudflare-native auth module. It is **not** better-auth
+`@lunora/auth` is a Cloudflare-native auth module. It is **not** better-auth
 running on Workers; the wire shape is borrowed but the storage and crypto
 are first-party so it boots without external services.
 
 ```ts
-import { createAuth, providers } from "@cirrus/auth";
+import { createAuth, providers } from "@lunora/auth";
 
 export const auth = createAuth({
     secret: env.AUTH_SECRET,
@@ -23,7 +23,7 @@ export const auth = createAuth({
 ## Mount the routes
 
 ```ts
-import { createWorker } from "@cirrus/runtime";
+import { createWorker } from "@lunora/runtime";
 
 export default createWorker({
     shardDO: env.SHARD,
@@ -42,7 +42,7 @@ You can prefix-mount or merge with your own routes.
 
 ## Sessions
 
-Sessions live in a dedicated Durable Object — `SessionDO` from `@cirrus/do`.
+Sessions live in a dedicated Durable Object — `SessionDO` from `@lunora/do`.
 The auth package writes through the `SESSION` namespace binding and shards
 sessions across DO instances using the first 16 characters of each token
 (`idFromName(token.slice(0, 16))`). Same-prefix tokens co-locate; one DO
@@ -71,7 +71,7 @@ to the DO.
 
 OAuth is handled by **better-auth** — social providers run through its
 built-in social-provider flow, and any additional providers go through
-`genericOAuth`. Cirrus does not implement its own code/token/userinfo
+`genericOAuth`. Lunora does not implement its own code/token/userinfo
 exchange or `id_token` verification; it configures better-auth and forwards
 the request. The GitHub and Google providers each perform a real
 code-for-token-for-userinfo exchange:
@@ -83,7 +83,7 @@ code-for-token-for-userinfo exchange:
 - **Google** — exchanges the authorization code for tokens and reads the
   returned `id_token` (JWT) for `sub`, `email`, `name`. The `id_token`
   signature is **verified against Google's JWKS** as part of better-auth's
-  social-provider flow — Cirrus does not roll its own OAuth or trust the
+  social-provider flow — Lunora does not roll its own OAuth or trust the
   transport alone.
 
 Configure credentials via `OAUTH_GITHUB_CLIENT_ID`, `OAUTH_GITHUB_CLIENT_SECRET`,
@@ -120,7 +120,7 @@ export const auth = createAuth({
 ```
 
 To turn rate limiting off — for example when you front auth with your own
-limiter (see [`@cirrus/ratelimit`](/docs/addons/ratelimit)) — pass an
+limiter (see [`@lunora/ratelimit`](/docs/addons/ratelimit)) — pass an
 explicit flag; an explicit `enabled` value always wins over the default:
 
 ```ts
@@ -139,4 +139,4 @@ needed on Workers.
 ## See also
 
 - [Getting started](/docs/getting-started)
-- [@cirrus/server](/docs/api/server)
+- [@lunora/server](/docs/api/server)

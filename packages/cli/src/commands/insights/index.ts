@@ -1,7 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
 /**
- * `cirrus insights` — a Convex-Insights-style report over the live worker's
+ * `lunora insights` — a Convex-Insights-style report over the live worker's
  * per-function metrics. Surfaces write-conflict hot-spots (OCC contention, the
  * sharding signal), error hot-spots, and latency outliers. Metadata only; the
  * handler (lazy-loaded via `loader`) holds the logic.
@@ -9,10 +9,10 @@ import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/
 const insightsCommand: Command = {
     description: "Report write-conflict hot-spots, error rates, and latency outliers from a running Worker",
     examples: [
-        ["cirrus insights", "Report against the local dev worker"],
-        ["cirrus insights --shard channel:demo", "Scope the report to one shard"],
-        ["cirrus insights --json", "Emit the raw report as JSON"],
-        ["cirrus insights --prod --url https://app.example.com --token $CIRRUS_ADMIN_TOKEN", "Report against production"],
+        ["lunora insights", "Report against the local dev worker"],
+        ["lunora insights --shard channel:demo", "Scope the report to one shard"],
+        ["lunora insights --json", "Emit the raw report as JSON"],
+        ["lunora insights --prod --url https://app.example.com --token $LUNORA_ADMIN_TOKEN", "Report against production"],
     ],
     group: "Develop",
     loader: () =>
@@ -26,7 +26,7 @@ const insightsCommand: Command = {
         { description: "Emit a JSON report instead of human text", name: "json", type: Boolean },
         { description: "Target production — requires an explicit --url", name: "prod", type: Boolean },
         { description: "Worker URL (default http://localhost:8787)", name: "url", type: String },
-        { description: "Admin bearer token (or CIRRUS_ADMIN_TOKEN)", name: "token", type: String },
+        { description: "Admin bearer token (or LUNORA_ADMIN_TOKEN)", name: "token", type: String },
     ],
 };
 

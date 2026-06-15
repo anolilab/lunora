@@ -68,7 +68,7 @@ const requireRecipients = (to: SendPayload["to"]): { first: ProviderAddress; lis
     const [first] = list ?? [];
 
     if (!list || first === undefined) {
-        throw new Error("@cirrus/mail: at least one recipient is required");
+        throw new Error("@lunora/mail: at least one recipient is required");
     }
 
     return { first, list };
@@ -97,9 +97,9 @@ const toProviderEmail = (payload: SendPayload, defaultFrom: string, to: Provider
 const interpretSendResult = (result: ProviderSendResult): { id: string } => {
     if (!result.success || !result.data) {
         // eslint-disable-next-line no-console -- intentional server-side log of the redacted provider error before throwing a generic message
-        console.error(`@cirrus/mail: send failed: ${reasonOf(result.error)}`);
+        console.error(`@lunora/mail: send failed: ${reasonOf(result.error)}`);
 
-        throw new Error("@cirrus/mail: send failed");
+        throw new Error("@lunora/mail: send failed");
     }
 
     return { id: result.data.messageId };

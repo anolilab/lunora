@@ -1,7 +1,7 @@
 import { buildPresignedUrl } from "./presigned-url";
 import { buildSignedUrl } from "./signed-url";
 import type {
-    CirrusStorageOptions,
+    LunoraStorageOptions,
     ListOptions,
     ObjectMetadata,
     PresignedUrlOptions,
@@ -142,19 +142,19 @@ const trimTrailingSlashes = (value: string): string => {
  */
 const validateKey = (key: string): void => {
     if (typeof key !== "string" || key.length === 0) {
-        throw new Error("@cirrus/storage: key must be a non-empty string");
+        throw new Error("@lunora/storage: key must be a non-empty string");
     }
 
     if (key.length > MAX_KEY_LENGTH) {
-        throw new Error(`@cirrus/storage: key exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
+        throw new Error(`@lunora/storage: key exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
     }
 
     if (key.includes("\0")) {
-        throw new Error("@cirrus/storage: key contains NUL byte");
+        throw new Error("@lunora/storage: key contains NUL byte");
     }
 
     if (key.startsWith("/")) {
-        throw new Error("@cirrus/storage: key must not start with `/`");
+        throw new Error("@lunora/storage: key must not start with `/`");
     }
 
     // Reject `..` as a path component (not just substring) so `a..b` is fine
@@ -163,7 +163,7 @@ const validateKey = (key: string): void => {
 
     for (const segment of segments) {
         if (segment === "..") {
-            throw new Error("@cirrus/storage: key contains a `..` path component");
+            throw new Error("@lunora/storage: key contains a `..` path component");
         }
     }
 };
@@ -182,18 +182,18 @@ export const scopeKey = (prefix: string, key: string): string => {
     const composed = `${trimmedPrefix}/${key}`;
 
     if (composed.length > MAX_KEY_LENGTH) {
-        throw new Error(`@cirrus/storage: scoped key exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
+        throw new Error(`@lunora/storage: scoped key exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
     }
 
     return composed;
 };
 
-export const createStorage = (options: CirrusStorageOptions): Storage => {
+export const createStorage = (options: LunoraStorageOptions): Storage => {
     // Defensive runtime guard: `bucket` is required by the type, but JS callers
     // (and `createStorage({})` misuse — exercised by a test) can omit it.
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untrusted JS callers despite the type
     if (!options.bucket) {
-        throw new Error("@cirrus/storage: `bucket` is required");
+        throw new Error("@lunora/storage: `bucket` is required");
     }
 
     const upload = async (
@@ -210,11 +210,11 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
         // `contentType` is REQUIRED and must be a member of the list.
         if (uploadOptions.allowedContentTypes !== undefined) {
             if (uploadOptions.contentType === undefined) {
-                throw new Error("@cirrus/storage: contentType is required when allowedContentTypes is set");
+                throw new Error("@lunora/storage: contentType is required when allowedContentTypes is set");
             }
 
             if (!uploadOptions.allowedContentTypes.includes(uploadOptions.contentType)) {
-                throw new Error(`@cirrus/storage: contentType "${uploadOptions.contentType}" not in allowedContentTypes`);
+                throw new Error(`@lunora/storage: contentType "${uploadOptions.contentType}" not in allowedContentTypes`);
             }
         }
 
@@ -232,7 +232,7 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
             }
 
             if (size !== undefined && size > uploadOptions.maxSize) {
-                throw new Error(`@cirrus/storage: body exceeds maxSize (${String(size)} > ${String(uploadOptions.maxSize)})`);
+                throw new Error(`@lunora/storage: body exceeds maxSize (${String(size)} > ${String(uploadOptions.maxSize)})`);
             }
         }
 
@@ -286,7 +286,7 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
         // value just produces an empty result. We still reject NUL bytes since
         // the R2 binding silently truncates at the NUL on some runtimes.
         if (prefix?.includes("\0")) {
-            throw new Error("@cirrus/storage: prefix contains NUL byte");
+            throw new Error("@lunora/storage: prefix contains NUL byte");
         }
 
         const requested = listOptions.limit ?? DEFAULT_LIST_LIMIT;
@@ -300,7 +300,7 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
 
     const getUrl = (key: string): string => {
         if (!options.publicBaseUrl) {
-            throw new Error("@cirrus/storage: `publicBaseUrl` is required for getUrl()");
+            throw new Error("@lunora/storage: `publicBaseUrl` is required for getUrl()");
         }
 
         validateKey(key);
@@ -319,11 +319,11 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
 
     const getSignedUrl = async (key: string, signedOptions: SignedUrlOptions = {}): Promise<string> => {
         if (!options.publicBaseUrl) {
-            throw new Error("@cirrus/storage: `publicBaseUrl` is required for getSignedUrl()");
+            throw new Error("@lunora/storage: `publicBaseUrl` is required for getSignedUrl()");
         }
 
         if (!options.signingSecret) {
-            throw new Error("@cirrus/storage: `signingSecret` is required for getSignedUrl()");
+            throw new Error("@lunora/storage: `signingSecret` is required for getSignedUrl()");
         }
 
         validateKey(key);
@@ -348,7 +348,7 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
         validateKey(key);
 
         if (!options.bucket.createMultipartUpload) {
-            throw new Error("@cirrus/storage: bucket binding does not support multipart uploads (createMultipartUpload)");
+            throw new Error("@lunora/storage: bucket binding does not support multipart uploads (createMultipartUpload)");
         }
 
         return options.bucket.createMultipartUpload(key, {
@@ -361,11 +361,11 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
         validateKey(key);
 
         if (typeof uploadId !== "string" || uploadId.length === 0) {
-            throw new Error("@cirrus/storage: resumeMultipartUpload requires a non-empty uploadId");
+            throw new Error("@lunora/storage: resumeMultipartUpload requires a non-empty uploadId");
         }
 
         if (!options.bucket.resumeMultipartUpload) {
-            throw new Error("@cirrus/storage: bucket binding does not support multipart uploads (resumeMultipartUpload)");
+            throw new Error("@lunora/storage: bucket binding does not support multipart uploads (resumeMultipartUpload)");
         }
 
         return options.bucket.resumeMultipartUpload(key, uploadId);
@@ -375,7 +375,7 @@ export const createStorage = (options: CirrusStorageOptions): Storage => {
     // R2 S3 credentials; the worker-signed path (`getSignedUrl`) needs none.
     const getPresignedUrl = async (key: string, presignedOptions: PresignedUrlOptions = {}): Promise<string> => {
         if (!options.s3) {
-            throw new Error("@cirrus/storage: `s3` credentials are required for getPresignedUrl() — pass { accountId, accessKeyId, secretAccessKey, bucket }");
+            throw new Error("@lunora/storage: `s3` credentials are required for getPresignedUrl() — pass { accountId, accessKeyId, secretAccessKey, bucket }");
         }
 
         validateKey(key);

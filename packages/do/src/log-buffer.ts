@@ -25,7 +25,7 @@ const DEFAULT_CAPACITY = 500;
  * Production log shipping is the platform's job, not ours: use Cloudflare
  * **Workers Logs** (retained, queryable in the studio), **Logpush** (stream
  * to R2 / a SIEM / a log service), or a **Tail Worker** for programmatic
- * capture. Cirrus deliberately does not reimplement any of those — this buffer
+ * capture. Lunora deliberately does not reimplement any of those — this buffer
  * stays a tiny dev/ops readout. Capacity is fixed at construction; once full,
  * the oldest entry is evicted to make room (FIFO), so memory stays bounded
  * regardless of traffic.

@@ -1,5 +1,5 @@
-import type { FunctionReference } from "@cirrus/client";
-import { useCirrus } from "@cirrus/react";
+import type { FunctionReference } from "@lunora/client";
+import { useLunora } from "@lunora/react";
 import { useCallback } from "react";
 
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
@@ -35,7 +35,7 @@ interface RunAsProbeArgs {
  * propagating, so the playground renders allow/deny uniformly.
  */
 const useRunAsProbe = (): ((probe: RunAsProbeArgs) => Promise<ProbeOutcome>) => {
-    const client = useCirrus();
+    const client = useLunora();
 
     return useCallback(
         async ({ args, functionPath, shardKey = "", userId }: RunAsProbeArgs): Promise<ProbeOutcome> => {

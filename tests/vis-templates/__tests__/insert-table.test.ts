@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import { insertTableIntoSchema } from "../../../.vis/templates/_helpers/insert-table.js";
 
-const baseSchema = `import { defineSchema, defineTable, v } from "@cirrus/server";
+const baseSchema = `import { defineSchema, defineTable, v } from "@lunora/server";
 
 export const schema = defineSchema({
     users: defineTable({
@@ -54,7 +54,7 @@ describe("insertTableIntoSchema", () => {
     });
 
     test("rejects defineSchema called with a non-object literal argument", () => {
-        const source = `import { defineSchema } from "@cirrus/server";
+        const source = `import { defineSchema } from "@lunora/server";
 
 const tables = { users: {} };
 export const schema = defineSchema(tables);
@@ -68,7 +68,7 @@ export const schema = defineSchema(tables);
         // Documented edge case: alias-aware matching is not implemented.
         // The test pins the current behaviour so a future change to support
         // aliases doesn't silently flip semantics.
-        const source = `import { defineSchema as ds } from "@cirrus/server";
+        const source = `import { defineSchema as ds } from "@lunora/server";
 
 export const schema = ds({
     users: defineTable({}),

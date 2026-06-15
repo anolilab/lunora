@@ -1,11 +1,11 @@
-import type { AggregateIndexDefinitionLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@cirrus/do";
+import type { AggregateIndexDefinitionLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@lunora/do";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createD1CtxDb as createD1ContextDatabase, runD1AggregateMigrations } from "../src/d1-ctx-db";
 import createD1Exec from "./_helpers/node-sqlite-d1";
 
 /**
- * Mirror of `@cirrus/do`'s ctx-db.aggregates suite against the D1 column
+ * Mirror of `@lunora/do`'s ctx-db.aggregates suite against the D1 column
  * dialect, covering trigger-maintained counters, indexed/scan planning, the
  * RLS coupling seam, and the migration helper that materializes counter
  * tables.
@@ -184,7 +184,7 @@ describe("d1 aggregateIndex parity", () => {
 
         await expect(writer.count("todos", { restrictsCounts: true, where: { projectId: "p1" } })).rejects.toMatchObject({
             code: "COUNT_RLS_UNSUPPORTED",
-            name: "CirrusError",
+            name: "LunoraError",
         });
     });
 

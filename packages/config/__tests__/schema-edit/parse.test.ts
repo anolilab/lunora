@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { ParseSchemaResult, SchemaTable } from "../../src/schema-edit/parse";
 import { parseSchema } from "../../src/schema-edit/parse";
 
-const SCHEMA = `import { defineSchema, defineTable, v } from "@cirrus/server";
+const SCHEMA = `import { defineSchema, defineTable, v } from "@lunora/server";
 
 export default defineSchema({
     users: defineTable({
@@ -64,7 +64,7 @@ describe("parseSchema", () => {
     it("reports aliased-define-schema when the import is aliased", () => {
         expect.assertions(1);
 
-        const aliased = `import { defineSchema as ds, defineTable, v } from "@cirrus/server";\nexport default ds({ a: defineTable({ x: v.string() }) });\n`;
+        const aliased = `import { defineSchema as ds, defineTable, v } from "@lunora/server";\nexport default ds({ a: defineTable({ x: v.string() }) });\n`;
 
         expect(parseSchema(aliased)).toStrictEqual({ ok: false, reason: "aliased-define-schema" });
     });

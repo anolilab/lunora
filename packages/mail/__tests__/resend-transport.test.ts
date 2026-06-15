@@ -47,7 +47,7 @@ describe("resend transport error mapping", () => {
 
         sendEmail.mockResolvedValue({ error: new Error("rate limited"), success: false });
 
-        await expect(mailer().send({ subject: "Hi", to: "a@x.test" })).rejects.toThrow("@cirrus/mail: send failed");
+        await expect(mailer().send({ subject: "Hi", to: "a@x.test" })).rejects.toThrow("@lunora/mail: send failed");
         expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("rate limited"));
     });
 
@@ -56,7 +56,7 @@ describe("resend transport error mapping", () => {
 
         sendEmail.mockResolvedValue({ error: "boom", success: false });
 
-        await expect(mailer().send({ subject: "Hi", to: "a@x.test" })).rejects.toThrow("@cirrus/mail: send failed");
+        await expect(mailer().send({ subject: "Hi", to: "a@x.test" })).rejects.toThrow("@lunora/mail: send failed");
         expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("boom"));
     });
 
@@ -65,7 +65,7 @@ describe("resend transport error mapping", () => {
 
         sendEmail.mockResolvedValue({ error: 503, success: false });
 
-        await expect(mailer().send({ subject: "Hi", to: "a@x.test" })).rejects.toThrow("@cirrus/mail: send failed");
+        await expect(mailer().send({ subject: "Hi", to: "a@x.test" })).rejects.toThrow("@lunora/mail: send failed");
         expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("503"));
     });
 
@@ -74,7 +74,7 @@ describe("resend transport error mapping", () => {
 
         sendEmail.mockResolvedValue({ error: null, success: false });
 
-        await expect(mailer().send({ subject: "Hi", to: "a@x.test" })).rejects.toThrow("@cirrus/mail: send failed");
+        await expect(mailer().send({ subject: "Hi", to: "a@x.test" })).rejects.toThrow("@lunora/mail: send failed");
         expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("send failed"));
     });
 
@@ -83,7 +83,7 @@ describe("resend transport error mapping", () => {
 
         sendEmail.mockResolvedValue({ error: { code: "E", detail: "nope" }, success: false });
 
-        await expect(mailer().send({ subject: "Hi", to: "a@x.test" })).rejects.toThrow("@cirrus/mail: send failed");
+        await expect(mailer().send({ subject: "Hi", to: "a@x.test" })).rejects.toThrow("@lunora/mail: send failed");
         expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("nope"));
     });
 
@@ -92,7 +92,7 @@ describe("resend transport error mapping", () => {
 
         sendEmail.mockResolvedValue({ error: Symbol("x"), success: false });
 
-        await expect(mailer().send({ subject: "Hi", to: "a@x.test" })).rejects.toThrow("@cirrus/mail: send failed");
+        await expect(mailer().send({ subject: "Hi", to: "a@x.test" })).rejects.toThrow("@lunora/mail: send failed");
         expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("send failed"));
     });
 

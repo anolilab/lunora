@@ -9,7 +9,7 @@ const { data } = await useFetch("/api/messages");
 <template>
     <main style="font-family: system-ui; padding: 24px">
         <h1>{{ "{{name}}" }}</h1>
-        <p>Nuxt + Cirrus realtime queries — your loader is live.</p>
+        <p>Nuxt + Lunora realtime queries — your loader is live.</p>
         <MessageFeed v-if="data" :preloaded="data.preloaded" />
     </main>
 </template>

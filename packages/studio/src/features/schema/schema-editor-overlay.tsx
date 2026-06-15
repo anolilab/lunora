@@ -174,7 +174,7 @@ export const SchemaEditorOverlay = ({ onApplied, tableNames }: SchemaEditorOverl
         <Card data-testid="sc-editor" size="sm">
             <CardHeader>
                 <CardTitle>{t("Edit schema")}</CardTitle>
-                <CardDescription>{t("Adds a table, column, or index to cirrus/schema.ts and reruns codegen.")}</CardDescription>
+                <CardDescription>{t("Adds a table, column, or index to lunora/schema.ts and reruns codegen.")}</CardDescription>
             </CardHeader>
             <CardContent>
                 <div className="flex flex-wrap gap-2">

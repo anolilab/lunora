@@ -3,7 +3,7 @@ title: Manual end-to-end verification
 description: How to actually prove live loaders work — scaffold, SSR-curl the preloaded value, two-tab live update.
 ---
 
-The reactive-loader contract is covered by unit tests in `@cirrus/react`
+The reactive-loader contract is covered by unit tests in `@lunora/react`
 (`preloadQuery` produces a serializable token, `usePreloadedQuery` seeds the SSR
 value with no flash and attaches the live subscription, `renderToString` contains
 the value). But the **full** proof — browser → SSR worker → live WebSocket
@@ -18,11 +18,11 @@ monorepo. This page is the honest manual procedure to prove it yourself.
 
 Three claims, in order:
 
-1. **SSR preload** — the route loader runs the Cirrus query on the server and the
+1. **SSR preload** — the route loader runs the Lunora query on the server and the
    result is in the **raw HTML** (before any JS runs), not just after hydration.
 2. **No flash** — the first client paint shows the preloaded value with no
    loading spinner and no refetch.
-3. **Live update** — a write from one tab pushes over `/_cirrus/ws` and updates a
+3. **Live update** — a write from one tab pushes over `/_lunora/ws` and updates a
    second tab with no page reload.
 
 ## 1. Scaffold
@@ -32,15 +32,15 @@ path; the others are scaffoldable and in progress (see
 [Bring your framework](/docs/frameworks/bring-your-framework) for status).
 
 ```bash
-cirrus init demo-app -t tanstack-start   # class A — proven end-to-end
+lunora init demo-app -t tanstack-start   # class A — proven end-to-end
 # or, for an existing app:
-#   cd my-existing-app && cirrus init --here
+#   cd my-existing-app && lunora init --here
 cd demo-app
 pnpm install
 ```
 
-`cirrus init --here` detects your framework, patches the config, scaffolds
-`cirrus/`, and prints the per-framework adapter + worker-composition steps you
+`lunora init --here` detects your framework, patches the config, scaffolds
+`lunora/`, and prints the per-framework adapter + worker-composition steps you
 still need to wire by hand. Complete those before running `dev`.
 
 ## 2. Dev
@@ -50,9 +50,9 @@ pnpm dev   # starts wrangler + the Vite dev server (default http://localhost:517
 ```
 
 For class-A frameworks this is one Vite/Miniflare dev server running both the SSR
-handler and Cirrus realtime. For class-B frameworks (SvelteKit / Nuxt / Astro)
-this is the framework's own dev server with Cirrus realtime composed in — verify
-the `/_cirrus/ws` endpoint responds under it.
+handler and Lunora realtime. For class-B frameworks (SvelteKit / Nuxt / Astro)
+this is the framework's own dev server with Lunora realtime composed in — verify
+the `/_lunora/ws` endpoint responds under it.
 
 ## 3. Prove SSR preload (curl the raw HTML)
 
@@ -66,7 +66,7 @@ curl -s http://localhost:5173/ | grep -i "channelId\|messages"
 
 You should see the seeded query response — the `channelId` / `messages` payload —
 embedded in the HTML (typically inside the framework's dehydration `<script>`
-tag, e.g. `__cirrusPreloaded`). If `curl` shows the value, SSR preload works. If
+tag, e.g. `__lunoraPreloaded`). If `curl` shows the value, SSR preload works. If
 it only appears after the page hydrates in a browser, the loader is **not** doing
 server-side preload.
 
@@ -74,7 +74,7 @@ server-side preload.
 
 1. Open `http://localhost:5173/` in a browser.
 2. Open DevTools → **Network → WS**.
-3. Confirm a WebSocket connection to **`/_cirrus/ws`** is established after the
+3. Confirm a WebSocket connection to **`/_lunora/ws`** is established after the
    page loads. This is the live subscription that `usePreloadedQuery` (or your
    adapter's equivalent) attaches in an effect after mount.
 
@@ -89,19 +89,19 @@ never refetched. The WebSocket is the only freshness signal.
    `useMutation(api.messages.send)`).
 3. In tab **B**, the message list updates **without a page reload**.
 
-The path being proven: mutation in A → `/_cirrus/rpc` → `ShardDO` writes and
-broadcasts a delta → `/_cirrus/ws` push to B → the adapter applies the delta via
+The path being proven: mutation in A → `/_lunora/rpc` → `ShardDO` writes and
+broadcasts a delta → `/_lunora/ws` push to B → the adapter applies the delta via
 `setQueryData` → re-render. No polling, no manual refresh.
 
 ## Identity check (optional, with auth)
 
-If your app uses `@cirrus/auth`, confirm SSR and the socket run as the **same**
+If your app uses `@lunora/auth`, confirm SSR and the socket run as the **same**
 user:
 
 - Sign in, then `curl` with the session cookie:
   `curl -s --cookie "<your-session-cookie>" http://localhost:5173/` should return
   the **signed-in** user's data.
-- In the browser, the WebSocket upgrade to `/_cirrus/ws` carries the same cookie
+- In the browser, the WebSocket upgrade to `/_lunora/ws` carries the same cookie
   automatically, so the subscription resumes the same identity with no token
   exchange. See [Reactive loaders → Identity continuity](/docs/frameworks/reactive-loaders).
 
@@ -110,7 +110,7 @@ user:
 | Step | Pass criterion                                                        |
 | ---- | --------------------------------------------------------------------- |
 | 3    | `curl` (no JS) shows the preloaded query value in the raw HTML        |
-| 4    | a `/_cirrus/ws` WebSocket opens after load; no query refetch on paint |
+| 4    | a `/_lunora/ws` WebSocket opens after load; no query refetch on paint |
 | 5    | a write in tab A updates tab B with no reload                         |
 
 If all three pass, the live-loader contract holds for your framework: SSR data

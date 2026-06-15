@@ -12,5 +12,5 @@
         "noEmit": true,
         "types": ["@cloudflare/workers-types"]
     },
-    "include": ["src/**/*", "cirrus/**/*"]
+    "include": ["src/**/*", "lunora/**/*"]
 }

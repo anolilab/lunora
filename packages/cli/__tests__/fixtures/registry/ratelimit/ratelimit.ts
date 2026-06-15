@@ -1,4 +1,4 @@
-import { mutation, v } from "@cirrus/server";
+import { mutation, v } from "@lunora/server";
 
 export const consume = mutation({
     args: { key: v.string() },

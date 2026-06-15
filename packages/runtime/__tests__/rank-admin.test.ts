@@ -11,7 +11,7 @@ const fakeContext: ExecutionContextLike = {
 };
 
 const ADMIN_TOKEN = "admin-bear";
-const RANK_URL = "https://app.example/_cirrus/admin/rank";
+const RANK_URL = "https://app.example/_lunora/admin/rank";
 
 interface ShardCall {
     authorization: null | string;
@@ -72,7 +72,7 @@ describe("createWorker — admin rank endpoint", () => {
         expect(result.ok).toBe(3);
         expect(calls).toHaveLength(3);
         // Each shard saw the rankBefore admin RPC carrying the forwarded admin bearer.
-        expect(calls.every((c) => c.body.functionPath === "__cirrus_admin__:rankBefore" && c.authorization === `Bearer ${ADMIN_TOKEN}`)).toBe(true);
+        expect(calls.every((c) => c.body.functionPath === "__lunora_admin__:rankBefore" && c.authorization === `Bearer ${ADMIN_TOKEN}`)).toBe(true);
     });
 
     it("forwards the explicit key tuple verbatim to each shard", async () => {
@@ -130,7 +130,7 @@ describe("createWorker — admin rank endpoint", () => {
     });
 });
 
-const RANKPAGE_URL = "https://app.example/_cirrus/admin/rankpage";
+const RANKPAGE_URL = "https://app.example/_lunora/admin/rankpage";
 
 interface PageRow {
     doc: Record<string, unknown>;
@@ -191,7 +191,7 @@ describe("createWorker — admin rankpage endpoint", () => {
 
         expect(result.page.map((d) => d._id)).toEqual(["a1", "b1", "b2", "a2"]);
         expect(result.isDone).toBe(true);
-        expect(calls.every((c) => c.body.functionPath === "__cirrus_admin__:rankPage" && c.authorization === `Bearer ${ADMIN_TOKEN}`)).toBe(true);
+        expect(calls.every((c) => c.body.functionPath === "__lunora_admin__:rankPage" && c.authorization === `Bearer ${ADMIN_TOKEN}`)).toBe(true);
     });
 
     it("rejects without the admin bearer", async () => {

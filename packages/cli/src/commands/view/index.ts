@@ -1,10 +1,10 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
 const viewCommand: Command = {
-    description: "Open the Cirrus studio in your browser (local dev by default, --remote for production)",
+    description: "Open the Lunora studio in your browser (local dev by default, --remote for production)",
     examples: [
-        ["cirrus view", "Open the studio for local dev"],
-        ["cirrus view --remote", "Open the deployed studio"],
+        ["lunora view", "Open the studio for local dev"],
+        ["lunora view --remote", "Open the deployed studio"],
     ],
     group: "Project",
     loader: () =>

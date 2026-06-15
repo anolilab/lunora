@@ -40,7 +40,7 @@ describe("augmentWorkerStartupError", () => {
 
         expect(error.message).toContain("Cannot read properties of undefined (reading 'string')");
         expect(error.message).toContain("circular import");
-        expect(error.message).toContain("cirrus codegen");
+        expect(error.message).toContain("lunora codegen");
         // Vite's CLI prints `util.inspect(error)`, which renders the stack — so the
         // hint must reach `.stack`, not just `.message`, to actually be seen.
         expect(error.stack).toContain("circular import");
@@ -115,7 +115,7 @@ describe("withWorkerStartupHint", () => {
         const [wrapped] = withWorkerStartupHint([plugin]);
         const { handler } = wrapped?.buildStart as { handler: () => Promise<void> };
 
-        await expect(handler()).rejects.toThrow("cirrus codegen");
+        await expect(handler()).rejects.toThrow("lunora codegen");
     });
 
     it("passes through a successful hook result unchanged", async () => {

@@ -1,4 +1,4 @@
-import { useCirrus } from "@cirrus/react";
+import { useLunora } from "@lunora/react";
 import type { ChangeEvent, ReactElement } from "react";
 import { useCallback, useEffect, useState } from "react";
 
@@ -27,15 +27,15 @@ const PITR_RESTORE = adminRef(ADMIN_FUNCTIONS.pitrRestore);
  *
  * Reads the shard's current bookmark, previews the bookmark nearest a chosen
  * time, and (behind a confirm step) restores the shard to a time or an explicit
- * bookmark via the `__cirrus_admin__:pitrRestore` RPC, surfacing the returned
+ * bookmark via the `__lunora_admin__:pitrRestore` RPC, surfacing the returned
  * undo bookmark so the restore can be reversed. All ops run over the
- * {@link useCirrus} client and are gated by the server's `CIRRUS_ADMIN_TOKEN`.
+ * {@link useLunora} client and are gated by the server's `LUNORA_ADMIN_TOKEN`.
  *
  * In-place recovery covers the last 30 days; for older or off-platform recovery
- * use the snapshot tier (`cirrus backup` / the backup registry item).
+ * use the snapshot tier (`lunora backup` / the backup registry item).
  */
 export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const t = useT();
     const shardKey = initialShardKey ?? "";
 
@@ -168,7 +168,7 @@ export const PitrPanel = ({ initialShardKey }: PitrPanelProps): ReactElement => 
     }, [restart, restored, runRestore]);
 
     return (
-        <div className="flex flex-col gap-4" data-testid="cirrus-pitr">
+        <div className="flex flex-col gap-4" data-testid="lunora-pitr">
             <div className="flex flex-wrap items-center gap-3">
                 <span className="text-xs text-muted-foreground">
                     {t("Shard")}: <span className="font-mono">{shardKey === "" ? t("root") : shardKey}</span>

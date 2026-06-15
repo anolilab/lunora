@@ -39,13 +39,13 @@ const plugins = {
 };
 
 /**
- * The expansion shipped under `@cirrus/auth/plugins` is intentionally a
+ * The expansion shipped under `@lunora/auth/plugins` is intentionally a
  * thin re-export of better-auth's plugin factories. These tests don't
  * exercise the underlying plugin behavior (that's better-auth's domain) —
  * they verify the surface area: each export is present and is the
  * expected shape (callable factory or callable plugin).
  */
-describe("@cirrus/auth/plugins", () => {
+describe("@lunora/auth/plugins", () => {
     const expectedExports = [
         "admin",
         "anonymous",

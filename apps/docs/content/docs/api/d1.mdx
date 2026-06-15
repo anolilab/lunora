@@ -1,15 +1,15 @@
 ---
-title: "@cirrus/d1"
+title: "@lunora/d1"
 description: D1 Sessions API client + migration runner for global tables.
 ---
 
-`@cirrus/d1` is the D1-backed storage adapter for tables marked
+`@lunora/d1` is the D1-backed storage adapter for tables marked
 `.global()`. It wraps the Workers `D1Database` binding with the Sessions
 API (so read-your-writes works across replicas) and ships a migration
 runner the CLI's `migrate` command relies on.
 
 ```ts
-import { D1Client } from "@cirrus/d1";
+import { D1Client } from "@lunora/d1";
 
 const client = new D1Client(env.D1, { bookmark: bookmarkFromRequest });
 const { results } = await client.query("SELECT * FROM users WHERE id = ?", [userId]);
@@ -40,10 +40,10 @@ without depending on the full Workers types package.
 ## `MigrationRunner`
 
 Applies a sequence of `Migration` records against a D1 database. Tracks
-applied versions in the `_cirrus_migrations` table.
+applied versions in the `_lunora_migrations` table.
 
 ```ts
-import { MigrationRunner } from "@cirrus/d1";
+import { MigrationRunner } from "@lunora/d1";
 
 const runner = new MigrationRunner(env.D1, [{ version: 1, name: "init", sql: readFileSync("migrations/001_init.sql", "utf8") }]);
 
@@ -51,7 +51,7 @@ const { applied, skipped } = await runner.run();
 ```
 
 `MigrationRunnerResult.applied` is the versions that were just applied,
-`skipped` is what was already on disk. Use `cirrus migrate generate` to
+`skipped` is what was already on disk. Use `lunora migrate generate` to
 **produce** the SQL — `MigrationRunner` is what actually **applies** it at
 deploy time.
 
@@ -75,6 +75,6 @@ tracking table out of sync.
 
 ## See also
 
-- [@cirrus/cli](/docs/api/cli) — the `cirrus migrate generate` command
-- [@cirrus/do](/docs/api/do) — shard-local storage (no migrations needed)
+- [@lunora/cli](/docs/api/cli) — the `lunora migrate generate` command
+- [@lunora/do](/docs/api/do) — shard-local storage (no migrations needed)
 - [Concepts: schema](/docs/concepts/schema)

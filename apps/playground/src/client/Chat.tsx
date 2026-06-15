@@ -1,10 +1,10 @@
-import { useAuth, useCirrus } from "@cirrus/react";
+import { useAuth, useLunora } from "@lunora/react";
 import { eq } from "@tanstack/db";
 import { useLiveQuery } from "@tanstack/react-db";
 import type { CSSProperties, ReactElement } from "react";
 import { useEffect, useState } from "react";
 
-import type { Id } from "../../cirrus/_generated/dataModel.js";
+import type { Id } from "../../lunora/_generated/dataModel.js";
 import { clearDraft, getDraftsCollection, writeDraft } from "./drafts-store.js";
 import { getMessagesStore } from "./messages-store.js";
 
@@ -24,7 +24,7 @@ export const Chat = (): ReactElement => {
 
     const drafts = getDraftsCollection();
 
-    const client = useCirrus();
+    const client = useLunora();
     const { user } = useAuth();
     const store = getMessagesStore(client);
 

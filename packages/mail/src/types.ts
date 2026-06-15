@@ -43,14 +43,14 @@ export interface SendOptions {
     to: string | string[];
 }
 
-export interface CirrusMailOptions {
+export interface LunoraMailOptions {
     /** API key for the Resend transport (bring-your-own-provider). Ignored when `transport` or `cloudflareSend` is set. */
     apiKey?: string;
 
     /**
      * RFC 822 send callback bound to the Worker's `send_email` binding. When set
      * (and no explicit `transport` is supplied) the default transport is
-     * Cloudflare Email Workers — Cirrus's default provider. Ignored when
+     * Cloudflare Email Workers — Lunora's default provider. Ignored when
      * `transport` is set.
      */
     cloudflareSend?: (from: string, to: string, raw: string) => Promise<void>;

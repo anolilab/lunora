@@ -1,5 +1,5 @@
 # Local dev secrets for the payment-demo worker (gitignored as `.dev.vars`).
-# `cirrus dev` / the Vite dev server offer to generate `.dev.vars` from this file
+# `lunora dev` / the Vite dev server offer to generate `.dev.vars` from this file
 # on first run. Or by hand:
 #
 #   cp .dev.vars.example .dev.vars   # then fill in

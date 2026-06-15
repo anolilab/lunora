@@ -13,7 +13,7 @@ export interface AdvisorNondeterministicCall {
     callee: string;
     /** The exported function performing the call (e.g. `sendMessage`). */
     exportName: string;
-    /** Source file the call appears in (relative to the cirrus dir, no extension). */
+    /** Source file the call appears in (relative to the lunora dir, no extension). */
     file: string;
     /** Which procedure kind the call lives in — only `query`/`mutation` handlers are non-deterministic; actions are exempt. */
     kind: "mutation" | "query";

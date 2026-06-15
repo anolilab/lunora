@@ -1,6 +1,6 @@
 "use client";
 
-import type { FunctionReference } from "@cirrus/client";
+import type { FunctionReference } from "@lunora/client";
 import { useCallback, useEffect, useRef } from "react";
 
 import type { UseInfiniteQueryOptions, UseInfiniteQueryResult } from "./types";

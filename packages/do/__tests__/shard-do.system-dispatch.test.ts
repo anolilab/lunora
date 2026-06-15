@@ -20,7 +20,7 @@ const createFakeState = (): FakeState => {
  * Probe shard whose `handleRpc` reports the protected system-dispatch flag —
  * the signal a generated `handleRpc` consults to decide whether an `internal`
  * function may run. Exercises the real `/rpc` fetch path (not a stubbed shard),
- * so it verifies the `x-cirrus-system` header is honored end-to-end.
+ * so it verifies the `x-lunora-system` header is honored end-to-end.
  */
 class ProbeShardDO extends ShardDO {
     public constructor(state: ShardDOState) {
@@ -47,12 +47,12 @@ const readSystemFlag = async (shard: ProbeShardDO, headers: Record<string, strin
 };
 
 describe("shardDO system dispatch", () => {
-    it("isSystemDispatch() is true only when the x-cirrus-system header is set", async () => {
+    it("isSystemDispatch() is true only when the x-lunora-system header is set", async () => {
         expect.assertions(2);
 
         const shard = new ProbeShardDO(createFakeState());
 
-        await expect(readSystemFlag(shard, { "x-cirrus-system": "1" })).resolves.toBe(true);
+        await expect(readSystemFlag(shard, { "x-lunora-system": "1" })).resolves.toBe(true);
         await expect(readSystemFlag(shard, {})).resolves.toBe(false);
     });
 
@@ -61,7 +61,7 @@ describe("shardDO system dispatch", () => {
 
         const shard = new ProbeShardDO(createFakeState());
 
-        await readSystemFlag(shard, { "x-cirrus-system": "1" });
+        await readSystemFlag(shard, { "x-lunora-system": "1" });
 
         await expect(readSystemFlag(shard, {})).resolves.toBe(false);
     });

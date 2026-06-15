@@ -1,14 +1,14 @@
-import type { FunctionReference } from "@cirrus/client";
+import type { FunctionReference } from "@lunora/client";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
-import { CirrusProvider } from "../src/cirrus-provider";
+import { LunoraProvider } from "../src/lunora-provider";
 import useQuery from "../src/use-query";
 import { createMockClient } from "./mock-client";
 
 const makeRef = (ref: string): FunctionReference => {
-    return { __cirrusRef: ref };
+    return { __lunoraRef: ref };
 };
 
 const DEFAULT_ARGS: Record<string, unknown> = {};
@@ -29,9 +29,9 @@ describe("useQuery", () => {
         });
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <Display />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         expect(screen.getByTestId("display").textContent).toBe("loading");
@@ -51,9 +51,9 @@ describe("useQuery", () => {
         });
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <Display args="skip" />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         expect(screen.getByTestId("display").textContent).toBe("loading");
@@ -69,10 +69,10 @@ describe("useQuery", () => {
         });
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <Display args={SHARED_ARGS} />
                 <Display args={SHARED_ARGS} />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         await waitFor(() => {
@@ -95,9 +95,9 @@ describe("useQuery", () => {
         const mock = createMockClient(() => 0);
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <Display />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         await waitFor(() => {

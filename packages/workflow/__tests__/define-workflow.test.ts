@@ -6,7 +6,7 @@ describe("defineWorkflow", () => {
     it("brands a valid definition", () => {
         const definition = defineWorkflow({ handler: async () => "ok" });
 
-        expect(definition.isCirrusWorkflow).toBe(true);
+        expect(definition.isLunoraWorkflow).toBe(true);
         expect(isWorkflowDefinition(definition)).toBe(true);
         expect(typeof definition.handler).toBe("function");
     });
@@ -31,7 +31,7 @@ describe("isWorkflowDefinition", () => {
     it("rejects non-definitions", () => {
         expect(isWorkflowDefinition(null)).toBe(false);
         expect(isWorkflowDefinition({})).toBe(false);
-        expect(isWorkflowDefinition({ isCirrusWorkflow: false })).toBe(false);
+        expect(isWorkflowDefinition({ isLunoraWorkflow: false })).toBe(false);
         expect(isWorkflowDefinition("string")).toBe(false);
     });
 });

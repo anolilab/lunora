@@ -1,6 +1,6 @@
-import { cirrus } from "@cirrus/vite";
+import { lunora } from "@lunora/vite";
 import { defineConfig } from "vite";
 
 export default defineConfig({
-    plugins: [cirrus()],
+    plugins: [lunora()],
 });

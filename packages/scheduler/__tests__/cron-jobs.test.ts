@@ -15,7 +15,7 @@ interface ParityCase {
 const parityCases: ParityCase[] = (JSON.parse(readFileSync(new URL("cron-parity.json", import.meta.url), "utf8")) as { cases: ParityCase[] }).cases;
 
 const fnRef = (ref: string): FunctionReference => {
-    return { __cirrusRef: ref };
+    return { __lunoraRef: ref };
 };
 
 describe("cronJobs", () => {
@@ -110,7 +110,7 @@ describe("cronJobs", () => {
 });
 
 // cron-compile-parity: the scheduler compiler and codegen's static mirror
-// (@cirrus/codegen src/cron-compile.ts) are both asserted against this one
+// (@lunora/codegen src/cron-compile.ts) are both asserted against this one
 // shared matrix so a drift in either copy fails CI.
 describe("cron-compile-parity", () => {
     it.each(parityCases)("compiles $kind $schedule to $expected", ({ expected, kind, schedule }) => {

@@ -4,7 +4,7 @@
  * (importantly) the same Spinner / Reporter primitives we use elsewhere.
  *
  * Two reporters are wired: `PrettyReporter` for interactive terminals and
- * `JsonReporter` when `CIRRUS_LOG_JSON=1` (CI / machine-readable mode).
+ * `JsonReporter` when `LUNORA_LOG_JSON=1` (CI / machine-readable mode).
  *
  * The public surface stays the same `Logger` shape the existing commands
  * already program against so we don't have to touch every command.
@@ -51,7 +51,7 @@ interface PailReporter {
 type PailReporterConstructor = new () => PailReporter;
 
 const wantJson = (): boolean => {
-    const flag = process.env.CIRRUS_LOG_JSON;
+    const flag = process.env.LUNORA_LOG_JSON;
 
     return flag === "1" || flag === "true";
 };
@@ -66,14 +66,14 @@ const buildReporter = (): PailReporter => {
  * Lazily-constructed pail instance. Building it (plus its Pretty/Json reporter)
  * is deferred until the first `createLogger()` / `getPail()` call so that merely
  * importing this module stays side-effect-free (`package.json` declares
- * `sideEffects:false`) — `cirrus --help` / `-v` never pay the construction cost.
+ * `sideEffects:false`) — `lunora --help` / `-v` never pay the construction cost.
  */
 let sharedPail: PailLogger | undefined;
 
 const getPail = (): PailLogger => {
     sharedPail ??= createPail({
         reporters: [buildReporter()],
-        scope: ["cirrus"],
+        scope: ["lunora"],
         stderr: process.stderr,
         stdout: process.stdout,
     }) as PailLogger;

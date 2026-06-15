@@ -1,10 +1,10 @@
 /**
- * The feature catalog shared by `cirrus init`'s post-scaffold offer and the
- * `cirrus add &lt;feature>` command. Each feature maps to one or more **registry
+ * The feature catalog shared by `lunora init`'s post-scaffold offer and the
+ * `lunora add &lt;feature>` command. Each feature maps to one or more **registry
  * items** (resolved by `runAddCommand`), so there is a single install path —
  * the registry — behind both front doors.
  */
-import type { SelectOption } from "@cirrus/config";
+import type { SelectOption } from "@lunora/config";
 
 /** A registry item a feature can install. */
 type FeatureItem = "auth" | "auth-auth0" | "auth-clerk" | "mail";
@@ -28,7 +28,7 @@ type AuthProviderSelect = (
 
 /**
  * Prompt for the auth provider, defaulting to email & password. Shared by
- * `cirrus add` and the init post-scaffold offer so the message, options, and
+ * `lunora add` and the init post-scaffold offer so the message, options, and
  * default can't drift between the two front doors.
  */
 const promptAuthProvider = async (select: AuthProviderSelect): Promise<FeatureItem> =>
@@ -38,14 +38,14 @@ const promptAuthProvider = async (select: AuthProviderSelect): Promise<FeatureIt
 const EMAIL_ITEM: FeatureItem = "mail";
 
 /**
- * A resolved `cirrus add` argument: either one of the friendly aliases (`auth`
+ * A resolved `lunora add` argument: either one of the friendly aliases (`auth`
  * prompts for a provider, `email` maps to the mail item) or a bare registry
  * item name passed straight through to `runAddCommand` (which validates it).
  */
 type NormalizedFeature = { item: string; kind: "item" } | { kind: "auth" } | { kind: "email" };
 
 /**
- * Normalize a `cirrus add` argument. The friendly aliases (`auth`, `email` /
+ * Normalize a `lunora add` argument. The friendly aliases (`auth`, `email` /
  * `mail`) resolve to their dedicated flows; any other non-empty name is treated
  * as a bare registry item and handed to the registry as-is — it errors clearly
  * if unknown. Returns `undefined` only for an empty/whitespace argument.

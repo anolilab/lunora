@@ -1,7 +1,7 @@
 /**
- * Reader for a generated `cirrus/_generated/api.ts`: enumerate each function's
+ * Reader for a generated `lunora/_generated/api.ts`: enumerate each function's
  * namespace, kind (query/mutation/action), and argument names. The
- * `cirrus-collections` generator uses this to verify a table's `list` query
+ * `lunora-collections` generator uses this to verify a table's `list` query
  * exists and to emit a correct `toArgs` from its insert mutation's real args.
  */
 import type { PropertySignature, TypeLiteralNode, TypeReferenceNode } from "ts-morph";

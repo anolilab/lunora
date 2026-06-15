@@ -1,62 +1,62 @@
 ---
-title: "@cirrus/mcp"
-description: A Model Context Protocol server that exposes a Cirrus deployment to AI agents.
+title: "@lunora/mcp"
+description: A Model Context Protocol server that exposes a Lunora deployment to AI agents.
 ---
 
-`@cirrus/mcp` is a [Model Context Protocol](https://modelcontextprotocol.io)
-server that exposes a deployed Cirrus app to AI agents. It registers tools for
-introspecting a deployment (`cirrus_list_functions`, `cirrus_list_tables`) and
-invoking its functions (`cirrus_run_query`, `cirrus_run_mutation`,
-`cirrus_run_action`), each backed by [`@cirrus/client`](/docs/api/client) over
+`@lunora/mcp` is a [Model Context Protocol](https://modelcontextprotocol.io)
+server that exposes a deployed Lunora app to AI agents. It registers tools for
+introspecting a deployment (`lunora_list_functions`, `lunora_list_tables`) and
+invoking its functions (`lunora_run_query`, `lunora_run_mutation`,
+`lunora_run_action`), each backed by [`@lunora/client`](/docs/api/client) over
 HTTP RPC.
 
 ```sh
-pnpm add @cirrus/mcp
+pnpm add @lunora/mcp
 ```
 
-The server is transport-agnostic. The shipped `cirrus-mcp` binary speaks
+The server is transport-agnostic. The shipped `lunora-mcp` binary speaks
 JSON-RPC over **stdio** — the transport MCP clients use when they spawn a
-process — or you can build a server with `createCirrusMcpServer` and connect
+process — or you can build a server with `createLunoraMcpServer` and connect
 any transport yourself.
 
-## The `cirrus-mcp` binary
+## The `lunora-mcp` binary
 
-MCP clients spawn the `cirrus-mcp` binary and talk to it over stdio.
+MCP clients spawn the `lunora-mcp` binary and talk to it over stdio.
 Configuration comes from the environment, so the spawn config stays a plain
 `{ command, env }`:
 
-- `CIRRUS_URL` (**required**) — base URL of the deployed Worker.
-- `CIRRUS_ADMIN_TOKEN` (optional) — bearer token sent on every RPC.
+- `LUNORA_URL` (**required**) — base URL of the deployed Worker.
+- `LUNORA_ADMIN_TOKEN` (optional) — bearer token sent on every RPC.
 
 ```jsonc
 {
     "mcpServers": {
-        "cirrus": {
-            "command": "cirrus-mcp",
+        "lunora": {
+            "command": "lunora-mcp",
             "env": {
-                "CIRRUS_URL": "https://app.example.workers.dev",
-                "CIRRUS_ADMIN_TOKEN": "...",
+                "LUNORA_URL": "https://app.example.workers.dev",
+                "LUNORA_ADMIN_TOKEN": "...",
             },
         },
     },
 }
 ```
 
-> The binary exits non-zero if `CIRRUS_URL` is missing or the transport fails to
+> The binary exits non-zero if `LUNORA_URL` is missing or the transport fails to
 > connect, so the spawning client surfaces a startup failure immediately.
 
 ## Exposed tools
 
-Each tool maps onto a method `CirrusClient` already provides. `TOOL_DEFINITIONS`
+Each tool maps onto a method `LunoraClient` already provides. `TOOL_DEFINITIONS`
 is the registered tool surface; `callTool` dispatches a call against a client.
 
 | Tool                    | Input                                | What it does                                                                            |
 | ----------------------- | ------------------------------------ | --------------------------------------------------------------------------------------- |
-| `cirrus_list_functions` | _none_                               | Lists the deployment's public functions (queries, mutations, actions) with their kinds. |
-| `cirrus_list_tables`    | _none_                               | Lists the deployment's `.global()` tables and their column shapes.                      |
-| `cirrus_run_query`      | `functionPath`, `args?`, `shardKey?` | Runs a query and returns its result. Read-only.                                         |
-| `cirrus_run_mutation`   | `functionPath`, `args?`, `shardKey?` | Runs a mutation and returns its result. Writes data.                                    |
-| `cirrus_run_action`     | `functionPath`, `args?`, `shardKey?` | Runs an action and returns its result. May call external services.                      |
+| `lunora_list_functions` | _none_                               | Lists the deployment's public functions (queries, mutations, actions) with their kinds. |
+| `lunora_list_tables`    | _none_                               | Lists the deployment's `.global()` tables and their column shapes.                      |
+| `lunora_run_query`      | `functionPath`, `args?`, `shardKey?` | Runs a query and returns its result. Read-only.                                         |
+| `lunora_run_mutation`   | `functionPath`, `args?`, `shardKey?` | Runs a mutation and returns its result. Writes data.                                    |
+| `lunora_run_action`     | `functionPath`, `args?`, `shardKey?` | Runs an action and returns its result. May call external services.                      |
 
 The three run-tools share one input schema:
 
@@ -74,14 +74,14 @@ calling model sees the failure as tool output.
 
 ## Building a server programmatically
 
-`createCirrusMcpServer` returns a transport-agnostic MCP `Server`. Pass a `url`
-(and optional `token`), and the tools dispatch against a `CirrusClient` built
+`createLunoraMcpServer` returns a transport-agnostic MCP `Server`. Pass a `url`
+(and optional `token`), and the tools dispatch against a `LunoraClient` built
 from them:
 
 ```ts
-import { createCirrusMcpServer } from "@cirrus/mcp";
+import { createLunoraMcpServer } from "@lunora/mcp";
 
-const server = createCirrusMcpServer({ url: "https://app.example.workers.dev", token: "..." });
+const server = createLunoraMcpServer({ url: "https://app.example.workers.dev", token: "..." });
 
 await server.connect(myTransport);
 ```
@@ -90,18 +90,18 @@ For the common stdio case, `connectStdio` builds the server and connects it over
 a `StdioServerTransport` in one step:
 
 ```ts
-import { connectStdio } from "@cirrus/mcp";
+import { connectStdio } from "@lunora/mcp";
 
-await connectStdio({ url: process.env.CIRRUS_URL, token: process.env.CIRRUS_ADMIN_TOKEN });
+await connectStdio({ url: process.env.LUNORA_URL, token: process.env.LUNORA_ADMIN_TOKEN });
 ```
 
-`CirrusMcpServerOptions` accepts either a `url` (with optional `token` and
+`LunoraMcpServerOptions` accepts either a `url` (with optional `token` and
 `fetch`) or a pre-built `client` — the latter is the injection point for tests.
 You must supply one or the other; passing neither throws.
 
 ## Auth and admin gating
 
-The `token` (sourced from `CIRRUS_ADMIN_TOKEN` for the binary) is set as the
+The `token` (sourced from `LUNORA_ADMIN_TOKEN` for the binary) is set as the
 client's auth token and sent as a bearer token on **every** RPC the tools make.
 Gating is enforced by your deployment: the tools call ordinary queries,
 mutations, and actions, so whatever auth those functions require applies
@@ -111,14 +111,14 @@ server is safe to run as a short-lived stdio process.
 ## Connecting an MCP client
 
 Any MCP client that can spawn a stdio server works. With the `mcpServers` config
-above, an agent like Claude can call `cirrus_list_functions` to discover the
-deployment's surface, then `cirrus_run_query` / `cirrus_run_mutation` /
-`cirrus_run_action` to invoke it — passing `functionPath` (e.g.
+above, an agent like Claude can call `lunora_list_functions` to discover the
+deployment's surface, then `lunora_run_query` / `lunora_run_mutation` /
+`lunora_run_action` to invoke it — passing `functionPath` (e.g.
 `"messages:list"`), an `args` object, and an optional `shardKey`.
 
 ## See also
 
-- [@cirrus/client](/docs/api/client) — the HTTP RPC client backing every tool
-- [@cirrus/server](/docs/api/server) — defines the queries, mutations, and actions the tools call
-- [@cirrus/cli](/docs/api/cli) — deploy the app the server introspects
+- [@lunora/client](/docs/api/client) — the HTTP RPC client backing every tool
+- [@lunora/server](/docs/api/server) — defines the queries, mutations, and actions the tools call
+- [@lunora/cli](/docs/api/cli) — deploy the app the server introspects
 - [Sharding](/docs/concepts/sharding) — the `shardKey` the run-tools accept

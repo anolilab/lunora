@@ -1,4 +1,4 @@
-import { useCirrus } from "@cirrus/react";
+import { useLunora } from "@lunora/react";
 import { useCallback, useEffect, useState } from "react";
 
 import type { SqlConsoleResult } from "../../../lib/admin";
@@ -23,7 +23,7 @@ export interface RunSqlState {
  * one audited run/cancel path rather than re-deriving it per component.
  */
 export const useRunSql = (sql: string, shardKey: string): RunSqlState => {
-    const client = useCirrus();
+    const client = useLunora();
 
     const [result, setResult] = useState<SqlConsoleResult | undefined>(undefined);
     const [error, setError] = useState<string | undefined>(undefined);

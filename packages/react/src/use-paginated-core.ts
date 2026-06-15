@@ -1,17 +1,17 @@
 "use client";
 
-import type { FunctionReference } from "@cirrus/client";
+import type { FunctionReference } from "@lunora/client";
 import type { QueryKey } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
-import { cirrusQueryKey, getSubscriptionRegistry, serializeQueryKey } from "./cache";
-import { useCirrus } from "./cirrus-provider";
+import { lunoraQueryKey, getSubscriptionRegistry, serializeQueryKey } from "./cache";
+import { useLunora } from "./lunora-provider";
 import type { PaginationResult, PaginationStatus } from "./types";
 import useLazyRef from "./use-lazy-ref";
 
 /**
- * Shared mechanics for Cirrus's Convex-parity *reactive* pagination, driving
+ * Shared mechanics for Lunora's Convex-parity *reactive* pagination, driving
  * both `usePaginatedQuery` (flattened feed) and `useInfiniteQuery` (per-page
  * arrays).
  *
@@ -145,7 +145,7 @@ const usePaginatedCore = <T>(
     args: "skip" | Record<string, unknown>,
     options: { initialNumItems: number; shardKey?: string },
 ): PaginatedCoreResult<T> => {
-    const client = useCirrus();
+    const client = useLunora();
     const queryClient = useQueryClient();
     const { initialNumItems, shardKey } = options;
 
@@ -159,7 +159,7 @@ const usePaginatedCore = <T>(
     // Reset to the first page whenever the query identity, base args, page size,
     // or shard changes. Set-state-during-render (guarded by a ref) is React's
     // sanctioned way to derive state from changing inputs without an extra commit.
-    const resetKey = `${function_.__cirrusRef}::${baseArgsKey}::${String(initialNumItems)}::${shardKey ?? ""}`;
+    const resetKey = `${function_.__lunoraRef}::${baseArgsKey}::${String(initialNumItems)}::${shardKey ?? ""}`;
     const resetKeyRef = useRef(resetKey);
 
     if (resetKeyRef.current !== resetKey) {
@@ -172,7 +172,7 @@ const usePaginatedCore = <T>(
     // dedup'd subscription per range.
     const pageEntries = pages.map((page) => {
         const pageArgs = { ...baseArgs, paginationOpts: { cursor: page.lower, endCursor: page.upper, numItems: page.numItems } };
-        const key: QueryKey = cirrusQueryKey(function_, pageArgs, shardKey);
+        const key: QueryKey = lunoraQueryKey(function_, pageArgs, shardKey);
 
         return { args: pageArgs, key };
     });
@@ -192,7 +192,7 @@ const usePaginatedCore = <T>(
     // its subscription without disturbing the others.
     const detachesRef = useLazyRef((): Map<string, () => void> => new Map());
 
-    // The CirrusClient the current detach handles are bound to. Page-key hashes
+    // The LunoraClient the current detach handles are bound to. Page-key hashes
     // don't encode client identity, so a client swap (same page keys) would
     // otherwise leave every subscription attached to the old client — detach and
     // rebuild against the new one when this changes.
@@ -249,7 +249,7 @@ const usePaginatedCore = <T>(
             // fresh attach guarantees a recycled key never serves that corpse —
             // the live subscription then keeps it current. The attach only fires
             // once per newly-desired page, so this stays a single fetch per page.
-            // eslint-disable-next-line @tanstack/query/exhaustive-deps -- client is provider-stable (it comes from CirrusContext; swapping it remounts the provider subtree) and is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache. Client swaps are handled explicitly via detachClientRef above.
+            // eslint-disable-next-line @tanstack/query/exhaustive-deps -- client is provider-stable (it comes from LunoraContext; swapping it remounts the provider subtree) and is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache. Client swaps are handled explicitly via detachClientRef above.
             const initialFetch = queryClient.fetchQuery({
                 queryFn: () =>
                     (client.query as (function_: FunctionReference, args: unknown, options: { shardKey?: string }) => Promise<unknown>)(

@@ -1,15 +1,15 @@
 {
-    "name": "@cirrus/storage",
+    "name": "@lunora/storage",
     "version": "0.0.0",
     "license": "FSL-1.1-Apache-2.0",
-    "description": "R2-backed storage for Cirrus: typed buckets and signed URLs",
-    "homepage": "https://cirrus.dev",
+    "description": "R2-backed storage for Lunora: typed buckets and signed URLs",
+    "homepage": "https://lunora.sh",
     "bugs": {
-        "url": "https://github.com/anolilab/cirrus/issues"
+        "url": "https://github.com/anolilab/lunora/issues"
     },
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/anolilab/cirrus.git",
+        "url": "git+https://github.com/anolilab/lunora.git",
         "directory": "packages/storage"
     },
     "author": {
@@ -17,7 +17,7 @@
         "email": "d.bannert@anolilab.de"
     },
     "keywords": [
-        "cirrus",
+        "lunora",
         "cloudflare",
         "workers",
         "durable-objects",

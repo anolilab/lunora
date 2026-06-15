@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import discoverInserts from "../src/discover-inserts";
 
 const MESSAGES = `
-    import { mutation, query } from "@cirrus/server";
+    import { mutation, query } from "@lunora/server";
 
     const dynamicTable = "messages";
 
@@ -36,7 +36,7 @@ const MESSAGES = `
 `;
 
 const CHANNELS = `
-    import { mutation } from "@cirrus/server";
+    import { mutation } from "@lunora/server";
 
     export const create = mutation({ args: {}, handler: (ctx) => ctx.db.insert("channels", { name: "general" }) });
 `;
@@ -46,10 +46,10 @@ let project: Project;
 
 describe("discoverInserts", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-inserts-"));
-        mkdirSync(join(workdir, "cirrus"), { recursive: true });
-        writeFileSync(join(workdir, "cirrus", "messages.ts"), MESSAGES, "utf8");
-        writeFileSync(join(workdir, "cirrus", "channels.ts"), CHANNELS, "utf8");
+        workdir = mkdtempSync(join(tmpdir(), "lunora-inserts-"));
+        mkdirSync(join(workdir, "lunora"), { recursive: true });
+        writeFileSync(join(workdir, "lunora", "messages.ts"), MESSAGES, "utf8");
+        writeFileSync(join(workdir, "lunora", "channels.ts"), CHANNELS, "utf8");
         project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
     });
 
@@ -60,7 +60,7 @@ describe("discoverInserts", () => {
     it("attributes each insert to its exported function and file", () => {
         expect.assertions(3);
 
-        const writes = discoverInserts(project, join(workdir, "cirrus")).map(({ exportName, file, table }) => {
+        const writes = discoverInserts(project, join(workdir, "lunora")).map(({ exportName, file, table }) => {
             return { exportName, file, table };
         });
 
@@ -73,7 +73,7 @@ describe("discoverInserts", () => {
     it("records a non-literal table argument as an empty table", () => {
         expect.assertions(1);
 
-        const dynamic = discoverInserts(project, join(workdir, "cirrus")).find((write) => write.exportName === "dynamic");
+        const dynamic = discoverInserts(project, join(workdir, "lunora")).find((write) => write.exportName === "dynamic");
 
         expect(dynamic).toMatchObject({ table: "" });
     });
@@ -81,7 +81,7 @@ describe("discoverInserts", () => {
     it("drops inserts that aren't inside an exported declaration", () => {
         expect.assertions(1);
 
-        const writes = discoverInserts(project, join(workdir, "cirrus"));
+        const writes = discoverInserts(project, join(workdir, "lunora"));
 
         expect(writes.some((write) => write.table === "secret")).toBe(false);
     });

@@ -1,4 +1,4 @@
-import { useCirrus } from "@cirrus/react";
+import { useLunora } from "@lunora/react";
 import type { ChangeEvent, ReactElement } from "react";
 import { useCallback, useState } from "react";
 
@@ -30,15 +30,15 @@ const RUN_MIGRATION = adminRef(ADMIN_FUNCTIONS.runMigration);
 /**
  * Inspect and drive data migrations on a single shard.
  *
- * Reads the persisted run-state via the `__cirrus_admin__:migrationStatus` RPC
- * and lets an operator kick off a migration by id (`__cirrus_admin__:runMigration`)
+ * Reads the persisted run-state via the `__lunora_admin__:migrationStatus` RPC
+ * and lets an operator kick off a migration by id (`__lunora_admin__:runMigration`)
  * with a direction, an optional batch cap and a dry-run toggle. Both calls
- * travel over the ordinary {@link useCirrus} client transport and are gated by
- * the server's `CIRRUS_ADMIN_TOKEN` — this component issues no credentials of
+ * travel over the ordinary {@link useLunora} client transport and are gated by
+ * the server's `LUNORA_ADMIN_TOKEN` — this component issues no credentials of
  * its own.
  */
 export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const t = useT();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
@@ -140,7 +140,7 @@ export const MigrationsPanel = ({ initialShardKey }: MigrationsPanelProps): Reac
     }, []);
 
     return (
-        <div className="flex flex-col gap-3" data-testid="cirrus-migrations">
+        <div className="flex flex-col gap-3" data-testid="lunora-migrations">
             <div className="flex flex-wrap items-center gap-2">
                 <ShardInput onChange={setShardKey} testId="mg-shard-input" value={shardKey} />
                 <LiveError message={liveError} prefix="mg" />

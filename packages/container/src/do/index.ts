@@ -1,5 +1,5 @@
 /**
- * `@cirrus/container/do` — the workerd-only half of the package.
+ * `@lunora/container/do` — the workerd-only half of the package.
  *
  * `@cloudflare/containers` imports `cloudflare:workers` at module scope, so
  * anything touching it lives behind this subpath: the package root stays
@@ -26,16 +26,16 @@ type DurableObjectContext = ConstructorParameters<typeof Container>[0];
  * Generated subclasses stay one line of behavior:
  *
  * ```ts
- * export class TranscoderContainer extends CirrusContainer {
+ * export class TranscoderContainer extends LunoraContainer {
  *     constructor(ctx: DurableObjectState, env: Env) {
  *         super(ctx, env, transcoder, "transcoder");
  *     }
  * }
  * ```
  */
-class CirrusContainer<Env = unknown> extends Container<Env> {
-    /** The `cirrus/containers.ts` export name, for lifecycle log correlation. */
-    private readonly cirrusName: string;
+class LunoraContainer<Env = unknown> extends Container<Env> {
+    /** The `lunora/containers.ts` export name, for lifecycle log correlation. */
+    private readonly lunoraName: string;
 
     public constructor(context: DurableObjectContext, env: Env, definition: ContainerDefinition, exportName?: string) {
         super(context, env, {
@@ -48,11 +48,11 @@ class CirrusContainer<Env = unknown> extends Container<Env> {
             this.enableInternet = definition.enableInternet;
         }
 
-        this.cirrusName = exportName ?? "container";
+        this.lunoraName = exportName ?? "container";
     }
 
     public override onError(error: unknown): unknown {
-        const envelope = emitContainerLifecycle(this.cirrusName, this.instanceId(), "error", error instanceof Error ? error.message : String(error));
+        const envelope = emitContainerLifecycle(this.lunoraName, this.instanceId(), "error", error instanceof Error ? error.message : String(error));
 
         this.surfaceInStudioLogs(envelope);
 
@@ -60,7 +60,7 @@ class CirrusContainer<Env = unknown> extends Container<Env> {
     }
 
     public override async onStart(): Promise<void> {
-        const envelope = emitContainerLifecycle(this.cirrusName, this.instanceId(), "start");
+        const envelope = emitContainerLifecycle(this.lunoraName, this.instanceId(), "start");
 
         this.surfaceInStudioLogs(envelope);
 
@@ -68,7 +68,7 @@ class CirrusContainer<Env = unknown> extends Container<Env> {
     }
 
     public override async onStop(parameters: StopParams): Promise<void> {
-        const envelope = emitContainerLifecycle(this.cirrusName, this.instanceId(), "stop", `${parameters.reason} (exit ${String(parameters.exitCode)})`);
+        const envelope = emitContainerLifecycle(this.lunoraName, this.instanceId(), "stop", `${parameters.reason} (exit ${String(parameters.exitCode)})`);
 
         this.surfaceInStudioLogs(envelope);
 
@@ -105,4 +105,4 @@ class CirrusContainer<Env = unknown> extends Container<Env> {
     }
 }
 
-export default CirrusContainer;
+export default LunoraContainer;

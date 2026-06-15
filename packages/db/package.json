@@ -1,15 +1,15 @@
 {
-    "name": "@cirrus/db",
+    "name": "@lunora/db",
     "version": "0.0.0",
-    "description": "TanStack DB binding: typed, live-synced collections and a durable offline outbox over the Cirrus client",
+    "description": "TanStack DB binding: typed, live-synced collections and a durable offline outbox over the Lunora client",
     "license": "FSL-1.1-Apache-2.0",
-    "homepage": "https://cirrus.dev",
+    "homepage": "https://lunora.sh",
     "bugs": {
-        "url": "https://github.com/anolilab/cirrus/issues"
+        "url": "https://github.com/anolilab/lunora/issues"
     },
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/anolilab/cirrus.git",
+        "url": "git+https://github.com/anolilab/lunora.git",
         "directory": "packages/db"
     },
     "author": {
@@ -17,7 +17,7 @@
         "email": "d.bannert@anolilab.de"
     },
     "keywords": [
-        "cirrus",
+        "lunora",
         "cloudflare",
         "workers",
         "durable-objects",
@@ -56,7 +56,7 @@
         "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
-        "@cirrus/client": "workspace:*"
+        "@lunora/client": "workspace:*"
     },
     "peerDependencies": {
         "@tanstack/db": "^0.6.0",

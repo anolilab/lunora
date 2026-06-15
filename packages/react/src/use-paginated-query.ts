@@ -1,6 +1,6 @@
 "use client";
 
-import type { ArgsOf, FunctionReference, ReturnOf } from "@cirrus/client";
+import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
 
 import type { UsePaginatedQueryOptions, UsePaginatedQueryResult } from "./types";
 import { usePaginatedCore } from "./use-paginated-core";

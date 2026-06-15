@@ -1,12 +1,12 @@
 {
   "info": {
-    "description": "Auto-generated from @cirrus/values-typed functions by @cirrus/codegen. Do not edit — run `cirrus codegen` to regenerate.",
-    "title": "Cirrus RPC",
+    "description": "Auto-generated from @lunora/values-typed functions by @lunora/codegen. Do not edit — run `lunora codegen` to regenerate.",
+    "title": "Lunora RPC",
     "version": "0.0.0"
   },
   "methods": [
     {
-      "description": "Invoke the `query` `messages:list` over the Cirrus RPC envelope (POST /_cirrus/rpc, body `{ \"functionPath\": \"messages:list\", \"args\": { … } }`).",
+      "description": "Invoke the `query` `messages:list` over the Lunora RPC envelope (POST /_lunora/rpc, body `{ \"functionPath\": \"messages:list\", \"args\": { … } }`).",
       "errors": [
         {
           "code": -32000,
@@ -126,7 +126,7 @@
               "channelId": {
                 "description": "Id<\"channels\">",
                 "type": "string",
-                "x-cirrus-table": "channels"
+                "x-lunora-table": "channels"
               },
               "limit": {
                 "type": "number"
@@ -146,7 +146,7 @@
         }
       },
       "summary": "query: messages:list",
-      "x-cirrus-function-kind": "query",
+      "x-lunora-function-kind": "query",
       "x-tags": [
         {
           "name": "messages"
@@ -154,7 +154,7 @@
       ]
     },
     {
-      "description": "Invoke the `mutation` `messages:send` over the Cirrus RPC envelope (POST /_cirrus/rpc, body `{ \"functionPath\": \"messages:send\", \"args\": { … } }`).",
+      "description": "Invoke the `mutation` `messages:send` over the Lunora RPC envelope (POST /_lunora/rpc, body `{ \"functionPath\": \"messages:send\", \"args\": { … } }`).",
       "errors": [
         {
           "code": -32000,
@@ -274,7 +274,7 @@
               "channelId": {
                 "description": "Id<\"channels\">",
                 "type": "string",
-                "x-cirrus-table": "channels"
+                "x-lunora-table": "channels"
               },
               "text": {
                 "type": "string"
@@ -315,7 +315,7 @@
         }
       },
       "summary": "mutation: messages:send",
-      "x-cirrus-function-kind": "mutation",
+      "x-lunora-function-kind": "mutation",
       "x-tags": [
         {
           "name": "messages"

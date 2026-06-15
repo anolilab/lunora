@@ -38,7 +38,7 @@ const killProc = async (name: string, proc: ChildProcess): Promise<void> => {
 
 /** Put the developer's `.dev.vars` back (or remove the one we wrote, if none existed). */
 const restoreDevVars = (): void => {
-    const backup = globalThis.CIRRUS_E2E_DEV_VARS_BACKUP;
+    const backup = globalThis.LUNORA_E2E_DEV_VARS_BACKUP;
 
     if (backup === undefined) {
         return;
@@ -50,15 +50,15 @@ const restoreDevVars = (): void => {
         writeFileSync(DEV_VARS_PATH, backup, "utf8");
     }
 
-    globalThis.CIRRUS_E2E_DEV_VARS_BACKUP = undefined;
+    globalThis.LUNORA_E2E_DEV_VARS_BACKUP = undefined;
 };
 
 const globalTeardown = async (_config: FullConfig): Promise<void> => {
-    const procs = globalThis.CIRRUS_E2E_PROCS;
+    const procs = globalThis.LUNORA_E2E_PROCS;
 
     if (procs?.length) {
         await Promise.all(procs.map(async ({ name, proc }) => killProc(name, proc)));
-        globalThis.CIRRUS_E2E_PROCS = undefined;
+        globalThis.LUNORA_E2E_PROCS = undefined;
     }
 
     restoreDevVars();

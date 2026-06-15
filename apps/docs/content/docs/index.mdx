@@ -3,22 +3,22 @@ title: Overview
 description: A type-safe real-time backend on your own Cloudflare account.
 ---
 
-Cirrus is a Convex-style backend framework that runs entirely on **your own
+Lunora is a Convex-style backend framework that runs entirely on **your own
 Cloudflare Workers + Durable Objects account**. It gives you typed functions,
 live subscriptions, schema-driven storage, first-party auth, file storage, a
 scheduler, durable workflows, server-side authorization (row-level security and
 data masking), and a local admin studio — without making you give up ownership
 of the data or paying a per-seat platform tax.
 
-Where Convex couples you to a hosted runtime, Cirrus lets you ship the exact
+Where Convex couples you to a hosted runtime, Lunora lets you ship the exact
 same DX onto your own infrastructure. Where prior art on Cloudflare like
-`convex.do` and `zeroback` peaked at a single Durable Object, Cirrus is
+`convex.do` and `zeroback` peaked at a single Durable Object, Lunora is
 **scale-proof by default**: tables stay in one root DO until you opt into
 sharding, and the moment you do, every call site routes itself.
 
 ```ts
-// cirrus/messages.ts
-import { mutation, query, v } from "@cirrus/server";
+// lunora/messages.ts
+import { mutation, query, v } from "@lunora/server";
 
 export const send = mutation({
     args: { channelId: v.id("channels"), text: v.string() },
@@ -39,20 +39,20 @@ export const list = query({
 
 ## What ships in v0.1
 
-- **`@cirrus/server`** — `defineSchema`, `defineTable`, `query`, `mutation`, `action`, validators
-- **`@cirrus/runtime`** — Worker entrypoint, RPC envelope, shard routing
-- **`@cirrus/do`** — `ShardDO` and `SessionDO` base classes
-- **`@cirrus/d1`** — D1 Sessions API wrapper for `.global()` tables
-- **`@cirrus/client` + `@cirrus/react` / `@cirrus/vue` / `@cirrus/solid` / `@cirrus/svelte`** — browser SDK and framework adapters
-- **`@cirrus/vite` + `@cirrus/cli`** — codegen, dev server, scaffolding
-- **`@cirrus/auth` / `@cirrus/mail` / `@cirrus/storage` / `@cirrus/scheduler`** — first-party add-ons
-- **`@cirrus/vectors`** — Cloudflare Vectorize adapter for typed similarity search and RAG
-- **`@cirrus/workflow`** — durable, replayable multi-step workflows on Cloudflare Workflows
-- **`@cirrus/ratelimit` / `@cirrus/payment`** — rate-limiting middleware and provider-agnostic payments
-- **Row-level security + data masking** — opt-in, server-side authorization in `@cirrus/server`
-- **`@cirrus/advisor`** — schema, performance, and security lints, surfaced in the studio
-- **`@cirrus/testing` / `@cirrus/mcp`** — an in-memory test harness and an MCP server for AI agents
-- **`@cirrus/studio`** — a local admin console for data, functions, logs, and advisors
+- **`@lunora/server`** — `defineSchema`, `defineTable`, `query`, `mutation`, `action`, validators
+- **`@lunora/runtime`** — Worker entrypoint, RPC envelope, shard routing
+- **`@lunora/do`** — `ShardDO` and `SessionDO` base classes
+- **`@lunora/d1`** — D1 Sessions API wrapper for `.global()` tables
+- **`@lunora/client` + `@lunora/react` / `@lunora/vue` / `@lunora/solid` / `@lunora/svelte`** — browser SDK and framework adapters
+- **`@lunora/vite` + `@lunora/cli`** — codegen, dev server, scaffolding
+- **`@lunora/auth` / `@lunora/mail` / `@lunora/storage` / `@lunora/scheduler`** — first-party add-ons
+- **`@lunora/vectors`** — Cloudflare Vectorize adapter for typed similarity search and RAG
+- **`@lunora/workflow`** — durable, replayable multi-step workflows on Cloudflare Workflows
+- **`@lunora/ratelimit` / `@lunora/payment`** — rate-limiting middleware and provider-agnostic payments
+- **Row-level security + data masking** — opt-in, server-side authorization in `@lunora/server`
+- **`@lunora/advisor`** — schema, performance, and security lints, surfaced in the studio
+- **`@lunora/testing` / `@lunora/mcp`** — an in-memory test harness and an MCP server for AI agents
+- **`@lunora/studio`** — a local admin console for data, functions, logs, and advisors
 
 ## See also
 

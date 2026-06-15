@@ -5,14 +5,14 @@ import { fileURLToPath } from "node:url";
 
 import { afterAll, bench, describe } from "vitest";
 
-// Cold-start cost of `cirrus --help`.
+// Cold-start cost of `lunora --help`.
 //
 // Every CLI invocation evaluates the command-module graph at process start.
 // The dominant term is ts-morph (pulled by info/migrate), with giget (init)
 // and the codegen package (info/migrate/deploy) close behind.
 //
 // Before the optimization, cli.ts imported all 17 command modules statically,
-// so even `cirrus --help` / `-v` paid for the full graph — including ts-morph —
+// so even `lunora --help` / `-v` paid for the full graph — including ts-morph —
 // before runCli's fast path ran. After the change the handlers are loaded via
 // dynamic import() inside each command's execute, so the help/version/dev/env
 // paths never touch ts-morph or giget.
@@ -39,7 +39,7 @@ const cacheRoot = join(packageRoot, "node_modules", ".cache");
 
 mkdirSync(cacheRoot, { recursive: true });
 
-const scratch = mkdtempSync(join(cacheRoot, "cirrus-cli-bench-"));
+const scratch = mkdtempSync(join(cacheRoot, "lunora-cli-bench-"));
 
 const lazyShim = join(scratch, "lazy.mts");
 const eagerShim = join(scratch, "eager.mts");
@@ -74,7 +74,7 @@ afterAll(() => {
     rmSync(scratch, { force: true, recursive: true });
 });
 
-describe("cirrus --help cold start", () => {
+describe("lunora --help cold start", () => {
     bench(
         "lazy command handlers (current — no ts-morph/giget on the help path)",
         () => {

@@ -1,15 +1,15 @@
 /**
- * Codegen watch loop for `cirrus dev` — the non-Vite counterpart to the
- * `@cirrus/vite` codegen plugin's `buildStart` + watcher. Runs `@cirrus/codegen`
- * once on startup and again (debounced) whenever a file under `cirrus/` changes,
+ * Codegen watch loop for `lunora dev` — the non-Vite counterpart to the
+ * `@lunora/vite` codegen plugin's `buildStart` + watcher. Runs `@lunora/codegen`
+ * once on startup and again (debounced) whenever a file under `lunora/` changes,
  * so `_generated/*` stays in sync with the schema and functions while you edit.
  */
 import type { FSWatcher } from "node:fs";
 import { watch } from "node:fs";
 import { join } from "node:path";
 
-import type { CodegenOptions } from "@cirrus/codegen";
-import { runCodegen } from "@cirrus/codegen";
+import type { CodegenOptions } from "@lunora/codegen";
+import { runCodegen } from "@lunora/codegen";
 
 import type { Logger } from "./logger";
 
@@ -19,11 +19,11 @@ const DEFAULT_DEBOUNCE_MS = 100;
 const PATH_SEGMENT_SEPARATOR = /[/\\]/u;
 
 /** Run codegen once, logging success or surfacing a parse/emit error without throwing. */
-const runOnce = (projectRoot: string, cirrusDirectory: string, apiSpec: CodegenOptions["apiSpec"], logger: Logger, reason: string): void => {
+const runOnce = (projectRoot: string, lunoraDirectory: string, apiSpec: CodegenOptions["apiSpec"], logger: Logger, reason: string): void => {
     try {
-        runCodegen({ apiSpec, cirrusDirectory, projectRoot });
+        runCodegen({ apiSpec, lunoraDirectory, projectRoot });
 
-        logger.success(`codegen: wrote ${cirrusDirectory}/_generated (${reason})`);
+        logger.success(`codegen: wrote ${lunoraDirectory}/_generated (${reason})`);
     } catch (error: unknown) {
         logger.error(`codegen failed (${reason}): ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -31,17 +31,17 @@ const runOnce = (projectRoot: string, cirrusDirectory: string, apiSpec: CodegenO
 
 /**
  * Start the codegen watch loop and return a handle to stop it. Regenerates on
- * startup, then on debounced changes under `cirrus/` (ignoring writes to the
+ * startup, then on debounced changes under `lunora/` (ignoring writes to the
  * `_generated/` output to avoid a feedback loop). If the platform can't do a
  * recursive watch, it logs once and falls back to startup-only codegen.
  */
 export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatcherHandle => {
-    const cirrusDirectory = options.cirrusDirectory ?? "cirrus";
-    const watchDirectory = join(options.projectRoot, cirrusDirectory);
+    const lunoraDirectory = options.lunoraDirectory ?? "lunora";
+    const watchDirectory = join(options.projectRoot, lunoraDirectory);
     const debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
     const { apiSpec } = options;
 
-    runOnce(options.projectRoot, cirrusDirectory, apiSpec, options.logger, "startup");
+    runOnce(options.projectRoot, lunoraDirectory, apiSpec, options.logger, "startup");
 
     let timer: NodeJS.Timeout | undefined;
     let watcher: FSWatcher | undefined;
@@ -57,11 +57,11 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
                 clearTimeout(timer);
             }
 
-            timer = setTimeout(runOnce, debounceMs, options.projectRoot, cirrusDirectory, apiSpec, options.logger, `change: ${filename ?? "?"}`);
+            timer = setTimeout(runOnce, debounceMs, options.projectRoot, lunoraDirectory, apiSpec, options.logger, `change: ${filename ?? "?"}`);
         });
     } catch (error: unknown) {
         options.logger.warn(
-            `codegen watch unavailable (${error instanceof Error ? error.message : String(error)}) — run \`cirrus codegen\` manually after edits`,
+            `codegen watch unavailable (${error instanceof Error ? error.message : String(error)}) — run \`lunora codegen\` manually after edits`,
         );
     }
 
@@ -79,12 +79,12 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
 export interface CodegenWatcherOptions {
     /** Which API spec(s) to emit. Defaults to codegen's `"openapi"` when omitted. */
     apiSpec?: CodegenOptions["apiSpec"];
-    /** Override the cirrus subdirectory name. Defaults to `"cirrus"`. */
-    cirrusDirectory?: string;
+    /** Override the lunora subdirectory name. Defaults to `"lunora"`. */
+    lunoraDirectory?: string;
     /** Debounce window for coalescing rapid edits. Defaults to 100ms. */
     debounceMs?: number;
     logger: Logger;
-    /** Project root containing the `cirrus/` directory. */
+    /** Project root containing the `lunora/` directory. */
     projectRoot: string;
 }
 

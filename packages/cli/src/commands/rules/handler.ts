@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { AGENT_RULES_DIR, CIRRUS_SKILL_NAMES, detectAgentRules } from "@cirrus/config";
+import { AGENT_RULES_DIR, LUNORA_SKILL_NAMES, detectAgentRules } from "@lunora/config";
 import { dirname, join, relative } from "@visulima/path";
 
 import type { CommandHandler } from "../../util/command";
@@ -27,9 +27,9 @@ interface RunRulesResult {
 }
 
 /**
- * Resolve the `skills/` directory bundled with `@cirrus/cli`. Walks up from
+ * Resolve the `skills/` directory bundled with `@lunora/cli`. Walks up from
  * `startDirectory` (this module by default — works from both `dist/*.mjs` and
- * `src/`, and from the published `node_modules/@cirrus/cli/dist/...` layout) to
+ * `src/`, and from the published `node_modules/@lunora/cli/dist/...` layout) to
  * the package root, then appends `skills`. Returns `undefined` when it can't be
  * located. `startDirectory` is injectable so the walk is unit-testable.
  */
@@ -43,7 +43,7 @@ const resolveBundledSkillsDirectory = (startDirectory: string = dirname(fileURLT
             try {
                 const parsed = JSON.parse(readFileSync(packageJson, "utf8")) as { name?: string };
 
-                if (parsed.name === "@cirrus/cli") {
+                if (parsed.name === "@lunora/cli") {
                     const skills = join(directory, "skills");
 
                     return existsSync(skills) ? skills : undefined;
@@ -101,7 +101,7 @@ const copySkill = (source: string, destination: string, overwrite: boolean): boo
 };
 
 /**
- * `cirrus rules install` — copy the bundled Cirrus agent skills into the
+ * `lunora rules install` — copy the bundled Lunora agent skills into the
  * project's `.agents/skills/`. Existing skill files are left untouched unless
  * `--overwrite` is set, so local edits survive a re-run.
  */
@@ -111,7 +111,7 @@ const runRulesInstall = (options: RunRulesOptions): RunRulesResult => {
     const skillsDirectory = resolveBundledSkillsDirectory();
 
     if (skillsDirectory === undefined) {
-        options.logger.error("rules: could not locate the bundled skills (is @cirrus/cli installed correctly?).");
+        options.logger.error("rules: could not locate the bundled skills (is @lunora/cli installed correctly?).");
 
         return { code: 1, installed: [], skipped: [] };
     }
@@ -133,40 +133,40 @@ const runRulesInstall = (options: RunRulesOptions): RunRulesResult => {
     const target = relative(cwd, join(cwd, AGENT_RULES_DIR)) || AGENT_RULES_DIR;
 
     if (installed.length > 0) {
-        options.logger.success(`Installed ${String(installed.length)} Cirrus skill(s) into ${target}/: ${installed.join(", ")}.`);
+        options.logger.success(`Installed ${String(installed.length)} Lunora skill(s) into ${target}/: ${installed.join(", ")}.`);
     }
 
     if (skipped.length > 0) {
         options.logger.info(`Skipped ${String(skipped.length)} existing skill(s) (re-run with --overwrite to replace): ${skipped.join(", ")}.`);
     }
 
-    options.logger.info("Your AI coding agent will pick these up automatically. Start with the `cirrus` skill.");
+    options.logger.info("Your AI coding agent will pick these up automatically. Start with the `lunora` skill.");
 
     return { code: 0, installed, skipped };
 };
 
-/** `cirrus rules check` — report which Cirrus skills are installed in the project. */
+/** `lunora rules check` — report which Lunora skills are installed in the project. */
 const runRulesCheck = (options: RunRulesOptions): RunRulesResult => {
     const cwd = options.cwd ?? process.cwd();
     const status = detectAgentRules(cwd);
 
     if (status.installed) {
-        options.logger.success(`Cirrus agent rules are installed (${String(status.present.length)}/${String(CIRRUS_SKILL_NAMES.length)} skills).`);
+        options.logger.success(`Lunora agent rules are installed (${String(status.present.length)}/${String(LUNORA_SKILL_NAMES.length)} skills).`);
 
         if (status.missing.length > 0) {
-            options.logger.info(`Missing: ${status.missing.join(", ")}. Run \`cirrus rules install\` to add them.`);
+            options.logger.info(`Missing: ${status.missing.join(", ")}. Run \`lunora rules install\` to add them.`);
         }
 
         return { code: 0, installed: status.present, skipped: [] };
     }
 
-    options.logger.warn("Cirrus agent rules are not installed. Run `cirrus rules install` so your AI agent knows how to use Cirrus.");
+    options.logger.warn("Lunora agent rules are not installed. Run `lunora rules install` so your AI agent knows how to use Lunora.");
 
     // `--strict` turns a missing rule set into a non-zero exit so CI can gate on it.
     return { code: options.strict === true ? 1 : 0, installed: status.present, skipped: [] };
 };
 
-/** `cirrus rules &lt;install|check>` handler (lazy-loaded via the command's `loader`). */
+/** `lunora rules &lt;install|check>` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<RulesOptions> = defineHandler<RulesOptions>(({ argument, cwd, logger, options }) => {
     const subcommand = argument[0] ?? "check";
 
@@ -178,7 +178,7 @@ const execute: CommandHandler<RulesOptions> = defineHandler<RulesOptions>(({ arg
         return runRulesCheck({ cwd, logger, strict: options.strict === true });
     }
 
-    logger.error("rules: unknown subcommand. Usage: cirrus rules <install|check>");
+    logger.error("rules: unknown subcommand. Usage: lunora rules <install|check>");
 
     return { code: 1 };
 });

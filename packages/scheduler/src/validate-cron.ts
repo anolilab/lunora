@@ -48,7 +48,7 @@ const isValidCronExpression = (schedule: string): boolean => {
  */
 const assertValidCronExpression = (schedule: string, context = "cron expression"): void => {
     if (!isValidCronExpression(schedule)) {
-        throw new Error(`@cirrus/scheduler: invalid ${context} "${schedule}" — expected 5 or 6 space-separated fields (e.g. "0 * * * *")`);
+        throw new Error(`@lunora/scheduler: invalid ${context} "${schedule}" — expected 5 or 6 space-separated fields (e.g. "0 * * * *")`);
     }
 };
 

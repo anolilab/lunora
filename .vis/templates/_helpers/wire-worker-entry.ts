@@ -1,5 +1,5 @@
 /**
- * Worker-entry auto-wiring for `cirrus-container` / `cirrus-workflow` — kept in
+ * Worker-entry auto-wiring for `lunora-container` / `lunora-workflow` — kept in
  * `_helpers/` so the tests under `tests/vis-templates/` can import it without
  * the vis runtime.
  *
@@ -60,7 +60,7 @@ export const WORKFLOWS_TARGET: ReexportTarget = {
 /**
  * Find the class-B/C worker entry and return it rewritten with the
  * `_generated/<target.module>` re-export appended. Conservative: only touches a
- * file that unmistakably is a Cirrus worker entry (`createShardDO(`), is
+ * file that unmistakably is a Lunora worker entry (`createShardDO(`), is
  * idempotent (skips when already wired), and returns `undefined` for class-A
  * (no such file) so the caller falls back to a printed instruction.
  */
@@ -77,7 +77,7 @@ export const wireWorkerEntryReexport = (projectDirectory: string, target: Reexpo
 
         const source = readFileSync(absolute, "utf8");
 
-        // A real class-B/C cirrus entry only; class-A has no createShardDO file.
+        // A real class-B/C lunora entry only; class-A has no createShardDO file.
         if (!source.includes("createShardDO(")) {
             return undefined;
         }
@@ -86,7 +86,7 @@ export const wireWorkerEntryReexport = (projectDirectory: string, target: Reexpo
             return undefined; // already wired — idempotent.
         }
 
-        const importPath = relative(dirname(absolute), join(projectDirectory, "cirrus", "_generated", target.module)).replaceAll("\\", "/");
+        const importPath = relative(dirname(absolute), join(projectDirectory, "lunora", "_generated", target.module)).replaceAll("\\", "/");
         const specifier = `${importPath.startsWith(".") ? importPath : `./${importPath}`}.js`;
         const separator = source.endsWith("\n") ? "" : "\n";
 

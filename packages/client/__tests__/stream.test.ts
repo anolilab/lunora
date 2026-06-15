@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { CirrusClient } from "../src/cirrus-client";
+import { LunoraClient } from "../src/lunora-client";
 import { createStream, DEFAULT_MAX_BUFFER } from "../src/stream";
 import type { FunctionReference } from "../src/types";
 
@@ -96,7 +96,7 @@ const latestSocket = (): MockSocket => {
 };
 
 const fnRef = <T = unknown>(reference: string): FunctionReference<"stream", Record<string, never>, T> => {
-    return { __cirrusRef: reference };
+    return { __lunoraRef: reference };
 };
 
 describe("stream", () => {
@@ -227,13 +227,13 @@ describe("stream", () => {
         });
     });
 
-    // --- CirrusClient.stream() integration tests --------------------------------
+    // --- LunoraClient.stream() integration tests --------------------------------
 
-    describe("cirrusClient.stream()", () => {
+    describe("lunoraClient.stream()", () => {
         it("opens a WS, sends a stream frame, and yields chunks until complete", async () => {
             expect.assertions(3);
 
-            const client = new CirrusClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
+            const client = new LunoraClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
 
             const iterable = client.stream(fnRef<{ tick: number }>("metrics:tick"), {});
 
@@ -270,7 +270,7 @@ describe("stream", () => {
         it("cancel() sends an unsubscribe frame and resolves the iterator", async () => {
             expect.assertions(2);
 
-            const client = new CirrusClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
+            const client = new LunoraClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
 
             const iterable = client.stream(fnRef<number>("metrics:loop"), {});
 
@@ -305,7 +305,7 @@ describe("stream", () => {
         it("server-side error surfaces as a rejection on the consumer", async () => {
             expect.assertions(1);
 
-            const client = new CirrusClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
+            const client = new LunoraClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
 
             const iterable = client.stream(fnRef<number>("metrics:boom"), {});
 
@@ -324,7 +324,7 @@ describe("stream", () => {
         it("client.close() fails any in-flight streams", async () => {
             expect.assertions(1);
 
-            const client = new CirrusClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
+            const client = new LunoraClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
 
             const iterable = client.stream(fnRef<number>("metrics:keepalive"), {});
 
@@ -340,7 +340,7 @@ describe("stream", () => {
         it("buffers the start frame while the socket is connecting and flushes it on open", async () => {
             expect.assertions(2);
 
-            const client = new CirrusClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
+            const client = new LunoraClient({ url: "https://app.example", WebSocket: createMockWebSocket() });
             const iterable = client.stream(fnRef<number>("metrics:tick"), {});
 
             // Before open: nothing has gone over the wire yet.

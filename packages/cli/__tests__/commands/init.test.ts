@@ -23,16 +23,16 @@ const templatesRoot = resolve(testDirectory, "..", "..", "..", "..", "templates"
 
 let workdir: string;
 
-describe("cirrus init", () => {
+describe("lunora init", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-cli-init-"));
+        workdir = mkdtempSync(join(tmpdir(), "lunora-cli-init-"));
     });
 
     afterEach(() => {
         rmSync(workdir, { force: true, recursive: true });
     });
 
-    describe("cirrus init", () => {
+    describe("lunora init", () => {
         it("vite template scaffolds expected files", async () => {
             expect.assertions(10);
 
@@ -49,8 +49,8 @@ describe("cirrus init", () => {
             const target = join(workdir, "my-app");
 
             expect(existsSync(join(target, "package.json"))).toBe(true);
-            expect(existsSync(join(target, "cirrus", "schema.ts"))).toBe(true);
-            expect(existsSync(join(target, "cirrus", "messages.ts"))).toBe(true);
+            expect(existsSync(join(target, "lunora", "schema.ts"))).toBe(true);
+            expect(existsSync(join(target, "lunora", "messages.ts"))).toBe(true);
             expect(existsSync(join(target, "src", "main.tsx"))).toBe(true);
             expect(existsSync(join(target, "vite.config.ts"))).toBe(true);
             expect(existsSync(join(target, "wrangler.jsonc"))).toBe(true);
@@ -79,7 +79,7 @@ describe("cirrus init", () => {
             expect(main).toContain("rainbow");
         });
 
-        it("vite template package.json references all cirrus packages", async () => {
+        it("vite template package.json references all lunora packages", async () => {
             expect.assertions(7);
 
             await runInitCommand({
@@ -92,11 +92,11 @@ describe("cirrus init", () => {
 
             const pkg = readFileSync(join(workdir, "demo", "package.json"), "utf8");
 
-            expect(pkg).toContain("@cirrus/server");
-            expect(pkg).toContain("@cirrus/runtime");
-            expect(pkg).toContain("@cirrus/client");
-            expect(pkg).toContain("@cirrus/react");
-            expect(pkg).toContain("@cirrus/vite");
+            expect(pkg).toContain("@lunora/server");
+            expect(pkg).toContain("@lunora/runtime");
+            expect(pkg).toContain("@lunora/client");
+            expect(pkg).toContain("@lunora/react");
+            expect(pkg).toContain("@lunora/vite");
             expect(pkg).toContain("vite");
             expect(pkg).toContain("wrangler");
         });
@@ -122,7 +122,7 @@ describe("cirrus init", () => {
             expect(existsSync(join(target, "vite.config.ts"))).toBe(false);
             expect(existsSync(join(target, "index.html"))).toBe(false);
             expect(existsSync(join(target, "wrangler.jsonc"))).toBe(true);
-            expect(existsSync(join(target, "cirrus", "schema.ts"))).toBe(true);
+            expect(existsSync(join(target, "lunora", "schema.ts"))).toBe(true);
         });
 
         it("tanstack-start-react template scaffolds router + route entries", async () => {
@@ -144,13 +144,13 @@ describe("cirrus init", () => {
             expect(existsSync(join(target, "src", "router.tsx"))).toBe(true);
             expect(existsSync(join(target, "src", "routes", "__root.tsx"))).toBe(true);
             expect(existsSync(join(target, "src", "routes", "index.tsx"))).toBe(true);
-            expect(existsSync(join(target, "cirrus", "schema.ts"))).toBe(true);
+            expect(existsSync(join(target, "lunora", "schema.ts"))).toBe(true);
             expect(existsSync(join(target, "wrangler.jsonc"))).toBe(true);
 
             const pkg = readFileSync(join(target, "package.json"), "utf8");
 
             expect(pkg).toContain("@tanstack/react-start");
-            expect(pkg).toContain("@cirrus/react");
+            expect(pkg).toContain("@lunora/react");
             expect(pkg).toContain('"name": "starter"');
         });
 
@@ -173,13 +173,13 @@ describe("cirrus init", () => {
             expect(existsSync(join(target, "src", "router.tsx"))).toBe(true);
             expect(existsSync(join(target, "src", "routes", "__root.tsx"))).toBe(true);
             expect(existsSync(join(target, "src", "routes", "index.tsx"))).toBe(true);
-            expect(existsSync(join(target, "cirrus", "schema.ts"))).toBe(true);
+            expect(existsSync(join(target, "lunora", "schema.ts"))).toBe(true);
             expect(existsSync(join(target, "wrangler.jsonc"))).toBe(true);
 
             const pkg = readFileSync(join(target, "package.json"), "utf8");
 
             expect(pkg).toContain("@tanstack/solid-start");
-            expect(pkg).toContain("@cirrus/solid");
+            expect(pkg).toContain("@lunora/solid");
             expect(pkg).toContain('"name": "starter"');
         });
 
@@ -273,7 +273,7 @@ describe("cirrus init", () => {
 
             // astro.config.mjs is astro-specific — proves we did NOT fall back to vite
             expect(existsSync(join(target, "astro.config.mjs"))).toBe(true);
-            expect(existsSync(join(target, "cirrus", "schema.ts"))).toBe(true);
+            expect(existsSync(join(target, "lunora", "schema.ts"))).toBe(true);
             expect(existsSync(join(target, "wrangler.jsonc"))).toBe(true);
             // vite.config.ts does NOT exist in the astro template (class-B framework)
             expect(existsSync(join(target, "vite.config.ts"))).toBe(false);

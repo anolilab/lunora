@@ -1,6 +1,6 @@
 {
     "name": "{{name}}",
-    "main": "virtual:cirrus/worker",
+    "main": "virtual:lunora/worker",
     "compatibility_date": "2026-06-10",
     "compatibility_flags": ["nodejs_compat"],
     "durable_objects": {

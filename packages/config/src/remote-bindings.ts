@@ -1,7 +1,7 @@
 /**
- * Remote-binding dev support (`CIRRUS_REMOTE=1`).
+ * Remote-binding dev support (`LUNORA_REMOTE=1`).
  *
- * When `cirrus dev` runs with `CIRRUS_REMOTE` set, the local worker should hit
+ * When `lunora dev` runs with `LUNORA_REMOTE` set, the local worker should hit
  * the project's **deployed** D1/KV/R2 instead of empty local-only resources —
  * so you debug against real data. wrangler 4 ships this natively: a binding
  * tagged `"remote": true` in the config is proxied to the deployed resource
@@ -16,13 +16,13 @@
  * config it reports which binding entries are eligible for remote mode. The
  * stateless storage + service bindings whose wrangler schema accepts
  * `"remote": true` qualify (D1, KV, R2, Vectorize, Queue producers, Services,
- * AI); Durable Objects are never remoted, because a Cirrus shard's
+ * AI); Durable Objects are never remoted, because a Lunora shard's
  * authoritative state is its DO SQLite and CF has no remote-DO mode — shards run
  * locally while their data deps point at production (the PLAN5 §5.3 boundary).
  *
  * {@link materializeRemoteWranglerConfig} writes a sibling temp config with
  * `"remote": true` injected onto each eligible binding, comment-preservingly, so
- * `cirrus dev` can point `wrangler dev --config` at it without ever mutating the
+ * `lunora dev` can point `wrangler dev --config` at it without ever mutating the
  * user's checked-in `wrangler.jsonc`. It returns a {@link MaterializeResult.cleanup}
  * disposer so the caller can unlink the generated temp dir when dev exits.
  */
@@ -36,7 +36,7 @@ import { findWranglerFile, readWranglerJsonc } from "./wrangler-path";
 const FORMATTING = { formattingOptions: { insertSpaces: true, tabSize: 4 } } as const;
 
 /**
- * The wrangler config sections Cirrus can safely flip to remote mode in dev,
+ * The wrangler config sections Lunora can safely flip to remote mode in dev,
  * each with the human label used in logs and the structural `shape` the entry
  * lives in.
  *
@@ -239,15 +239,15 @@ const createCleanup = (path: string): (() => void) => {
 };
 
 /**
- * Filename for a Cirrus-generated remote-dev config. A dotfile (less likely to
- * be committed / shown), per-process-unique so concurrent `cirrus dev` runs on
+ * Filename for a Lunora-generated remote-dev config. A dotfile (less likely to
+ * be committed / shown), per-process-unique so concurrent `lunora dev` runs on
  * one project don't clobber each other; the cleanup disposer unlinks it on exit.
  */
-const remoteConfigBasename = (): string => `.wrangler.cirrus-remote.${String(process.pid)}.jsonc`;
+const remoteConfigBasename = (): string => `.wrangler.lunora-remote.${String(process.pid)}.jsonc`;
 
 /**
  * Produce a temporary wrangler config with `"remote": true` on every eligible
- * binding, so `cirrus dev` can run `wrangler dev --config &lt;temp>` against the
+ * binding, so `lunora dev` can run `wrangler dev --config &lt;temp>` against the
  * deployed D1/KV/R2 without touching the user's file.
  *
  * The temp file is written as a sibling of the source `wrangler.jsonc` (in the
@@ -292,7 +292,7 @@ const materializeRemoteWranglerConfig = (options: MaterializeOptions): Materiali
 };
 
 /**
- * Parse a `CIRRUS_REMOTE` env value into the on/off decision. Truthy when set to
+ * Parse a `LUNORA_REMOTE` env value into the on/off decision. Truthy when set to
  * `"1"` or `"true"` (case-insensitive); anything else — unset, `"0"`, `"false"`,
  * empty — is off. Mirrors the `"1" | "true"` convention used across the runtime.
  */
@@ -309,12 +309,12 @@ const isRemoteEnvEnabled = (value: string | undefined): boolean => {
 /** The three inputs that can switch remote-binding dev on, in precedence order. */
 interface RemoteEnableInputs {
     /**
-     * The `remote` preference from `cirrus.json` (the lowest-priority signal).
+     * The `remote` preference from `lunora.json` (the lowest-priority signal).
      * `undefined` means "no project preference"; an explicit `false` here loses
      * to neither the flag nor the env when those are absent — it just stays off.
      */
     configPreference?: boolean;
-    /** The raw `CIRRUS_REMOTE` env value (parsed with {@link isRemoteEnvEnabled}). */
+    /** The raw `LUNORA_REMOTE` env value (parsed with {@link isRemoteEnvEnabled}). */
     envValue?: string;
     /** The explicit `--remote` CLI flag — `true` when passed, `undefined`/`false` otherwise. */
     flag?: boolean;
@@ -324,13 +324,13 @@ interface RemoteEnableInputs {
  * Resolve whether remote-binding dev is on, with a clear precedence:
  *
  * 1. an explicit `--remote` flag (highest — a deliberate per-invocation choice),
- * 2. then `CIRRUS_REMOTE` in the environment,
- * 3. then the `remote` key in `cirrus.json` (lowest — a project default).
+ * 2. then `LUNORA_REMOTE` in the environment,
+ * 3. then the `remote` key in `lunora.json` (lowest — a project default).
  *
  * The flag and env are one-directional (they can only turn remote *on*); only
  * the config preference carries a meaningful `false`, and it applies solely when
  * neither stronger signal is present. So a project that sets `"remote": false`
- * is still overridable per-run by `--remote` or `CIRRUS_REMOTE=1`.
+ * is still overridable per-run by `--remote` or `LUNORA_REMOTE=1`.
  */
 const resolveRemoteEnabled = (inputs: RemoteEnableInputs): boolean => {
     if (inputs.flag === true) {

@@ -1,4 +1,4 @@
-import { useCirrus } from "@cirrus/react";
+import { useLunora } from "@lunora/react";
 import type { ChangeEvent, ReactElement } from "react";
 import { useCallback, useState } from "react";
 
@@ -62,17 +62,17 @@ const parseNdjson = (text: string): ExportRow[] => {
 /**
  * Snapshot and restore a single shard's data as NDJSON.
  *
- * "Export" reads every shard-local row via `__cirrus_admin__:exportShard` and
+ * "Export" reads every shard-local row via `__lunora_admin__:exportShard` and
  * renders it as NDJSON for download/copy. "Import" parses NDJSON the operator
- * pastes in and replays it through `__cirrus_admin__:importShard`, reporting
+ * pastes in and replays it through `__lunora_admin__:importShard`, reporting
  * inserted counts, id conflicts and per-row errors. Globally-scoped (`.global()`)
  * tables live in D1 and are intentionally out of scope here.
  *
- * Both calls travel over the {@link useCirrus} client transport and are gated by
- * the server's `CIRRUS_ADMIN_TOKEN`.
+ * Both calls travel over the {@link useLunora} client transport and are gated by
+ * the server's `LUNORA_ADMIN_TOKEN`.
  */
 export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const t = useT();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
@@ -144,7 +144,7 @@ export const ExportImportPanel = ({ initialShardKey }: ExportImportPanelProps): 
     }, []);
 
     return (
-        <div className="flex flex-col gap-4" data-testid="cirrus-export-import">
+        <div className="flex flex-col gap-4" data-testid="lunora-export-import">
             <Card className="rounded-md">
                 <CardHeader>
                     <CardTitle>{t("Export")}</CardTitle>

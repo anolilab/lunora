@@ -35,7 +35,7 @@ interface SavedQuery {
  * saved. Guarded so a missing/throwing storage (SSR, privacy mode) degrades to
  * "no saved queries".
  */
-const STORAGE_KEY = "cirrus-studio-saved-queries";
+const STORAGE_KEY = "lunora-studio-saved-queries";
 
 /** Cap the list so it stays a short, useful menu rather than an unbounded log. */
 const MAX_SAVED = 50;

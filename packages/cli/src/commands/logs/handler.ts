@@ -32,7 +32,7 @@ interface LogsCommandResult {
 }
 
 /**
- * Stream live logs from a deployed Cirrus Worker by wrapping `wrangler tail`.
+ * Stream live logs from a deployed Lunora Worker by wrapping `wrangler tail`.
  *
  * Unlike `deploy`, this neither runs codegen nor validates wrangler bindings —
  * it only forwards a tail request, and `wrangler` itself reports a clear error
@@ -87,7 +87,7 @@ const runLogsCommand = async (options: LogsCommandOptions): Promise<LogsCommandR
     };
 };
 
-/** `cirrus logs [worker]` handler (lazy-loaded via the command's `loader`). */
+/** `lunora logs [worker]` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<LogsOptions> = defineHandler<LogsOptions>(({ argument, cwd, logger, options }) =>
     runLogsCommand({
         cwd,

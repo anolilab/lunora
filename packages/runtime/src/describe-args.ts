@@ -1,7 +1,7 @@
 /**
  * A compact, transport-safe description of one function argument — the runtime
  * read of a `v.*` validator's reflection tags (`kind` + `_meta`). The runtime
- * deliberately avoids a hard dependency on `@cirrus/values`, so this reads the
+ * deliberately avoids a hard dependency on `@lunora/values`, so this reads the
  * validator structurally rather than importing its types.
  */
 interface FunctionArgumentDescriptor {

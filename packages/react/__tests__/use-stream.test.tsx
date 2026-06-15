@@ -1,14 +1,14 @@
-import type { CirrusClient, FunctionReference, StreamHandle, StreamIterable } from "@cirrus/client";
-import { createStream } from "@cirrus/client";
+import type { LunoraClient, FunctionReference, StreamHandle, StreamIterable } from "@lunora/client";
+import { createStream } from "@lunora/client";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import { CirrusProvider } from "../src/cirrus-provider";
+import { LunoraProvider } from "../src/lunora-provider";
 import { useStream } from "../src/use-stream";
 
 const makeRef = (reference: string): FunctionReference<"stream"> => {
-    return { __cirrusRef: reference };
+    return { __lunoraRef: reference };
 };
 
 interface MockEntry {
@@ -17,7 +17,7 @@ interface MockEntry {
     onCancel: ReturnType<typeof vi.fn>;
 }
 
-const buildClientWithStream = (): { client: CirrusClient; opened: MockEntry[]; openStream: () => MockEntry } => {
+const buildClientWithStream = (): { client: LunoraClient; opened: MockEntry[]; openStream: () => MockEntry } => {
     const opened: MockEntry[] = [];
     const streamFunction = vi.fn<(function__: FunctionReference, args: unknown) => StreamIterable<unknown>>((_function: FunctionReference, _args: unknown) => {
         const onCancel = vi.fn<() => void>();
@@ -29,7 +29,7 @@ const buildClientWithStream = (): { client: CirrusClient; opened: MockEntry[]; o
         return iterable;
     });
 
-    const client = { stream: streamFunction } as unknown as CirrusClient;
+    const client = { stream: streamFunction } as unknown as LunoraClient;
 
     return {
         client,
@@ -65,9 +65,9 @@ describe("useStream", () => {
         const { client, openStream } = buildClientWithStream();
 
         render(
-            <CirrusProvider client={client}>
+            <LunoraProvider client={client}>
                 <Display />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         await waitFor(() => {
@@ -105,9 +105,9 @@ describe("useStream", () => {
         const { client, opened } = buildClientWithStream();
 
         render(
-            <CirrusProvider client={client}>
+            <LunoraProvider client={client}>
                 <Display args="skip" />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         expect(opened).toHaveLength(0);
@@ -120,9 +120,9 @@ describe("useStream", () => {
         const { client, openStream } = buildClientWithStream();
 
         const view = render(
-            <CirrusProvider client={client}>
+            <LunoraProvider client={client}>
                 <Display />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         await waitFor(() => {
@@ -140,9 +140,9 @@ describe("useStream", () => {
         const { client, openStream } = buildClientWithStream();
 
         render(
-            <CirrusProvider client={client}>
+            <LunoraProvider client={client}>
                 <Display />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         await waitFor(() => {

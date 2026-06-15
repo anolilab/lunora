@@ -5,7 +5,7 @@
  *
  * Reference model: a record references a stored R2 object through a first-class
  * `v.storage(bucket?)` schema validator. Codegen emits the `{ table: [field, …] }`
- * map of those columns (`buildStorageColumns` in `@cirrus/codegen`'s `emit.ts`),
+ * map of those columns (`buildStorageColumns` in `@lunora/codegen`'s `emit.ts`),
  * the generated shard overrides `ShardDO.storageColumns()` with it, and both
  * correlation reads scan ONLY those declared columns — never the whole shard.
  *
@@ -14,7 +14,7 @@
  * answers the inverse, which an object listing alone can't: "which record
  * storage-field values point at an object key that does NOT exist in the bucket?"
  * — a **dangling reference**. CF's R2 browser sees only the bytes and can never
- * make this join; cirrus, sitting on the schema, can.
+ * make this join; lunora, sitting on the schema, can.
  *
  * Bounded by design: at most {@link DANGLING_SCAN_CAP} rows are scanned per
  * storage column and at most {@link DANGLING_RESULT_CAP} dangling references are
@@ -38,7 +38,7 @@ const DANGLING_SCAN_CAP = 5000;
  */
 const DANGLING_RESULT_CAP = 500;
 
-/** The physical doc-blob column of a canonical Cirrus shard table (user fields live in `__doc__`). */
+/** The physical doc-blob column of a canonical Lunora shard table (user fields live in `__doc__`). */
 const DOC_COLUMN = "__doc__";
 
 /** One record field whose `v.storage()` value points at an object key absent from the bucket. */
@@ -66,9 +66,9 @@ interface DanglingReferenceResult {
     truncated: boolean;
 }
 
-/** Tables the correlation scan must never touch (SQLite/CF/Cirrus bookkeeping), mirroring `introspect.ts`'s filter. */
+/** Tables the correlation scan must never touch (SQLite/CF/Lunora bookkeeping), mirroring `introspect.ts`'s filter. */
 const isInternalTable = (name: string): boolean =>
-    name.startsWith("sqlite_") || name.startsWith("_cf_") || name.startsWith("__miniflare") || name.startsWith("__cirrus") || name.includes("__fts_");
+    name.startsWith("sqlite_") || name.startsWith("_cf_") || name.startsWith("__miniflare") || name.startsWith("__lunora") || name.includes("__fts_");
 
 /** Double-quote a SQL identifier, escaping any embedded double quotes. */
 const quoteIdentifier = (name: string): string => `"${name.replaceAll('"', '""')}"`;

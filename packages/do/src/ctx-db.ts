@@ -5,7 +5,7 @@
  * codegen-generated functions reach for) that reads and writes JSON-encoded
  * documents through the Durable Object's SQLite handle. `runShardMigrations`
  * brings the underlying SQLite tables and indexes into existence from the
- * schema declared in `cirrus/schema.ts`.
+ * schema declared in `lunora/schema.ts`.
  *
  * Why JSON-blob storage instead of a column-per-field schema?
  *
@@ -27,7 +27,7 @@
  * stop typing the string at all.
  */
 
-/* eslint-disable unicorn/prevent-abbreviations -- "ctx-db" is the established public module name: src/index.ts and every consumer/test import `createShardCtxDb` / `CtxDbOptions` from "./ctx-db.js", and it deliberately mirrors @cirrus/d1's "d1-ctx-db.ts" twin. Renaming the file or those exports would break those importers. `doc`/`docs` is the domain term for a stored document throughout the DO/D1 ORM. */
+/* eslint-disable unicorn/prevent-abbreviations -- "ctx-db" is the established public module name: src/index.ts and every consumer/test import `createShardCtxDb` / `CtxDbOptions` from "./ctx-db.js", and it deliberately mirrors @lunora/d1's "d1-ctx-db.ts" twin. Renaming the file or those exports would break those importers. `doc`/`docs` is the domain term for a stored document throughout the DO/D1 ORM. */
 
 import { aggregateSqlFunction, matchesStaticWhere, normalizeCountArgument, throwingScheduler } from "./aggregate-sql";
 import type { AggregateTally } from "./aggregate-tally";
@@ -80,8 +80,8 @@ interface SqlCursor<Row> extends Iterable<Row> {
 }
 
 /**
- * Minimal subset of `@cirrus/server`'s `Schema&lt;T>` the adapter actually
- * reads. Kept structural so this package doesn't pull in `@cirrus/server`
+ * Minimal subset of `@lunora/server`'s `Schema&lt;T>` the adapter actually
+ * reads. Kept structural so this package doesn't pull in `@lunora/server`
  * (which would create a dependency cycle — server consumes ShardDO types).
  */
 interface SchemaLike {
@@ -95,7 +95,7 @@ interface TableDefinitionLike {
     readonly relationMap?: Record<string, RelationDefinitionLike>;
     readonly searchIndexes?: ReadonlyArray<SearchIndexDefinitionLike>;
     readonly shape: Record<string, ValidatorLike>;
-    // Mirror of `@cirrus/server`'s `ShardMode`. The `shardBy` variant carries
+    // Mirror of `@lunora/server`'s `ShardMode`. The `shardBy` variant carries
     // a `field` (the column the runtime hashes on) but most consumers only
     // read `kind`, so `field` is left optional here to keep the structural
     // mirror narrow without forcing every callsite to spread the variant.
@@ -117,7 +117,7 @@ interface SearchIndexDefinitionLike {
 
 /**
  * Column constraints/defaults the write layer honors, mirrored structurally
- * from `@cirrus/values`' `ColumnMeta` (kept local so this package doesn't take
+ * from `@lunora/values`' `ColumnMeta` (kept local so this package doesn't take
  * a runtime dependency on the validator package — same reasoning as
  * {@link SchemaLike}). Populated on the live validator's `_meta.column` and
  * read through here when the generated `shard.ts` hands us the real schema.
@@ -135,7 +135,7 @@ interface ValidatorLike {
     readonly kind?: string;
 
     /**
-     * Optional runtime parser. Real validators from `@cirrus/values` always
+     * Optional runtime parser. Real validators from `@lunora/values` always
      * supply this; the structural fakes used in DO unit tests typically don't.
      * The write layer calls it (when present) on each field before persisting
      * so refinements declared via `.check(predicate)` fire on insert / patch /
@@ -342,9 +342,9 @@ interface TableReaderLike {
 
 /**
  * Options accepted by `count()`. Alias of {@link RestrictableQueryOptions} so
- * the RLS middleware (`@cirrus/server` §3.2) and the aggregate reader (§3.1)
+ * the RLS middleware (`@lunora/server` §3.2) and the aggregate reader (§3.1)
  * share a single option surface. When `restrictsCounts` is `true`, the reader
- * throws `CirrusError("COUNT_RLS_UNSUPPORTED")` (422) rather than scanning,
+ * throws `LunoraError("COUNT_RLS_UNSUPPORTED")` (422) rather than scanning,
  * matching kitcn's documented behavior for counts in an RLS-restricted context.
  */
 type CountArgs = RestrictableQueryOptions;
@@ -433,7 +433,7 @@ interface DatabaseWriterLike {
      * `restrictsCounts` RLS seam identically to `rank()`.
      *
      * Optional on the interface: the DO writer (this file) implements it; the
-     * D1 twin (`@cirrus/d1`) omits it for now — cross-shard rank over a
+     * D1 twin (`@lunora/d1`) omits it for now — cross-shard rank over a
      * `.global()` table is a follow-up, so a D1 writer that doesn't supply it
      * still structurally satisfies `DatabaseWriterLike`.
      */
@@ -452,7 +452,7 @@ interface DatabaseWriterLike {
      * Cross-shard companion to `rankPage`: the same shard-local ranked
      * slice, but each row keeps its rank-key tuple so the query coordinator's
      * k-way merge can order rows across shards (`orchestrateRankPage`). The
-     * shard's `__cirrus_admin__:rankPage` admin RPC forwards this verbatim as
+     * shard's `__lunora_admin__:rankPage` admin RPC forwards this verbatim as
      * the `ShardRankPageResult` the coordinator consumes.
      *
      * Optional on the interface for the same reason as `rankBefore`: the
@@ -463,7 +463,7 @@ interface DatabaseWriterLike {
     replace: (id: string, document: Record<string, unknown>) => Promise<void>;
 
     /**
-     * Best-effort, read-only reader over Cirrus's system tables
+     * Best-effort, read-only reader over Lunora's system tables
      * (`_scheduled_functions`, `_storage`). Eventually consistent and **not**
      * part of the shard's transaction snapshot — see {@link SystemDatabaseReader}.
      * Reaches across to the `SchedulerDO` / R2 on every call rather than the
@@ -471,8 +471,8 @@ interface DatabaseWriterLike {
      *
      * Optional on this structural interface: the DO writer ({@link createShardCtxDb})
      * always sets it, and it's what backs `ctx.db.system` (which the public
-     * `@cirrus/server` `DatabaseReader.system` types as required). The D1 twin
-     * (`@cirrus/d1`), used only for `.global()` table routing and never assigned
+     * `@lunora/server` `DatabaseReader.system` types as required). The D1 twin
+     * (`@lunora/d1`), used only for `.global()` table routing and never assigned
      * to `ctx.db`, omits it — same pattern as the optional `rankBefore` above.
      */
     system?: SystemDatabaseReader;
@@ -522,7 +522,7 @@ const isFtsAvailable = (sql: SqlExec): boolean => {
     let available: boolean;
 
     try {
-        runSql(sql, `CREATE VIRTUAL TABLE IF NOT EXISTS "__cirrus_fts_probe" USING fts5(x)`);
+        runSql(sql, `CREATE VIRTUAL TABLE IF NOT EXISTS "__lunora_fts_probe" USING fts5(x)`);
         available = true;
     } catch {
         available = false;
@@ -532,7 +532,7 @@ const isFtsAvailable = (sql: SqlExec): boolean => {
         // succeeded but a later statement threw (today there isn't one,
         // but keep the invariant for future probes), the DROP still runs.
         try {
-            runSql(sql, `DROP TABLE IF EXISTS "__cirrus_fts_probe"`);
+            runSql(sql, `DROP TABLE IF EXISTS "__lunora_fts_probe"`);
         } catch {
             // The probe table cleanup is best-effort; swallow so the
             // availability decision still propagates.
@@ -901,7 +901,7 @@ const paginateStage = (sql: SqlExec, tableName: string, stage: QueryStage, optio
  * Thrown by `.unique()` when more than one row matches. Like {@link ConflictError}
  * / `NotFoundError`, `code` / `status` are declared as own properties so the
  * cross-package structural error mapper renders it as a 400 without an
- * `instanceof` check against `@cirrus/do`.
+ * `instanceof` check against `@lunora/do`.
  */
 class NotUniqueError extends Error {
     public readonly code: string = "NOT_UNIQUE";
@@ -920,7 +920,7 @@ class NotUniqueError extends Error {
  * no whitespace (interior, leading, or trailing) and no NUL byte — the shape
  * every minter in the stack produces (`crypto.randomUUID()` by default; a custom
  * `idGenerator` or an `allowExplicitId` import path may supply another opaque
- * string). Cirrus ids carry no embedded table tag, so this is the strongest
+ * string). Lunora ids carry no embedded table tag, so this is the strongest
  * structural check the format admits; it never touches the database, matching
  * Convex's `normalizeId`. Returns the id unchanged when valid, else `null`.
  * Throws on an unknown table so a typo'd table name surfaces loudly rather than
@@ -2023,7 +2023,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             new Error(
                 `rank index "${index.name}" on "${tableName}" partitions across shards (shard key "${shardMode.field ?? "?"}" is not in partitionBy) — a shard-local rank()/rankPage() would be wrong; roll it up through the Query Coordinator instead`,
             ),
-            { code: "CROSS_SHARD_RANK_UNSUPPORTED", name: "CirrusError", status: 400 },
+            { code: "CROSS_SHARD_RANK_UNSUPPORTED", name: "LunoraError", status: 400 },
         );
     };
 
@@ -2303,7 +2303,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const countOptions = normalizeCountArgument(whereOrOptions);
 
             // RLS-restricted contexts can't be trusted to return a correct
-            // count — surface a structural CirrusError so the request fails
+            // count — surface a structural LunoraError so the request fails
             // loudly rather than silently undercounting. See PLAN2 §3.1
             // "Coupling seam" and `aggregates.ts` for the seam contract.
             if (countOptions.restrictsCounts) {

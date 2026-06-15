@@ -1,4 +1,4 @@
-import { initCirrus } from "@cirrus/server";
+import { initLunora } from "@lunora/server";
 import { describe, expect, it } from "vitest";
 
 import { ratelimitPlugin } from "../src/plugin";
@@ -14,7 +14,7 @@ describe("ratelimitPlugin", () => {
         expect.assertions(3);
 
         const limiter = makeLimiter();
-        const c = initCirrus.dataModel<Record<string, never>>().create();
+        const c = initLunora.dataModel<Record<string, never>>().create();
 
         const procedure = c.mutation.use(ratelimitPlugin(limiter).middleware!).mutation(async ({ ctx }) => {
             const first = await ctx.api.ratelimit.limit("send", { key: "u-1" });
@@ -36,7 +36,7 @@ describe("ratelimitPlugin", () => {
         expect.assertions(1);
 
         const limiter = makeLimiter();
-        const c = initCirrus.dataModel<Record<string, never>>().create();
+        const c = initLunora.dataModel<Record<string, never>>().create();
 
         const procedure = c.query
             .use(async ({ next }) => next({ ctx: { tenantLimiter: limiter } }))

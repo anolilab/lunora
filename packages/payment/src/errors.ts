@@ -19,19 +19,19 @@ const STATUS_BY_CODE: Record<PaymentErrorCode, number> = {
     WEBHOOK_TIMESTAMP_INVALID: 400,
 };
 
-/** Typed error for all `@cirrus/payment` failures. `status` maps onto an HTTP response. */
-class CirrusPaymentError extends Error {
+/** Typed error for all `@lunora/payment` failures. `status` maps onto an HTTP response. */
+class LunoraPaymentError extends Error {
     public readonly code: PaymentErrorCode;
 
     public readonly status: number;
 
     public constructor(code: PaymentErrorCode, message: string) {
         super(message);
-        this.name = "CirrusPaymentError";
+        this.name = "LunoraPaymentError";
         this.code = code;
         this.status = STATUS_BY_CODE[code];
     }
 }
 
-export { CirrusPaymentError };
+export { LunoraPaymentError };
 export type { PaymentErrorCode };

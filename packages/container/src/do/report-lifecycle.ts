@@ -6,12 +6,12 @@
  * are worker-wide, so the ShardDO namespace (`env.SHARD`) is reachable from the
  * Container DO's `env`. We address the ROOT shard (`__root__`) — the same
  * default shard request dispatch uses — and POST the reserved
- * `__cirrus_admin__:recordContainerEvent` admin RPC to its `/rpc` endpoint with
+ * `__lunora_admin__:recordContainerEvent` admin RPC to its `/rpc` endpoint with
  * the admin bearer, mirroring how the worker fire-and-forgets `recordAuthEvent`
- * (`@cirrus/runtime`'s `recordAuthAttempt`).
+ * (`@lunora/runtime`'s `recordAuthAttempt`).
  *
  * Best-effort end to end: it resolves the admin token from
- * `env.CIRRUS_ADMIN_TOKEN`, skips silently when no token (or no SHARD binding)
+ * `env.LUNORA_ADMIN_TOKEN`, skips silently when no token (or no SHARD binding)
  * is configured, and swallows EVERY error — the `console` path printed by
  * `emitContainerLifecycle` remains the source of truth, so a failed push must
  * never break a lifecycle hook.
@@ -19,9 +19,9 @@
 import type { ContainerLifecycleEvent } from "../lifecycle-event";
 
 /** Reserved admin op the root ShardDO serves to append a container event to its log buffer. */
-const RECORD_CONTAINER_EVENT_OP = "__cirrus_admin__:recordContainerEvent";
+const RECORD_CONTAINER_EVENT_OP = "__lunora_admin__:recordContainerEvent";
 
-/** The root shard name — the default, unnamed shard (mirrors `@cirrus/do`'s `ROOT_SHARD_NAME`). */
+/** The root shard name — the default, unnamed shard (mirrors `@lunora/do`'s `ROOT_SHARD_NAME`). */
 const ROOT_SHARD_NAME = "__root__";
 
 /** A stub addressable by `.fetch`, returned by the ShardDO namespace. */
@@ -32,7 +32,7 @@ interface ShardStubLike {
 /**
  * Structural projection of the bits of the ShardDO `DurableObjectNamespace` we
  * need — `getByName` when available (the friendlier API), else `idFromName` +
- * `get`. Mirrors `@cirrus/runtime`'s `ShardNamespaceLike` so a test double can
+ * `get`. Mirrors `@lunora/runtime`'s `ShardNamespaceLike` so a test double can
  * stand in without `@cloudflare/workers-types`.
  */
 interface ShardNamespaceLike {
@@ -65,7 +65,7 @@ const resolveRootShard = (namespace: ShardNamespaceLike): ShardStubLike => {
  * Forward one lifecycle envelope to the root ShardDO's log buffer, best-effort.
  *
  * `env` is the Container DO's worker `env`: we read the `SHARD` namespace and
- * the `CIRRUS_ADMIN_TOKEN` from it. Returns a promise that NEVER rejects — every
+ * the `LUNORA_ADMIN_TOKEN` from it. Returns a promise that NEVER rejects — every
  * failure path (missing binding, missing token, fetch error) resolves to
  * `undefined` — so the caller can `void` it from a lifecycle hook safely.
  */
@@ -78,7 +78,7 @@ const reportContainerLifecycle = async (env: unknown, envelope: ContainerLifecyc
             return;
         }
 
-        const adminBearer = typeof envRecord["CIRRUS_ADMIN_TOKEN"] === "string" ? envRecord["CIRRUS_ADMIN_TOKEN"] : undefined;
+        const adminBearer = typeof envRecord["LUNORA_ADMIN_TOKEN"] === "string" ? envRecord["LUNORA_ADMIN_TOKEN"] : undefined;
 
         // No admin token ⇒ the root shard's admin gate would reject the write;
         // skip silently so the buffer push is simply absent (the terminal still

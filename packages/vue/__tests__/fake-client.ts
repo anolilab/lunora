@@ -1,8 +1,8 @@
-import type { ArgsOf, CirrusClient, FunctionReference, ReturnOf, SubscriptionErrorCallback, Unsubscribe } from "@cirrus/client";
+import type { ArgsOf, LunoraClient, FunctionReference, ReturnOf, SubscriptionErrorCallback, Unsubscribe } from "@lunora/client";
 import { vi } from "vitest";
 import { createApp } from "vue";
 
-import { CIRRUS_INJECTION_KEY } from "../src/cirrus-provider";
+import { LUNORA_INJECTION_KEY } from "../src/lunora-provider";
 
 interface SubscribeCall {
     args: Record<string, unknown>;
@@ -12,17 +12,17 @@ interface SubscribeCall {
 }
 
 /**
- * A hand-rolled stand-in for `CirrusClient` exposing just the surface the Vue
+ * A hand-rolled stand-in for `LunoraClient` exposing just the surface the Vue
  * composables touch (`subscribe`, `mutation`). Records every subscribe call,
  * lets a test push values to a live subscription, and spies on unsubscribe so we
  * can assert teardown. No WebSocket, no network — pure in-memory.
  */
 interface FakeClient {
-    /** The fake typed as a `CirrusClient` for passing into the composables. */
-    client: CirrusClient;
+    /** The fake typed as a `LunoraClient` for passing into the composables. */
+    client: LunoraClient;
     /** A recorded mock of `mutation` so tests can assert calls/resolve a value. */
     mutationSpy: ReturnType<typeof vi.fn>;
-    /** Run `fn` with this fake provided as the Cirrus client (no component mount). */
+    /** Run `fn` with this fake provided as the Lunora client (no component mount). */
     provide: <T>(fn: () => T) => T;
     /** Push `value` to every callback subscribed for `(functionPath, args)`. */
     push: (functionPath: string, args: Record<string, unknown>, value: unknown) => void;
@@ -53,8 +53,8 @@ const createFakeClient = (): FakeClient => {
             args: args ?? {},
             callback: callback as (data: unknown) => void,
             // Bracket access — this package's eslint config has no underscore
-            // allow-list, and `__cirrusRef` is the real public marker field.
-            functionPath: function_["__cirrusRef"],
+            // allow-list, and `__lunoraRef` is the real public marker field.
+            functionPath: function_["__lunoraRef"],
             options,
         });
 
@@ -63,11 +63,11 @@ const createFakeClient = (): FakeClient => {
         };
     };
 
-    const fake = { mutation: mutationSpy, subscribe } as unknown as CirrusClient;
+    const fake = { mutation: mutationSpy, subscribe } as unknown as LunoraClient;
 
     // Install the fake into the app's provide context up front so
-    // `useCirrus()` resolves it inside `runWithContext`.
-    app.provide(CIRRUS_INJECTION_KEY, fake);
+    // `useLunora()` resolves it inside `runWithContext`.
+    app.provide(LUNORA_INJECTION_KEY, fake);
 
     const provide = <T>(fn: () => T): T => app.runWithContext(fn);
 

@@ -6,7 +6,7 @@
 
 </a>
 
-<h3 align="center">SolidJS adapter for Cirrus — live queries, optimistic mutations, and reactive loaders</h3>
+<h3 align="center">SolidJS adapter for Lunora — live queries, optimistic mutations, and reactive loaders</h3>
 
 <!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
@@ -34,33 +34,33 @@
 
 ---
 
-The SolidJS adapter for Cirrus. Thin, idiomatic glue over the framework-neutral `@cirrus/client` — Solid's fine-grained signals map directly onto Cirrus's per-subscription deltas, so a live query is just a signal the WebSocket writes to. Ships `createQuery`, `createMutation`, and a `hydratePreloaded` SSR handoff.
+The SolidJS adapter for Lunora. Thin, idiomatic glue over the framework-neutral `@lunora/client` — Solid's fine-grained signals map directly onto Lunora's per-subscription deltas, so a live query is just a signal the WebSocket writes to. Ships `createQuery`, `createMutation`, and a `hydratePreloaded` SSR handoff.
 
-Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
+Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
 ## Install
 
 ```sh
-npm install @cirrus/solid
+npm install @lunora/solid
 ```
 
 ```sh
-yarn add @cirrus/solid
+yarn add @lunora/solid
 ```
 
 ```sh
-pnpm add @cirrus/solid
+pnpm add @lunora/solid
 ```
 
 ## Usage
 
 ```tsx
-import { CirrusClient } from "@cirrus/client";
-import { CirrusProvider, createQuery, createMutation } from "@cirrus/solid";
+import { LunoraClient } from "@lunora/client";
+import { LunoraProvider, createQuery, createMutation } from "@lunora/solid";
 import { For, render } from "solid-js/web";
-import { api } from "./cirrus/_generated/api";
+import { api } from "./lunora/_generated/api";
 
-const client = new CirrusClient({ url: window.location.origin });
+const client = new LunoraClient({ url: window.location.origin });
 
 function Messages() {
     const messages = createQuery(api.messages.list, { channelId: "channel:demo" });
@@ -71,21 +71,21 @@ function Messages() {
 
 render(
     () => (
-        <CirrusProvider client={client}>
+        <LunoraProvider client={client}>
             <Messages />
-        </CirrusProvider>
+        </LunoraProvider>
     ),
     document.getElementById("root")!,
 );
 ```
 
-> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/frameworks/reactive-loaders)**.
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/frameworks/reactive-loaders)**.
 
 ## Related
 
-- [`@cirrus/client`](https://www.npmjs.com/package/@cirrus/client) — the framework-neutral browser SDK this adapter wraps.
-- `@cirrus/client/ssr` — the server preload contract behind `@cirrus/solid/server`.
-- [`@cirrus/react`](https://www.npmjs.com/package/@cirrus/react) — the same contract for React.
+- [`@lunora/client`](https://www.npmjs.com/package/@lunora/client) — the framework-neutral browser SDK this adapter wraps.
+- `@lunora/client/ssr` — the server preload contract behind `@lunora/solid/server`.
+- [`@lunora/react`](https://www.npmjs.com/package/@lunora/react) — the same contract for React.
 
 ## Supported Node.js Versions
 
@@ -94,14 +94,14 @@ Here's [a post on why we think this is important](https://medium.com/the-node-js
 
 ## Contributing
 
-If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/lunora/issues) and check our [Contributing](https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
 > **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
 ## Credits
 
 - [Daniel Bannert](https://github.com/prisis)
-- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
+- [All Contributors](https://github.com/anolilab/lunora/graphs/contributors)
 
 ## Made with ❤️ at Anolilab
 
@@ -109,17 +109,17 @@ This is an open source project and will always remain free to use. If you think 
 
 ## License
 
-The Cirrus solid package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The Lunora solid package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
 
 <!-- badges -->
 
 [license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
-[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
-[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/solid?style=for-the-badge
-[npm-version]: https://www.npmjs.com/package/@cirrus/solid
-[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/solid?style=for-the-badge
-[npm-downloads]: https://www.npmjs.com/package/@cirrus/solid
+[license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@lunora/solid?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@lunora/solid
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@lunora/solid?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@lunora/solid
 [prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
-[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[prs-welcome]: https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md
 [typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
 [typescript-url]: https://www.typescriptlang.org/

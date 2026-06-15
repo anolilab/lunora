@@ -73,7 +73,7 @@ describe("wireRlsIntoProcedure", () => {
         // The terminal call + its handler body survive untouched.
         expect(result.text).toContain('.query(async ({ ctx }) => ctx.db.query("invoices").collect())');
         // `rls` is now importable so codegen still recognises the procedure.
-        expect(result.text).toMatch(/import \{[^}]*\brls\b[^}]*\} from "@cirrus\/server"/u);
+        expect(result.text).toMatch(/import \{[^}]*\brls\b[^}]*\} from "@lunora\/server"/u);
     });
 
     it("reports a procedure that is already wired", () => {

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { createServerClient, deserializePreloaded, getServerSession, preloadedQueryResult, preloadQuery, serializePreloaded } from "../../src/ssr/index";
 
-describe("@cirrus/client/ssr public surface", () => {
+describe("@lunora/client/ssr public surface", () => {
     it("exposes the re-exported and own helpers as callable functions", () => {
         expect(typeof createServerClient).toBe("function");
         expect(typeof getServerSession).toBe("function");
@@ -20,7 +20,7 @@ describe("@cirrus/client/ssr public surface", () => {
 
     it("preloadedQueryResult reads the value out of a Preloaded token", () => {
         const value = preloadedQueryResult({
-            __cirrusPreloaded: true,
+            __lunoraPreloaded: true,
             args: {},
             functionPath: "f:g",
             value: 42,

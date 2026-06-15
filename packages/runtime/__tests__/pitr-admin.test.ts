@@ -10,7 +10,7 @@ const fakeContext: ExecutionContextLike = {
 };
 
 const ADMIN_TOKEN = "admin-bear";
-const PITR_URL = "https://app.example/_cirrus/admin/pitr";
+const PITR_URL = "https://app.example/_lunora/admin/pitr";
 
 interface Captured {
     authorization: null | string;
@@ -54,14 +54,14 @@ describe("createWorker — admin PITR endpoint", () => {
         const captured: Captured[] = [];
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: capturingNamespace(captured) });
 
-        const response = await worker.fetch(pitrRequest({ args: {}, functionPath: "__cirrus_admin__:getPitrBookmark" }), {}, fakeContext);
+        const response = await worker.fetch(pitrRequest({ args: {}, functionPath: "__lunora_admin__:getPitrBookmark" }), {}, fakeContext);
 
         expect(response.status).toBe(200);
         expect(captured).toHaveLength(1);
 
         const forwarded = JSON.parse(captured[0]?.body ?? "{}") as { args: Record<string, unknown>; functionPath: string };
 
-        expect(forwarded.functionPath).toBe("__cirrus_admin__:getPitrBookmark");
+        expect(forwarded.functionPath).toBe("__lunora_admin__:getPitrBookmark");
         // The inbound admin bearer is forwarded so the shard's own admin gate accepts the op.
         expect(captured[0]?.authorization).toBe(`Bearer ${ADMIN_TOKEN}`);
         expect(forwarded.args).toStrictEqual({});
@@ -74,7 +74,7 @@ describe("createWorker — admin PITR endpoint", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: capturingNamespace(captured) });
 
         await worker.fetch(
-            pitrRequest({ args: { restart: true, time: "2026-06-01T00:00:00.000Z" }, functionPath: "__cirrus_admin__:pitrRestore", shardKey: "tenant-7" }),
+            pitrRequest({ args: { restart: true, time: "2026-06-01T00:00:00.000Z" }, functionPath: "__lunora_admin__:pitrRestore", shardKey: "tenant-7" }),
             {},
             fakeContext,
         );
@@ -82,7 +82,7 @@ describe("createWorker — admin PITR endpoint", () => {
         const forwarded = JSON.parse(captured[0]?.body ?? "{}") as { args: Record<string, unknown>; functionPath: string };
 
         expect(captured[0]?.shardName).toBe("tenant-7");
-        expect(forwarded.functionPath).toBe("__cirrus_admin__:pitrRestore");
+        expect(forwarded.functionPath).toBe("__lunora_admin__:pitrRestore");
         expect(forwarded.args).toStrictEqual({ restart: true, time: "2026-06-01T00:00:00.000Z" });
     });
 
@@ -92,7 +92,7 @@ describe("createWorker — admin PITR endpoint", () => {
         const captured: Captured[] = [];
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: capturingNamespace(captured) });
 
-        const response = await worker.fetch(pitrRequest({ functionPath: "__cirrus_admin__:getPitrBookmark" }, "wrong-token"), {}, fakeContext);
+        const response = await worker.fetch(pitrRequest({ functionPath: "__lunora_admin__:getPitrBookmark" }, "wrong-token"), {}, fakeContext);
 
         expect(response.status).toBe(403);
         expect(captured).toHaveLength(0);
@@ -104,7 +104,7 @@ describe("createWorker — admin PITR endpoint", () => {
         const captured: Captured[] = [];
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: capturingNamespace(captured) });
 
-        const response = await worker.fetch(pitrRequest({ functionPath: "__cirrus_admin__:listTables" }), {}, fakeContext);
+        const response = await worker.fetch(pitrRequest({ functionPath: "__lunora_admin__:listTables" }), {}, fakeContext);
 
         expect(response.status).toBe(400);
         expect(captured).toHaveLength(0);

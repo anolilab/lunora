@@ -1,4 +1,4 @@
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
@@ -29,9 +29,9 @@ const createWorkflowsClient = (result: WorkflowsResult = METADATA): MockClientHo
     });
 
 const renderPanel = (mock: MockClientHooks): ReactElement => (
-    <CirrusProvider client={mock.asClient}>
+    <LunoraProvider client={mock.asClient}>
         <WorkflowsPanel />
-    </CirrusProvider>
+    </LunoraProvider>
 );
 
 describe("workflowsPanel", () => {

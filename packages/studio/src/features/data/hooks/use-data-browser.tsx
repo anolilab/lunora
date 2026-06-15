@@ -1,4 +1,4 @@
-import { useCirrus } from "@cirrus/react";
+import { useLunora } from "@lunora/react";
 import type { SortingState } from "@tanstack/react-table";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -226,7 +226,7 @@ const useDataBrowser = ({
     /** The table named in the URL — drives the selection so browser back/forward works. */
     tableParam: string | undefined;
 }): DataBrowserModel => {
-    const client = useCirrus();
+    const client = useLunora();
 
     // Rows-per-page is user-adjustable (the pagination footer's selector); the
     // prop seeds the initial value. Changing it re-fetches the first page.

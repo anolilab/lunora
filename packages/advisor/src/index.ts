@@ -1,10 +1,10 @@
 /**
- * `@cirrus/advisor` — schema & runtime lints (splinter-style advisors) for Cirrus.
+ * `@lunora/advisor` — schema & runtime lints (splinter-style advisors) for Lunora.
  *
  * Each {@link Lint} is a pure rule over a {@link LintContext}; {@link runAdvisor}
  * runs a set of them and flattens their {@link Finding}s for the studio Advisors
  * table. The interface is shaped after Supabase's splinter so the UI can render
- * any lint uniformly, but the rules run against Cirrus's declared schema (and,
+ * any lint uniformly, but the rules run against Lunora's declared schema (and,
  * later, observed runtime signal) rather than Postgres catalog views.
  */
 import constraintValidator from "./lints/runtime/constraint-validator";

@@ -6,7 +6,7 @@
 export interface AdvisorAuthApiCall {
     /** The exported function performing the call (e.g. `createOrg`). */
     exportName: string;
-    /** Source file the call appears in (relative to the cirrus dir, no extension). */
+    /** Source file the call appears in (relative to the lunora dir, no extension). */
     file: string;
     /** True when the call's argument object includes a `headers` property. */
     hasHeaders: boolean;

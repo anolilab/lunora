@@ -1,11 +1,11 @@
 /**
- * Code-first cron definitions — the Cirrus equivalent of Convex's `cronJobs()`.
+ * Code-first cron definitions — the Lunora equivalent of Convex's `cronJobs()`.
  *
  * Instead of hand-pasting a wrangler.jsonc `triggers.crons` array, users declare
- * crons in a `cirrus/crons.ts` file:
+ * crons in a `lunora/crons.ts` file:
  *
  * ```ts
- * import { cronJobs } from "@cirrus/scheduler";
+ * import { cronJobs } from "@lunora/scheduler";
  * import { internal } from "./_generated/api.js";
  *
  * const crons = cronJobs();
@@ -15,7 +15,7 @@
  * export default crons;
  * ```
  *
- * `@cirrus/codegen` discovers the registered jobs and emits both the
+ * `@lunora/codegen` discovers the registered jobs and emits both the
  * wrangler.jsonc schedule array and a dispatcher map the runtime's
  * `scheduled()` handler consumes — the user never edits wrangler by hand.
  */
@@ -51,7 +51,7 @@ interface MonthlySchedule extends DailySchedule {
 
 /**
  * One registered cron job, normalized to a compiled cron expression. Shared
- * verbatim with `@cirrus/codegen` (which lifts the same fields out of the AST)
+ * verbatim with `@lunora/codegen` (which lifts the same fields out of the AST)
  * and the runtime dispatcher — keep the shape stable across all three.
  */
 interface CronJob {
@@ -59,7 +59,7 @@ interface CronJob {
     args: Record<string, unknown>;
     /** Compiled standard cron expression, e.g. `"0 9 * * *"`. */
     cron: string;
-    /** `__cirrusRef` of the target function. */
+    /** `__lunoraRef` of the target function. */
     functionPath: string;
     /** Human-readable identifier — must be unique within one `cronJobs()`. */
     name: string;
@@ -78,7 +78,7 @@ const WEEKDAY_INDEX: Record<WeeklySchedule["dayOfWeek"], number> = {
 /** Validate an integer in `[min, max]` and return it as a cron field string. */
 const field = (value: number, label: string, min: number, max: number): string => {
     if (!Number.isInteger(value) || value < min || value > max) {
-        throw new Error(`@cirrus/scheduler: cronJobs ${label} must be an integer in [${min.toFixed(0)}, ${max.toFixed(0)}], got ${String(value)}`);
+        throw new Error(`@lunora/scheduler: cronJobs ${label} must be an integer in [${min.toFixed(0)}, ${max.toFixed(0)}], got ${String(value)}`);
     }
 
     return value.toFixed(0);
@@ -93,7 +93,7 @@ const compileInterval = (schedule: IntervalSchedule): string => {
     const units = (["seconds", "minutes", "hours"] as const).filter((unit) => schedule[unit] !== undefined);
 
     if (units.length !== 1) {
-        throw new Error(`@cirrus/scheduler: interval schedule must specify exactly one of { seconds, minutes, hours }`);
+        throw new Error(`@lunora/scheduler: interval schedule must specify exactly one of { seconds, minutes, hours }`);
     }
 
     const unit = units[0] as "hours" | "minutes" | "seconds";
@@ -121,7 +121,7 @@ const compileWeekly = (schedule: WeeklySchedule): string => {
     const index = WEEKDAY_INDEX[schedule.dayOfWeek] as number | undefined;
 
     if (index === undefined) {
-        throw new Error(`@cirrus/scheduler: weekly schedule has invalid dayOfWeek "${schedule.dayOfWeek}"`);
+        throw new Error(`@lunora/scheduler: weekly schedule has invalid dayOfWeek "${schedule.dayOfWeek}"`);
     }
 
     const minute = field(schedule.minuteUTC, "weekly.minuteUTC", 0, 59);
@@ -146,7 +146,7 @@ const CRON_SCHEDULE_KINDS: ReadonlySet<CronScheduleKind> = new Set<CronScheduleK
 
 /**
  * Compile one of the ergonomic schedule forms into a standard cron expression.
- * Exposed as a pure function so `@cirrus/codegen` can reuse the exact same
+ * Exposed as a pure function so `@lunora/codegen` can reuse the exact same
  * compilation when it statically lifts a `crons.{kind}(...)` call out of the
  * AST — codegen imports this directly (no duplicated mirror).
  */
@@ -165,7 +165,7 @@ const compileCronSchedule = (kind: CronScheduleKind, schedule: DailySchedule | I
             return compileWeekly(schedule as WeeklySchedule);
         }
         default: {
-            throw new Error(`@cirrus/scheduler: unknown cron schedule kind "${String(kind)}"`);
+            throw new Error(`@lunora/scheduler: unknown cron schedule kind "${String(kind)}"`);
         }
     }
 };
@@ -192,7 +192,7 @@ interface CronJobsBuilder {
 
 /**
  * Create a code-first cron registry. The returned builder is chainable;
- * codegen discovers a `cirrus/crons.ts` default export by AST, not a runtime
+ * codegen discovers a `lunora/crons.ts` default export by AST, not a runtime
  * brand.
  */
 const cronJobs = (): CronJobsBuilder => {
@@ -201,22 +201,22 @@ const cronJobs = (): CronJobsBuilder => {
 
     const register = (name: string, cron: string, function_: FunctionReference, args: Record<string, unknown> | undefined): void => {
         if (typeof name !== "string" || name.trim() === "") {
-            throw new Error(`@cirrus/scheduler: cron job name must be a non-empty string`);
+            throw new Error(`@lunora/scheduler: cron job name must be a non-empty string`);
         }
 
         if (seen.has(name)) {
-            throw new Error(`@cirrus/scheduler: duplicate cron job name "${name}" — names must be unique within one cronJobs()`);
+            throw new Error(`@lunora/scheduler: duplicate cron job name "${name}" — names must be unique within one cronJobs()`);
         }
 
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untrusted JS callers despite the required type
-        if (!function_ || typeof function_.__cirrusRef !== "string") {
-            throw new Error(`@cirrus/scheduler: cron job "${name}" requires a function reference (e.g. internal.email.digest)`);
+        if (!function_ || typeof function_.__lunoraRef !== "string") {
+            throw new Error(`@lunora/scheduler: cron job "${name}" requires a function reference (e.g. internal.email.digest)`);
         }
 
         assertValidCronExpression(cron, `cron expression for job "${name}"`);
 
         seen.add(name);
-        jobs.push({ args: args ?? {}, cron, functionPath: function_.__cirrusRef, name });
+        jobs.push({ args: args ?? {}, cron, functionPath: function_.__lunoraRef, name });
     };
 
     const builder: CronJobsBuilder = {

@@ -89,7 +89,7 @@ interface QueryInsightsProps {
  * Slow-query leaderboard for the Reports → Metrics panel.
  *
  * Renders a sortable table of per-statement SQL aggregates surfaced by the
- * `__cirrus_admin__:getMetrics` RPC when the worker includes the
+ * `__lunora_admin__:getMetrics` RPC when the worker includes the
  * `queryStats` feed (workers predating the query-metrics feature return
  * `undefined` here — the parent panel guards on presence before mounting
  * this component). Each row carries a performance badge keyed on average

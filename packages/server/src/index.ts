@@ -1,7 +1,7 @@
 export { default as asBucketStorage } from "./as-bucket-storage";
 export type {
     ActionBuilder,
-    CirrusBuilders,
+    LunoraBuilders,
     CreateOptions,
     DataModelInit,
     EmptyArgs,
@@ -14,19 +14,19 @@ export type {
     QueryBuilder,
     TerminalKind,
 } from "./builder/index";
-export { initCirrus } from "./builder/index";
+export { initLunora } from "./builder/index";
 export type { EnvAccessor, EnvKeyFailure, EnvShape, InferEnv } from "./env";
-export { CirrusEnvError, defineEnv, redactSecrets } from "./env";
-export type { CirrusErrorCode } from "./error";
-export { CirrusError } from "./error";
+export { LunoraEnvError, defineEnv, redactSecrets } from "./env";
+export type { LunoraErrorCode } from "./error";
+export { LunoraError } from "./error";
 export type { FacadeEntry, FacadeWriterLike, OrmLike } from "./facade";
 export { bindOrm, bindTableFacade } from "./facade";
 export type { ActionDefinition, MutationDefinition, QueryDefinition } from "./functions";
 export { action, internalAction, internalMutation, internalQuery, mutation, query } from "./functions";
 export type {
-    CirrusHttpApp,
-    CirrusHttpEnv,
-    CirrusRouteHandler,
+    LunoraHttpApp,
+    LunoraHttpEnv,
+    LunoraRouteHandler,
     HttpActionCtx,
     HttpActionHandler,
     HttpMethod,
@@ -70,7 +70,7 @@ export type {
     AnyApi,
     ArgsValidator,
     AuthState,
-    CirrusLogger,
+    LunoraLogger,
     DatabaseReader,
     DatabaseWriter,
     FunctionKind,
@@ -147,11 +147,11 @@ export type {
 } from "./types";
 export { anyApi } from "./types";
 // Re-export the code-first cron builder so users declare crons from the main
-// package alongside query/mutation/action (it lives in @cirrus/scheduler).
-export type { CronJob, CronJobsBuilder, CronScheduleKind, DailySchedule, IntervalSchedule, MonthlySchedule, WeeklySchedule } from "@cirrus/scheduler";
-export { cronJobs } from "@cirrus/scheduler";
-export type { ColumnValidator, Id, Infer, Validator, ValidatorKind } from "@cirrus/values";
-export { v } from "@cirrus/values";
-export { ValidationError } from "@cirrus/values";
+// package alongside query/mutation/action (it lives in @lunora/scheduler).
+export type { CronJob, CronJobsBuilder, CronScheduleKind, DailySchedule, IntervalSchedule, MonthlySchedule, WeeklySchedule } from "@lunora/scheduler";
+export { cronJobs } from "@lunora/scheduler";
+export type { ColumnValidator, Id, Infer, Validator, ValidatorKind } from "@lunora/values";
+export { v } from "@lunora/values";
+export { ValidationError } from "@lunora/values";
 
 export const VERSION = "0.0.0";

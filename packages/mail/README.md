@@ -6,7 +6,7 @@
 
 </a>
 
-<h3 align="center">Email for Cirrus: Resend adapter, TSX templates, and queue-backed sends</h3>
+<h3 align="center">Email for Lunora: Resend adapter, TSX templates, and queue-backed sends</h3>
 
 <!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
@@ -34,28 +34,28 @@
 
 ---
 
-Transactional email for Cirrus. Render TSX templates, send through Cloudflare Email Workers or the Resend adapter, and offload delivery to a Cloudflare Queue so requests return immediately.
+Transactional email for Lunora. Render TSX templates, send through Cloudflare Email Workers or the Resend adapter, and offload delivery to a Cloudflare Queue so requests return immediately.
 
-Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
+Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
 ## Install
 
 ```sh
-npm install @cirrus/mail
+npm install @lunora/mail
 ```
 
 ```sh
-yarn add @cirrus/mail
+yarn add @lunora/mail
 ```
 
 ```sh
-pnpm add @cirrus/mail
+pnpm add @lunora/mail
 ```
 
 ## Usage
 
 ```ts
-import { createMailer } from "@cirrus/mail";
+import { createMailer } from "@lunora/mail";
 
 import { WelcomeEmail } from "./emails/Welcome";
 
@@ -71,13 +71,13 @@ await mailer.send({
 });
 ```
 
-> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/addons/mail)**.
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/addons/mail)**.
 
 ## Related
 
-- [`@cirrus/server`](https://www.npmjs.com/package/@cirrus/server) — call the mailer from actions.
-- [`@cirrus/scheduler`](https://www.npmjs.com/package/@cirrus/scheduler) — queue-backed dispatch for deferred sends.
-- [`@cirrus/auth`](https://www.npmjs.com/package/@cirrus/auth) — send verification and password-reset emails.
+- [`@lunora/server`](https://www.npmjs.com/package/@lunora/server) — call the mailer from actions.
+- [`@lunora/scheduler`](https://www.npmjs.com/package/@lunora/scheduler) — queue-backed dispatch for deferred sends.
+- [`@lunora/auth`](https://www.npmjs.com/package/@lunora/auth) — send verification and password-reset emails.
 
 ## Supported Node.js Versions
 
@@ -86,14 +86,14 @@ Here's [a post on why we think this is important](https://medium.com/the-node-js
 
 ## Contributing
 
-If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/lunora/issues) and check our [Contributing](https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
 > **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
 ## Credits
 
 - [Daniel Bannert](https://github.com/prisis)
-- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
+- [All Contributors](https://github.com/anolilab/lunora/graphs/contributors)
 
 ## Made with ❤️ at Anolilab
 
@@ -101,17 +101,17 @@ This is an open source project and will always remain free to use. If you think 
 
 ## License
 
-The Cirrus mail package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The Lunora mail package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
 
 <!-- badges -->
 
 [license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
-[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
-[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/mail?style=for-the-badge
-[npm-version]: https://www.npmjs.com/package/@cirrus/mail
-[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/mail?style=for-the-badge
-[npm-downloads]: https://www.npmjs.com/package/@cirrus/mail
+[license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@lunora/mail?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@lunora/mail
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@lunora/mail?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@lunora/mail
 [prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
-[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[prs-welcome]: https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md
 [typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
 [typescript-url]: https://www.typescriptlang.org/

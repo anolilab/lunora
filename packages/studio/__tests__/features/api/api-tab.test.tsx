@@ -1,4 +1,4 @@
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
@@ -12,8 +12,8 @@ const FUNCTIONS: FunctionDescriptor[] = [{ kind: "query", path: "messages:list" 
 const SPEC: Record<string, unknown> = {
     openapi: "3.1.0",
     paths: {
-        "/_cirrus/rpc#messages:list": {
-            post: { operationId: "messages:list", summary: "query: messages:list", tags: ["messages"], "x-cirrus-function-kind": "query" },
+        "/_lunora/rpc#messages:list": {
+            post: { operationId: "messages:list", summary: "query: messages:list", tags: ["messages"], "x-lunora-function-kind": "query" },
         },
     },
 };
@@ -24,9 +24,9 @@ const RPC_SPEC: Record<string, unknown> = {
 };
 
 const renderTab = (): ReactElement => (
-    <CirrusProvider client={createMockClient().asClient}>
+    <LunoraProvider client={createMockClient().asClient}>
         <ApiTab functions={FUNCTIONS} openApiSpec={SPEC} openRpcSpec={RPC_SPEC} />
-    </CirrusProvider>
+    </LunoraProvider>
 );
 
 describe("apiTab", () => {
@@ -37,7 +37,7 @@ describe("apiTab", () => {
 
         expect(screen.getByTestId("api-reference")).toBeDefined();
         // The snippets browser is not mounted while reference is active.
-        expect(screen.queryByTestId("cirrus-api-docs")).toBeNull();
+        expect(screen.queryByTestId("lunora-api-docs")).toBeNull();
     });
 
     it("toggles to the snippets sub-view and back", () => {
@@ -47,7 +47,7 @@ describe("apiTab", () => {
 
         fireEvent.click(screen.getByTestId("api-view-snippets"));
 
-        expect(screen.getByTestId("cirrus-api-docs")).toBeDefined();
+        expect(screen.getByTestId("lunora-api-docs")).toBeDefined();
         expect(screen.queryByTestId("api-reference")).toBeNull();
 
         fireEvent.click(screen.getByTestId("api-view-reference"));

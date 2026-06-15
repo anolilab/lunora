@@ -1,5 +1,5 @@
 /**
- * The post-scaffold "which features do you want?" offer for `cirrus init`.
+ * The post-scaffold "which features do you want?" offer for `lunora init`.
  *
  * The multi-select, the auth-provider sub-select, and the registry apply step
  * are all injected ({@link OfferDeps}) so this logic is pure and unit-testable
@@ -49,7 +49,7 @@ interface OfferDeps {
  */
 const offerRegistryExtras = async (deps: OfferDeps): Promise<void> => {
     if (!deps.interactive) {
-        deps.logger.info("tip: add authentication or email later with `cirrus add auth` / `cirrus add email`.");
+        deps.logger.info("tip: add authentication or email later with `lunora add auth` / `lunora add email`.");
 
         return;
     }

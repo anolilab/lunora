@@ -1,5 +1,5 @@
-import type { AuthPage, AuthSession, AuthUser } from "@cirrus/client";
-import { CirrusProvider } from "@cirrus/react";
+import type { AuthPage, AuthSession, AuthUser } from "@lunora/client";
+import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -24,9 +24,9 @@ const createUsersClient = (): MockClientHooks =>
     });
 
 const renderPanel = (mock: MockClientHooks): ReactElement => (
-    <CirrusProvider client={mock.asClient}>
+    <LunoraProvider client={mock.asClient}>
         <UsersPanel />
-    </CirrusProvider>
+    </LunoraProvider>
 );
 
 describe("usersPanel", () => {

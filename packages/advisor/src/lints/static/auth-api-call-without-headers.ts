@@ -4,7 +4,7 @@ import type { Lint } from "../../types";
 /**
  * Flags a `ctx.authApi.&lt;method>(...)` call whose argument object omits `headers`.
  *
- * `@cirrus/auth`'s `withAuthPlugins` middleware attaches the full privileged
+ * `@lunora/auth`'s `withAuthPlugins` middleware attaches the full privileged
  * better-auth API to `ctx.authApi` — `banUser`, `setRole`, impersonation,
  * `createOrganization`, `removeMember`, etc. better-auth authorizes these calls
  * from the caller's session carried in the `headers` you pass. Called

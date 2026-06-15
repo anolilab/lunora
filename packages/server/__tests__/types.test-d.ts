@@ -2,8 +2,8 @@
  * Compile-time only: this file is included by `tsc --noEmit` to exercise the
  * type surface. It is also imported by a no-op test so vitest counts it.
  */
-import type { ActionCtx, CirrusRouteHandler, EmptyArgs, Id, Infer, QueryCtx, RegisteredQuery, ScheduledFunctionDoc, StorageMetadata } from "../src/index";
-import { defineSchema, defineTable, httpRoute, initCirrus, mutation, query, v } from "../src/index";
+import type { ActionCtx, LunoraRouteHandler, EmptyArgs, Id, Infer, QueryCtx, RegisteredQuery, ScheduledFunctionDoc, StorageMetadata } from "../src/index";
+import { defineSchema, defineTable, httpRoute, initLunora, mutation, query, v } from "../src/index";
 
 type Assert<T extends true> = T;
 // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- canonical type-equality idiom; each fresh `T` in the two function signatures is structurally load-bearing (relaxing it breaks the invariance check).
@@ -30,7 +30,7 @@ const send = mutation({
 type Check2 = Assert<Equal<typeof list.kind, "query">>;
 type Check3 = Assert<Equal<typeof send.kind, "mutation">>;
 
-const c = initCirrus.dataModel<Record<string, never>>().create();
+const c = initLunora.dataModel<Record<string, never>>().create();
 
 // The builder terminal re-states the kind as a literal type.
 const builderList = c.query.input({ limit: v.number() }).query(({ args }) => args.limit);
@@ -84,12 +84,12 @@ type Check10 = Assert<Equal<ItemsOptions["searchParams"]["limit"], number>>;
 type Check11 = Assert<Equal<ItemsOptions["body"]["text"], string>>;
 type Check11b = Assert<Equal<ItemsOptions["params"]["id"], string>>;
 
-// The terminal `.handler()` yields a `CirrusRouteHandler`, mountable on `httpRouter`.
+// The terminal `.handler()` yields a `LunoraRouteHandler`, mountable on `httpRouter`.
 const pingRoute = httpRoute.get("/api/ping").handler(() => {
     return { ok: true };
 });
 
-type Check12 = Assert<Equal<typeof pingRoute, CirrusRouteHandler>>;
+type Check12 = Assert<Equal<typeof pingRoute, LunoraRouteHandler>>;
 
 // `.output()` constrains the handler's return — a mismatch is a compile error.
 // The directive sits immediately before `.handler(() => 42)` because TypeScript
@@ -102,7 +102,7 @@ const routeOutputMismatch = httpRoute
     // @ts-expect-error - handler returns number, but .output declares string
     .handler(() => 42);
 
-type Check13 = Assert<Equal<typeof routeOutputMismatch, CirrusRouteHandler>>;
+type Check13 = Assert<Equal<typeof routeOutputMismatch, LunoraRouteHandler>>;
 
 // Server-to-server callers: `ctx.runQuery` / `runMutation` infer both the args
 // type and the result type from the passed function reference — no loose

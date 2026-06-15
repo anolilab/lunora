@@ -1,7 +1,7 @@
-# `@cirrus/scheduler` — Test Layout
+# `@lunora/scheduler` — Test Layout
 
 This package has two parallel test suites coordinated by a single
-`pnpm --filter @cirrus/scheduler test`.
+`pnpm --filter @lunora/scheduler test`.
 
 ```
 __tests__/
@@ -40,10 +40,10 @@ alarm-registration and dispatch machinery is the genuine article.
 
 ```bash
 # Mocks only (default):
-pnpm --filter @cirrus/scheduler test
+pnpm --filter @lunora/scheduler test
 
 # Both projects (opt-in — requires unrestricted localhost-loopback
 # access between workerd and the test host; see top-level
 # workerd-integration note in packages/do/__tests__/README.md):
-CIRRUS_WORKERD_TESTS=1 pnpm --filter @cirrus/scheduler test
+LUNORA_WORKERD_TESTS=1 pnpm --filter @lunora/scheduler test
 ```

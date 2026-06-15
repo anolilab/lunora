@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { CirrusError, initCirrus, v, ValidationError } from "../src/index";
+import { LunoraError, initLunora, v, ValidationError } from "../src/index";
 
-const c = initCirrus.dataModel<Record<string, never>>().create();
+const c = initLunora.dataModel<Record<string, never>>().create();
 
 describe("builder terminal", () => {
     it("query terminal yields the { args, handler, kind } dispatch shape", async () => {
@@ -25,23 +25,23 @@ describe("builder terminal", () => {
         expect(ping.kind).toBe("action");
     });
 
-    it("the receiver carries the __cirrusProcedure brand codegen keys off", () => {
+    it("the receiver carries the __lunoraProcedure brand codegen keys off", () => {
         expect.assertions(3);
 
-        expect((c.query as unknown as { __cirrusProcedure: string }).__cirrusProcedure).toBe("query");
-        expect((c.mutation as unknown as { __cirrusProcedure: string }).__cirrusProcedure).toBe("mutation");
-        expect((c.action as unknown as { __cirrusProcedure: string }).__cirrusProcedure).toBe("action");
+        expect((c.query as unknown as { __lunoraProcedure: string }).__lunoraProcedure).toBe("query");
+        expect((c.mutation as unknown as { __lunoraProcedure: string }).__lunoraProcedure).toBe("mutation");
+        expect((c.action as unknown as { __lunoraProcedure: string }).__lunoraProcedure).toBe("action");
     });
 });
 
 describe("internal builders", () => {
-    it("carry the __cirrusVisibility brand while public builders do not", () => {
+    it("carry the __lunoraVisibility brand while public builders do not", () => {
         expect.assertions(4);
 
-        expect((c.internalQuery as unknown as { __cirrusVisibility?: string }).__cirrusVisibility).toBe("internal");
-        expect((c.internalMutation as unknown as { __cirrusVisibility?: string }).__cirrusVisibility).toBe("internal");
-        expect((c.internalAction as unknown as { __cirrusVisibility?: string }).__cirrusVisibility).toBe("internal");
-        expect((c.query as unknown as { __cirrusVisibility?: string }).__cirrusVisibility).toBeUndefined();
+        expect((c.internalQuery as unknown as { __lunoraVisibility?: string }).__lunoraVisibility).toBe("internal");
+        expect((c.internalMutation as unknown as { __lunoraVisibility?: string }).__lunoraVisibility).toBe("internal");
+        expect((c.internalAction as unknown as { __lunoraVisibility?: string }).__lunoraVisibility).toBe("internal");
+        expect((c.query as unknown as { __lunoraVisibility?: string }).__lunoraVisibility).toBeUndefined();
     });
 
     it("stamp visibility: internal onto the registered function, preserving kind + the brand across .input()", () => {
@@ -54,7 +54,7 @@ describe("internal builders", () => {
         // The brand survives a chained .input() so codegen reads it off the receiver.
         const chained = c.internalQuery.input({ a: v.number() });
 
-        expect((chained as unknown as { __cirrusVisibility?: string }).__cirrusVisibility).toBe("internal");
+        expect((chained as unknown as { __lunoraVisibility?: string }).__lunoraVisibility).toBe("internal");
     });
 
     it("internal builders still validate and run their handler", async () => {
@@ -159,14 +159,14 @@ describe("builder middleware", () => {
         const fn = c.query
             .use(async ({ ctx, next }) => {
                 if (!(ctx as { user?: string }).user) {
-                    throw new CirrusError("UNAUTHORIZED");
+                    throw new LunoraError("UNAUTHORIZED");
                 }
 
                 return next();
             })
             .query(handler);
 
-        await expect(fn.handler({}, {})).rejects.toBeInstanceOf(CirrusError);
+        await expect(fn.handler({}, {})).rejects.toBeInstanceOf(LunoraError);
         expect(handler).not.toHaveBeenCalled();
     });
 });

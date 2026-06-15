@@ -3,6 +3,6 @@ node_modules
 .vinxi
 dist
 .wrangler
-.cirrus-cache
-cirrus/_generated
+.lunora-cache
+lunora/_generated
 src/routeTree.gen.ts

@@ -23,7 +23,7 @@ const stubFetch = (entries: CapturedMail[]) =>
         };
     });
 
-describe("@cirrus/mail/testing", () => {
+describe("@lunora/mail/testing", () => {
     it("listCapturedMail posts the admin op with the bearer and returns entries", async () => {
         expect.assertions(3);
 
@@ -36,7 +36,7 @@ describe("@cirrus/mail/testing", () => {
 
         const [url, init] = fetch.mock.calls[0] as [string, { body: string; headers: Record<string, string> }];
 
-        expect(url).toBe("https://localhost:8787/_cirrus/rpc");
+        expect(url).toBe("https://localhost:8787/_lunora/rpc");
         expect(init.headers.authorization).toBe("Bearer secret");
     });
 

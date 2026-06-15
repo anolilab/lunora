@@ -1,9 +1,9 @@
-import type { CirrusClient, FunctionReference, Unsubscribe, User } from "@cirrus/client";
+import type { LunoraClient, FunctionReference, Unsubscribe, User } from "@lunora/client";
 import { vi } from "vitest";
 
 interface MockClientHooks {
     action: ReturnType<typeof vi.fn>;
-    asClient: CirrusClient;
+    asClient: LunoraClient;
     close: ReturnType<typeof vi.fn>;
     /** Manually push a value to all active subscribers for `ref`. */
     emit: (ref: string, value: unknown) => void;
@@ -28,13 +28,13 @@ const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): 
     let authToken: string | null = null;
 
     const queryFunction = vi.fn<(reference: FunctionReference, args: unknown) => Promise<unknown>>(async (reference: FunctionReference, args: unknown) =>
-        queryImpl ? queryImpl(reference.__cirrusRef, args) : undefined,
+        queryImpl ? queryImpl(reference.__lunoraRef, args) : undefined,
     );
     const mutationFunction = vi.fn<() => Promise<unknown>>(async () => undefined);
     const actionFunction = vi.fn<() => Promise<unknown>>(async () => undefined);
     const subscribeFunction = vi.fn<(reference: FunctionReference, args: unknown, callback: (value: unknown) => void) => Unsubscribe>(
         (reference: FunctionReference, _args: unknown, callback: (value: unknown) => void): Unsubscribe => {
-            const entry: SubEntry = { callback, ref: reference.__cirrusRef };
+            const entry: SubEntry = { callback, ref: reference.__lunoraRef };
 
             subs.add(entry);
 
@@ -91,7 +91,7 @@ const createMockClient = (queryImpl?: (ref: string, args: unknown) => unknown): 
         query: queryFunction,
         setAuthToken: setAuthTokenFunction,
         subscribe: subscribeFunction,
-    } as unknown as CirrusClient;
+    } as unknown as LunoraClient;
 
     return {
         action: actionFunction,

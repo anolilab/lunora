@@ -1,4 +1,4 @@
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -132,7 +132,7 @@ describe("buildEdges", () => {
         const edges = buildEdges(externalGlobals);
 
         expect(edges).toHaveLength(1);
-        // The source handle is the external table's `id`, not Cirrus's `_id`.
+        // The source handle is the external table's `id`, not Lunora's `_id`.
         expect(edges[0]).toMatchObject({ source: "user", sourceHandle: "id", target: "session", targetHandle: "userId" });
         expect(edges[0]?.id).toBe("session.userId->user");
     });
@@ -240,9 +240,9 @@ const createClientWithColumnError = (): MockClientHooks =>
     });
 
 const renderViewer = (mock: MockClientHooks) => (
-    <CirrusProvider client={mock.asClient}>
+    <LunoraProvider client={mock.asClient}>
         <SchemaViewer />
-    </CirrusProvider>
+    </LunoraProvider>
 );
 
 describe("schemaDiagram (viewer integration)", () => {

@@ -3,8 +3,8 @@ title: Migrating from Convex
 description: Side-by-side mapping — schema, queries, mutations, actions, React hooks.
 ---
 
-Cirrus borrows Convex's authoring shape on purpose: if you've used Convex, you
-already know 80% of Cirrus. The wire transport, runtime, and storage are
+Lunora borrows Convex's authoring shape on purpose: if you've used Convex, you
+already know 80% of Lunora. The wire transport, runtime, and storage are
 different — but the file layout, the `defineSchema` / `query` / `mutation` /
 `action` factories and the React hooks are intentionally near-identical.
 
@@ -13,30 +13,30 @@ when porting an existing Convex app.
 
 ## At a glance
 
-| Concern             | Convex                   | Cirrus                                    |
+| Concern             | Convex                   | Lunora                                    |
 | ------------------- | ------------------------ | ----------------------------------------- |
 | Hosting             | Convex Cloud             | Your Cloudflare account                   |
 | Backend runtime     | Convex (V8 isolate)      | Cloudflare Workers + Durable Objects      |
 | Default storage     | Convex DB                | One Durable Object's SQLite (`__root__`)  |
 | Cross-tenant data   | tables                   | `.global()` tables in D1                  |
 | Per-tenant data     | tables                   | `.shardBy("field")` tables in DOs         |
-| Schema file         | `convex/schema.ts`       | `cirrus/schema.ts`                        |
-| Generated API       | `convex/_generated/api`  | `cirrus/_generated/api`                   |
-| Function dir        | `convex/*.ts`            | `cirrus/*.ts`                             |
-| Codegen trigger     | `convex dev`             | `cirrus codegen` (or the Vite plugin)     |
-| React hooks         | `convex/react`           | `@cirrus/react`                           |
-| Server SDK          | `convex/server`          | `@cirrus/server`                          |
-| Validators          | `convex/values` (`v.*`)  | `@cirrus/values` (`v.*`)                  |
-| Auth                | Convex Auth, Clerk, etc. | `@cirrus/auth` (built-in)                 |
+| Schema file         | `convex/schema.ts`       | `lunora/schema.ts`                        |
+| Generated API       | `convex/_generated/api`  | `lunora/_generated/api`                   |
+| Function dir        | `convex/*.ts`            | `lunora/*.ts`                             |
+| Codegen trigger     | `convex dev`             | `lunora codegen` (or the Vite plugin)     |
+| React hooks         | `convex/react`           | `@lunora/react`                           |
+| Server SDK          | `convex/server`          | `@lunora/server`                          |
+| Validators          | `convex/values` (`v.*`)  | `@lunora/values` (`v.*`)                  |
+| Auth                | Convex Auth, Clerk, etc. | `@lunora/auth` (built-in)                 |
 | Scheduled functions | `ctx.scheduler.runAfter` | `ctx.scheduler.runAfter` (same shape)     |
 | File storage        | `ctx.storage`            | `ctx.storage` (backed by R2)              |
 | Subscriptions       | WebSocket                | WebSocket (Durable Object hibernated)     |
-| Deploy              | `npx convex deploy`      | `cirrus deploy` (wraps `wrangler deploy`) |
+| Deploy              | `npx convex deploy`      | `lunora deploy` (wraps `wrangler deploy`) |
 
 ## Schema
 
 The DSL is the same. `defineSchema` and `defineTable` come from
-`@cirrus/server`, indexes use the same `(name, fields, { unique? })` shape,
+`@lunora/server`, indexes use the same `(name, fields, { unique? })` shape,
 validators are byte-compatible.
 
 Convex:
@@ -53,10 +53,10 @@ export default defineSchema({
 });
 ```
 
-Cirrus:
+Lunora:
 
 ```ts
-import { defineSchema, defineTable, v } from "@cirrus/server";
+import { defineSchema, defineTable, v } from "@lunora/server";
 
 export const schema = defineSchema({
     messages: defineTable({
@@ -69,7 +69,7 @@ export const schema = defineSchema({
 ```
 
 The two new keywords are `.shardBy(field)` and `.global()`. Convex hides this
-decision behind its hosted database; Cirrus surfaces it because **the answer
+decision behind its hosted database; Lunora surfaces it because **the answer
 determines which Durable Object owns the row**. See
 [Concepts: sharding](/docs/concepts/sharding) for the decision tree.
 
@@ -94,10 +94,10 @@ export const list = query({
 });
 ```
 
-Cirrus:
+Lunora:
 
 ```ts
-import { mutation, query, v } from "@cirrus/server";
+import { mutation, query, v } from "@lunora/server";
 
 export const list = query({
     args: { channelId: v.id("channels") },
@@ -110,7 +110,7 @@ export const list = query({
 });
 ```
 
-Single import path (`@cirrus/server`) instead of two
+Single import path (`@lunora/server`) instead of two
 (`./_generated/server` + `convex/values`). The body is identical.
 
 ## React
@@ -120,9 +120,9 @@ Single import path (`@cirrus/server`) instead of two
 import { useMutation, useQuery } from "convex/react";
 import { api } from "../convex/_generated/api";
 
-// Cirrus
-import { useMutation, useQuery } from "@cirrus/react";
-import { api } from "../cirrus/_generated/api";
+// Lunora
+import { useMutation, useQuery } from "@lunora/react";
+import { api } from "../lunora/_generated/api";
 ```
 
 Hook signatures match: `useQuery(api.file.fn, args)` returns `undefined`
@@ -131,21 +131,21 @@ typed function. `usePaginatedQuery` and `useAction` mirror Convex too.
 
 ## Auth
 
-Convex pairs with external providers (Clerk, Auth0, Convex Auth). Cirrus
-ships [`@cirrus/auth`](/docs/addons/auth) — an opt-in add-on that handles
+Convex pairs with external providers (Clerk, Auth0, Convex Auth). Lunora
+ships [`@lunora/auth`](/docs/addons/auth) — an opt-in add-on that handles
 sessions, password and OAuth flows, and rotating refresh tokens inside a
 `SessionDO`. The `ctx.auth` shape is the same.
 
 ## Scheduler
 
 `ctx.scheduler.runAfter(ms, fn, args)` works identically. Under the hood
-Cirrus persists the schedule in a `SchedulerDO` instead of Convex's hosted
+Lunora persists the schedule in a `SchedulerDO` instead of Convex's hosted
 queue.
 
 ## File storage
 
 `ctx.storage.generateUploadUrl()` / `ctx.storage.getUrl(id)` mirror the
-Convex shape. Cirrus backs them with **R2** — uploads go straight to R2 via
+Convex shape. Lunora backs them with **R2** — uploads go straight to R2 via
 a presigned URL, downloads stream from the Worker.
 
 ## Subscriptions
@@ -153,55 +153,55 @@ a presigned URL, downloads stream from the Worker.
 Both products implement the same observable mental model: a query is a
 subscription, mutations broadcast deltas, the client re-renders. The
 difference is the routing layer — Convex broadcasts via its hosted service,
-Cirrus broadcasts via the owning Durable Object using WebSocket hibernation
+Lunora broadcasts via the owning Durable Object using WebSocket hibernation
 so idle subscribers cost zero CPU. See [Real-time](/docs/concepts/realtime).
 
 ## Porting checklist
 
 1. **Move files**:
-    - `convex/` → `cirrus/`
-    - `convex/schema.ts` exports default → `cirrus/schema.ts` exports `schema`
+    - `convex/` → `lunora/`
+    - `convex/schema.ts` exports default → `lunora/schema.ts` exports `schema`
 2. **Rewrite imports**:
-    - `convex/server` → `@cirrus/server`
-    - `convex/values` → `@cirrus/server` (or `@cirrus/values`)
-    - `convex/react` → `@cirrus/react`
-    - `./_generated/server` → `@cirrus/server`
-    - `../convex/_generated/api` → `../cirrus/_generated/api`
+    - `convex/server` → `@lunora/server`
+    - `convex/values` → `@lunora/server` (or `@lunora/values`)
+    - `convex/react` → `@lunora/react`
+    - `./_generated/server` → `@lunora/server`
+    - `../convex/_generated/api` → `../lunora/_generated/api`
 3. **Decide sharding**: every table needs `.global()`, `.shardBy(field)`, or
    neither (stays in `__root__`). Start with neither; promote when you hit
    the 1 GiB warning. Details: [Sharding](/docs/concepts/sharding).
 4. **Generate the initial migration**: any `.global()` table needs an
    `INSERT INTO channels … FROM <exported.jsonl>` step. Run
-   `cirrus migrate generate init` to get the schema SQL, then add a
+   `lunora migrate generate init` to get the schema SQL, then add a
    one-off data-import migration alongside it.
 5. **Export Convex data**: `npx convex export` produces a JSONL dump per
    table. Reshape it to your new schema (drop `_creationTime` if you don't
-   need it; Cirrus uses `createdAt` columns you populate yourself), then
-   batch-insert via a Cirrus mutation or a `cirrus run` script.
+   need it; Lunora uses `createdAt` columns you populate yourself), then
+   batch-insert via a Lunora mutation or a `lunora run` script.
 6. **Wire the React provider**: replace `<ConvexProvider client={…}>` with
-   `<CirrusProvider client={createCirrusClient({ url })}>`. URL is your
+   `<LunoraProvider client={createLunoraClient({ url })}>`. URL is your
    Worker's `*.workers.dev` hostname.
-7. **Deploy**: `cirrus deploy` builds, runs migrations, calls
+7. **Deploy**: `lunora deploy` builds, runs migrations, calls
    `wrangler deploy`. Your data plane is now in your own Cloudflare account.
 
 ## Caveats
 
 - **No transactions across shards**. A mutation runs inside one Durable
   Object; cross-shard writes need a saga or an action that fans out. Convex
-  gives you cross-document transactions inside its DB; Cirrus doesn't.
+  gives you cross-document transactions inside its DB; Lunora doesn't.
 - **D1 eventual consistency on replicas**. Reads from `.global()` tables
   use the D1 Sessions API. Pass the `x-d1-bookmark` header to get
   read-your-writes; otherwise you may read a slightly stale replica.
 - **Self-hosted studio, not managed**. There's no hosted control plane like
-  Convex's. Instead `@cirrus/studio` ships a first-party studio that
-  `cirrus dev` serves at `/__cirrus` (data browser, function runner, metrics,
-  migrations, scheduled jobs, and more) — gated by your own `CIRRUS_ADMIN_TOKEN`.
-  Cloudflare's DO browser, the D1 console, and `cirrus run` remain available for
-  ad-hoc work. See [@cirrus/studio](/docs/addons/studio).
+  Convex's. Instead `@lunora/studio` ships a first-party studio that
+  `lunora dev` serves at `/__lunora` (data browser, function runner, metrics,
+  migrations, scheduled jobs, and more) — gated by your own `LUNORA_ADMIN_TOKEN`.
+  Cloudflare's DO browser, the D1 console, and `lunora run` remain available for
+  ad-hoc work. See [@lunora/studio](/docs/addons/studio).
 
 ## See also
 
 - [Concepts: schema](/docs/concepts/schema)
 - [Concepts: sharding](/docs/concepts/sharding)
-- [@cirrus/cli](/docs/api/cli) — `cirrus migrate generate`, `cirrus run`
+- [@lunora/cli](/docs/api/cli) — `lunora migrate generate`, `lunora run`
 - [Architecture](/docs/architecture)

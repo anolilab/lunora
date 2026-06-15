@@ -32,7 +32,7 @@ let workdir: string;
 
 describe("detectFramework (CLI)", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-detect-"));
+        workdir = mkdtempSync(join(tmpdir(), "lunora-detect-"));
     });
 
     it("detects tanstack-start as class A with the react adapter", () => {
@@ -40,7 +40,7 @@ describe("detectFramework (CLI)", () => {
 
         writePackageJson(workdir, { "@tanstack/react-start": "^1.95.0" });
 
-        expect(detectFramework(workdir)).toStrictEqual({ adapter: "@cirrus/react", class: "A", framework: "tanstack-start" });
+        expect(detectFramework(workdir)).toStrictEqual({ adapter: "@lunora/react", class: "A", framework: "tanstack-start" });
     });
 
     it("detects react-router as class A with the react adapter", () => {
@@ -48,7 +48,7 @@ describe("detectFramework (CLI)", () => {
 
         writePackageJson(workdir, { "@react-router/dev": "^7.0.0" });
 
-        expect(detectFramework(workdir)).toStrictEqual({ adapter: "@cirrus/react", class: "A", framework: "react-router" });
+        expect(detectFramework(workdir)).toStrictEqual({ adapter: "@lunora/react", class: "A", framework: "react-router" });
     });
 
     it("detects solid-start as class A with the solid adapter", () => {
@@ -56,7 +56,7 @@ describe("detectFramework (CLI)", () => {
 
         writePackageJson(workdir, { "@solidjs/start": "^1.1.0" });
 
-        expect(detectFramework(workdir)).toStrictEqual({ adapter: "@cirrus/solid", class: "A", framework: "solid-start" });
+        expect(detectFramework(workdir)).toStrictEqual({ adapter: "@lunora/solid", class: "A", framework: "solid-start" });
     });
 
     it("detects sveltekit as class B with the svelte adapter", () => {
@@ -64,7 +64,7 @@ describe("detectFramework (CLI)", () => {
 
         writePackageJson(workdir, { "@sveltejs/kit": "^2.0.0" });
 
-        expect(detectFramework(workdir)).toStrictEqual({ adapter: "@cirrus/svelte", class: "B", framework: "sveltekit" });
+        expect(detectFramework(workdir)).toStrictEqual({ adapter: "@lunora/svelte", class: "B", framework: "sveltekit" });
     });
 
     it("detects nuxt as class B with the vue adapter", () => {
@@ -72,7 +72,7 @@ describe("detectFramework (CLI)", () => {
 
         writePackageJson(workdir, { nuxt: "^3.14.0" });
 
-        expect(detectFramework(workdir)).toStrictEqual({ adapter: "@cirrus/vue", class: "B", framework: "nuxt" });
+        expect(detectFramework(workdir)).toStrictEqual({ adapter: "@lunora/vue", class: "B", framework: "nuxt" });
     });
 
     it("falls back to standalone (class C) for an unknown framework", () => {
@@ -80,12 +80,12 @@ describe("detectFramework (CLI)", () => {
 
         writePackageJson(workdir, { lodash: "^4.0.0" });
 
-        expect(detectFramework(workdir)).toStrictEqual({ adapter: "@cirrus/react", class: "C", framework: "none" });
+        expect(detectFramework(workdir)).toStrictEqual({ adapter: "@lunora/react", class: "C", framework: "none" });
     });
 
     it("falls back to standalone when package.json is missing", () => {
         expect.assertions(1);
-        expect(detectFramework(workdir)).toStrictEqual({ adapter: "@cirrus/react", class: "C", framework: "none" });
+        expect(detectFramework(workdir)).toStrictEqual({ adapter: "@lunora/react", class: "C", framework: "none" });
     });
 
     it("never throws on a malformed package.json", () => {
@@ -93,20 +93,20 @@ describe("detectFramework (CLI)", () => {
 
         writeFileSync(join(workdir, "package.json"), "{ not valid json", "utf8");
 
-        expect(detectFramework(workdir)).toStrictEqual({ adapter: "@cirrus/react", class: "C", framework: "none" });
+        expect(detectFramework(workdir)).toStrictEqual({ adapter: "@lunora/react", class: "C", framework: "none" });
     });
 });
 
-describe("cirrus init --here", () => {
+describe("lunora init --here", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-here-"));
+        workdir = mkdtempSync(join(tmpdir(), "lunora-here-"));
     });
 
     afterEach(() => {
         // best-effort; tmp dirs are reaped by the OS
     });
 
-    it("class A (tanstack-start): patches vite config, scaffolds cirrus/, prints react adapter + httpRouter steps", async () => {
+    it("class A (tanstack-start): patches vite config, scaffolds lunora/, prints react adapter + httpRouter steps", async () => {
         expect.assertions(7);
 
         writePackageJson(workdir, { "@tanstack/react-start": "^1.95.0" });
@@ -116,21 +116,21 @@ describe("cirrus init --here", () => {
         const result = await runInitCommand({ cwd: workdir, inPlace: true, logger });
 
         expect(result.code).toBe(0);
-        expect(existsSync(join(workdir, "cirrus", "schema.ts"))).toBe(true);
-        expect(existsSync(join(workdir, "cirrus", "messages.ts"))).toBe(true);
+        expect(existsSync(join(workdir, "lunora", "schema.ts"))).toBe(true);
+        expect(existsSync(join(workdir, "lunora", "messages.ts"))).toBe(true);
 
         const vite = readFileSync(join(workdir, "vite.config.ts"), "utf8");
 
-        expect(vite).toContain("@cirrus/vite");
+        expect(vite).toContain("@lunora/vite");
 
         const log = logger.lines.join("\n");
 
         expect(log).toContain("class A");
-        expect(log).toContain("@cirrus/react");
+        expect(log).toContain("@lunora/react");
         expect(log).toContain("httpRouter");
     });
 
-    it("class B (sveltekit): scaffolds cirrus/ without a vite.config and prints svelte adapter + hook-injection steps", async () => {
+    it("class B (sveltekit): scaffolds lunora/ without a vite.config and prints svelte adapter + hook-injection steps", async () => {
         expect.assertions(5);
 
         writePackageJson(workdir, { "@sveltejs/kit": "^2.0.0" });
@@ -140,17 +140,17 @@ describe("cirrus init --here", () => {
         const result = await runInitCommand({ cwd: workdir, inPlace: true, logger });
 
         expect(result.code).toBe(0);
-        expect(existsSync(join(workdir, "cirrus", "schema.ts"))).toBe(true);
+        expect(existsSync(join(workdir, "lunora", "schema.ts"))).toBe(true);
         // Class B without a vite config must NOT drop a standalone vite.config.ts.
         expect(existsSync(join(workdir, "vite.config.ts"))).toBe(false);
 
         const log = logger.lines.join("\n");
 
-        expect(log).toContain("@cirrus/svelte");
-        expect(log).toContain("/_cirrus/*");
+        expect(log).toContain("@lunora/svelte");
+        expect(log).toContain("/_lunora/*");
     });
 
-    it("class C (no framework, no vite config): creates a minimal vite.config and scaffolds cirrus/", async () => {
+    it("class C (no framework, no vite config): creates a minimal vite.config and scaffolds lunora/", async () => {
         expect.assertions(4);
 
         writePackageJson(workdir, { lodash: "^4.0.0" });
@@ -160,14 +160,14 @@ describe("cirrus init --here", () => {
 
         expect(result.code).toBe(0);
         expect(existsSync(join(workdir, "vite.config.ts"))).toBe(true);
-        expect(existsSync(join(workdir, "cirrus", "schema.ts"))).toBe(true);
+        expect(existsSync(join(workdir, "lunora", "schema.ts"))).toBe(true);
 
         const vite = readFileSync(join(workdir, "vite.config.ts"), "utf8");
 
-        expect(vite).toContain("cirrus()");
+        expect(vite).toContain("lunora()");
     });
 
-    it("is idempotent: re-running does not double-patch the vite config or clobber cirrus/schema.ts", async () => {
+    it("is idempotent: re-running does not double-patch the vite config or clobber lunora/schema.ts", async () => {
         expect.assertions(4);
 
         writePackageJson(workdir, { "@tanstack/react-start": "^1.95.0" });
@@ -176,7 +176,7 @@ describe("cirrus init --here", () => {
         await runInitCommand({ cwd: workdir, inPlace: true, logger: capturingLogger() });
 
         // Hand-edit the scaffolded schema to prove the second run leaves it alone.
-        const schemaPath = join(workdir, "cirrus", "schema.ts");
+        const schemaPath = join(workdir, "lunora", "schema.ts");
 
         writeFileSync(schemaPath, "// hand edited\n", "utf8");
 
@@ -187,8 +187,8 @@ describe("cirrus init --here", () => {
 
         const vite = readFileSync(join(workdir, "vite.config.ts"), "utf8");
 
-        // Exactly one cirrus() call — no double-patch.
-        expect(vite.match(/cirrus\(\)/gu)?.length).toBe(1);
+        // Exactly one lunora() call — no double-patch.
+        expect(vite.match(/lunora\(\)/gu)?.length).toBe(1);
         // The hand-edited schema is preserved.
         expect(readFileSync(schemaPath, "utf8")).toBe("// hand edited\n");
         expect(logger.lines.join("\n")).toContain("already present");

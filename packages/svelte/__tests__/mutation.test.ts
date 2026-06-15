@@ -1,16 +1,16 @@
-import type { CirrusClient, FunctionReference } from "@cirrus/client";
+import type { LunoraClient, FunctionReference } from "@lunora/client";
 import { get } from "svelte/store";
 import { describe, expect, it, vi } from "vitest";
 
 import { mutation } from "../src/mutation";
 
-const fnRef = { __cirrusRef: "messages:send" } as unknown as FunctionReference;
+const fnRef = { __lunoraRef: "messages:send" } as unknown as FunctionReference;
 const args = { text: "hi" } as unknown;
 
 describe("mutation handle", () => {
     it("forwards args and options to client.mutation and resolves the result", async () => {
         const mutationFn = vi.fn().mockResolvedValue({ id: 1 });
-        const client = { mutation: mutationFn } as unknown as CirrusClient;
+        const client = { mutation: mutationFn } as unknown as LunoraClient;
 
         const { mutate } = mutation(client, fnRef);
         const result = await mutate(args, { shardKey: "general" });
@@ -27,7 +27,7 @@ describe("mutation handle", () => {
                     resolveCall = resolve;
                 }),
         );
-        const client = { mutation: mutationFn } as unknown as CirrusClient;
+        const client = { mutation: mutationFn } as unknown as LunoraClient;
 
         const { mutate, pending } = mutation(client, fnRef);
 
@@ -51,7 +51,7 @@ describe("mutation handle", () => {
                     resolvers.push(resolve);
                 }),
         );
-        const client = { mutation: mutationFn } as unknown as CirrusClient;
+        const client = { mutation: mutationFn } as unknown as LunoraClient;
 
         const { mutate, pending } = mutation(client, fnRef);
         const first = mutate(args);

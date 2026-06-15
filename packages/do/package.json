@@ -1,15 +1,15 @@
 {
-    "name": "@cirrus/do",
+    "name": "@lunora/do",
     "version": "0.0.0",
     "license": "FSL-1.1-Apache-2.0",
-    "description": "Cirrus Durable Objects: ShardDO (SQLite, OCC, hibernated WebSocket subscriptions) and SessionDO",
-    "homepage": "https://cirrus.dev",
+    "description": "Lunora Durable Objects: ShardDO (SQLite, OCC, hibernated WebSocket subscriptions) and SessionDO",
+    "homepage": "https://lunora.sh",
     "bugs": {
-        "url": "https://github.com/anolilab/cirrus/issues"
+        "url": "https://github.com/anolilab/lunora/issues"
     },
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/anolilab/cirrus.git",
+        "url": "git+https://github.com/anolilab/lunora.git",
         "directory": "packages/do"
     },
     "author": {
@@ -17,7 +17,7 @@
         "email": "d.bannert@anolilab.de"
     },
     "keywords": [
-        "cirrus",
+        "lunora",
         "cloudflare",
         "workers",
         "durable-objects",
@@ -61,7 +61,7 @@
         "drizzle-orm": "catalog:drizzle"
     },
     "devDependencies": {
-        "@cirrus/vectors": "workspace:*",
+        "@lunora/vectors": "workspace:*",
         "@cloudflare/vitest-pool-workers": "catalog:cloudflare",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@types/node": "catalog:types",

@@ -31,7 +31,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "..", "..", "..", "codegen", "__tests__", "fixtures", "simple");
 
 const VALID_WRANGLER = `{
-    "name": "cirrus-app",
+    "name": "lunora-app",
     "main": "src/index.ts",
     "compatibility_date": "2026-04-07",
     "compatibility_flags": ["nodejs_compat"],
@@ -67,17 +67,17 @@ const recordingLogger = (): { logger: Logger; recorded: Recorded } => {
 
 let workdir: string;
 
-describe("cirrus verify", () => {
+describe("lunora verify", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-cli-verify-"));
-        cpSync(join(fixtureRoot, "cirrus"), join(workdir, "cirrus"), { recursive: true });
+        workdir = mkdtempSync(join(tmpdir(), "lunora-cli-verify-"));
+        cpSync(join(fixtureRoot, "lunora"), join(workdir, "lunora"), { recursive: true });
     });
 
     afterEach(() => {
         rmSync(workdir, { force: true, recursive: true });
     });
 
-    describe("cirrus verify", () => {
+    describe("lunora verify", () => {
         it("returns 0 and writes nothing when wrangler + codegen are both valid", async () => {
             expect.assertions(4);
 
@@ -90,7 +90,7 @@ describe("cirrus verify", () => {
             expect(result.errors).toEqual([]);
             expect(recorded.successes.join("\n")).toContain("valid");
             // Dry-run must not have created the _generated/ directory.
-            expect(existsSync(join(workdir, "cirrus", "_generated"))).toBe(false);
+            expect(existsSync(join(workdir, "lunora", "_generated"))).toBe(false);
         });
 
         it("returns 1 and surfaces wrangler errors", async () => {
@@ -118,7 +118,7 @@ describe("cirrus verify", () => {
             expect.assertions(2);
 
             writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
-            writeFileSync(join(workdir, "cirrus", "schema.ts"), "this is not valid typescript syntax {{{", "utf8");
+            writeFileSync(join(workdir, "lunora", "schema.ts"), "this is not valid typescript syntax {{{", "utf8");
             const { logger } = recordingLogger();
 
             const result = await runVerifyCommand({ cwd: workdir, logger });

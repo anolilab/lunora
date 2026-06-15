@@ -24,13 +24,13 @@ const TERMINAL_METHODS = new Set(["action", "mutation", "query", "stream"]);
 /** A JS identifier, so a generated symbol/file name can't inject arbitrary text. */
 const IDENTIFIER_PATTERN = /^[A-Za-z_$][\w$]*$/u;
 
-/** Scaffold a new policy/role/permission stub file under `cirrus/`. */
+/** Scaffold a new policy/role/permission stub file under `lunora/`. */
 interface ScaffoldPolicyEdit {
     readonly kind: "scaffoldPolicy";
 
     /**
      * Base name for the generated file and its exported policy-set identifier,
-     * e.g. `invoices` → `cirrus/invoices.policies.ts` exporting `invoicesPolicies`.
+     * e.g. `invoices` → `lunora/invoices.policies.ts` exporting `invoicesPolicies`.
      */
     readonly name: string;
     /** Logical table the scaffolded policy guards (used in the stub body). */
@@ -102,10 +102,10 @@ const scaffoldPolicyFile = (edit: ScaffoldPolicyEdit): ScaffoldFileResult => {
     const rolesIdentifier = `${edit.name}Roles`;
     const table = JSON.stringify(edit.table);
 
-    const source = `import { definePermission, definePolicies, definePolicy, defineRole } from "@cirrus/server";
+    const source = `import { definePermission, definePolicies, definePolicy, defineRole } from "@lunora/server";
 
 /**
- * Access rules for the ${edit.table} table — scaffolded by the Cirrus studio
+ * Access rules for the ${edit.table} table — scaffolded by the Lunora studio
  * (plan 025). The \`when\` predicates below DENY by default (\`() => false\`);
  * replace each TODO with the real condition, then wire \`${policiesIdentifier}\`
  * into the procedures that read/write ${edit.table} via
@@ -147,17 +147,17 @@ const builderReceiver = (initializer: CallExpression): Node | undefined => {
 };
 
 /**
- * Ensure `rls` is imported from `@cirrus/server`, so the appended
+ * Ensure `rls` is imported from `@lunora/server`, so the appended
  * `.use(rls(...))` resolves and codegen keeps recognising the procedure. Adds
- * `rls` to an existing `@cirrus/server` import, or inserts a fresh import; a
+ * `rls` to an existing `@lunora/server` import, or inserts a fresh import; a
  * no-op when it is already imported. Purely additive — never touches other
  * specifiers or imports.
  */
 const ensureRlsImport = (sourceFile: SourceFile): void => {
-    const serverImport = sourceFile.getImportDeclaration((declaration) => declaration.getModuleSpecifierValue() === "@cirrus/server");
+    const serverImport = sourceFile.getImportDeclaration((declaration) => declaration.getModuleSpecifierValue() === "@lunora/server");
 
     if (serverImport === undefined) {
-        sourceFile.addImportDeclaration({ moduleSpecifier: "@cirrus/server", namedImports: ["rls"] });
+        sourceFile.addImportDeclaration({ moduleSpecifier: "@lunora/server", namedImports: ["rls"] });
 
         return;
     }
@@ -240,7 +240,7 @@ const wireRlsIntoProcedure = (source: string, edit: WireRlsEdit): WireResult => 
     receiver.replaceWithText(`${receiver.getText()}.use(rls(${edit.policies}))`);
 
     // Keep the file compiling: the appended call references `rls`, which must
-    // come from `@cirrus/server` for codegen to still recognise the procedure.
+    // come from `@lunora/server` for codegen to still recognise the procedure.
     ensureRlsImport(sourceFile);
 
     return { ok: true, text: sourceFile.getFullText() };

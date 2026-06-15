@@ -17,7 +17,7 @@ type Mode = "scaffold" | "wire" | null;
 interface ScaffolderForm {
     /** Wire form: exported procedure name to wire. */
     readonly exportName: string;
-    /** Wire form: cirrus-relative module path of the procedure file. */
+    /** Wire form: lunora-relative module path of the procedure file. */
     readonly filePath: string;
     /** Wire form: identifier of the policy set passed to `rls(...)`. */
     readonly policies: string;
@@ -49,7 +49,7 @@ const PolicyScaffolder = (): ReactElement => {
     const [busy, setBusy] = useState<boolean>(false);
     const [result, setResult] = useState<PolicyScaffoldResult | null>(null);
 
-    // One form object across both modes. `filePath` is the cirrus-relative module
+    // One form object across both modes. `filePath` is the lunora-relative module
     // path (no extension); it is explicit rather than derived from a function's
     // path because the generated registry key sanitizes nested directories
     // (`a/b` → `a_b`).
@@ -113,7 +113,7 @@ const PolicyScaffolder = (): ReactElement => {
             <CardHeader>
                 <CardTitle>{t("Scaffold access rules")}</CardTitle>
                 <CardDescription>
-                    {t("Writes a new deny-by-default policy file under cirrus/, or wires one into a procedure, then reruns codegen. Local dev only.")}
+                    {t("Writes a new deny-by-default policy file under lunora/, or wires one into a procedure, then reruns codegen. Local dev only.")}
                 </CardDescription>
             </CardHeader>
             <CardContent>

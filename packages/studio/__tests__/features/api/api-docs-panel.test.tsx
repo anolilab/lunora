@@ -1,4 +1,4 @@
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -39,9 +39,9 @@ const createClient = (): MockClientHooks =>
     });
 
 const renderPanel = (mock: MockClientHooks): ReactElement => (
-    <CirrusProvider client={mock.asClient}>
+    <LunoraProvider client={mock.asClient}>
         <ApiDocsPanel functions={FUNCTIONS} />
-    </CirrusProvider>
+    </LunoraProvider>
 );
 
 describe("snippet builders", () => {
@@ -78,7 +78,7 @@ describe("snippet builders", () => {
     it("builds the CLI snippet", () => {
         expect.assertions(1);
 
-        expect(buildCliSnippet({ file: "messages", fn: "list", kind: "query" })).toBe("cirrus run messages:list --args '{ }'");
+        expect(buildCliSnippet({ file: "messages", fn: "list", kind: "query" })).toBe("lunora run messages:list --args '{ }'");
     });
 
     it("builds the typed data-model snippet for a table", () => {
@@ -140,7 +140,7 @@ describe("apiDocsPanel", () => {
 
         fireEvent.click(screen.getByTestId("api-tab-cli"));
 
-        expect(screen.getByTestId("api-snippet-cli").textContent).toContain("cirrus run messages:list --args");
+        expect(screen.getByTestId("api-snippet-cli").textContent).toContain("lunora run messages:list --args");
     });
 
     it("notes the action fallback on the React tab", () => {

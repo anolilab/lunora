@@ -33,12 +33,12 @@ const fakeIndex = (overrides: Partial<VectorizeIndexLike> = {}): VectorizeIndexL
 };
 
 describe("createContextVectors", () => {
-    it("upsert + upsertNow both call cirrus.upsert inline and return void", async () => {
+    it("upsert + upsertNow both call lunora.upsert inline and return void", async () => {
         expect.assertions(4);
 
         const index = fakeIndex();
-        const cirrus = createVectors({ indexes: { docs: index } });
-        const context = createContextVectors(cirrus);
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora);
         const embed = async (value: string): Promise<ReadonlyArray<number>> => [value.length];
 
         await expect(context.upsert("docs", { embed, id: "a", input: "hello", metadata: { t: 1 } })).resolves.toBeUndefined();
@@ -51,8 +51,8 @@ describe("createContextVectors", () => {
     it("query maps Vectorize matches to the server match shape", async () => {
         expect.assertions(1);
 
-        const cirrus = createVectors({ indexes: { docs: fakeIndex() } });
-        const context = createContextVectors(cirrus);
+        const lunora = createVectors({ indexes: { docs: fakeIndex() } });
+        const context = createContextVectors(lunora);
 
         const result = await context.query("docs", { vector: [0.1, 0.2] });
 
@@ -63,8 +63,8 @@ describe("createContextVectors", () => {
         expect.assertions(1);
 
         const index = fakeIndex();
-        const cirrus = createVectors({ indexes: { docs: index } });
-        const context = createContextVectors(cirrus);
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora);
 
         await context.query("docs", { vector: [0.1] });
 
@@ -76,8 +76,8 @@ describe("createContextVectors", () => {
     it("getByIds maps Vectorize vectors to the server record shape", async () => {
         expect.assertions(1);
 
-        const cirrus = createVectors({ indexes: { docs: fakeIndex() } });
-        const context = createContextVectors(cirrus);
+        const lunora = createVectors({ indexes: { docs: fakeIndex() } });
+        const context = createContextVectors(lunora);
 
         const records = await context.getByIds("docs", ["a"]);
 
@@ -88,8 +88,8 @@ describe("createContextVectors", () => {
         expect.assertions(2);
 
         const index = fakeIndex();
-        const cirrus = createVectors({ indexes: { docs: index } });
-        const context = createContextVectors(cirrus);
+        const lunora = createVectors({ indexes: { docs: index } });
+        const context = createContextVectors(lunora);
 
         await expect(context.deleteByIds("docs", ["a", "b"])).resolves.toBeUndefined();
         expect(index.deleteByIds).toHaveBeenCalledWith(["a", "b"]);

@@ -1,5 +1,5 @@
 /**
- * AST-merge helper for `cirrus-table` — kept in `_helpers/` so the tests
+ * AST-merge helper for `lunora-table` — kept in `_helpers/` so the tests
  * under `tests/vis-templates/` can import it without pulling in the vis
  * runtime (`@visulima/vis/generate`).
  */

@@ -1,6 +1,6 @@
-/* eslint-disable no-underscore-dangle -- `_id` is the Cirrus document-id field this binding keys rows by */
+/* eslint-disable no-underscore-dangle -- `_id` is the Lunora document-id field this binding keys rows by */
 /* eslint-disable import/exports-last -- a types-heavy module: public types are declared next to the helpers they build on */
-import type { CirrusClient, FunctionReference } from "@cirrus/client";
+import type { LunoraClient, FunctionReference } from "@lunora/client";
 import type { Collection, Transaction } from "@tanstack/db";
 import { BTreeIndex, createCollection } from "@tanstack/db";
 import type { OfflineConfig, OfflineExecutor } from "@tanstack/offline-transactions";
@@ -25,7 +25,7 @@ type RowOfList<TList> = IsAny<TList> extends true ? Row : TList extends Function
 
 /** Maps a write through the durable outbox: optimistic insert + a retried mutation. */
 export interface InsertBinding<TRow extends Row, TInput> {
-    /** The Cirrus mutation that persists the row. */
+    /** The Lunora mutation that persists the row. */
     mutation: FunctionReference;
     /** Build the optimistic row to insert from the action input + the generated client id. */
     optimistic: (input: TInput, id: string) => TRow;
@@ -33,14 +33,14 @@ export interface InsertBinding<TRow extends Row, TInput> {
     toArgs: (row: TRow) => Record<string, unknown>;
 }
 
-/** Declarative binding of a Cirrus table to a live collection (+ optional write action). */
+/** Declarative binding of a Lunora table to a live collection (+ optional write action). */
 // eslint-disable-next-line unicorn/prevent-abbreviations -- "Def" reads well for a declarative collection definition; "Definition" is noise
 export interface CollectionDef<TList extends FunctionReference, TInput = never> {
     /** Row key extractor — defaults to `row._id`. */
     getKey?: (row: RowOfList<TList>) => string;
     /** Optional write binding — present iff this collection is written through the outbox. */
     insert?: InsertBinding<RowOfList<TList>, TInput>;
-    /** The Cirrus query that lists the rows (the sync source). */
+    /** The Lunora query that lists the rows (the sync source). */
     list: TList;
     /** A field that scopes the list (e.g. a shard key); makes the collection re-pointable via `scope`. */
     scopeBy?: string;
@@ -64,8 +64,8 @@ type RowOf<C extends AnyDef> = C["list"] extends FunctionReference<infer _K, inf
 type InputOf<C> = C extends { insert: { optimistic: (input: infer I, id: string) => unknown } } ? I : never;
 
 /** The wired data layer `defineCollections` returns. */
-// eslint-disable-next-line unicorn/prevent-abbreviations -- "Db" matches the package name `@cirrus/db`
-export interface CirrusDb<D extends Record<string, AnyDef>> {
+// eslint-disable-next-line unicorn/prevent-abbreviations -- "Db" matches the package name `@lunora/db`
+export interface LunoraDb<D extends Record<string, AnyDef>> {
     /** Optimistic, durable, retried write actions — present for `insert` collections. */
     actions: { [K in keyof D]: D[K] extends { insert: object } ? (input: InputOf<D[K]>) => { id: string; transaction: Transaction } : never };
     /** The live, synced collections — feed these to `useLiveQuery`. */
@@ -77,16 +77,16 @@ export interface CirrusDb<D extends Record<string, AnyDef>> {
 }
 
 /**
- * Wire a set of Cirrus tables into a TanStack DB data layer in one declaration:
+ * Wire a set of Lunora tables into a TanStack DB data layer in one declaration:
  * each entry becomes a live, auto-indexed collection synced from its `list` query,
  * and `insert` entries get an optimistic write action backed by the
  * offline-transactions outbox (durable, retried, client-id-keyed). Scoped
  * (`scopeBy`) collections are re-pointable for sharded queries.
  *
- * This is the hand-written form; `@cirrus/codegen` can emit a fully-typed call to
+ * This is the hand-written form; `@lunora/codegen` can emit a fully-typed call to
  * it from `schema.ts`, so an app writes nothing.
  */
-export const defineCollections = <D extends Record<string, AnyDef>>(client: CirrusClient, defs: D): CirrusDb<D> => {
+export const defineCollections = <D extends Record<string, AnyDef>>(client: LunoraClient, defs: D): LunoraDb<D> => {
     const collections: Record<string, Collection<Row, string>> = {};
     const scope: Record<string, (args?: Record<string, unknown>) => void> = {};
     const subscriptions: Record<string, (() => void) | undefined> = {};
@@ -193,5 +193,5 @@ export const defineCollections = <D extends Record<string, AnyDef>>(client: Cirr
         };
     }
 
-    return { actions, collections, executor, scope } as unknown as CirrusDb<D>;
+    return { actions, collections, executor, scope } as unknown as LunoraDb<D>;
 };

@@ -19,7 +19,7 @@ const element = (
     <html lang="en">
         <body>
             <h1>Welcome, Alice!</h1>
-            <p>Thanks for joining Cirrus. We are glad to have you on board.</p>
+            <p>Thanks for joining Lunora. We are glad to have you on board.</p>
             <ul>
                 <li>Set up your profile</li>
                 <li>Invite your team</li>

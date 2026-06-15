@@ -1,4 +1,4 @@
-import { useCirrus } from "@cirrus/react";
+import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useCallback, useMemo } from "react";
 
@@ -15,7 +15,7 @@ interface OpenRpcReferencePanelProps {
      * Inline OpenRPC document. When supplied the panel renders it directly and
      * skips the fetch — used by the mock harness and by hosts that already hold
      * the generated spec. When omitted the panel fetches the worker's
-     * admin-gated `GET /_cirrus/admin/openrpc` endpoint via the client.
+     * admin-gated `GET /_lunora/admin/openrpc` endpoint via the client.
      */
     readonly spec?: unknown;
 }
@@ -35,18 +35,18 @@ const classifyDocument = (spec: unknown): SpecFetchState<OpenRpcDocument> => {
 
 /**
  * In-studio OpenRPC reference. OpenRPC is the RPC-native spec (a `methods` array
- * over the JSON-RPC-shaped `POST /_cirrus/rpc` transport), documenting the RPC
+ * over the JSON-RPC-shaped `POST /_lunora/rpc` transport), documenting the RPC
  * functions only. It is parsed into the shared `ApiModel` and rendered by the
  * same studio-native {@link ReferenceView} the OpenAPI panel uses, so both
  * formats share one operation browser, schema view, try-it console, and sample
  * rail.
  *
  * The spec comes from an inline {@link OpenRpcReferencePanelProps.spec} prop, or
- * — by default — the worker's admin-gated `GET /_cirrus/admin/openrpc` endpoint.
+ * — by default — the worker's admin-gated `GET /_lunora/admin/openrpc` endpoint.
  */
 const OpenRpcReferencePanel = ({ spec: inlineSpec }: OpenRpcReferencePanelProps): ReactElement => {
     const t = useT();
-    const client = useCirrus();
+    const client = useLunora();
 
     const fetchOpenRpc = useCallback(() => client.fetchOpenRpc(), [client]);
     const state = useAdminSpec<OpenRpcDocument>(inlineSpec, fetchOpenRpc, classifyDocument);
@@ -76,7 +76,7 @@ const OpenRpcReferencePanel = ({ spec: inlineSpec }: OpenRpcReferencePanelProps)
         return (
             <EmptyState
                 description={t(
-                    "Run `cirrus codegen --api-spec openrpc` and wire `_generated/openrpc.json` to the worker to render the OpenRPC reference here.",
+                    "Run `lunora codegen --api-spec openrpc` and wire `_generated/openrpc.json` to the worker to render the OpenRPC reference here.",
                 )}
                 testId="openrpc-reference-empty"
                 title={t("No OpenRPC spec configured")}

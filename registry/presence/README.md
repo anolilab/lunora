@@ -1,25 +1,25 @@
 # presence
 
-Collaborative-awareness presence for Cirrus — the "who's here" + cursors primitive (Convex [`@convex-dev/presence`](https://www.npmjs.com/package/@convex-dev/presence) parity). A room (a document, board, or channel) and the set of users/sessions currently looking at it, each carrying an optional awareness `data` blob (cursor, selection, name, color…).
+Collaborative-awareness presence for Lunora — the "who's here" + cursors primitive (Convex [`@convex-dev/presence`](https://www.npmjs.com/package/@convex-dev/presence) parity). A room (a document, board, or channel) and the set of users/sessions currently looking at it, each carrying an optional awareness `data` blob (cursor, selection, name, color…).
 
-Built entirely from primitives Cirrus already has — a live-query table plus a read-time TTL filter — so there's no new package and no Durable-Object-level support to enable.
+Built entirely from primitives Lunora already has — a live-query table plus a read-time TTL filter — so there's no new package and no Durable-Object-level support to enable.
 
 ## Install
 
 ```bash
-cirrus registry add presence
+lunora registry add presence
 ```
 
 This:
 
-1. Adds `@cirrus/server` to your `package.json` (run `pnpm install` afterwards).
-2. Copies `cirrus/presence/schema.ts` (the `present` table + the plugin) and `cirrus/presence/index.ts` (the `heartbeat` / `listPresent` / `sweep` functions) into your project — these are **yours** to edit.
-3. Splices a managed `.extend(presence.extension)` into `cirrus/schema.ts`, merging the `present` table in as **`presence_present`** (extension tables are auto-prefixed with the plugin key).
+1. Adds `@lunora/server` to your `package.json` (run `pnpm install` afterwards).
+2. Copies `lunora/presence/schema.ts` (the `present` table + the plugin) and `lunora/presence/index.ts` (the `heartbeat` / `listPresent` / `sweep` functions) into your project — these are **yours** to edit.
+3. Splices a managed `.extend(presence.extension)` into `lunora/schema.ts`, merging the `present` table in as **`presence_present`** (extension tables are auto-prefixed with the plugin key).
 
 Then regenerate types:
 
 ```bash
-cirrus codegen
+lunora codegen
 ```
 
 The functions surface in the generated `api` as `presence/heartbeat`, `presence/listPresent`, and `presence/sweep` — i.e. `api.presence.heartbeat` and friends.
@@ -30,16 +30,16 @@ The functions surface in the generated `api` as `presence/heartbeat`, `presence/
 - **listPresent** (query) returns the non-expired members of a room, newest first. It filters `lastSeen > now - PRESENCE_TTL_MS` at read time, so a client that stops heart-beating silently drops out — **no reaper needed**.
 - **sweep** (internal mutation) hard-deletes expired rows to reclaim storage. It's _internal_ (server-only) so clients can't trigger bulk deletes; wire it to a cron or `runAfter` if your tables grow.
 
-Tune the time-to-live by editing `PRESENCE_TTL_MS` in `cirrus/presence/schema.ts` (default 30s). Keep your client heartbeat cadence well under it.
+Tune the time-to-live by editing `PRESENCE_TTL_MS` in `lunora/presence/schema.ts` (default 30s). Keep your client heartbeat cadence well under it.
 
 ## Use it from React
 
-The client half ships in `@cirrus/react` as the `usePresence` hook — it calls `heartbeat` on an interval (and on tab-visibility changes) and subscribes to `listPresent`:
+The client half ships in `@lunora/react` as the `usePresence` hook — it calls `heartbeat` on an interval (and on tab-visibility changes) and subscribes to `listPresent`:
 
 ```tsx
-import { usePresence } from "@cirrus/react";
+import { usePresence } from "@lunora/react";
 
-import { api } from "../cirrus/_generated/api";
+import { api } from "../lunora/_generated/api";
 
 function Room({ roomId }: { roomId: string }) {
     const { present, setData } = usePresence(roomId, {
@@ -67,8 +67,8 @@ function Room({ roomId }: { roomId: string }) {
 `listPresent` never returns stale rows, so sweeping is purely about reclaiming storage. To run it, schedule the internal mutation from a cron:
 
 ```ts
-// cirrus/crons.ts
-import { cronJobs } from "@cirrus/server";
+// lunora/crons.ts
+import { cronJobs } from "@lunora/server";
 
 import { internal } from "./_generated/api";
 
@@ -81,4 +81,4 @@ export default crons;
 
 ## What you own
 
-Everything under `cirrus/presence/` is copied into your repo — change the TTL, the table columns (add a `name`/`color` column instead of stuffing them in `data`), the sort order, or the functions however you like. This component is the idiomatic Cirrus glue; once added, it's just your code.
+Everything under `lunora/presence/` is copied into your repo — change the TTL, the table columns (add a `name`/`color` column instead of stuffing them in `data`), the sort order, or the functions however you like. This component is the idiomatic Lunora glue; once added, it's just your code.

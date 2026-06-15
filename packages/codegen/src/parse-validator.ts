@@ -97,7 +97,7 @@ const parseObjectShape = (object: ObjectLiteralExpression): Record<string, Valid
         const fieldName = property.getName();
 
         if (!FIELD_NAME_RE.test(fieldName)) {
-            throw new Error(`@cirrus/codegen: field name is not a valid JS identifier: ${JSON.stringify(fieldName)}`);
+            throw new Error(`@lunora/codegen: field name is not a valid JS identifier: ${JSON.stringify(fieldName)}`);
         }
 
         out[fieldName] = parseValidator(initializer);

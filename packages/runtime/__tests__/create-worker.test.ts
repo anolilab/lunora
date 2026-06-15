@@ -60,13 +60,13 @@ describe("createWorker", () => {
         expect(res.status).toBe(404);
     });
 
-    it("forwards POST /_cirrus/rpc to the default __root__ shard", async () => {
+    it("forwards POST /_lunora/rpc to the default __root__ shard", async () => {
         expect.assertions(4);
 
         const worker = createWorker({ shardDO: shard.namespace });
 
         const res = await worker.fetch(
-            new Request("https://app.example/_cirrus/rpc", {
+            new Request("https://app.example/_lunora/rpc", {
                 body: JSON.stringify({ args: { limit: 5 }, functionPath: "messages:list" }),
                 method: "POST",
             }),
@@ -89,7 +89,7 @@ describe("createWorker", () => {
         const worker = createWorker({ shardDO: shard.namespace });
 
         await worker.fetch(
-            new Request("https://app.example/_cirrus/rpc", {
+            new Request("https://app.example/_lunora/rpc", {
                 body: JSON.stringify({ args: {}, functionPath: "messages:list", shardKey: "channel-42" }),
                 method: "POST",
             }),
@@ -106,7 +106,7 @@ describe("createWorker", () => {
         const worker = createWorker({ defaultShardKey: "tenant-1", shardDO: shard.namespace });
 
         await worker.fetch(
-            new Request("https://app.example/_cirrus/rpc", {
+            new Request("https://app.example/_lunora/rpc", {
                 body: JSON.stringify({ args: {}, functionPath: "x:y" }),
                 method: "POST",
             }),
@@ -122,7 +122,7 @@ describe("createWorker", () => {
 
         const worker = createWorker({ shardDO: shard.namespace });
 
-        const res = await worker.fetch(new Request("https://app.example/_cirrus/rpc"), {}, fakeContext);
+        const res = await worker.fetch(new Request("https://app.example/_lunora/rpc"), {}, fakeContext);
 
         expect(res.status).toBe(405);
         await expect(res.json()).resolves.toMatchObject({ error: { code: "METHOD_NOT_ALLOWED" } });
@@ -133,7 +133,7 @@ describe("createWorker", () => {
 
         const worker = createWorker({ shardDO: shard.namespace });
 
-        const res = await worker.fetch(new Request("https://app.example/_cirrus/rpc", { body: "{not json", method: "POST" }), {}, fakeContext);
+        const res = await worker.fetch(new Request("https://app.example/_lunora/rpc", { body: "{not json", method: "POST" }), {}, fakeContext);
 
         expect(res.status).toBe(400);
         await expect(res.json()).resolves.toMatchObject({ error: { code: "BAD_REQUEST" } });
@@ -144,17 +144,17 @@ describe("createWorker", () => {
 
         const worker = createWorker({ shardDO: shard.namespace });
 
-        const res = await worker.fetch(new Request("https://app.example/_cirrus/rpc", { body: JSON.stringify({ args: {} }), method: "POST" }), {}, fakeContext);
+        const res = await worker.fetch(new Request("https://app.example/_lunora/rpc", { body: JSON.stringify({ args: {} }), method: "POST" }), {}, fakeContext);
 
         expect(res.status).toBe(400);
     });
 
-    it("forwards /_cirrus/ws upgrades to the correct shard", async () => {
+    it("forwards /_lunora/ws upgrades to the correct shard", async () => {
         expect.assertions(2);
 
         const worker = createWorker({ shardDO: shard.namespace });
 
-        const upgrade = new Request("https://app.example/_cirrus/ws?shard=channel-7", {
+        const upgrade = new Request("https://app.example/_lunora/ws?shard=channel-7", {
             headers: { Upgrade: "websocket" },
         });
 
@@ -164,12 +164,12 @@ describe("createWorker", () => {
         expect(shard.calls[0]!.shardKey).toBe("channel-7");
     });
 
-    it("rejects /_cirrus/ws without upgrade header", async () => {
+    it("rejects /_lunora/ws without upgrade header", async () => {
         expect.assertions(1);
 
         const worker = createWorker({ shardDO: shard.namespace });
 
-        const res = await worker.fetch(new Request("https://app.example/_cirrus/ws?shard=x"), {}, fakeContext);
+        const res = await worker.fetch(new Request("https://app.example/_lunora/ws?shard=x"), {}, fakeContext);
 
         expect(res.status).toBe(426);
     });
@@ -200,7 +200,7 @@ describe("createWorker", () => {
         const worker = createWorker({ shardDO: namespace });
 
         await worker.fetch(
-            new Request("https://app.example/_cirrus/rpc", {
+            new Request("https://app.example/_lunora/rpc", {
                 body: JSON.stringify({ functionPath: "x:y", shardKey: "a" }),
                 method: "POST",
             }),
@@ -215,7 +215,7 @@ describe("createWorker", () => {
         expect(stub.fetch).toHaveBeenCalledWith(expect.any(Request));
     });
 
-    it("forwards resolveIdentity userId on the x-cirrus-userid header", async () => {
+    it("forwards resolveIdentity userId on the x-lunora-userid header", async () => {
         expect.assertions(2);
 
         const worker = createWorker({
@@ -226,7 +226,7 @@ describe("createWorker", () => {
         });
 
         await worker.fetch(
-            new Request("https://app.example/_cirrus/rpc", {
+            new Request("https://app.example/_lunora/rpc", {
                 body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
                 method: "POST",
             }),
@@ -234,8 +234,8 @@ describe("createWorker", () => {
             fakeContext,
         );
 
-        expect(shard.calls[0]!.request.headers.get("x-cirrus-userid")).toBe("user_42");
-        expect(shard.calls[0]!.request.headers.get("x-cirrus-identity")).toBeNull();
+        expect(shard.calls[0]!.request.headers.get("x-lunora-userid")).toBe("user_42");
+        expect(shard.calls[0]!.request.headers.get("x-lunora-identity")).toBeNull();
     });
 
     it("omits identity headers when resolveIdentity returns null", async () => {
@@ -247,7 +247,7 @@ describe("createWorker", () => {
         });
 
         await worker.fetch(
-            new Request("https://app.example/_cirrus/rpc", {
+            new Request("https://app.example/_lunora/rpc", {
                 body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
                 method: "POST",
             }),
@@ -255,11 +255,11 @@ describe("createWorker", () => {
             fakeContext,
         );
 
-        expect(shard.calls[0]!.request.headers.get("x-cirrus-userid")).toBeNull();
-        expect(shard.calls[0]!.request.headers.get("x-cirrus-identity")).toBeNull();
+        expect(shard.calls[0]!.request.headers.get("x-lunora-userid")).toBeNull();
+        expect(shard.calls[0]!.request.headers.get("x-lunora-identity")).toBeNull();
     });
 
-    it("serialises extra identity claims as JSON on x-cirrus-identity", async () => {
+    it("serialises extra identity claims as JSON on x-lunora-identity", async () => {
         expect.assertions(3);
 
         const worker = createWorker({
@@ -270,7 +270,7 @@ describe("createWorker", () => {
         });
 
         await worker.fetch(
-            new Request("https://app.example/_cirrus/rpc", {
+            new Request("https://app.example/_lunora/rpc", {
                 body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
                 method: "POST",
             }),
@@ -278,9 +278,9 @@ describe("createWorker", () => {
             fakeContext,
         );
 
-        expect(shard.calls[0]!.request.headers.get("x-cirrus-userid")).toBe("user_42");
+        expect(shard.calls[0]!.request.headers.get("x-lunora-userid")).toBe("user_42");
 
-        const identityHeader = shard.calls[0]!.request.headers.get("x-cirrus-identity");
+        const identityHeader = shard.calls[0]!.request.headers.get("x-lunora-identity");
 
         expect(identityHeader).not.toBeNull();
         expect(JSON.parse(identityHeader!)).toEqual({ email: "u@example.com", roles: ["admin"] });
@@ -298,7 +298,7 @@ describe("createWorker", () => {
         });
 
         const res = await worker.fetch(
-            new Request("https://app.example/_cirrus/rpc", {
+            new Request("https://app.example/_lunora/rpc", {
                 body: JSON.stringify({ args: {}, fanOut: { kind: "all" }, functionPath: "messages:list" }),
                 method: "POST",
             }),
@@ -339,7 +339,7 @@ describe("createWorker", () => {
         });
 
         await worker.fetch(
-            new Request("https://app.example/_cirrus/rpc", {
+            new Request("https://app.example/_lunora/rpc", {
                 body: JSON.stringify({ args: {}, fanOut: { merge: { kind: "concat" }, table: "messages" }, functionPath: "messages:list" }),
                 method: "POST",
             }),
@@ -351,8 +351,8 @@ describe("createWorker", () => {
 
         const { headers } = fanOut.mock.calls[0]![1];
 
-        expect(headers["x-cirrus-userid"]).toBe("user_42");
-        expect(JSON.parse(headers["x-cirrus-identity"]!)).toEqual({ email: "u@example.com" });
+        expect(headers["x-lunora-userid"]).toBe("user_42");
+        expect(JSON.parse(headers["x-lunora-identity"]!)).toEqual({ email: "u@example.com" });
     });
 
     it("denies fan-out by default when authorizeShard is set without authorizeFanOut", async () => {
@@ -377,7 +377,7 @@ describe("createWorker", () => {
         });
 
         const res = await worker.fetch(
-            new Request("https://app.example/_cirrus/rpc", {
+            new Request("https://app.example/_lunora/rpc", {
                 body: JSON.stringify({ args: {}, fanOut: { merge: { kind: "concat" }, table: "messages" }, functionPath: "messages:list" }),
                 method: "POST",
             }),
@@ -420,7 +420,7 @@ describe("createWorker", () => {
         });
 
         await worker.fetch(
-            new Request("https://app.example/_cirrus/rpc", {
+            new Request("https://app.example/_lunora/rpc", {
                 body: JSON.stringify({ args: {}, fanOut: { merge: { kind: "concat" }, table: "messages" }, functionPath: "messages:list" }),
                 method: "POST",
             }),
@@ -455,7 +455,7 @@ describe("createWorker", () => {
         });
 
         const res = await worker.fetch(
-            new Request("https://app.example/_cirrus/rpc", {
+            new Request("https://app.example/_lunora/rpc", {
                 body: JSON.stringify({ args: {}, fanOut: { merge: { kind: "concat" }, table: "messages" }, functionPath: "messages:list" }),
                 method: "POST",
             }),
@@ -480,7 +480,7 @@ describe("createWorker", () => {
         });
 
         const res = await worker.fetch(
-            new Request("https://app.example/_cirrus/rpc", {
+            new Request("https://app.example/_lunora/rpc", {
                 body: JSON.stringify({ args: {}, functionPath: "messages:list", shardKey: "channel-42" }),
                 method: "POST",
             }),
@@ -524,7 +524,7 @@ describe("createWorker", () => {
         });
 
         const res = await worker.fetch(
-            new Request("https://app.example/_cirrus/rpc", {
+            new Request("https://app.example/_lunora/rpc", {
                 body: JSON.stringify({ args: {}, fanOut: fanOutSpec, functionPath: "messages:list" }),
                 method: "POST",
             }),
@@ -545,7 +545,7 @@ describe("createWorker — migration endpoint", () => {
     });
 
     const migrateRequest = (body: unknown, headers: Record<string, string> = {}): Request =>
-        new Request("https://app.example/_cirrus/migrate", { body: JSON.stringify(body), headers, method: "POST" });
+        new Request("https://app.example/_lunora/migrate", { body: JSON.stringify(body), headers, method: "POST" });
 
     it("drives orchestrateMigration with the table, args and forwarded bearer", async () => {
         expect.assertions(5);
@@ -585,7 +585,7 @@ describe("createWorker — migration endpoint", () => {
 
         const res = await worker.fetch(
             migrateRequest(
-                { args: { direction: "up", id: "backfill" }, functionPath: "__cirrus_admin__:runMigration", table: "messages" },
+                { args: { direction: "up", id: "backfill" }, functionPath: "__lunora_admin__:runMigration", table: "messages" },
                 { authorization: "Bearer s3cret" },
             ),
             {},
@@ -598,7 +598,7 @@ describe("createWorker — migration endpoint", () => {
 
         const request = orchestrateMigration.mock.calls[0]![1];
 
-        expect(request).toMatchObject({ args: { direction: "up", id: "backfill" }, functionPath: "__cirrus_admin__:runMigration", table: "messages" });
+        expect(request).toMatchObject({ args: { direction: "up", id: "backfill" }, functionPath: "__lunora_admin__:runMigration", table: "messages" });
         expect(request.headers.authorization).toBe("Bearer s3cret");
     });
 
@@ -608,7 +608,7 @@ describe("createWorker — migration endpoint", () => {
         const worker = createWorker({ adminToken: "s3cret", shardDO: shard.namespace });
 
         const res = await worker.fetch(
-            migrateRequest({ functionPath: "__cirrus_admin__:runMigration", table: "messages" }, { authorization: "Bearer s3cret" }),
+            migrateRequest({ functionPath: "__lunora_admin__:runMigration", table: "messages" }, { authorization: "Bearer s3cret" }),
             {},
             fakeContext,
         );
@@ -665,7 +665,7 @@ describe("createWorker — migration endpoint", () => {
             shardDO: shard.namespace,
         });
 
-        const res = await worker.fetch(migrateRequest({ functionPath: "__cirrus_admin__:runMigration" }, { authorization: "Bearer s3cret" }), {}, fakeContext);
+        const res = await worker.fetch(migrateRequest({ functionPath: "__lunora_admin__:runMigration" }, { authorization: "Bearer s3cret" }), {}, fakeContext);
 
         expect(res.status).toBe(400);
     });
@@ -689,7 +689,7 @@ describe("createWorker — migration endpoint", () => {
             shardDO: shard.namespace,
         });
 
-        const res = await worker.fetch(new Request("https://app.example/_cirrus/migrate"), {}, fakeContext);
+        const res = await worker.fetch(new Request("https://app.example/_lunora/migrate"), {}, fakeContext);
 
         expect(res.status).toBe(405);
     });
@@ -697,27 +697,27 @@ describe("createWorker — migration endpoint", () => {
 
 /**
  * Bindings the runtime injects on the env when dispatching to the HTTP router.
- * Mirrors `@cirrus/server`'s `CirrusHttpEnv` without importing the server
+ * Mirrors `@lunora/server`'s `LunoraHttpEnv` without importing the server
  * package — the runtime stays structurally hono-free.
  */
 interface ContextEnv {
-    Bindings: { __cirrusCtx?: HttpActionContext };
-    Variables: { cirrus: HttpActionContext };
+    Bindings: { __lunoraCtx?: HttpActionContext };
+    Variables: { lunora: HttpActionContext };
 }
 
 /**
- * Build a real hono app pre-wired with the same `__cirrusCtx` → `c.var.cirrus`
- * lift that `@cirrus/server`'s `httpRouter()` installs, then let the test
+ * Build a real hono app pre-wired with the same `__lunoraCtx` → `c.var.lunora`
+ * lift that `@lunora/server`'s `httpRouter()` installs, then let the test
  * register routes on it. Returned as an {@link HttpRouterLike} (`{ fetch }`).
  */
 const honoApp = (register: (app: Hono<ContextEnv>) => void): HttpRouterLike => {
     const app = new Hono<ContextEnv>();
 
     app.use("*", async (c, next) => {
-        const injected = c.env.__cirrusCtx;
+        const injected = c.env.__lunoraCtx;
 
         if (injected) {
-            c.set("cirrus", injected);
+            c.set("lunora", injected);
         }
 
         await next();
@@ -750,7 +750,7 @@ describe("createWorker — HTTP actions", () => {
         expect(shard.calls).toHaveLength(0);
     });
 
-    it("c.var.cirrus.runMutation forwards an RPC envelope to the default shard and unwraps `{ result }`", async () => {
+    it("c.var.lunora.runMutation forwards an RPC envelope to the default shard and unwraps `{ result }`", async () => {
         expect.assertions(6);
 
         shard.response = Response.json({ result: { id: "m1" } });
@@ -759,7 +759,7 @@ describe("createWorker — HTTP actions", () => {
             httpRouter: honoApp((app) =>
                 app.post("/webhook", async (c) => {
                     const body = await c.req.json();
-                    const created = await c.var.cirrus.runMutation({ __cirrusRef: "messages:send" }, { body });
+                    const created = await c.var.lunora.runMutation({ __lunoraRef: "messages:send" }, { body });
 
                     return Response.json({ created });
                 }),
@@ -780,12 +780,12 @@ describe("createWorker — HTTP actions", () => {
         expect(forwarded.args).toEqual({ body: { text: "hi" } });
     });
 
-    it("exposes resolveIdentity on c.var.cirrus.auth", async () => {
+    it("exposes resolveIdentity on c.var.lunora.auth", async () => {
         expect.assertions(1);
 
         const worker = createWorker({
             httpRouter: honoApp((app) =>
-                app.get("/me", async (c) => Response.json({ claims: await c.var.cirrus.auth.getIdentity(), userId: c.var.cirrus.auth.userId })),
+                app.get("/me", async (c) => Response.json({ claims: await c.var.lunora.auth.getIdentity(), userId: c.var.lunora.auth.userId })),
             ),
             resolveIdentity: () => {
                 return { email: "u@example.com", userId: "user_7" };
@@ -853,7 +853,7 @@ describe("createWorker — HTTP actions", () => {
         });
 
         const res = await worker.fetch(
-            new Request("https://app.example/_cirrus/rpc", { body: JSON.stringify({ args: {}, functionPath: "x:y" }), method: "POST" }),
+            new Request("https://app.example/_lunora/rpc", { body: JSON.stringify({ args: {}, functionPath: "x:y" }), method: "POST" }),
             {},
             fakeContext,
         );
@@ -871,7 +871,7 @@ describe("composeWorker — meta-framework composition (PLAN4 §2.2)", () => {
         shard = createShardSpy();
     });
 
-    it("routes /_cirrus/* to Cirrus rather than the httpRouter", async () => {
+    it("routes /_lunora/* to Lunora rather than the httpRouter", async () => {
         expect.assertions(3);
 
         const ssr = vi.fn<() => Response>(() => new Response("ssr"));
@@ -882,7 +882,7 @@ describe("composeWorker — meta-framework composition (PLAN4 §2.2)", () => {
         });
 
         const res = await worker.fetch(
-            new Request("https://app.example/_cirrus/rpc", { body: JSON.stringify({ args: {}, functionPath: "x:y" }), method: "POST" }),
+            new Request("https://app.example/_lunora/rpc", { body: JSON.stringify({ args: {}, functionPath: "x:y" }), method: "POST" }),
             {},
             fakeContext,
         );
@@ -907,7 +907,7 @@ describe("composeWorker — meta-framework composition (PLAN4 §2.2)", () => {
         expect(shard.calls).toHaveLength(0);
     });
 
-    it("isolates a throwing SSR render as a 500 while /_cirrus/* stays serviceable", async () => {
+    it("isolates a throwing SSR render as a 500 while /_lunora/* stays serviceable", async () => {
         expect.assertions(4);
 
         // Swallow the expected server-side log so the deliberate throw doesn't
@@ -931,9 +931,9 @@ describe("composeWorker — meta-framework composition (PLAN4 §2.2)", () => {
         await expect(ssrRes.text()).resolves.not.toContain("SSR render exploded");
 
         // The SAME worker still services the realtime plane: a subsequent
-        // /_cirrus/rpc request forwards to the shard and succeeds.
+        // /_lunora/rpc request forwards to the shard and succeeds.
         const rpcRes = await worker.fetch(
-            new Request("https://app.example/_cirrus/rpc", { body: JSON.stringify({ args: {}, functionPath: "x:y" }), method: "POST" }),
+            new Request("https://app.example/_lunora/rpc", { body: JSON.stringify({ args: {}, functionPath: "x:y" }), method: "POST" }),
             {},
             fakeContext,
         );
@@ -982,7 +982,7 @@ describe("createWorker auth-metrics instrumentation (PLAN3 §2.3)", () => {
 
         const body = await recordCall!.request.json<{ args: { outcome: string }; functionPath: string }>();
 
-        expect(body).toEqual({ args: { outcome: "fail" }, functionPath: "__cirrus_admin__:recordAuthEvent" });
+        expect(body).toEqual({ args: { outcome: "fail" }, functionPath: "__lunora_admin__:recordAuthEvent" });
     });
 
     it("records an `ok` event for a successful sign-up attempt", async () => {

@@ -30,7 +30,7 @@ catalogs:
     # Vercel AI SDK v6 core + Cloudflare's official Workers AI provider. The
     # provider peers `ai ^6.0.0` / `@ai-sdk/provider ^3.0.0`. Workers AI is the
     # zero-config default; the `@ai-sdk/*` providers below are optional
-    # bring-your-own (declared as optional peers on @cirrus/ai) so an app stays
+    # bring-your-own (declared as optional peers on @lunora/ai) so an app stays
     # Workers-AI-only unless it opts into another provider.
     #
     # EXACT-pinned (no caret): v6 shipped inside the 1440-minute maturity window,
@@ -99,7 +99,7 @@ catalogs:
     "@types/node": 25.9.3
   cloudflare:
     "@cloudflare/containers": ^0.3.7
-    # Exact-pinned (no caret): the Browser Rendering surface (`@cirrus/browser`) tracks a
+    # Exact-pinned (no caret): the Browser Rendering surface (`@lunora/browser`) tracks a
     # verified-good Playwright-on-Workers release; bumps are vetted against a live worker.
     "@cloudflare/playwright": 1.3.0
     "@cloudflare/vitest-pool-workers": ^0.16.15
@@ -119,7 +119,7 @@ catalogs:
     # 1.40.2 drags in too-fresh transitive deps (wrangler@4.100.0 → miniflare/workerd dated
     # 2026-06-11) that trip the minimumReleaseAge gate — 1.40.1's wrangler@4.99.0 chain is
     # aged-in and matches the catalog's `wrangler: ^4.99.0`. To bump: try the new version
-    # locally, run a `pnpm --filter "@cirrus/vite" dev` smoke against a template, confirm the
+    # locally, run a `pnpm --filter "@lunora/vite" dev` smoke against a template, confirm the
     # dev runner boots without the getWorkerEntryExportTypes crash AND that its transitive
     # wrangler/miniflare/workerd are past the release-age window, then update this pin.
     "@cloudflare/vite-plugin": 1.40.2

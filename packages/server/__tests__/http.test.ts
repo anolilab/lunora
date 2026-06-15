@@ -22,7 +22,7 @@ describe("httpAction", () => {
         );
 
         const marker = { auth: "marker" } as unknown as HttpActionContext;
-        const response = await app.fetch(new Request("https://x/echo", { method: "PATCH" }), { __cirrusCtx: marker });
+        const response = await app.fetch(new Request("https://x/echo", { method: "PATCH" }), { __lunoraCtx: marker });
 
         expect(response.status).toBe(200);
         await expect(response.text()).resolves.toBe("PATCH");
@@ -40,7 +40,7 @@ describe("httpAction", () => {
             httpAction(() => Response.json({ ok: true }, { status: 202 })),
         );
 
-        const response = await app.fetch(new Request("https://x/raw", { method: "POST" }), { __cirrusCtx: context });
+        const response = await app.fetch(new Request("https://x/raw", { method: "POST" }), { __lunoraCtx: context });
 
         expect(response.status).toBe(202);
         await expect(response.json()).resolves.toEqual({ ok: true });
@@ -62,11 +62,11 @@ describe("httpRouter", () => {
             httpAction(() => new Response("POST")),
         );
 
-        const getResponse = await app.fetch(new Request("https://x/r"), { __cirrusCtx: context });
+        const getResponse = await app.fetch(new Request("https://x/r"), { __lunoraCtx: context });
 
         await expect(getResponse.text()).resolves.toBe("GET");
 
-        const postResponse = await app.fetch(new Request("https://x/r", { method: "POST" }), { __cirrusCtx: context });
+        const postResponse = await app.fetch(new Request("https://x/r", { method: "POST" }), { __lunoraCtx: context });
 
         await expect(postResponse.text()).resolves.toBe("POST");
     });
@@ -81,7 +81,7 @@ describe("httpRouter", () => {
             httpAction(() => new Response("ok")),
         );
 
-        const response = await app.fetch(new Request("https://x/unknown"), { __cirrusCtx: context });
+        const response = await app.fetch(new Request("https://x/unknown"), { __lunoraCtx: context });
 
         expect(response.status).toBe(404);
     });
@@ -96,7 +96,7 @@ describe("httpRouter", () => {
             httpAction(() => new Response("ok")),
         );
 
-        const response = await app.fetch(new Request("https://x/thing", { method: "POST" }), { __cirrusCtx: context });
+        const response = await app.fetch(new Request("https://x/thing", { method: "POST" }), { __lunoraCtx: context });
 
         expect(response.status).toBe(404);
     });

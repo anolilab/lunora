@@ -1,4 +1,4 @@
-import { useCirrus } from "@cirrus/react";
+import { useLunora } from "@lunora/react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import type { ChangeEvent, CSSProperties, ReactElement } from "react";
 import { useCallback, useMemo, useRef, useState } from "react";
@@ -237,7 +237,7 @@ interface LogFilterCriteria {
 }
 
 /**
- * Pure, AND-composed filter over the loaded log entries. Cirrus's `getLogs` is
+ * Pure, AND-composed filter over the loaded log entries. Lunora's `getLogs` is
  * an in-memory ring buffer, not a queryable store, so there is no SQL to run —
  * this is the client-side equivalent: level allow-set, function-path substring,
  * message substring, and a relative time window, all combined. Extracted to
@@ -358,11 +358,11 @@ const SummaryBucketRow = ({ bucket }: SummaryBucketRowProps): ReactElement => (
 );
 
 /**
- * The shard's log feed, newest first, over the gated `__cirrus_admin__:*` RPC
- * layer (gated by the server's `CIRRUS_ADMIN_TOKEN`). Two views.
+ * The shard's log feed, newest first, over the gated `__lunora_admin__:*` RPC
+ * layer (gated by the server's `LUNORA_ADMIN_TOKEN`). Two views.
  *
  * The Requests view (`getRequestLog`) is the durable, structured per-request log
- * `@cirrus/do` writes once per `/rpc` dispatch (PLAN3 §1.1): function path,
+ * `@lunora/do` writes once per `/rpc` dispatch (PLAN3 §1.1): function path,
  * shard, acting user/identity, redacted args, outcome, duration, and tables
  * read/written. It survives hibernation/restart (bounded retention) and is
  * filtered/correlated SERVER-side on function-path prefix, userId, shard,
@@ -373,11 +373,11 @@ const SummaryBucketRow = ({ bucket }: SummaryBucketRowProps): ReactElement => (
  * kept for the "what's failing on this instance right now" view, filtered
  * client-side.
  *
- * For the raw, un-attributed request firehose (which Cirrus deliberately does
+ * For the raw, un-attributed request firehose (which Lunora deliberately does
  * NOT re-stream), a deep-link to Cloudflare Workers Observability is provided.
  */
 export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const t = useT();
 
     const [view, setView] = useState<LogsView>("requests");
@@ -585,7 +585,7 @@ export const LogsPanel = ({ initialShardKey }: LogsPanelProps): ReactElement => 
     }, []);
 
     return (
-        <div className="flex flex-col gap-3" data-testid="cirrus-logs">
+        <div className="flex flex-col gap-3" data-testid="lunora-logs">
             <div className="flex flex-wrap items-center gap-2">
                 <div className="inline-flex overflow-hidden rounded-md border border-border" role="tablist">
                     <button

@@ -1,8 +1,8 @@
-import { compileCronSchedule, CRON_SCHEDULE_KINDS, isValidCronExpression } from "@cirrus/scheduler";
+import { compileCronSchedule, CRON_SCHEDULE_KINDS, isValidCronExpression } from "@lunora/scheduler";
 import type { CallExpression, Identifier, ObjectLiteralExpression, Project, PropertyAccessExpression, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { listCirrusSourceFiles } from "./discover-functions";
+import { listLunoraSourceFiles } from "./discover-functions";
 import type { CronJobIR } from "./ir";
 import sanitizeNamespace from "./paths";
 
@@ -10,13 +10,13 @@ import sanitizeNamespace from "./paths";
 const CRON_METHODS = new Set<string>([...CRON_SCHEDULE_KINDS, "cron"]);
 
 /**
- * Modules `cronJobs` may legitimately be imported from: `@cirrus/scheduler`
- * (its home) or `@cirrus/server` (the main API surface, which re-exports it —
+ * Modules `cronJobs` may legitimately be imported from: `@lunora/scheduler`
+ * (its home) or `@lunora/server` (the main API surface, which re-exports it —
  * see `packages/server/src/index.ts`). Both must be recognized, otherwise a
- * user (or registry item) importing `cronJobs` from `@cirrus/server` has every
+ * user (or registry item) importing `cronJobs` from `@lunora/server` has every
  * cron silently dropped.
  */
-const CRON_JOBS_SOURCES = new Set<string>(["@cirrus/scheduler", "@cirrus/server"]);
+const CRON_JOBS_SOURCES = new Set<string>(["@lunora/scheduler", "@lunora/server"]);
 
 /**
  * Decide whether a callee identifier refers to the framework's `cronJobs`.
@@ -124,7 +124,7 @@ const literalValue = (node: Node, jobName: string): unknown => {
 
     throw Object.assign(new Error(`Cron job "${jobName}" passes a non-static value where a literal is required; codegen can only read literals.`), {
         code: "CRON_NON_STATIC_VALUE",
-        name: "CirrusError",
+        name: "LunoraError",
         status: 500,
     });
 };
@@ -139,7 +139,7 @@ const objectLiteralValue = (object: ObjectLiteralExpression, jobName: string): R
                 new Error(`Cron job "${jobName}" uses an unsupported object property (shorthand/spread/method) where a static literal is required.`),
                 {
                     code: "CRON_NON_STATIC_VALUE",
-                    name: "CirrusError",
+                    name: "LunoraError",
                     status: 500,
                 },
             );
@@ -164,7 +164,7 @@ const functionPathFromArgument = (call: CallExpression, index: number, jobName: 
             new Error(`Cron job "${jobName}" must reference a function statically (e.g. internal.email.digest); codegen cannot resolve a dynamic reference.`),
             {
                 code: "CRON_NON_STATIC_FN",
-                name: "CirrusError",
+                name: "LunoraError",
                 status: 500,
             },
         );
@@ -179,7 +179,7 @@ const functionPathFromArgument = (call: CallExpression, index: number, jobName: 
     if (!Node.isPropertyAccessExpression(receiver)) {
         throw Object.assign(new Error(`Cron job "${jobName}" function reference must be of the form internal.file.fn (two property accesses).`), {
             code: "CRON_NON_STATIC_FN",
-            name: "CirrusError",
+            name: "LunoraError",
             status: 500,
         });
     }
@@ -206,7 +206,7 @@ const cronFromCall = (call: CallExpression, callee: PropertyAccessExpression, bu
     if (name === undefined || name.trim() === "") {
         throw Object.assign(new Error(`A cron ".${method}(...)" registration must pass a non-empty string-literal name as its first argument.`), {
             code: "CRON_NAME_NOT_STATIC",
-            name: "CirrusError",
+            name: "LunoraError",
             status: 500,
         });
     }
@@ -219,7 +219,7 @@ const cronFromCall = (call: CallExpression, callee: PropertyAccessExpression, bu
         if (expression === undefined) {
             throw Object.assign(new Error(`Cron job "${name}" must pass a string-literal cron expression to ".cron(...)".`), {
                 code: "CRON_EXPR_NOT_STATIC",
-                name: "CirrusError",
+                name: "LunoraError",
                 status: 500,
             });
         }
@@ -227,7 +227,7 @@ const cronFromCall = (call: CallExpression, callee: PropertyAccessExpression, bu
         if (!isValidCronExpression(expression)) {
             throw Object.assign(new Error(`Cron job "${name}" has an invalid cron expression "${expression}" — expected 5 or 6 space-separated fields.`), {
                 code: "CRON_EXPR_INVALID",
-                name: "CirrusError",
+                name: "LunoraError",
                 status: 500,
             });
         }
@@ -239,7 +239,7 @@ const cronFromCall = (call: CallExpression, callee: PropertyAccessExpression, bu
         if (!scheduleArgument || !Node.isObjectLiteralExpression(scheduleArgument)) {
             throw Object.assign(new Error(`Cron job "${name}" must pass an object-literal schedule to ".${method}(...)".`), {
                 code: "CRON_SCHEDULE_NOT_STATIC",
-                name: "CirrusError",
+                name: "LunoraError",
                 status: 500,
             });
         }
@@ -268,7 +268,7 @@ const assertUniqueNames = (crons: ReadonlyArray<CronJobIR>): void => {
                 ),
                 {
                     code: "DUPLICATE_CRON_NAME",
-                    name: "CirrusError",
+                    name: "LunoraError",
                     names: cron.name,
                     status: 500,
                 },
@@ -280,14 +280,14 @@ const assertUniqueNames = (crons: ReadonlyArray<CronJobIR>): void => {
 };
 
 /**
- * Scan every `.ts` file under `cirrusDir` for `cronJobs()` builder registrations
+ * Scan every `.ts` file under `lunoraDir` for `cronJobs()` builder registrations
  * (`crons.interval(...)`, `crons.daily(...)`, `crons.cron(...)`, …) and lift them
  * into {@link CronJobIR}. Schedules are compiled to standard cron expressions;
  * function references are resolved to their `namespace:fn` dispatch path. Names
  * must be unique across the project.
  */
-const discoverCrons = (project: Project, cirrusDirectory: string): CronJobIR[] => {
-    const filePaths = listCirrusSourceFiles(cirrusDirectory);
+const discoverCrons = (project: Project, lunoraDirectory: string): CronJobIR[] => {
+    const filePaths = listLunoraSourceFiles(lunoraDirectory);
     const crons: CronJobIR[] = [];
 
     for (const filePath of filePaths) {

@@ -1,4 +1,4 @@
-import type { Validator } from "@cirrus/values";
+import type { Validator } from "@lunora/values";
 
 import { copycat } from "./copycat";
 import { metaOf, unwrapOptional } from "./introspect";
@@ -102,7 +102,7 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown):
 
         case "date":
         case "timestamp": {
-            // Cirrus stores dates as epoch-ms numbers.
+            // Lunora stores dates as epoch-ms numbers.
             return new Date(copycat.dateString(input)).getTime();
         }
 

@@ -1,7 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
 /**
- * Playwright config for the Cirrus E2E suite.
+ * Playwright config for the Lunora E2E suite.
  *
  * The suite drives the `apps/playground` chat app against a Miniflare-backed
  * Worker — no Cloudflare account, no network. `globalSetup.ts` boots Miniflare
@@ -17,10 +17,10 @@ import { defineConfig, devices } from "@playwright/test";
  *     cron timing is the point.
  *
  * Skip gate:
- *   - Set `CIRRUS_E2E=skip` to short-circuit the entire run (used by CI when
+ *   - Set `LUNORA_E2E=skip` to short-circuit the entire run (used by CI when
  *     the suite is flaky on a given runner).
  */
-const baseURL = process.env.CIRRUS_E2E_BASE_URL ?? "http://localhost:5173";
+const baseURL = process.env.LUNORA_E2E_BASE_URL ?? "http://localhost:5173";
 
 const isCI = process.env.CI === "true";
 

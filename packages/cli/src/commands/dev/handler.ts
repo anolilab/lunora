@@ -7,11 +7,11 @@ import {
     createConfirm,
     detectAgentRules,
     ensureDevVariables,
-    formatCirrusEvent,
+    formatLunoraEvent,
     materializeRemoteWranglerConfig,
     readProjectRemotePreference,
     resolveRemoteEnabled,
-} from "@cirrus/config";
+} from "@lunora/config";
 
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
@@ -56,7 +56,7 @@ interface DevCommandOptions {
     materializeRemote?: typeof materializeRemoteWranglerConfig;
     /** Studio server port. */
     port?: number;
-    /** Proxy D1/KV/R2 bindings to the deployed worker during dev (`CIRRUS_REMOTE=1` / `--remote`); DO shards stay local. */
+    /** Proxy D1/KV/R2 bindings to the deployed worker during dev (`LUNORA_REMOTE=1` / `--remote`); DO shards stay local. */
     remote?: boolean;
     /** Injection seam for tests — defaults to the real codegen watcher. */
     startCodegen?: typeof startCodegenWatch;
@@ -94,13 +94,13 @@ interface DevCommandPlan {
     studioPort: number;
     workerOrigin: string;
     workerPort: number;
-    /** The single child process `cirrus dev` spawns: `wrangler dev`. */
+    /** The single child process `lunora dev` spawns: `wrangler dev`. */
     wrangler: SpawnDescriptor & { tag: string };
 }
 
 /**
  * Resolve remote-binding mode into the extra `wrangler dev` args + a banner
- * summary. When `--remote`/`CIRRUS_REMOTE` is set we materialize a temp wrangler
+ * summary. When `--remote`/`LUNORA_REMOTE` is set we materialize a temp wrangler
  * config with `"remote": true` on each D1/KV/R2 binding (Durable Object shards
  * stay local) and point `wrangler dev --config` at it, so the local worker reads
  * and writes the **deployed** resources. When disabled, or when there's nothing
@@ -129,9 +129,9 @@ const resolveRemotePlan = (options: DevCommandOptions, cwd: string): { args: str
 };
 
 /**
- * Plan `cirrus dev`: it runs the worker via `wrangler dev` and nothing else as a
+ * Plan `lunora dev`: it runs the worker via `wrangler dev` and nothing else as a
  * child process. Vite is intentionally NOT spawned — a project may not use Vite,
- * and when it does, the `@cirrus/vite` plugin already runs the worker inside
+ * and when it does, the `@lunora/vite` plugin already runs the worker inside
  * Vite, so the user runs `vite` themselves. Pure + synchronous so it's unit-testable.
  */
 const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
@@ -141,7 +141,7 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
     const remote = resolveRemotePlan(options, cwd);
     // `--var WORKER_ENV:development` flags the worker as a dev deployment so the
     // runtime streams every RPC dispatch summary to the terminal by default
-    // (`@cirrus/do`'s `isDevEnvironment`). `wrangler dev` only — never `deploy` —
+    // (`@lunora/do`'s `isDevEnvironment`). `wrangler dev` only — never `deploy` —
     // so it can't leak into production; a `WORKER_ENV` in wrangler config / a
     // `--var` the user passes still wins. Mirrors the Vite plugin's injection.
     // `--config <temp>` (when remote) points wrangler at a config whose D1/KV/R2
@@ -160,8 +160,8 @@ const planDevCommand = (options: DevCommandOptions): DevCommandPlan => {
 };
 
 /**
- * Emit one already-split output line. A Cirrus structured event
- * (`source: "cirrus"`) is rewritten as a tagged, attributed `[cirrus]` line at
+ * Emit one already-split output line. A Lunora structured event
+ * (`source: "lunora"`) is rewritten as a tagged, attributed `[lunora]` line at
  * its own severity; everything else passes through tagged with the child's name
  * (`[wrangler]`), stderr at warn level.
  */
@@ -170,12 +170,12 @@ const emitChildLine = (line: string, tag: string, kind: "stderr" | "stdout", log
         return;
     }
 
-    const formatted = formatCirrusEvent(line);
+    const formatted = formatLunoraEvent(line);
 
     if (formatted) {
         // `formatted.level` is exactly the `error | info | warn` union of the
         // logger's channels, so index straight into it — no branch ladder.
-        logger[formatted.level](`[cirrus] ${formatted.text}`);
+        logger[formatted.level](`[lunora] ${formatted.text}`);
 
         return;
     }
@@ -191,7 +191,7 @@ const emitChildLine = (line: string, tag: string, kind: "stderr" | "stdout", log
 
 /**
  * Pipe a child's stdout/stderr through the logger, tagged by name, recognising
- * and reformatting Cirrus structured log events along the way. Output is
+ * and reformatting Lunora structured log events along the way. Output is
  * line-buffered per stream so a structured event split across two `data` chunks
  * is still parsed as one line; the trailing partial is flushed on stream end.
  */
@@ -259,7 +259,7 @@ const defaultWorkerSpawner: WorkerSpawner = (descriptor, logger) => {
 /** Print the Convex-style startup banner once the studio + worker URLs are known. */
 const printBanner = (logger: Logger, plan: DevCommandPlan, studioUrl: string | undefined): void => {
     logger.info("");
-    logger.success("Cirrus dev");
+    logger.success("Lunora dev");
     logger.info(`  ➜  Worker:     ${plan.workerOrigin}`);
 
     if (studioUrl !== undefined) {
@@ -267,7 +267,7 @@ const printBanner = (logger: Logger, plan: DevCommandPlan, studioUrl: string | u
     }
 
     if (plan.codegenEnabled) {
-        logger.info("  ➜  Codegen:    watching cirrus/");
+        logger.info("  ➜  Codegen:    watching lunora/");
     }
 
     if (plan.remote.enabled) {
@@ -282,9 +282,9 @@ const printBanner = (logger: Logger, plan: DevCommandPlan, studioUrl: string | u
 };
 
 /**
- * When the Cirrus agent skills ("rules") aren't installed in the project, nudge
+ * When the Lunora agent skills ("rules") aren't installed in the project, nudge
  * the developer (and any cloud/headless coding agent reading stdout) to install
- * them so the AI knows how to use Cirrus. Non-blocking — just one info line.
+ * them so the AI knows how to use Lunora. Non-blocking — just one info line.
  */
 const printAgentRulesHint = (logger: Logger, cwd: string): void => {
     if (detectAgentRules(cwd).installed || !claimAgentRulesHint()) {
@@ -419,7 +419,7 @@ const runDevCommand = async (options: DevCommandOptions): Promise<{ code: number
     }
 };
 
-/** `cirrus dev` handler (lazy-loaded via the command's `loader`). */
+/** `lunora dev` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(({ cwd, logger, options }) =>
     runDevCommand({
         apiSpec: parseApiSpec(options.apiSpec),
@@ -431,12 +431,12 @@ const execute: CommandHandler<DevOptions> = defineHandler<DevOptions>(({ cwd, lo
         logger,
         port: options.port,
         // Remote-binding mode obeys a clear precedence: an explicit `--remote`
-        // flag wins, then `CIRRUS_REMOTE` in the environment, then the `remote`
-        // key in the project's `cirrus.json` (a project default). See
-        // `resolveRemoteEnabled` in @cirrus/config.
+        // flag wins, then `LUNORA_REMOTE` in the environment, then the `remote`
+        // key in the project's `lunora.json` (a project default). See
+        // `resolveRemoteEnabled` in @lunora/config.
         remote: resolveRemoteEnabled({
             configPreference: readProjectRemotePreference(cwd),
-            envValue: process.env["CIRRUS_REMOTE"],
+            envValue: process.env["LUNORA_REMOTE"],
             flag: options.remote,
         }),
         studio: options.studio === false ? false : undefined,

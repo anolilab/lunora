@@ -1,4 +1,4 @@
-import { containerBuildTag } from "@cirrus/container";
+import { containerBuildTag } from "@lunora/container";
 
 import type { DockerProbe } from "./docker";
 import { isRailpackAvailable } from "./docker";
@@ -10,7 +10,7 @@ import { defaultSpawner } from "./spawn";
 interface RailpackBuildTarget {
     /** Source directory Railpack builds (the `{ build }` value). */
     buildDir: string;
-    /** The `cirrus/containers.ts` export name. */
+    /** The `lunora/containers.ts` export name. */
     exportName: string;
 }
 

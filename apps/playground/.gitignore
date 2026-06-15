@@ -2,8 +2,8 @@
 .vite/
 dist/
 
-# Cirrus codegen output (regenerated on each build)
-cirrus/_generated/
+# Lunora codegen output (regenerated on each build)
+lunora/_generated/
 
 # Wrangler state
 .wrangler/

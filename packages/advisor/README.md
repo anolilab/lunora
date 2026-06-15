@@ -6,7 +6,7 @@
 
 </a>
 
-<h3 align="center">Schema & query lints (splinter-style advisors) for Cirrus, feeding the Studio Advisors view</h3>
+<h3 align="center">Schema & query lints (splinter-style advisors) for Lunora, feeding the Studio Advisors view</h3>
 
 <!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
@@ -34,30 +34,30 @@
 
 ---
 
-Schema & query lints (splinter-style advisors) for Cirrus. Each lint is a pure rule over a normalized `LintContext`; `runAdvisor()` runs a set and flattens their findings for the CLI, the Vite plugin, and the Studio Advisors view. The rules run against Cirrus's declared schema and discovered query reads, so problems are caught at codegen time before they ship.
+Schema & query lints (splinter-style advisors) for Lunora. Each lint is a pure rule over a normalized `LintContext`; `runAdvisor()` runs a set and flattens their findings for the CLI, the Vite plugin, and the Studio Advisors view. The rules run against Lunora's declared schema and discovered query reads, so problems are caught at codegen time before they ship.
 
-Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
+Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
 ## Install
 
 ```sh
-npm install @cirrus/advisor
+npm install @lunora/advisor
 ```
 
 ```sh
-yarn add @cirrus/advisor
+yarn add @lunora/advisor
 ```
 
 ```sh
-pnpm add @cirrus/advisor
+pnpm add @lunora/advisor
 ```
 
 ## Usage
 
 ```ts
-import { fromServerSchema, runAdvisor } from "@cirrus/advisor";
+import { fromServerSchema, runAdvisor } from "@lunora/advisor";
 
-import schema from "./cirrus/schema";
+import schema from "./lunora/schema";
 
 const findings = runAdvisor({ schema: fromServerSchema(schema) }, { source: "static" });
 
@@ -66,13 +66,13 @@ for (const finding of findings) {
 }
 ```
 
-> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/addons/studio)**.
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/addons/studio)**.
 
 ## Related
 
-- [`@cirrus/server`](https://www.npmjs.com/package/@cirrus/server) — the `defineSchema` / `defineTable` schema these lints analyze.
-- [`@cirrus/codegen`](https://www.npmjs.com/package/@cirrus/codegen) — runs the static lints at codegen time and returns them on `CodegenResult.advisories`.
-- [`@cirrus/studio`](https://www.npmjs.com/package/@cirrus/studio) — renders the findings in the Advisors view.
+- [`@lunora/server`](https://www.npmjs.com/package/@lunora/server) — the `defineSchema` / `defineTable` schema these lints analyze.
+- [`@lunora/codegen`](https://www.npmjs.com/package/@lunora/codegen) — runs the static lints at codegen time and returns them on `CodegenResult.advisories`.
+- [`@lunora/studio`](https://www.npmjs.com/package/@lunora/studio) — renders the findings in the Advisors view.
 
 ## Supported Node.js Versions
 
@@ -81,14 +81,14 @@ Here's [a post on why we think this is important](https://medium.com/the-node-js
 
 ## Contributing
 
-If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/lunora/issues) and check our [Contributing](https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
 > **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
 ## Credits
 
 - [Daniel Bannert](https://github.com/prisis)
-- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
+- [All Contributors](https://github.com/anolilab/lunora/graphs/contributors)
 
 ## Made with ❤️ at Anolilab
 
@@ -96,17 +96,17 @@ This is an open source project and will always remain free to use. If you think 
 
 ## License
 
-The Cirrus advisor package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The Lunora advisor package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
 
 <!-- badges -->
 
 [license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
-[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
-[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/advisor?style=for-the-badge
-[npm-version]: https://www.npmjs.com/package/@cirrus/advisor
-[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/advisor?style=for-the-badge
-[npm-downloads]: https://www.npmjs.com/package/@cirrus/advisor
+[license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@lunora/advisor?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@lunora/advisor
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@lunora/advisor?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@lunora/advisor
 [prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
-[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[prs-welcome]: https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md
 [typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
 [typescript-url]: https://www.typescriptlang.org/

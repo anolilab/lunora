@@ -1,10 +1,10 @@
 /**
  * The data-movement admin routes, extracted from `create-worker.ts` (mirroring
  * `./auth-admin-routes`). These admin-gated endpoints move bulk data in and out
- * of a deployment: NDJSON export (`/_cirrus/admin/export`), the stateless CDC
- * sync feed (`/_cirrus/admin/sync`), the turn-key warehouse-connector sync
- * (`/_cirrus/admin/connector/sync`), CDC apply / restore (`/_cirrus/admin/apply`),
- * and NDJSON import (`/_cirrus/admin/import`).
+ * of a deployment: NDJSON export (`/_lunora/admin/export`), the stateless CDC
+ * sync feed (`/_lunora/admin/sync`), the turn-key warehouse-connector sync
+ * (`/_lunora/admin/connector/sync`), CDC apply / restore (`/_lunora/admin/apply`),
+ * and NDJSON import (`/_lunora/admin/import`).
  *
  * Each handler reaches the admin gate, the coordinator, the shard namespace, and
  * the export/import primitives through the injected {@link DataMovementAdminRouteDeps}.
@@ -17,15 +17,15 @@
 import { readBodyTextWithLimit, readJsonBodyWithLimit } from "./body-readers";
 import { decodeConnectorCursor, encodeConnectorCursor, foldCdcPage } from "./connector-cdc";
 import type { ConnectorChange, ConnectorSyncPage } from "./connector-format";
-import { CirrusError } from "./errors";
+import { LunoraError } from "./errors";
 import type { QueryCoordinator } from "./query-coordinator";
 import type { ShardNamespaceLike } from "./resolve-shard";
 
-const EXPORT_PATH = "/_cirrus/admin/export";
-const IMPORT_PATH = "/_cirrus/admin/import";
-const SYNC_PATH = "/_cirrus/admin/sync";
-const CONNECTOR_SYNC_PATH = "/_cirrus/admin/connector/sync";
-const APPLY_PATH = "/_cirrus/admin/apply";
+const EXPORT_PATH = "/_lunora/admin/export";
+const IMPORT_PATH = "/_lunora/admin/import";
+const SYNC_PATH = "/_lunora/admin/sync";
+const CONNECTOR_SYNC_PATH = "/_lunora/admin/connector/sync";
+const APPLY_PATH = "/_lunora/admin/apply";
 
 /** One exported row — a table name plus its document. Mirrors the export primitive's row shape. */
 type ExportRow = { doc: Record<string, unknown>; table: string };
@@ -48,11 +48,11 @@ const parseExportBody = async (request: Request): Promise<ExportBody> => {
 
         body = text === "" ? {} : JSON.parse(text);
     } catch (error) {
-        if (error instanceof CirrusError) {
+        if (error instanceof LunoraError) {
             throw error;
         }
 
-        throw new CirrusError("Export body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
+        throw new LunoraError("Export body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
     }
 
     const candidate = (body ?? {}) as { tables?: unknown };
@@ -62,14 +62,14 @@ const parseExportBody = async (request: Request): Promise<ExportBody> => {
     }
 
     if (!Array.isArray(candidate.tables)) {
-        throw new CirrusError("Export `tables` must be a string array", { code: "BAD_REQUEST", status: 400 });
+        throw new LunoraError("Export `tables` must be a string array", { code: "BAD_REQUEST", status: 400 });
     }
 
     const tables: string[] = [];
 
     for (const entry of candidate.tables) {
         if (typeof entry !== "string" || entry.length === 0) {
-            throw new CirrusError("Export `tables` entries must be non-empty strings", { code: "BAD_REQUEST", status: 400 });
+            throw new LunoraError("Export `tables` entries must be non-empty strings", { code: "BAD_REQUEST", status: 400 });
         }
 
         tables.push(entry);
@@ -119,17 +119,17 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
 
     const handleExport = async (request: Request, env: unknown): Promise<Response> => {
         if (request.method !== "POST") {
-            throw new CirrusError("Export endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+            throw new LunoraError("Export endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
         if (!isAdmin(request)) {
-            throw new CirrusError("admin export endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
+            throw new LunoraError("admin export endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
         }
 
         const coordinator = queryCoordinator;
 
         if (!coordinator) {
-            throw new CirrusError("Export endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
+            throw new LunoraError("Export endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
         }
 
         const body = await parseExportBody(request);
@@ -168,17 +168,17 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
      */
     const handleCdcSync = async (request: Request, env: unknown): Promise<Response> => {
         if (request.method !== "POST") {
-            throw new CirrusError("Sync endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+            throw new LunoraError("Sync endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
         if (!isAdmin(request)) {
-            throw new CirrusError("admin sync endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
+            throw new LunoraError("admin sync endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
         }
 
         const coordinator = queryCoordinator;
 
         if (!coordinator) {
-            throw new CirrusError("Sync endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
+            throw new LunoraError("Sync endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
         }
 
         const raw = await readJsonBodyWithLimit(request);
@@ -226,17 +226,17 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
      */
     const handleConnectorSync = async (request: Request, env: unknown): Promise<Response> => {
         if (request.method !== "POST") {
-            throw new CirrusError("Connector sync endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+            throw new LunoraError("Connector sync endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
         if (!isAdmin(request)) {
-            throw new CirrusError("admin connector sync endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
+            throw new LunoraError("admin connector sync endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
         }
 
         const coordinator = queryCoordinator;
 
         if (!coordinator) {
-            throw new CirrusError("Connector sync endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
+            throw new LunoraError("Connector sync endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
         }
 
         const raw = await readJsonBodyWithLimit(request);
@@ -283,7 +283,7 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
     };
 
     /**
-     * Replay endpoint behind `cirrus backup restore --to &lt;time>`. Accepts
+     * Replay endpoint behind `lunora backup restore --to &lt;time>`. Accepts
      * per-shard pre-bucketed batches (the shape `/sync` emits, so the caller
      * just forwards each shard's changes back to the same shard — no
      * re-bucketing, which also sidesteps deletes carrying no shard-key field)
@@ -292,17 +292,17 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
      */
     const handleApplyCdc = async (request: Request, env: unknown): Promise<Response> => {
         if (request.method !== "POST") {
-            throw new CirrusError("Apply endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+            throw new LunoraError("Apply endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
         if (!isAdmin(request)) {
-            throw new CirrusError("admin apply endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
+            throw new LunoraError("admin apply endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
         }
 
         const coordinator = queryCoordinator;
 
         if (!coordinator) {
-            throw new CirrusError("Apply endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
+            throw new LunoraError("Apply endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
         }
 
         const raw = await readJsonBodyWithLimit(request);
@@ -326,15 +326,15 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
 
     const handleImport = async (request: Request, env: unknown): Promise<Response> => {
         if (request.method !== "POST") {
-            throw new CirrusError("Import endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+            throw new LunoraError("Import endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
         if (!isAdmin(request)) {
-            throw new CirrusError("admin import endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
+            throw new LunoraError("admin import endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
         }
 
         if (!queryCoordinator) {
-            throw new CirrusError("Import endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
+            throw new LunoraError("Import endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
         }
 
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env);

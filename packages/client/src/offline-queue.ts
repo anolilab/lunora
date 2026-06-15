@@ -46,7 +46,7 @@ const reportPersistenceError = (
     }
 
     // eslint-disable-next-line no-console -- last-resort visibility for a swallowed durable-write failure
-    console.warn(`[cirrus] offline-queue persistence ${operation} failed`, error);
+    console.warn(`[lunora] offline-queue persistence ${operation} failed`, error);
 };
 
 /**
@@ -58,7 +58,7 @@ const reportPersistenceError = (
  * When a {@link PersistenceAdapter} is supplied, enqueued mutations are mirrored
  * to durable storage so they survive a reload — {@link OfflineQueue.hydrate} restores them on
  * the next startup and the client replays them on reconnect. Durable removal is
- * the caller's responsibility *after* a successful replay (see `CirrusClient`);
+ * the caller's responsibility *after* a successful replay (see `LunoraClient`);
  * the queue only persists on enqueue and un-persists on overflow.
  */
 class OfflineQueue {

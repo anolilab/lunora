@@ -22,7 +22,7 @@ const subscribe = (): (() => void) => () => undefined;
  * has hydrated, then `isAuthenticated` tracks whether a token is set on the
  * shared client.
  *
- * Cirrus auth is token-based and resolves synchronously once the token is
+ * Lunora auth is token-based and resolves synchronously once the token is
  * known, so the loading window is hydration rather than a server round-trip —
  * use it (via {@link AuthState}) to render a fallback while it settles.
  */

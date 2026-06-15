@@ -1,5 +1,5 @@
-import { defineSchema, defineTable } from "@cirrus/server";
-import { v } from "@cirrus/values";
+import { defineSchema, defineTable } from "@lunora/server";
+import { v } from "@lunora/values";
 import { describe, expect, it } from "vitest";
 
 import type { AdvisorAuthApiCall } from "../src";

@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { DEV_VARS_EXAMPLE_FILE, DEV_VARS_FILE, DEV_VARS_KEY_PATTERN, isPlaceholderValue, parseDevVariableEntries } from "@cirrus/config";
+import { DEV_VARS_EXAMPLE_FILE, DEV_VARS_FILE, DEV_VARS_KEY_PATTERN, isPlaceholderValue, parseDevVariableEntries } from "@lunora/config";
 
 import type { CommandHandler } from "../../util/command";
 import { defineHandler } from "../../util/command";
@@ -107,7 +107,7 @@ const runEnvGet = (context: EnvContext): EnvCommandResult => {
     const { devVariablesPath, logger, options } = context;
 
     if (!options.key) {
-        logger.error("env get requires a key. Usage: cirrus env get <KEY>");
+        logger.error("env get requires a key. Usage: lunora env get <KEY>");
 
         return { code: 1, descriptors: [] };
     }
@@ -130,7 +130,7 @@ const runEnvSet = (context: EnvContext): EnvCommandResult => {
     const { devVariablesPath, logger, options } = context;
 
     if (!options.key) {
-        logger.error("env set requires a key. Usage: cirrus env set <KEY> <VALUE>");
+        logger.error("env set requires a key. Usage: lunora env set <KEY> <VALUE>");
 
         return { code: 1, descriptors: [] };
     }
@@ -142,7 +142,7 @@ const runEnvSet = (context: EnvContext): EnvCommandResult => {
     }
 
     if (options.value === undefined) {
-        logger.error("env set requires a value. Usage: cirrus env set <KEY> <VALUE>");
+        logger.error("env set requires a value. Usage: lunora env set <KEY> <VALUE>");
 
         return { code: 1, descriptors: [] };
     }
@@ -169,7 +169,7 @@ const runEnvUnset = (context: EnvContext): EnvCommandResult => {
     const { devVariablesPath, logger, options } = context;
 
     if (!options.key) {
-        logger.error("env unset requires a key. Usage: cirrus env unset <KEY>");
+        logger.error("env unset requires a key. Usage: lunora env unset <KEY>");
 
         return { code: 1, descriptors: [] };
     }
@@ -263,7 +263,7 @@ const runEnvDoctor = (context: EnvContext): EnvCommandResult => {
     const current = loadDevVariables(devVariablesPath);
 
     if (!existsSync(devVariablesPath)) {
-        logger.error(`env doctor: ${DEV_VARS_FILE} is missing. Run \`cirrus dev\` to scaffold it, or \`cirrus env set <KEY> <VALUE>\`.`);
+        logger.error(`env doctor: ${DEV_VARS_FILE} is missing. Run \`lunora dev\` to scaffold it, or \`lunora env set <KEY> <VALUE>\`.`);
         logger.info(`expected (from ${DEV_VARS_EXAMPLE_FILE}): ${exampleKeys.join(", ")}`);
 
         return { code: 1, descriptors: [] };
@@ -335,7 +335,7 @@ const runEnvCommand = async (options: EnvCommandOptions): Promise<EnvCommandResu
 const isEnvSubcommand = (value: unknown): value is EnvSubcommand =>
     value === "list" || value === "get" || value === "set" || value === "unset" || value === "push" || value === "doctor";
 
-/** `cirrus env &lt;subcommand>` handler (lazy-loaded via the command's `loader`). */
+/** `lunora env &lt;subcommand>` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<EnvOptions> = defineHandler<EnvOptions>(({ argument, cwd, logger, options }) => {
     const sub = argument[0];
 

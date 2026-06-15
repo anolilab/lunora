@@ -1,5 +1,5 @@
-import type { CronJobInfo } from "@cirrus/client";
-import { useCirrus } from "@cirrus/react";
+import type { CronJobInfo } from "@lunora/client";
+import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useEffect, useState } from "react";
 
@@ -11,8 +11,8 @@ import { errorMessage, fireAndForget } from "../../lib/internal";
 interface CronTriggersPanelProps {
     /**
      * Load the code-defined cron triggers. Defaults to `client.getCronJobs`,
-     * which hits the worker's admin-gated `/_cirrus/admin/cron-jobs` endpoint —
-     * so the panel works out of the box under `&lt;CirrusProvider>`, provided the
+     * which hits the worker's admin-gated `/_lunora/admin/cron-jobs` endpoint —
+     * so the panel works out of the box under `&lt;LunoraProvider>`, provided the
      * worker is built with a `cronJobs` map and `adminToken`. Override it to
      * source triggers from elsewhere (e.g. tests).
      */
@@ -29,7 +29,7 @@ interface CronTriggersPanelProps {
  */
 
 export const CronTriggersPanel = ({ loadCronJobs }: CronTriggersPanelProps = {}): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const t = useT();
 
     const [jobs, setJobs] = useState<CronJobInfo[] | null>(null);
@@ -62,7 +62,7 @@ export const CronTriggersPanel = ({ loadCronJobs }: CronTriggersPanelProps = {})
     }, [client, loadCronJobs]);
 
     return (
-        <div className="flex flex-col gap-3" data-testid="cirrus-cron-triggers">
+        <div className="flex flex-col gap-3" data-testid="lunora-cron-triggers">
             {error !== null && (
                 <p className="text-sm text-destructive" data-testid="cron-error" role="alert">
                     {error}

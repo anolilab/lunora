@@ -1,13 +1,13 @@
 /**
  * Single source of truth for the container facts both the wrangler validator
  * and binding inference need — mirrors `schema-info.ts`: derive the facts from
- * one `@cirrus/codegen` discovery call so inference and validation can never
- * disagree about what `cirrus/containers.ts` declares.
+ * one `@lunora/codegen` discovery call so inference and validation can never
+ * disagree about what `lunora/containers.ts` declares.
  */
 import { existsSync } from "node:fs";
 
-import type { ContainerIR } from "@cirrus/codegen";
-import { CONTAINERS_FILENAME, discoverContainers } from "@cirrus/codegen";
+import type { ContainerIR } from "@lunora/codegen";
+import { CONTAINERS_FILENAME, discoverContainers } from "@lunora/codegen";
 import { Project } from "ts-morph";
 
 import join from "./path";
@@ -15,13 +15,13 @@ import join from "./path";
 interface DiscoverContainerInfoResult {
     /** Discovered container definitions; `[]` when none are declared or parsing failed. */
     containers: ReadonlyArray<ContainerIR>;
-    /** Parse error message, when `cirrus/containers.ts` exists but could not be analyzed. */
+    /** Parse error message, when `lunora/containers.ts` exists but could not be analyzed. */
     error?: string;
 }
 
 /**
  * Discover the project's `defineContainer` declarations. Returns
- * `{ containers: [] }` when the project has no `cirrus/containers.ts` (not an
+ * `{ containers: [] }` when the project has no `lunora/containers.ts` (not an
  * error), or `{ containers: [], error }` when the file exists but could not be
  * parsed — callers decide whether that is a warning (validator) or ignorable
  * (inference).
@@ -45,4 +45,4 @@ const discoverContainerInfo = (projectRoot: string, schemaDirectory: string): Di
 export type { DiscoverContainerInfoResult };
 export { discoverContainerInfo };
 
-export { type ContainerIR } from "@cirrus/codegen";
+export { type ContainerIR } from "@lunora/codegen";

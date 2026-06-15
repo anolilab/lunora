@@ -2,17 +2,17 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 /**
- * The meta-frameworks Cirrus can compose with, plus `"none"` for a standalone
+ * The meta-frameworks Lunora can compose with, plus `"none"` for a standalone
  * SPA / SSR-less project (the current default). Mirrors PLAN4 §2.4.
  */
 type DetectedFramework = "astro" | "none" | "nuxt" | "react-router" | "solid-start" | "sveltekit" | "tanstack-start" | "tanstack-start-solid";
 
 /**
- * void's class model (PLAN4 §3). Class A is Vite-native and Cirrus owns the
+ * void's class model (PLAN4 §3). Class A is Vite-native and Lunora owns the
  * worker entry (`createWorker({ httpRouter })`). Class B frameworks own their own
- * Cloudflare adapter, so Cirrus injects its worker composition into the
+ * Cloudflare adapter, so Lunora injects its worker composition into the
  * framework's server entry via hooks (PLAN4 M4). Class C is non-CF / SSR-less —
- * ship the client adapter + a standalone Cirrus worker (today's default).
+ * ship the client adapter + a standalone Lunora worker (today's default).
  */
 type FrameworkClass = "A" | "B" | "C";
 
@@ -30,8 +30,8 @@ interface FrameworkDetection {
  * first match wins, so the most specific signatures come first.
  *
  * This is the SINGLE source of truth for framework detection, shared by
- * `@cirrus/vite` (which re-exports it) and `@cirrus/cli` (which wraps it to add
- * the per-framework client-adapter mapping). Both depend on `@cirrus/config`, so
+ * `@lunora/vite` (which re-exports it) and `@lunora/cli` (which wraps it to add
+ * the per-framework client-adapter mapping). Both depend on `@lunora/config`, so
  * the table can never drift between them.
  */
 const FRAMEWORK_SIGNATURES: ReadonlyArray<{ class: FrameworkClass; dependency: string; framework: DetectedFramework }> = [

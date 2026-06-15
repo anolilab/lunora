@@ -1,7 +1,7 @@
 export { default as createAi } from "./create-ai";
-export type { AiBindingLike, AiGatewayOptions, CirrusAi, CirrusAiOptions, EmbeddingModelInput, ModelInput, WorkersAiProviderLike } from "./types";
+export type { AiBindingLike, AiGatewayOptions, LunoraAi, LunoraAiOptions, EmbeddingModelInput, ModelInput, WorkersAiProviderLike } from "./types";
 
-// Re-export the AI SDK primitives apps reach for, so `@cirrus/ai` is a single
+// Re-export the AI SDK primitives apps reach for, so `@lunora/ai` is a single
 // import for the whole inference surface. These are provider-agnostic — pass
 // them a Workers AI model (via `ctx.ai.model(...)`) or any other AI SDK model.
 export type { EmbeddingModel, LanguageModel } from "ai";

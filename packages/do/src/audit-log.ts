@@ -16,8 +16,8 @@
 
 import type { SqlCursor, SqlExec } from "./ctx-db";
 
-/** Reserved append-only table backing the studio Audit tab. Auto-hidden from the data browser by the `__cirrus` prefix. */
-const AUDIT_LOG_TABLE = "__cirrus_audit__";
+/** Reserved append-only table backing the studio Audit tab. Auto-hidden from the data browser by the `__lunora` prefix. */
+const AUDIT_LOG_TABLE = "__lunora_audit__";
 
 /** Most recent entries kept; older rows are trimmed after each append so the log stays bounded. */
 const AUDIT_LOG_RETENTION = 1000;
@@ -38,7 +38,7 @@ interface AuditEntry {
     ts: number;
 }
 
-/** Payload of a `__cirrus_admin__:getAuditLog` call: the recorded entries, newest first. */
+/** Payload of a `__lunora_admin__:getAuditLog` call: the recorded entries, newest first. */
 interface AuditLogResult {
     entries: AuditEntry[];
 }
@@ -60,7 +60,7 @@ const runSql = <Row = Record<string, unknown>>(sql: SqlExec, query: string, ...p
 };
 
 /**
- * Create the `__cirrus_audit__` table. `seq` is an `AUTOINCREMENT` primary key,
+ * Create the `__lunora_audit__` table. `seq` is an `AUTOINCREMENT` primary key,
  * giving each shard a monotonic cursor the Audit tab pages through; `detail`
  * holds JSON extra context and is `NULL` when none was recorded. Idempotent, so
  * read and write paths can call it defensively.

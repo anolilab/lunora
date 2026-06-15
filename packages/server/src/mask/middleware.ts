@@ -15,7 +15,7 @@
  * **Limitation — nested `with` relations are NOT masked.** Masking rewrites the
  * rows of the table named in the call (`ctx.db.posts.findMany(...)` masks
  * `posts`). Rows pulled in as a relation via `with` are hydrated below the
- * `ctx.db` facade by `@cirrus/do`'s relation fetcher, on a path this middleware
+ * `ctx.db` facade by `@lunora/do`'s relation fetcher, on a path this middleware
  * never sees — so `ctx.db.posts.findMany({ with: { author: true } })` returns
  * each `author` in the clear even if `users` is masked. This mirrors RLS, whose
  * row filter likewise does not descend into `with`-hydrated children. If a
@@ -23,7 +23,7 @@
  * with `rls()` rather than relying on the parent's mask.
  *
  * 2. **Analytical reductions fail closed** — `aggregate` / `groupBy` over a
- * masked column throw `CirrusError("MASK_UNSUPPORTED")`: a group key *is* the
+ * masked column throw `LunoraError("MASK_UNSUPPORTED")`: a group key *is* the
  * raw value and an aggregate is computed *from* it, so neither can be served
  * without leaking what the mask hides. `count` / `rank` / `rankBefore` return
  * counts-of-rows (no column value), so they pass through. `rankPage` returns
@@ -49,7 +49,7 @@
  * column-masked.
  */
 import type { Middleware } from "../builder/types";
-import { CirrusError } from "../error";
+import { LunoraError } from "../error";
 import type { FacadeEntry } from "../facade";
 import { bindOrm, bindTableFacade } from "../facade";
 import type { MaskColumns, MaskContext, MaskOptions, MaskPolicies, Permission, Role } from "./types";
@@ -92,7 +92,7 @@ interface TableReaderLike {
 /**
  * Structural projection of the runtime ORM writer — the same subset
  * `../rls/middleware` mirrors, so the wrapper is interchangeable between
- * `@cirrus/do`'s and `@cirrus/d1`'s `DatabaseWriterLike` without an
+ * `@lunora/do`'s and `@lunora/d1`'s `DatabaseWriterLike` without an
  * inter-package dependency. `rankBefore` is optional (the D1 twin omits it).
  */
 interface MaskDatabase {
@@ -280,7 +280,7 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
             const located = await base.getWithTable(id);
 
             if (!located) {
-                // eslint-disable-next-line unicorn/no-null -- absent row mirrors @cirrus/do's writer null sentinel
+                // eslint-disable-next-line unicorn/no-null -- absent row mirrors @lunora/do's writer null sentinel
                 return { row: null, tableName: undefined };
             }
 
@@ -290,7 +290,7 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
         const row = await base.get(id);
 
         if (!row) {
-            // eslint-disable-next-line unicorn/no-null -- absent row mirrors @cirrus/do's writer null sentinel
+            // eslint-disable-next-line unicorn/no-null -- absent row mirrors @lunora/do's writer null sentinel
             return { row: null, tableName: undefined };
         }
 
@@ -316,7 +316,7 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
         const offending = fields.find((field): field is string => typeof field === "string" && field in columns);
 
         if (offending !== undefined) {
-            throw new CirrusError("MASK_UNSUPPORTED", `${method}() over masked column "${offending}" on "${tableName}" is not supported`);
+            throw new LunoraError("MASK_UNSUPPORTED", `${method}() over masked column "${offending}" on "${tableName}" is not supported`);
         }
     };
 

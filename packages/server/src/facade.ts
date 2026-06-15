@@ -3,7 +3,7 @@
  * the kitcn-style `ctx.orm` namespace, as plain runtime helpers. This is the ONE
  * source of truth for the facade shape, shared by two callers so they can never
  * drift (a drift here is security-relevant — a facade accessor the RLS
- * middleware forgot to re-bind would read around policy). `@cirrus/codegen`
+ * middleware forgot to re-bind would read around policy). `@lunora/codegen`
  * emits `ctx.db`/`ctx.orm` by calling these over the raw shard writer (and the
  * D1 `globalDb` writer for `.global()` tables); the RLS middleware re-binds the
  * policy tables by calling them over the policy-enforcing wrapped writer.
@@ -17,7 +17,7 @@
 /**
  * Minimal structural writer the facade binds over. Declared with **method**
  * syntax (not arrow properties) so a more-specifically-typed writer — both
- * `@cirrus/do`'s `DatabaseWriterLike` and the RLS middleware's wrapped writer —
+ * `@lunora/do`'s `DatabaseWriterLike` and the RLS middleware's wrapped writer —
  * stays assignable under bivariant parameter checking. That is the whole reason
  * the shared helper can serve both callers, hence the rule exemption.
  */

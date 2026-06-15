@@ -1,19 +1,19 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-import { workflowBindingName, workflowClassName, workflowDefaultName } from "@cirrus/workflow";
+import { workflowBindingName, workflowClassName, workflowDefaultName } from "@lunora/workflow";
 import type { CallExpression, Expression, Identifier, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { diagnosticAt } from "./diagnostics";
 import type { WorkflowIR } from "./ir";
 
-/** The only file workflows may be declared in — mirrors `cirrus/containers.ts`. */
+/** The only file workflows may be declared in — mirrors `lunora/containers.ts`. */
 const WORKFLOWS_FILENAME = "workflows.ts";
 
 /**
  * Decide whether a callee identifier refers to `defineWorkflow` from
- * `@cirrus/workflow`. Mirrors `isDefineContainer`: trust the import declaration
+ * `@lunora/workflow`. Mirrors `isDefineContainer`: trust the import declaration
  * when the checker has a symbol (so aliasing survives), and fall back to the
  * surface text when no symbol is available.
  */
@@ -29,7 +29,7 @@ const isDefineWorkflow = (identifier: Identifier): boolean => {
             continue;
         }
 
-        if (declaration.getImportDeclaration().getModuleSpecifierValue() !== "@cirrus/workflow") {
+        if (declaration.getImportDeclaration().getModuleSpecifierValue() !== "@lunora/workflow") {
             return false;
         }
 
@@ -111,12 +111,12 @@ const workflowsFromSource = (source: SourceFile): WorkflowIR[] => {
 
 /**
  * Discover every workflow the project declares: exported `defineWorkflow()`
- * calls in `cirrus/workflows.ts`. Returns `[]` when the file doesn't exist. The
+ * calls in `lunora/workflows.ts`. Returns `[]` when the file doesn't exist. The
  * only wrangler-relevant literal is the optional `name` override; the workflow
  * body is runtime-only, so codegen never evaluates it.
  */
-const discoverWorkflows = (project: Project, cirrusDirectory: string): WorkflowIR[] => {
-    const workflowsPath = join(cirrusDirectory, WORKFLOWS_FILENAME);
+const discoverWorkflows = (project: Project, lunoraDirectory: string): WorkflowIR[] => {
+    const workflowsPath = join(lunoraDirectory, WORKFLOWS_FILENAME);
 
     if (!existsSync(workflowsPath)) {
         return [];

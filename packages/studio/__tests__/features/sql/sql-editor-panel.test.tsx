@@ -1,4 +1,4 @@
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, it } from "vitest";
@@ -10,9 +10,9 @@ import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
 
 const renderPanel = (mock: MockClientHooks): ReactElement => (
-    <CirrusProvider client={mock.asClient}>
+    <LunoraProvider client={mock.asClient}>
         <SqlEditorPanel />
-    </CirrusProvider>
+    </LunoraProvider>
 );
 
 /** A mock that serves an empty SQL result plus a small schema for autocomplete. */
@@ -160,7 +160,7 @@ describe("sqlEditorPanel", () => {
         fireEvent.click(screen.getByTestId("sql-history-clear"));
 
         expect(screen.queryByTestId("sql-history")).toBeNull();
-        expect(localStorage.getItem("cirrus-studio-sql-history")).toBe("[]");
+        expect(localStorage.getItem("lunora-studio-sql-history")).toBe("[]");
     });
 
     it("formats the current draft in place", () => {
@@ -230,7 +230,7 @@ describe("sqlEditorPanel", () => {
     /** Resolve once the panel's `listTables` schema load has fired. */
     const waitForSchema = async (mock: MockClientHooks): Promise<void> => {
         await waitFor(() => {
-            if (!mock.query.mock.calls.some((call) => call[0]?.__cirrusRef === ADMIN_FUNCTIONS.listTables)) {
+            if (!mock.query.mock.calls.some((call) => call[0]?.__lunoraRef === ADMIN_FUNCTIONS.listTables)) {
                 throw new Error("schema not loaded yet");
             }
         });

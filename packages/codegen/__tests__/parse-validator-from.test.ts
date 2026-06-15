@@ -15,7 +15,7 @@ let workdir: string;
 
 describe("v.from() in codegen", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-from-"));
+        workdir = mkdtempSync(join(tmpdir(), "lunora-from-"));
     });
 
     afterEach(() => {
@@ -35,7 +35,7 @@ describe("v.from() in codegen", () => {
         writeFunction(
             "messages.ts",
             `
-            import { query } from "@cirrus/server";
+            import { query } from "@lunora/server";
             const externalSchema = { "~standard": { version: 1, vendor: "fake", validate: (val) => ({ value: val }) } };
             export const list = query({
                 args: { text: v.from(externalSchema), count: v.number() },

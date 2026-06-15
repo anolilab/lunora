@@ -9,7 +9,7 @@ interface CommandContext<TOptions extends Record<string, unknown>> {
     argument: string[];
     /** The working directory (`toolbox.process.cwd`). */
     cwd: string;
-    /** A fresh Cirrus logger. */
+    /** A fresh Lunora logger. */
     logger: Logger;
     /** Parsed, camelCased options (`toolbox.options`). */
     options: TOptions;

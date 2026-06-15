@@ -1,13 +1,13 @@
-import { CirrusClient } from "@cirrus/client";
+import { LunoraClient } from "@lunora/client";
 import type { CallToolResult, ListToolsResult } from "@modelcontextprotocol/sdk/types.js";
 import { CallToolRequestSchema, ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { createCirrusMcpServer } from "../src/server";
+import { createLunoraMcpServer } from "../src/server";
 
 /** Minimal mock exposing only the methods the tools touch. */
 const mockClient = (): {
-    asClient: CirrusClient;
+    asClient: LunoraClient;
     listFunctions: ReturnType<typeof vi.fn>;
     query: ReturnType<typeof vi.fn>;
 } => {
@@ -16,7 +16,7 @@ const mockClient = (): {
         return { count: 7 };
     });
 
-    const client = { listFunctions, query } as unknown as CirrusClient;
+    const client = { listFunctions, query } as unknown as LunoraClient;
 
     return { asClient: client, listFunctions, query };
 };
@@ -26,7 +26,7 @@ const mockClient = (): {
  * request method. We don't drive a transport here; we reach the handlers the
  * same way the SDK does — by looking them up via the request schema's method.
  */
-const handlerFor = (server: ReturnType<typeof createCirrusMcpServer>, method: string): ((request: Record<string, unknown>) => unknown) => {
+const handlerFor = (server: ReturnType<typeof createLunoraMcpServer>, method: string): ((request: Record<string, unknown>) => unknown) => {
     // eslint-disable-next-line no-underscore-dangle -- reach into the SDK's private handler map; there is no public accessor for registered handlers.
     const handlers = (server as unknown as { _requestHandlers: Map<string, (request: unknown, extra: unknown) => unknown> })._requestHandlers;
     const handler = handlers.get(method);
@@ -48,15 +48,15 @@ describe("resolveClient", () => {
     it("throws when neither a client nor a url is provided", () => {
         expect.assertions(1);
 
-        expect(() => createCirrusMcpServer({})).toThrow(/requires either a `client` or a `url`/);
+        expect(() => createLunoraMcpServer({})).toThrow(/requires either a `client` or a `url`/);
     });
 
     it("wires the token through setAuthToken when constructed from a url", () => {
         expect.assertions(2);
 
-        const setAuthToken = vi.spyOn(CirrusClient.prototype, "setAuthToken").mockImplementation(() => undefined);
+        const setAuthToken = vi.spyOn(LunoraClient.prototype, "setAuthToken").mockImplementation(() => undefined);
 
-        createCirrusMcpServer({ token: "admin-token", url: "https://example.workers.dev" });
+        createLunoraMcpServer({ token: "admin-token", url: "https://example.workers.dev" });
 
         expect(setAuthToken).toHaveBeenCalledTimes(1);
         expect(setAuthToken).toHaveBeenCalledWith("admin-token");
@@ -65,27 +65,27 @@ describe("resolveClient", () => {
     it("does not call setAuthToken when no token is given", () => {
         expect.assertions(1);
 
-        const setAuthToken = vi.spyOn(CirrusClient.prototype, "setAuthToken").mockImplementation(() => undefined);
+        const setAuthToken = vi.spyOn(LunoraClient.prototype, "setAuthToken").mockImplementation(() => undefined);
 
-        createCirrusMcpServer({ url: "https://example.workers.dev" });
+        createLunoraMcpServer({ url: "https://example.workers.dev" });
 
         expect(setAuthToken).not.toHaveBeenCalled();
     });
 });
 
-describe("createCirrusMcpServer request handlers", () => {
+describe("createLunoraMcpServer request handlers", () => {
     it("listTools returns the full tool definition set", async () => {
         expect.assertions(1);
 
-        const server = createCirrusMcpServer({ client: mockClient().asClient });
+        const server = createLunoraMcpServer({ client: mockClient().asClient });
         const result = (await handlerFor(server, ListToolsRequestSchema.shape.method.value)({})) as ListToolsResult;
 
         expect(result.tools.map((tool) => tool.name)).toStrictEqual([
-            "cirrus_list_functions",
-            "cirrus_list_tables",
-            "cirrus_run_query",
-            "cirrus_run_mutation",
-            "cirrus_run_action",
+            "lunora_list_functions",
+            "lunora_list_tables",
+            "lunora_run_query",
+            "lunora_run_mutation",
+            "lunora_run_action",
         ]);
     });
 
@@ -93,12 +93,12 @@ describe("createCirrusMcpServer request handlers", () => {
         expect.assertions(2);
 
         const mock = mockClient();
-        const server = createCirrusMcpServer({ client: mock.asClient });
+        const server = createLunoraMcpServer({ client: mock.asClient });
         const result = (await handlerFor(
             server,
             CallToolRequestSchema.shape.method.value,
         )({
-            params: { arguments: {}, name: "cirrus_list_functions" },
+            params: { arguments: {}, name: "lunora_list_functions" },
         })) as CallToolResult;
 
         expect(mock.listFunctions).toHaveBeenCalledTimes(1);
@@ -109,7 +109,7 @@ describe("createCirrusMcpServer request handlers", () => {
         expect.assertions(1);
 
         const mock = mockClient();
-        const server = createCirrusMcpServer({ client: mock.asClient });
+        const server = createLunoraMcpServer({ client: mock.asClient });
 
         // No `arguments` key at all — the handler coalesces it to `{}`. With no
         // functionPath this is a validation error surfaced as an error result,
@@ -118,7 +118,7 @@ describe("createCirrusMcpServer request handlers", () => {
             server,
             CallToolRequestSchema.shape.method.value,
         )({
-            params: { name: "cirrus_run_query" },
+            params: { name: "lunora_run_query" },
         })) as CallToolResult;
 
         expect(result.isError).toBe(true);

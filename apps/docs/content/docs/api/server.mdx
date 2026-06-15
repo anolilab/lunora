@@ -1,13 +1,13 @@
 ---
-title: "@cirrus/server"
+title: "@lunora/server"
 description: Authoring API — defineSchema, query, mutation, action, validators.
 ---
 
-`@cirrus/server` is the authoring-side package. It is the only Cirrus package
-you import from your `cirrus/*.ts` function files.
+`@lunora/server` is the authoring-side package. It is the only Lunora package
+you import from your `lunora/*.ts` function files.
 
 ```ts
-import { action, defineSchema, defineTable, mutation, query, v } from "@cirrus/server";
+import { action, defineSchema, defineTable, mutation, query, v } from "@lunora/server";
 ```
 
 ## `defineSchema(tables)`
@@ -77,10 +77,10 @@ ctx.db.insert("messages", doc, { clientId });
 
 `clientId` is validated for shape (a v1–v8 UUID) and still subject to the
 primary-key uniqueness constraint, so a client can't collide with, overwrite, or
-forge a peer row. This is the mechanism [`@cirrus/db`](/docs/addons/db#client-generated-ids)
+forge a peer row. This is the mechanism [`@lunora/db`](/docs/addons/db#client-generated-ids)
 uses to reconcile an optimistic row with its persisted server row.
 
 ## See also
 
-- [@cirrus/client](/docs/api/client)
+- [@lunora/client](/docs/api/client)
 - [Concepts: schema](/docs/concepts/schema)

@@ -1,4 +1,4 @@
-import type { FunctionReference } from "@cirrus/client";
+import type { FunctionReference } from "@lunora/client";
 
 /**
  * Build a {@link FunctionReference} for a reserved admin RPC path. All admin
@@ -7,7 +7,7 @@ import type { FunctionReference } from "@cirrus/client";
  * `client.query` — a pure one-shot RPC with no optimistic/offline machinery.
  */
 export const adminRef = (path: string): FunctionReference => {
-    return { __cirrusRef: path };
+    return { __lunoraRef: path };
 };
 
 /** Translate a free-text shard key into the client's call options. Empty → root shard. */

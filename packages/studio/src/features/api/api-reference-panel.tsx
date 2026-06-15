@@ -1,4 +1,4 @@
-import { useCirrus } from "@cirrus/react";
+import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useCallback, useMemo } from "react";
 
@@ -15,7 +15,7 @@ interface ApiReferencePanelProps {
      * Inline OpenAPI document. When supplied the panel renders it directly and
      * skips the fetch — used by the mock harness and by hosts that already hold
      * the generated spec. When omitted the panel fetches the worker's
-     * admin-gated `GET /_cirrus/admin/openapi` endpoint via the client.
+     * admin-gated `GET /_lunora/admin/openapi` endpoint via the client.
      */
     readonly spec?: unknown;
 }
@@ -43,7 +43,7 @@ const classifySpec = (spec: unknown): SpecFetchState<OpenApiDocument> => {
  * schema tables, a live "try it" console, and copy-paste request samples, all
  * themed to the studio. The spec comes from an inline
  * {@link ApiReferencePanelProps.spec} prop, or — by default — the worker's
- * admin-gated `GET /_cirrus/admin/openapi` endpoint fetched through the client.
+ * admin-gated `GET /_lunora/admin/openapi` endpoint fetched through the client.
  *
  * This replaced the embedded Scalar reference (a Vue app in React): Scalar's
  * portal/overlay layers repeatedly intercepted clicks and froze the tab, and it
@@ -52,7 +52,7 @@ const classifySpec = (spec: unknown): SpecFetchState<OpenApiDocument> => {
  */
 const ApiReferencePanel = ({ spec: inlineSpec }: ApiReferencePanelProps): ReactElement => {
     const t = useT();
-    const client = useCirrus();
+    const client = useLunora();
 
     const fetchOpenApi = useCallback(() => client.fetchOpenApi(), [client]);
     const state = useAdminSpec<OpenApiDocument>(inlineSpec, fetchOpenApi, classifySpec);
@@ -81,7 +81,7 @@ const ApiReferencePanel = ({ spec: inlineSpec }: ApiReferencePanelProps): ReactE
     if (state.kind === "empty" || model === undefined) {
         return (
             <EmptyState
-                description={t("Run `cirrus codegen` and wire `_generated/openapi.json` to the worker to render the API reference here.")}
+                description={t("Run `lunora codegen` and wire `_generated/openapi.json` to the worker to render the API reference here.")}
                 testId="api-reference-empty"
                 title={t("No OpenAPI spec configured")}
             />

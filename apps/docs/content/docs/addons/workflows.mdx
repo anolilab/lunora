@@ -1,9 +1,9 @@
 ---
-title: "@cirrus/workflow"
+title: "@lunora/workflow"
 description: Durable, multi-step execution that replays deterministically — built on Cloudflare Workflows.
 ---
 
-`@cirrus/workflow` gives Cirrus durable workflows: chain steps into a single
+`@lunora/workflow` gives Lunora durable workflows: chain steps into a single
 unit that **survives Worker restarts and redeploys** and **replays
 deterministically** on failure. Each step's result is persisted and memoized —
 when a later step throws, only that step retries; the completed ones don't run
@@ -21,12 +21,12 @@ enough.
 
 ## Define a workflow
 
-Workflows live in `cirrus/workflows.ts` as named exports. Scaffold one with
-`vis generate cirrus-workflow --name=orderPipeline`, or write it by hand:
+Workflows live in `lunora/workflows.ts` as named exports. Scaffold one with
+`vis generate lunora-workflow --name=orderPipeline`, or write it by hand:
 
 ```ts
-// cirrus/workflows.ts
-import { defineWorkflow } from "@cirrus/workflow";
+// lunora/workflows.ts
+import { defineWorkflow } from "@lunora/workflow";
 
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/server";
@@ -69,7 +69,7 @@ function caller:
 | ---------------- | --------------------------------------------------------------------------------------------------- |
 | `context.params` | The input passed to `.create({ params })`, typed as `Params`.                                       |
 | `context.step`   | The durable-step API — `do` / `sleep` / `sleepUntil` / `waitForEvent`.                              |
-| `context.run`    | Call a Cirrus function (`api.*`) by typed reference; pass `{ shardKey }` to target a shard.         |
+| `context.run`    | Call a Lunora function (`api.*`) by typed reference; pass `{ shardKey }` to target a shard.         |
 | `context.log`    | Structured logger (`debug`/`info`/`warn`/`error`), captured by `wrangler tail` and the Studio logs. |
 | `context.event`  | The raw triggering event (`id`, `payload`, timestamp).                                              |
 | `context.env`    | The Worker environment bindings.                                                                    |
@@ -109,7 +109,7 @@ Codegen wires a typed `ctx.workflows` handle onto **mutations and actions**.
 Start an instance from a function:
 
 ```ts
-// cirrus/channels.ts
+// lunora/channels.ts
 export const create = mutation({
     args: { channelId: v.id("channels") },
     handler: async (context, { channelId }) => {
@@ -134,11 +134,11 @@ An instance handle exposes its lifecycle: `status()` (returns
 
 ## Wiring (handled by codegen)
 
-After adding `cirrus/workflows.ts`, re-run codegen (`cirrus dev` does this on
+After adding `lunora/workflows.ts`, re-run codegen (`lunora dev` does this on
 save). It:
 
 1. Emits a `WorkflowEntrypoint` subclass per export into
-   `cirrus/_generated/workflows.ts` (`channelWelcome` → `ChannelWelcomeWorkflow`).
+   `lunora/_generated/workflows.ts` (`channelWelcome` → `ChannelWelcomeWorkflow`).
 2. Wires the typed `ctx.workflows` handle.
 3. Reconciles `wrangler.jsonc`'s `workflows[]` array — `binding`, `class_name`,
    and `name` — from the same definition.
@@ -148,7 +148,7 @@ them:
 
 ```ts
 // src/server/index.ts
-export { ChannelWelcomeWorkflow } from "../../cirrus/_generated/workflows";
+export { ChannelWelcomeWorkflow } from "../../lunora/_generated/workflows";
 ```
 
 The resulting binding:

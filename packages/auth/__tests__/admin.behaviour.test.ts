@@ -11,7 +11,7 @@ import { admin } from "../src/plugins";
  * operation talks to `auth.$context` correctly and that the trusted server-side
  * path bypasses better-auth's own admin-session gate — i.e. these calls work
  * with no caller headers, which is the whole point of the admin-token-gated
- * Cirrus endpoints that drive them.
+ * Lunora endpoints that drive them.
  */
 
 const SECRET = "x".repeat(32);

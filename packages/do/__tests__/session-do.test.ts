@@ -38,7 +38,7 @@ const createFakeStorage = (): {
 const authHeaders = (extra: Record<string, string> = {}): Record<string, string> => {
     return {
         "content-type": "application/json",
-        "x-cirrus-session-do-secret": TEST_SECRET,
+        "x-lunora-session-do-secret": TEST_SECRET,
         ...extra,
     };
 };
@@ -80,12 +80,12 @@ describe("sessionDO", () => {
             }),
         );
 
-        const found = await session.fetch(new Request("https://session.internal/get", { headers: authHeaders({ "x-cirrus-session-token": TOK_2 }) }));
+        const found = await session.fetch(new Request("https://session.internal/get", { headers: authHeaders({ "x-lunora-session-token": TOK_2 }) }));
 
         expect(found.status).toBe(200);
 
         const missing = await session.fetch(
-            new Request("https://session.internal/get", { headers: authHeaders({ "x-cirrus-session-token": "e".repeat(32) }) }),
+            new Request("https://session.internal/get", { headers: authHeaders({ "x-lunora-session-token": "e".repeat(32) }) }),
         );
 
         expect(missing.status).toBe(404);
@@ -100,7 +100,7 @@ describe("sessionDO", () => {
         await state.storage.put(`s:${TOK_DEAD}`, { createdAt: Date.now() - 10_000, expiresAt: Date.now() - 1, userId: "u" });
 
         const session = new SessionDO(state as any, TEST_ENV);
-        const response = await session.fetch(new Request("https://session.internal/get", { headers: authHeaders({ "x-cirrus-session-token": TOK_DEAD }) }));
+        const response = await session.fetch(new Request("https://session.internal/get", { headers: authHeaders({ "x-lunora-session-token": TOK_DEAD }) }));
 
         expect(response.status).toBe(404);
         await expect(state.storage.get(`s:${TOK_DEAD}`)).resolves.toBeUndefined();
@@ -122,7 +122,7 @@ describe("sessionDO", () => {
 
         const first = await session.fetch(
             new Request("https://session.internal/revoke", {
-                headers: authHeaders({ "x-cirrus-session-token": TOK_DOOMED }),
+                headers: authHeaders({ "x-lunora-session-token": TOK_DOOMED }),
                 method: "DELETE",
             }),
         );
@@ -132,7 +132,7 @@ describe("sessionDO", () => {
         // Idempotent — revoking a missing token still succeeds.
         const second = await session.fetch(
             new Request("https://session.internal/revoke", {
-                headers: authHeaders({ "x-cirrus-session-token": TOK_DOOMED }),
+                headers: authHeaders({ "x-lunora-session-token": TOK_DOOMED }),
                 method: "DELETE",
             }),
         );

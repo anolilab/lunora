@@ -1,4 +1,4 @@
-import { useConnectionStatus } from "@cirrus/react";
+import { useConnectionStatus } from "@lunora/react";
 import type { ReactElement } from "react";
 
 import { useT } from "../i18n/i18n-context";

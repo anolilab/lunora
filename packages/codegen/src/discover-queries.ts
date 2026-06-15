@@ -1,7 +1,7 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { cirrusRelativePath, listCirrusSourceFiles } from "./discover-functions";
+import { lunoraRelativePath, listLunoraSourceFiles } from "./discover-functions";
 import type { QueryReadIR } from "./ir";
 
 /** Chain methods that narrow a read so it is not a full scan. */
@@ -67,17 +67,17 @@ const tableOf = (queryCall: CallExpression): string => {
 };
 
 /**
- * Discover `ctx.db.query("table")…` reads under the cirrus source directory and
+ * Discover `ctx.db.query("table")…` reads under the lunora source directory and
  * reduce each to a {@link QueryReadIR}. Only reads that call `.filter()` are
  * returned — an unfiltered read is never a `filter_without_index` candidate, so
  * dropping the rest keeps the lint input small.
  */
-const discoverQueries = (project: Project, cirrusDirectory: string): QueryReadIR[] => {
+const discoverQueries = (project: Project, lunoraDirectory: string): QueryReadIR[] => {
     const reads: QueryReadIR[] = [];
 
-    for (const filePath of listCirrusSourceFiles(cirrusDirectory)) {
+    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-        const relativePath = cirrusRelativePath(cirrusDirectory, filePath);
+        const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
 
         for (const call of sourceFile.getDescendantsOfKind(SyntaxKind.CallExpression)) {
             if (!isDatabaseQueryCall(call)) {

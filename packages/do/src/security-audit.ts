@@ -13,9 +13,9 @@ type SecurityFindingLevel = "error" | "info" | "warning";
  * remediation hint — so the rule set is trivially unit-testable and the wire
  * payload is tiny.
  *
- * `admin-token-weak`: `CIRRUS_ADMIN_TOKEN` is set but short enough to be brute-forceable. (An *unset* token disables admin introspection entirely, so this audit — itself admin-gated — only ever runs with a token present.)
+ * `admin-token-weak`: `LUNORA_ADMIN_TOKEN` is set but short enough to be brute-forceable. (An *unset* token disables admin introspection entirely, so this audit — itself admin-gated — only ever runs with a token present.)
  *
- * `ws-gate-open`: admin HTTP RPCs require the bearer, but `CIRRUS_WS_BEARER` is unset so the WebSocket upgrade gate defaults open — live admin subscriptions (Logs, Metrics, …) are reachable without a credential.
+ * `ws-gate-open`: admin HTTP RPCs require the bearer, but `LUNORA_WS_BEARER` is unset so the WebSocket upgrade gate defaults open — live admin subscriptions (Logs, Metrics, …) are reachable without a credential.
  *
  * `dev-args-unredacted`: the worker reports a development environment, so the durable request log captures raw, un-redacted args and identity (PII). A production deploy mislabeled as dev would persist sensitive payloads.
  */
@@ -32,13 +32,13 @@ interface SecurityFinding {
     level: SecurityFindingLevel;
 }
 
-/** Payload of a `__cirrus_admin__:getSecurityAudit` call: every detected finding, worst-first. */
+/** Payload of a `__lunora_admin__:getSecurityAudit` call: every detected finding, worst-first. */
 interface SecurityAuditResult {
     findings: SecurityFinding[];
 }
 
 /**
- * Minimum `CIRRUS_ADMIN_TOKEN` length considered safe against brute force. A
+ * Minimum `LUNORA_ADMIN_TOKEN` length considered safe against brute force. A
  * short token gates the studio's destructive admin ops (writeRow, clearTable,
  * pitrRestore, …), so a guessable one is a real exposure. 24 chars ≈ 128 bits
  * for a random base64-ish token.
@@ -54,23 +54,23 @@ const LEVEL_ORDER: Record<SecurityFindingLevel, number> = { error: 0, info: 2, w
  * same findings — so the rules unit-test without a live shard.
  *
  * This is the server half of the studio's **Security Advisor**: CF's dashboard
- * is infra-level and can't reason about cirrus's admin/WS gates or its
- * request-log redaction policy, so these are signals only cirrus can surface.
+ * is infra-level and can't reason about lunora's admin/WS gates or its
+ * request-log redaction policy, so these are signals only lunora can surface.
  * The audit is served behind the same admin gate as every other introspection
- * RPC, so it only runs once a `CIRRUS_ADMIN_TOKEN` is configured — which is why
+ * RPC, so it only runs once a `LUNORA_ADMIN_TOKEN` is configured — which is why
  * a *missing* token is never itself a finding here (introspection is simply off).
  */
 const buildSecurityAudit = (rawEnv: unknown): SecurityAuditResult => {
     const env = (rawEnv ?? {}) as Record<string, unknown>;
     const findings: SecurityFinding[] = [];
 
-    const adminToken = env["CIRRUS_ADMIN_TOKEN"];
+    const adminToken = env["LUNORA_ADMIN_TOKEN"];
 
     if (typeof adminToken === "string" && adminToken.length > 0 && adminToken.length < MIN_ADMIN_TOKEN_LENGTH) {
         findings.push({ detail: { length: adminToken.length, min: MIN_ADMIN_TOKEN_LENGTH }, kind: "admin-token-weak", level: "warning" });
     }
 
-    const wsBearer = env["CIRRUS_WS_BEARER"];
+    const wsBearer = env["LUNORA_WS_BEARER"];
     const dev = isDevEnvironment(env);
 
     if (typeof wsBearer !== "string" || wsBearer === "") {

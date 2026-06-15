@@ -1,6 +1,6 @@
 /**
- * Per-project lock for `cirrus add` whole-file items, persisted at
- * `cirrus/.cirrus-registry.json`.
+ * Per-project lock for `lunora add` whole-file items, persisted at
+ * `lunora/.lunora-registry.json`.
  *
  * It records, per item, the SHA-256 of each whole-file destination **as `add`
  * last wrote it**. That recorded hash is the "base" in a 3-way reconcile on
@@ -10,7 +10,7 @@
  * edited it → never clobber; drop a `.new` sidecar instead).
  *
  * Schema-extension merges are NOT tracked here — they carry their own
- * `cirrus:add` managed-block markers in `schema.ts` and are idempotent on their
+ * `lunora:add` managed-block markers in `schema.ts` and are idempotent on their
  * own (see `insert-schema-extension.ts`).
  */
 import { createHash } from "node:crypto";
@@ -21,8 +21,8 @@ import { join } from "@visulima/path";
 /** Current on-disk lock format version. */
 const LOCK_VERSION = 1 as const;
 
-/** The lock file's name, relative to the project's `cirrus/` directory. */
-const LOCK_FILE = ".cirrus-registry.json";
+/** The lock file's name, relative to the project's `lunora/` directory. */
+const LOCK_FILE = ".lunora-registry.json";
 
 /** One item's recorded state: a map of destination path (relative to project root) → last-written content hash. */
 interface LockItem {
@@ -35,7 +35,7 @@ interface RegistryLock {
 }
 
 /** Absolute path to the lock file for a project root. */
-const lockPath = (projectRoot: string): string => join(projectRoot, "cirrus", LOCK_FILE);
+const lockPath = (projectRoot: string): string => join(projectRoot, "lunora", LOCK_FILE);
 
 /** Structural guard for a parsed lock: an object carrying a non-null `items` object. */
 const isLockShape = (value: unknown): value is { items: Record<string, LockItem> } => {

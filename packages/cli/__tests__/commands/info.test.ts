@@ -35,18 +35,18 @@ const recordingLogger = (): { logger: Logger; recorded: Recorded } => {
 const PKG = `{
     "name": "demo",
     "dependencies": {
-        "@cirrus/server": "^0.0.0",
-        "@cirrus/runtime": "^0.0.0",
+        "@lunora/server": "^0.0.0",
+        "@lunora/runtime": "^0.0.0",
         "lodash": "^4.0.0"
     },
     "devDependencies": {
-        "@cirrus/vite": "^0.0.0"
+        "@lunora/vite": "^0.0.0"
     }
 }`;
 
 const WRANGLER = `{
     "name": "demo-worker",
-    "main": "cirrus/_generated/server.ts",
+    "main": "lunora/_generated/server.ts",
     "compatibility_date": "2026-04-07",
     "compatibility_flags": ["nodejs_compat"],
     "durable_objects": {
@@ -57,10 +57,10 @@ const WRANGLER = `{
 
 let workdir: string;
 
-describe("cirrus info", () => {
+describe("lunora info", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-cli-info-"));
-        cpSync(join(fixtureRoot, "cirrus"), join(workdir, "cirrus"), { recursive: true });
+        workdir = mkdtempSync(join(tmpdir(), "lunora-cli-info-"));
+        cpSync(join(fixtureRoot, "lunora"), join(workdir, "lunora"), { recursive: true });
         writeFileSync(join(workdir, "package.json"), PKG, "utf8");
         writeFileSync(join(workdir, "wrangler.jsonc"), WRANGLER, "utf8");
     });
@@ -69,8 +69,8 @@ describe("cirrus info", () => {
         rmSync(workdir, { force: true, recursive: true });
     });
 
-    describe("cirrus info", () => {
-        it("collects @cirrus/* packages, wrangler summary, and schema overview", () => {
+    describe("lunora info", () => {
+        it("collects @lunora/* packages, wrangler summary, and schema overview", () => {
             expect.hasAssertions();
 
             const { logger } = recordingLogger();
@@ -79,13 +79,13 @@ describe("cirrus info", () => {
 
             expect(result.code).toBe(0);
 
-            const cirrusNames = result.snapshot.cirrusPackages.map((p) => p.name);
+            const lunoraNames = result.snapshot.lunoraPackages.map((p) => p.name);
 
-            expect(cirrusNames).toContain("@cirrus/server");
-            expect(cirrusNames).toContain("@cirrus/runtime");
-            expect(cirrusNames).toContain("@cirrus/vite");
-            // Non-cirrus deps are excluded.
-            expect(cirrusNames).not.toContain("lodash");
+            expect(lunoraNames).toContain("@lunora/server");
+            expect(lunoraNames).toContain("@lunora/runtime");
+            expect(lunoraNames).toContain("@lunora/vite");
+            // Non-lunora deps are excluded.
+            expect(lunoraNames).not.toContain("lodash");
 
             expect(result.snapshot.wrangler?.name).toBe("demo-worker");
             expect(result.snapshot.wrangler?.bindings.durableObjects).toContain("SHARD");
@@ -124,7 +124,7 @@ describe("cirrus info", () => {
                 // tools like `jq` can consume it verbatim.
                 const payload = JSON.parse(written.join(""));
 
-                expect(payload.cirrusPackages?.length).toBeGreaterThan(0);
+                expect(payload.lunoraPackages?.length).toBeGreaterThan(0);
                 expect(payload.wrangler?.name).toBe("demo-worker");
             } finally {
                 spy.mockRestore();

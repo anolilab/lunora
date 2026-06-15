@@ -21,9 +21,9 @@ const asRows = (rows: AuthRow[]): never => rows as never;
 
 /**
  * A better-auth database adapter backed by an {@link AuthStore} — the bridge
- * that routes better-auth's reads and writes through Cirrus's data layer
+ * that routes better-auth's reads and writes through Lunora's data layer
  * instead of better-auth's built-in D1/Kysely adapter. Pass the result as
- * `createAuth({ database: cirrusAuthAdapter(store) })`; better-auth's
+ * `createAuth({ database: lunoraAuthAdapter(store) })`; better-auth's
  * `createAdapterFactory` handles id generation, default values, field-name
  * mapping and output shaping, so this only translates the cleaned CRUD calls
  * onto the store.
@@ -32,7 +32,7 @@ const asRows = (rows: AuthRow[]): never => rows as never;
  * const auth = createAuth({
  *     secret: env.AUTH_SECRET,
  *     emailAndPassword: { enabled: true },
- *     database: cirrusAuthAdapter(cirrusStore), // cirrusStore writes via ctx.db
+ *     database: lunoraAuthAdapter(lunoraStore), // lunoraStore writes via ctx.db
  * });
  * ```
  *
@@ -40,7 +40,7 @@ const asRows = (rows: AuthRow[]): never => rows as never;
  * relational `join` reads (an advanced opt-in) are not handled — pair the
  * adapter with `disableJoins` or let better-auth fall back to per-table reads.
  */
-const cirrusAuthAdapter = (store: AuthStore): ReturnType<typeof createAdapterFactory> =>
+const lunoraAuthAdapter = (store: AuthStore): ReturnType<typeof createAdapterFactory> =>
     createAdapterFactory({
         adapter: (): CustomAdapter => {
             return {
@@ -70,8 +70,8 @@ const cirrusAuthAdapter = (store: AuthStore): ReturnType<typeof createAdapterFac
             };
         },
         config: {
-            adapterId: "cirrus",
-            adapterName: "Cirrus Adapter",
+            adapterId: "lunora",
+            adapterName: "Lunora Adapter",
             // Conservative flags so the adapter is store-agnostic: better-auth
             // serializes dates/booleans/json to primitives (string/number) before a
             // write and parses them back after a read, so a store — in-memory or
@@ -85,8 +85,8 @@ const cirrusAuthAdapter = (store: AuthStore): ReturnType<typeof createAdapterFac
 
 /**
  * One-liner for the common case: a better-auth `database` backed by a Cloudflare
- * D1 binding, via Cirrus's SQL store — equivalent to
- * `cirrusAuthAdapter(createSqlAuthStore(d1Executor(d1)))`.
+ * D1 binding, via Lunora's SQL store — equivalent to
+ * `lunoraAuthAdapter(createSqlAuthStore(d1Executor(d1)))`.
  *
  * Prefer this over passing the raw `env.DB` as `database`. With raw D1,
  * better-auth resolves its Kysely adapter through a runtime `await import(...)`
@@ -99,6 +99,6 @@ const cirrusAuthAdapter = (store: AuthStore): ReturnType<typeof createAdapterFac
  * `ensureMigrated`'s Kysely migrator can create the tables (its `$context` is
  * never resolved, so the hang doesn't apply there).
  */
-const cirrusD1Adapter = (d1: Parameters<typeof d1Executor>[0]): ReturnType<typeof cirrusAuthAdapter> => cirrusAuthAdapter(createSqlAuthStore(d1Executor(d1)));
+const lunoraD1Adapter = (d1: Parameters<typeof d1Executor>[0]): ReturnType<typeof lunoraAuthAdapter> => lunoraAuthAdapter(createSqlAuthStore(d1Executor(d1)));
 
-export { cirrusAuthAdapter, cirrusD1Adapter };
+export { lunoraAuthAdapter, lunoraD1Adapter };

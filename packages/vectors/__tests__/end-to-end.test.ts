@@ -14,7 +14,7 @@ import type {
 
 /**
  * Stateful structural fake of `VectorizeIndexLike` — mirrors the spirit of
- * `@cirrus/runtime`'s `ShardNamespaceLike` mock: an in-memory store with a
+ * `@lunora/runtime`'s `ShardNamespaceLike` mock: an in-memory store with a
  * cosine-similarity scorer that lets us drive a real upsert → query → match
  * flow without any live Cloudflare dependency.
  */

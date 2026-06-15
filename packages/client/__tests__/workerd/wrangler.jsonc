@@ -2,7 +2,7 @@
 // boot the integration test worker. NOT for deployment.
 {
     "$schema": "../../../../node_modules/wrangler/config-schema.json",
-    "name": "cirrus-client-test-worker",
+    "name": "lunora-client-test-worker",
     "main": "test-worker.ts",
     "compatibility_date": "2026-04-07",
     "compatibility_flags": ["nodejs_compat"],

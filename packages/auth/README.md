@@ -6,7 +6,7 @@
 
 </a>
 
-<h3 align="center">Cookie-session auth for Cirrus: PBKDF2 email/password plus OAuth (PKCE), D1-backed, sessions in SessionDO</h3>
+<h3 align="center">Cookie-session auth for Lunora: PBKDF2 email/password plus OAuth (PKCE), D1-backed, sessions in SessionDO</h3>
 
 <!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
@@ -34,32 +34,32 @@
 
 ---
 
-Cookie-session authentication for Cirrus. Wraps better-auth with PBKDF2 email/password and OAuth (PKCE), backs the user store on D1, and persists sessions in the Cirrus `SessionDO`.
+Cookie-session authentication for Lunora. Wraps better-auth with PBKDF2 email/password and OAuth (PKCE), backs the user store on D1, and persists sessions in the Lunora `SessionDO`.
 
-Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
+Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
 ## Install
 
 ```sh
-npm install @cirrus/auth
+npm install @lunora/auth
 ```
 
 ```sh
-yarn add @cirrus/auth
+yarn add @lunora/auth
 ```
 
 ```sh
-pnpm add @cirrus/auth
+pnpm add @lunora/auth
 ```
 
 ## Usage
 
 ```ts
-import { cirrusD1Adapter, createAuth, handleAuthRequest } from "@cirrus/auth";
+import { lunoraD1Adapter, createAuth, handleAuthRequest } from "@lunora/auth";
 
 const auth = createAuth({
     secret: env.AUTH_SECRET,
-    database: cirrusD1Adapter(env.DB),
+    database: lunoraD1Adapter(env.DB),
     emailAndPassword: { enabled: true },
 });
 
@@ -69,17 +69,17 @@ const response = await handleAuthRequest(auth, request);
 
 ### Plugins & CAPTCHA
 
-better-auth's plugin factories are re-exported from `@cirrus/auth/plugins` (so you don't need better-auth's deep import paths): `admin`, `anonymous`, `bearer`, `captcha`, `createAccessControl`, `customSession`, `deviceAuthorization`, `emailOTP`, `genericOAuth`, `haveIBeenPwned`, `jwt`, `magicLink`, `mcp`, `multiSession`, `oAuthProxy`, `oidcProvider`, `oneTimeToken`, `organization`, `passkey`, `phoneNumber`, `siwe`, `twoFactor`, `username`, and `withMcpAuth`.
+better-auth's plugin factories are re-exported from `@lunora/auth/plugins` (so you don't need better-auth's deep import paths): `admin`, `anonymous`, `bearer`, `captcha`, `createAccessControl`, `customSession`, `deviceAuthorization`, `emailOTP`, `genericOAuth`, `haveIBeenPwned`, `jwt`, `magicLink`, `mcp`, `multiSession`, `oAuthProxy`, `oidcProvider`, `oneTimeToken`, `organization`, `passkey`, `phoneNumber`, `siwe`, `twoFactor`, `username`, and `withMcpAuth`.
 
 For Cloudflare Turnstile on the **auth flow**, use the `captcha` plugin (`captcha({ provider: "cloudflare-turnstile", secretKey: env.TURNSTILE_SECRET_KEY })`); it reads the token from the `x-captcha-response` header. For **non-auth** procedures, the package root also exports standalone helpers — `verifyTurnstile` (pure `siteverify`) and `verifyTurnstileMiddleware` (a `.use()` middleware that takes the token from the function args).
 
-> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/addons/auth)**.
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/addons/auth)**.
 
 ## Related
 
-- [`@cirrus/server`](https://www.npmjs.com/package/@cirrus/server) — define the queries and mutations that read the authenticated session.
-- [`@cirrus/d1`](https://www.npmjs.com/package/@cirrus/d1) — the D1 adapter backing auth's user table.
-- [`@cirrus/do`](https://www.npmjs.com/package/@cirrus/do) — `SessionDO`, where sessions are persisted.
+- [`@lunora/server`](https://www.npmjs.com/package/@lunora/server) — define the queries and mutations that read the authenticated session.
+- [`@lunora/d1`](https://www.npmjs.com/package/@lunora/d1) — the D1 adapter backing auth's user table.
+- [`@lunora/do`](https://www.npmjs.com/package/@lunora/do) — `SessionDO`, where sessions are persisted.
 
 ## Supported Node.js Versions
 
@@ -88,14 +88,14 @@ Here's [a post on why we think this is important](https://medium.com/the-node-js
 
 ## Contributing
 
-If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/lunora/issues) and check our [Contributing](https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
 > **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
 ## Credits
 
 - [Daniel Bannert](https://github.com/prisis)
-- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
+- [All Contributors](https://github.com/anolilab/lunora/graphs/contributors)
 
 ## Made with ❤️ at Anolilab
 
@@ -103,17 +103,17 @@ This is an open source project and will always remain free to use. If you think 
 
 ## License
 
-The Cirrus auth package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The Lunora auth package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
 
 <!-- badges -->
 
 [license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
-[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
-[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/auth?style=for-the-badge
-[npm-version]: https://www.npmjs.com/package/@cirrus/auth
-[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/auth?style=for-the-badge
-[npm-downloads]: https://www.npmjs.com/package/@cirrus/auth
+[license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@lunora/auth?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@lunora/auth
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@lunora/auth?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@lunora/auth
 [prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
-[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[prs-welcome]: https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md
 [typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
 [typescript-url]: https://www.typescriptlang.org/

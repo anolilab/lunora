@@ -1,5 +1,5 @@
 import type {
-    CirrusKvOptions,
+    LunoraKvOptions,
     Kv,
     KvGetOptions,
     KvListKey,
@@ -19,25 +19,25 @@ const MAX_LIST_LIMIT = 1000;
 
 /**
  * Reject keys that escape their tenant prefix, contain a path-traversal
- * segment, or exceed KV's size ceiling. Mirrors `@cirrus/storage`'s
+ * segment, or exceed KV's size ceiling. Mirrors `@lunora/storage`'s
  * `validateKey`. Used by every operation that takes a `key` so a malicious
  * caller can't probe peer prefixes via `..`, an empty string, or a NUL byte.
  *
  * Note: this does not enforce tenancy. Callers MUST also scope keys with a
- * per-tenant prefix (see {@link scopeKey} / {@link CirrusKvOptions.keyPrefix})
+ * per-tenant prefix (see {@link scopeKey} / {@link LunoraKvOptions.keyPrefix})
  * to prevent IDOR across tenants.
  */
 const validateKey = (key: string): void => {
     if (typeof key !== "string" || key.length === 0) {
-        throw new Error("@cirrus/kv: key must be a non-empty string");
+        throw new Error("@lunora/kv: key must be a non-empty string");
     }
 
     if (key.length > MAX_KEY_LENGTH) {
-        throw new Error(`@cirrus/kv: key exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
+        throw new Error(`@lunora/kv: key exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
     }
 
     if (key.includes("\0")) {
-        throw new Error("@cirrus/kv: key contains NUL byte");
+        throw new Error("@lunora/kv: key contains NUL byte");
     }
 
     // `.` and `..` are reserved by KV's list semantics and traversal; reject
@@ -47,7 +47,7 @@ const validateKey = (key: string): void => {
 
     for (const segment of segments) {
         if (segment === "." || segment === "..") {
-            throw new Error("@cirrus/kv: key contains a `.`/`..` path component");
+            throw new Error("@lunora/kv: key contains a `.`/`..` path component");
         }
     }
 };
@@ -57,7 +57,7 @@ const validateKey = (key: string): void => {
  * halves are validated — the prefix may not contain `..` or NUL either, and the
  * resulting key must stay under KV's length ceiling. Recommended for any
  * multi-tenant deployment so client-supplied keys can't address peer data.
- * Mirrors `scopeKey` from `@cirrus/storage`.
+ * Mirrors `scopeKey` from `@lunora/storage`.
  */
 // eslint-disable-next-line import/exports-last -- this exported helper must precede its consumer (`createKv`'s `resolve`) to avoid no-use-before-define
 export const scopeKey = (prefix: string, key: string): string => {
@@ -68,7 +68,7 @@ export const scopeKey = (prefix: string, key: string): string => {
     const composed = `${trimmedPrefix}/${key}`;
 
     if (composed.length > MAX_KEY_LENGTH) {
-        throw new Error(`@cirrus/kv: scoped key exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
+        throw new Error(`@lunora/kv: scoped key exceeds ${String(MAX_KEY_LENGTH)}-byte limit`);
     }
 
     return composed;
@@ -93,12 +93,12 @@ const toPutOptions = (options: KvPutOptions): KvNamespacePutOptions | undefined 
     return Object.keys(out).length > 0 ? out : undefined;
 };
 
-export const createKv = (options: CirrusKvOptions): Kv => {
+export const createKv = (options: LunoraKvOptions): Kv => {
     // Defensive runtime guard: `namespace` is required by the type, but JS
     // callers (and `createKv({})` misuse — exercised by a test) can omit it.
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untrusted JS callers despite the type
     if (!options.namespace) {
-        throw new Error("@cirrus/kv: `namespace` is required");
+        throw new Error("@lunora/kv: `namespace` is required");
     }
 
     const { keyPrefix, namespace } = options;
@@ -159,7 +159,7 @@ export const createKv = (options: CirrusKvOptions): Kv => {
 
     const list = async <M = unknown>(listOptions: KvListOptions = {}): Promise<KvListResult<M>> => {
         if (listOptions.prefix?.includes("\0")) {
-            throw new Error("@cirrus/kv: prefix contains NUL byte");
+            throw new Error("@lunora/kv: prefix contains NUL byte");
         }
 
         // Combine the instance keyPrefix with a caller-supplied prefix so a

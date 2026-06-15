@@ -1,13 +1,13 @@
 /**
- * `cirrus export` / `cirrus import` — Convex-style bulk data transfer.
+ * `lunora export` / `lunora import` — Convex-style bulk data transfer.
  *
- * `export` streams NDJSON from the worker's `POST /_cirrus/admin/export`
+ * `export` streams NDJSON from the worker's `POST /_lunora/admin/export`
  * endpoint to stdout (or `--out` file). `import` reads an NDJSON file and
- * POSTs batches to `POST /_cirrus/admin/import`, surfacing inserted/error
+ * POSTs batches to `POST /_lunora/admin/import`, surfacing inserted/error
  * counts to the user.
  *
  * Authentication mirrors `vis migrate`: an admin bearer via `--token` or
- * `CIRRUS_ADMIN_TOKEN`. `--prod` (with an explicit `--url`) is the guardrail
+ * `LUNORA_ADMIN_TOKEN`. `--prod` (with an explicit `--url`) is the guardrail
  * against accidentally targeting localhost in production scripts.
  */
 import { createReadStream, createWriteStream } from "node:fs";
@@ -17,8 +17,8 @@ import resolveAdminBaseUrl from "../util/admin-url";
 import type { Logger } from "../util/logger";
 import type { FetchLike } from "./run/handler";
 
-const EXPORT_ENDPOINT_PATH = "/_cirrus/admin/export";
-const IMPORT_ENDPOINT_PATH = "/_cirrus/admin/import";
+const EXPORT_ENDPOINT_PATH = "/_lunora/admin/export";
+const IMPORT_ENDPOINT_PATH = "/_lunora/admin/import";
 
 /** Rows per HTTP request when importing. Convex uses ~500; same here. */
 const DEFAULT_IMPORT_BATCH_SIZE = 500;
@@ -49,7 +49,7 @@ interface ExportCommandOptions {
     prod?: boolean;
     /** Comma-separated table list; omit to export every table. */
     tables?: string;
-    /** Admin bearer token (or `CIRRUS_ADMIN_TOKEN`). */
+    /** Admin bearer token (or `LUNORA_ADMIN_TOKEN`). */
     token?: string;
     /** Worker URL (default `http://localhost:8787`). */
     url?: string;
@@ -171,10 +171,10 @@ const runExportCommand = async (options: ExportCommandOptions): Promise<ExportCo
         return { bytes: 0, code: 1, rows: 0 };
     }
 
-    const token = options.token ?? process.env["CIRRUS_ADMIN_TOKEN"];
+    const token = options.token ?? process.env["LUNORA_ADMIN_TOKEN"];
 
     if (!token) {
-        options.logger.error("admin token required — pass --token or set CIRRUS_ADMIN_TOKEN");
+        options.logger.error("admin token required — pass --token or set LUNORA_ADMIN_TOKEN");
 
         return { bytes: 0, code: 1, rows: 0 };
     }
@@ -296,10 +296,10 @@ const resolveImportRequest = async (options: ImportCommandOptions): Promise<Impo
         return undefined;
     }
 
-    const token = options.token ?? process.env["CIRRUS_ADMIN_TOKEN"];
+    const token = options.token ?? process.env["LUNORA_ADMIN_TOKEN"];
 
     if (!token) {
-        options.logger.error("admin token required — pass --token or set CIRRUS_ADMIN_TOKEN");
+        options.logger.error("admin token required — pass --token or set LUNORA_ADMIN_TOKEN");
 
         return undefined;
     }
@@ -337,7 +337,7 @@ const resolveImportRequest = async (options: ImportCommandOptions): Promise<Impo
 
 /**
  * Stream an NDJSON file in chunks, POSTing each batch to
- * `/_cirrus/admin/import`. We keep the line buffer bounded by `batchSize` so a
+ * `/_lunora/admin/import`. We keep the line buffer bounded by `batchSize` so a
  * multi-GiB file imports without buffering everything in memory.
  */
 const runImportCommand = async (options: ImportCommandOptions): Promise<ImportCommandResult> => {

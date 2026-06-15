@@ -1,4 +1,4 @@
-import { useCirrus } from "@cirrus/react";
+import { useLunora } from "@lunora/react";
 import type { Rect, Virtualizer } from "@tanstack/react-virtual";
 import { observeElementRect, useVirtualizer } from "@tanstack/react-virtual";
 import type { ChangeEvent, CSSProperties, ReactElement } from "react";
@@ -60,9 +60,9 @@ const observeViewportRect = (instance: Virtualizer<HTMLDivElement, Element>, cal
 /**
  * Durable audit log for one shard: the admin state-changing operations
  * (`writeRow`, `runMigration`, `importShard`, `applyCdc`) recorded to the
- * reserved `__cirrus_audit__` table, newest first. Reads via the
- * `__cirrus_admin__:getAuditLog` RPC over the {@link useCirrus} client; gated by
- * the server's `CIRRUS_ADMIN_TOKEN`.
+ * reserved `__lunora_audit__` table, newest first. Reads via the
+ * `__lunora_admin__:getAuditLog` RPC over the {@link useLunora} client; gated by
+ * the server's `LUNORA_ADMIN_TOKEN`.
  *
  * Unlike the logs panel (an in-memory ring that resets on hibernation), the
  * audit log is durable and bounded only by a retention cap. The panel is always
@@ -71,7 +71,7 @@ const observeViewportRect = (instance: Virtualizer<HTMLDivElement, Element>, cal
  * filter is client-side over the already-fetched buffer — it never triggers a refetch.
  */
 const AuditPanel = ({ initialShardKey }: AuditPanelProps): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const t = useT();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
@@ -169,7 +169,7 @@ const AuditPanel = ({ initialShardKey }: AuditPanelProps): ReactElement => {
     }, []);
 
     return (
-        <div className="flex flex-col gap-4" data-testid="cirrus-audit">
+        <div className="flex flex-col gap-4" data-testid="lunora-audit">
             <div className="flex flex-wrap items-center gap-2">
                 <ShardInput onChange={setShardKey} testId="au-shard-input" value={shardKey} />
                 <LiveError message={liveError} prefix="au" />

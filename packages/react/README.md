@@ -6,7 +6,7 @@
 
 </a>
 
-<h3 align="center">React hooks for Cirrus: useQuery, useMutation, useSubscription, and useAuth</h3>
+<h3 align="center">React hooks for Lunora: useQuery, useMutation, useSubscription, and useAuth</h3>
 
 <!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
@@ -34,38 +34,38 @@
 
 ---
 
-React hooks for Cirrus — `useQuery`, `useMutation`, `useSubscription`, `useAuth`, and more — that wrap a `@cirrus/client` instance behind a `CirrusProvider`. The hooks are client-only; server-side data loading lives in the socket-free `@cirrus/react/server` entry.
+React hooks for Lunora — `useQuery`, `useMutation`, `useSubscription`, `useAuth`, and more — that wrap a `@lunora/client` instance behind a `LunoraProvider`. The hooks are client-only; server-side data loading lives in the socket-free `@lunora/react/server` entry.
 
-Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
+Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
 ## Install
 
 ```sh
-npm install @cirrus/react
+npm install @lunora/react
 ```
 
 ```sh
-yarn add @cirrus/react
+yarn add @lunora/react
 ```
 
 ```sh
-pnpm add @cirrus/react
+pnpm add @lunora/react
 ```
 
 ## Usage
 
 ```tsx
-import { CirrusClient } from "@cirrus/client";
-import { CirrusProvider, useMutation, useQuery } from "@cirrus/react";
-import { api } from "./cirrus/_generated/api";
+import { LunoraClient } from "@lunora/client";
+import { LunoraProvider, useMutation, useQuery } from "@lunora/react";
+import { api } from "./lunora/_generated/api";
 
-const client = new CirrusClient({ url: "https://app.acme.test" });
+const client = new LunoraClient({ url: "https://app.acme.test" });
 
 export function App() {
     return (
-        <CirrusProvider client={client}>
+        <LunoraProvider client={client}>
             <MessageList room="general" />
-        </CirrusProvider>
+        </LunoraProvider>
     );
 }
 
@@ -90,11 +90,11 @@ function MessageList({ room }: { room: string }) {
 }
 ```
 
-> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/api/react)**.
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/api/react)**.
 
 ## Related
 
-- [`@cirrus/client`](https://www.npmjs.com/package/@cirrus/client) — the browser SDK these hooks wrap. Its `@cirrus/client/query` subpath is the shared live-query state machine, and `@cirrus/client/ssr` provides the server-side preloading used by `@cirrus/react/server`.
+- [`@lunora/client`](https://www.npmjs.com/package/@lunora/client) — the browser SDK these hooks wrap. Its `@lunora/client/query` subpath is the shared live-query state machine, and `@lunora/client/ssr` provides the server-side preloading used by `@lunora/react/server`.
 
 ## Supported Node.js Versions
 
@@ -103,14 +103,14 @@ Here's [a post on why we think this is important](https://medium.com/the-node-js
 
 ## Contributing
 
-If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/lunora/issues) and check our [Contributing](https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
 > **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
 ## Credits
 
 - [Daniel Bannert](https://github.com/prisis)
-- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
+- [All Contributors](https://github.com/anolilab/lunora/graphs/contributors)
 
 ## Made with ❤️ at Anolilab
 
@@ -118,17 +118,17 @@ This is an open source project and will always remain free to use. If you think 
 
 ## License
 
-The Cirrus react package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The Lunora react package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
 
 <!-- badges -->
 
 [license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
-[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
-[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/react?style=for-the-badge
-[npm-version]: https://www.npmjs.com/package/@cirrus/react
-[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/react?style=for-the-badge
-[npm-downloads]: https://www.npmjs.com/package/@cirrus/react
+[license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@lunora/react?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@lunora/react
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@lunora/react?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@lunora/react
 [prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
-[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[prs-welcome]: https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md
 [typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
 [typescript-url]: https://www.typescriptlang.org/

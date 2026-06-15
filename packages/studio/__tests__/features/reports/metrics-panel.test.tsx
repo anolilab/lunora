@@ -1,4 +1,4 @@
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraProvider } from "@lunora/react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -30,9 +30,9 @@ const createClient = (metrics: ShardMetrics = METRICS): MockClientHooks =>
     });
 
 const renderPanel = (mock: MockClientHooks) => (
-    <CirrusProvider client={mock.asClient}>
+    <LunoraProvider client={mock.asClient}>
         <MetricsPanel />
-    </CirrusProvider>
+    </LunoraProvider>
 );
 
 describe("metricsPanel", () => {
@@ -127,16 +127,16 @@ describe("metricsPanel", () => {
 
         // No Live toggle: the subscription opens once the mount seed commits a shard.
         await waitFor(() => {
-            const ref = mock.subscribe.mock.calls.at(-1)?.[0] as { __cirrusRef: string } | undefined;
+            const ref = mock.subscribe.mock.calls.at(-1)?.[0] as { __lunoraRef: string } | undefined;
 
-            if (ref?.__cirrusRef !== ADMIN_FUNCTIONS.getMetrics) {
+            if (ref?.__lunoraRef !== ADMIN_FUNCTIONS.getMetrics) {
                 throw new Error("not subscribed yet");
             }
         });
 
-        const ref = mock.subscribe.mock.calls.at(-1)?.[0] as { __cirrusRef: string } | undefined;
+        const ref = mock.subscribe.mock.calls.at(-1)?.[0] as { __lunoraRef: string } | undefined;
 
-        expect(ref?.__cirrusRef).toBe(ADMIN_FUNCTIONS.getMetrics);
+        expect(ref?.__lunoraRef).toBe(ADMIN_FUNCTIONS.getMetrics);
     });
 
     it("renders a sparkline once at least two live samples accumulate", async () => {
@@ -242,7 +242,7 @@ describe("metricsPanel", () => {
         expect.assertions(3);
 
         // Seed a recently-visited shard so the aggregate covers more than root.
-        sessionStorage.setItem("cirrus-studio-recent-shards", JSON.stringify(["room-1"]));
+        sessionStorage.setItem("lunora-studio-recent-shards", JSON.stringify(["room-1"]));
 
         const mock = createMockClient({
             query: (reference, _args, options): unknown => {

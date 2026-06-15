@@ -1,12 +1,12 @@
-import type { FunctionReference } from "@cirrus/client";
+import type { FunctionReference } from "@lunora/client";
 import { QueryClient } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import { CirrusProvider } from "../src/cirrus-provider";
-import { cirrusQueryKey } from "../src/query-key";
-import { cirrusQueryOptions } from "../src/query-options";
+import { LunoraProvider } from "../src/lunora-provider";
+import { lunoraQueryKey } from "../src/query-key";
+import { lunoraQueryOptions } from "../src/query-options";
 import {
     createServerClient,
     deserializePreloaded,
@@ -24,7 +24,7 @@ import { createMockClient } from "./mock-client";
 
 /** A typed query reference so `useQuery` infers args/return without casts. */
 const queryRef = <Args extends Record<string, unknown>, Return>(path: string): FunctionReference<"query", Args, Return> => {
-    return { __cirrusRef: path };
+    return { __lunoraRef: path };
 };
 
 /** Minimal `fetch` double that returns one RPC `{ result }` envelope and records the request. */
@@ -55,7 +55,7 @@ describe("createServerClient", () => {
 
         const [url] = fetchImpl.mock.calls[0]!;
 
-        expect(url).toBe("https://app.example.dev/_cirrus/rpc");
+        expect(url).toBe("https://app.example.dev/_lunora/rpc");
     });
 
     it("sends the bearer token as an Authorization header when provided", async () => {
@@ -88,9 +88,9 @@ describe("prefetchQuery", () => {
 
         await prefetchQuery(queryClient, client, reference, {});
 
-        // The value must be retrievable under cirrusQueryKey — proving the
+        // The value must be retrievable under lunoraQueryKey — proving the
         // server prefetch and the client `useQuery` agree on the key shape.
-        expect(queryClient.getQueryData(cirrusQueryKey(reference, {}, undefined))).toStrictEqual([{ id: 1 }]);
+        expect(queryClient.getQueryData(lunoraQueryKey(reference, {}, undefined))).toStrictEqual([{ id: 1 }]);
     });
 
     it("hydrates a client useQuery with no loading flash and no client fetch", async () => {
@@ -116,9 +116,9 @@ describe("prefetchQuery", () => {
         };
 
         render(
-            <CirrusProvider client={browser.asClient} queryClient={queryClient}>
+            <LunoraProvider client={browser.asClient} queryClient={queryClient}>
                 <Post />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         // First paint already shows the hydrated value — no "loading" flash.
@@ -148,7 +148,7 @@ describe("fetchQuery / fetchMutation / fetchAction", () => {
 
         const [url] = fetchImpl.mock.calls[0]!;
 
-        expect(url).toBe("https://app.example.dev/_cirrus/rpc");
+        expect(url).toBe("https://app.example.dev/_lunora/rpc");
     });
 
     it("fetchMutation forwards the bearer token and runs over HTTP RPC", async () => {
@@ -185,7 +185,7 @@ describe("fetchQuery / fetchMutation / fetchAction", () => {
     });
 });
 
-describe("cirrusQueryOptions", () => {
+describe("lunoraQueryOptions", () => {
     it("builds queryFn/queryKey keyed identically to the first-class hooks", async () => {
         expect.assertions(3);
 
@@ -193,11 +193,11 @@ describe("cirrusQueryOptions", () => {
         const client = createServerClient({ fetch: fetchImpl as unknown as typeof fetch, url: "https://app.example.dev" });
         const reference = queryRef<Record<string, never>, { count: number }>("posts:count");
 
-        const options = cirrusQueryOptions(client, reference, {});
+        const options = lunoraQueryOptions(client, reference, {});
 
         // The key must match what useQuery / prefetchQuery use, so the adapter
         // shares cache identity with the first-class hooks.
-        expect(options.queryKey).toStrictEqual(cirrusQueryKey(reference, {}, undefined));
+        expect(options.queryKey).toStrictEqual(lunoraQueryKey(reference, {}, undefined));
         expect(options.staleTime).toBe(Number.POSITIVE_INFINITY);
 
         const value = await options.queryFn();
@@ -212,9 +212,9 @@ describe("cirrusQueryOptions", () => {
         const client = createServerClient({ fetch: fetchImpl as unknown as typeof fetch, url: "https://app.example.dev" });
         const reference = queryRef<Record<string, never>, { ok: boolean }>("rooms:get");
 
-        const options = cirrusQueryOptions(client, reference, {}, { shardKey: "room-7" });
+        const options = lunoraQueryOptions(client, reference, {}, { shardKey: "room-7" });
 
-        expect(options.queryKey).toStrictEqual(cirrusQueryKey(reference, {}, "room-7"));
+        expect(options.queryKey).toStrictEqual(lunoraQueryKey(reference, {}, "room-7"));
 
         await options.queryFn();
 
@@ -233,14 +233,14 @@ describe("preloadQuery (server re-export)", () => {
 
         const token = await preloadQuery(client, queryRef<Record<string, never>, { count: number }>("posts:count"), {});
 
-        expect(token.__cirrusPreloaded).toBe(true);
+        expect(token.__lunoraPreloaded).toBe(true);
         expect(token.functionPath).toBe("posts:count");
         expect(preloadedQueryResult(token)).toStrictEqual({ count: 3 });
     });
 });
 
-describe("@cirrus/client/ssr re-exports (one server entry)", () => {
-    it("createServerClient is sourced from @cirrus/client/ssr and runs RPC against the url", async () => {
+describe("@lunora/client/ssr re-exports (one server entry)", () => {
+    it("createServerClient is sourced from @lunora/client/ssr and runs RPC against the url", async () => {
         expect.assertions(2);
 
         const fetchImpl = mockFetch({ count: 11 });
@@ -252,7 +252,7 @@ describe("@cirrus/client/ssr re-exports (one server entry)", () => {
 
         const [url] = fetchImpl.mock.calls[0]!;
 
-        expect(url).toBe("https://app.example.dev/_cirrus/rpc");
+        expect(url).toBe("https://app.example.dev/_lunora/rpc");
     });
 
     it("getServerSession resolves the session from the request headers via auth.api.getSession", async () => {
@@ -275,7 +275,7 @@ describe("@cirrus/client/ssr re-exports (one server entry)", () => {
     it("serializePreloaded / deserializePreloaded round-trip a Preloaded token (script-safe)", () => {
         expect.assertions(2);
 
-        const token = { __cirrusPreloaded: true as const, args: {}, functionPath: "posts:list", value: { html: "<b>x</b>" } };
+        const token = { __lunoraPreloaded: true as const, args: {}, functionPath: "posts:list", value: { html: "<b>x</b>" } };
         const serialized = serializePreloaded(token);
 
         // The `<` is escaped so the payload is safe to inline in a <script> tag.

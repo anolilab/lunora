@@ -25,9 +25,9 @@ const coverage = {
 
 /**
  * See `packages/do/vitest.config.ts` for the rationale behind the
- * `CIRRUS_WORKERD_TESTS=1` opt-in gate.
+ * `LUNORA_WORKERD_TESTS=1` opt-in gate.
  */
-const runWorkerd = process.env.CIRRUS_WORKERD_TESTS === "1";
+const runWorkerd = process.env.LUNORA_WORKERD_TESTS === "1";
 
 export default defineConfig({
     test: {

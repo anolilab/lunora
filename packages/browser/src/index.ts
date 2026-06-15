@@ -5,7 +5,7 @@ export type {
     BrowserContextLike,
     BrowserLaunchLike,
     BrowserLike,
-    CirrusBrowserOptions,
+    LunoraBrowserOptions,
     NavigateOptions,
     PageLike,
     PdfOptions,

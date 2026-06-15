@@ -1,4 +1,4 @@
-import { defineSchema, defineTable, v } from "@cirrus/server";
+import { defineSchema, defineTable, v } from "@lunora/server";
 
 export const schema = defineSchema({
     messages: defineTable({

@@ -1,12 +1,12 @@
 {
     "$schema": "node_modules/wrangler/config-schema.json",
-    "name": "cirrus-example-payment-demo",
+    "name": "lunora-example-payment-demo",
     "main": "src/server/index.ts",
     "compatibility_date": "2026-04-07",
     "compatibility_flags": ["nodejs_compat"],
     "durable_objects": {
         // Payment state rides the app's ShardDO via `ctx.db` — there is NO separate
-        // payment Durable Object. The `paymentTables` are merged into `cirrus/schema.ts`.
+        // payment Durable Object. The `paymentTables` are merged into `lunora/schema.ts`.
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
     },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],

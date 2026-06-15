@@ -1,5 +1,5 @@
-import type { GlobalTablePage } from "@cirrus/client";
-import { CirrusProvider } from "@cirrus/react";
+import type { GlobalTablePage } from "@lunora/client";
+import { LunoraProvider } from "@lunora/react";
 import { createMemoryHistory, createRootRoute, createRoute, createRouter, RouterProvider } from "@tanstack/react-router";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
@@ -50,9 +50,9 @@ const renderEditor = (mock: MockClientHooks, initialUrl = "/data"): { router: Te
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- TanStack's deeply-generic router type isn't structurally comparable to the minimal TestRouter surface, so the double cast is required (and not redundant, despite the heuristic).
         router: router as unknown as TestRouter,
         ui: (
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <RouterProvider router={router} />
-            </CirrusProvider>
+            </LunoraProvider>
         ),
     };
 };
@@ -69,7 +69,7 @@ describe("tableEditor", () => {
 
         render(renderEditor(createEditorClient()).ui);
 
-        await screen.findByTestId("cirrus-data-browser");
+        await screen.findByTestId("lunora-data-browser");
 
         expect(screen.getByTestId<HTMLSelectElement>("table-editor-schema").value).toBe("shard");
         expect(screen.getByTestId("db-table-messages")).toBeDefined();
@@ -82,14 +82,14 @@ describe("tableEditor", () => {
 
         render(ui);
 
-        await screen.findByTestId("cirrus-data-browser");
+        await screen.findByTestId("lunora-data-browser");
 
         fireEvent.change(screen.getByTestId("table-editor-schema"), { target: { value: "global" } });
 
         // The global browser replaces the shard one, and the tier is in the URL.
-        await screen.findByTestId("cirrus-global-data-browser");
+        await screen.findByTestId("lunora-global-data-browser");
 
-        expect(screen.queryByTestId("cirrus-data-browser")).toBeNull();
+        expect(screen.queryByTestId("lunora-data-browser")).toBeNull();
         expect(screen.getByTestId("gdb-table-organizations")).toBeDefined();
         expect(schemaParam(router)).toBe("global");
     });
@@ -314,9 +314,9 @@ describe("tableEditor", () => {
 
         render(ui);
 
-        await screen.findByTestId("cirrus-global-data-browser");
+        await screen.findByTestId("lunora-global-data-browser");
 
-        expect(screen.queryByTestId("cirrus-data-browser")).toBeNull();
+        expect(screen.queryByTestId("lunora-data-browser")).toBeNull();
         expect(schemaParam(router)).toBe("global");
         expect(tableParam(router)).toBe("organizations");
     });

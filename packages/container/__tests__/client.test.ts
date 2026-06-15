@@ -143,7 +143,7 @@ describe("ctx.containers.<name>.get() lifecycle controls", () => {
     it("throws a directed error when the runtime stub lacks a lifecycle method", async () => {
         expect.assertions(1);
 
-        // A fetch-only stub (older @cirrus/container/do) → stop() is unavailable.
+        // A fetch-only stub (older @lunora/container/do) → stop() is unavailable.
         const namespace: ContainerNamespaceLike = {
             get: () => {
                 return { fetch: async () => new Response("ok") };

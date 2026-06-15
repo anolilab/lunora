@@ -1,5 +1,5 @@
 /**
- * Observability hooks for the Cirrus runtime.
+ * Observability hooks for the Lunora runtime.
  *
  * A user-supplied {@link ObservabilitySink} receives one event per dispatched
  * RPC (single-shard forward or fan-out). The runtime is otherwise oblivious
@@ -22,7 +22,7 @@ export interface ObservabilityEvent {
     durationMs: number;
 
     /**
-     * Populated on `ok === false`. `code`/`status` mirror the CirrusError
+     * Populated on `ok === false`. `code`/`status` mirror the LunoraError
      * taxonomy; `message` is the human-readable string (may include user
      * input — sinks that ship to third parties should scrub it).
      */

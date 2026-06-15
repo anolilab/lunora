@@ -1,11 +1,11 @@
-import type { Validator } from "@cirrus/values";
+import type { Validator } from "@lunora/values";
 
 import { validateArgs } from "../functions";
 import type { ActionCtx as ActionContext, ArgsValidator, FunctionKind, InferArgs, MutationCtx as MutationContext, QueryCtx as QueryContext } from "../types";
 import runMiddlewareChain from "./run-middleware";
 import type {
     ActionBuilder,
-    CirrusBuilders,
+    LunoraBuilders,
     CreateOptions,
     DataModelInit,
     EmptyArgs,
@@ -126,14 +126,14 @@ const makeStreamHandler =
  * terminal name and the runtime routes the registration through the WS stream
  * dispatcher instead of the request/response one.
  *
- * Internal builders carry an extra `__cirrusVisibility: "internal"` brand and
+ * Internal builders carry an extra `__lunoraVisibility: "internal"` brand and
  * stamp `visibility: "internal"` onto the registered function. Public builders
  * declare neither, so codegen distinguishes them by the brand's mere presence.
  */
 const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "internal"): Record<string, unknown> => {
     return {
-        __cirrusProcedure: kind,
-        ...(visibility ? { __cirrusVisibility: visibility } : {}),
+        __lunoraProcedure: kind,
+        ...(visibility ? { __lunoraVisibility: visibility } : {}),
         input: (validators: ArgsValidator) => makeBuilder(kind, { ...state, args: { ...state.args, ...validators } }, visibility),
         [kind]: <R>(userHandler: (options: { args: Record<string, unknown>; ctx: unknown }) => Promise<R> | R) => {
             return {
@@ -175,10 +175,10 @@ const makeBuilder = (kind: FunctionKind, state: BuilderState, visibility?: "inte
  * `DataModel` (phantom for now), and `.create()` yields the public root builders
  * plus their `internal*` counterparts.
  */
-const initCirrus = {
+const initLunora = {
     dataModel: <DataModel>(): DataModelInit<DataModel> => {
         return {
-            create: (_options?: CreateOptions): CirrusBuilders => {
+            create: (_options?: CreateOptions): LunoraBuilders => {
                 return {
                     action: makeBuilder("action", { args: {}, middlewares: [] }) as unknown as ActionBuilder<ActionContext, EmptyArgs>,
                     internalAction: makeBuilder("action", { args: {}, middlewares: [] }, "internal") as unknown as InternalActionBuilder<
@@ -198,11 +198,11 @@ const initCirrus = {
     },
 };
 
-export { initCirrus };
+export { initLunora };
 
 export type {
     ActionBuilder,
-    CirrusBuilders,
+    LunoraBuilders,
     CreateOptions,
     DataModelInit,
     EmptyArgs,

@@ -1,14 +1,14 @@
-import type { FunctionReference } from "@cirrus/client";
+import type { FunctionReference } from "@lunora/client";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { PropsWithChildren, ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
-import { CirrusProvider } from "../src/cirrus-provider";
+import { LunoraProvider } from "../src/lunora-provider";
 import useInfiniteQuery from "../src/use-infinite-query";
 import { createMockClient } from "./mock-client";
 
 const makeRef = (ref: string): FunctionReference => {
-    return { __cirrusRef: ref };
+    return { __lunoraRef: ref };
 };
 
 /** Keyset-style backend over a fixed list, cursor = next offset as a string. */
@@ -26,7 +26,7 @@ const makePaginator =
 
 const wrapper =
     (client: ReturnType<typeof createMockClient>["asClient"]) =>
-    ({ children }: PropsWithChildren): ReactElement => <CirrusProvider client={client}>{children}</CirrusProvider>;
+    ({ children }: PropsWithChildren): ReactElement => <LunoraProvider client={client}>{children}</LunoraProvider>;
 
 describe("useInfiniteQuery", () => {
     it("loads the first page into pages[0]", async () => {

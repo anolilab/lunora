@@ -1,4 +1,4 @@
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraProvider } from "@lunora/react";
 import { QueryClientProvider, type QueryClient } from "@tanstack/react-query";
 import { createRootRouteWithContext, HeadContent, Outlet, Scripts } from "@tanstack/react-router";
 
@@ -23,9 +23,9 @@ function RootComponent() {
             </head>
             <body>
                 <QueryClientProvider client={queryClient}>
-                    <CirrusProvider url={typeof window === "undefined" ? "http://localhost:8787" : window.location.origin}>
+                    <LunoraProvider url={typeof window === "undefined" ? "http://localhost:8787" : window.location.origin}>
                         <Outlet />
-                    </CirrusProvider>
+                    </LunoraProvider>
                 </QueryClientProvider>
                 <Scripts />
             </body>

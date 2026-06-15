@@ -1,23 +1,23 @@
 /**
- * Public types for `@cirrus/workflow`. Everything here is Node-safe — the
+ * Public types for `@lunora/workflow`. Everything here is Node-safe — the
  * Cloudflare Workflows runtime types are mirrored STRUCTURALLY (the `*Like`
  * interfaces) so this module needs no `@cloudflare/workers-types` and stays
- * importable from codegen, `@cirrus/config`, and app unit tests. The shapes are
+ * importable from codegen, `@lunora/config`, and app unit tests. The shapes are
  * kept in lockstep with `@cloudflare/workers-types`' `Workflow` /
  * `WorkflowInstance` / `WorkflowStep` / `WorkflowEvent` declarations.
  */
 
 /**
- * Opaque reference to a Cirrus function. Mirrors the `FunctionReference` shape
- * emitted by `@cirrus/codegen` (and consumed by `@cirrus/client`). We avoid a
+ * Opaque reference to a Lunora function. Mirrors the `FunctionReference` shape
+ * emitted by `@lunora/codegen` (and consumed by `@lunora/client`). We avoid a
  * direct dependency to keep this package usable from the codegen pipeline
- * itself — identical rationale to `@cirrus/scheduler`'s copy.
+ * itself — identical rationale to `@lunora/scheduler`'s copy.
  *
- * The runtime identifier lives in `__cirrusRef` — this MUST stay in lockstep
- * with the codegen emit + `@cirrus/client`'s `FunctionReference`.
+ * The runtime identifier lives in `__lunoraRef` — this MUST stay in lockstep
+ * with the codegen emit + `@lunora/client`'s `FunctionReference`.
  */
 export interface FunctionReference {
-    readonly __cirrusRef: string;
+    readonly __lunoraRef: string;
     /** Marker phantom type — discriminates queries / mutations / actions. */
     readonly _kind?: "query" | "mutation" | "action";
 }
@@ -99,7 +99,7 @@ export interface WorkflowStepLike {
     waitForEvent: <T = unknown>(name: string, options: { timeout?: number | string; type: string }) => Promise<{ payload: Readonly<T>; type: string }>;
 }
 
-// --- The Cirrus-flavored workflow authoring surface ------------------------
+// --- The Lunora-flavored workflow authoring surface ------------------------
 
 /** Minimal structured logger handed to the workflow body. */
 export interface WorkflowLogger {
@@ -116,7 +116,7 @@ export interface RunFunctionOptions {
 }
 
 /**
- * Calls a Cirrus query / mutation / action from inside a workflow and resolves
+ * Calls a Lunora query / mutation / action from inside a workflow and resolves
  * with its result. Wrap it in {@link WorkflowStepLike.do} to make the call a
  * durable, memoized, retried step:
  *
@@ -128,7 +128,7 @@ export type WorkflowRunFunction = <F extends FunctionReference>(function_: F, ar
 
 /**
  * The context object passed to a `defineWorkflow` handler. Bundles the native
- * Cloudflare durability primitives (`step`, `event`) with the Cirrus runner
+ * Cloudflare durability primitives (`step`, `event`) with the Lunora runner
  * (`run`), the Worker `env`, and a logger.
  */
 export interface WorkflowRunContext<Params = Record<string, unknown>> {
@@ -140,7 +140,7 @@ export interface WorkflowRunContext<Params = Record<string, unknown>> {
     readonly log: WorkflowLogger;
     /** Convenience alias for `event.payload`. */
     readonly params: Readonly<Params>;
-    /** Invoke a Cirrus function; wrap in `step.do(...)` for durability. */
+    /** Invoke a Lunora function; wrap in `step.do(...)` for durability. */
     readonly run: WorkflowRunFunction;
     /** The native Cloudflare Workflows durable-step API. */
     readonly step: WorkflowStepLike;
@@ -157,7 +157,7 @@ export interface WorkflowConfig<Params = Record<string, unknown>, Output = unkno
     /**
      * Optional override for the deployed workflow name — the `workflows[].name`
      * written to `wrangler.jsonc`. Defaults to a kebab-cased form of the
-     * `cirrus/workflows.ts` export name (`orderPipeline` → `order-pipeline`).
+     * `lunora/workflows.ts` export name (`orderPipeline` → `order-pipeline`).
      * This does NOT change the binding name, which is always derived from the
      * export name (`orderPipeline` → `WORKFLOW_ORDER_PIPELINE`).
      */
@@ -175,7 +175,7 @@ export interface WorkflowDefinition<Params = Record<string, unknown>, Output = u
     /** Phantom marker for the params type — never present at runtime. */
     readonly __params?: Params;
     /** Runtime brand check (see `isWorkflowDefinition`). */
-    readonly isCirrusWorkflow: true;
+    readonly isLunoraWorkflow: true;
 }
 
 // --- The `ctx.workflows` action/mutation surface ---------------------------
@@ -195,7 +195,7 @@ export interface WorkflowHandle<Params = Record<string, unknown>> {
 
 /**
  * The `ctx.workflows` surface available on `MutationCtx` and `ActionCtx`. Each
- * declared workflow is reachable by its `cirrus/workflows.ts` export name.
+ * declared workflow is reachable by its `lunora/workflows.ts` export name.
  */
 export interface Workflows {
     /** Resolve the handle for a declared workflow by export name. */
@@ -203,9 +203,9 @@ export interface Workflows {
 }
 
 /** Options for `createWorkflows`. */
-export interface CirrusWorkflowsOptions {
+export interface LunoraWorkflowsOptions {
     /**
-     * Map of `cirrus/workflows.ts` export name → its Cloudflare `Workflow`
+     * Map of `lunora/workflows.ts` export name → its Cloudflare `Workflow`
      * binding. Codegen builds this from `env` (`{ orderPipeline:
      * env.WORKFLOW_ORDER_PIPELINE }`); for manual wiring construct it yourself.
      */

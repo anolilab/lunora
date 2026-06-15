@@ -1,9 +1,9 @@
 /**
- * A {@link PaymentStore} backed by Cirrus's own data layer.
+ * A {@link PaymentStore} backed by Lunora's own data layer.
  *
  * Rather than ship a bespoke `PaymentDO`, payment state rides the app's existing ShardDO: the
  * `paymentTables` are merged into the app schema and this store reads/writes them through a small
- * `PaymentDb` port that `ctx.db` satisfies. That inherits Cirrus's OCC, reactivity, sharding, and
+ * `PaymentDb` port that `ctx.db` satisfies. That inherits Lunora's OCC, reactivity, sharding, and
  * `.global()`/D1 read path for free. The codecs below are the single source of truth for the
  * domain ⇄ row mapping (money split into `amountMinor` + `currency`, id ⇄ `provider&lt;Thing>Id`).
  */
@@ -11,7 +11,7 @@ import { money } from "./money";
 import type { PaymentStore } from "./store";
 import type { Customer, PaymentSession, PaymentState, ProviderId, Subscription, SubscriptionState, UsageEvent } from "./types";
 
-/** A stored row, carrying Cirrus's document id. */
+/** A stored row, carrying Lunora's document id. */
 interface PaymentRow extends Record<string, unknown> {
     readonly _id: string;
 }

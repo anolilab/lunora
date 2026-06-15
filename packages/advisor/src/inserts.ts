@@ -8,7 +8,7 @@
 export interface AdvisorInsertWrite {
     /** The exported function performing the insert (e.g. `send`). */
     exportName: string;
-    /** Source file the insert appears in (relative to the cirrus dir, no extension). */
+    /** Source file the insert appears in (relative to the lunora dir, no extension). */
     file: string;
     /** 1-based line of the `insert(...)` call, or `0` when unknown. */
     line: number;

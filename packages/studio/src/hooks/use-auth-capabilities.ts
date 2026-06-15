@@ -1,5 +1,5 @@
-import type { AuthCapabilities } from "@cirrus/client";
-import { useCirrus } from "@cirrus/react";
+import type { AuthCapabilities } from "@lunora/client";
+import { useLunora } from "@lunora/react";
 import { useEffect, useState } from "react";
 
 import { fireAndForget } from "../lib/internal";
@@ -15,7 +15,7 @@ export const DEFAULT_CAPABILITIES: AuthCapabilities = { accounts: true, admin: t
  * by every panel that gates a surface on a plugin.
  */
 export const useAuthCapabilities = (): { capabilities: AuthCapabilities; ready: boolean } => {
-    const client = useCirrus();
+    const client = useLunora();
     const [capabilities, setCapabilities] = useState<AuthCapabilities>(DEFAULT_CAPABILITIES);
     const [ready, setReady] = useState<boolean>(false);
 

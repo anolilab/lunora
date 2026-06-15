@@ -23,7 +23,7 @@ describe("validatorKindToSqlType", () => {
         expect(validatorKindToSqlType("boolean")).toBe("INTEGER");
     });
 
-    it("maps number/timestamp/date to REAL (matching the @cirrus/d1 dialect)", () => {
+    it("maps number/timestamp/date to REAL (matching the @lunora/d1 dialect)", () => {
         expect.assertions(3);
 
         expect(validatorKindToSqlType("number")).toBe("REAL");
@@ -69,7 +69,7 @@ describe("sQL renderers", () => {
         });
 
         expect(sql).toContain('CREATE TABLE IF NOT EXISTS "users"');
-        // Physical framework columns the @cirrus/d1 runtime reads/writes.
+        // Physical framework columns the @lunora/d1 runtime reads/writes.
         expect(sql).toContain('"id" TEXT PRIMARY KEY');
         expect(sql).toContain('"_creationTime" REAL NOT NULL');
         expect(sql).toContain('"email" TEXT NOT NULL');
@@ -307,7 +307,7 @@ describe("renderMigrationFile", () => {
         const diff = diffSnapshots(undefined, next);
         const body = renderMigrationFile("init", diff, "2024-01-01T00:00:00.000Z");
 
-        expect(body).toContain("Cirrus migration: init");
+        expect(body).toContain("Lunora migration: init");
         expect(body).toContain("2024-01-01T00:00:00.000Z");
         expect(body).toContain('CREATE TABLE IF NOT EXISTS "users"');
     });

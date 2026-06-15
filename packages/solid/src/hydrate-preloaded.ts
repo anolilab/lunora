@@ -1,8 +1,8 @@
-import type { FunctionReference, Preloaded } from "@cirrus/client";
+import type { FunctionReference, Preloaded } from "@lunora/client";
 import type { Accessor } from "solid-js";
 import { createEffect, createSignal, onCleanup } from "solid-js";
 
-import { useCirrus } from "./context";
+import { useLunora } from "./context";
 
 /**
  * Hydrate a query from a {@link Preloaded} token produced by `preloadQuery`
@@ -27,7 +27,7 @@ import { useCirrus } from "./context";
  * only value the server render ever sees.
  */
 const hydratePreloaded = <T>(preloaded: Preloaded<T>): Accessor<T> => {
-    const client = useCirrus();
+    const client = useLunora();
 
     const { args, functionPath, shardKey, value } = preloaded;
 
@@ -35,7 +35,7 @@ const hydratePreloaded = <T>(preloaded: Preloaded<T>): Accessor<T> => {
     // first render reads it, so there is no `undefined`/loading window.
     const [data, setData] = createSignal<T>(value);
 
-    const functionRef: FunctionReference = { __cirrusRef: functionPath };
+    const functionRef: FunctionReference = { __lunoraRef: functionPath };
 
     createEffect(() => {
         const unsubscribe = client.subscribe(functionRef, args, (next) => setData(() => next as T), { shardKey });

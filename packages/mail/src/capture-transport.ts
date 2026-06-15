@@ -6,7 +6,7 @@ import type { MailTransport, SendPayload } from "./types";
  * routes through `send` (into the inbox) instead of throwing for a missing queue —
  * dev queued mail then shows up in the studio catcher just like a direct send.
  */
-const CAPTURE_TRANSPORT_BRAND: unique symbol = Symbol.for("@cirrus/mail.captureTransport");
+const CAPTURE_TRANSPORT_BRAND: unique symbol = Symbol.for("@lunora/mail.captureTransport");
 
 /** Whether `transport` is the dev capture transport built by {@link createCaptureTransport}. */
 const isCaptureTransport = (transport: MailTransport): boolean =>
@@ -22,11 +22,11 @@ const isCaptureTransport = (transport: MailTransport): boolean =>
  * representation of a captured message mirrors this shape; consumers import it
  * directly wherever the package dependency direction allows.
  *
- * `@cirrus/studio`'s `CapturedMail` re-exports this (type-only dep on
- * `@cirrus/mail`). `@cirrus/do`'s `CapturedMailRow` / `RecordMailInput` are
- * documented mirrors — the DO runtime stays free of any `@cirrus/mail` *runtime*
+ * `@lunora/studio`'s `CapturedMail` re-exports this (type-only dep on
+ * `@lunora/mail`). `@lunora/do`'s `CapturedMailRow` / `RecordMailInput` are
+ * documented mirrors — the DO runtime stays free of any `@lunora/mail` *runtime*
  * dep — guarded by a compile-time structural assertion against this type, so a
- * field added here that isn't mirrored fails the `@cirrus/do` build.
+ * field added here that isn't mirrored fails the `@lunora/do` build.
  *
  * Add or change a captured-mail field here first; the guards will point at the
  * mirrors that need the matching change.
@@ -41,9 +41,9 @@ interface CapturedMail extends SendPayload {
 /**
  * Minimal projection of the persistence target the capture transport writes to
  * (the studio's root-shard mailbox). Declared structurally — like
- * {@link import("./types").QueueLike} — so `@cirrus/mail` stays free of any
+ * {@link import("./types").QueueLike} — so `@lunora/mail` stays free of any
  * Durable Object / runtime dependency. The registry scaffold supplies the
- * concrete sink that POSTs to the root shard's `__cirrus_admin__:recordMail` RPC.
+ * concrete sink that POSTs to the root shard's `__lunora_admin__:recordMail` RPC.
  */
 interface MailboxSink {
     record: (mail: SendPayload) => Promise<{ id: string }>;
@@ -53,8 +53,8 @@ interface MailboxSink {
  * Build a capture {@link MailTransport}: instead of delivering, it persists the
  * fully rendered + validated payload to `sink` and returns the assigned id.
  *
- * Wired in dev by the mail registry scaffold so `cirrus dev` shows every send in
- * the studio's Mail inbox — including `@cirrus/auth`'s verification and
+ * Wired in dev by the mail registry scaffold so `lunora dev` shows every send in
+ * the studio's Mail inbox — including `@lunora/auth`'s verification and
  * forgot-password mail — with no provider credentials and nothing leaving the
  * machine. Address/header validation already ran in `createMailer.buildPayload`
  * before the payload reaches here, so the captured message is the same one a

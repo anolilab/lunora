@@ -1,6 +1,6 @@
 import { createConfig } from "@anolilab/eslint-config";
 
-// Self-contained flat config for @cirrus/cli. Each package owns its own
+// Self-contained flat config for @lunora/cli. Each package owns its own
 // setup (no shared local preset); rules build on @anolilab/eslint-config.
 export default createConfig(
     {
@@ -50,7 +50,7 @@ export default createConfig(
                 { ignores: ["crypto", "CryptoKey", "SubtleCrypto", "Storage", "sessionStorage", "localStorage"] },
             ],
             // Leading-underscore identifiers that are framework API by design: _id /
-            // _creationTime are the public document fields; __cirrus* are internal markers;
+            // _creationTime are the public document fields; __lunora* are internal markers;
             // _meta/__doc__ are data-model internals; __name is a bundler helper. Accidental
             // dangles (and the trailing-underscore variety) are still flagged.
             "no-underscore-dangle": [
@@ -66,12 +66,12 @@ export default createConfig(
                         "_chunk",
                         "__doc__",
                         "__name",
-                        "__cirrusRef",
-                        "__cirrusVisibility",
-                        "__cirrusProcedure",
-                        "__cirrusCtx",
-                        "__cirrusTable",
-                        "__cirrusPreloaded",
+                        "__lunoraRef",
+                        "__lunoraVisibility",
+                        "__lunoraProcedure",
+                        "__lunoraCtx",
+                        "__lunoraTable",
+                        "__lunoraPreloaded",
                     ],
                 },
             ],
@@ -122,7 +122,7 @@ export default createConfig(
     // Markdown code blocks: don't enforce language tags. The `n` Node-builtins
     // rules reach into the scope manager, which a markdown document has none of —
     // under ESLint 10 they throw "Cannot read properties of undefined (globalScope)"
-    // while linting docs (e.g. skills/cirrus/SKILL.md). They're meaningless on prose,
+    // while linting docs (e.g. skills/lunora/SKILL.md). They're meaningless on prose,
     // so turn them off for markdown.
     {
         files: ["**/*.md", "**/*.md/**"],

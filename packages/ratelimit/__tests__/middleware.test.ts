@@ -1,4 +1,4 @@
-import type { Middleware, MiddlewareNext } from "@cirrus/server";
+import type { Middleware, MiddlewareNext } from "@lunora/server";
 import { describe, expect, it } from "vitest";
 
 import { rateLimit } from "../src/middleware";
@@ -47,7 +47,7 @@ describe("rateLimit middleware", () => {
         expect(result).toBe(SENTINEL);
     });
 
-    it("throws a structural CirrusError (429) once the limit is hit", async () => {
+    it("throws a structural LunoraError (429) once the limit is hit", async () => {
         expect.assertions(4);
 
         const middleware = rateLimit<Context>(makeLimiter(), "api");
@@ -55,7 +55,7 @@ describe("rateLimit middleware", () => {
         await invoke(middleware, {});
         const error = await catchError(() => invoke(middleware, {}));
 
-        expect(error.name).toBe("CirrusError");
+        expect(error.name).toBe("LunoraError");
         expect(error.code).toBe("TOO_MANY_REQUESTS");
         expect(error.status).toBe(429);
         expect(error.retryAfter).toBeTypeOf("number");

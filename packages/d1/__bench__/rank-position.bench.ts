@@ -1,11 +1,11 @@
-import type { DatabaseWriterLike, RankIndexDefinitionLike, SchemaLike, ValidatorLike } from "@cirrus/do";
+import type { DatabaseWriterLike, RankIndexDefinitionLike, SchemaLike, ValidatorLike } from "@lunora/do";
 import { bench, describe } from "vitest";
 
 import createD1Exec from "../__tests__/_helpers/node-sqlite-d1";
 import { createD1CtxDb as createD1ContextDatabase, runD1RankMigrations } from "../src/d1-ctx-db";
 
 /**
- * D1 column-dialect twin of `@cirrus/do/rank-position`. `rank()` over a
+ * D1 column-dialect twin of `@lunora/do/rank-position`. `rank()` over a
  * declared `rankIndex` is one SQLite index seek on the companion table.
  * Without an index the only way to answer is to walk the partition and
  * indexOf the candidate row — O(partition size). The win shape is the

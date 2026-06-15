@@ -8,11 +8,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { detectFramework } from "../src/detect-framework";
 import { createPluginContext, formatFrameworkDetection } from "../src/framework-detect-plugin";
-import { cirrus } from "../src/index";
+import { lunora } from "../src/index";
 
 let workdir: string;
 
-const SCHEMA = `import { defineSchema, defineTable, v } from "@cirrus/server";
+const SCHEMA = `import { defineSchema, defineTable, v } from "@lunora/server";
 
 export const schema = defineSchema({
     messages: defineTable({
@@ -23,7 +23,7 @@ export const schema = defineSchema({
 `;
 
 const VALID_WRANGLER = `{
-    "name": "cirrus-app",
+    "name": "lunora-app",
     "compatibility_date": "2026-04-07",
     "compatibility_flags": ["web_socket_auto_reply_to_close"],
     "durable_objects": {
@@ -38,7 +38,7 @@ const writePackageJson = (dependencies: Record<string, string>): void => {
 
 describe("detectFramework", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-vite-detect-"));
+        workdir = mkdtempSync(join(tmpdir(), "lunora-vite-detect-"));
     });
 
     afterEach(() => {
@@ -125,11 +125,11 @@ describe("formatFrameworkDetection", () => {
     });
 });
 
-describe("framework-detect-plugin (wired into cirrus())", () => {
+describe("framework-detect-plugin (wired into lunora())", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-vite-detect-plugin-"));
-        mkdirSync(join(workdir, "cirrus"), { recursive: true });
-        writeFileSync(join(workdir, "cirrus", "schema.ts"), SCHEMA, "utf8");
+        workdir = mkdtempSync(join(tmpdir(), "lunora-vite-detect-plugin-"));
+        mkdirSync(join(workdir, "lunora"), { recursive: true });
+        writeFileSync(join(workdir, "lunora", "schema.ts"), SCHEMA, "utf8");
         writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
     });
 
@@ -137,12 +137,12 @@ describe("framework-detect-plugin (wired into cirrus())", () => {
         rmSync(workdir, { force: true, recursive: true });
     });
 
-    it("includes the framework-detect plugin in cirrus()", () => {
+    it("includes the framework-detect plugin in lunora()", () => {
         expect.hasAssertions();
 
-        const names = cirrus({ cloudflare: false, overlay: false, projectRoot: workdir, validateWrangler: false }).map((plugin) => plugin.name);
+        const names = lunora({ cloudflare: false, overlay: false, projectRoot: workdir, validateWrangler: false }).map((plugin) => plugin.name);
 
-        expect(names).toContain("cirrus:framework-detect");
+        expect(names).toContain("lunora:framework-detect");
     });
 
     it("surfaces the detected framework on the shared context during config resolution", async () => {
@@ -163,7 +163,7 @@ describe("framework-detect-plugin (wired into cirrus())", () => {
         await resolveConfig(
             {
                 configFile: false,
-                plugins: [probe, ...cirrus({ cloudflare: false, overlay: false, projectRoot: workdir, validateWrangler: false })],
+                plugins: [probe, ...lunora({ cloudflare: false, overlay: false, projectRoot: workdir, validateWrangler: false })],
                 root: workdir,
             },
             "serve",

@@ -18,8 +18,8 @@ const silentLogger = (): Logger => {
 };
 
 /** A users + posts schema with a `v.id("users")` foreign key on posts. */
-const SCHEMA_SOURCE = `import { defineSchema, defineTable } from "@cirrus/server";
-import { v } from "@cirrus/values";
+const SCHEMA_SOURCE = `import { defineSchema, defineTable } from "@lunora/server";
+import { v } from "@lunora/values";
 
 export default defineSchema({
     users: defineTable({
@@ -39,13 +39,13 @@ export default defineSchema({
 let workDir: string;
 
 const writeSchema = (): void => {
-    mkdirSync(join(workDir, "cirrus"), { recursive: true });
-    writeFileSync(join(workDir, "cirrus", "schema.ts"), SCHEMA_SOURCE, "utf8");
+    mkdirSync(join(workDir, "lunora"), { recursive: true });
+    writeFileSync(join(workDir, "lunora", "schema.ts"), SCHEMA_SOURCE, "utf8");
 };
 
-describe("cirrus seed", () => {
+describe("lunora seed", () => {
     beforeEach(() => {
-        workDir = mkdtempSync(join(tmpdir(), "cirrus-cli-seed-"));
+        workDir = mkdtempSync(join(tmpdir(), "lunora-cli-seed-"));
     });
 
     afterEach(() => {
@@ -163,7 +163,7 @@ describe("cirrus seed", () => {
         expect(result.code).toBe(0);
         expect(result.generated).toBe(4);
         expect(result.inserted).toBe(4);
-        expect(calls[0]!.url).toBe("http://localhost:8787/_cirrus/admin/import");
+        expect(calls[0]!.url).toBe("http://localhost:8787/_lunora/admin/import");
     });
 
     it("surfaces skipped rows as conflicts and warns about determinism", async () => {

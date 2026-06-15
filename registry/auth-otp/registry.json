@@ -2,12 +2,12 @@
     "$schema": "../schema/registry-item.schema.json",
     "name": "auth-otp",
     "title": "Auth — Email OTP",
-    "description": "Passwordless email one-time-password (OTP) sign-in and verification for Cirrus auth. Wires better-auth's emailOTP plugin on top of the base `auth` item and delivers the code through @cirrus/mail (captured into the studio Mail tab in dev).",
-    "docs": "Add `emailOtpPlugin` to your auth instance's `plugins` array in cirrus/auth/index.ts: `import { emailOtpPlugin } from \"./otp.js\"` then `plugins: [emailOtpPlugin(env)]`. The code is emailed via @cirrus/mail using MAIL_FROM (already set by the base auth item); in dev it lands in the studio Mail tab, for production delivery run `cirrus add email` (SEND_EMAIL binding) or set RESEND_API_KEY. Trigger it client-side with `authClient.emailOtp.sendVerificationOtp({ email, type: \"sign-in\" })` then `authClient.signIn.emailOtp({ email, otp })`.",
+    "description": "Passwordless email one-time-password (OTP) sign-in and verification for Lunora auth. Wires better-auth's emailOTP plugin on top of the base `auth` item and delivers the code through @lunora/mail (captured into the studio Mail tab in dev).",
+    "docs": "Add `emailOtpPlugin` to your auth instance's `plugins` array in lunora/auth/index.ts: `import { emailOtpPlugin } from \"./otp.js\"` then `plugins: [emailOtpPlugin(env)]`. The code is emailed via @lunora/mail using MAIL_FROM (already set by the base auth item); in dev it lands in the studio Mail tab, for production delivery run `lunora add email` (SEND_EMAIL binding) or set RESEND_API_KEY. Trigger it client-side with `authClient.emailOtp.sendVerificationOtp({ email, type: \"sign-in\" })` then `authClient.signIn.emailOtp({ email, otp })`.",
     "requires": ["auth"],
     "deps": {
-        "@cirrus/auth": "workspace:*",
-        "@cirrus/mail": "workspace:*"
+        "@lunora/auth": "workspace:*",
+        "@lunora/mail": "workspace:*"
     },
-    "files": [{ "from": "otp.ts", "to": "cirrus/auth/otp.ts", "merge": "create-or-skip" }]
+    "files": [{ "from": "otp.ts", "to": "lunora/auth/otp.ts", "merge": "create-or-skip" }]
 }

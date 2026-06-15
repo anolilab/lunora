@@ -21,14 +21,14 @@ const EMPTY_SCHEMA: SchemaIR = { tables: [], vectorIndexes: [] };
 
 describe("discover-containers", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-container-disco-"));
+        workdir = mkdtempSync(join(tmpdir(), "lunora-container-disco-"));
     });
 
     afterEach(() => {
         rmSync(workdir, { force: true, recursive: true });
     });
 
-    it("returns [] when cirrus/containers.ts does not exist", () => {
+    it("returns [] when lunora/containers.ts does not exist", () => {
         expect.assertions(1);
 
         expect(discoverContainers(newProject(), workdir)).toEqual([]);
@@ -38,7 +38,7 @@ describe("discover-containers", () => {
         expect.assertions(1);
 
         writeContainers(`
-            import { defineContainer } from "@cirrus/container";
+            import { defineContainer } from "@lunora/container";
 
             export const transcoder = defineContainer({
                 image: "./containers/transcoder",
@@ -80,7 +80,7 @@ describe("discover-containers", () => {
         expect.assertions(1);
 
         writeContainers(`
-            import { defineContainer } from "@cirrus/container";
+            import { defineContainer } from "@lunora/container";
 
             export const notAContainer = { image: "./x" };
             const internalOnly = defineContainer({ image: "./internal" });
@@ -94,7 +94,7 @@ describe("discover-containers", () => {
         expect.assertions(1);
 
         writeContainers(`
-            import { defineContainer as dc } from "@cirrus/container";
+            import { defineContainer as dc } from "@lunora/container";
 
             export const worker = dc({ image: "./containers/worker" });
         `);
@@ -106,7 +106,7 @@ describe("discover-containers", () => {
         expect.assertions(1);
 
         writeContainers(`
-            import { defineContainer } from "@cirrus/container";
+            import { defineContainer } from "@lunora/container";
             const path = "./containers/worker";
             export const worker = defineContainer({ image: path });
         `);
@@ -118,7 +118,7 @@ describe("discover-containers", () => {
         expect.assertions(1);
 
         writeContainers(`
-            import { defineContainer } from "@cirrus/container";
+            import { defineContainer } from "@lunora/container";
             export const worker = defineContainer({ defaultPort: 8080 });
         `);
 
@@ -129,7 +129,7 @@ describe("discover-containers", () => {
         expect.assertions(1);
 
         writeContainers(`
-            import { defineContainer } from "@cirrus/container";
+            import { defineContainer } from "@lunora/container";
             const n = 5;
             export const worker = defineContainer({ image: "./w", maxInstances: n });
         `);
@@ -141,7 +141,7 @@ describe("discover-containers", () => {
         expect.assertions(2);
 
         writeContainers(`
-            import { defineContainer } from "@cirrus/container";
+            import { defineContainer } from "@lunora/container";
             const level = process.env.LOG_LEVEL ?? "info";
             export const worker = defineContainer({ image: "./w", env: { LOG_LEVEL: level }, sleepAfter: 60 * 5 });
         `);
@@ -157,7 +157,7 @@ describe("discover-containers", () => {
         expect.assertions(1);
 
         writeContainers(`
-            import { defineContainer } from "@cirrus/container";
+            import { defineContainer } from "@lunora/container";
             export const worker = defineContainer({ image: { build: "./services/worker/" } });
         `);
 
@@ -168,7 +168,7 @@ describe("discover-containers", () => {
         expect.assertions(2);
 
         writeContainers(`
-            import { defineContainer } from "@cirrus/container";
+            import { defineContainer } from "@lunora/container";
             export const worker = defineContainer({ image: "./w", enableInternet: false, sleepAfter: "30s" });
         `);
 
@@ -181,7 +181,7 @@ describe("discover-containers", () => {
 
 describe("emit (containers)", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-container-emit-"));
+        workdir = mkdtempSync(join(tmpdir(), "lunora-container-emit-"));
     });
 
     afterEach(() => {
@@ -190,7 +190,7 @@ describe("emit (containers)", () => {
 
     const discover = (): ReturnType<typeof discoverContainers> => {
         writeContainers(`
-            import { defineContainer } from "@cirrus/container";
+            import { defineContainer } from "@lunora/container";
             export const transcoder = defineContainer({ image: "./containers/transcoder", maxInstances: 5 });
         `);
 
@@ -202,9 +202,9 @@ describe("emit (containers)", () => {
 
         const content = emitContainers(discover());
 
-        expect(content).toContain('import CirrusContainer from "@cirrus/container/do";');
+        expect(content).toContain('import LunoraContainer from "@lunora/container/do";');
         expect(content).toContain('import { transcoder } from "../containers.js";');
-        expect(content).toContain("export class TranscoderContainer extends CirrusContainer {");
+        expect(content).toContain("export class TranscoderContainer extends LunoraContainer {");
         expect(content).toContain('super(ctx, env, transcoder, "transcoder");');
         expect(content).toContain("Re-export them from your worker entry");
     });
@@ -220,7 +220,7 @@ describe("emit (containers)", () => {
 
         const withContainers = emitServer({ schema: EMPTY_SCHEMA, containers: discover() });
 
-        expect(withContainers).toContain('import type { ContainerAccessor } from "@cirrus/container";');
+        expect(withContainers).toContain('import type { ContainerAccessor } from "@lunora/container";');
         expect(withContainers).toContain("readonly containers: {");
         expect(withContainers).toContain("readonly transcoder: ContainerAccessor;");
 
@@ -232,15 +232,15 @@ describe("emit (containers)", () => {
 
         const shard = emitShard({ schema: EMPTY_SCHEMA, containers: discover() });
 
-        expect(shard).toContain('import { createContainerContext } from "@cirrus/container";');
+        expect(shard).toContain('import { createContainerContext } from "@lunora/container";');
         expect(shard).toContain('{ binding: "CONTAINER_TRANSCODER", exportName: "transcoder", maxInstances: 5 },');
-        expect(shard).toContain("const containers = createContainerContext(env, CIRRUS_CONTAINERS);");
+        expect(shard).toContain("const containers = createContainerContext(env, LUNORA_CONTAINERS);");
         expect(shard).toContain("containers,");
     });
 
     it("emitShard stays container-free without definitions", () => {
         expect.assertions(1);
 
-        expect(emitShard({ schema: EMPTY_SCHEMA })).not.toContain("CIRRUS_CONTAINERS");
+        expect(emitShard({ schema: EMPTY_SCHEMA })).not.toContain("LUNORA_CONTAINERS");
     });
 });

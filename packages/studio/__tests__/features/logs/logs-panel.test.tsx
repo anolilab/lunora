@@ -1,4 +1,4 @@
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraProvider } from "@lunora/react";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
@@ -69,9 +69,9 @@ const createClient = (entries: LogEntry[] = ENTRIES, requests: RequestLogEntry[]
     });
 
 const renderPanel = (mock: MockClientHooks) => (
-    <CirrusProvider client={mock.asClient}>
+    <LunoraProvider client={mock.asClient}>
         <LogsPanel />
-    </CirrusProvider>
+    </LunoraProvider>
 );
 
 /** Switch to the in-memory Errors view (the default view is the durable request log). */
@@ -114,7 +114,7 @@ describe("logsPanel — requests view (default)", () => {
             () => {
                 const carriesFilters = mock.query.mock.calls.some(
                     (call) =>
-                        (call[0] as { __cirrusRef: string }).__cirrusRef === ADMIN_FUNCTIONS.getRequestLog &&
+                        (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.getRequestLog &&
                         (call[1] as Record<string, unknown>).functionPathPrefix === "messages:" &&
                         (call[1] as Record<string, unknown>).outcome === "error",
                 );
@@ -128,9 +128,9 @@ describe("logsPanel — requests view (default)", () => {
 
         const merged = mock.query.mock.calls.find(
             (call) => (call[1] as Record<string, unknown>).functionPathPrefix === "messages:" && (call[1] as Record<string, unknown>).outcome === "error",
-        ) as [{ __cirrusRef: string }, Record<string, unknown>, unknown];
+        ) as [{ __lunoraRef: string }, Record<string, unknown>, unknown];
 
-        expect(merged[0].__cirrusRef).toBe(ADMIN_FUNCTIONS.getRequestLog);
+        expect(merged[0].__lunoraRef).toBe(ADMIN_FUNCTIONS.getRequestLog);
         expect(merged[1]).toEqual({ functionPathPrefix: "messages:", outcome: "error" });
     });
 
@@ -180,9 +180,9 @@ describe("logsPanel — requests view (default)", () => {
 
         // No Live toggle: the Requests view subscribes once the mount seed commits a shard.
         await waitFor(() => {
-            const ref = mock.subscribe.mock.calls.at(-1)?.[0] as { __cirrusRef: string } | undefined;
+            const ref = mock.subscribe.mock.calls.at(-1)?.[0] as { __lunoraRef: string } | undefined;
 
-            if (ref?.__cirrusRef !== ADMIN_FUNCTIONS.getRequestLog) {
+            if (ref?.__lunoraRef !== ADMIN_FUNCTIONS.getRequestLog) {
                 throw new Error("not subscribed yet");
             }
         });
@@ -352,9 +352,9 @@ describe("logsPanel — errors view", () => {
 
         // No Live toggle: switching to the Errors view subscribes to getLogs.
         await waitFor(() => {
-            const ref = mock.subscribe.mock.calls.at(-1)?.[0] as { __cirrusRef: string } | undefined;
+            const ref = mock.subscribe.mock.calls.at(-1)?.[0] as { __lunoraRef: string } | undefined;
 
-            if (ref?.__cirrusRef !== ADMIN_FUNCTIONS.getLogs) {
+            if (ref?.__lunoraRef !== ADMIN_FUNCTIONS.getLogs) {
                 throw new Error("not subscribed yet");
             }
         });

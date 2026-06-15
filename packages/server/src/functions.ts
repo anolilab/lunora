@@ -1,4 +1,4 @@
-import { ValidationError } from "@cirrus/values";
+import { ValidationError } from "@lunora/values";
 
 import type {
     ActionCtx as ActionContext,

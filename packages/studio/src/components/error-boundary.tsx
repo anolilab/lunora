@@ -39,7 +39,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     public override componentDidCatch(error: Error, info: ErrorInfo): void {
         // Surface to the console so the stack isn't lost; the UI shows the message.
         // eslint-disable-next-line no-console -- deliberate operator-facing surface so a caught render error keeps its stack
-        console.error("[cirrus-studio] panel error", error, info.componentStack);
+        console.error("[lunora-studio] panel error", error, info.componentStack);
     }
 
     public readonly reset = (): void => {

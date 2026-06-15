@@ -1,7 +1,7 @@
 import { bench, describe } from "vitest";
 
 import type { Middleware, Policy } from "../src/index";
-import { definePolicy, initCirrus, rls } from "../src/index";
+import { definePolicy, initLunora, rls } from "../src/index";
 
 /**
  * What does `.use(rls(policies))` cost per query call? The middleware
@@ -97,7 +97,7 @@ const createFakeDatabase = (): FakeDatabase => {
     };
 };
 
-const cirrus = initCirrus.dataModel<Record<string, never>>().create();
+const lunora = initLunora.dataModel<Record<string, never>>().create();
 
 interface BenchContext {
     auth: { roles?: ReadonlyArray<string>; userId: null | string };
@@ -117,7 +117,7 @@ const buildContext = (): BenchContext => {
 const rlsAsAny = <Context>(policies: ReadonlyArray<Policy<Context>>): Middleware<any, any> =>
     (rls as unknown as (p: ReadonlyArray<Policy<Context>>) => Middleware<any, any>)(policies);
 
-const baselineHandler = cirrus.query.query(async ({ ctx }) => {
+const baselineHandler = lunora.query.query(async ({ ctx }) => {
     // Two reads — most queries touch more than one table. The procedure
     // builder types `ctx.db` nominally as `DatabaseReader`; the structural
     // writer (which carries `findMany`/`findFirst`) is what the RLS-wrapped
@@ -145,14 +145,14 @@ const policyPredicate = definePolicy<BenchContext>({
     },
 });
 
-const rlsTrueHandler = cirrus.query.use(rlsAsAny<BenchContext>([policyTrue])).query(async ({ ctx }) => {
+const rlsTrueHandler = lunora.query.use(rlsAsAny<BenchContext>([policyTrue])).query(async ({ ctx }) => {
     await ctx.db.findMany("documents", { where: { ownerId: "user_42" } });
     await ctx.db.findFirst("users", { where: { _id: "user_42" } });
 
     return null;
 });
 
-const rlsPredicateHandler = cirrus.query.use(rlsAsAny<BenchContext>([policyPredicate])).query(async ({ ctx }) => {
+const rlsPredicateHandler = lunora.query.use(rlsAsAny<BenchContext>([policyPredicate])).query(async ({ ctx }) => {
     await ctx.db.findMany("documents", { where: { ownerId: "user_42" } });
     await ctx.db.findFirst("users", { where: { _id: "user_42" } });
 

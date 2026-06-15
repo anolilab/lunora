@@ -1,10 +1,10 @@
 {
     // Nuxt SSR worker — produced by `nuxt build` (Nitro cloudflare_module preset).
-    // This worker handles all page/SSR requests. Cirrus realtime (`/_cirrus/*` and
-    // ShardDO) lives in a SEPARATE worker; see `wrangler.cirrus.jsonc`.
+    // This worker handles all page/SSR requests. Lunora realtime (`/_lunora/*` and
+    // ShardDO) lives in a SEPARATE worker; see `wrangler.lunora.jsonc`.
     //
-    // In production set NUXT_PUBLIC_CIRRUS_URL to the Cirrus worker URL so the SSR
-    // loader and the browser client know where to reach `/_cirrus/*`.
+    // In production set NUXT_PUBLIC_LUNORA_URL to the Lunora worker URL so the SSR
+    // loader and the browser client know where to reach `/_lunora/*`.
     "name": "{{name}}",
     "main": ".output/server/index.mjs",
     "compatibility_date": "2026-06-10",

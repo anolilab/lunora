@@ -8,7 +8,7 @@
  * responses are SDK-camelCased; raw webhook bodies are snake_case — handled accordingly.
  */
 import type { PaymentAdapter, WebhookInput } from "../adapter";
-import { CirrusPaymentError } from "../errors";
+import { LunoraPaymentError } from "../errors";
 import { asRecord, readBoolean, readNumber, readString } from "../json";
 import { money, zeroMoney } from "../money";
 import type {
@@ -86,7 +86,7 @@ const SUBSCRIPTION_STATE_BY_POLAR_STATUS: Record<string, SubscriptionState> = {
 };
 
 const notSupported = (operation: string): never => {
-    throw new CirrusPaymentError("PROVIDER_ERROR", `polar (merchant-of-record) does not support ${operation}`);
+    throw new LunoraPaymentError("PROVIDER_ERROR", `polar (merchant-of-record) does not support ${operation}`);
 };
 
 const parseTimestamp = (value: null | string | undefined): number | undefined => {

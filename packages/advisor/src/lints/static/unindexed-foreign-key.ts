@@ -8,7 +8,7 @@ const PRIMARY_KEY = "_id";
 const suggestIndexName = (field: string): string => `by${field.charAt(0).toUpperCase()}${field.slice(1)}`;
 
 /**
- * Cirrus port of splinter's `0001_unindexed_foreign_keys`.
+ * Lunora port of splinter's `0001_unindexed_foreign_keys`.
  *
  * A `one` (many-to-one) relation declares a foreign-key column (`relation.field`)
  * on the holder table pointing at the target's `references` column. If no index

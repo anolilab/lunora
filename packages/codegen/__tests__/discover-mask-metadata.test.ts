@@ -20,7 +20,7 @@ const PREAMBLE = `
     declare const query: <R>(config: { args: Record<string, unknown>; handler: (ctx: unknown) => R }) => { kind: "query" };
 
     interface QueryBuilder<Args> {
-        readonly __cirrusProcedure: "query";
+        readonly __lunoraProcedure: "query";
         use: <C>(middleware: (options: { ctx: unknown }) => C) => QueryBuilder<Args>;
         query: <R>(handler: (options: { args: Args; ctx: unknown }) => R) => { kind: "query" };
     }
@@ -58,10 +58,10 @@ let project: Project;
 
 describe("discoverMaskMetadata", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-mask-meta-"));
-        mkdirSync(join(workdir, "cirrus"), { recursive: true });
-        writeFileSync(join(workdir, "cirrus", "users.ts"), USERS, "utf8");
-        writeFileSync(join(workdir, "cirrus", "admin.ts"), ADMIN, "utf8");
+        workdir = mkdtempSync(join(tmpdir(), "lunora-mask-meta-"));
+        mkdirSync(join(workdir, "lunora"), { recursive: true });
+        writeFileSync(join(workdir, "lunora", "users.ts"), USERS, "utf8");
+        writeFileSync(join(workdir, "lunora", "admin.ts"), ADMIN, "utf8");
         project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
     });
 
@@ -72,7 +72,7 @@ describe("discoverMaskMetadata", () => {
     it("extracts each masked column's table + strategy", () => {
         expect.assertions(2);
 
-        const { columns } = discoverMaskMetadata(project, join(workdir, "cirrus"));
+        const { columns } = discoverMaskMetadata(project, join(workdir, "lunora"));
 
         expect(columns).toContainEqual({ column: "name", strategy: "hash", table: "users" });
         expect(columns).toContainEqual({ column: "phone", strategy: "custom", table: "users" });
@@ -81,7 +81,7 @@ describe("discoverMaskMetadata", () => {
     it("maps a function strategy to `custom` (the closure is never read)", () => {
         expect.assertions(1);
 
-        const { columns } = discoverMaskMetadata(project, join(workdir, "cirrus"));
+        const { columns } = discoverMaskMetadata(project, join(workdir, "lunora"));
 
         expect(columns.find((column) => column.column === "phone")?.strategy).toBe("custom");
     });
@@ -89,7 +89,7 @@ describe("discoverMaskMetadata", () => {
     it("dedupes by (table, column) with the first declaration's strategy winning", () => {
         expect.assertions(2);
 
-        const { columns } = discoverMaskMetadata(project, join(workdir, "cirrus"));
+        const { columns } = discoverMaskMetadata(project, join(workdir, "lunora"));
 
         const email = columns.filter((column) => column.table === "users" && column.column === "email");
 
@@ -102,7 +102,7 @@ describe("discoverMaskMetadata", () => {
     it("ignores bare-factory procedures with no mask chain", () => {
         expect.assertions(1);
 
-        const { columns } = discoverMaskMetadata(project, join(workdir, "cirrus"));
+        const { columns } = discoverMaskMetadata(project, join(workdir, "lunora"));
 
         // Only the masked columns are listed; `peek` contributes none.
         expect(columns.every((column) => column.table === "users")).toBe(true);

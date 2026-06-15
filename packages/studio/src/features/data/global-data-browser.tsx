@@ -1,5 +1,5 @@
-import type { GlobalFacetResult, GlobalFilterClause, GlobalTableInfo, GlobalTablePage } from "@cirrus/client";
-import { useCirrus } from "@cirrus/react";
+import type { GlobalFacetResult, GlobalFilterClause, GlobalTableInfo, GlobalTablePage } from "@lunora/client";
+import { useLunora } from "@lunora/react";
 import type { MouseEvent, ReactElement, ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -82,7 +82,7 @@ const chipValue = (value: unknown): string => {
  * but not shard-scoped: it lists tables via `listGlobalTables()` and pages rows
  * via `readGlobalTablePage()`. Laid out like Supabase's Table Editor — a left
  * table sidebar + a bordered grid with a paginated footer — and gated by the
- * server's `CIRRUS_ADMIN_TOKEN`.
+ * server's `LUNORA_ADMIN_TOKEN`.
  */
 export const GlobalDataBrowser = ({
     initialTable,
@@ -90,7 +90,7 @@ export const GlobalDataBrowser = ({
     pageSize: initialPageSize = DEFAULT_PAGE_SIZE,
     schemaSwitch,
 }: GlobalDataBrowserProps = {}): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const t = useT();
 
     const [tables, setTables] = useState<GlobalTableInfo[] | null>(null);
@@ -328,7 +328,7 @@ export const GlobalDataBrowser = ({
     );
 
     return (
-        <div className="flex h-full min-w-0" data-testid="cirrus-global-data-browser">
+        <div className="flex h-full min-w-0" data-testid="lunora-global-data-browser">
             <TableListSidebar
                 header={
                     <div className="flex shrink-0 flex-col items-stretch gap-2 border-b border-border p-3">

@@ -23,7 +23,7 @@ export interface KvGetOptions {
 /**
  * Minimal projection of Cloudflare's `KVNamespace`. Declared structurally so
  * unit tests can pass a plain `Map`-backed double; the real binding satisfies
- * the same shape. Mirrors `R2BucketLike` in `@cirrus/storage`.
+ * the same shape. Mirrors `R2BucketLike` in `@lunora/storage`.
  */
 export interface KVNamespaceLike {
     /** Delete a key. No-op if the key is absent. */
@@ -75,7 +75,7 @@ export type KvNamespaceListResult<Metadata = unknown> =
     | { cacheStatus?: string | null; keys: KvListKey<Metadata>[]; list_complete: true };
 
 /** Construction options for the `createKv` factory. */
-export interface CirrusKvOptions {
+export interface LunoraKvOptions {
     /**
      * Optional per-instance key prefix applied to every operation (get/put/
      * delete/list). Use for multi-tenant key namespacing — equivalent to

@@ -1,13 +1,13 @@
 /**
  * `defineWorkflow` and the pure naming helpers shared by the runtime, codegen,
  * and the config layer. Everything here is Node-safe — no Cloudflare runtime
- * imports — so codegen and `@cirrus/config` derive class names and binding names
+ * imports — so codegen and `@lunora/config` derive class names and binding names
  * from the exact same logic the runtime uses (mirrors `defineContainer`).
  */
 import type { WorkflowConfig, WorkflowDefinition } from "./types";
 
 /**
- * The generated `WorkflowEntrypoint` class name for a `cirrus/workflows.ts`
+ * The generated `WorkflowEntrypoint` class name for a `lunora/workflows.ts`
  * export: `orderPipeline` → `OrderPipelineWorkflow`. wrangler's
  * `workflows[].class_name` references it, so codegen and the config layer MUST
  * derive it identically — always via this helper.
@@ -37,8 +37,8 @@ const workflowDefaultName = (exportName: string): string => exportName.replaceAl
  * same definition.
  *
  * ```ts
- * // cirrus/workflows.ts
- * import { defineWorkflow } from "@cirrus/workflow";
+ * // lunora/workflows.ts
+ * import { defineWorkflow } from "@lunora/workflow";
  * import { api } from "./_generated/api";
  *
  * export const orderPipeline = defineWorkflow&lt;{ orderId: string }>({
@@ -60,11 +60,11 @@ const defineWorkflow = <Params = Record<string, unknown>, Output = unknown>(conf
         throw new TypeError("defineWorkflow: `name` must be a non-empty string when provided");
     }
 
-    return { ...config, isCirrusWorkflow: true };
+    return { ...config, isLunoraWorkflow: true };
 };
 
 /** True when a value is a `defineWorkflow` result (the runtime brand check). */
 const isWorkflowDefinition = (value: unknown): value is WorkflowDefinition =>
-    typeof value === "object" && value !== null && (value as { isCirrusWorkflow?: unknown }).isCirrusWorkflow === true;
+    typeof value === "object" && value !== null && (value as { isLunoraWorkflow?: unknown }).isLunoraWorkflow === true;
 
 export { defineWorkflow, isWorkflowDefinition, workflowBindingName, workflowClassName, workflowDefaultName };

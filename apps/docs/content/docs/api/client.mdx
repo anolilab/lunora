@@ -1,25 +1,25 @@
 ---
-title: "@cirrus/client"
+title: "@lunora/client"
 description: Framework-agnostic browser/edge client.
 ---
 
-`@cirrus/client` is the framework-agnostic SDK. React, Vue, Solid and Svelte
+`@lunora/client` is the framework-agnostic SDK. React, Vue, Solid and Svelte
 adapters wrap it. You only depend on it directly when writing a custom
-adapter or driving Cirrus from a Node/Bun script.
+adapter or driving Lunora from a Node/Bun script.
 
 ```ts
-import { CirrusClient } from "@cirrus/client";
+import { LunoraClient } from "@lunora/client";
 
-const client = new CirrusClient({ url: "https://app.example.workers.dev" });
+const client = new LunoraClient({ url: "https://app.example.workers.dev" });
 const messages = await client.query(api.messages.list, { channelId });
 await client.mutation(api.messages.send, { channelId, text: "hi" });
 ```
 
 ## Wire protocol
 
-- **Queries / mutations / actions** — `POST /_cirrus/rpc`, JSON body
+- **Queries / mutations / actions** — `POST /_lunora/rpc`, JSON body
   `{ functionPath, args, shardKey? }`. Response: `{ result }` or `{ error }`.
-- **Subscriptions** — single multiplexed WebSocket at `/_cirrus/ws`. Frames
+- **Subscriptions** — single multiplexed WebSocket at `/_lunora/ws`. Frames
   are `{ type: "subscribe" | "unsubscribe" | "delta" | "ack", id, ... }`.
 
 ## Reconnect & bookmarks
@@ -49,5 +49,5 @@ on every RPC and includes it as a query param on the WebSocket handshake.
 
 ## See also
 
-- [@cirrus/react](/docs/api/react)
+- [@lunora/react](/docs/api/react)
 - [Concepts: real-time](/docs/concepts/realtime)

@@ -1,20 +1,20 @@
 /**
- * `@cirrus/mail/inbound` — inbound Email Routing support.
+ * `@lunora/mail/inbound` — inbound Email Routing support.
  *
- * Wire a Cloudflare Email Worker entry to route received mail into a Cirrus
+ * Wire a Cloudflare Email Worker entry to route received mail into a Lunora
  * mutation/action:
  *
  * ```ts
- * import { createInboundEmailHandler, parseInboundEmail, dispatchToCirrusFunction } from "@cirrus/mail/inbound";
+ * import { createInboundEmailHandler, parseInboundEmail, dispatchToLunoraFunction } from "@lunora/mail/inbound";
  *
  * export const email = createInboundEmailHandler({
  *     parse: parseInboundEmail,
- *     dispatch: dispatchToCirrusFunction({ shard: env.SHARD, functionPath: "inbound:onEmail" }),
+ *     dispatch: dispatchToLunoraFunction({ shard: env.SHARD, functionPath: "inbound:onEmail" }),
  * });
  * ```
  */
 export type {
-    DispatchToCirrusFunctionOptions,
+    DispatchToLunoraFunctionOptions,
     ForwardableEmailMessageLike,
     InboundDispatch,
     InboundDispatchContext,
@@ -22,7 +22,7 @@ export type {
     InboundEmailHandlerOptions,
     RpcEnvelope,
 } from "./handler";
-export { createInboundEmailHandler, dispatchToCirrusFunction } from "./handler";
+export { createInboundEmailHandler, dispatchToLunoraFunction } from "./handler";
 export type { InboundAttachment, InboundEmail, RawInboundEmail } from "./parse";
 export { parseInboundEmail } from "./parse";
 export type { ShardNamespaceLike, ShardStubLike } from "./shard";

@@ -1,7 +1,7 @@
 <script lang="ts">
-    import { hydratePreloaded, mutation } from "@cirrus/svelte";
+    import { hydratePreloaded, mutation } from "@lunora/svelte";
 
-    import { api } from "../../cirrus/_generated/api";
+    import { api } from "../../lunora/_generated/api";
     import type { PageData } from "./$types";
 
     export let data: PageData;
@@ -28,7 +28,7 @@
 
 <main style="font-family: system-ui; padding: 24px;">
     <h1>{"{{name}}"}</h1>
-    <p>SvelteKit + Cirrus — your loader is live.</p>
+    <p>SvelteKit + Lunora — your loader is live.</p>
 
     <pre>{JSON.stringify($messages, null, 2)}</pre>
 

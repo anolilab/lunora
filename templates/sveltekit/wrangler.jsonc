@@ -1,13 +1,13 @@
 {
-    // SINGLE worker for SvelteKit + Cirrus realtime (PLAN4 §3, class-B).
+    // SINGLE worker for SvelteKit + Lunora realtime (PLAN4 §3, class-B).
     //
     // `main` points at `.svelte-kit/cloudflare/_worker.js` — the handler
     // `@sveltejs/adapter-cloudflare` emits during `vite build`. The adapter
     // overwrites whatever `main` points at, so it MUST be the adapter's own
     // output path (its default) — NOT `src/worker.ts`, which the adapter would
     // clobber. `src/worker.ts` imports that emitted handler, wraps it with
-    // `withCirrus` (mounting Cirrus realtime under `/_cirrus/*`), and re-exports
-    // `ShardDO`. `cirrus deploy` bundles `src/worker.ts` as the deploy entry
+    // `withLunora` (mounting Lunora realtime under `/_lunora/*`), and re-exports
+    // `ShardDO`. `lunora deploy` bundles `src/worker.ts` as the deploy entry
     // (overriding `main`), so the one deployed Worker carries both planes.
     "name": "{{name}}",
     "main": ".svelte-kit/cloudflare/_worker.js",
@@ -18,7 +18,7 @@
     // SvelteKit's adapter writes its SSR worker, client assets, and an
     // `.assetsignore` (which excludes `_worker.js` from being served) under
     // `.svelte-kit/cloudflare`. The `ASSETS` binding is how the emitted handler
-    // serves those static files; Cirrus realtime is dispatched in
+    // serves those static files; Lunora realtime is dispatched in
     // `src/worker.ts` before SvelteKit ever sees the request.
     "assets": {
         "directory": ".svelte-kit/cloudflare",

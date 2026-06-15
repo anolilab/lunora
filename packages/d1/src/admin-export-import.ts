@@ -1,11 +1,11 @@
 /**
  * D1 admin bulk export/import for `.global()` tables.
  *
- * Twin of `@cirrus/do`'s `admin-export-import.ts`, except every read/write is
+ * Twin of `@lunora/do`'s `admin-export-import.ts`, except every read/write is
  * an async `D1Exec` call (real columns instead of JSON blobs). The worker
  * stitches D1 globals and per-shard DO output into a single NDJSON stream.
  */
-import type { DatabaseWriterLike, SchemaLike } from "@cirrus/do";
+import type { DatabaseWriterLike, SchemaLike } from "@lunora/do";
 
 import type { D1Exec } from "./d1-ctx-db";
 import { decodeGlobalRow } from "./d1-ctx-db";

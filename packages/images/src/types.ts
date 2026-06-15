@@ -1,7 +1,7 @@
 /**
  * Structural projections of the Cloudflare **Images** binding (`env.IMAGES`).
  *
- * Declared structurally — the same pattern `@cirrus/storage` uses for
+ * Declared structurally — the same pattern `@lunora/storage` uses for
  * `R2BucketLike` — so a unit test can pass a plain object double and the real
  * `ImagesBinding` from `@cloudflare/workers-types` satisfies the same shape. We
  * project only the slice of the chain we actually call
@@ -46,7 +46,7 @@ export interface TransformOptions {
     width?: number;
 }
 
-/** The output image formats Cirrus permits (the binding allowlist plus `json` info). */
+/** The output image formats Lunora permits (the binding allowlist plus `json` info). */
 export type ImageOutputFormat = "image/avif" | "image/gif" | "image/jpeg" | "image/png" | "image/webp";
 
 /** Options for the terminal `output(...)` call. */
@@ -103,7 +103,7 @@ export interface R2ObjectBodyLike {
 /** Anything `transform`/`info` accept as input bytes. R2 bodies are unwrapped to their stream. */
 export type ImageInput = ArrayBuffer | Blob | R2ObjectBodyLike | ReadableStream | Uint8Array;
 
-export interface CirrusImagesOptions {
+export interface LunoraImagesOptions {
     /** The Cloudflare Images binding (`env.IMAGES`). */
     binding: ImagesBindingLike;
 

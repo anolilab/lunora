@@ -601,10 +601,10 @@ describe("ctx-db relations", () => {
          * The reverse direction (global → shardBy) genuinely can't be supported
          * without Query Coordinator fan-out across DOs. The D1 writer's cascade
          * pre-flights and throws when it would have to reach into a shardBy
-         * table. Tested in `@cirrus/d1`; this comment-only stub documents the
+         * table. Tested in `@lunora/d1`; this comment-only stub documents the
          * symmetry from the DO side so a future Coordinator implementation
          * has a clear home.
          */
-        it.todo("global → shardBy cascade is documented as unsupported; covered in @cirrus/d1 tests");
+        it.todo("global → shardBy cascade is documented as unsupported; covered in @lunora/d1 tests");
     });
 });

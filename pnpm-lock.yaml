@@ -383,7 +383,7 @@ importers:
       '@babel/core':
         specifier: catalog:build
         version: 7.29.7
-      '@cirrus/codegen':
+      '@lunora/codegen':
         specifier: workspace:*
         version: link:packages/codegen
       '@commitlint/cli':
@@ -507,46 +507,46 @@ importers:
 
   apps/playground:
     dependencies:
-      '@cirrus/auth':
+      '@lunora/auth':
         specifier: workspace:*
         version: link:../../packages/auth
-      '@cirrus/client':
+      '@lunora/client':
         specifier: workspace:*
         version: link:../../packages/client
-      '@cirrus/d1':
+      '@lunora/d1':
         specifier: workspace:*
         version: link:../../packages/d1
-      '@cirrus/db':
+      '@lunora/db':
         specifier: workspace:*
         version: link:../../packages/db
-      '@cirrus/do':
+      '@lunora/do':
         specifier: workspace:*
         version: link:../../packages/do
-      '@cirrus/mail':
+      '@lunora/mail':
         specifier: workspace:*
         version: link:../../packages/mail
-      '@cirrus/react':
+      '@lunora/react':
         specifier: workspace:*
         version: link:../../packages/react
-      '@cirrus/runtime':
+      '@lunora/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
-      '@cirrus/scheduler':
+      '@lunora/scheduler':
         specifier: workspace:*
         version: link:../../packages/scheduler
-      '@cirrus/server':
+      '@lunora/server':
         specifier: workspace:*
         version: link:../../packages/server
-      '@cirrus/storage':
+      '@lunora/storage':
         specifier: workspace:*
         version: link:../../packages/storage
-      '@cirrus/studio':
+      '@lunora/studio':
         specifier: workspace:*
         version: link:../../packages/studio
-      '@cirrus/vite':
+      '@lunora/vite':
         specifier: workspace:*
         version: link:../../packages/vite
-      '@cirrus/workflow':
+      '@lunora/workflow':
         specifier: workspace:*
         version: link:../../packages/workflow
       '@tanstack/db':
@@ -568,13 +568,13 @@ importers:
         specifier: 19.2.7
         version: 19.2.7(react@19.2.7)
     devDependencies:
-      '@cirrus/cli':
+      '@lunora/cli':
         specifier: workspace:*
         version: link:../../packages/cli
-      '@cirrus/codegen':
+      '@lunora/codegen':
         specifier: workspace:*
         version: link:../../packages/codegen
-      '@cirrus/config':
+      '@lunora/config':
         specifier: workspace:*
         version: link:../../packages/config
       '@cloudflare/workers-types':
@@ -604,7 +604,7 @@ importers:
 
   apps/studio:
     dependencies:
-      '@cirrus/studio':
+      '@lunora/studio':
         specifier: workspace:*
         version: link:../../packages/studio
       '@fontsource-variable/geist':
@@ -650,25 +650,25 @@ importers:
 
   examples/auth-playground:
     dependencies:
-      '@cirrus/auth':
+      '@lunora/auth':
         specifier: workspace:*
         version: link:../../packages/auth
-      '@cirrus/client':
+      '@lunora/client':
         specifier: workspace:*
         version: link:../../packages/client
-      '@cirrus/do':
+      '@lunora/do':
         specifier: workspace:*
         version: link:../../packages/do
-      '@cirrus/react':
+      '@lunora/react':
         specifier: workspace:*
         version: link:../../packages/react
-      '@cirrus/runtime':
+      '@lunora/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
-      '@cirrus/server':
+      '@lunora/server':
         specifier: workspace:*
         version: link:../../packages/server
-      '@cirrus/vite':
+      '@lunora/vite':
         specifier: workspace:*
         version: link:../../packages/vite
       better-auth:
@@ -681,7 +681,7 @@ importers:
         specifier: 19.2.7
         version: 19.2.7(react@19.2.7)
     devDependencies:
-      '@cirrus/cli':
+      '@lunora/cli':
         specifier: workspace:*
         version: link:../../packages/cli
       '@cloudflare/workers-types':
@@ -708,37 +708,37 @@ importers:
 
   examples/blog:
     dependencies:
-      '@cirrus/auth':
+      '@lunora/auth':
         specifier: workspace:*
         version: link:../../packages/auth
-      '@cirrus/client':
+      '@lunora/client':
         specifier: workspace:*
         version: link:../../packages/client
-      '@cirrus/d1':
+      '@lunora/d1':
         specifier: workspace:*
         version: link:../../packages/d1
-      '@cirrus/do':
+      '@lunora/do':
         specifier: workspace:*
         version: link:../../packages/do
-      '@cirrus/react':
+      '@lunora/react':
         specifier: workspace:*
         version: link:../../packages/react
-      '@cirrus/runtime':
+      '@lunora/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
-      '@cirrus/scheduler':
+      '@lunora/scheduler':
         specifier: workspace:*
         version: link:../../packages/scheduler
-      '@cirrus/server':
+      '@lunora/server':
         specifier: workspace:*
         version: link:../../packages/server
-      '@cirrus/storage':
+      '@lunora/storage':
         specifier: workspace:*
         version: link:../../packages/storage
-      '@cirrus/vectors':
+      '@lunora/vectors':
         specifier: workspace:*
         version: link:../../packages/vectors
-      '@cirrus/vite':
+      '@lunora/vite':
         specifier: workspace:*
         version: link:../../packages/vite
       better-auth:
@@ -751,7 +751,7 @@ importers:
         specifier: 19.2.7
         version: 19.2.7(react@19.2.7)
     devDependencies:
-      '@cirrus/cli':
+      '@lunora/cli':
         specifier: workspace:*
         version: link:../../packages/cli
       '@cloudflare/workers-types':
@@ -778,25 +778,25 @@ importers:
 
   examples/payment-demo:
     dependencies:
-      '@cirrus/client':
+      '@lunora/client':
         specifier: workspace:*
         version: link:../../packages/client
-      '@cirrus/do':
+      '@lunora/do':
         specifier: workspace:*
         version: link:../../packages/do
-      '@cirrus/payment':
+      '@lunora/payment':
         specifier: workspace:*
         version: link:../../packages/payment
-      '@cirrus/react':
+      '@lunora/react':
         specifier: workspace:*
         version: link:../../packages/react
-      '@cirrus/runtime':
+      '@lunora/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
-      '@cirrus/server':
+      '@lunora/server':
         specifier: workspace:*
         version: link:../../packages/server
-      '@cirrus/vite':
+      '@lunora/vite':
         specifier: workspace:*
         version: link:../../packages/vite
       react:
@@ -809,7 +809,7 @@ importers:
         specifier: ^22.2.1
         version: 22.2.1(@types/node@25.9.3)
     devDependencies:
-      '@cirrus/cli':
+      '@lunora/cli':
         specifier: workspace:*
         version: link:../../packages/cli
       '@cloudflare/workers-types':
@@ -836,22 +836,22 @@ importers:
 
   examples/realtime-cursors:
     dependencies:
-      '@cirrus/client':
+      '@lunora/client':
         specifier: workspace:*
         version: link:../../packages/client
-      '@cirrus/do':
+      '@lunora/do':
         specifier: workspace:*
         version: link:../../packages/do
-      '@cirrus/react':
+      '@lunora/react':
         specifier: workspace:*
         version: link:../../packages/react
-      '@cirrus/runtime':
+      '@lunora/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
-      '@cirrus/server':
+      '@lunora/server':
         specifier: workspace:*
         version: link:../../packages/server
-      '@cirrus/vite':
+      '@lunora/vite':
         specifier: workspace:*
         version: link:../../packages/vite
       react:
@@ -861,7 +861,7 @@ importers:
         specifier: 19.2.7
         version: 19.2.7(react@19.2.7)
     devDependencies:
-      '@cirrus/cli':
+      '@lunora/cli':
         specifier: workspace:*
         version: link:../../packages/cli
       '@cloudflare/workers-types':
@@ -888,22 +888,22 @@ importers:
 
   examples/todo-app:
     dependencies:
-      '@cirrus/client':
+      '@lunora/client':
         specifier: workspace:*
         version: link:../../packages/client
-      '@cirrus/do':
+      '@lunora/do':
         specifier: workspace:*
         version: link:../../packages/do
-      '@cirrus/react':
+      '@lunora/react':
         specifier: workspace:*
         version: link:../../packages/react
-      '@cirrus/runtime':
+      '@lunora/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
-      '@cirrus/server':
+      '@lunora/server':
         specifier: workspace:*
         version: link:../../packages/server
-      '@cirrus/vite':
+      '@lunora/vite':
         specifier: workspace:*
         version: link:../../packages/vite
       react:
@@ -913,7 +913,7 @@ importers:
         specifier: 19.2.7
         version: 19.2.7(react@19.2.7)
     devDependencies:
-      '@cirrus/cli':
+      '@lunora/cli':
         specifier: workspace:*
         version: link:../../packages/cli
       '@cloudflare/workers-types':
@@ -940,11 +940,11 @@ importers:
 
   packages/advisor:
     dependencies:
-      '@cirrus/server':
+      '@lunora/server':
         specifier: workspace:*
         version: link:../server
     devDependencies:
-      '@cirrus/values':
+      '@lunora/values':
         specifier: workspace:*
         version: link:../values
       '@types/node':
@@ -1035,10 +1035,10 @@ importers:
 
   packages/astro:
     dependencies:
-      '@cirrus/client':
+      '@lunora/client':
         specifier: workspace:*
         version: link:../client
-      '@cirrus/runtime':
+      '@lunora/runtime':
         specifier: workspace:*
         version: link:../runtime
       astro:
@@ -1069,10 +1069,10 @@ importers:
       '@better-auth/passkey':
         specifier: catalog:auth
         version: 1.6.18(@better-auth/core@1.6.18(@better-auth/utils@0.4.1)(@better-fetch/fetch@1.3.0)(@cloudflare/workers-types@4.20260613.1)(@opentelemetry/api@1.9.1)(better-call@1.3.6(zod@4.4.3))(jose@6.2.3)(kysely@0.28.17)(nanostores@1.3.0))(@better-auth/utils@0.4.1)(@better-fetch/fetch@1.3.0)(better-auth@1.6.18(@cloudflare/workers-types@4.20260613.1)(@opentelemetry/api@1.9.1)(drizzle-orm@0.45.2(@cloudflare/workers-types@4.20260613.1)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(mysql2@3.22.5(@types/node@25.9.3))(next@16.2.9(@babel/core@7.29.7)(@opentelemetry/api@1.9.1)(@playwright/test@1.60.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(pg@8.21.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.13)(svelte@5.56.3(@typescript-eslint/types@8.61.0))(vitest@4.1.8)(vue@3.5.38(typescript@6.0.3)))(better-call@1.3.6(zod@4.4.3))(nanostores@1.3.0)
-      '@cirrus/server':
+      '@lunora/server':
         specifier: workspace:*
         version: link:../server
-      '@cirrus/values':
+      '@lunora/values':
         specifier: workspace:*
         version: link:../values
       better-auth:
@@ -1139,28 +1139,28 @@ importers:
       '@bomb.sh/tab':
         specifier: 0.0.16
         version: 0.0.16
-      '@cirrus/codegen':
+      '@lunora/codegen':
         specifier: workspace:*
         version: link:../codegen
-      '@cirrus/config':
+      '@lunora/config':
         specifier: workspace:*
         version: link:../config
-      '@cirrus/container':
+      '@lunora/container':
         specifier: workspace:*
         version: link:../container
-      '@cirrus/d1':
+      '@lunora/d1':
         specifier: workspace:*
         version: link:../d1
-      '@cirrus/seed':
+      '@lunora/seed':
         specifier: workspace:*
         version: link:../seed
-      '@cirrus/server':
+      '@lunora/server':
         specifier: workspace:*
         version: link:../server
-      '@cirrus/studio':
+      '@lunora/studio':
         specifier: workspace:*
         version: link:../studio
-      '@cirrus/values':
+      '@lunora/values':
         specifier: workspace:*
         version: link:../values
       '@visulima/cerebro':
@@ -1212,10 +1212,10 @@ importers:
 
   packages/client:
     devDependencies:
-      '@cirrus/do':
+      '@lunora/do':
         specifier: workspace:*
         version: link:../do
-      '@cirrus/runtime':
+      '@lunora/runtime':
         specifier: workspace:*
         version: link:../runtime
       '@cloudflare/vitest-pool-workers':
@@ -1251,29 +1251,29 @@ importers:
 
   packages/codegen:
     dependencies:
-      '@cirrus/advisor':
+      '@lunora/advisor':
         specifier: workspace:*
         version: link:../advisor
-      '@cirrus/container':
+      '@lunora/container':
         specifier: workspace:*
         version: link:../container
-      '@cirrus/scheduler':
+      '@lunora/scheduler':
         specifier: workspace:*
         version: link:../scheduler
-      '@cirrus/values':
+      '@lunora/values':
         specifier: workspace:*
         version: link:../values
-      '@cirrus/workflow':
+      '@lunora/workflow':
         specifier: workspace:*
         version: link:../workflow
       ts-morph:
         specifier: catalog:tooling
         version: 28.0.0
     devDependencies:
-      '@cirrus/do':
+      '@lunora/do':
         specifier: workspace:*
         version: link:../do
-      '@cirrus/server':
+      '@lunora/server':
         specifier: workspace:*
         version: link:../server
       '@types/node':
@@ -1300,16 +1300,16 @@ importers:
 
   packages/config:
     dependencies:
-      '@cirrus/codegen':
+      '@lunora/codegen':
         specifier: workspace:*
         version: link:../codegen
-      '@cirrus/container':
+      '@lunora/container':
         specifier: workspace:*
         version: link:../container
-      '@cirrus/seed':
+      '@lunora/seed':
         specifier: workspace:*
         version: link:../seed
-      '@cirrus/studio':
+      '@lunora/studio':
         specifier: workspace:*
         version: link:../studio
       es-module-lexer:
@@ -1371,7 +1371,7 @@ importers:
 
   packages/d1:
     dependencies:
-      '@cirrus/do':
+      '@lunora/do':
         specifier: workspace:*
         version: link:../do
       drizzle-orm:
@@ -1408,7 +1408,7 @@ importers:
 
   packages/db:
     dependencies:
-      '@cirrus/client':
+      '@lunora/client':
         specifier: workspace:*
         version: link:../client
     devDependencies:
@@ -1446,7 +1446,7 @@ importers:
         specifier: catalog:drizzle
         version: 0.45.2(@cloudflare/workers-types@4.20260613.1)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
     devDependencies:
-      '@cirrus/vectors':
+      '@lunora/vectors':
         specifier: workspace:*
         version: link:../vectors
       '@cloudflare/vitest-pool-workers':
@@ -1613,7 +1613,7 @@ importers:
 
   packages/mcp:
     dependencies:
-      '@cirrus/client':
+      '@lunora/client':
         specifier: workspace:*
         version: link:../client
       '@modelcontextprotocol/sdk':
@@ -1641,10 +1641,10 @@ importers:
 
   packages/payment:
     dependencies:
-      '@cirrus/server':
+      '@lunora/server':
         specifier: workspace:*
         version: link:../server
-      '@cirrus/values':
+      '@lunora/values':
         specifier: workspace:*
         version: link:../values
       dinero.js:
@@ -1678,10 +1678,10 @@ importers:
 
   packages/ratelimit:
     devDependencies:
-      '@cirrus/server':
+      '@lunora/server':
         specifier: workspace:*
         version: link:../server
-      '@cirrus/values':
+      '@lunora/values':
         specifier: workspace:*
         version: link:../values
       '@types/node':
@@ -1705,10 +1705,10 @@ importers:
 
   packages/react:
     dependencies:
-      '@cirrus/client':
+      '@lunora/client':
         specifier: workspace:*
         version: link:../client
-      '@cirrus/ratelimit':
+      '@lunora/ratelimit':
         specifier: workspace:*
         version: link:../ratelimit
     devDependencies:
@@ -1769,7 +1769,7 @@ importers:
 
   packages/runtime:
     devDependencies:
-      '@cirrus/do':
+      '@lunora/do':
         specifier: workspace:*
         version: link:../do
       '@cloudflare/vitest-pool-workers':
@@ -1839,16 +1839,16 @@ importers:
         specifier: catalog:data
         version: 10.4.0
     devDependencies:
-      '@cirrus/do':
+      '@lunora/do':
         specifier: workspace:*
         version: link:../do
-      '@cirrus/server':
+      '@lunora/server':
         specifier: workspace:*
         version: link:../server
-      '@cirrus/testing':
+      '@lunora/testing':
         specifier: workspace:*
         version: link:../testing
-      '@cirrus/values':
+      '@lunora/values':
         specifier: workspace:*
         version: link:../values
       '@types/node':
@@ -1872,10 +1872,10 @@ importers:
 
   packages/server:
     dependencies:
-      '@cirrus/scheduler':
+      '@lunora/scheduler':
         specifier: workspace:*
         version: link:../scheduler
-      '@cirrus/values':
+      '@lunora/values':
         specifier: workspace:*
         version: link:../values
       drizzle-orm:
@@ -1906,7 +1906,7 @@ importers:
 
   packages/solid:
     dependencies:
-      '@cirrus/client':
+      '@lunora/client':
         specifier: workspace:*
         version: link:../client
     devDependencies:
@@ -1985,16 +1985,16 @@ importers:
       '@base-ui/react':
         specifier: catalog:ui
         version: 1.5.0(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@cirrus/advisor':
+      '@lunora/advisor':
         specifier: workspace:*
         version: link:../advisor
-      '@cirrus/analytics':
+      '@lunora/analytics':
         specifier: workspace:*
         version: link:../analytics
-      '@cirrus/client':
+      '@lunora/client':
         specifier: workspace:*
         version: link:../client
-      '@cirrus/react':
+      '@lunora/react':
         specifier: workspace:*
         version: link:../react
       '@hugeicons/core-free-icons':
@@ -2034,7 +2034,7 @@ importers:
         specifier: catalog:ui
         version: 3.6.0
     devDependencies:
-      '@cirrus/mail':
+      '@lunora/mail':
         specifier: workspace:*
         version: link:../mail
       '@tailwindcss/cli':
@@ -2091,10 +2091,10 @@ importers:
 
   packages/svelte:
     dependencies:
-      '@cirrus/client':
+      '@lunora/client':
         specifier: workspace:*
         version: link:../client
-      '@cirrus/runtime':
+      '@lunora/runtime':
         specifier: workspace:*
         version: link:../runtime
     devDependencies:
@@ -2125,16 +2125,16 @@ importers:
 
   packages/testing:
     dependencies:
-      '@cirrus/do':
+      '@lunora/do':
         specifier: workspace:*
         version: link:../do
-      '@cirrus/mail':
+      '@lunora/mail':
         specifier: workspace:*
         version: link:../mail
-      '@cirrus/server':
+      '@lunora/server':
         specifier: workspace:*
         version: link:../server
-      '@cirrus/values':
+      '@lunora/values':
         specifier: workspace:*
         version: link:../values
     devDependencies:
@@ -2213,13 +2213,13 @@ importers:
 
   packages/vite:
     dependencies:
-      '@cirrus/codegen':
+      '@lunora/codegen':
         specifier: workspace:*
         version: link:../codegen
-      '@cirrus/config':
+      '@lunora/config':
         specifier: workspace:*
         version: link:../config
-      '@cirrus/studio':
+      '@lunora/studio':
         specifier: workspace:*
         version: link:../studio
       '@cloudflare/vite-plugin':
@@ -2259,10 +2259,10 @@ importers:
 
   packages/vue:
     dependencies:
-      '@cirrus/client':
+      '@lunora/client':
         specifier: workspace:*
         version: link:../client
-      '@cirrus/runtime':
+      '@lunora/runtime':
         specifier: workspace:*
         version: link:../runtime
     devDependencies:
@@ -2317,7 +2317,7 @@ importers:
 
   tests/e2e:
     devDependencies:
-      '@cirrus/mail':
+      '@lunora/mail':
         specifier: workspace:*
         version: link:../../packages/mail
       '@playwright/test':

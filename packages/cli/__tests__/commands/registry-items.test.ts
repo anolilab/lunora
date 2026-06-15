@@ -4,7 +4,7 @@
  * `add` command mechanics against minimal hermetic fixtures.
  *
  * Data-driven: every subdirectory of `registry/` that carries a `registry.json`
- * is discovered and run through the full `cirrus add` flow into a throwaway
+ * is discovered and run through the full `lunora add` flow into a throwaway
  * project. New registry items get this coverage automatically — no edit here.
  */
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -27,7 +27,7 @@ const testDirectory = dirname(fileURLToPath(import.meta.url));
 // __tests__/commands → packages/cli → packages → repo root → registry
 const registryRoot = resolve(testDirectory, "..", "..", "..", "..", "registry");
 
-const BASE_SCHEMA = `import { defineSchema, defineTable, v } from "@cirrus/server";
+const BASE_SCHEMA = `import { defineSchema, defineTable, v } from "@lunora/server";
 
 export const schema = defineSchema({
     messages: defineTable({ text: v.string() }),
@@ -44,17 +44,17 @@ const itemNames = readdirSync(registryRoot).filter((entry) => {
 let workdir: string;
 
 const seedProject = (): void => {
-    const cirrusDirectory = join(workdir, "cirrus");
+    const lunoraDirectory = join(workdir, "lunora");
 
-    mkdirSync(cirrusDirectory, { recursive: true });
+    mkdirSync(lunoraDirectory, { recursive: true });
     writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: {}, name: "demo" }, undefined, 4), "utf8");
     writeFileSync(join(workdir, "wrangler.jsonc"), '{\n    // demo\n    "name": "demo"\n}\n', "utf8");
-    writeFileSync(join(cirrusDirectory, "schema.ts"), BASE_SCHEMA, "utf8");
+    writeFileSync(join(lunoraDirectory, "schema.ts"), BASE_SCHEMA, "utf8");
 };
 
 describe("shipped registry items", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-registry-"));
+        workdir = mkdtempSync(join(tmpdir(), "lunora-registry-"));
         seedProject();
     });
 
@@ -146,7 +146,7 @@ describe("shipped registry items", () => {
 
             expect(result.code).toBe(0);
 
-            const schema = readFileSync(join(workdir, "cirrus", "schema.ts"), "utf8");
+            const schema = readFileSync(join(workdir, "lunora", "schema.ts"), "utf8");
             // Items shipping a schema-extension file must have wired themselves into schema.ts.
             const hasExtension = manifest.files.some((file) => file.merge === "schema-extension");
 
@@ -163,7 +163,7 @@ describe("shipped registry items", () => {
             await runAddCommand({ cwd: workdir, from: registryRoot, logger: silentLogger(), names: [name], yes: true });
             await runAddCommand({ cwd: workdir, from: registryRoot, logger: silentLogger(), names: [name], yes: true });
 
-            const schema = readFileSync(join(workdir, "cirrus", "schema.ts"), "utf8");
+            const schema = readFileSync(join(workdir, "lunora", "schema.ts"), "utf8");
             const extendCount = schema.split(`.extend(${name}.extension)`).length - 1;
 
             // 0 for items with no schema extension, exactly 1 for those that have one — never duplicated.

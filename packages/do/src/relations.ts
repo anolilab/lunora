@@ -40,7 +40,7 @@ import type { WhereInput } from "./where-clause-compiler";
 type OnDeleteActionLike = "cascade" | "restrict" | "set null";
 
 /**
- * Structural mirror of `@cirrus/server`'s `RelationDefinition` (kept local so
+ * Structural mirror of `@lunora/server`'s `RelationDefinition` (kept local so
  * this package takes no runtime dependency on the server package — same
  * reasoning as {@link TableDefinitionLike}).
  */

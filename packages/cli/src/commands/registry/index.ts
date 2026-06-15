@@ -1,10 +1,10 @@
 /**
- * The component-registry command set (`cirrus registry add | list | view | build`).
+ * The component-registry command set (`lunora registry add | list | view | build`).
  *
- * Mirrors `cirrus init`'s `giget`-fetch pipeline but operates on *registry
- * items* (fetched from `gh:anolilab/cirrus/registry`) instead of whole-project
+ * Mirrors `lunora init`'s `giget`-fetch pipeline but operates on *registry
+ * items* (fetched from `gh:anolilab/lunora/registry`) instead of whole-project
  * templates. An item is a directory shipping a `registry.json` manifest plus the
- * files it scaffolds into the user's `cirrus/` tree. The model is shadcn/kitcn:
+ * files it scaffolds into the user's `lunora/` tree. The model is shadcn/kitcn:
  * the code is copied into the project and becomes the user's to own and edit.
  *
  * Modules (this is the barrel):

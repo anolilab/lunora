@@ -80,8 +80,8 @@ const asStringArray = (value: unknown): string[] => (Array.isArray(value) ? valu
  * POSTs `application/x-www-form-urlencoded` (`secret`, `response`=token, and an
  * optional `remoteip`) and returns the parsed verdict. A `success: false`
  * outcome (bot / invalid / expired token) is **returned**, not thrown — callers
- * decide how to react. The function throws a structural `CirrusError`-shaped
- * error (`{ name: "CirrusError", code: "SERVICE_UNAVAILABLE", status: 503 }`)
+ * decide how to react. The function throws a structural `LunoraError`-shaped
+ * error (`{ name: "LunoraError", code: "SERVICE_UNAVAILABLE", status: 503 }`)
  * only when the siteverify call itself fails (network error or non-2xx), so a
  * "siteverify is down" failure is distinguishable from a "this is a bot"
  * verdict.
@@ -105,7 +105,7 @@ const verifyTurnstile = async ({ fetch = globalThis.fetch, remoteip, secret, tok
         throw Object.assign(new Error("turnstile siteverify request failed"), {
             cause: error,
             code: "SERVICE_UNAVAILABLE",
-            name: "CirrusError",
+            name: "LunoraError",
             status: 503,
         });
     }
@@ -113,7 +113,7 @@ const verifyTurnstile = async ({ fetch = globalThis.fetch, remoteip, secret, tok
     if (!response.ok) {
         throw Object.assign(new Error(`turnstile siteverify returned ${String(response.status)}`), {
             code: "SERVICE_UNAVAILABLE",
-            name: "CirrusError",
+            name: "LunoraError",
             status: 503,
         });
     }

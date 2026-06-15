@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { ForwardableEmailMessageLike } from "../src/inbound/handler";
-import { createInboundEmailHandler, dispatchToCirrusFunction } from "../src/inbound/handler";
+import { createInboundEmailHandler, dispatchToLunoraFunction } from "../src/inbound/handler";
 import type { InboundEmail } from "../src/inbound/parse";
 
 /** A parsed message fixture used by the handler tests (parsing is covered separately). */
@@ -36,7 +36,7 @@ describe("createInboundEmailHandler", () => {
         const parse = vi.fn<() => Promise<InboundEmail>>(async () => fixture);
         const dispatch = vi.fn<() => Promise<void>>(async () => undefined);
         const message = fakeMessage();
-        const env = { CIRRUS_ADMIN_TOKEN: "secret" };
+        const env = { LUNORA_ADMIN_TOKEN: "secret" };
 
         const handler = createInboundEmailHandler({ dispatch, parse });
 
@@ -88,7 +88,7 @@ describe("createInboundEmailHandler", () => {
     });
 });
 
-describe("dispatchToCirrusFunction", () => {
+describe("dispatchToLunoraFunction", () => {
     const stubShard = (response: { json: () => Promise<unknown>; ok?: boolean; status?: number }) => {
         const fetch = vi.fn<() => Promise<typeof response>>(async () => response);
         const get = vi.fn<() => { fetch: typeof fetch }>(() => {
@@ -109,9 +109,9 @@ describe("dispatchToCirrusFunction", () => {
             ok: true,
         });
 
-        const dispatch = dispatchToCirrusFunction({ functionPath: "inbound:onEmail", shard });
+        const dispatch = dispatchToLunoraFunction({ functionPath: "inbound:onEmail", shard });
 
-        await dispatch(fixture, { ctx: undefined, env: { CIRRUS_ADMIN_TOKEN: "secret" }, message: fakeMessage() });
+        await dispatch(fixture, { ctx: undefined, env: { LUNORA_ADMIN_TOKEN: "secret" }, message: fakeMessage() });
 
         expect(idFromName).toHaveBeenCalledWith("__root__");
 
@@ -136,7 +136,7 @@ describe("dispatchToCirrusFunction", () => {
             ok: true,
         });
 
-        const dispatch = dispatchToCirrusFunction({
+        const dispatch = dispatchToLunoraFunction({
             functionPath: "inbound:onEmail",
             resolveArgs: (email) => {
                 return { subject: email.subject };
@@ -145,7 +145,7 @@ describe("dispatchToCirrusFunction", () => {
             shardKey: "tenant-7",
         });
 
-        await dispatch(fixture, { ctx: undefined, env: { CIRRUS_ADMIN_TOKEN: "secret" }, message: fakeMessage() });
+        await dispatch(fixture, { ctx: undefined, env: { LUNORA_ADMIN_TOKEN: "secret" }, message: fakeMessage() });
 
         expect(idFromName).toHaveBeenCalledWith("tenant-7");
 
@@ -164,9 +164,9 @@ describe("dispatchToCirrusFunction", () => {
             },
             ok: true,
         });
-        const dispatch = dispatchToCirrusFunction({ functionPath: "inbound:onEmail", shard });
+        const dispatch = dispatchToLunoraFunction({ functionPath: "inbound:onEmail", shard });
 
-        await expect(dispatch(fixture, { ctx: undefined, env: {}, message: fakeMessage() })).rejects.toThrow(/CIRRUS_ADMIN_TOKEN/);
+        await expect(dispatch(fixture, { ctx: undefined, env: {}, message: fakeMessage() })).rejects.toThrow(/LUNORA_ADMIN_TOKEN/);
     });
 
     it("throws on a non-2xx shard response", async () => {
@@ -179,9 +179,9 @@ describe("dispatchToCirrusFunction", () => {
             ok: false,
             status: 500,
         });
-        const dispatch = dispatchToCirrusFunction({ functionPath: "inbound:onEmail", shard });
+        const dispatch = dispatchToLunoraFunction({ functionPath: "inbound:onEmail", shard });
 
-        await expect(dispatch(fixture, { ctx: undefined, env: { CIRRUS_ADMIN_TOKEN: "secret" }, message: fakeMessage() })).rejects.toThrow(
+        await expect(dispatch(fixture, { ctx: undefined, env: { LUNORA_ADMIN_TOKEN: "secret" }, message: fakeMessage() })).rejects.toThrow(
             /failed \(HTTP 500\)/,
         );
     });
@@ -195,9 +195,9 @@ describe("dispatchToCirrusFunction", () => {
             },
             ok: true,
         });
-        const dispatch = dispatchToCirrusFunction({ functionPath: "inbound:missing", shard });
+        const dispatch = dispatchToLunoraFunction({ functionPath: "inbound:missing", shard });
 
-        await expect(dispatch(fixture, { ctx: undefined, env: { CIRRUS_ADMIN_TOKEN: "secret" }, message: fakeMessage() })).rejects.toThrow(/returned an error/);
+        await expect(dispatch(fixture, { ctx: undefined, env: { LUNORA_ADMIN_TOKEN: "secret" }, message: fakeMessage() })).rejects.toThrow(/returned an error/);
     });
 
     it("end-to-end: handler + dispatcher rejects the message when the shard errors", async () => {
@@ -212,11 +212,11 @@ describe("dispatchToCirrusFunction", () => {
         const message = fakeMessage();
 
         const handler = createInboundEmailHandler({
-            dispatch: dispatchToCirrusFunction({ functionPath: "inbound:onEmail", shard }),
+            dispatch: dispatchToLunoraFunction({ functionPath: "inbound:onEmail", shard }),
             parse: async () => fixture,
         });
 
-        await handler(message, { CIRRUS_ADMIN_TOKEN: "secret" }, undefined);
+        await handler(message, { LUNORA_ADMIN_TOKEN: "secret" }, undefined);
 
         expect(message.setReject).toHaveBeenCalledTimes(1);
         expect(message.setReject).toHaveBeenCalledWith(expect.stringContaining("returned an error"));

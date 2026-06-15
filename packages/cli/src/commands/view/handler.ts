@@ -25,7 +25,7 @@ interface ViewCommandResult {
 }
 
 const DEFAULT_DEV_PORT = 8787;
-const STUDIO_PATH = "/_cirrus/studio";
+const STUDIO_PATH = "/_lunora/studio";
 
 const findWranglerFile = (projectRoot: string): string | undefined => {
     for (const candidate of ["wrangler.jsonc", "wrangler.json"]) {
@@ -141,7 +141,7 @@ const runViewCommand = async (options: ViewCommandOptions): Promise<ViewCommandR
     return { code: 0, url };
 };
 
-/** `cirrus view` handler (lazy-loaded via the command's `loader`). */
+/** `lunora view` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<ViewOptions> = defineHandler<ViewOptions>(({ cwd, logger, options }) =>
     runViewCommand({ cwd, logger, remote: options.remote === true }),
 );

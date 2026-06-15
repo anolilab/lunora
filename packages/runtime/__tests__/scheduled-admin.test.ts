@@ -67,7 +67,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         const { namespace } = recordingScheduler();
         const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
 
-        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/scheduled", { method: "GET" }), {}, fakeContext);
+        const response = await worker.fetch(new Request("https://app.example/_lunora/admin/scheduled", { method: "GET" }), {}, fakeContext);
 
         expect(response.status).toBe(403);
     });
@@ -78,7 +78,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/scheduled", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
+            new Request("https://app.example/_lunora/admin/scheduled", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
             {},
             fakeContext,
         );
@@ -97,7 +97,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/scheduled", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
+            new Request("https://app.example/_lunora/admin/scheduled", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
             {},
             fakeContext,
         );
@@ -118,7 +118,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, schedulerInstanceName: "tenant-a", shardDO: noopNamespace });
 
         await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/scheduled", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
+            new Request("https://app.example/_lunora/admin/scheduled", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
             {},
             fakeContext,
         );
@@ -133,7 +133,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/scheduled", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "POST" }),
+            new Request("https://app.example/_lunora/admin/scheduled", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "POST" }),
             {},
             fakeContext,
         );
@@ -147,7 +147,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         const { calls, namespace } = recordingScheduler();
         const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
 
-        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/scheduled/status", { method: "GET" }), {}, fakeContext);
+        const response = await worker.fetch(new Request("https://app.example/_lunora/admin/scheduled/status", { method: "GET" }), {}, fakeContext);
 
         expect(response.status).toBe(403);
         // The admin gate rejects before the request ever reaches the DO stub.
@@ -160,7 +160,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/scheduled/status", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
+            new Request("https://app.example/_lunora/admin/scheduled/status", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
             {},
             fakeContext,
         );
@@ -179,7 +179,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/scheduled/status", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
+            new Request("https://app.example/_lunora/admin/scheduled/status", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
             {},
             fakeContext,
         );
@@ -200,7 +200,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, schedulerInstanceName: "tenant-a", shardDO: noopNamespace });
 
         await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/scheduled/status", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
+            new Request("https://app.example/_lunora/admin/scheduled/status", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
             {},
             fakeContext,
         );
@@ -215,7 +215,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/scheduled/status", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "POST" }),
+            new Request("https://app.example/_lunora/admin/scheduled/status", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "POST" }),
             {},
             fakeContext,
         );
@@ -230,7 +230,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/scheduled/cancel", {
+            new Request("https://app.example/_lunora/admin/scheduled/cancel", {
                 body: JSON.stringify({ id: "j1" }),
                 headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
                 method: "POST",
@@ -254,7 +254,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/scheduled/cancel", {
+            new Request("https://app.example/_lunora/admin/scheduled/cancel", {
                 body: JSON.stringify({}),
                 headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/json" },
                 method: "POST",
@@ -274,7 +274,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
 
         await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/scheduled/ws", { headers: { authorization: `Bearer ${ADMIN_TOKEN}`, Upgrade: "websocket" } }),
+            new Request("https://app.example/_lunora/admin/scheduled/ws", { headers: { authorization: `Bearer ${ADMIN_TOKEN}`, Upgrade: "websocket" } }),
             {},
             fakeContext,
         );
@@ -289,7 +289,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
 
         await worker.fetch(
-            new Request(`https://app.example/_cirrus/admin/scheduled/ws?token=${ADMIN_TOKEN}`, { headers: { Upgrade: "websocket" } }),
+            new Request(`https://app.example/_lunora/admin/scheduled/ws?token=${ADMIN_TOKEN}`, { headers: { Upgrade: "websocket" } }),
             {},
             fakeContext,
         );
@@ -304,7 +304,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/scheduled/ws", { headers: { Upgrade: "websocket" } }),
+            new Request("https://app.example/_lunora/admin/scheduled/ws", { headers: { Upgrade: "websocket" } }),
             {},
             fakeContext,
         );
@@ -320,7 +320,7 @@ describe("createWorker — scheduled admin endpoints", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, schedulerDO: namespace, shardDO: noopNamespace });
 
         const response = await worker.fetch(
-            new Request(`https://app.example/_cirrus/admin/scheduled/ws?token=${ADMIN_TOKEN}`, { method: "GET" }),
+            new Request(`https://app.example/_lunora/admin/scheduled/ws?token=${ADMIN_TOKEN}`, { method: "GET" }),
             {},
             fakeContext,
         );

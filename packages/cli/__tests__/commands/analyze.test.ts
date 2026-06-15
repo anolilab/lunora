@@ -32,15 +32,15 @@ const recordingLogger = (): { logger: Logger; recorded: Recorded } => {
 let workdir: string;
 let buildOut: string;
 
-describe("cirrus analyze", () => {
+describe("lunora analyze", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-cli-analyze-"));
-        buildOut = mkdtempSync(join(tmpdir(), "cirrus-cli-analyze-out-"));
+        workdir = mkdtempSync(join(tmpdir(), "lunora-cli-analyze-"));
+        buildOut = mkdtempSync(join(tmpdir(), "lunora-cli-analyze-out-"));
         // Fake worker bundle: a big entry + a small chunk + a _generated/ file.
         writeFileSync(join(buildOut, "worker.js"), "x".repeat(3000));
         writeFileSync(join(buildOut, "chunk.js"), "x".repeat(200));
-        mkdirSync(join(buildOut, "cirrus", "_generated"), { recursive: true });
-        writeFileSync(join(buildOut, "cirrus", "_generated", "api.ts"), "x".repeat(500));
+        mkdirSync(join(buildOut, "lunora", "_generated"), { recursive: true });
+        writeFileSync(join(buildOut, "lunora", "_generated", "api.ts"), "x".repeat(500));
     });
 
     afterEach(() => {
@@ -48,7 +48,7 @@ describe("cirrus analyze", () => {
         rmSync(buildOut, { force: true, recursive: true });
     });
 
-    describe("cirrus analyze", () => {
+    describe("lunora analyze", () => {
         it("walks the supplied outdir and reports sizes + _generated files", async () => {
             expect.hasAssertions();
 
@@ -60,7 +60,7 @@ describe("cirrus analyze", () => {
             expect(result.report?.totalFiles).toBe(3);
             expect(result.report?.totalBytes).toBe(3700);
             expect(result.report?.topModules[0]?.path).toBe("worker.js");
-            expect(result.report?.generatedFiles.map((f) => f.path)).toEqual([join("cirrus", "_generated", "api.ts")]);
+            expect(result.report?.generatedFiles.map((f) => f.path)).toEqual([join("lunora", "_generated", "api.ts")]);
         });
 
         it("--json emits a machine-readable report on stdout (jq-pipeable)", async () => {

@@ -1,11 +1,11 @@
-import type { FunctionReference, OptimisticLocalStore } from "@cirrus/client";
+import type { FunctionReference, OptimisticLocalStore } from "@lunora/client";
 import { describe, expect, it } from "vitest";
 import { effectScope } from "vue";
 
 import { useMutation } from "../src/use-mutation";
 import { createFakeClient } from "./fake-client";
 
-const sendMessage: FunctionReference = { __cirrusRef: "messages:send" };
+const sendMessage: FunctionReference = { __lunoraRef: "messages:send" };
 
 describe(useMutation, () => {
     it("resolves with the server value, exposing reactive data/pending refs", async () => {
@@ -26,7 +26,7 @@ describe(useMutation, () => {
         expect(handle.pending.value).toBe(false);
 
         // No per-call options → the runner forwards `undefined`, which
-        // `CirrusClient.mutation`'s default param resolves to `{}`.
+        // `LunoraClient.mutation`'s default param resolves to `{}`.
         expect(fake.mutationSpy).toHaveBeenCalledWith(sendMessage, { channelId: "c1", text: "hi" }, undefined);
 
         scope.stop();

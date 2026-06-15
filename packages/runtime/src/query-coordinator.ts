@@ -19,9 +19,9 @@
  * (`createStaticShardRegistry`) here and leave the DO/KV-backed registry
  * for a follow-up once codegen opts schemas into cross-shard call sites.
  */
-import type { RankDirection as RankPageDirection, RankPageRow, RankPageRowKey as RankPageKey, ShardRankPageResult } from "@cirrus/do";
+import type { RankDirection as RankPageDirection, RankPageRow, RankPageRowKey as RankPageKey, ShardRankPageResult } from "@lunora/do";
 
-import { CirrusError } from "./errors";
+import { LunoraError } from "./errors";
 import type { ShardNamespaceLike } from "./resolve-shard";
 import { resolveShard } from "./resolve-shard";
 
@@ -66,7 +66,7 @@ const createStaticShardRegistry = (table_to_keys: Readonly<Record<string, Readon
  *
  * `rank` — cross-shard `rank()` over a partition that spans shards (e.g. a
  * global leaderboard `.shardBy("userId")` with `rankIndex(partitionBy: [])`).
- * Each shard's `__cirrus_admin__:rankBefore` returns `{before, total}` (its
+ * Each shard's `__lunora_admin__:rankBefore` returns `{before, total}` (its
  * local rows strictly-before the explicit key, plus its local partition
  * total); the merge sums them into `{position: Σbefore + 1, total: Σtotal}` —
  * the 1-based global position and global partition size.
@@ -116,7 +116,7 @@ const mergeStrategyForAggregate = (
         }
 
         // avg requires (sum, count) — see jsdoc on MergeStrategy.
-        throw new CirrusError('aggregate({ op: "avg" }) is not supported across shards in v1 — fan out sum + count separately', {
+        throw new LunoraError('aggregate({ op: "avg" }) is not supported across shards in v1 — fan out sum + count separately', {
             code: "BAD_REQUEST",
             status: 400,
         });
@@ -136,7 +136,7 @@ const mergeStrategyForAggregate = (
         return { kind: "groupBy", op: "min" };
     }
 
-    throw new CirrusError('groupBy({ agg: { op: "avg" } }) is not supported across shards in v1 — fan out sum + count separately', {
+    throw new LunoraError('groupBy({ agg: { op: "avg" } }) is not supported across shards in v1 — fan out sum + count separately', {
         code: "BAD_REQUEST",
         status: 400,
     });
@@ -207,7 +207,7 @@ type ShardRpcRequest = Pick<FanOutRequest, "args" | "functionPath" | "headers">;
  * fixed semantics documented on {@link MigrationFanOutResult}.
  *
  * `functionPath` is the admin RPC to invoke on each shard
- * (`__cirrus_admin__:runMigration` or `:migrationStatus`); `headers` must carry
+ * (`__lunora_admin__:runMigration` or `:migrationStatus`); `headers` must carry
  * the `Authorization` bearer header the shard's admin gate requires (the
  * configured admin token), or every shard comes back as a 403 error.
  */
@@ -254,8 +254,8 @@ interface MigrationFanOutResult {
  * `{position: Σbefore + 1, total: Σtotal}` semantics {@link mergeRank} defines.
  *
  * The key tuple (`partitionKey`/`sortValues`/`rowId`) is built off the row doc
- * via `@cirrus/do`'s `rankKeyFromDoc(index, doc)` and forwarded verbatim to
- * each shard's `__cirrus_admin__:rankBefore` admin RPC; `headers` must carry
+ * via `@lunora/do`'s `rankKeyFromDoc(index, doc)` and forwarded verbatim to
+ * each shard's `__lunora_admin__:rankBefore` admin RPC; `headers` must carry
  * the admin bearer the shard's admin gate requires.
  */
 interface RankFanOutRequest {
@@ -298,10 +298,10 @@ interface ShardRankOutcome {
  * The shard-local rank-page wire types — `RankPageKey` (per-row sort key, byte-
  * identical to the companion's `ORDER BY __partition__, __sort_k<i>__, __id__`),
  * `RankPageRow`, `RankPageDirection`, and `ShardRankPageResult` — are owned by
- * `@cirrus/do` (which writes the rank companion the keys mirror) and imported at
+ * `@lunora/do` (which writes the rank companion the keys mirror) and imported at
  * the top of this file, so this cross-package wire contract has a single source
  * of truth instead of two structurally-identical copies that can silently drift.
- * They are re-exported below under the same `@cirrus/runtime` public names.
+ * They are re-exported below under the same `@lunora/runtime` public names.
  */
 
 /**
@@ -364,14 +364,14 @@ interface QueryCoordinator {
     fanOut: <T = unknown>(namespace: ShardNamespaceLike, request: FanOutRequest) => Promise<FanOutResult<T>>;
 
     /**
-     * Fan the `__cirrus_admin__:applyCdc` admin RPC out by forwarding each
+     * Fan the `__lunora_admin__:applyCdc` admin RPC out by forwarding each
      * pre-bucketed per-shard batch of CDC changes, rolling up the applied/failed
      * counts. The replay half of point-in-time recovery.
      */
     orchestrateApplyCdc: (namespace: ShardNamespaceLike, request: ApplyCdcFanOutRequest) => Promise<ApplyCdcFanOutResult>;
 
     /**
-     * Fan the `__cirrus_admin__:cdcSync` admin RPC out to every live shard,
+     * Fan the `__lunora_admin__:cdcSync` admin RPC out to every live shard,
      * each resumed from its own cursor in `request.cursors` (shardKey → seq).
      * Returns the per-shard change pages plus their new cursors so the caller
      * can checkpoint each shard independently — the streaming-export feed.
@@ -397,7 +397,7 @@ interface QueryCoordinator {
     orchestrateMigration: (namespace: ShardNamespaceLike, request: MigrationFanOutRequest) => Promise<MigrationFanOutResult>;
 
     /**
-     * Fan the `__cirrus_admin__:rankBefore` admin RPC out to every live shard of
+     * Fan the `__lunora_admin__:rankBefore` admin RPC out to every live shard of
      * a table and roll up the per-shard `{before, total}` payloads into the
      * global rank (`{position: Σbefore + 1, total: Σtotal}`). The cross-shard
      * `rank()` path for a partition that spans shards.
@@ -406,7 +406,7 @@ interface QueryCoordinator {
 
     /**
      * Page a ranked query across every live shard of a `.shardBy(...)` table.
-     * Fans `__cirrus_admin__:rankPage` out to each shard, gathers each shard's
+     * Fans `__lunora_admin__:rankPage` out to each shard, gathers each shard's
      * local ranked slice (rows tagged with their rank-key tuple), and k-way
      * merges them by that tuple into one globally-ranked page of `take` rows.
      * The opaque `continueCursor` is a composite of per-shard cursors so the
@@ -417,7 +417,7 @@ interface QueryCoordinator {
     orchestrateRankPage: (namespace: ShardNamespaceLike, request: RankPageFanOutRequest) => Promise<RankPageFanOutResult>;
 
     /**
-     * Fan the `__cirrus_admin__:getMetrics` admin RPC out to every live shard of
+     * Fan the `__lunora_admin__:getMetrics` admin RPC out to every live shard of
      * a table and collect each shard's lifetime `requests` total into a per-shard
      * `{ shardKey, requests }` distribution. The feed the studio's `hot_shard`
      * advisor lint needs: a single shard's snapshot can't reveal cross-shard
@@ -497,7 +497,7 @@ interface CdcSyncFanOutResult {
 interface ImportFanOutRequest {
     /**
      * Per-shard batches keyed by shard key. Each entry will be POSTed as the
-     * `rows` arg of `__cirrus_admin__:importShard`. The shard's
+     * `rows` arg of `__lunora_admin__:importShard`. The shard's
      * starting-line-number for error attribution is carried in `startLine`.
      */
     batches: ReadonlyArray<{ rows: ReadonlyArray<{ doc: Record<string, unknown>; table: string }>; shardKey: string; startLine?: number }>;
@@ -529,7 +529,7 @@ interface ImportFanOutResult {
 /**
  * Cross-shard CDC replay request (point-in-time recovery). Changes are
  * pre-bucketed by the runtime into one batch per shard key — the coordinator
- * forwards each batch to `__cirrus_admin__:applyCdc` and rolls up the counts.
+ * forwards each batch to `__lunora_admin__:applyCdc` and rolls up the counts.
  */
 interface ApplyCdcFanOutRequest {
     batches: ReadonlyArray<{ changes: ReadonlyArray<Record<string, unknown>>; shardKey: string }>;
@@ -549,7 +549,7 @@ interface ApplyCdcFanOutResult {
 
 /**
  * Cross-shard traffic request. Like {@link MigrationFanOutRequest} there is no
- * caller-supplied merge — each shard's `__cirrus_admin__:getMetrics` payload
+ * caller-supplied merge — each shard's `__lunora_admin__:getMetrics` payload
  * carries its own lifetime `requests` total, and {@link rollUpShardTraffic}
  * collects them into one `{ shardKey, requests }` entry per shard. `headers`
  * must carry the admin bearer the per-shard `getMetrics` gate requires.
@@ -1438,7 +1438,7 @@ interface RankMergeResult {
  *
  * NOTE: this reads `before`/`total` off the RAW per-shard value — the generic
  * `fanOut` contract, where shards return bare query results. The admin
- * `__cirrus_admin__:rankBefore` op wraps its payload in `{result}`, so
+ * `__lunora_admin__:rankBefore` op wraps its payload in `{result}`, so
  * `orchestrateRank`/`rollUpRank` (not this) is the path for that op; it
  * `unwrapResult`s first. Don't point a `{kind:"rank"}` `fanOut` at the admin op.
  */
@@ -1542,7 +1542,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
     const perShardTimeoutMs = options.perShardTimeoutMs ?? DEFAULT_TIMEOUT_MS;
 
     if (maxConcurrency < 1) {
-        throw new CirrusError("maxConcurrency must be >= 1", { code: "BAD_REQUEST", status: 400 });
+        throw new LunoraError("maxConcurrency must be >= 1", { code: "BAD_REQUEST", status: 400 });
     }
 
     return {
@@ -1593,7 +1593,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
                 // before the `tables` field so they reach the shard RPC. The
                 // earlier `{ tables }` literal silently dropped them.
                 args: { ...request.args, tables: [...request.tables] },
-                functionPath: "__cirrus_admin__:exportShard",
+                functionPath: "__lunora_admin__:exportShard",
                 headers: request.headers,
             };
 
@@ -1643,7 +1643,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
                         shardKey,
                         prepareShardRpc({
                             args: { limit: request.limit, sinceSeq },
-                            functionPath: "__cirrus_admin__:cdcSync",
+                            functionPath: "__lunora_admin__:cdcSync",
                             headers: request.headers,
                         }),
                         perShardTimeoutMs,
@@ -1689,7 +1689,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
                         batch.shardKey,
                         prepareShardRpc({
                             args: { rows: [...batch.rows], startLine: batch.startLine ?? 1 },
-                            functionPath: "__cirrus_admin__:importShard",
+                            functionPath: "__lunora_admin__:importShard",
                             headers: request.headers,
                         }),
                         perShardTimeoutMs,
@@ -1732,7 +1732,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
                         batch.shardKey,
                         prepareShardRpc({
                             args: { changes: [...batch.changes] },
-                            functionPath: "__cirrus_admin__:applyCdc",
+                            functionPath: "__lunora_admin__:applyCdc",
                             headers: request.headers,
                         }),
                         perShardTimeoutMs,
@@ -1769,7 +1769,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
                     sortValues: [...request.sortValues],
                     table: request.table,
                 },
-                functionPath: "__cirrus_admin__:rankBefore",
+                functionPath: "__lunora_admin__:rankBefore",
                 headers: request.headers,
             };
 
@@ -1828,7 +1828,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
                     const outcome = await callOneShard(
                         namespace,
                         shardKey,
-                        prepareShardRpc({ args, functionPath: "__cirrus_admin__:rankPage", headers: request.headers }),
+                        prepareShardRpc({ args, functionPath: "__lunora_admin__:rankPage", headers: request.headers }),
                         perShardTimeoutMs,
                     );
 
@@ -1896,7 +1896,7 @@ const createQueryCoordinator = (options: QueryCoordinatorOptions): QueryCoordina
             // orchestrators — the bearer in `headers` satisfies each shard's
             // admin gate.
             const trafficRequest: ShardRpcRequest = {
-                functionPath: "__cirrus_admin__:getMetrics",
+                functionPath: "__lunora_admin__:getMetrics",
                 headers: request.headers,
             };
 
@@ -1937,9 +1937,9 @@ export type {
     ShardTrafficFanOutRequest,
     ShardTrafficFanOutResult,
 };
-// The shard-local rank-page wire types are owned by `@cirrus/do` and re-exported
+// The shard-local rank-page wire types are owned by `@lunora/do` and re-exported
 // here for consumers. Kept as a type-only `import` + `export` (not `export…from`)
-// on purpose: `@cirrus/do` is a type-only dev dependency, so a real re-export
+// on purpose: `@lunora/do` is a type-only dev dependency, so a real re-export
 // edge would pull it into the runtime's production dependency graph.
-// eslint-disable-next-line unicorn/prefer-export-from -- keep @cirrus/do a type-only dev dep; no runtime re-export edge
+// eslint-disable-next-line unicorn/prefer-export-from -- keep @lunora/do a type-only dev dep; no runtime re-export edge
 export type { RankPageDirection, RankPageKey, RankPageRow, ShardRankPageResult };

@@ -4,5 +4,5 @@ node_modules
 .nitro
 dist
 .wrangler
-.cirrus-cache
-cirrus/_generated
+.lunora-cache
+lunora/_generated

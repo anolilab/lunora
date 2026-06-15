@@ -9,7 +9,7 @@ that emits zero or more **findings**, each tagged with a level
 (`ERROR`/`WARN`/`INFO`), a category (`SCHEMA`/`PERFORMANCE`/`SECURITY`), and a
 remediation.
 
-What sets Cirrus apart from a live-database-only advisor is that most lints are
+What sets Lunora apart from a live-database-only advisor is that most lints are
 **static** — they run at codegen/build time against the declared schema and the
 discovered query/insert/middleware sites, so they catch a problem _before_ it
 ships. A smaller set is **runtime**: it needs observed signal from a running
@@ -73,12 +73,12 @@ Need observed signal from a live shard, aggregated by the Studio backend.
 ## Running advisors
 
 You don't run advisors by hand in normal use — codegen runs the static set on
-every `cirrus dev` save and on deploy, and the Studio computes the runtime set
+every `lunora dev` save and on deploy, and the Studio computes the runtime set
 when you open the Advisors panels. The catalog is also available
 programmatically:
 
 ```ts
-import { runAdvisor, STATIC_LINTS, RUNTIME_LINTS, ALL_LINTS } from "@cirrus/advisor";
+import { runAdvisor, STATIC_LINTS, RUNTIME_LINTS, ALL_LINTS } from "@lunora/advisor";
 
 const findings = runAdvisor(context, { source: "static" }); // or "runtime"
 ```

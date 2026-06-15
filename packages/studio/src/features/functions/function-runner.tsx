@@ -1,5 +1,5 @@
-import type { FunctionReference } from "@cirrus/client";
-import { useCirrus } from "@cirrus/react";
+import type { FunctionReference } from "@lunora/client";
+import { useLunora } from "@lunora/react";
 import type { ChangeEvent, ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -46,7 +46,7 @@ const MAX_HISTORY = 10;
 interface FunctionRunnerProps {
     /**
      * Functions to expose. When omitted, the runner auto-discovers them via the
-     * client's `listFunctions()` (the admin-gated `/_cirrus/admin/functions`
+     * client's `listFunctions()` (the admin-gated `/_lunora/admin/functions`
      * endpoint), so it works with no wiring when the worker is built with a
      * `functions` registry. Supply the list to override discovery.
      */
@@ -56,7 +56,7 @@ interface FunctionRunnerProps {
      * Expose the "Run as identity" control — execute the selected function AS a
      * chosen authenticated user so an operator can test auth + RLS behavior.
      * Security-sensitive: the run is forwarded over the admin-gated
-     * `__cirrus_admin__:runAs` RPC, which forges the per-request identity. The
+     * `__lunora_admin__:runAs` RPC, which forges the per-request identity. The
      * host sets this only on a trusted loopback-dev gate (the `Studio` component's
      * `runAsIdentity` prop); off by default, the runner always runs with the
      * caller's own (admin) identity.
@@ -75,16 +75,16 @@ const formatResult = (value: unknown): string => {
 /**
  * Interactive runner for the registered functions: pick one, edit its JSON
  * arguments, optionally target a shard, then invoke it against the live
- * {@link useCirrus} client and inspect the result or error.
+ * {@link useLunora} client and inspect the result or error.
  *
  * By default the function list is auto-discovered from the worker's
- * `/_cirrus/admin/functions` endpoint; pass an explicit `functions` array to
+ * `/_lunora/admin/functions` endpoint; pass an explicit `functions` array to
  * skip discovery (a query/mutation/action's `kind` is compile-time-only, so it
  * must be named).
  */
 export const FunctionRunner = ({ functions: functionsProp, runAsIdentity = false }: FunctionRunnerProps = {}): ReactElement => {
     const t = useT();
-    const client = useCirrus();
+    const client = useLunora();
 
     const [discovered, setDiscovered] = useState<FunctionDescriptor[] | null>(null);
     const [discoverError, setDiscoverError] = useState<null | string>(null);
@@ -158,7 +158,7 @@ export const FunctionRunner = ({ functions: functionsProp, runAsIdentity = false
             return;
         }
 
-        const reference: FunctionReference = { __cirrusRef: selected.path };
+        const reference: FunctionReference = { __lunoraRef: selected.path };
         const options = shardKey.trim() === "" ? {} : { shardKey: shardKey.trim() };
 
         // "Run as identity": when the dev gate is on AND a userId is set, route
@@ -260,7 +260,7 @@ export const FunctionRunner = ({ functions: functionsProp, runAsIdentity = false
     }, [selected]);
 
     return (
-        <div className="flex flex-col gap-4" data-testid="cirrus-function-runner">
+        <div className="flex flex-col gap-4" data-testid="lunora-function-runner">
             {discoverError !== null && (
                 <p className="text-sm text-destructive" data-testid="function-discover-error" role="alert">
                     {discoverError}

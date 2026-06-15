@@ -7,10 +7,10 @@ const MAX_TOP_K = 100;
 const DEFAULT_TOP_K = 10;
 
 /**
- * One vector index as the generated `CIRRUS_VECTOR_INDEXES` registry describes
+ * One vector index as the generated `LUNORA_VECTOR_INDEXES` registry describes
  * it — the static schema shape, independent of any live binding. Structurally
- * the codegen `CirrusVectorIndex`, restated here so this package stays free of a
- * dependency on `@cirrus/codegen`.
+ * the codegen `LunoraVectorIndex`, restated here so this package stays free of a
+ * dependency on `@lunora/codegen`.
  */
 interface VectorIndexRegistryEntry {
     dimensions?: number;
@@ -55,7 +55,7 @@ interface VectorAdminIntrospectorOptions {
     /** Live Vectorize bindings keyed by index name, from `env`. */
     indexes: Record<string, VectorizeIndexLike>;
 
-    /** The generated `CIRRUS_VECTOR_INDEXES` registry (Vectorize can't enumerate at runtime). */
+    /** The generated `LUNORA_VECTOR_INDEXES` registry (Vectorize can't enumerate at runtime). */
     registry: ReadonlyArray<VectorIndexRegistryEntry>;
 }
 
@@ -107,13 +107,13 @@ const createVectorAdminIntrospector = (options: VectorAdminIntrospectorOptions):
         const binding = indexes[name];
 
         if (binding === undefined) {
-            throw new Error(`@cirrus/vectors: no Vectorize binding registered for index "${name}"`);
+            throw new Error(`@lunora/vectors: no Vectorize binding registered for index "${name}"`);
         }
 
         const embed = embedders[name];
 
         if (embed === undefined) {
-            throw new Error(`@cirrus/vectors: no embedder registered for index "${name}" — it lists read-only`);
+            throw new Error(`@lunora/vectors: no embedder registered for index "${name}" — it lists read-only`);
         }
 
         const vector = await embed(text);

@@ -80,16 +80,16 @@ import type { MutationDelta, RpcRequest, SocketAttachment, SubscriptionEnvelope,
  * stays alive across hibernation without a billable request. Clients send this
  * payload on their heartbeat instead of an app-level ping.
  */
-const WS_KEEPALIVE_PING = "cirrus-ping";
+const WS_KEEPALIVE_PING = "lunora-ping";
 /** Canned reply the runtime returns for {@link WS_KEEPALIVE_PING}; never reaches a message handler. */
-const WS_KEEPALIVE_PONG = "cirrus-pong";
+const WS_KEEPALIVE_PONG = "lunora-pong";
 
 /**
  * Optional programmatic log sink, resolved from `createShardDO({ observability })`.
- * Structurally a subset of `@cirrus/runtime`'s `ObservabilitySink`, so a user can
+ * Structurally a subset of `@lunora/runtime`'s `ObservabilitySink`, so a user can
  * pass the SAME sink object to `createWorker` (which drives `onRpc`) and
  * `createShardDO` (which drives `onLog` from `ctx.log`). Typed structurally so
- * `@cirrus/do` takes no dependency on `@cirrus/runtime`; the event is the same
+ * `@lunora/do` takes no dependency on `@lunora/runtime`; the event is the same
  * {@link LogEventInput} shape `emitLogEvent` consumes, built once per call.
  */
 interface LogSink {
@@ -201,14 +201,14 @@ interface ShardDOOptions {
      * behavior (every dispatch re-runs the handler).
      *
      * The cache is invisible to the WS subscription bridge: invalidations
-     * land via the ctx-db write hooks (`@cirrus/do`'s `createShardCtxDb`
+     * land via the ctx-db write hooks (`@lunora/do`'s `createShardCtxDb`
      * `cache` option) BEFORE the broadcast goes out, so subscribers that
      * re-run their queries in response always observe the post-write state.
      */
     reactiveCache?: ReactiveCacheOptions;
 }
 
-/** Arguments accepted by the `__cirrus_admin__:runMigration` admin RPC. */
+/** Arguments accepted by the `__lunora_admin__:runMigration` admin RPC. */
 interface RunShardMigrationArgs {
     batchSize?: number;
     direction?: MigrationDirection;
@@ -217,13 +217,13 @@ interface RunShardMigrationArgs {
     maxBatches?: number;
 }
 
-/** Arguments accepted by the `__cirrus_admin__:exportShard` admin RPC. */
+/** Arguments accepted by the `__lunora_admin__:exportShard` admin RPC. */
 interface RunShardExportArgs {
     batchSize?: number;
     tables?: ReadonlyArray<string>;
 }
 
-/** Arguments accepted by the `__cirrus_admin__:importShard` admin RPC. */
+/** Arguments accepted by the `__lunora_admin__:importShard` admin RPC. */
 interface RunShardImportArgs {
     rows: ReadonlyArray<ExportRow>;
     startLine?: number;
@@ -285,7 +285,7 @@ interface RunShardBulkDeleteResult {
 }
 
 /**
- * Arguments accepted by the `__cirrus_admin__:rankBefore` admin RPC. The query
+ * Arguments accepted by the `__lunora_admin__:rankBefore` admin RPC. The query
  * coordinator fans this out to every shard to count, for the row identified by
  * `rowId`, how many rows precede it under `index` within `partitionKey`; the
  * coordinator sums the per-shard `{before, total}` into a global rank.
@@ -299,7 +299,7 @@ interface RunShardRankBeforeArgs {
 }
 
 /**
- * Arguments accepted by the `__cirrus_admin__:rankPage` admin RPC. The query
+ * Arguments accepted by the `__lunora_admin__:rankPage` admin RPC. The query
  * coordinator (`orchestrateRankPage`) fans this out to every live shard of a
  * `.shardBy(...)` table to gather each shard's local ranked slice, then k-way
  * merges them into one globally-ranked page. `take` bounds the per-shard slice;
@@ -326,7 +326,7 @@ interface SubscriptionMemo {
     tables: Set<string>;
 }
 
-/** Identity field every Cirrus document row carries. */
+/** Identity field every Lunora document row carries. */
 const ROW_ID_FIELD = "_id";
 
 /**
@@ -335,7 +335,7 @@ const ROW_ID_FIELD = "_id";
  * ({@link MutationDelta} recognition) — `key`/`row`/`op` drive the actual
  * merge — so any non-empty string is safe.
  */
-const DELTA_FALLBACK_TABLE = "__cirrus__";
+const DELTA_FALLBACK_TABLE = "__lunora__";
 
 /** Read a row's `_id` as a string; `undefined` when the row isn't a plain object with a string `_id`. */
 const readRowId = (row: unknown): string | undefined => {
@@ -470,7 +470,7 @@ const collectUpsertDeltas = (previous: RowIndex, next: RowIndex, deltaTable: str
  *
  * Diff is keyed by `_id`: rows only in prev → `delete`; rows only in next →
  * `insert`; rows in both whose JSON differs → `update`. Insert/update carry the
- * full new `row`; delete omits it (matching the wire contract `@cirrus/client`
+ * full new `row`; delete omits it (matching the wire contract `@lunora/client`
  * parses). Deltas are ordered deletes-then-inserts/updates so the client never
  * sees a transient over-length page.
  *
@@ -600,7 +600,7 @@ const parseRunMigrationArgs = (args: Record<string, unknown>): RunShardMigration
     const id = typeof args["id"] === "string" ? args["id"] : "";
 
     if (id.trim() === "") {
-        throw Object.assign(new Error("runMigration: `id` is required"), { code: "MIGRATION_ID_REQUIRED", name: "CirrusError", status: 400 });
+        throw Object.assign(new Error("runMigration: `id` is required"), { code: "MIGRATION_ID_REQUIRED", name: "LunoraError", status: 400 });
     }
 
     return {
@@ -622,9 +622,9 @@ const parseRunMigrationArgs = (args: Record<string, unknown>): RunShardMigration
 const SHARD_BULK_DELETE_CAP = MAX_PAGE_SIZE;
 
 /**
- * Validate the `__cirrus_admin__:writeRow` payload. Enforces that `id` is
+ * Validate the `__lunora_admin__:writeRow` payload. Enforces that `id` is
  * present for ops that target an existing row and that `doc` is present for ops
- * that carry one, throwing a 400 `CirrusError` otherwise — the writer would
+ * that carry one, throwing a 400 `LunoraError` otherwise — the writer would
  * reject these too, but failing here keeps the error shape uniform.
  */
 const parseWriteRowArgs = (args: Record<string, unknown>): RunShardWriteArgs => {
@@ -632,11 +632,11 @@ const parseWriteRowArgs = (args: Record<string, unknown>): RunShardWriteArgs => 
     const table = typeof args["table"] === "string" ? args["table"] : "";
 
     if (op !== "insert" && op !== "patch" && op !== "replace" && op !== "delete") {
-        throw Object.assign(new Error("writeRow: `op` must be insert|patch|replace|delete"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+        throw Object.assign(new Error("writeRow: `op` must be insert|patch|replace|delete"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
     }
 
     if (table.trim() === "") {
-        throw Object.assign(new Error("writeRow: `table` is required"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+        throw Object.assign(new Error("writeRow: `table` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
     }
 
     const id = typeof args["id"] === "string" ? args["id"] : undefined;
@@ -644,11 +644,11 @@ const parseWriteRowArgs = (args: Record<string, unknown>): RunShardWriteArgs => 
         typeof args["doc"] === "object" && args["doc"] !== null && !Array.isArray(args["doc"]) ? (args["doc"] as Record<string, unknown>) : undefined;
 
     if (op !== "insert" && (id === undefined || id === "")) {
-        throw Object.assign(new Error(`writeRow: \`id\` is required for op "${op}"`), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+        throw Object.assign(new Error(`writeRow: \`id\` is required for op "${op}"`), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
     }
 
     if (op !== "delete" && record === undefined) {
-        throw Object.assign(new Error(`writeRow: \`doc\` is required for op "${op}"`), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+        throw Object.assign(new Error(`writeRow: \`doc\` is required for op "${op}"`), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
     }
 
     return { doc: record, id, op, table };
@@ -658,7 +658,7 @@ const parseWriteRowArgs = (args: Record<string, unknown>): RunShardWriteArgs => 
 
 /**
  * Minimal structural shape of a created/fetched workflow instance handle, mirrored
- * from `@cirrus/workflow`'s `WorkflowInstanceLike` so `@cirrus/do` stays free of a
+ * from `@lunora/workflow`'s `WorkflowInstanceLike` so `@lunora/do` stays free of a
  * dependency on the workflow package. Only the members the admin ops touch (`id`
  * and `status()`) are modelled.
  */
@@ -669,7 +669,7 @@ interface WorkflowInstanceHandle {
 
 /**
  * Minimal structural shape of a Cloudflare Workflows binding (the `env.WORKFLOW_*`
- * object), mirrored from `@cirrus/workflow`'s `WorkflowBindingLike`. Only `create`
+ * object), mirrored from `@lunora/workflow`'s `WorkflowBindingLike`. Only `create`
  * and `get` — the members the studio's start/observe ops call — are modelled.
  */
 interface WorkflowBindingHandle {
@@ -677,7 +677,7 @@ interface WorkflowBindingHandle {
     get: (id: string) => Promise<WorkflowInstanceHandle>;
 }
 
-/** Parsed `__cirrus_admin__:createWorkflowInstance` payload: which declared workflow to start, plus optional id/params. */
+/** Parsed `__lunora_admin__:createWorkflowInstance` payload: which declared workflow to start, plus optional id/params. */
 interface CreateWorkflowInstanceArgs {
     exportName: string;
     id?: string;
@@ -685,15 +685,15 @@ interface CreateWorkflowInstanceArgs {
 }
 
 /**
- * Validate the `__cirrus_admin__:createWorkflowInstance` payload. Requires a
- * non-empty `exportName` (the `cirrus/workflows.ts` export the handle is addressed
- * by); `id` and `params` are optional. Throws a 400 `CirrusError` on a bad shape.
+ * Validate the `__lunora_admin__:createWorkflowInstance` payload. Requires a
+ * non-empty `exportName` (the `lunora/workflows.ts` export the handle is addressed
+ * by); `id` and `params` are optional. Throws a 400 `LunoraError` on a bad shape.
  */
 const parseCreateWorkflowInstanceArgs = (args: Record<string, unknown>): CreateWorkflowInstanceArgs => {
     const exportName = typeof args["exportName"] === "string" ? args["exportName"].trim() : "";
 
     if (exportName === "") {
-        throw Object.assign(new Error("createWorkflowInstance: `exportName` is required"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+        throw Object.assign(new Error("createWorkflowInstance: `exportName` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
     }
 
     const id = typeof args["id"] === "string" && args["id"] !== "" ? args["id"] : undefined;
@@ -701,33 +701,33 @@ const parseCreateWorkflowInstanceArgs = (args: Record<string, unknown>): CreateW
     return { exportName, id, params: args["params"] };
 };
 
-/** Parsed `__cirrus_admin__:getWorkflowInstanceStatus` payload: which workflow and which instance to inspect. */
+/** Parsed `__lunora_admin__:getWorkflowInstanceStatus` payload: which workflow and which instance to inspect. */
 interface GetWorkflowInstanceStatusArgs {
     exportName: string;
     id: string;
 }
 
 /**
- * Validate the `__cirrus_admin__:getWorkflowInstanceStatus` payload. Requires both
+ * Validate the `__lunora_admin__:getWorkflowInstanceStatus` payload. Requires both
  * a non-empty `exportName` and a non-empty instance `id`. Throws a 400
- * `CirrusError` otherwise.
+ * `LunoraError` otherwise.
  */
 const parseGetWorkflowInstanceStatusArgs = (args: Record<string, unknown>): GetWorkflowInstanceStatusArgs => {
     const exportName = typeof args["exportName"] === "string" ? args["exportName"].trim() : "";
     const id = typeof args["id"] === "string" ? args["id"].trim() : "";
 
     if (exportName === "") {
-        throw Object.assign(new Error("getWorkflowInstanceStatus: `exportName` is required"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+        throw Object.assign(new Error("getWorkflowInstanceStatus: `exportName` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
     }
 
     if (id === "") {
-        throw Object.assign(new Error("getWorkflowInstanceStatus: `id` is required"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+        throw Object.assign(new Error("getWorkflowInstanceStatus: `id` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
     }
 
     return { exportName, id };
 };
 
-/** The lifecycle states a workflow instance can report (mirrors `@cirrus/workflow`'s `WorkflowInstanceStatus`). */
+/** The lifecycle states a workflow instance can report (mirrors `@lunora/workflow`'s `WorkflowInstanceStatus`). */
 const WORKFLOW_INSTANCE_STATES: ReadonlySet<string> = new Set<WorkflowInstanceStatusResult["status"]>([
     "complete",
     "errored",
@@ -811,17 +811,17 @@ const parseTablePageOrderBy = (raw: unknown): OrderByClause | undefined => {
 };
 
 /**
- * Validate the `__cirrus_admin__:deleteRows` payload. `table` must be a
+ * Validate the `__lunora_admin__:deleteRows` payload. `table` must be a
  * non-empty string; `filters`/`search` mirror `readTablePage`'s predicate args
  * (so "delete matching" removes exactly the previewed rows) and a numeric
  * `limit` passes through to be clamped against {@link SHARD_BULK_DELETE_CAP}.
- * Throws a 400 `CirrusError` on a missing table, keeping the error shape uniform.
+ * Throws a 400 `LunoraError` on a missing table, keeping the error shape uniform.
  */
 const parseBulkDeleteArgs = (args: Record<string, unknown>): RunShardBulkDeleteArgs => {
     const table = typeof args["table"] === "string" ? args["table"] : "";
 
     if (table.trim() === "") {
-        throw Object.assign(new Error("deleteRows: `table` is required"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+        throw Object.assign(new Error("deleteRows: `table` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
     }
 
     return {
@@ -833,25 +833,25 @@ const parseBulkDeleteArgs = (args: Record<string, unknown>): RunShardBulkDeleteA
 };
 
 /**
- * Validate the `__cirrus_admin__:clearTable` payload — the "empty this table"
+ * Validate the `__lunora_admin__:clearTable` payload — the "empty this table"
  * action. Only `table` is meaningful (clearTable carries no predicate: it
  * matches every row); a numeric `limit` passes through for the per-call cap.
- * Throws a 400 `CirrusError` on a missing table.
+ * Throws a 400 `LunoraError` on a missing table.
  */
 const parseClearTableArgs = (args: Record<string, unknown>): RunShardBulkDeleteArgs => {
     const table = typeof args["table"] === "string" ? args["table"] : "";
 
     if (table.trim() === "") {
-        throw Object.assign(new Error("clearTable: `table` is required"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+        throw Object.assign(new Error("clearTable: `table` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
     }
 
     return { limit: typeof args["limit"] === "number" ? args["limit"] : undefined, table };
 };
 
 /**
- * Validate the `__cirrus_admin__:recordAuthEvent` payload — the worker's
+ * Validate the `__lunora_admin__:recordAuthEvent` payload — the worker's
  * fire-and-forget record of one auth attempt (PLAN3 §2.3). `outcome` must be
- * exactly `"ok"` or `"fail"`; anything else throws a 400 `CirrusError`, keeping
+ * exactly `"ok"` or `"fail"`; anything else throws a 400 `LunoraError`, keeping
  * the error shape uniform with the other admin write parsers. Returns the
  * narrowed outcome the {@link recordAuthEvent} helper consumes.
  */
@@ -859,7 +859,7 @@ const parseRecordAuthEventArgs = (args: Record<string, unknown>): { outcome: "fa
     const { outcome } = args;
 
     if (outcome !== "ok" && outcome !== "fail") {
-        throw Object.assign(new Error('recordAuthEvent: `outcome` must be "ok" or "fail"'), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+        throw Object.assign(new Error('recordAuthEvent: `outcome` must be "ok" or "fail"'), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
     }
 
     return { outcome };
@@ -874,19 +874,19 @@ const parseRecordAuthEventArgs = (args: Record<string, unknown>): { outcome: "fa
 type ContainerLogEntry = LogEntry & { functionPath: string };
 
 /**
- * Validate the `__cirrus_admin__:recordContainerEvent` payload — the Container
- * DO's best-effort push of one lifecycle transition (`@cirrus/container`'s
+ * Validate the `__lunora_admin__:recordContainerEvent` payload — the Container
+ * DO's best-effort push of one lifecycle transition (`@lunora/container`'s
  * `reportContainerLifecycle`). The reserved op carries the same envelope
  * `emitContainerLifecycle` prints to the dev terminal under `args.event`, so the
  * terminal and the Studio Logs panel never diverge. Maps it to a {@link LogEntry}
  * with `functionPath: "container:&lt;name>"`. A malformed envelope throws a 400
- * `CirrusError`, matching the other admin write parsers.
+ * `LunoraError`, matching the other admin write parsers.
  */
 const parseRecordContainerEventArgs = (args: Record<string, unknown>): ContainerLogEntry => {
     const raw = args["event"];
 
     if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
-        throw Object.assign(new Error("recordContainerEvent: `event` must be an object"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+        throw Object.assign(new Error("recordContainerEvent: `event` must be an object"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
     }
 
     const envelope = raw as Record<string, unknown>;
@@ -896,7 +896,7 @@ const parseRecordContainerEventArgs = (args: Record<string, unknown>): Container
     if (container.trim() === "" || event.trim() === "") {
         throw Object.assign(new Error("recordContainerEvent: `event.container` and `event.event` are required"), {
             code: "BAD_REQUEST",
-            name: "CirrusError",
+            name: "LunoraError",
             status: 400,
         });
     }
@@ -916,7 +916,7 @@ const parseRecordContainerEventArgs = (args: Record<string, unknown>): Container
 };
 
 /**
- * Arguments accepted by the `__cirrus_admin__:runAs` admin RPC — the studio's
+ * Arguments accepted by the `__lunora_admin__:runAs` admin RPC — the studio's
  * "Run as identity" tool. `functionPath` + `args` name the target function to
  * dispatch; `userId` (and the optional `identity` claims envelope) are the
  * forged identity it runs under. Admin-gated by `handleAdminRpc`; intended for
@@ -930,11 +930,11 @@ interface RunAsArgs {
 }
 
 /**
- * Validate the `__cirrus_admin__:runAs` payload. `functionPath` and `userId`
+ * Validate the `__lunora_admin__:runAs` payload. `functionPath` and `userId`
  * must be non-empty strings; `args` defaults to `{}` and `identity` (if present)
  * must be a plain object of claims. The target `functionPath` must NOT itself be
  * a reserved admin path — forging an identity to re-enter the admin plane is
- * never allowed. Anything malformed throws a 400 `CirrusError`, matching the
+ * never allowed. Anything malformed throws a 400 `LunoraError`, matching the
  * other admin parsers.
  */
 const parseRunAsArgs = (args: Record<string, unknown>): RunAsArgs => {
@@ -942,27 +942,27 @@ const parseRunAsArgs = (args: Record<string, unknown>): RunAsArgs => {
     const userId = typeof args["userId"] === "string" ? args["userId"] : "";
 
     if (functionPath.trim() === "") {
-        throw Object.assign(new Error("runAs: `functionPath` is required"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+        throw Object.assign(new Error("runAs: `functionPath` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
     }
 
     if (functionPath.startsWith(ADMIN_FUNCTION_PREFIX)) {
-        throw Object.assign(new Error("runAs: cannot target a reserved admin function"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+        throw Object.assign(new Error("runAs: cannot target a reserved admin function"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
     }
 
     if (userId.trim() === "") {
-        throw Object.assign(new Error("runAs: `userId` is required"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+        throw Object.assign(new Error("runAs: `userId` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
     }
 
     const rawArgs = args["args"];
 
     if (rawArgs !== undefined && (typeof rawArgs !== "object" || rawArgs === null || Array.isArray(rawArgs))) {
-        throw Object.assign(new Error("runAs: `args` must be an object"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+        throw Object.assign(new Error("runAs: `args` must be an object"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
     }
 
     const rawIdentity = args["identity"];
 
     if (rawIdentity !== undefined && (typeof rawIdentity !== "object" || rawIdentity === null || Array.isArray(rawIdentity))) {
-        throw Object.assign(new Error("runAs: `identity` must be an object"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+        throw Object.assign(new Error("runAs: `identity` must be an object"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
     }
 
     return {
@@ -974,23 +974,23 @@ const parseRunAsArgs = (args: Record<string, unknown>): RunAsArgs => {
 };
 
 /**
- * Validate the `__cirrus_admin__:recordMail` payload — the dev mail catcher's
+ * Validate the `__lunora_admin__:recordMail` payload — the dev mail catcher's
  * capture of one outbound message (a rendered, already-validated `SendPayload`
- * from `@cirrus/mail`). `subject` must be a string and `to` a string or string
+ * from `@lunora/mail`). `subject` must be a string and `to` a string or string
  * array; the optional address/body/header fields are shape-checked. Anything
- * else throws a 400 `CirrusError`, matching the other admin write parsers.
+ * else throws a 400 `LunoraError`, matching the other admin write parsers.
  *
  * This is the trust-boundary re-check for the admin RPC edge — it stays even
  * though the wire type is now centralized. Its return type `RecordMailInput` is
- * a compile-time mirror of `@cirrus/mail`'s canonical `SendPayload` (guarded in
+ * a compile-time mirror of `@lunora/mail`'s canonical `SendPayload` (guarded in
  * `mail-catcher.ts`). Adding a captured-mail field is therefore a two-place
- * change: the canonical `SendPayload`/`CapturedMail` in `@cirrus/mail`, and the
+ * change: the canonical `SendPayload`/`CapturedMail` in `@lunora/mail`, and the
  * field-by-field validation here (the mirror types update themselves, and their
  * drift guards point you back here). Keep the shapes in lockstep.
  */
 const parseRecordMailArgs = (args: Record<string, unknown>): RecordMailInput => {
     const bad = (message: string): never => {
-        throw Object.assign(new Error(`recordMail: ${message}`), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+        throw Object.assign(new Error(`recordMail: ${message}`), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
     };
 
     const { bcc, cc, from, headers, html, replyTo, subject, text, to } = args;
@@ -1039,7 +1039,7 @@ const parseRecordMailArgs = (args: Record<string, unknown>): RecordMailInput => 
 };
 
 /** Default recipient for the studio "Send test" action when no `to` is supplied. */
-const TEST_MAIL_DEFAULT_TO = "test@cirrus.dev";
+const TEST_MAIL_DEFAULT_TO = "test@lunora.sh";
 
 /**
  * Build the synthetic captured message the studio "Send test" button populates
@@ -1052,25 +1052,25 @@ const buildTestMailInput = (args: Record<string, unknown>): RecordMailInput => {
     const { to } = args;
 
     if (to !== undefined && typeof to !== "string") {
-        throw Object.assign(new Error("sendTestMail: `to` must be a string"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+        throw Object.assign(new Error("sendTestMail: `to` must be a string"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
     }
 
     const recipient = to ?? TEST_MAIL_DEFAULT_TO;
     const link = "https://example.test/verify?token=demo";
 
     return {
-        from: "Cirrus <noreply@cirrus.dev>",
-        html: `<p>This is a test email from the Cirrus dev mail catcher.</p><p><a href="${link}">Verify your email</a></p>`,
-        subject: "Cirrus test email",
-        text: `This is a test email from the Cirrus dev mail catcher.\n\nVerify your email: ${link}`,
+        from: "Lunora <noreply@lunora.sh>",
+        html: `<p>This is a test email from the Lunora dev mail catcher.</p><p><a href="${link}">Verify your email</a></p>`,
+        subject: "Lunora test email",
+        text: `This is a test email from the Lunora dev mail catcher.\n\nVerify your email: ${link}`,
         to: recipient,
     };
 };
 
 /**
- * Validate the `__cirrus_admin__:rankBefore` payload. `table`, `index`,
+ * Validate the `__lunora_admin__:rankBefore` payload. `table`, `index`,
  * `partitionKey`, and `rowId` must be non-empty strings and `sortValues` must
- * be an array; anything else throws a 400 `CirrusError` so the cross-shard
+ * be an array; anything else throws a 400 `LunoraError` so the cross-shard
  * coordinator surfaces a uniform error rather than a downstream SQL failure.
  */
 const parseRankBeforeArgs = (args: Record<string, unknown>): RunShardRankBeforeArgs => {
@@ -1079,34 +1079,34 @@ const parseRankBeforeArgs = (args: Record<string, unknown>): RunShardRankBeforeA
     const rowId = typeof args["rowId"] === "string" ? args["rowId"] : "";
 
     if (table.trim() === "") {
-        throw Object.assign(new Error("rankBefore: `table` is required"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+        throw Object.assign(new Error("rankBefore: `table` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
     }
 
     if (index.trim() === "") {
-        throw Object.assign(new Error("rankBefore: `index` is required"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+        throw Object.assign(new Error("rankBefore: `index` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
     }
 
     // `partitionKey` is the encoded partition tuple — `""` is legitimate for a
     // rankIndex with no `partitionBy`, so only the type is enforced, not
     // non-emptiness.
     if (typeof args["partitionKey"] !== "string") {
-        throw Object.assign(new Error("rankBefore: `partitionKey` must be a string"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+        throw Object.assign(new Error("rankBefore: `partitionKey` must be a string"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
     }
 
     if (rowId.trim() === "") {
-        throw Object.assign(new Error("rankBefore: `rowId` is required"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+        throw Object.assign(new Error("rankBefore: `rowId` is required"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
     }
 
     if (!Array.isArray(args["sortValues"])) {
-        throw Object.assign(new Error("rankBefore: `sortValues` must be an array"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+        throw Object.assign(new Error("rankBefore: `sortValues` must be an array"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
     }
 
     return { index, partitionKey: args["partitionKey"], rowId, sortValues: args["sortValues"], table };
 };
 
-/** Throw a uniform 400 `CirrusError` for a malformed admin payload field. */
+/** Throw a uniform 400 `LunoraError` for a malformed admin payload field. */
 const badRequest = (message: string): never => {
-    throw Object.assign(new Error(message), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+    throw Object.assign(new Error(message), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
 };
 
 /** Narrow a required non-empty string admin arg or 400 with `&lt;field> is required`. */
@@ -1119,7 +1119,7 @@ const requireNonEmptyString = (value: unknown, field: string): string => {
 };
 
 /**
- * Validate the optional `__cirrus_admin__:rankPage` `after` resume key the
+ * Validate the optional `__lunora_admin__:rankPage` `after` resume key the
  * coordinator forwards (`{ partitionKey, sortValues, rowId }`), so a malformed
  * cursor is rejected at the boundary rather than mid-SQL. `undefined` (first
  * page) passes through.
@@ -1143,7 +1143,7 @@ const parseRankPageAfter = (raw: unknown): RunShardRankPageArgs["after"] => {
 };
 
 /**
- * Validate the `__cirrus_admin__:rankPage` payload. `table` and `index` are
+ * Validate the `__lunora_admin__:rankPage` payload. `table` and `index` are
  * required non-empty strings; `take`/`cursor`/`after`/`partitionKey`/`directions`
  * are optional and shape-checked just enough to reject obvious garbage before it
  * reaches the rank reader. The error shape stays uniform with the other admin
@@ -1203,13 +1203,13 @@ const decodeIndexHitKey = (key: string): IndexHit | undefined => {
     return undefined;
 };
 
-/** Arguments accepted by the `__cirrus_admin__:cdcSync` admin RPC. */
+/** Arguments accepted by the `__lunora_admin__:cdcSync` admin RPC. */
 interface RunShardCdcSyncArgs {
     limit?: number;
     sinceSeq: number;
 }
 
-/** Arguments accepted by the `__cirrus_admin__:applyCdc` admin RPC. */
+/** Arguments accepted by the `__lunora_admin__:applyCdc` admin RPC. */
 interface RunShardApplyCdcArgs {
     changes: ReadonlyArray<CdcChange>;
 }
@@ -1220,7 +1220,7 @@ interface RunShardApplyCdcResult {
 }
 
 /**
- * Validate the `__cirrus_admin__:applyCdc` payload. `changes` must be an array
+ * Validate the `__lunora_admin__:applyCdc` payload. `changes` must be an array
  * of CDC entries (`{ table, id, op, doc? }`); each is shape-checked just enough
  * to reject obvious garbage before it reaches the writer.
  */
@@ -1228,7 +1228,7 @@ const parseApplyCdcArgs = (args: Record<string, unknown>): RunShardApplyCdcArgs 
     const raw = args["changes"];
 
     if (!Array.isArray(raw)) {
-        throw Object.assign(new Error("applyCdc: `changes` must be an array"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+        throw Object.assign(new Error("applyCdc: `changes` must be an array"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
     }
 
     const changes = raw.map((entry, index): CdcChange => {
@@ -1240,7 +1240,7 @@ const parseApplyCdcArgs = (args: Record<string, unknown>): RunShardApplyCdcArgs 
         if (table === "" || id === "" || (op !== "insert" && op !== "update" && op !== "delete")) {
             throw Object.assign(new Error(`applyCdc: changes[${String(index)}] must have a table, id, and op of insert|update|delete`), {
                 code: "BAD_REQUEST",
-                name: "CirrusError",
+                name: "LunoraError",
                 status: 400,
             });
         }
@@ -1254,7 +1254,7 @@ const parseApplyCdcArgs = (args: Record<string, unknown>): RunShardApplyCdcArgs 
         if (rawDocument !== undefined && (typeof rawDocument !== "object" || rawDocument === null || Array.isArray(rawDocument))) {
             throw Object.assign(new Error(`applyCdc: changes[${String(index)}].doc must be an object`), {
                 code: "BAD_REQUEST",
-                name: "CirrusError",
+                name: "LunoraError",
                 status: 400,
             });
         }
@@ -1267,7 +1267,7 @@ const parseApplyCdcArgs = (args: Record<string, unknown>): RunShardApplyCdcArgs 
         if (document !== undefined && typeof document["_id"] === "string" && document["_id"] !== id) {
             throw Object.assign(new Error(`applyCdc: changes[${String(index)}].doc._id must match the entry id`), {
                 code: "BAD_REQUEST",
-                name: "CirrusError",
+                name: "LunoraError",
                 status: 400,
             });
         }
@@ -1286,7 +1286,7 @@ const parseApplyCdcArgs = (args: Record<string, unknown>): RunShardApplyCdcArgs 
 };
 
 /**
- * Validate the `__cirrus_admin__:cdcSync` payload. `sinceSeq` is the caller's
+ * Validate the `__lunora_admin__:cdcSync` payload. `sinceSeq` is the caller's
  * per-shard cursor (defaults to 0 = from the beginning); `limit` is an optional
  * page cap. Both are coerced to finite non-negative integers.
  */
@@ -1311,7 +1311,7 @@ const jsonResponse = (body: unknown, status = 200, bookmark?: string): Response 
 };
 
 /**
- * Decode the JSON envelope shipped on the `x-cirrus-identity` header.
+ * Decode the JSON envelope shipped on the `x-lunora-identity` header.
  * Malformed payloads collapse to `undefined` rather than throwing — the
  * shard should still serve requests whose identity claims didn't round-trip.
  */
@@ -1353,7 +1353,7 @@ const tablesFromDeps = (deps: Set<string>): Set<string> => {
     return tables;
 };
 
-/** Parse a positive-integer env override (e.g. `CIRRUS_REQUEST_LOG_RETENTION`); `undefined` when unset/invalid so the caller keeps its default. */
+/** Parse a positive-integer env override (e.g. `LUNORA_REQUEST_LOG_RETENTION`); `undefined` when unset/invalid so the caller keeps its default. */
 const parsePositiveInt = (raw: string | undefined): number | undefined => {
     if (raw === undefined) {
         return undefined;
@@ -1365,7 +1365,7 @@ const parsePositiveInt = (raw: string | undefined): number | undefined => {
 };
 
 /**
- * Resolve the per-dispatch console-stream toggle (`CIRRUS_REQUEST_LOG_EMIT`).
+ * Resolve the per-dispatch console-stream toggle (`LUNORA_REQUEST_LOG_EMIT`).
  * An explicit `"1"`/`"true"` forces it on and `"0"`/`"false"` forces it off
  * (even in dev); when the var is unset/empty it falls back to `devDefault` —
  * which the caller passes as {@link isDevEnvironment}, so a dev deployment
@@ -1385,7 +1385,7 @@ const parseEmit = (raw: string | undefined, devDefault: boolean): boolean => {
     return devDefault;
 };
 
-/** Parse a 0..1 sample rate (`CIRRUS_REQUEST_LOG_SAMPLE`); clamped to `[0, 1]`, defaulting to `1` (record all) when unset/invalid. */
+/** Parse a 0..1 sample rate (`LUNORA_REQUEST_LOG_SAMPLE`); clamped to `[0, 1]`, defaulting to `1` (record all) when unset/invalid. */
 const parseSampleRate = (raw: string | undefined): number => {
     if (raw === undefined) {
         return 1;
@@ -1547,7 +1547,7 @@ abstract class ShardDO {
 
     /**
      * Per-request userId forwarded from the runtime via the
-     * `x-cirrus-userid` header. Surfaced to handlers via
+     * `x-lunora-userid` header. Surfaced to handlers via
      * `getCurrentUserId`. Cleared in the `finally` block of `fetch`
      * so a stale identity from a previous client never leaks into the
      * next request.
@@ -1556,7 +1556,7 @@ abstract class ShardDO {
 
     /**
      * Per-request identity envelope forwarded from the runtime via the
-     * `x-cirrus-identity` JSON header. Stores claims like `email`,
+     * `x-lunora-identity` JSON header. Stores claims like `email`,
      * `name`, or custom roles populated by `resolveIdentity` on the
      * worker. Surfaced to handlers via `getCurrentIdentity`.
      */
@@ -1564,7 +1564,7 @@ abstract class ShardDO {
 
     /**
      * Whether the in-flight `/rpc` call is a trusted server-initiated dispatch
-     * (scheduler/cron), signalled by the `x-cirrus-system` header that only the
+     * (scheduler/cron), signalled by the `x-lunora-system` header that only the
      * worker's authorized dispatch path sets. When true, `handleRpc` may invoke
      * `internal` functions; client RPCs never carry it, so internals stay
      * unreachable across the external boundary. Cleared in `fetch`'s `finally`.
@@ -1598,7 +1598,7 @@ abstract class ShardDO {
     private readonly streamCancellers = new WeakMap<WebSocket, Map<string, AbortController>>();
 
     /**
-     * Lifetime request counters surfaced by the `__cirrus_admin__:getMetrics`
+     * Lifetime request counters surfaced by the `__lunora_admin__:getMetrics`
      * RPC. In-memory only — they reset when the DO hibernates or restarts, which
      * is the right granularity for a "since this instance woke" health readout
      * (durable aggregation would be a separate, heavier feature).
@@ -1614,7 +1614,7 @@ abstract class ShardDO {
 
     /**
      * Per-function execution counters surfaced by the
-     * `__cirrus_admin__:getFunctionStats` RPC, keyed by `&lt;file>:&lt;function>`
+     * `__lunora_admin__:getFunctionStats` RPC, keyed by `&lt;file>:&lt;function>`
      * path. Shares the `metrics` lifecycle: in-memory, reset on
      * hibernation/restart. The map is naturally bounded by the app's registered
      * function count (a finite set), so no eviction is needed. Maintained by
@@ -1625,7 +1625,7 @@ abstract class ShardDO {
 
     /**
      * Recent RPC errors on this shard instance, surfaced by the
-     * `__cirrus_admin__:getLogs` RPC. In-memory only and bounded — like
+     * `__lunora_admin__:getLogs` RPC. In-memory only and bounded — like
      * `metrics`, it resets on hibernation/restart. We only capture RPC
      * dispatch failures here (path + error message), not user `console.*` output:
      * intercepting the console cheaply isn't possible, so this is honestly a
@@ -1646,7 +1646,7 @@ abstract class ShardDO {
      * Tables the in-flight dispatch full-scanned (read via `SCAN_DEP`, no index
      * / point lookup). Allocated at the top of each `/rpc` dispatch and drained
      * into `recordFunctionCall` once the handler returns, so the durable
-     * `__cirrus_metrics_scans` attribution can pin a slow function to the
+     * `__lunora_metrics_scans` attribution can pin a slow function to the
      * table(s) it scanned. Independent of `currentTracker` (which only exists
      * when the reactive cache is enabled), so the causal signal is collected
      * even on a cache-less shard. Stamped by `getCtxDbReadHook`.
@@ -1657,7 +1657,7 @@ abstract class ShardDO {
      * Declared indexes the in-flight dispatch exercised (used to narrow a read,
      * via `onIndexUse`), keyed by `JSON.stringify([table, index])`. Allocated at the top of each
      * `/rpc` dispatch and drained into `recordFunctionCall` once the handler
-     * returns, so the durable `__cirrus_metrics_index` hit counter — the producer
+     * returns, so the durable `__lunora_metrics_index` hit counter — the producer
      * behind the advisor dead-index lint — records on the same dispatch path as
      * the scan attribution. Stamped by `getCtxDbIndexUseHook`.
      */
@@ -1679,7 +1679,7 @@ abstract class ShardDO {
     /**
      * Per-statement SQL samples collected during the current `/rpc` dispatch by
      * the instrumented `sql` getter. Drained into the durable
-     * `__cirrus_metrics_queries` table after the handler returns (same pattern as
+     * `__lunora_metrics_queries` table after the handler returns (same pattern as
      * `currentScannedTables` / `currentIndexHits`). `undefined` when no dispatch
      * is in flight; allocated fresh per dispatch so a previous request's samples
      * never leak into the next one.
@@ -1709,7 +1709,7 @@ abstract class ShardDO {
 
     /**
      * Worker-side fetch entry point. Handles WebSocket upgrades and the
-     * shard-local RPC endpoint forwarded by `@cirrus/runtime`.
+     * shard-local RPC endpoint forwarded by `@lunora/runtime`.
      */
     public async fetch(request: Request): Promise<Response> {
         const url = new URL(request.url);
@@ -1739,9 +1739,9 @@ abstract class ShardDO {
             // values. Cleared on exit so the next request starts fresh.
             this.currentRequestBookmark = request.headers.get("x-d1-bookmark") ?? undefined;
             this.currentResponseBookmark = undefined;
-            this.currentRequestUserId = request.headers.get("x-cirrus-userid") ?? undefined;
-            this.currentRequestIdentity = parseIdentityHeader(request.headers.get("x-cirrus-identity"));
-            this.currentRequestSystem = request.headers.get("x-cirrus-system") === "1";
+            this.currentRequestUserId = request.headers.get("x-lunora-userid") ?? undefined;
+            this.currentRequestIdentity = parseIdentityHeader(request.headers.get("x-lunora-identity"));
+            this.currentRequestSystem = request.headers.get("x-lunora-system") === "1";
             // Reset the per-request read/cache capture (filled by `runCachedQuery`
             // for cached query paths) so a previous dispatch can't leak into this
             // entry's logged read set / cache-hit flag.
@@ -1764,7 +1764,7 @@ abstract class ShardDO {
 
             // Collect per-statement SQL samples from the instrumented `sql`
             // getter so `flushStmtSamples` can persist them to the durable
-            // `__cirrus_metrics_queries` table after the handler resolves.
+            // `__lunora_metrics_queries` table after the handler resolves.
             // Allocating a fresh array here activates the instrumentation (the
             // `sql` getter only wraps when this field is defined).
             this.currentStmtSamples = [];
@@ -1792,7 +1792,7 @@ abstract class ShardDO {
                 this.recordFunctionCall(payload.functionPath, durationMs, undefined, this.currentScannedTables, this.currentIndexHits);
 
                 // Flush per-statement SQL samples accumulated during dispatch to
-                // the durable `__cirrus_metrics_queries` table. Best-effort:
+                // the durable `__lunora_metrics_queries` table. Best-effort:
                 // a flush failure (e.g. no sql handle in tests) must never fail
                 // the response.
                 this.flushStmtSamples();
@@ -1879,7 +1879,7 @@ abstract class ShardDO {
             const isAdmin = functionPath?.startsWith(ADMIN_FUNCTION_PREFIX) === true;
 
             // Admin introspection subscriptions read shard internals (raw rows,
-            // metrics, logs), so they are gated by the same `CIRRUS_ADMIN_TOKEN`
+            // metrics, logs), so they are gated by the same `LUNORA_ADMIN_TOKEN`
             // as the HTTP admin RPCs — recorded on the socket at upgrade. A
             // socket that only cleared the user-subscription gate must never be
             // able to read admin data by naming a reserved functionPath.
@@ -2010,10 +2010,10 @@ abstract class ShardDO {
      * Serve a reserved {@link RELATION_FUNCTION_PREFIX} fan-out read/count for
      * reverse cross-backend relations (a `.global()` parent loading a
      * shard-local child that spans every shard). Returns a BARE value — the
-     * child-row array for `__cirrus_relation__:read`, a number for
-     * `__cirrus_relation__:count` — so the coordinator's `concat`/`sum` merge
+     * child-row array for `__lunora_relation__:read`, a number for
+     * `__lunora_relation__:count` — so the coordinator's `concat`/`sum` merge
      * composes the per-shard results. Runs under the forwarded caller identity
-     * (the `x-cirrus-userid` / `x-cirrus-identity` headers stashed for the
+     * (the `x-lunora-userid` / `x-lunora-identity` headers stashed for the
      * request), never the admin token.
      *
      * The base class is schema-agnostic, so it cannot build the ctx-db needed to
@@ -2023,9 +2023,9 @@ abstract class ShardDO {
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this with a schema-aware reader that uses `this`
     protected runRelationFanoutRead(_functionPath: string, _args: Record<string, unknown>): Promise<unknown> {
-        throw Object.assign(new Error("__cirrus_relation__: no schema bound — the base ShardDO cannot serve cross-shard relation reads"), {
+        throw Object.assign(new Error("__lunora_relation__: no schema bound — the base ShardDO cannot serve cross-shard relation reads"), {
             code: "NOT_IMPLEMENTED",
-            name: "CirrusError",
+            name: "LunoraError",
             status: 500,
         });
     }
@@ -2034,7 +2034,7 @@ abstract class ShardDO {
      * Instrumented SQL handle. Wraps `state.storage.sql` so that every `exec`
      * call during a user RPC dispatch is timed and its result size captured into
      * `currentStmtSamples`. The samples are flushed to the durable
-     * `__cirrus_metrics_queries` table after the handler returns (same lifecycle
+     * `__lunora_metrics_queries` table after the handler returns (same lifecycle
      * as `currentScannedTables`/`currentIndexHits`).
      *
      * The wrapper is only active when `currentStmtSamples` is defined (i.e.
@@ -2162,7 +2162,7 @@ abstract class ShardDO {
      * rolls back if it throws. The `ConflictError` re-throw lets the
      * runtime translate optimistic-concurrency failures into a 409 response.
      *
-     * Nested calls are refused with a `CirrusError`-shaped object — SQLite
+     * Nested calls are refused with a `LunoraError`-shaped object — SQLite
      * in Durable Objects does not support nested transactions, so we fail
      * loudly rather than silently flattening them.
      *
@@ -2197,7 +2197,7 @@ abstract class ShardDO {
         if (this.transactionDepth > 0) {
             throw Object.assign(new Error("nested transactions are not supported in SQLite-in-DO"), {
                 code: "NESTED_TRANSACTION",
-                name: "CirrusError",
+                name: "LunoraError",
                 status: 500,
             });
         }
@@ -2207,7 +2207,7 @@ abstract class ShardDO {
         if (!sqlHandle || typeof sqlHandle.exec !== "function") {
             throw Object.assign(new Error("storage.sql is not available on this ShardDO state"), {
                 code: "SQL_UNAVAILABLE",
-                name: "CirrusError",
+                name: "LunoraError",
                 status: 500,
             });
         }
@@ -2309,7 +2309,7 @@ abstract class ShardDO {
      * Whether the in-flight `/rpc` call is a trusted server-initiated dispatch
      * (scheduler/cron). A concrete `handleRpc` consults this to decide whether
      * `internal` functions may run — they may for system dispatch, never for a
-     * client RPC (which never carries the `x-cirrus-system` header).
+     * client RPC (which never carries the `x-lunora-system` header).
      */
     protected isSystemDispatch(): boolean {
         return this.currentRequestSystem;
@@ -2318,14 +2318,14 @@ abstract class ShardDO {
     /**
      * Run a data migration by id against this shard, returning the runner's
      * result. The base class can't reach the project's generated
-     * `CIRRUS_MIGRATIONS` registry or build a schema-aware writer, so it reports
+     * `LUNORA_MIGRATIONS` registry or build a schema-aware writer, so it reports
      * the migration as unknown; the codegen-generated subclass overrides this to
      * look the migration up and invoke `runDataMigration`.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to reach the generated migration registry
     protected runShardDataMigration(args: RunShardMigrationArgs): Promise<MigrationRunResult> {
         return Promise.reject(
-            Object.assign(new Error(`data migration "${args.id}" is not registered`), { code: "MIGRATION_NOT_FOUND", name: "CirrusError", status: 404 }),
+            Object.assign(new Error(`data migration "${args.id}" is not registered`), { code: "MIGRATION_NOT_FOUND", name: "LunoraError", status: 404 }),
         );
     }
 
@@ -2356,10 +2356,10 @@ abstract class ShardDO {
 
     /**
      * Declared indexes for `table` (secondary, search, rank, vector), surfaced by
-     * the schema viewer via `__cirrus_admin__:listTableIndexes`. Like
+     * the schema viewer via `__lunora_admin__:listTableIndexes`. Like
      * {@link tableRefs}, the base class can't see the user's `schema.ts`, so it
      * reports none; the codegen subclass overrides this with the schema-derived
-     * list. Schema-sourced rather than read from SQLite because cirrus's physical
+     * list. Schema-sourced rather than read from SQLite because lunora's physical
      * indexes are `json_extract` expressions whose field names PRAGMA can't recover.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this to read the generated schema's index metadata
@@ -2369,11 +2369,11 @@ abstract class ShardDO {
 
     /**
      * Typed columns for `table` (name, validator-IR type, PK/FK/storage role),
-     * surfaced by the schema viewer's diagram via `__cirrus_admin__:describeTable`.
+     * surfaced by the schema viewer's diagram via `__lunora_admin__:describeTable`.
      * Like {@link tableRefs}/{@link tableIndexes}, the base class can't see the
      * user's `schema.ts`, so it reports none; the codegen subclass overrides this
      * with the schema-derived list. Schema-sourced rather than read from SQLite
-     * because cirrus stores rows in a `__doc__` JSON blob, so PRAGMA recovers
+     * because lunora stores rows in a `__doc__` JSON blob, so PRAGMA recovers
      * neither declared types nor PK/FK roles.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this with the generated schema's column metadata
@@ -2396,7 +2396,7 @@ abstract class ShardDO {
 
     /**
      * Static schema advisories for this deployment, surfaced via
-     * `__cirrus_admin__:getAdvisories`. Computed by `@cirrus/advisor` at codegen
+     * `__lunora_admin__:getAdvisories`. Computed by `@lunora/advisor` at codegen
      * time (the only place the schema + query reads are both available) and
      * emitted into the generated subclass, which overrides this. The base class
      * can't see the user's `schema.ts`, so it reports none.
@@ -2408,12 +2408,12 @@ abstract class ShardDO {
 
     /**
      * Row-level-security metadata for this deployment, surfaced via
-     * `__cirrus_admin__:rlsPolicies` to the studio's read-only RLS inspector:
+     * `__lunora_admin__:rlsPolicies` to the studio's read-only RLS inspector:
      * which `definePolicy`s guard which `(table, on)` and which `defineRole`s
-     * are registered. Statically discovered by `@cirrus/codegen` at codegen
+     * are registered. Statically discovered by `@lunora/codegen` at codegen
      * time (the only place every `.use(rls(...))` chain is visible) and emitted
      * into the generated subclass, which overrides this. The base class can't
-     * see the user's `cirrus/` sources, so it reports none. Never includes the
+     * see the user's `lunora/` sources, so it reports none. Never includes the
      * `when` predicate — that's an opaque closure whose logic stays in code.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this with the generated RLS policy + role metadata
@@ -2423,12 +2423,12 @@ abstract class ShardDO {
 
     /**
      * Masking metadata for this deployment, surfaced via
-     * `__cirrus_admin__:maskPolicies` to the studio's data-browser mask preview:
+     * `__lunora_admin__:maskPolicies` to the studio's data-browser mask preview:
      * which `(table, column)` pairs a `.use(mask(...))` chain redacts and the
-     * declared strategy. Statically discovered by `@cirrus/codegen` (the only
+     * declared strategy. Statically discovered by `@lunora/codegen` (the only
      * place every `.use(mask(...))` chain is visible) and emitted into the
      * generated subclass, which overrides this. The base class can't see the
-     * user's `cirrus/` sources, so it reports none. Never includes the masking
+     * user's `lunora/` sources, so it reports none. Never includes the masking
      * closure — only the column + strategy descriptor.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this with the generated mask column metadata
@@ -2438,11 +2438,11 @@ abstract class ShardDO {
 
     /**
      * Storage access-rule metadata for this deployment, surfaced via
-     * `__cirrus_admin__:storageRules` to the studio's read-only access-rules
+     * `__lunora_admin__:storageRules` to the studio's read-only access-rules
      * view: which `defineStorageRule`s gate which `(bucket, on, prefix)`.
-     * Statically discovered by `@cirrus/codegen` from every
+     * Statically discovered by `@lunora/codegen` from every
      * `.use(storageRules(...))` chain and emitted into the generated subclass,
-     * which overrides this. The base class can't see the user's `cirrus/`
+     * which overrides this. The base class can't see the user's `lunora/`
      * sources, so it reports none. Never includes the `when` predicate.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this with the generated storage-rule metadata
@@ -2452,10 +2452,10 @@ abstract class ShardDO {
 
     /**
      * Which optional, package-backed features this deployment wires up, surfaced
-     * via `__cirrus_admin__:studioFeatures` so the studio hides nav pages whose
+     * via `__lunora_admin__:studioFeatures` so the studio hides nav pages whose
      * backing package isn't enabled (mirroring how auth panels gate on
-     * capabilities). Statically discovered by `@cirrus/codegen` from the app's
-     * `cirrus/` sources + schema and emitted into the generated subclass, which
+     * capabilities). Statically discovered by `@lunora/codegen` from the app's
+     * `lunora/` sources + schema and emitted into the generated subclass, which
      * overrides this. The base class can't see the user's project, so it reports
      * every flag `false` — an un-generated `ShardDO` shows no optional pages.
      */
@@ -2466,10 +2466,10 @@ abstract class ShardDO {
 
     /**
      * The Cloudflare Workflows declared by this app, surfaced via
-     * `__cirrus_admin__:listWorkflows` for the studio's Workflows page. Workflows
+     * `__lunora_admin__:listWorkflows` for the studio's Workflows page. Workflows
      * are NOT Durable Objects and hold no shard state, so this is pure
-     * declaration metadata statically discovered by `@cirrus/codegen` from
-     * `cirrus/workflows.ts` and emitted into the generated subclass, which
+     * declaration metadata statically discovered by `@lunora/codegen` from
+     * `lunora/workflows.ts` and emitted into the generated subclass, which
      * overrides this. The base class can't see the user's project, so it reports
      * none — an un-generated `ShardDO` lists zero workflows.
      */
@@ -2555,7 +2555,7 @@ abstract class ShardDO {
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
     protected runShardWrite(args: RunShardWriteArgs): Promise<RunShardWriteResult> {
-        return Promise.reject(Object.assign(new Error(`unknown table: ${args.table}`), { code: "UNKNOWN_TABLE", name: "CirrusError", status: 404 }));
+        return Promise.reject(Object.assign(new Error(`unknown table: ${args.table}`), { code: "UNKNOWN_TABLE", name: "LunoraError", status: 404 }));
     }
 
     /**
@@ -2571,7 +2571,7 @@ abstract class ShardDO {
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
     protected deleteRowThroughWriter(_table: string, _id: string): Promise<void> {
-        return Promise.reject(Object.assign(new Error(`unknown table: ${_table}`), { code: "UNKNOWN_TABLE", name: "CirrusError", status: 404 }));
+        return Promise.reject(Object.assign(new Error(`unknown table: ${_table}`), { code: "UNKNOWN_TABLE", name: "LunoraError", status: 404 }));
     }
 
     /**
@@ -2625,7 +2625,7 @@ abstract class ShardDO {
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
     protected runShardRankBefore(_args: RunShardRankBeforeArgs): Promise<{ before: number; total: number }> {
         return Promise.reject(
-            Object.assign(new Error("rankBefore is not implemented in base ShardDO"), { code: "NOT_IMPLEMENTED", name: "CirrusError", status: 500 }),
+            Object.assign(new Error("rankBefore is not implemented in base ShardDO"), { code: "NOT_IMPLEMENTED", name: "LunoraError", status: 500 }),
         );
     }
 
@@ -2642,7 +2642,7 @@ abstract class ShardDO {
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
     protected runShardRankPage(_args: RunShardRankPageArgs): Promise<ShardRankPageResult> {
         return Promise.reject(
-            Object.assign(new Error("rankPage is not implemented in base ShardDO"), { code: "NOT_IMPLEMENTED", name: "CirrusError", status: 500 }),
+            Object.assign(new Error("rankPage is not implemented in base ShardDO"), { code: "NOT_IMPLEMENTED", name: "LunoraError", status: 500 }),
         );
     }
 
@@ -2673,7 +2673,7 @@ abstract class ShardDO {
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to build a schema-aware writer
     protected runShardApplyCdc(_args: RunShardApplyCdcArgs): Promise<RunShardApplyCdcResult> {
         return Promise.reject(
-            Object.assign(new Error("applyCdc is not implemented in base ShardDO"), { code: "NOT_IMPLEMENTED", name: "CirrusError", status: 500 }),
+            Object.assign(new Error("applyCdc is not implemented in base ShardDO"), { code: "NOT_IMPLEMENTED", name: "LunoraError", status: 500 }),
         );
     }
 
@@ -2824,7 +2824,7 @@ abstract class ShardDO {
     /**
      * Look up a streaming-query function and return a thunk that produces the
      * `AsyncIterable&lt;unknown>` when handed an {@link AbortSignal}. The codegen
-     * subclass overrides this to dispatch via `CIRRUS_FUNCTIONS`; the base
+     * subclass overrides this to dispatch via `LUNORA_FUNCTIONS`; the base
      * default returns `null`, which surfaces as `{type:"error", code:"NOT_FOUND"}`
      * to the client.
      *
@@ -2933,7 +2933,7 @@ abstract class ShardDO {
      * `unused_index` runtime advisory (reset on hibernation/restart — a "since
      * this instance woke" readout, like the function/scan counters), keyed
      * `table:index`. Second, the per-dispatch `currentIndexHits` set, drained
-     * into `recordFunctionCall` so the DURABLE `__cirrus_metrics_index` hit
+     * into `recordFunctionCall` so the DURABLE `__lunora_metrics_index` hit
      * counter (the advisor dead-index lint's producer) records one read per
      * distinct `(table, index)` this dispatch exercised. Passed as `onIndexUse`
      * to `createShardCtxDb` by the generated subclass.
@@ -2943,7 +2943,7 @@ abstract class ShardDO {
             this.usedIndexes.add(`${table}:${indexName}`);
             // JSON-keyed so a table or index name can never alias a different
             // pair when the set is unpacked back into `{table, index}` in
-            // recordFunctionCall, matching the durable __cirrus_metrics_index key.
+            // recordFunctionCall, matching the durable __lunora_metrics_index key.
             this.currentIndexHits?.add(JSON.stringify([table, indexName]));
         };
     }
@@ -2979,7 +2979,7 @@ abstract class ShardDO {
      * Three destinations, each best-effort so a logging call can NEVER turn a
      * served request into a failed one. First, the in-memory {@link LogBuffer}
      * that powers the studio's live Logs panel (it resets on hibernation, like
-     * the metrics counters). Second, a structured `{ source: "cirrus", type:
+     * the metrics counters). Second, a structured `{ source: "lunora", type:
      * "log" }` console event that rides CF Workers Logs / Logpush to prod sinks
      * and is pretty-printed by the CLI / Vite dev-server formatter in the
      * terminal. Third, the optional programmatic `sink.onLog` — the in-process
@@ -3046,7 +3046,7 @@ abstract class ShardDO {
      * silent correctness mismatch between the initial fetch and the live
      * updates. For per-user live data, scope it by shard (`.shardBy(...)`)
      * or pass the identifier as an explicit query arg instead of relying on
-     * `ctx.auth` inside a subscribed query. See the cirrus-realtime skill
+     * `ctx.auth` inside a subscribed query. See the lunora-realtime skill
      * ("Authorization & live queries").
      */
     private async withAnonymousIdentity<R>(run: () => Promise<R> | R): Promise<R> {
@@ -3061,12 +3061,12 @@ abstract class ShardDO {
      */
 
     /**
-     * Assemble the health snapshot served by `__cirrus_admin__:getMetrics`:
+     * Assemble the health snapshot served by `__lunora_admin__:getMetrics`:
      * lifetime request/error counts, the live SQLite size, and (when an opt-in
      * reactive cache is configured) its hit/miss stats.
      *
      * `requests`/`errors` now report the **durable** lifetime totals from the
-     * `__cirrus_metrics` table (source of truth) so they survive
+     * `__lunora_metrics` table (source of truth) so they survive
      * hibernation/restart; the in-memory counters are used only as a fallback
      * when the durable read throws. The response is extended additively with
      * `functions` (per-function persisted rows), `history` (the coarse
@@ -3154,12 +3154,12 @@ abstract class ShardDO {
      * `getCtxDbReadHook`), which advance the causal scan attribution.
      * `indexHits` carries the declared indexes it exercised (collected by
      * `getCtxDbIndexUseHook`, NUL-free `JSON.stringify([table, index])` keys),
-     * which advance the durable `__cirrus_metrics_index` hit counter behind the
+     * which advance the durable `__lunora_metrics_index` hit counter behind the
      * dead-index lint. Called once per `/rpc` dispatch alongside the aggregate
      * `metrics` update.
      *
      * Two writes happen here. The in-memory {@link functionStats} map is kept
-     * for the fast warm-instance path, and the durable `__cirrus_metrics`
+     * for the fast warm-instance path, and the durable `__lunora_metrics`
      * table is upserted so the counters survive hibernation/restart — the
      * persisted table is the source of truth the admin RPCs read from. The
      * persist is best-effort: a SQL failure (e.g. a test double without a
@@ -3224,7 +3224,7 @@ abstract class ShardDO {
         // Fold the dispatch's full-scan attribution into the in-memory stat so
         // the warm-instance fallback (used when the durable read fails) carries
         // the causal data too — via the same `mergeScanAttribution` rule the
-        // durable `__cirrus_metrics_scans` upsert uses, so the two can't drift.
+        // durable `__lunora_metrics_scans` upsert uses, so the two can't drift.
         if (scanned.length > 0) {
             stat.scans += scanned.length;
             mergeScanAttribution(stat.scannedTables, scanned);
@@ -3247,7 +3247,7 @@ abstract class ShardDO {
 
     /**
      * Flush per-statement SQL samples accumulated during the current dispatch
-     * into the durable `__cirrus_metrics_queries` table. Called after
+     * into the durable `__lunora_metrics_queries` table. Called after
      * `recordFunctionCall` on both the success and error paths.
      *
      * Best-effort: a SQL failure (e.g. a test double without a usable `sql`
@@ -3281,10 +3281,10 @@ abstract class ShardDO {
 
     /**
      * Assemble the per-function readout served by
-     * `__cirrus_admin__:getFunctionStats`, sorted most-recently-called first so
+     * `__lunora_admin__:getFunctionStats`, sorted most-recently-called first so
      * the busiest functions surface at the top of the studio table.
      *
-     * Reads from the durable `__cirrus_metrics` table — the source of truth —
+     * Reads from the durable `__lunora_metrics` table — the source of truth —
      * so the counts reflect the function's lifetime, not just calls since this
      * instance woke. Falls back to the in-memory map only if the durable read
      * throws (e.g. a test double without a usable `sql` handle), keeping the
@@ -3307,7 +3307,7 @@ abstract class ShardDO {
     /**
      * Per-function coarse time-series served additively by the metrics RPC, so
      * the studio can chart call/error history. Reads the durable
-     * `__cirrus_metrics_buckets` table; returns `[]` when persistence is
+     * `__lunora_metrics_buckets` table; returns `[]` when persistence is
      * unavailable so the response stays well-formed.
      */
     private collectFunctionMetricBuckets(): (FunctionMetricBucket & { path: string })[] {
@@ -3339,20 +3339,20 @@ abstract class ShardDO {
         ShardDO.rootSizeWarned = true;
         // eslint-disable-next-line no-console -- intentional one-shot operational warning surfacing the __root__ DO approaching the 10 GiB ceiling
         console.warn(
-            `[@cirrus/do] __root__ Durable Object SQLite size is ${String(size)} bytes (>= 1 GiB, 10% of the 10 GiB per-DO ceiling). Plan a \`.shardBy()\` migration before you hit the wall. See https://cirrus.dev/docs/concepts/sharding for guidance.`,
+            `[@lunora/do] __root__ Durable Object SQLite size is ${String(size)} bytes (>= 1 GiB, 10% of the 10 GiB per-DO ceiling). Plan a \`.shardBy()\` migration before you hit the wall. See https://lunora.sh/docs/concepts/sharding for guidance.`,
         );
     }
 
     /**
      * Map a thrown value to a JSON response. `ValidationError` from
-     * `@cirrus/values` becomes a 400 with code `VALIDATION_ERROR`. A
-     * `CirrusError` keeps its declared status/code. Everything else becomes
+     * `@lunora/values` becomes a 400 with code `VALIDATION_ERROR`. A
+     * `LunoraError` keeps its declared status/code. Everything else becomes
      * a 500 with code `RPC_FAILED`.
      */
     // eslint-disable-next-line class-methods-use-this -- cohesive DO instance method (groups with the request handlers); kept non-static so subclasses can override the error mapping
     private errorToResponse(error: unknown): Response {
         // Structural duck-typing so this package does not need a runtime
-        // dependency on `@cirrus/values` or `@cirrus/runtime`. The shapes
+        // dependency on `@lunora/values` or `@lunora/runtime`. The shapes
         // below are the public surface of those error types.
         if (error instanceof ConflictError) {
             return jsonResponse({ error: { code: error.code, message: error.message } }, error.status);
@@ -3364,11 +3364,11 @@ abstract class ShardDO {
             return jsonResponse({ error: { code: "VALIDATION_ERROR", message } }, 400);
         }
 
-        if (error && typeof error === "object" && (error as { name?: string }).name === "CirrusError") {
-            const cirrusError = error as { code?: string; message?: string; status?: number };
-            const status = typeof cirrusError.status === "number" ? cirrusError.status : 500;
+        if (error && typeof error === "object" && (error as { name?: string }).name === "LunoraError") {
+            const lunoraError = error as { code?: string; message?: string; status?: number };
+            const status = typeof lunoraError.status === "number" ? lunoraError.status : 500;
 
-            return jsonResponse({ error: { code: cirrusError.code ?? "INTERNAL", message: cirrusError.message ?? "internal error" } }, status);
+            return jsonResponse({ error: { code: lunoraError.code ?? "INTERNAL", message: lunoraError.message ?? "internal error" } }, status);
         }
 
         const message = error instanceof Error ? error.message : "unknown error";
@@ -3377,8 +3377,8 @@ abstract class ShardDO {
     }
 
     /**
-     * Serve a reserved admin-introspection RPC (`__cirrus_admin__:*`) for the
-     * data browser. Gated by `env.CIRRUS_ADMIN_TOKEN`: introspection is
+     * Serve a reserved admin-introspection RPC (`__lunora_admin__:*`) for the
+     * data browser. Gated by `env.LUNORA_ADMIN_TOKEN`: introspection is
      * **disabled unless the token is configured**, and when it is, the request
      * must present a matching `Authorization: Bearer` header. The blast radius
      * is raw table contents, so the default is closed — unlike the WebSocket
@@ -3609,7 +3609,7 @@ abstract class ShardDO {
      * of truth), so a missing/garbage envelope is rejected up front (400) rather
      * than corrupting the buffer. Mapped to `functionPath: "container:&lt;name>"` so
      * the panel renders it alongside `ctx.log` lines. Admin-gated by
-     * `handleAdminRpc`'s caller (the same `CIRRUS_ADMIN_TOKEN` bearer as every
+     * `handleAdminRpc`'s caller (the same `LUNORA_ADMIN_TOKEN` bearer as every
      * other admin write).
      */
     private handleRecordContainerEvent(args: Record<string, unknown>): Response {
@@ -3621,16 +3621,16 @@ abstract class ShardDO {
     }
 
     /**
-     * Serve the `__cirrus_admin__:runAs` admin RPC — the studio's "Run as
+     * Serve the `__lunora_admin__:runAs` admin RPC — the studio's "Run as
      * identity" tool. Dispatches the target `functionPath` through the normal
      * `handleRpc` path while the per-request identity is forged to the supplied
      * `userId`/`identity`, so the function (and any RLS middleware it uses)
      * observes that user instead of the admin caller.
      *
      * SECURITY. This op is reachable only after `handleAdminRpc`'s
-     * `isAdminAuthorized` bearer check (the `CIRRUS_ADMIN_TOKEN` gate), so an
+     * `isAdminAuthorized` bearer check (the `LUNORA_ADMIN_TOKEN` gate), so an
      * unauthenticated caller can never forge an identity. The inbound
-     * `x-cirrus-userid`/`x-cirrus-identity` headers the runtime sets are
+     * `x-lunora-userid`/`x-lunora-identity` headers the runtime sets are
      * overwritten here for the duration of the dispatch and restored after, so
      * the forge can't leak into a later request. The target path is validated to
      * be a non-admin function, so it can't be used to re-enter the admin plane.
@@ -3658,14 +3658,14 @@ abstract class ShardDO {
      * Looks the `exportName` up in {@link workflowsMetadata} (the codegen subclass's
      * statically-discovered list) to find its generated `WORKFLOW_*` binding, then
      * reads `env[binding]` and validates it carries the `create`/`get` methods. A
-     * bad export name or a missing/malformed binding throws a 400 `CirrusError` so
+     * bad export name or a missing/malformed binding throws a 400 `LunoraError` so
      * the studio surfaces an actionable message instead of a generic 500.
      */
     private resolveWorkflowBinding(exportName: string): WorkflowBindingHandle {
         const metadata = this.workflowsMetadata().workflows.find((workflow) => workflow.exportName === exportName);
 
         if (!metadata) {
-            throw Object.assign(new Error(`workflow "${exportName}" is not declared`), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+            throw Object.assign(new Error(`workflow "${exportName}" is not declared`), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
         }
 
         const binding = (this.env as Record<string, unknown> | undefined)?.[metadata.binding];
@@ -3678,7 +3678,7 @@ abstract class ShardDO {
         ) {
             throw Object.assign(new Error(`workflow binding "${metadata.binding}" is not available on this deployment`), {
                 code: "BAD_REQUEST",
-                name: "CirrusError",
+                name: "LunoraError",
                 status: 400,
             });
         }
@@ -3687,7 +3687,7 @@ abstract class ShardDO {
     }
 
     /**
-     * Serve `__cirrus_admin__:createWorkflowInstance` — the studio's "Start
+     * Serve `__lunora_admin__:createWorkflowInstance` — the studio's "Start
      * instance" button. Resolves the declared workflow's `WORKFLOW_*` binding and
      * calls `.create({ id?, params })`, returning the new instance's id and initial
      * status. No SQLite write happens (workflows are not Durable Objects and hold
@@ -3708,7 +3708,7 @@ abstract class ShardDO {
     }
 
     /**
-     * Serve `__cirrus_admin__:getWorkflowInstanceStatus` — the studio's instance
+     * Serve `__lunora_admin__:getWorkflowInstanceStatus` — the studio's instance
      * observer. Resolves the workflow binding, fetches the instance handle by id,
      * and reports its current status plus output/error when present. Read-only:
      * inspecting an instance mutates no shard state, so nothing is flushed or
@@ -3761,9 +3761,9 @@ abstract class ShardDO {
 
     /**
      * Capture one outbound message into the dev mail catcher (`mail-catcher.ts`).
-     * `@cirrus/mail`'s capture transport POSTs each rendered, validated send here
+     * `@lunora/mail`'s capture transport POSTs each rendered, validated send here
      * (fire-and-forget) so the studio's Mail inbox shows it. Admin-gated by
-     * `handleAdminRpc`'s caller, so only a request bearing `CIRRUS_ADMIN_TOKEN`
+     * `handleAdminRpc`'s caller, so only a request bearing `LUNORA_ADMIN_TOKEN`
      * can record — and the worker only ever calls this when the capture transport
      * is wired (dev). Validates the payload (400 on a bad shape) and returns the
      * generated id.
@@ -3823,13 +3823,13 @@ abstract class ShardDO {
      * for a `/rpc` dispatch that just completed — the per-request readout
      * (`&lt;file>:&lt;function>`, shard key, acting user/identity, redacted args,
      * outcome, duration, tables read/written, cache hit) that Cloudflare cannot
-     * attribute (PLAN3 §1.1). When `CIRRUS_REQUEST_LOG_EMIT` is set, the same
+     * attribute (PLAN3 §1.1). When `LUNORA_REQUEST_LOG_EMIT` is set, the same
      * entry is ALSO emitted as a structured console event for CF Workers Logs /
      * Logpush to ship to external SIEMs (PLAN3 §3.3) — see `requestLogConfig`.
      *
      * Volume is bounded by two knobs (`requestLogConfig`): SUCCESSFUL dispatches
-     * are sampled at `CIRRUS_REQUEST_LOG_SAMPLE` (errors always recorded) and the
-     * durable rows are trimmed to `CIRRUS_REQUEST_LOG_RETENTION`. Args/identity
+     * are sampled at `LUNORA_REQUEST_LOG_SAMPLE` (errors always recorded) and the
+     * durable rows are trimmed to `LUNORA_REQUEST_LOG_RETENTION`. Args/identity
      * are redacted by default and captured raw only in a dev environment.
      *
      * Best-effort, exactly like `recordFunctionCall`'s durable upsert: a SQL
@@ -3869,7 +3869,7 @@ abstract class ShardDO {
         }
 
         // Build the structured entry once and feed it to BOTH sinks: the durable
-        // `__cirrus_reqlog__` row (the queryable readout) and — when enabled — a
+        // `__lunora_reqlog__` row (the queryable readout) and — when enabled — a
         // console event CF's Workers Logs / Logpush pipeline ships to external
         // SIEMs (PLAN3 §3.3). Both redact args/identity from this same raw entry
         // (unless `captureRaw` in dev), so the two stay byte-consistent.
@@ -3900,7 +3900,7 @@ abstract class ShardDO {
         // CF Workers Logs at error level and the dev-server formats them in the
         // terminal), redacted in prod like any other event. The full per-dispatch
         // summary stream (successful OKs too) stays opt-in behind
-        // `CIRRUS_REQUEST_LOG_EMIT` so a hot shard doesn't emit a line per call.
+        // `LUNORA_REQUEST_LOG_EMIT` so a hot shard doesn't emit a line per call.
         if (config.emit || outcome === "error") {
             try {
                 emitRequestLogEvent(entry, writeOptions);
@@ -3917,26 +3917,26 @@ abstract class ShardDO {
      * in production (`isDevEnvironment`) — default redacted.
      *
      * `emit`: also stream each entry as a console event for CF Workers Logs /
-     * Logpush (and the dev-server terminal). Explicit `CIRRUS_REQUEST_LOG_EMIT`
+     * Logpush (and the dev-server terminal). Explicit `LUNORA_REQUEST_LOG_EMIT`
      * (`"1"`/`"true"` vs `"0"`/`"false"`) always wins; unset, it defaults to
      * `isDevEnvironment` — ON in dev so a developer sees every dispatch, OFF in
      * production where a line per dispatch is log volume an operator opts into.
      * Errors stream regardless (see `recordRequestLog`).
      *
-     * `retention`: durable-row cap override (`CIRRUS_REQUEST_LOG_RETENTION`);
+     * `retention`: durable-row cap override (`LUNORA_REQUEST_LOG_RETENTION`);
      * `undefined` falls back to the module default.
      *
      * `sampleRate`: fraction of SUCCESSFUL dispatches recorded
-     * (`CIRRUS_REQUEST_LOG_SAMPLE`, 0..1, default 1.0 = all); errors always record.
+     * (`LUNORA_REQUEST_LOG_SAMPLE`, 0..1, default 1.0 = all); errors always record.
      */
     private requestLogConfig(): { captureRaw: boolean; emit: boolean; retention: number | undefined; sampleRate: number } {
-        const env = (this.env ?? {}) as { CIRRUS_REQUEST_LOG_EMIT?: string; CIRRUS_REQUEST_LOG_RETENTION?: string; CIRRUS_REQUEST_LOG_SAMPLE?: string };
+        const env = (this.env ?? {}) as { LUNORA_REQUEST_LOG_EMIT?: string; LUNORA_REQUEST_LOG_RETENTION?: string; LUNORA_REQUEST_LOG_SAMPLE?: string };
 
         return {
             captureRaw: isDevEnvironment(this.env),
-            emit: parseEmit(env.CIRRUS_REQUEST_LOG_EMIT, isDevEnvironment(this.env)),
-            retention: parsePositiveInt(env.CIRRUS_REQUEST_LOG_RETENTION),
-            sampleRate: parseSampleRate(env.CIRRUS_REQUEST_LOG_SAMPLE),
+            emit: parseEmit(env.LUNORA_REQUEST_LOG_EMIT, isDevEnvironment(this.env)),
+            retention: parsePositiveInt(env.LUNORA_REQUEST_LOG_RETENTION),
+            sampleRate: parseSampleRate(env.LUNORA_REQUEST_LOG_SAMPLE),
         };
     }
 
@@ -3971,7 +3971,7 @@ abstract class ShardDO {
 
         if (restart) {
             // Apply now: restart the DO so it reopens at the armed bookmark.
-            this.state.abort?.("cirrus PITR restore");
+            this.state.abort?.("lunora PITR restore");
         }
 
         return response;
@@ -4138,7 +4138,7 @@ abstract class ShardDO {
         if (result.truncated) {
             // eslint-disable-next-line no-console -- intentional operational notice: the dangling-reference scan was clipped by its bound, so the studio's view is partial
             console.warn(
-                `[@cirrus/do] storageOrphans scan truncated after checking ${String(result.scanned)} storage references; reporting the first ${String(result.references.length)} dangling reference(s).`,
+                `[@lunora/do] storageOrphans scan truncated after checking ${String(result.scanned)} storage references; reporting the first ${String(result.references.length)} dangling reference(s).`,
             );
         }
 
@@ -4236,7 +4236,7 @@ abstract class ShardDO {
 
     /**
      * Enumerate every connected WebSocket and the subscriptions it tracks for
-     * the `__cirrus_admin__:listSubscriptions` realtime inspector. Reads each
+     * the `__lunora_admin__:listSubscriptions` realtime inspector. Reads each
      * socket's hibernation attachment (admin flag + live `subs` map) and folds
      * them into a {@link SubscriptionsResult} via {@link summarizeSubscriptions}.
      * Read-only: it touches no SQLite and mutates no socket state.
@@ -4293,7 +4293,7 @@ abstract class ShardDO {
      * Resolve a `getAuthMetrics` admin read: the durable app-level auth
      * attempt/failure counters + minute-bucketed history the studio SLO panel
      * charts (PLAN3 §2.3). Auth runs as a top-level `/api/auth/*` worker route,
-     * NOT through cirrus functions, so the worker records each attempt against
+     * NOT through lunora functions, so the worker records each attempt against
      * the root shard via `recordAuthEvent` and this read surfaces the rollup.
      *
      * Best-effort: a SQL failure (e.g. a test double without a real `sql`
@@ -4410,7 +4410,7 @@ abstract class ShardDO {
     }
 
     /**
-     * Seed/refresh hook for `__cirrus_admin__:*` subscriptions, mirroring
+     * Seed/refresh hook for `__lunora_admin__:*` subscriptions, mirroring
      * `executeSubscription` for user functions. Returns `null` for any
      * path that isn't a read-only admin op so the caller can fall through.
      * Synchronous — admin reads hit raw SQLite directly, no async dispatch.
@@ -4423,13 +4423,13 @@ abstract class ShardDO {
     }
 
     /**
-     * Constant-time bearer check against `env.CIRRUS_ADMIN_TOKEN`. Returns
+     * Constant-time bearer check against `env.LUNORA_ADMIN_TOKEN`. Returns
      * `false` (closed) when the token is unset so admin introspection is
      * opt-in rather than exposed by default.
      */
     private isAdminAuthorized(request: Request): boolean {
-        const env = (this.env ?? {}) as { CIRRUS_ADMIN_TOKEN?: string };
-        const token = env.CIRRUS_ADMIN_TOKEN;
+        const env = (this.env ?? {}) as { LUNORA_ADMIN_TOKEN?: string };
+        const token = env.LUNORA_ADMIN_TOKEN;
 
         if (!token || token.length === 0) {
             return false;
@@ -4754,10 +4754,10 @@ abstract class ShardDO {
     /**
      * Gate the upgrade request against two complementary controls:
      *
-     * 1. Origin allowlist via `env.CIRRUS_ALLOWED_ORIGINS` (comma-separated).
+     * 1. Origin allowlist via `env.LUNORA_ALLOWED_ORIGINS` (comma-separated).
      * When unset, any origin is accepted — convenient for local dev,
      * not suitable for production.
-     * 2. Bearer token via `env.CIRRUS_WS_BEARER`. When set, the upgrade
+     * 2. Bearer token via `env.LUNORA_WS_BEARER`. When set, the upgrade
      * must present a matching token. We accept either an
      * `Authorization: Bearer &lt;token>` header (preferred) or a
      * `?token=&lt;token>` query parameter (the only escape hatch for
@@ -4772,8 +4772,8 @@ abstract class ShardDO {
      * secret.
      */
     private isUpgradeAllowed(request: Request): boolean {
-        const env = (this.env ?? {}) as { CIRRUS_ALLOWED_ORIGINS?: string; CIRRUS_WS_BEARER?: string };
-        const allowedOrigins = env.CIRRUS_ALLOWED_ORIGINS;
+        const env = (this.env ?? {}) as { LUNORA_ALLOWED_ORIGINS?: string; LUNORA_WS_BEARER?: string };
+        const allowedOrigins = env.LUNORA_ALLOWED_ORIGINS;
 
         if (allowedOrigins && allowedOrigins.trim() !== "") {
             const origin = request.headers.get("origin");
@@ -4792,13 +4792,13 @@ abstract class ShardDO {
             }
         }
 
-        const expectedBearer = env.CIRRUS_WS_BEARER;
+        const expectedBearer = env.LUNORA_WS_BEARER;
 
         if (expectedBearer && expectedBearer.length > 0) {
             const supplied = this.suppliedWsToken(request);
 
             // The admin token is accepted as an alternate credential so a
-            // studio can open its socket even when `CIRRUS_WS_BEARER` gates
+            // studio can open its socket even when `LUNORA_WS_BEARER` gates
             // ordinary subscribers. The socket is flagged admin separately (see
             // `isAdminSocket`); matching the bearer alone never grants it.
             if (!supplied || (!constantTimeEqual(supplied, expectedBearer) && !this.isAdminSocket(request))) {
@@ -4826,14 +4826,14 @@ abstract class ShardDO {
     }
 
     /**
-     * Whether the upgrade presented a token matching `CIRRUS_ADMIN_TOKEN`,
+     * Whether the upgrade presented a token matching `LUNORA_ADMIN_TOKEN`,
      * constant-time compared. Closed (returns `false`) when the admin token is
      * unset, mirroring `isAdminAuthorized` for the HTTP path so admin
      * streaming is opt-in rather than exposed by default.
      */
     private isAdminSocket(request: Request): boolean {
-        const env = (this.env ?? {}) as { CIRRUS_ADMIN_TOKEN?: string };
-        const adminToken = env.CIRRUS_ADMIN_TOKEN;
+        const env = (this.env ?? {}) as { LUNORA_ADMIN_TOKEN?: string };
+        const adminToken = env.LUNORA_ADMIN_TOKEN;
 
         if (!adminToken || adminToken.length === 0) {
             return false;
@@ -4875,7 +4875,7 @@ abstract class ShardDO {
 
         this.state.acceptWebSocket(server);
         // Stamp admin authorization onto the socket at upgrade so later
-        // `__cirrus_admin__:*` subscribe envelopes (which carry no credential of
+        // `__lunora_admin__:*` subscribe envelopes (which carry no credential of
         // their own) can be gated without re-checking a token per message.
         (server as HibernatableWebSocket).serializeAttachment?.({ admin: this.isAdminSocket(request), subs: {} } satisfies SocketAttachment);
 

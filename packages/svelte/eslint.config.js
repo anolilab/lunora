@@ -1,6 +1,6 @@
 import { createConfig } from "@anolilab/eslint-config";
 
-// Self-contained flat config for @cirrus/svelte. Each package owns its own
+// Self-contained flat config for @lunora/svelte. Each package owns its own
 // setup (no shared local preset); rules build on @anolilab/eslint-config.
 export default createConfig(
     {
@@ -31,13 +31,13 @@ export default createConfig(
     {
         rules: {
             // Leading-underscore identifiers that are framework API by design:
-            // __cirrus* are internal markers carried on function references and the
+            // __lunora* are internal markers carried on function references and the
             // preloaded token. Accidental dangles (and the trailing-underscore
             // variety) are still flagged.
             "no-underscore-dangle": [
                 "error",
                 {
-                    allow: ["_id", "_creationTime", "__cirrusRef", "__cirrusPreloaded"],
+                    allow: ["_id", "_creationTime", "__lunoraRef", "__lunoraPreloaded"],
                 },
             ],
         },

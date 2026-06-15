@@ -1,14 +1,14 @@
 /**
- * Opaque reference to a Cirrus function. Mirrors the `FunctionReference` shape
- * emitted by `@cirrus/codegen` (and consumed by `@cirrus/client`). We avoid a
+ * Opaque reference to a Lunora function. Mirrors the `FunctionReference` shape
+ * emitted by `@lunora/codegen` (and consumed by `@lunora/client`). We avoid a
  * direct dependency to keep this package usable from the codegen pipeline
  * itself.
  *
- * The runtime identifier lives in `__cirrusRef` — this MUST stay in lockstep
- * with the codegen emit + `@cirrus/client`'s `FunctionReference`.
+ * The runtime identifier lives in `__lunoraRef` — this MUST stay in lockstep
+ * with the codegen emit + `@lunora/client`'s `FunctionReference`.
  */
 export interface FunctionReference {
-    readonly __cirrusRef: string;
+    readonly __lunoraRef: string;
     /** Marker phantom type — discriminates queries / mutations / actions. */
     readonly _kind?: "query" | "mutation" | "action";
 }
@@ -122,7 +122,7 @@ export interface DurableObjectStubLike {
     fetch: (input: Request | string, init?: RequestInit) => Promise<Response>;
 }
 
-export interface CirrusSchedulerOptions {
+export interface LunoraSchedulerOptions {
     /** Optional named instance — useful for tenant isolation. Default `default`. */
     instanceName?: string;
     /** Binding to the `SchedulerDO` durable object namespace. */
@@ -146,13 +146,13 @@ export interface EnqueueOptions {
 }
 
 /**
- * Options for `createWorkpool`. Mirrors {@link CirrusSchedulerOptions}
+ * Options for `createWorkpool`. Mirrors {@link LunoraSchedulerOptions}
  * (same `namespace` / `originUrl` / `instanceName`) plus the bounded-concurrency
  * controls. A workpool is a NAMED logical pool inside the existing SchedulerDO —
  * it needs no extra Durable Object or wrangler binding beyond the SchedulerDO
  * the scheduler already uses.
  */
-export interface WorkpoolOptions extends CirrusSchedulerOptions {
+export interface WorkpoolOptions extends LunoraSchedulerOptions {
     /**
      * Maximum number of jobs from this pool that may be in flight at once.
      * Excess enqueues are persisted and drain as slots free. Must be a positive
@@ -168,7 +168,7 @@ export interface WorkpoolOptions extends CirrusSchedulerOptions {
 }
 
 /**
- * Bounded-concurrency action queue (Cirrus equivalent of `@convex-dev/workpool`).
+ * Bounded-concurrency action queue (Lunora equivalent of `@convex-dev/workpool`).
  * Built on the existing SchedulerDO: `enqueue` schedules a job tagged with this
  * pool's name; the DO caps simultaneous dispatch at `maxConcurrency` and queues
  * the rest durably.
@@ -197,7 +197,7 @@ export interface Workpool {
 // the SchedulerDO-based {@link Workpool} when you need those. All binding types
 // are declared structurally so the package needs no `@cloudflare/workers-types`.
 
-/** Per-message options for {@link QueueLike.send} — the subset Cirrus uses. */
+/** Per-message options for {@link QueueLike.send} — the subset Lunora uses. */
 export interface QueueSendOptionsLike {
     /** Delay delivery to the consumer by this many seconds. */
     delaySeconds?: number;
@@ -238,7 +238,7 @@ export interface MessageBatchLike<Body = unknown> {
     retryAll: (options?: { delaySeconds?: number }) => void;
 }
 
-/** The wire payload Cirrus puts on the queue: a function dispatch. */
+/** The wire payload Lunora puts on the queue: a function dispatch. */
 export interface QueueJob {
     args?: Record<string, unknown>;
     functionPath: string;
@@ -287,10 +287,10 @@ export interface QueueConsumerOptions {
 
 /** Options for the `httpDispatcher` — the default HTTP dispatcher. */
 export interface HttpDispatcherOptions {
-    /** Admin bearer token the dispatch endpoint accepts (`CIRRUS_ADMIN_TOKEN`). */
+    /** Admin bearer token the dispatch endpoint accepts (`LUNORA_ADMIN_TOKEN`). */
     adminToken: string;
     /** Injectable fetch (tests); defaults to the global. */
     fetchImpl?: typeof fetch;
-    /** Origin where the Worker is mounted (the `/_cirrus/scheduler/dispatch` endpoint). */
+    /** Origin where the Worker is mounted (the `/_lunora/scheduler/dispatch` endpoint). */
     originUrl: string;
 }

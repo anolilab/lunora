@@ -12,7 +12,7 @@ let workdir: string;
 
 describe("discover-crons", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-cron-disco-"));
+        workdir = mkdtempSync(join(tmpdir(), "lunora-cron-disco-"));
     });
 
     afterEach(() => {
@@ -34,7 +34,7 @@ describe("discover-crons", () => {
         writeSource(
             "crons.ts",
             `
-            import { cronJobs } from "@cirrus/scheduler";
+            import { cronJobs } from "@lunora/scheduler";
             import { internal } from "./_generated/api.js";
             const crons = cronJobs();
             crons.interval("clear presence", { minutes: 30 }, internal.presence.clear, {});
@@ -54,16 +54,16 @@ describe("discover-crons", () => {
         ]);
     });
 
-    it("discovers cronJobs imported from the @cirrus/server re-export", () => {
+    it("discovers cronJobs imported from the @lunora/server re-export", () => {
         expect.assertions(1);
 
-        // @cirrus/server re-exports cronJobs from @cirrus/scheduler; codegen must
-        // recognize it (importing framework API from @cirrus/server is the
+        // @lunora/server re-exports cronJobs from @lunora/scheduler; codegen must
+        // recognize it (importing framework API from @lunora/server is the
         // convention used by registry items + the presence/backup docs).
         writeSource(
             "crons.ts",
             `
-            import { cronJobs } from "@cirrus/server";
+            import { cronJobs } from "@lunora/server";
             import { internal } from "./_generated/api.js";
             const crons = cronJobs();
             crons.interval("heartbeat", { hours: 1 }, internal.jobs.run, {});
@@ -82,7 +82,7 @@ describe("discover-crons", () => {
         writeSource(
             "crons.ts",
             `
-            import { cronJobs as defineCrons } from "@cirrus/scheduler";
+            import { cronJobs as defineCrons } from "@lunora/scheduler";
             import { internal } from "./_generated/api.js";
             const c = defineCrons();
             c.weekly("report", { dayOfWeek: "monday", hourUTC: 8, minuteUTC: 0 }, internal.email.report, {});
@@ -101,7 +101,7 @@ describe("discover-crons", () => {
         writeSource(
             "crons.ts",
             `
-            import { cronJobs } from "@cirrus/scheduler";
+            import { cronJobs } from "@lunora/scheduler";
             import { internal } from "./_generated/api.js";
             const crons = cronJobs();
             crons
@@ -116,7 +116,7 @@ describe("discover-crons", () => {
         expect(result.map((cron) => `${cron.name}:${cron.cron}`)).toEqual(["a:0 */1 * * *", "b:0 0 1 * *"]);
     });
 
-    it("ignores a local cronJobs not imported from @cirrus/scheduler", () => {
+    it("ignores a local cronJobs not imported from @lunora/scheduler", () => {
         expect.assertions(1);
 
         writeSource(
@@ -124,7 +124,7 @@ describe("discover-crons", () => {
             `
             const cronJobs = () => ({ interval: (..._a: unknown[]) => undefined });
             const crons = cronJobs();
-            crons.interval("nope", { minutes: 1 }, { __cirrusRef: "a:b" }, {});
+            crons.interval("nope", { minutes: 1 }, { __lunoraRef: "a:b" }, {});
         `,
         );
 
@@ -139,7 +139,7 @@ describe("discover-crons", () => {
         writeSource(
             "crons.ts",
             `
-            import { cronJobs } from "@cirrus/scheduler";
+            import { cronJobs } from "@lunora/scheduler";
             import { internal } from "./_generated/api.js";
             const crons = cronJobs();
             crons.interval("dup", { minutes: 1 }, internal.a.b, {});
@@ -149,7 +149,7 @@ describe("discover-crons", () => {
         writeSource(
             "more-crons.ts",
             `
-            import { cronJobs } from "@cirrus/scheduler";
+            import { cronJobs } from "@lunora/scheduler";
             import { internal } from "./_generated/api.js";
             const crons = cronJobs();
             crons.interval("dup", { minutes: 2 }, internal.a.c, {});
@@ -169,7 +169,7 @@ describe("discover-crons", () => {
             caught = error;
         }
 
-        expect(caught).toMatchObject({ code: "DUPLICATE_CRON_NAME", name: "CirrusError", status: 500 });
+        expect(caught).toMatchObject({ code: "DUPLICATE_CRON_NAME", name: "LunoraError", status: 500 });
     });
 
     it("throws on an invalid raw cron expression", () => {
@@ -178,7 +178,7 @@ describe("discover-crons", () => {
         writeSource(
             "crons.ts",
             `
-            import { cronJobs } from "@cirrus/scheduler";
+            import { cronJobs } from "@lunora/scheduler";
             import { internal } from "./_generated/api.js";
             const crons = cronJobs();
             crons.cron("bad", "every minute", internal.a.b, {});
@@ -195,7 +195,7 @@ describe("discover-crons", () => {
         writeSource(
             "crons.ts",
             `
-            import { cronJobs } from "@cirrus/scheduler";
+            import { cronJobs } from "@lunora/scheduler";
             import { internal } from "./_generated/api.js";
             const name = "dyn";
             const crons = cronJobs();
@@ -219,7 +219,7 @@ describe("emitCrons", () => {
         ]);
 
         // Trigger array dedupes the shared "0 * * * *" expression.
-        expect(output).toContain('export const CIRRUS_CRON_TRIGGERS: ReadonlyArray<string> = [\n    "0 * * * *",\n    "*/5 * * * *",\n];');
+        expect(output).toContain('export const LUNORA_CRON_TRIGGERS: ReadonlyArray<string> = [\n    "0 * * * *",\n    "*/5 * * * *",\n];');
 
         // Dispatcher map keeps both jobs under the shared key…
         expect(output).toContain('"0 * * * *": [');
@@ -235,8 +235,8 @@ describe("emitCrons", () => {
 
         const output = emitCrons([]);
 
-        expect(output).toContain("export const CIRRUS_CRON_TRIGGERS: ReadonlyArray<string> = [];");
-        expect(output).toContain("export const CIRRUS_CRONS: Record<string, ReadonlyArray<CirrusCronJob>> = {};");
+        expect(output).toContain("export const LUNORA_CRON_TRIGGERS: ReadonlyArray<string> = [];");
+        expect(output).toContain("export const LUNORA_CRONS: Record<string, ReadonlyArray<LunoraCronJob>> = {};");
     });
 });
 

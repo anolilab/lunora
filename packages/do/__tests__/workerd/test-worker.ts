@@ -20,7 +20,7 @@ import { ShardDO } from "../../src/shard-do";
 import type { MutationDelta } from "../../src/types";
 
 interface Env {
-    CIRRUS_ALLOWED_ORIGINS?: string;
+    LUNORA_ALLOWED_ORIGINS?: string;
     SESSION: DurableObjectNamespace<TestSessionDO>;
     SHARD: DurableObjectNamespace<TestShardDO>;
 }

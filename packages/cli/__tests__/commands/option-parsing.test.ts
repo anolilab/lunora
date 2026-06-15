@@ -19,7 +19,7 @@ import { verifyCommand } from "../../src/commands/verify";
  */
 const parseOptions = async (commandName: string, options: ReadonlyArray<OptionDefinition<unknown>>, argv: string[]): Promise<Record<string, unknown>> => {
     let captured: Record<string, unknown> = {};
-    const cli = new Cerebro("cirrus", { argv });
+    const cli = new Cerebro("lunora", { argv });
 
     cli.addCommand({
         execute: ({ options: parsed }) => {

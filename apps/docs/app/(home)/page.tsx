@@ -38,10 +38,10 @@ const CARD_BODY_STYLE: CSSProperties = { color: "#475569", marginTop: 8 };
 const HomePage = (): ReactElement => (
     <main style={MAIN_STYLE}>
         <section>
-            <p style={EYEBROW_STYLE}>≡ cirrus</p>
+            <p style={EYEBROW_STYLE}>≡ lunora</p>
             <h1 style={HEADING_STYLE}>Type-safe real-time backend on your own Cloudflare account.</h1>
             <p style={LEAD_STYLE}>
-                Cirrus brings the Convex developer experience to Cloudflare Workers, Durable Objects, D1, R2 and Queues — without vendor lock-in. Vite plugin
+                Lunora brings the Convex developer experience to Cloudflare Workers, Durable Objects, D1, R2 and Queues — without vendor lock-in. Vite plugin
                 first, standalone CLI second.
             </p>
             <p style={CTA_WRAP_STYLE}>

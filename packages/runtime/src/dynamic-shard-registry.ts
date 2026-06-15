@@ -1,7 +1,7 @@
 /**
  * Dynamic shard registry — DO-backed implementation of {@link ShardRegistry}.
  *
- * The companion to `ShardRegistryDO` from `@cirrus/do`. Plug into
+ * The companion to `ShardRegistryDO` from `@lunora/do`. Plug into
  * `createQueryCoordinator({registry})` and the coordinator will discover
  * the live shard key set per table from a Durable Object instead of from
  * a hand-supplied static map.
@@ -42,10 +42,10 @@ import type { ShardNamespaceLike } from "./resolve-shard";
 
 /**
  * Conventional DO instance name. Kept in sync with `SHARD_REGISTRY_DO_NAME`
- * in `@cirrus/do` (not imported to avoid the runtime → do dependency edge —
- * `@cirrus/runtime` MUST stay free of a hard `@cirrus/do` dep).
+ * in `@lunora/do` (not imported to avoid the runtime → do dependency edge —
+ * `@lunora/runtime` MUST stay free of a hard `@lunora/do` dep).
  */
-const SHARD_REGISTRY_DO_NAME: string = "__cirrus_shard_registry__";
+const SHARD_REGISTRY_DO_NAME: string = "__lunora_shard_registry__";
 
 /**
  * Default per-table cache TTL in milliseconds. 30s is a balance between

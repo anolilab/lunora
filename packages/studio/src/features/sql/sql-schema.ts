@@ -1,4 +1,4 @@
-import { useCirrus } from "@cirrus/react";
+import { useLunora } from "@lunora/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { TableInfo, TablePage } from "../../lib/admin";
@@ -20,7 +20,7 @@ const READ_TABLE_PAGE = adminRef(ADMIN_FUNCTIONS.readTablePage);
  * in-flight list via the cancel token.
  */
 const useSqlSchema = (shardKey: string): { probe: (table: string) => void; schema: SqlSchema } => {
-    const client = useCirrus();
+    const client = useLunora();
 
     const [tables, setTables] = useState<string[]>([]);
     const [columns, setColumns] = useState<Record<string, string[]>>({});

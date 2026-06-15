@@ -3,7 +3,7 @@
  * Row-Level Security (`../rls`).
  *
  * ```ts
- * import { defineStorageRule, defineStorageRules, storageRules } from "@cirrus/server";
+ * import { defineStorageRule, defineStorageRules, storageRules } from "@lunora/server";
  *
  * const ownAvatars = defineStorageRule&lt;MyCtx>({
  *     bucket: "avatars",
@@ -14,7 +14,7 @@
  *
  * const rules = defineStorageRules([ownAvatars]);
  *
- * const builders = initCirrus.dataModel&lt;DataModel>().create();
+ * const builders = initLunora.dataModel&lt;DataModel>().create();
  * const guardedAction = builders.action.use(storageRules(rules));
  * ```
  *

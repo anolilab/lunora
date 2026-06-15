@@ -1,7 +1,7 @@
-import type { ExecutionContextLike } from "@cirrus/runtime";
+import type { ExecutionContextLike } from "@lunora/runtime";
 import { describe, expect, it, vi } from "vitest";
 
-import { withCirrus } from "../src/worker";
+import { withLunora } from "../src/worker";
 
 /**
  * A minimal fake of the parts of a `ShardDO` namespace `composeWorker` touches
@@ -41,34 +41,34 @@ const fakeContext: ExecutionContextLike = {
     waitUntil: () => undefined,
 };
 
-/** Build an RPC request — the canonical reserved `/_cirrus/*` realtime entry. */
+/** Build an RPC request — the canonical reserved `/_lunora/*` realtime entry. */
 const rpcRequest = (): Request =>
-    new Request("https://app.example/_cirrus/rpc", {
+    new Request("https://app.example/_lunora/rpc", {
         body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
         method: "POST",
     });
 
-describe("withCirrus — SvelteKit single-worker composition (PLAN4 §3, class-B)", () => {
+describe("withLunora — SvelteKit single-worker composition (PLAN4 §3, class-B)", () => {
     it("delegates a non-reserved path to the wrapped SvelteKit handler", async () => {
         const shard = createShardSpy();
         const svelteKit = { fetch: vi.fn(() => new Response("rendered page", { status: 200 })) };
 
-        const worker = withCirrus(svelteKit, { shardDO: shard.namespace });
+        const worker = withLunora(svelteKit, { shardDO: shard.namespace });
 
         const res = await worker.fetch(new Request("https://app.example/about"), {}, fakeContext);
 
         expect(res.status).toBe(200);
         await expect(res.text()).resolves.toBe("rendered page");
-        // SvelteKit handled it; Cirrus never forwarded to a shard.
+        // SvelteKit handled it; Lunora never forwarded to a shard.
         expect(svelteKit.fetch).toHaveBeenCalledTimes(1);
         expect(shard.calls).toHaveLength(0);
     });
 
-    it("routes /_cirrus/rpc into Cirrus rather than the SvelteKit handler", async () => {
+    it("routes /_lunora/rpc into Lunora rather than the SvelteKit handler", async () => {
         const shard = createShardSpy();
         const svelteKit = { fetch: vi.fn(() => new Response("rendered page")) };
 
-        const worker = withCirrus(svelteKit, { shardDO: shard.namespace });
+        const worker = withLunora(svelteKit, { shardDO: shard.namespace });
 
         const res = await worker.fetch(rpcRequest(), {}, fakeContext);
 
@@ -79,7 +79,7 @@ describe("withCirrus — SvelteKit single-worker composition (PLAN4 §3, class-B
         expect(shard.calls[0]?.shardKey).toBe("__root__");
     });
 
-    it("isolates a throwing SvelteKit handler so /_cirrus/* stays serviceable", async () => {
+    it("isolates a throwing SvelteKit handler so /_lunora/* stays serviceable", async () => {
         // Swallow the expected server-side error log from the deliberate throw.
         const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
         const shard = createShardSpy();
@@ -89,7 +89,7 @@ describe("withCirrus — SvelteKit single-worker composition (PLAN4 §3, class-B
             }),
         };
 
-        const worker = withCirrus(svelteKit, { shardDO: shard.namespace });
+        const worker = withLunora(svelteKit, { shardDO: shard.namespace });
 
         // A throwing SvelteKit render is contained at the seam: a plain 500 that
         // never echoes the raw message to the client.
@@ -107,14 +107,14 @@ describe("withCirrus — SvelteKit single-worker composition (PLAN4 §3, class-B
         errorSpy.mockRestore();
     });
 
-    it("accepts a factory that derives Cirrus options from the per-request env", async () => {
+    it("accepts a factory that derives Lunora options from the per-request env", async () => {
         const shard = createShardSpy();
         const svelteKit = { fetch: vi.fn(() => new Response("page")) };
         const optionsFactory = vi.fn((env: unknown) => {
             return { shardDO: (env as { SHARD: unknown }).SHARD as never };
         });
 
-        const worker = withCirrus(svelteKit, optionsFactory);
+        const worker = withLunora(svelteKit, optionsFactory);
 
         const res = await worker.fetch(rpcRequest(), { SHARD: shard.namespace }, fakeContext);
 

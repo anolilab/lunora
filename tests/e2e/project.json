@@ -1,5 +1,5 @@
 {
-    "name": "cirrus-e2e",
+    "name": "lunora-e2e",
     "tags": ["type:tests", "category:e2e"],
     "targets": {
         "e2e": {

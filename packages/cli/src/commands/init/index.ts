@@ -2,12 +2,12 @@ import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/
 
 const initCommand: Command = {
     argument: { description: "Project name", name: "name", type: String },
-    description: "Scaffold a new Cirrus project",
+    description: "Scaffold a new Lunora project",
     examples: [
-        ["cirrus init my-app", "Scaffold with the default (vite) template"],
-        ["cirrus init my-app -t tanstack-start-react", "Scaffold a TanStack Start (React) app"],
-        ["cirrus init my-app -t tanstack-start-solid", "Scaffold a TanStack Start (Solid) app"],
-        ["cirrus init --here", "Add Cirrus to the current project"],
+        ["lunora init my-app", "Scaffold with the default (vite) template"],
+        ["lunora init my-app -t tanstack-start-react", "Scaffold a TanStack Start (React) app"],
+        ["lunora init my-app -t tanstack-start-solid", "Scaffold a TanStack Start (Solid) app"],
+        ["lunora init --here", "Add Lunora to the current project"],
     ],
     group: "Project",
     loader: () =>
@@ -39,7 +39,7 @@ const initCommand: Command = {
             type: Boolean,
         },
         {
-            description: "Add Cirrus to the current project: detect the framework, patch the config, scaffold cirrus/, print per-framework wiring steps",
+            description: "Add Lunora to the current project: detect the framework, patch the config, scaffold lunora/, print per-framework wiring steps",
             name: "here",
             type: Boolean,
         },

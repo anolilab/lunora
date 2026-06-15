@@ -13,10 +13,10 @@ import { createRecordingSpawner } from "../../src/util/spawn";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "..", "..", "..", "codegen", "__tests__", "fixtures", "simple");
-const SNAPSHOT_FILE = join("cirrus", ".cirrus-schema.json");
+const SNAPSHOT_FILE = join("lunora", ".lunora-schema.json");
 
 const VALID_WRANGLER = `{
-    "name": "cirrus-app",
+    "name": "lunora-app",
     "main": "src/index.ts",
     "compatibility_date": "2026-04-07",
     "compatibility_flags": ["nodejs_compat"],
@@ -47,29 +47,29 @@ const silentLogger = (): { errors: string[]; infos: string[]; logger: Logger; wa
 
 let workdir: string;
 
-/** Overwrite `cirrus/schema.ts` so `users.name` changes from `v.string()` to `v.number()` (breaking). */
+/** Overwrite `lunora/schema.ts` so `users.name` changes from `v.string()` to `v.number()` (breaking). */
 const introduceBreakingDrift = (): void => {
-    const schemaPath = join(workdir, "cirrus", "schema.ts");
+    const schemaPath = join(workdir, "lunora", "schema.ts");
     const source = readFileSync(schemaPath, "utf8").replace("name: v.string(),", "name: v.number(),");
 
     writeFileSync(schemaPath, source, "utf8");
 };
 
-/** Append a `defineMigration` to `cirrus/schema.ts` so a NEW migration id is discovered. */
+/** Append a `defineMigration` to `lunora/schema.ts` so a NEW migration id is discovered. */
 const addMigration = (id: string): void => {
-    const migrationsPath = join(workdir, "cirrus", "migrations.ts");
+    const migrationsPath = join(workdir, "lunora", "migrations.ts");
 
     writeFileSync(
         migrationsPath,
-        `import { defineMigration } from "@cirrus/server";\n\nexport const fix = defineMigration({\n    id: "${id}",\n    table: "users",\n    up: (doc) => doc,\n});\n`,
+        `import { defineMigration } from "@lunora/server";\n\nexport const fix = defineMigration({\n    id: "${id}",\n    table: "users",\n    up: (doc) => doc,\n});\n`,
         "utf8",
     );
 };
 
 describe("schema-drift gate", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-drift-gate-"));
-        cpSync(join(fixtureRoot, "cirrus"), join(workdir, "cirrus"), { recursive: true });
+        workdir = mkdtempSync(join(tmpdir(), "lunora-drift-gate-"));
+        cpSync(join(fixtureRoot, "lunora"), join(workdir, "lunora"), { recursive: true });
         writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
     });
 
@@ -77,7 +77,7 @@ describe("schema-drift gate", () => {
         rmSync(workdir, { force: true, recursive: true });
     });
 
-    describe("cirrus deploy", () => {
+    describe("lunora deploy", () => {
         it("blesses a baseline on first deploy and deploys cleanly (no drift)", async () => {
             expect.assertions(3);
 
@@ -229,7 +229,7 @@ describe("schema-drift gate", () => {
         });
     });
 
-    describe("cirrus prepare / verify", () => {
+    describe("lunora prepare / verify", () => {
         it("prepare blocks breaking drift without a migration", async () => {
             expect.assertions(2);
 

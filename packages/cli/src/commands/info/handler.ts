@@ -1,8 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import type { SchemaIR } from "@cirrus/codegen";
-import { discoverSchema } from "@cirrus/codegen";
+import type { SchemaIR } from "@lunora/codegen";
+import { discoverSchema } from "@lunora/codegen";
 import { parse as parseJsonc } from "jsonc-parser";
 import { Project } from "ts-morph";
 
@@ -17,7 +17,7 @@ interface InfoCommandOptions {
     logger: Logger;
 }
 
-interface CirrusPackageInfo {
+interface LunoraPackageInfo {
     name: string;
     version: string;
 }
@@ -44,7 +44,7 @@ interface SchemaSummary {
 }
 
 interface InfoSnapshot {
-    cirrusPackages: ReadonlyArray<CirrusPackageInfo>;
+    lunoraPackages: ReadonlyArray<LunoraPackageInfo>;
     projectRoot: string;
     schema: SchemaSummary | undefined;
     schemaError: string | undefined;
@@ -123,7 +123,7 @@ const summariseSchema = (schema: SchemaIR): SchemaSummary => {
     };
 };
 
-const collectCirrusPackages = (projectRoot: string): ReadonlyArray<CirrusPackageInfo> => {
+const collectLunoraPackages = (projectRoot: string): ReadonlyArray<LunoraPackageInfo> => {
     const pkgPath = join(projectRoot, "package.json");
 
     if (!existsSync(pkgPath)) {
@@ -153,7 +153,7 @@ const collectCirrusPackages = (projectRoot: string): ReadonlyArray<CirrusPackage
         }
 
         for (const [name, version] of Object.entries(block as Record<string, unknown>)) {
-            if (!name.startsWith("@cirrus/")) {
+            if (!name.startsWith("@lunora/")) {
                 continue;
             }
 
@@ -171,7 +171,7 @@ const collectCirrusPackages = (projectRoot: string): ReadonlyArray<CirrusPackage
 };
 
 const collectInfo = (projectRoot: string): InfoSnapshot => {
-    const cirrusPackages = collectCirrusPackages(projectRoot);
+    const lunoraPackages = collectLunoraPackages(projectRoot);
     const wranglerPath = findWranglerFile(projectRoot);
     let wrangler: WranglerSummary | undefined;
 
@@ -183,7 +183,7 @@ const collectInfo = (projectRoot: string): InfoSnapshot => {
         }
     }
 
-    const schemaPath = join(projectRoot, "cirrus", "schema.ts");
+    const schemaPath = join(projectRoot, "lunora", "schema.ts");
     let schema: SchemaSummary | undefined;
     let schemaError: string | undefined;
 
@@ -198,7 +198,7 @@ const collectInfo = (projectRoot: string): InfoSnapshot => {
     }
 
     return {
-        cirrusPackages,
+        lunoraPackages,
         projectRoot,
         schema,
         schemaError,
@@ -211,12 +211,12 @@ const renderText = (snapshot: InfoSnapshot, logger: Logger): void => {
     logger.info(`project: ${snapshot.projectRoot}`);
 
     logger.info("");
-    logger.info("@cirrus/* packages:");
+    logger.info("@lunora/* packages:");
 
-    if (snapshot.cirrusPackages.length === 0) {
+    if (snapshot.lunoraPackages.length === 0) {
         logger.info("  (none found in package.json)");
     } else {
-        for (const pkg of snapshot.cirrusPackages) {
+        for (const pkg of snapshot.lunoraPackages) {
             logger.info(`  ${pkg.name}@${pkg.version}`);
         }
     }
@@ -247,7 +247,7 @@ const renderText = (snapshot: InfoSnapshot, logger: Logger): void => {
             logger.info(`  ${table.name}  [${table.shard}, ${String(table.indexes)} index(es)]`);
         }
     } else {
-        logger.info("schema: (no cirrus/schema.ts)");
+        logger.info("schema: (no lunora/schema.ts)");
     }
 };
 
@@ -261,7 +261,7 @@ const runInfoCommand = (options: InfoCommandOptions): InfoCommandResult => {
     const snapshot = collectInfo(cwd);
 
     if (options.json) {
-        // Write straight to stdout so `cirrus info --json | jq` works — Pail
+        // Write straight to stdout so `lunora info --json | jq` works — Pail
         // prefixes (level + timestamps) would break the parser.
         process.stdout.write(`${JSON.stringify(snapshot, undefined, 2)}\n`);
     } else {
@@ -271,7 +271,7 @@ const runInfoCommand = (options: InfoCommandOptions): InfoCommandResult => {
     return { code: 0, snapshot };
 };
 
-/** `cirrus info` handler (lazy-loaded via the command's `loader`). */
+/** `lunora info` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<InfoOptions> = defineHandler<InfoOptions>(({ cwd, logger, options }) =>
     runInfoCommand({ cwd, json: options.json === true, logger }),
 );

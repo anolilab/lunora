@@ -1,14 +1,14 @@
-import type { ArgsOf, CirrusClient, FunctionReference, MutationCallOptions, ReturnOf } from "@cirrus/client";
-import { createMutationRunner } from "@cirrus/client";
+import type { ArgsOf, LunoraClient, FunctionReference, MutationCallOptions, ReturnOf } from "@lunora/client";
+import { createMutationRunner } from "@lunora/client";
 import type { Readable } from "svelte/store";
 import { writable } from "svelte/store";
 
-import { getCirrusClient } from "./context";
+import { getLunoraClient } from "./context";
 
 /**
  * The reactive handle returned by {@link mutation} — the Svelte counterpart to
  * React's `useMutation`, re-expressed as stores you read with `$`. The surface
- * is identical across the Cirrus adapters (`@cirrus/solid`, `/vue`):
+ * is identical across the Lunora adapters (`@lunora/solid`, `/vue`):
  * `data`/`error`/`pending` are readable stores and `mutate` is an awaitable.
  */
 export interface MutationHandle<F extends FunctionReference> {
@@ -40,17 +40,17 @@ export interface MutationHandle<F extends FunctionReference> {
  * Svelte counterpart to React's `useMutation`: returns
  * `{ data, error, pending, mutate, reset }` of readable stores plus an awaitable
  * `mutate`. The ref-counted pending + error-normalize orchestration is the
- * shared `createMutationRunner` from `@cirrus/client`; only the stores are
+ * shared `createMutationRunner` from `@lunora/client`; only the stores are
  * adapter-specific.
  *
  * Pass `client` explicitly, or omit it to resolve the ambient client published
- * by `setCirrusClient`.
+ * by `setLunoraClient`.
  */
 export function mutation<F extends FunctionReference>(function_: F): MutationHandle<F>;
-export function mutation<F extends FunctionReference>(client: CirrusClient, function_: F): MutationHandle<F>;
-export function mutation<F extends FunctionReference>(clientOrFunction: CirrusClient | F, maybeFunction?: F): MutationHandle<F> {
+export function mutation<F extends FunctionReference>(client: LunoraClient, function_: F): MutationHandle<F>;
+export function mutation<F extends FunctionReference>(clientOrFunction: LunoraClient | F, maybeFunction?: F): MutationHandle<F> {
     const hasExplicitClient = maybeFunction !== undefined;
-    const client = hasExplicitClient ? (clientOrFunction as CirrusClient) : getCirrusClient();
+    const client = hasExplicitClient ? (clientOrFunction as LunoraClient) : getLunoraClient();
     const functionRef = (hasExplicitClient ? maybeFunction : clientOrFunction) as F;
 
     const data = writable<ReturnOf<F> | undefined>();

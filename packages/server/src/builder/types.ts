@@ -1,4 +1,4 @@
-import type { Infer, Validator } from "@cirrus/values";
+import type { Infer, Validator } from "@lunora/values";
 
 import type {
     ActionCtx as ActionContext,
@@ -36,7 +36,7 @@ export interface MiddlewareNext<ContextIn> {
  */
 export type Middleware<ContextIn, ContextOut> = (options: { ctx: ContextIn; next: MiddlewareNext<ContextIn> }) => ContextOut | Promise<ContextOut>;
 
-/** Options accepted by `initCirrus.dataModel&lt;DM>().create(...)`. Reserved for transformer/error-formatter wiring. */
+/** Options accepted by `initLunora.dataModel&lt;DM>().create(...)`. Reserved for transformer/error-formatter wiring. */
 export type CreateOptions = Record<never, never>;
 
 /**
@@ -49,7 +49,7 @@ export type CreateOptions = Record<never, never>;
  * `Output` doesn't distribute and so the test is for the exact sentinel.
  */
 export interface QueryBuilder<Context, Args extends ArgsValidator, Output = undefined> {
-    readonly __cirrusProcedure: "query";
+    readonly __lunoraProcedure: "query";
     input: <A extends ArgsValidator>(validators: A) => QueryBuilder<Context, A & Args, Output>;
     output: <V extends Validator>(validator: V) => QueryBuilder<Context, Args, Infer<V>>;
     query: [Output] extends [undefined]
@@ -71,7 +71,7 @@ export interface QueryBuilder<Context, Args extends ArgsValidator, Output = unde
 }
 
 export interface MutationBuilder<Context, Args extends ArgsValidator, Output = undefined> {
-    readonly __cirrusProcedure: "mutation";
+    readonly __lunoraProcedure: "mutation";
     input: <A extends ArgsValidator>(validators: A) => MutationBuilder<Context, A & Args, Output>;
     mutation: [Output] extends [undefined]
         ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Context }) => Promise<R> | R) => RegisteredMutation<Args, Awaited<R>>
@@ -81,7 +81,7 @@ export interface MutationBuilder<Context, Args extends ArgsValidator, Output = u
 }
 
 export interface ActionBuilder<Context, Args extends ArgsValidator, Output = undefined> {
-    readonly __cirrusProcedure: "action";
+    readonly __lunoraProcedure: "action";
     action: [Output] extends [undefined]
         ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Context }) => Promise<R> | R) => RegisteredAction<Args, Awaited<R>>
         : (handler: (options: { args: InferArgs<Args>; ctx: Context }) => Output | Promise<Output>) => RegisteredAction<Args, Output>;
@@ -92,13 +92,13 @@ export interface ActionBuilder<Context, Args extends ArgsValidator, Output = und
 
 /**
  * Internal builder variants. Identical to their public counterparts but carry
- * the `__cirrusVisibility: "internal"` brand codegen keys off to route the
+ * the `__lunoraVisibility: "internal"` brand codegen keys off to route the
  * registration into the `internal` object (and keep it off `api`). `input`/`use`
  * return the internal builder type so the brand survives the whole chain.
  */
 export interface InternalQueryBuilder<Context, Args extends ArgsValidator, Output = undefined> {
-    readonly __cirrusProcedure: "query";
-    readonly __cirrusVisibility: "internal";
+    readonly __lunoraProcedure: "query";
+    readonly __lunoraVisibility: "internal";
     input: <A extends ArgsValidator>(validators: A) => InternalQueryBuilder<Context, A & Args, Output>;
     output: <V extends Validator>(validator: V) => InternalQueryBuilder<Context, Args, Infer<V>>;
     query: [Output] extends [undefined]
@@ -112,8 +112,8 @@ export interface InternalQueryBuilder<Context, Args extends ArgsValidator, Outpu
 }
 
 export interface InternalMutationBuilder<Context, Args extends ArgsValidator, Output = undefined> {
-    readonly __cirrusProcedure: "mutation";
-    readonly __cirrusVisibility: "internal";
+    readonly __lunoraProcedure: "mutation";
+    readonly __lunoraVisibility: "internal";
     input: <A extends ArgsValidator>(validators: A) => InternalMutationBuilder<Context, A & Args, Output>;
     mutation: [Output] extends [undefined]
         ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Context }) => Promise<R> | R) => RegisteredMutation<Args, Awaited<R>>
@@ -123,8 +123,8 @@ export interface InternalMutationBuilder<Context, Args extends ArgsValidator, Ou
 }
 
 export interface InternalActionBuilder<Context, Args extends ArgsValidator, Output = undefined> {
-    readonly __cirrusProcedure: "action";
-    readonly __cirrusVisibility: "internal";
+    readonly __lunoraProcedure: "action";
+    readonly __lunoraVisibility: "internal";
     action: [Output] extends [undefined]
         ? <R>(handler: (options: { args: InferArgs<Args>; ctx: Context }) => Promise<R> | R) => RegisteredAction<Args, Awaited<R>>
         : (handler: (options: { args: InferArgs<Args>; ctx: Context }) => Output | Promise<Output>) => RegisteredAction<Args, Output>;
@@ -134,7 +134,7 @@ export interface InternalActionBuilder<Context, Args extends ArgsValidator, Outp
 }
 
 /** The public root builders plus their `internal*` counterparts, returned by `.create()`. */
-export interface CirrusBuilders {
+export interface LunoraBuilders {
     action: ActionBuilder<ActionContext, EmptyArgs>;
     internalAction: InternalActionBuilder<ActionContext, EmptyArgs>;
     internalMutation: InternalMutationBuilder<MutationContext, EmptyArgs>;
@@ -146,5 +146,5 @@ export interface CirrusBuilders {
 export interface DataModelInit<DataModel> {
     /** Phantom carrier for the generated `DataModel`; reserved for typed `ctx.db` (Plan2 1.2.7). */
     readonly __dataModel?: DataModel;
-    create: (options?: CreateOptions) => CirrusBuilders;
+    create: (options?: CreateOptions) => LunoraBuilders;
 }

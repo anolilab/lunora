@@ -8,7 +8,7 @@ import type { ShardNamespaceLike } from "../src/resolve-shard";
  * Records every forwarded request and echoes the function path, args, and the
  * identity headers the worker derived back as a JSON `{ result }` body. That
  * lets a test assert the in-process `serverQuery` fast-path produces a
- * BYTE-IDENTICAL response to the HTTP `/_cirrus/rpc` path (PLAN4 §5.3): if the
+ * BYTE-IDENTICAL response to the HTTP `/_lunora/rpc` path (PLAN4 §5.3): if the
  * two paths thread identity / shardKey / args identically, the echoed bodies
  * match exactly.
  */
@@ -39,9 +39,9 @@ const createEchoShardSpy = (): EchoShardSpy => {
                     const result = {
                         args: body.args ?? {},
                         functionPath: body.functionPath,
-                        identity: request.headers.get("x-cirrus-identity"),
+                        identity: request.headers.get("x-lunora-identity"),
                         shardKey,
-                        userId: request.headers.get("x-cirrus-userid"),
+                        userId: request.headers.get("x-lunora-userid"),
                     };
 
                     return Response.json({ result }, { headers: { "content-type": "application/json" }, status: 200 });
@@ -61,12 +61,12 @@ const fakeContext: ExecutionContextLike = {
     waitUntil: () => undefined,
 };
 
-/** A generated-`api`-shaped function reference (`{ __cirrusRef }`). */
-const messagesList = { __cirrusRef: "messages:list" } as const;
+/** A generated-`api`-shaped function reference (`{ __lunoraRef }`). */
+const messagesList = { __lunoraRef: "messages:list" } as const;
 
-/** Build the HTTP `/_cirrus/rpc` request the client would post. */
+/** Build the HTTP `/_lunora/rpc` request the client would post. */
 const rpcRequest = (envelope: Record<string, unknown>, headers: Record<string, string> = {}): Request =>
-    new Request("https://app.example/_cirrus/rpc", {
+    new Request("https://app.example/_lunora/rpc", {
         body: JSON.stringify(envelope),
         headers,
         method: "POST",
@@ -84,7 +84,7 @@ describe("serverQuery — in-process fast-path (PLAN4 §2.2 / §5.3)", () => {
 
         const worker = createWorker({ shardDO: shard.namespace });
 
-        // HTTP `/_cirrus/rpc` path.
+        // HTTP `/_lunora/rpc` path.
         const httpRes = await worker.fetch(rpcRequest({ args: { limit: 5 }, functionPath: "messages:list" }), {}, fakeContext);
         const httpBody = await httpRes.text();
 
@@ -136,7 +136,7 @@ describe("serverQuery — in-process fast-path (PLAN4 §2.2 / §5.3)", () => {
             },
         });
         // The forwarded cookie reached the shard on the in-process path too.
-        expect(shard.calls[1]!.request.headers.get("x-cirrus-userid")).toBe("user_42");
+        expect(shard.calls[1]!.request.headers.get("x-lunora-userid")).toBe("user_42");
     });
 
     it("threads shardKey identically on both paths", async () => {

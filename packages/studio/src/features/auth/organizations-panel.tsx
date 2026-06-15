@@ -1,4 +1,4 @@
-import { useCirrus } from "@cirrus/react";
+import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -101,7 +101,7 @@ const OrgRowTable = ({
  */
 // eslint-disable-next-line import/prefer-default-export -- studio panels are named exports, mounted by name in studio.tsx
 export const OrganizationsPanel = (): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const t = useT();
     const { capabilities, ready } = useAuthCapabilities();
 
@@ -225,7 +225,7 @@ export const OrganizationsPanel = (): ReactElement => {
     }
 
     return (
-        <div className="flex flex-col gap-4" data-testid="cirrus-organizations">
+        <div className="flex flex-col gap-4" data-testid="lunora-organizations">
             {error !== null && (
                 <p className="text-sm text-destructive" data-testid="org-error" role="alert">
                     {error}

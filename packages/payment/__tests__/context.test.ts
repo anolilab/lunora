@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import type { PaymentAdapter } from "../src/adapter";
-import type { CirrusDatabaseLike } from "../src/context";
+import type { LunoraDatabaseLike } from "../src/context";
 import { paymentsFromContext } from "../src/context";
 import type { Subscription } from "../src/types";
 
-const makeDb = (): CirrusDatabaseLike => {
+const makeDb = (): LunoraDatabaseLike => {
     const rows = new Map<string, Record<string, unknown>>();
     let sequence = 0;
     const matches = (row: Record<string, unknown>, where?: Record<string, unknown>): boolean =>

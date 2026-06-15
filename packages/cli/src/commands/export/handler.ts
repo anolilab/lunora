@@ -4,7 +4,7 @@ import { runExportCommand } from "../data-transfer";
 import type { ExportOptions } from "./index";
 
 /**
- * `cirrus export` handler. The positional path (alias for `--out`) takes
+ * `lunora export` handler. The positional path (alias for `--out`) takes
  * precedence over the flag. Streams via {@link runExportCommand}.
  */
 const execute: CommandHandler<ExportOptions> = defineHandler<ExportOptions>(({ argument, cwd, logger, options }) =>

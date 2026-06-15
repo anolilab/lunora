@@ -1,15 +1,15 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
 /**
- * `cirrus run &lt;functionPath>` — send a single RPC to a running Cirrus worker.
+ * `lunora run &lt;functionPath>` — send a single RPC to a running Lunora worker.
  * Metadata only; the handler (lazy-loaded via `loader`) holds the logic.
  */
 const runCommand: Command = {
     argument: { description: "Function path (e.g. messages:send)", name: "functionPath", type: String },
-    description: "Send a single RPC to a running Cirrus Worker",
+    description: "Send a single RPC to a running Lunora Worker",
     examples: [
-        ['cirrus run messages:send --args \'{"text":"hi"}\'', "Call a function with JSON args"],
-        ["cirrus run messages:list --shard channel:demo", "Target a specific shard"],
+        ['lunora run messages:send --args \'{"text":"hi"}\'', "Call a function with JSON args"],
+        ["lunora run messages:list --shard channel:demo", "Target a specific shard"],
     ],
     group: "Develop",
     loader: () =>

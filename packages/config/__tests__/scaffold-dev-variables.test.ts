@@ -34,7 +34,7 @@ AUTH_SECRET="replace-with-openssl-rand-hex-32"
 AUTH_URL="http://localhost:5173"
 
 STORAGE_SECRET="replace-with-openssl-rand-hex-32"
-CIRRUS_ADMIN_TOKEN="replace-with-openssl-rand-hex-32"
+LUNORA_ADMIN_TOKEN="replace-with-openssl-rand-hex-32"
 `;
 
 describe("isPlaceholderValue", () => {
@@ -97,7 +97,7 @@ describe("planDevVariablesScaffold", () => {
 
         const plan = generatePlan(planDevVariablesScaffold({ devVarsExists: false, exampleContent: EXAMPLE, randomHex: fixedHex }));
 
-        expect(plan.generatedKeys).toStrictEqual(["AUTH_SECRET", "STORAGE_SECRET", "CIRRUS_ADMIN_TOKEN"]);
+        expect(plan.generatedKeys).toStrictEqual(["AUTH_SECRET", "STORAGE_SECRET", "LUNORA_ADMIN_TOKEN"]);
         // Secret keys get a fresh 64-char hex value.
         expect(plan.content).toContain(`AUTH_SECRET="${"a".repeat(64)}"`);
         // Non-secret values and comments are preserved verbatim.
@@ -188,7 +188,7 @@ describe("ensureDevVariables", () => {
     let dir: string;
 
     beforeEach(() => {
-        dir = mkdtempSync(join(tmpdir(), "cirrus-devvars-"));
+        dir = mkdtempSync(join(tmpdir(), "lunora-devvars-"));
     });
 
     afterEach(() => {
@@ -201,7 +201,7 @@ describe("ensureDevVariables", () => {
         // A complete file — all four example keys present.
         writeFileSync(
             join(dir, ".dev.vars"),
-            'AUTH_SECRET="kept"\nAUTH_URL="http://localhost:5173"\nSTORAGE_SECRET="kept"\nCIRRUS_ADMIN_TOKEN="kept"\n',
+            'AUTH_SECRET="kept"\nAUTH_URL="http://localhost:5173"\nSTORAGE_SECRET="kept"\nLUNORA_ADMIN_TOKEN="kept"\n',
             "utf8",
         );
         writeFileSync(join(dir, ".dev.vars.example"), EXAMPLE, "utf8");
@@ -216,7 +216,7 @@ describe("ensureDevVariables", () => {
     it("appends keys the example lists but .dev.vars is missing", async () => {
         expect.assertions(4);
 
-        // Only AUTH_SECRET present locally; the example also wants AUTH_URL, STORAGE_SECRET, CIRRUS_ADMIN_TOKEN.
+        // Only AUTH_SECRET present locally; the example also wants AUTH_URL, STORAGE_SECRET, LUNORA_ADMIN_TOKEN.
         writeFileSync(join(dir, ".dev.vars"), 'AUTH_SECRET="my-real-secret"\n', "utf8");
         writeFileSync(join(dir, ".dev.vars.example"), EXAMPLE, "utf8");
 
@@ -224,7 +224,7 @@ describe("ensureDevVariables", () => {
         const written = readFileSync(join(dir, ".dev.vars"), "utf8");
 
         expect(result.status).toBe("augmented");
-        expect(result.addedKeys).toStrictEqual(["AUTH_URL", "STORAGE_SECRET", "CIRRUS_ADMIN_TOKEN"]);
+        expect(result.addedKeys).toStrictEqual(["AUTH_URL", "STORAGE_SECRET", "LUNORA_ADMIN_TOKEN"]);
         // Existing value is preserved; missing secret keys are appended with fresh hex.
         expect(written).toContain('AUTH_SECRET="my-real-secret"');
         expect(written).toContain(`STORAGE_SECRET="${"a".repeat(64)}"`);
@@ -260,7 +260,7 @@ describe("ensureDevVariables", () => {
         const result = await ensureDevVariables({ confirm: async () => true, cwd: dir, info: () => undefined, randomHex: fixedHex });
 
         expect(result.status).toBe("generated");
-        expect(result.generatedKeys).toStrictEqual(["AUTH_SECRET", "STORAGE_SECRET", "CIRRUS_ADMIN_TOKEN"]);
+        expect(result.generatedKeys).toStrictEqual(["AUTH_SECRET", "STORAGE_SECRET", "LUNORA_ADMIN_TOKEN"]);
         expect(readFileSync(join(dir, ".dev.vars"), "utf8")).toContain(`AUTH_SECRET="${"a".repeat(64)}"`);
     });
 

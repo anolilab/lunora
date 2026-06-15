@@ -1,4 +1,4 @@
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraProvider } from "@lunora/react";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
@@ -59,9 +59,9 @@ const createMatrixClient = (rls: RlsPoliciesResult = RLS): MockClientHooks =>
     });
 
 const renderMatrix = (mock: MockClientHooks, onProbe?: (table: string, operation: RlsOperation, procedure: string) => void): ReactElement => (
-    <CirrusProvider client={mock.asClient}>
+    <LunoraProvider client={mock.asClient}>
         <PermissionsMatrix onProbe={onProbe} />
-    </CirrusProvider>
+    </LunoraProvider>
 );
 
 describe("permissionsMatrix", () => {

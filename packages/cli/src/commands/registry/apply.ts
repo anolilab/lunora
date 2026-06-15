@@ -5,7 +5,7 @@
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
-import { DEV_VARS_FILE, parseDevVariableEntries, promptYesNo } from "@cirrus/config";
+import { DEV_VARS_FILE, parseDevVariableEntries, promptYesNo } from "@lunora/config";
 import { join } from "@visulima/path";
 import { applyEdits, modify, parse } from "jsonc-parser";
 

@@ -1,11 +1,11 @@
-import type { DatabaseWriterLike, SchemaLike, ValidatorLike } from "@cirrus/do";
+import type { DatabaseWriterLike, SchemaLike, ValidatorLike } from "@lunora/do";
 import { bench, describe } from "vitest";
 
 import createD1Exec from "../__tests__/_helpers/node-sqlite-d1";
 import { createD1CtxDb as createD1ContextDatabase } from "../src/d1-ctx-db";
 
 /**
- * D1 column-dialect twin of `@cirrus/do/keyset-vs-offset`. The win is
+ * D1 column-dialect twin of `@lunora/do/keyset-vs-offset`. The win is
  * algorithmic (cursor seek is O(limit), offset-style is O(offset)) and
  * dialect-independent; we bench against D1 too so global tables get the
  * same regression signal as shard-local ones.

@@ -25,7 +25,7 @@ const fakeNestedFail = {
     },
 };
 
-// Async fixture — Standard Schema allows async validate; Cirrus does not.
+// Async fixture — Standard Schema allows async validate; Lunora does not.
 const fakeAsync = {
     "~standard": {
         validate: async (_value: unknown) => {
@@ -56,8 +56,8 @@ const fakeThenable = {
     },
 };
 
-// A real Cirrus validator also satisfies Standard Schema v1 (it exposes ~standard).
-const cirrusValidator = v.number();
+// A real Lunora validator also satisfies Standard Schema v1 (it exposes ~standard).
+const lunoraValidator = v.number();
 
 describe("v.from()", () => {
     it("(1) success passes the transformed value", () => {
@@ -84,7 +84,7 @@ describe("v.from()", () => {
     it("(3) non-Standard-Schema input throws at construction time", () => {
         expect.assertions(1);
 
-        expect(() => v.from({ not: "a standard schema" } as any)).toThrow("@cirrus/values: v.from() expects a Standard Schema v1 object");
+        expect(() => v.from({ not: "a standard schema" } as any)).toThrow("@lunora/values: v.from() expects a Standard Schema v1 object");
     });
 
     it("(4) async validate throws synchronously with a clear error", () => {
@@ -106,10 +106,10 @@ describe("v.from()", () => {
         expect(() => schema.parse("anything")).toThrow(/async Standard Schema/u);
     });
 
-    it("(5) a Cirrus validator passed through v.from parses unharmed", () => {
+    it("(5) a Lunora validator passed through v.from parses unharmed", () => {
         expect.assertions(3);
 
-        const schema = v.from(cirrusValidator);
+        const schema = v.from(lunoraValidator);
 
         expect(schema.parse(42)).toBe(42);
         expect(schema.parse(0)).toBe(0);

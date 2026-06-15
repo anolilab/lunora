@@ -6,7 +6,7 @@ import type { Lint } from "../../types";
  * other procedure's `rls(policies)` list, but whose own builder chain does NOT
  * include `.use(rls(...))`.
  *
- * Cirrus RLS is **opt-in per procedure**: a policy list only takes effect
+ * Lunora RLS is **opt-in per procedure**: a policy list only takes effect
  * inside procedures whose builder chain includes `.use(rls(policies))`. A
  * procedure without it sees the raw, unwrapped `ctx.db` and silently bypasses
  * every policy in the list — even when another procedure in the same app

@@ -195,7 +195,7 @@ describe("ctx-db rank", () => {
 
             await expect(writer.rank("messages", "byChannel", { restrictsCounts: true, row: "m1" })).rejects.toMatchObject({
                 code: "COUNT_RLS_UNSUPPORTED",
-                name: "CirrusError",
+                name: "LunoraError",
             });
         });
 
@@ -433,7 +433,7 @@ describe("ctx-db rank", () => {
 
             await expect(
                 writer.rankBefore!("messages", "leaderboard", { partitionKey: "", restrictsCounts: true, rowId: "x1", sortValues: [5] }),
-            ).rejects.toMatchObject({ code: "COUNT_RLS_UNSUPPORTED", name: "CirrusError" });
+            ).rejects.toMatchObject({ code: "COUNT_RLS_UNSUPPORTED", name: "LunoraError" });
         });
 
         it("rankBefore throws on an unknown rankIndex name", async () => {
@@ -467,7 +467,7 @@ describe("ctx-db rank", () => {
 
             await writer.insert("events", { _id: "e1", score: 10, userId: "u1" }, { allowExplicitId: true });
 
-            await expect(writer.rank("events", "byScore", { row: "e1" })).rejects.toMatchObject({ code: "CROSS_SHARD_RANK_UNSUPPORTED", name: "CirrusError" });
+            await expect(writer.rank("events", "byScore", { row: "e1" })).rejects.toMatchObject({ code: "CROSS_SHARD_RANK_UNSUPPORTED", name: "LunoraError" });
         });
 
         it("rankPage() refuses when the partition spans shards", async () => {
@@ -475,7 +475,7 @@ describe("ctx-db rank", () => {
 
             const writer = setupWriter(makeShardedSchema([]));
 
-            await expect(writer.rankPage("events", "byScore")).rejects.toMatchObject({ code: "CROSS_SHARD_RANK_UNSUPPORTED", name: "CirrusError" });
+            await expect(writer.rankPage("events", "byScore")).rejects.toMatchObject({ code: "CROSS_SHARD_RANK_UNSUPPORTED", name: "LunoraError" });
         });
 
         it("allows rank() when partitionBy includes the shard key (partition stays on one shard)", async () => {

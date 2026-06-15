@@ -1,10 +1,10 @@
 "use client";
 
-import type { ArgsOf, FunctionReference, ReturnOf } from "@cirrus/client";
-import { createQuerySubscription } from "@cirrus/client/query";
+import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
+import { createQuerySubscription } from "@lunora/client/query";
 import { useEffect, useRef, useState } from "react";
 
-import { useCirrus } from "./cirrus-provider";
+import { useLunora } from "./lunora-provider";
 import { stableStringify } from "./query-key";
 import type { UseQueryOptions, UseSubscriptionResult } from "./types";
 
@@ -18,13 +18,13 @@ const useSubscription = <F extends FunctionReference>(
     args: ArgsOf<F> | "skip",
     options: UseQueryOptions = {},
 ): UseSubscriptionResult<ReturnOf<F>> => {
-    const client = useCirrus();
+    const client = useLunora();
     const [state, setState] = useState<UseSubscriptionResult<ReturnOf<F>>>({ data: undefined, error: undefined });
 
     const skipped = args === "skip";
     const serialized = skipped ? "skip" : stableStringify(args);
 
-    // Latest subscribe inputs. The dependency array keys off `fn.__cirrusRef`
+    // Latest subscribe inputs. The dependency array keys off `fn.__lunoraRef`
     // and the serialized args, which already capture every meaningful change;
     // reading `fn`/`args` from a ref keeps the dependency array honest without
     // re-subscribing whenever the consumer recreates them with the same value.
@@ -50,7 +50,7 @@ const useSubscription = <F extends FunctionReference>(
         const { args: currentArgs, fn: currentFunction } = subscribeRef.current;
 
         // The subscribe → snapshot → error → cleanup lifecycle lives in the shared
-        // `@cirrus/client/query` state machine; this hook only binds it to React
+        // `@lunora/client/query` state machine; this hook only binds it to React
         // state. The error sink maps the client's `SubscriptionError` back to an
         // `Error` (the public `UseSubscriptionResult` shape) and is deferred out
         // of the synchronous effect body so it isn't a state adjustment made
@@ -84,7 +84,7 @@ const useSubscription = <F extends FunctionReference>(
             cancelled = true;
             unsubscribe();
         };
-    }, [client, function_.__cirrusRef, serialized, options.shardKey, skipped]);
+    }, [client, function_.__lunoraRef, serialized, options.shardKey, skipped]);
 
     return state;
 };

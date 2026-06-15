@@ -5,7 +5,7 @@ import type { Preloaded } from "../../src/types";
 
 const makePreloaded = (): Preloaded<{ items: string[] }> => {
     return {
-        __cirrusPreloaded: true,
+        __lunoraPreloaded: true,
         args: { roomId: "room_1", limit: 20 },
         functionPath: "messages:list",
         shardKey: "room_1",
@@ -35,7 +35,7 @@ describe("serializePreloaded", () => {
 
     it("escapes `<` so the payload is safe to inline in a <script> tag", () => {
         const preloaded: Preloaded<string> = {
-            __cirrusPreloaded: true,
+            __lunoraPreloaded: true,
             args: {},
             functionPath: "f:g",
             value: "</script><script>alert(1)</script>",

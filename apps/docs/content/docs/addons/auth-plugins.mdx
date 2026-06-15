@@ -1,10 +1,10 @@
 ---
-title: "@cirrus/auth plugins"
-description: Org, admin, and other better-auth plugins surfaced as first-class Cirrus middleware.
+title: "@lunora/auth plugins"
+description: Org, admin, and other better-auth plugins surfaced as first-class Lunora middleware.
 ---
 
-`@cirrus/auth` is a thin wrapper around [better-auth](https://better-auth.com).
-The Cirrus-specific surface is small on purpose:
+`@lunora/auth` is a thin wrapper around [better-auth](https://better-auth.com).
+The Lunora-specific surface is small on purpose:
 
 - `createAuth(options)` — `betterAuth(options)` with a clearer error when
   `secret` is missing.
@@ -15,12 +15,12 @@ The Cirrus-specific surface is small on purpose:
   onto `ctx.authApi`.
 
 The actual plugin behaviour (organizations, admin, OAuth, MFA, …) is
-better-auth's. Cirrus just re-exports the factories under
-`@cirrus/auth/plugins` so you don't have to know the deep import paths.
+better-auth's. Lunora just re-exports the factories under
+`@lunora/auth/plugins` so you don't have to know the deep import paths.
 
 ## Supported plugins
 
-Re-exported from `@cirrus/auth/plugins`:
+Re-exported from `@lunora/auth/plugins`:
 
 ```ts
 import {
@@ -48,7 +48,7 @@ import {
     twoFactor,
     username,
     withMcpAuth,
-} from "@cirrus/auth/plugins";
+} from "@lunora/auth/plugins";
 ```
 
 A few of these are worth calling out:
@@ -65,11 +65,11 @@ A few of these are worth calling out:
   k-anonymity check.
 - `oneTimeToken` — issue / verify single-use tokens.
 - `mcp` + `withMcpAuth` — OAuth-protected Model Context Protocol server auth;
-  pairs with the [`@cirrus/mcp`](/docs/addons/mcp) package.
+  pairs with the [`@lunora/mcp`](/docs/addons/mcp) package.
 
 > `captcha`, `mcp`, and `withMcpAuth` have no dedicated
 > `better-auth/plugins/<name>` subpath — they ship only via the
-> `better-auth/plugins` barrel, and `@cirrus/auth/plugins` re-exports them
+> `better-auth/plugins` barrel, and `@lunora/auth/plugins` re-exports them
 > from there.
 
 Anything else better-auth ships (or anything from the community, e.g.
@@ -79,9 +79,9 @@ unchanged.
 ## Add org + admin
 
 ```ts
-// cirrus/auth.ts
-import { createAuth } from "@cirrus/auth";
-import { admin, organization } from "@cirrus/auth/plugins";
+// lunora/auth.ts
+import { createAuth } from "@lunora/auth";
+import { admin, organization } from "@lunora/auth/plugins";
 
 export const buildAuth = (env: { AUTH_SECRET: string; DB: unknown }) =>
     createAuth({
@@ -98,7 +98,7 @@ That's the whole change — the new tables (`organization`, `member`,
 boots.
 
 To define **custom roles + permissions** beyond the built-in `user` / `admin`,
-use `createAccessControl` (re-exported from `@cirrus/auth/plugins`) and pass the
+use `createAccessControl` (re-exported from `@lunora/auth/plugins`) and pass the
 resulting roles into `admin({ ac, roles })` / `organization({ ac, roles })` —
 it's better-auth's standard access-control builder, unchanged.
 
@@ -116,9 +116,9 @@ better-auth 1.6.18). It reads the token from the `x-captcha-response` request
 header:
 
 ```ts
-// cirrus/auth.ts
-import { createAuth } from "@cirrus/auth";
-import { captcha } from "@cirrus/auth/plugins";
+// lunora/auth.ts
+import { createAuth } from "@lunora/auth";
+import { captcha } from "@lunora/auth/plugins";
 
 export const buildAuth = (env: { AUTH_SECRET: string; DB: unknown; TURNSTILE_SECRET_KEY: string }) =>
     createAuth({
@@ -136,25 +136,25 @@ has no Cloudflare binding.
 ### Standalone helpers — for non-auth procedures
 
 For **non-auth** procedures and mutations (where there's no better-auth
-pipeline to hook), `@cirrus/auth` ships standalone Turnstile helpers from the
+pipeline to hook), `@lunora/auth` ships standalone Turnstile helpers from the
 package root:
 
 - `verifyTurnstile({ secret, token, remoteip?, fetch? })` — a pure server-side
   `siteverify` helper, usable from any mutation/action. A `success: false`
   (bot / invalid / expired) verdict is **returned**, not thrown; it only throws
-  a structural `CirrusError` on transport failure (network error / non-2xx).
-- `verifyTurnstileMiddleware({ secret, token, ... })` — Cirrus procedure
+  a structural `LunoraError` on transport failure (network error / non-2xx).
+- `verifyTurnstileMiddleware({ secret, token, ... })` — Lunora procedure
   middleware (`.use()`) that gates any procedure on a Turnstile check. It reads
   the token from `ctx` via the `token` selector (the token travels in the
   function `args`, since the procedure context carries no raw `Headers`). Fails
   **closed** by default; pass `failOpen: true` to admit on a siteverify outage.
 
 ```ts
-// cirrus/contactForm.ts — gate a plain mutation, no auth involved
-import { mutation } from "@cirrus/server";
-import { verifyTurnstileMiddleware } from "@cirrus/auth";
+// lunora/contactForm.ts — gate a plain mutation, no auth involved
+import { mutation } from "@lunora/server";
+import { verifyTurnstileMiddleware } from "@lunora/auth";
 
-import { v } from "@cirrus/values";
+import { v } from "@lunora/values";
 
 export const submit = mutation
     .input({ message: v.string(), turnstileToken: v.string() })
@@ -186,11 +186,11 @@ built from your auth instance.
 
 ```ts
 // src/server/index.ts
-import { createAuthAdmin } from "@cirrus/auth";
+import { createAuthAdmin } from "@lunora/auth";
 
 createWorker({
     shardDO: env.SHARD,
-    adminToken: env.CIRRUS_ADMIN_TOKEN, // the dashboard's authorization gate
+    adminToken: env.LUNORA_ADMIN_TOKEN, // the dashboard's authorization gate
     authAdmin: createAuthAdmin(auth), // backed by better-auth's adapter
 });
 ```
@@ -199,7 +199,7 @@ createWorker({
 
 There is **no studio-side switch** — the plugins you enable in `createAuth(...)`
 are the switch. `createAuthAdmin` reads the enabled plugin set from
-`auth.$context`, the worker exposes a `GET /_cirrus/admin/auth/capabilities`
+`auth.$context`, the worker exposes a `GET /_lunora/admin/auth/capabilities`
 endpoint, and the studio renders only the surfaces that apply:
 
 | Enable in `createAuth(...)`       | Dashboard surface that appears                                           |
@@ -226,7 +226,7 @@ authAdmin: createAuthAdmin(auth, { features: { organization: false } }),
 
 ### Safe by construction
 
-Every `/_cirrus/admin/auth/*` endpoint is gated by `CIRRUS_ADMIN_TOKEN`, and
+Every `/_lunora/admin/auth/*` endpoint is gated by `LUNORA_ADMIN_TOKEN`, and
 `createAuthAdmin` is a trusted server-side operator — it talks to better-auth's
 adapter directly, so it is **not** an end-user API. Password hashes, session
 tokens, and OAuth access/refresh tokens are stripped from every response; the
@@ -237,12 +237,12 @@ only token ever returned is the one from an explicit **Impersonate**.
 
 ## The `withAuthPlugins` middleware
 
-`@cirrus/auth/middleware` exports a Cirrus-style middleware factory that
+`@lunora/auth/middleware` exports a Lunora-style middleware factory that
 surfaces every plugin endpoint on `ctx.authApi`:
 
 ```ts
-import { httpAction } from "@cirrus/server";
-import { withAuthPlugins } from "@cirrus/auth/middleware";
+import { httpAction } from "@lunora/server";
+import { withAuthPlugins } from "@lunora/auth/middleware";
 
 import { auth } from "./auth.js";
 
@@ -265,7 +265,7 @@ export const createOrg = httpAction(async (ctx, request) => {
 
 ### Why callers still pass `headers`
 
-Cirrus's procedure context carries the resolved identity (`ctx.auth.userId`,
+Lunora's procedure context carries the resolved identity (`ctx.auth.userId`,
 `ctx.auth.getIdentity()`) but not the raw inbound `Headers`. Better-auth
 endpoints need the headers to read the caller's session cookie, so the
 middleware does **not** pre-bind them — pass them through from the transport
@@ -283,9 +283,9 @@ configured database — fine for dev and small deployments:
 
 ```ts
 // src/server/index.ts
-import { ensureMigrated, handleAuthRequest } from "@cirrus/auth";
+import { ensureMigrated, handleAuthRequest } from "@lunora/auth";
 
-import { buildAuth } from "../../cirrus/auth.js";
+import { buildAuth } from "../../lunora/auth.js";
 
 export default {
     async fetch(request, env, ctx) {
@@ -305,7 +305,7 @@ For production, prefer pre-applying the schema at deploy time:
 
 ```bash
 node -e "
-import('@cirrus/auth').then(async ({ compileMigrationsSql }) => {
+import('@lunora/auth').then(async ({ compileMigrationsSql }) => {
     const sql = await compileMigrationsSql({
         database: undefined, // schema-only, no live DB
         secret: 'placeholder',
@@ -323,7 +323,7 @@ The migration runner discovers every loaded plugin's tables, so adding
 
 ## Full demo
 
-The [`examples/auth-playground`](https://github.com/anolilab/cirrus/tree/alpha/examples/auth-playground)
+The [`examples/auth-playground`](https://github.com/anolilab/lunora/tree/alpha/examples/auth-playground)
 app shows the whole flow end-to-end: sign-up, create org, invite member,
 admin-only ban panel.
 

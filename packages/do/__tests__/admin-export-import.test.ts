@@ -348,7 +348,7 @@ describe("shardDO admin export/import dispatch", () => {
     it("dispatches exportShard and returns rows", async () => {
         expect.assertions(3);
 
-        const shard = new ExportShardImpl(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new ExportShardImpl(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.exportShard, {}));
 
@@ -363,7 +363,7 @@ describe("shardDO admin export/import dispatch", () => {
     it("dispatches importShard and inserts rows", async () => {
         expect.assertions(3);
 
-        const shard = new ExportShardImpl(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new ExportShardImpl(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(
             adminRequest(ADMIN_FUNCTIONS.importShard, {

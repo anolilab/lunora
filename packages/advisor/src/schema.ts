@@ -1,8 +1,8 @@
-import type { Schema } from "@cirrus/server";
+import type { Schema } from "@lunora/server";
 
 /**
  * Normalized, feeder-agnostic view of a schema that lints run against. Both the
- * runtime `@cirrus/server` {@link Schema} (record-shaped) and `@cirrus/codegen`'s
+ * runtime `@lunora/server` {@link Schema} (record-shaped) and `@lunora/codegen`'s
  * `SchemaIR` (array-shaped, AST-derived) collapse to this same shape, so a lint
  * is written once and runs in either place. It carries only what the lints
  * read — tables, their columns, indexes, and relations.
@@ -28,7 +28,7 @@ export interface AdvisorTable {
 }
 
 /**
- * One declared index, flattened across Cirrus's index kinds so a single lint can
+ * One declared index, flattened across Lunora's index kinds so a single lint can
  * reason about every column an index touches. `kind` distinguishes the DSL that
  * declared it — only `index` (a btree secondary index) covers a foreign-key
  * equality lookup, so the FK lint filters on it. `fields` is every column the
@@ -58,12 +58,12 @@ export interface AdvisorRelation {
 }
 
 /**
- * Adapt the runtime `@cirrus/server` {@link Schema} into an {@link AdvisorSchema}.
+ * Adapt the runtime `@lunora/server` {@link Schema} into an {@link AdvisorSchema}.
  * Runtime callers (the studio backend, a live shard) hold the real schema
  * object; this collapses its record-keyed `tables`/`relationMap` into the array
  * form lints consume and flattens the per-kind index arrays into one list. The
  * codegen feeder builds the same shape from its AST IR independently (it never
- * imports `@cirrus/server`).
+ * imports `@lunora/server`).
  */
 export const fromServerSchema = (schema: Schema): AdvisorSchema => {
     return {

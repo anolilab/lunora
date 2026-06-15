@@ -1,7 +1,7 @@
-import { expect, test } from "../fixtures/cirrus.js";
+import { expect, test } from "../fixtures/lunora.js";
 
 /**
- * Auth flow E2E — exercises `@cirrus/auth`'s better-auth integration end to
+ * Auth flow E2E — exercises `@lunora/auth`'s better-auth integration end to
  * end. Signup runs the better-auth schema migrations against D1 (Miniflare),
  * signin verifies the scrypt hash, and the issued session cookie is read
  * back by `authClient.useSession()` on the next render.
@@ -11,7 +11,7 @@ import { expect, test } from "../fixtures/cirrus.js";
  *   - wrong password → 401 with INVALID_EMAIL_OR_PASSWORD code
  *   - weak password (< 8 chars) → 400 PASSWORD_TOO_SHORT
  */
-const WORKER_URL = process.env.CIRRUS_E2E_WORKER_URL ?? "http://localhost:5173";
+const WORKER_URL = process.env.LUNORA_E2E_WORKER_URL ?? "http://localhost:5173";
 
 test.beforeEach(async ({ resetServer }) => {
     await resetServer();
@@ -23,7 +23,7 @@ test("user can sign up and sees an authenticated session", async ({ page }) => {
     // The unauthenticated app renders the Login form (Login.tsx).
     await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
 
-    const email = `signup-${Date.now()}@cirrus.test`;
+    const email = `signup-${Date.now()}@lunora.test`;
     const password = "test-password-1234"; // gitleaks:allow
 
     // Sign up via better-auth's REST endpoint directly so we still validate
@@ -50,7 +50,7 @@ test("user can sign up and sees an authenticated session", async ({ page }) => {
 });
 
 test("sign in with wrong password returns a helpful error", async ({ page }) => {
-    const email = `wrongpw-${Date.now()}@cirrus.test`;
+    const email = `wrongpw-${Date.now()}@lunora.test`;
     const password = "test-password-1234"; // gitleaks:allow
 
     // Pre-create the user via API so we can attempt a failed login.
@@ -90,7 +90,7 @@ test("sign out clears the session cookie", async ({ signedInPage }) => {
 
 test("sign up with weak password (< 8 chars) returns 400 PASSWORD_TOO_SHORT", async ({ page }) => {
     const response = await page.request.post(`${WORKER_URL}/api/auth/sign-up/email`, {
-        data: { email: `weak-${Date.now()}@cirrus.test`, name: "weak", password: "abc" },
+        data: { email: `weak-${Date.now()}@lunora.test`, name: "weak", password: "abc" },
         headers: { Origin: WORKER_URL },
     });
 

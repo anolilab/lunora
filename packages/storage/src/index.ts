@@ -6,7 +6,7 @@ export { buildPresignedUrl } from "./presigned-url";
 export type { VerifyResult } from "./signed-url";
 export { buildSignedUrl, verifySignedUrl } from "./signed-url";
 export type {
-    CirrusStorageOptions,
+    LunoraStorageOptions,
     ListOptions,
     ObjectMetadata,
     PresignedUrlOptions,

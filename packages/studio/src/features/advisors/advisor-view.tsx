@@ -44,7 +44,7 @@ const ADVISORY_LEVEL: Record<"ERROR" | "INFO" | "WARN", AdvisorLevel> = { ERROR:
 /**
  * The minimal finding shape both the static schema advisories (`AdvisoryFinding`
  * from the `getAdvisories` RPC) and the runtime advisor lints (`Finding` from
- * `@cirrus/advisor`) structurally satisfy — so a single mapper serves both render
+ * `@lunora/advisor`) structurally satisfy — so a single mapper serves both render
  * paths instead of two copy-pasted ones that can drift.
  */
 interface AdvisoryLike {

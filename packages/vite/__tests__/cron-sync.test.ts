@@ -19,7 +19,7 @@ const writeWrangler = (root: string, content: string): string => {
 
 describe("reconcileWranglerCrons", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-cron-sync-"));
+        workdir = mkdtempSync(join(tmpdir(), "lunora-cron-sync-"));
     });
 
     afterEach(() => {

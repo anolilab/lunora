@@ -103,7 +103,7 @@ describe("handleAuthRequest", () => {
     it("returns undefined for the runtime's RPC path", async () => {
         expect.assertions(1);
 
-        const response = await handleAuthRequest(auth, new Request("https://app.test/_cirrus/rpc"));
+        const response = await handleAuthRequest(auth, new Request("https://app.test/_lunora/rpc"));
 
         expect(response).toBeUndefined();
     });

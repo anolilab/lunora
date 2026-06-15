@@ -31,7 +31,7 @@ interface WidgetDraft {
     readonly title: string;
 }
 
-const STORAGE_KEY = "cirrus-studio-dashboards";
+const STORAGE_KEY = "lunora-studio-dashboards";
 const EMPTY_DRAFT: WidgetDraft = { shardKey: "", sql: "", title: "" };
 
 interface WidgetCardProps {
@@ -276,7 +276,7 @@ const DashboardsPanel = ({ initialShardKey }: DashboardsPanelProps): ReactElemen
     }, [closeForm, draft, editingId, setWidgets]);
 
     return (
-        <div className="flex flex-col gap-4" data-testid="cirrus-dashboards">
+        <div className="flex flex-col gap-4" data-testid="lunora-dashboards">
             <div className="flex items-center justify-between">
                 <p className="text-sm text-muted-foreground">{t("Chart widgets backed by saved read-only SQL queries.")}</p>
                 {!formOpen && (

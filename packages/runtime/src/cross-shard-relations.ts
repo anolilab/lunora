@@ -2,27 +2,27 @@
  * Cross-shard relation capabilities for reverse cross-backend relations.
  *
  * A `.global()` (D1) parent loading a shard-local child relation can't read the
- * child from D1 — the child's rows live across every shard DO. `@cirrus/d1`'s
+ * child from D1 — the child's rows live across every shard DO. `@lunora/d1`'s
  * ctx-db therefore accepts injected `crossShardReader` / `crossShardCounter`
  * capabilities and routes the child read/count to them. This module builds those
  * two capabilities so they fan the read out across all shards through the Query
  * Coordinator's RLS-respecting path:
  *
- * POST a `fanOut` envelope to the worker's `/_cirrus/rpc` endpoint (the same
+ * POST a `fanOut` envelope to the worker's `/_lunora/rpc` endpoint (the same
  * endpoint the client SDK uses). The worker resolves identity, runs the
- * `authorizeFanOut` gate, and dispatches `__cirrus_relation__:read` / `:count`
+ * `authorizeFanOut` gate, and dispatches `__lunora_relation__:read` / `:count`
  * to every live shard for the table — forwarding the caller identity so each
  * shard reads under it (never the admin token). Each shard serves the reserved
  * RPC from its schema-aware ctx-db and returns a BARE value: the child-row array
  * for `:read`, a count for `:count`. The coordinator merges them with `concat`
  * (rows) / `sum` (counts).
  *
- * The reserved `__cirrus_relation__:*` reader reads the child through the raw
+ * The reserved `__lunora_relation__:*` reader reads the child through the raw
  * ctx-db (no read policy applied — matching same-backend relation reads, which
  * also bypass RLS), so the rows it returns are identity-independent. The
- * `x-cirrus-userid` / `x-cirrus-identity` headers are still forwarded from the
+ * `x-lunora-userid` / `x-lunora-identity` headers are still forwarded from the
  * per-request context the generated `createShardDO` threads into the `d1`
- * factory, but the public `/_cirrus/rpc` re-resolves identity from credentials
+ * factory, but the public `/_lunora/rpc` re-resolves identity from credentials
  * and ignores them — so they have no effect today (see the per-shard reader).
  *
  * RE-ENTRANCY: the originating global query executes INSIDE a ShardDO; the
@@ -33,17 +33,17 @@
  * naturally separates the global-query host from the child shards.
  */
 
-// Type-only: keeps `@cirrus/runtime` free of a hard (value) dependency on
-// `@cirrus/do` while reusing its canonical writer types (see the alias note).
-import type { DatabaseWriterLike } from "@cirrus/do";
+// Type-only: keeps `@lunora/runtime` free of a hard (value) dependency on
+// `@lunora/do` while reusing its canonical writer types (see the alias note).
+import type { DatabaseWriterLike } from "@lunora/do";
 
 /**
  * Reader / counter capabilities, typed against the SAME canonical
- * `DatabaseWriterLike` the `@cirrus/d1` ctx-db derives its `crossShardReader` /
+ * `DatabaseWriterLike` the `@lunora/d1` ctx-db derives its `crossShardReader` /
  * `crossShardCounter` options from (`DatabaseWriterLike["findMany"]` /
  * `["count"]`) — so the pair drops straight into `createD1CtxDb` with no cast and
- * no structural drift. The import is type-only: `@cirrus/runtime` keeps no hard
- * (value) dependency on `@cirrus/do`.
+ * no structural drift. The import is type-only: `@lunora/runtime` keeps no hard
+ * (value) dependency on `@lunora/do`.
  */
 type CrossShardCounter = DatabaseWriterLike["count"];
 type CrossShardReader = DatabaseWriterLike["findMany"];
@@ -54,15 +54,15 @@ interface CrossShardRelationOptions {
      * Injectable so the in-DO loopback (or a test) can supply its own.
      */
     fetch?: typeof globalThis.fetch;
-    /** Forwarded identity claims (the `x-cirrus-identity` envelope), when present. */
+    /** Forwarded identity claims (the `x-lunora-identity` envelope), when present. */
     identity?: Record<string, unknown>;
 
     /**
-     * Origin the worker is reachable at (`CIRRUS_WORKER_ORIGIN`). The DO issues a
-     * loopback subrequest to `${origin}/_cirrus/rpc`.
+     * Origin the worker is reachable at (`LUNORA_WORKER_ORIGIN`). The DO issues a
+     * loopback subrequest to `${origin}/_lunora/rpc`.
      */
     origin: string;
-    /** Forwarded user id (the `x-cirrus-userid` header), when authenticated. */
+    /** Forwarded user id (the `x-lunora-userid` header), when authenticated. */
     userId?: string;
 }
 
@@ -71,10 +71,10 @@ interface CrossShardRelationCapabilities {
     crossShardReader: CrossShardReader;
 }
 
-const RPC_ENDPOINT = "/_cirrus/rpc";
+const RPC_ENDPOINT = "/_lunora/rpc";
 
 /**
- * Build the `x-cirrus-userid` / `x-cirrus-identity` headers forwarded on the
+ * Build the `x-lunora-userid` / `x-lunora-identity` headers forwarded on the
  * fan-out so each shard reads under the originating caller's identity. Mirrors
  * the worker's own `resolveForwardContext` header shape.
  */
@@ -82,11 +82,11 @@ const buildIdentityHeaders = (options: CrossShardRelationOptions): Record<string
     const headers: Record<string, string> = { "content-type": "application/json" };
 
     if (options.userId !== undefined && options.userId.length > 0) {
-        headers["x-cirrus-userid"] = options.userId;
+        headers["x-lunora-userid"] = options.userId;
     }
 
     if (options.identity !== undefined) {
-        headers["x-cirrus-identity"] = JSON.stringify(options.identity);
+        headers["x-lunora-identity"] = JSON.stringify(options.identity);
     }
 
     return headers;
@@ -141,12 +141,12 @@ const createCrossShardRelationCapabilities = (options: CrossShardRelationOptions
             {
                 args: { orderBy: args?.orderBy, table, where: args?.where, with: args?.with },
                 fanOut: { merge: { kind: "concat" }, table },
-                functionPath: "__cirrus_relation__:read",
+                functionPath: "__lunora_relation__:read",
             },
             "read",
         );
 
-        // eslint-disable-next-line unicorn/no-null -- `continueCursor: null` is @cirrus/do's QueryPage "no more pages" sentinel
+        // eslint-disable-next-line unicorn/no-null -- `continueCursor: null` is @lunora/do's QueryPage "no more pages" sentinel
         return { continueCursor: null, isDone: true, page: Array.isArray(data) ? (data as Record<string, unknown>[]) : [] };
     };
 
@@ -156,7 +156,7 @@ const createCrossShardRelationCapabilities = (options: CrossShardRelationOptions
             {
                 args: { table, where },
                 fanOut: { merge: { kind: "sum" }, table },
-                functionPath: "__cirrus_relation__:count",
+                functionPath: "__lunora_relation__:count",
             },
             "count",
         );

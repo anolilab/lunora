@@ -6,7 +6,7 @@
 
 </a>
 
-<h3 align="center">Validators for Cirrus: the v.* validator suite with end-to-end return-type inference</h3>
+<h3 align="center">Validators for Lunora: the v.* validator suite with end-to-end return-type inference</h3>
 
 <!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
@@ -34,28 +34,28 @@
 
 ---
 
-The `v` validator namespace for Cirrus — a small runtime validator suite that doubles as a schema descriptor. Every validator carries a runtime `parse` / `safeParse` plus a phantom type that `Infer<…>` reads to recover the TypeScript type end-to-end. It also speaks [Standard Schema](https://standardschema.dev) in both directions. Usually consumed transitively via [`@cirrus/server`](https://www.npmjs.com/package/@cirrus/server), which re-exports `v`.
+The `v` validator namespace for Lunora — a small runtime validator suite that doubles as a schema descriptor. Every validator carries a runtime `parse` / `safeParse` plus a phantom type that `Infer<…>` reads to recover the TypeScript type end-to-end. It also speaks [Standard Schema](https://standardschema.dev) in both directions. Usually consumed transitively via [`@lunora/server`](https://www.npmjs.com/package/@lunora/server), which re-exports `v`.
 
-Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
+Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
 ## Install
 
 ```sh
-npm install @cirrus/values
+npm install @lunora/values
 ```
 
 ```sh
-yarn add @cirrus/values
+yarn add @lunora/values
 ```
 
 ```sh
-pnpm add @cirrus/values
+pnpm add @lunora/values
 ```
 
 ## Usage
 
 ```ts
-import { type Infer, v } from "@cirrus/values";
+import { type Infer, v } from "@lunora/values";
 
 const Message = v.object({
     id: v.id("messages"),
@@ -73,12 +73,12 @@ const result = Message.safeParse(input);
 if (!result.ok) console.error(result.error.path, result.error.expected);
 ```
 
-> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/api/values)**.
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/api/values)**.
 
 ## Related
 
-- [`@cirrus/server`](https://www.npmjs.com/package/@cirrus/server) — re-exports `v` for single-import usage in your functions.
-- [`@cirrus/codegen`](https://www.npmjs.com/package/@cirrus/codegen) — reads validator metadata to emit the typed data model.
+- [`@lunora/server`](https://www.npmjs.com/package/@lunora/server) — re-exports `v` for single-import usage in your functions.
+- [`@lunora/codegen`](https://www.npmjs.com/package/@lunora/codegen) — reads validator metadata to emit the typed data model.
 
 ## Supported Node.js Versions
 
@@ -87,14 +87,14 @@ Here's [a post on why we think this is important](https://medium.com/the-node-js
 
 ## Contributing
 
-If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/lunora/issues) and check our [Contributing](https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
 > **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
 ## Credits
 
 - [Daniel Bannert](https://github.com/prisis)
-- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
+- [All Contributors](https://github.com/anolilab/lunora/graphs/contributors)
 
 ## Made with ❤️ at Anolilab
 
@@ -102,17 +102,17 @@ This is an open source project and will always remain free to use. If you think 
 
 ## License
 
-The Cirrus values package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The Lunora values package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
 
 <!-- badges -->
 
 [license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
-[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
-[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/values?style=for-the-badge
-[npm-version]: https://www.npmjs.com/package/@cirrus/values
-[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/values?style=for-the-badge
-[npm-downloads]: https://www.npmjs.com/package/@cirrus/values
+[license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@lunora/values?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@lunora/values
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@lunora/values?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@lunora/values
 [prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
-[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[prs-welcome]: https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md
 [typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
 [typescript-url]: https://www.typescriptlang.org/

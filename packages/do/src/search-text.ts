@@ -5,7 +5,7 @@
  * fall back to a JS scan-and-score path when FTS5 is unavailable. The
  * tokenizer, MATCH-expression builder, text coercion, and fallback scorer are
  * dialect-agnostic, so they live here and are imported by both
- * `ctx-db.ts` (`@cirrus/do`) and `d1-ctx-db.ts` (`@cirrus/d1`) — guaranteeing the
+ * `ctx-db.ts` (`@lunora/do`) and `d1-ctx-db.ts` (`@lunora/d1`) — guaranteeing the
  * two engines tokenize and rank byte-for-byte identically.
  */
 

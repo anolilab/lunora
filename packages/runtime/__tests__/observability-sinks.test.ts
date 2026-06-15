@@ -35,8 +35,8 @@ describe("observability-sinks", () => {
             sink.onRpc!(okEvent);
             sink.onRpc!(errorEvent);
 
-            expect(log).toHaveBeenCalledWith("[cirrus:rpc]", okEvent);
-            expect(error).toHaveBeenCalledWith("[cirrus:rpc]", errorEvent);
+            expect(log).toHaveBeenCalledWith("[lunora:rpc]", okEvent);
+            expect(error).toHaveBeenCalledWith("[lunora:rpc]", errorEvent);
         });
 
         it("filters out ok events when onlyErrors is set", () => {
@@ -59,8 +59,8 @@ describe("observability-sinks", () => {
             sink.onLog!({ args: ["hi"], functionPath: "messages:list", level: "info", message: "hi", ts: 1 });
             sink.onLog!({ args: ["boom"], functionPath: "messages:send", level: "error", message: "boom", ts: 2 });
 
-            expect(log).toHaveBeenCalledWith("[cirrus:log]", "messages:list", "hi");
-            expect(error).toHaveBeenCalledWith("[cirrus:log]", "messages:send", "boom");
+            expect(log).toHaveBeenCalledWith("[lunora:log]", "messages:list", "hi");
+            expect(error).toHaveBeenCalledWith("[lunora:log]", "messages:send", "boom");
         });
 
         it("emits log events even when onlyErrors filters the rpc stream", () => {
@@ -70,7 +70,7 @@ describe("observability-sinks", () => {
 
             sink.onLog!({ args: [], functionPath: "a:b", level: "info", message: "still shown", ts: 1 });
 
-            expect(log).toHaveBeenCalledWith("[cirrus:log]", "a:b", "still shown");
+            expect(log).toHaveBeenCalledWith("[lunora:log]", "a:b", "still shown");
         });
     });
 

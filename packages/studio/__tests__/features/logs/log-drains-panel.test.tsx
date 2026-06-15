@@ -57,7 +57,7 @@ describe("logDrainsPanel", () => {
 
         const body = JSON.parse((fetchMock.mock.calls[0]?.[1] as { body: string }).body) as Record<string, unknown>;
 
-        expect(body).toMatchObject({ source: "cirrus", type: "request" });
+        expect(body).toMatchObject({ source: "lunora", type: "request" });
     });
 
     it("surfaces a fetch failure in the result area", async () => {

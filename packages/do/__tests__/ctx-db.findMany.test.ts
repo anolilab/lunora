@@ -271,12 +271,12 @@ describe("ctx-db findMany", () => {
 
             await seed(writer);
 
-            // The structural shape (`name: "CirrusError"` + `code` + `status`)
+            // The structural shape (`name: "LunoraError"` + `code` + `status`)
             // lets the runtime error mapper route it without an `instanceof`
-            // check; `@cirrus/do` stays free of a runtime dep on `@cirrus/server`.
+            // check; `@lunora/do` stays free of a runtime dep on `@lunora/server`.
             await expect(writer.count("todos", { restrictsCounts: true })).rejects.toMatchObject({
                 code: "COUNT_RLS_UNSUPPORTED",
-                name: "CirrusError",
+                name: "LunoraError",
                 status: 422,
             });
         });

@@ -4,7 +4,7 @@ import type { ReactElement, ReactNode } from "react";
 import { source } from "@/lib/source";
 
 // Hoisted so the literal isn't reallocated (and re-flagged) per render.
-const NAV = { title: "Cirrus" };
+const NAV = { title: "Lunora" };
 
 /**
  * Documentation chrome — sidebar, header, search trigger. The `notebook`

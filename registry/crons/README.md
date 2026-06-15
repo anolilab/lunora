@@ -1,34 +1,34 @@
 # crons
 
-Code-first scheduled jobs for Cirrus — the `cronJobs()` builder (Convex `crons.ts` parity) plus an example internal function it fires. Declare recurring work in a `cirrus/crons.ts` file and `@cirrus/codegen` keeps `wrangler.jsonc`'s `triggers.crons` in sync; you never hand-edit the wrangler schedule array.
+Code-first scheduled jobs for Lunora — the `cronJobs()` builder (Convex `crons.ts` parity) plus an example internal function it fires. Declare recurring work in a `lunora/crons.ts` file and `@lunora/codegen` keeps `wrangler.jsonc`'s `triggers.crons` in sync; you never hand-edit the wrangler schedule array.
 
-Built on `@cirrus/scheduler` (re-exported from `@cirrus/server`), so there's no extra package to install and no Durable-Object support to enable.
+Built on `@lunora/scheduler` (re-exported from `@lunora/server`), so there's no extra package to install and no Durable-Object support to enable.
 
 ## Install
 
 ```bash
-cirrus registry add crons
+lunora registry add crons
 ```
 
 This:
 
-1. Adds `@cirrus/server` to your `package.json` (run `pnpm install` afterwards).
-2. Copies `cirrus/crons.ts` (the `cronJobs()` registry, with one illustrative `interval` job) and `cirrus/crons/jobs.ts` (the example `run` internal mutation that job fires) into your project — these are **yours** to edit.
+1. Adds `@lunora/server` to your `package.json` (run `pnpm install` afterwards).
+2. Copies `lunora/crons.ts` (the `cronJobs()` registry, with one illustrative `interval` job) and `lunora/crons/jobs.ts` (the example `run` internal mutation that job fires) into your project — these are **yours** to edit.
 
 Then regenerate types and the schedule:
 
 ```bash
-cirrus codegen
+lunora codegen
 ```
 
-Codegen discovers the `crons.interval(...)` registration by AST, compiles its schedule to a standard cron expression, resolves the `internal.crons_jobs.run` reference to its `crons_jobs:run` dispatch ref, and emits both `cirrus/_generated/crons.ts` (the dispatcher map the Worker's `scheduled()` handler consumes) and the matching `triggers.crons` entry in `wrangler.jsonc`.
+Codegen discovers the `crons.interval(...)` registration by AST, compiles its schedule to a standard cron expression, resolves the `internal.crons_jobs.run` reference to its `crons_jobs:run` dispatch ref, and emits both `lunora/_generated/crons.ts` (the dispatcher map the Worker's `scheduled()` handler consumes) and the matching `triggers.crons` entry in `wrangler.jsonc`.
 
 ## How it works
 
-`cirrus/crons.ts` builds a registry and default-exports it:
+`lunora/crons.ts` builds a registry and default-exports it:
 
 ```ts
-import { cronJobs } from "@cirrus/server";
+import { cronJobs } from "@lunora/server";
 
 import { internal } from "./_generated/api.js";
 
@@ -46,7 +46,7 @@ export default crons;
 
 ### Why `internal`
 
-Cron targets are **internal** functions (`internalMutation` / `internalAction` / `internalQuery`) — server-only, so a client can never invoke your scheduled job directly. The shipped `cirrus/crons/jobs.ts` exposes `run` as an `internalMutation`. Make your job handlers idempotent: a missed tick may be retried and a slow tick can overlap the next one.
+Cron targets are **internal** functions (`internalMutation` / `internalAction` / `internalQuery`) — server-only, so a client can never invoke your scheduled job directly. The shipped `lunora/crons/jobs.ts` exposes `run` as an `internalMutation`. Make your job handlers idempotent: a missed tick may be retried and a slow tick can overlap the next one.
 
 ## Schedules
 
@@ -67,12 +67,12 @@ Schedules are validated at definition time, so an out-of-range value (e.g. `hour
 The example `run` is a placeholder. Point a job at one of your own internal functions instead — e.g. sweep an expired-rows table:
 
 ```ts
-// cirrus/crons.ts
+// lunora/crons.ts
 crons.interval("sweep presence", { minutes: 5 }, internal.presence.sweep, { roomId: "lobby" });
 ```
 
-Then delete `cirrus/crons/jobs.ts` (and the sample `heartbeat` job) once nothing references it.
+Then delete `lunora/crons/jobs.ts` (and the sample `heartbeat` job) once nothing references it.
 
 ## What you own
 
-Everything copied by this item — `cirrus/crons.ts` and `cirrus/crons/jobs.ts` — lives in your repo. Add, remove, or retune jobs, change the schedules, and swap in your own internal functions however you like. `@cirrus/scheduler` (via `@cirrus/server`) provides the builder and schedule compilation; this component is the idiomatic Cirrus glue around them.
+Everything copied by this item — `lunora/crons.ts` and `lunora/crons/jobs.ts` — lives in your repo. Add, remove, or retune jobs, change the schedules, and swap in your own internal functions however you like. `@lunora/scheduler` (via `@lunora/server`) provides the builder and schedule compilation; this component is the idiomatic Lunora glue around them.

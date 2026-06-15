@@ -1,4 +1,4 @@
-import type { Plugin } from "@cirrus/server";
+import type { Plugin } from "@lunora/server";
 
 import type { LimiterResolver } from "./middleware";
 import type { RateLimiter } from "./rate-limiter";
@@ -9,7 +9,7 @@ export interface RatelimitApiContext<Context> {
 }
 
 /**
- * Package `@cirrus/ratelimit` as a first-party {@link Plugin}, the dogfooded
+ * Package `@lunora/ratelimit` as a first-party {@link Plugin}, the dogfooded
  * form of the plugin contract: instead of (or alongside) the enforcing
  * `rateLimit(...)` middleware, this exposes the resolved {@link RateLimiter}
  * under `ctx.api.ratelimit` so a handler can `limit()`/`check()`/`reset()`
@@ -20,7 +20,7 @@ export interface RatelimitApiContext<Context> {
  *
  * ```ts
  * const limiter = new RateLimiter({ config: { send: { kind: "token bucket", rate: 5, period: 60_000, capacity: 5 } } });
- * const c = initCirrus.dataModel&lt;DataModel>().create();
+ * const c = initLunora.dataModel&lt;DataModel>().create();
  * export const send = c.mutation
  *     .use(ratelimitPlugin(limiter).middleware!)
  *     .mutation(async ({ ctx, args }) => {
@@ -36,7 +36,7 @@ export interface RatelimitApiContext<Context> {
  *
  * Built as a plain {@link Plugin} literal (the key is the fixed string
  * `"ratelimit"`, so the `definePlugin` validation adds nothing) — this keeps
- * `@cirrus/server` a type-only dependency of `@cirrus/ratelimit`.
+ * `@lunora/server` a type-only dependency of `@lunora/ratelimit`.
  */
 export const ratelimitPlugin = <Context = unknown>(
     limiter: LimiterResolver<Context>,

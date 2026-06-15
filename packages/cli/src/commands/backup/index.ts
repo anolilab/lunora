@@ -4,10 +4,10 @@ const backupCommand: Command = {
     argument: { description: "create | list | restore <id|file> | pitr", name: "subcommand", type: String },
     description: "Managed snapshot backups (create | list | restore) plus native point-in-time recovery (pitr)",
     examples: [
-        ["cirrus backup create", "Snapshot every table to a backup file"],
-        ["cirrus backup list", "List recorded snapshots"],
-        ["cirrus backup restore <id>", "Restore a snapshot by id"],
-        ["cirrus backup pitr --at 2026-06-01T00:00:00Z", "Point-in-time recovery (≤30 days)"],
+        ["lunora backup create", "Snapshot every table to a backup file"],
+        ["lunora backup list", "List recorded snapshots"],
+        ["lunora backup restore <id>", "Restore a snapshot by id"],
+        ["lunora backup pitr --at 2026-06-01T00:00:00Z", "Point-in-time recovery (≤30 days)"],
     ],
     group: "Data",
     loader: () =>
@@ -16,7 +16,7 @@ const backupCommand: Command = {
         }),
     name: "backup",
     options: [
-        { description: "Backup directory (default .cirrus-backups)", name: "dir", type: String },
+        { description: "Backup directory (default .lunora-backups)", name: "dir", type: String },
         { description: "Comma-separated table allowlist (create)", name: "tables", type: String },
         { description: "pitr: time to read/restore to (ISO or epoch-ms, ≤30 days)", name: "at", type: String },
         { description: "pitr --restore: explicit bookmark to restore to (wins over --at)", name: "bookmark", type: String },
@@ -26,7 +26,7 @@ const backupCommand: Command = {
         { description: "Target production — requires an explicit --url", name: "prod", type: Boolean },
         { description: "Confirm a production pitr --restore (required with --prod)", name: "yes", type: Boolean },
         { description: "Worker URL (default http://localhost:8787)", name: "url", type: String },
-        { description: "Admin bearer token (or CIRRUS_ADMIN_TOKEN)", name: "token", type: String },
+        { description: "Admin bearer token (or LUNORA_ADMIN_TOKEN)", name: "token", type: String },
     ],
 };
 

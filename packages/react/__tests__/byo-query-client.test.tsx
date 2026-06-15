@@ -1,15 +1,15 @@
-import type { FunctionReference } from "@cirrus/client";
+import type { FunctionReference } from "@lunora/client";
 import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
-import { CirrusProvider } from "../src/cirrus-provider";
+import { LunoraProvider } from "../src/lunora-provider";
 import useQuery from "../src/use-query";
 import { createMockClient } from "./mock-client";
 
 const makeRef = (reference: string): FunctionReference => {
-    return { __cirrusRef: reference };
+    return { __lunoraRef: reference };
 };
 
 const Display = (): ReactElement => {
@@ -26,7 +26,7 @@ const Display = (): ReactElement => {
     );
 };
 
-describe("cirrusProvider — bring-your-own QueryClient", () => {
+describe("lunoraProvider — bring-your-own QueryClient", () => {
     it("uses an explicit queryClient prop instead of creating one", async () => {
         expect.hasAssertions();
 
@@ -36,9 +36,9 @@ describe("cirrusProvider — bring-your-own QueryClient", () => {
         const myQc = new QueryClient({ defaultOptions: { queries: { gcTime: 99, retry: 0 } } });
 
         render(
-            <CirrusProvider client={mock.asClient} queryClient={myQc}>
+            <LunoraProvider client={mock.asClient} queryClient={myQc}>
                 <Display />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         await waitFor(() => {
@@ -60,9 +60,9 @@ describe("cirrusProvider — bring-your-own QueryClient", () => {
 
         render(
             <QueryClientProvider client={parentQc}>
-                <CirrusProvider client={mock.asClient}>
+                <LunoraProvider client={mock.asClient}>
                     <Display />
-                </CirrusProvider>
+                </LunoraProvider>
             </QueryClientProvider>,
         );
 
@@ -85,9 +85,9 @@ describe("cirrusProvider — bring-your-own QueryClient", () => {
         });
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <Display />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         await waitFor(() => {

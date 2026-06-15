@@ -32,16 +32,16 @@ const recordingLogger = (): { logger: Logger; recorded: Recorded } => {
 
 let workdir: string;
 
-describe("cirrus env", () => {
+describe("lunora env", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-cli-env-"));
+        workdir = mkdtempSync(join(tmpdir(), "lunora-cli-env-"));
     });
 
     afterEach(() => {
         rmSync(workdir, { force: true, recursive: true });
     });
 
-    describe("cirrus env", () => {
+    describe("lunora env", () => {
         it("list on a missing .dev.vars reports empty without erroring", async () => {
             expect.assertions(2);
 
@@ -225,7 +225,7 @@ describe("cirrus env", () => {
         });
     });
 
-    describe("cirrus env doctor", () => {
+    describe("lunora env doctor", () => {
         it("passes when .dev.vars covers the example with real values", async () => {
             expect.assertions(2);
 

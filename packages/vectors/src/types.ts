@@ -66,7 +66,7 @@ export interface VectorizeIndexDetails {
  */
 export type EmbedFunction<TInput = unknown> = (input: TInput) => Promise<ReadonlyArray<number>> | ReadonlyArray<number>;
 
-export interface CirrusVectorsOptions {
+export interface LunoraVectorsOptions {
     /**
      * Map of logical index name -> Vectorize binding. Most apps wire one
      * binding per index; multi-index apps register all of them here so calls
@@ -95,7 +95,7 @@ export interface QueryInput<TInput = unknown> {
     vector?: ReadonlyArray<number>;
 }
 
-export interface CirrusVectors {
+export interface LunoraVectors {
     deleteByIds: (indexName: string, ids: ReadonlyArray<string>) => Promise<VectorizeDeleteMutation>;
     describe: (indexName: string) => Promise<VectorizeIndexDetails>;
     getByIds: (indexName: string, ids: ReadonlyArray<string>) => Promise<ReadonlyArray<VectorizeVector>>;

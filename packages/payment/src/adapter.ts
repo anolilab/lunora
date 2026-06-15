@@ -1,4 +1,4 @@
-import { CirrusPaymentError } from "./errors";
+import { LunoraPaymentError } from "./errors";
 import type {
     CancelSubscriptionOptions,
     CaptureInput,
@@ -30,7 +30,7 @@ export interface WebhookInput {
 }
 
 /**
- * A stateless translator between the provider API and Cirrus's normalized vocabulary.
+ * A stateless translator between the provider API and Lunora's normalized vocabulary.
  *
  * Adapters never own state — they make provider calls and normalize provider events into a
  * `WebhookAction`. All durable state lives in the payment store.
@@ -75,7 +75,7 @@ export const createAdapterRegistry = (adapters: ReadonlyArray<PaymentAdapter>): 
 
     for (const adapter of adapters) {
         if (byId.has(adapter.identifier)) {
-            throw new CirrusPaymentError("CONFIG_INVALID", `duplicate adapter for provider "${adapter.identifier}"`);
+            throw new LunoraPaymentError("CONFIG_INVALID", `duplicate adapter for provider "${adapter.identifier}"`);
         }
 
         byId.set(adapter.identifier, adapter);
@@ -87,7 +87,7 @@ export const createAdapterRegistry = (adapters: ReadonlyArray<PaymentAdapter>): 
             const adapter = byId.get(provider);
 
             if (!adapter) {
-                throw new CirrusPaymentError("CONFIG_INVALID", `no adapter registered for provider "${provider}"`);
+                throw new LunoraPaymentError("CONFIG_INVALID", `no adapter registered for provider "${provider}"`);
             }
 
             return adapter;

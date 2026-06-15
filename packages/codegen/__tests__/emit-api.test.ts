@@ -42,13 +42,13 @@ describe("emitApi", () => {
                 exportName: "getCtx",
                 filePath: "ctx",
                 kind: "query",
-                returnType: 'import("@cirrus/server").CirrusContext',
+                returnType: 'import("@lunora/server").LunoraContext',
             },
         ];
 
         const rendered = emitApi(functions);
 
-        expect(rendered).toContain('import("@cirrus/server").CirrusContext');
+        expect(rendered).toContain('import("@lunora/server").LunoraContext');
     });
 
     it("rewrites the `_generated/` prefix even without a leading `./`", () => {
@@ -73,7 +73,7 @@ describe("emitApi", () => {
     it("rewrites `../_generated/X` qualifiers from nested function files", () => {
         expect.assertions(2);
 
-        // Regression: a handler nested in `cirrus/sub/foo.ts` imports dataModel
+        // Regression: a handler nested in `lunora/sub/foo.ts` imports dataModel
         // via `../_generated/dataModel.js`; ts-morph prints that relative path
         // verbatim. Inlined into `_generated/api.ts` it must collapse to
         // `./dataModel.js`, not stay `../_generated/...` (which resolves one

@@ -32,7 +32,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "..", "..", "..", "codegen", "__tests__", "fixtures", "simple");
 
 const VALID_WRANGLER = `{
-    "name": "cirrus-app",
+    "name": "lunora-app",
     "main": "src/index.ts",
     "compatibility_date": "2026-04-07",
     "compatibility_flags": ["nodejs_compat"],
@@ -63,17 +63,17 @@ const silentLogger = (): { errors: string[]; infos: string[]; logger: Logger; wa
 
 let workdir: string;
 
-describe("cirrus deploy", () => {
+describe("lunora deploy", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-cli-deploy-"));
-        cpSync(join(fixtureRoot, "cirrus"), join(workdir, "cirrus"), { recursive: true });
+        workdir = mkdtempSync(join(tmpdir(), "lunora-cli-deploy-"));
+        cpSync(join(fixtureRoot, "lunora"), join(workdir, "lunora"), { recursive: true });
     });
 
     afterEach(() => {
         rmSync(workdir, { force: true, recursive: true });
     });
 
-    describe("cirrus deploy", () => {
+    describe("lunora deploy", () => {
         it("runs codegen, validates wrangler, then spawns `pnpm exec wrangler deploy`", async () => {
             expect.assertions(5);
 
@@ -147,8 +147,8 @@ describe("cirrus deploy", () => {
 
             writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
             writeFileSync(
-                join(workdir, "cirrus", "containers.ts"),
-                `import { defineContainer } from "@cirrus/container";
+                join(workdir, "lunora", "containers.ts"),
+                `import { defineContainer } from "@lunora/container";
 export const worker = defineContainer({ image: { build: "./services/worker" } });
 `,
                 "utf8",
@@ -163,7 +163,7 @@ export const worker = defineContainer({ image: { build: "./services/worker" } })
             expect(result.code).toBe(0);
             // railpack build → wrangler containers push → wrangler deploy.
             expect(calls.map((call) => call.descriptor.command)).toStrictEqual(["railpack", "pnpm", "pnpm"]);
-            expect(calls[0]?.descriptor.args).toStrictEqual(["build", "./services/worker", "--name", "cirrus-worker:build"]);
+            expect(calls[0]?.descriptor.args).toStrictEqual(["build", "./services/worker", "--name", "lunora-worker:build"]);
         });
 
         it("blocks the deploy when a { build } container needs Railpack but it is unavailable", async () => {
@@ -171,8 +171,8 @@ export const worker = defineContainer({ image: { build: "./services/worker" } })
 
             writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
             writeFileSync(
-                join(workdir, "cirrus", "containers.ts"),
-                `import { defineContainer } from "@cirrus/container";
+                join(workdir, "lunora", "containers.ts"),
+                `import { defineContainer } from "@lunora/container";
 export const worker = defineContainer({ image: { build: "./services/worker" } });
 `,
                 "utf8",
@@ -193,8 +193,8 @@ export const worker = defineContainer({ image: { build: "./services/worker" } })
 
             writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
             writeFileSync(
-                join(workdir, "cirrus", "containers.ts"),
-                `import { defineContainer } from "@cirrus/container";
+                join(workdir, "lunora", "containers.ts"),
+                `import { defineContainer } from "@lunora/container";
 export const worker = defineContainer({ image: { build: "./services/worker" } });
 `,
                 "utf8",
@@ -216,8 +216,8 @@ export const worker = defineContainer({ image: { build: "./services/worker" } })
 
             writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
             writeFileSync(
-                join(workdir, "cirrus", "containers.ts"),
-                `import { defineContainer } from "@cirrus/container";
+                join(workdir, "lunora", "containers.ts"),
+                `import { defineContainer } from "@lunora/container";
 export const transcoder = defineContainer({ image: "./containers/transcoder" });
 `,
                 "utf8",
@@ -378,14 +378,14 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
             writeFileSync(
                 join(workdir, "wrangler.jsonc"),
                 `{
-    "name": "cirrus-app",
+    "name": "lunora-app",
     "main": "src/index.ts",
     "compatibility_date": "2026-04-07",
     "compatibility_flags": ["nodejs_compat"],
     "durable_objects": {
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
     },
-    "d1_databases": [{ "binding": "DB", "database_name": "cirrus-app", "database_id": "<replace-with-d1-create-id>" }]
+    "d1_databases": [{ "binding": "DB", "database_name": "lunora-app", "database_id": "<replace-with-d1-create-id>" }]
 }`,
                 "utf8",
             );
@@ -436,12 +436,12 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
             expect.assertions(4);
 
             // Write a migrations.ts so discoverMigrations finds at least one id
-            const cirrusDirectory = join(workdir, "cirrus");
-            const migrationsFile = join(cirrusDirectory, "migrations.ts");
+            const lunoraDirectory = join(workdir, "lunora");
+            const migrationsFile = join(lunoraDirectory, "migrations.ts");
 
             writeFileSync(
                 migrationsFile,
-                `import { defineMigration } from "@cirrus/server";
+                `import { defineMigration } from "@lunora/server";
 
 export const backfillNames = defineMigration({
     id: "backfill-names",
@@ -509,7 +509,7 @@ export const backfillNames = defineMigration({
             it("routes the spawned wrangler's stdout to stderr so it can't corrupt the JSON document", async () => {
                 // Regression: `wrangler deploy` inherits stdio; without redirection
                 // its progress + deployed-URL output interleaves with the JSON on
-                // stdout and breaks `cirrus deploy --format json | jq`.
+                // stdout and breaks `lunora deploy --format json | jq`.
                 expect.assertions(2);
 
                 writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");

@@ -1,12 +1,12 @@
 /**
  * Detection-driven class-A worker composition (PLAN4 M2).
  *
- * The plugin reads the detected framework off the shared `CirrusPluginContext`
- * and, for a class-A framework, resolves `virtual:cirrus/worker` to a generated
+ * The plugin reads the detected framework off the shared `LunoraPluginContext`
+ * and, for a class-A framework, resolves `virtual:lunora/worker` to a generated
  * worker entry that composes the framework SSR handler under `composeWorker`'s
  * `httpRouter` seam. These tests drive the plugin's `resolveId`/`load` hooks
  * directly (no real framework packages, matching the existing fakes pattern)
- * plus assert the emitted source routes `/_cirrus/*` to Cirrus and falls
+ * plus assert the emitted source routes `/_lunora/*` to Lunora and falls
  * through to the framework handler.
  */
 import type { Plugin } from "vite";
@@ -15,28 +15,28 @@ import { describe, expect, it } from "vitest";
 import type { DetectedFramework, FrameworkClass } from "../src/detect-framework";
 import frameworkComposePlugin, {
     buildWorkerEntrySource,
-    CIRRUS_WORKER_VIRTUAL_ID,
+    LUNORA_WORKER_VIRTUAL_ID,
     isAutoComposable,
-    RESOLVED_CIRRUS_WORKER_ID,
+    RESOLVED_LUNORA_WORKER_ID,
 } from "../src/framework-compose-plugin";
-import type { CirrusPluginContext } from "../src/framework-detect-plugin";
-import type { ResolvedCirrusPluginOptions } from "../src/types";
+import type { LunoraPluginContext } from "../src/framework-detect-plugin";
+import type { ResolvedLunoraPluginOptions } from "../src/types";
 
-const baseOptions = (overrides: Partial<ResolvedCirrusPluginOptions> = {}): ResolvedCirrusPluginOptions => {
+const baseOptions = (overrides: Partial<ResolvedLunoraPluginOptions> = {}): ResolvedLunoraPluginOptions => {
     return {
         apiSpec: "openapi",
         cloudflare: {},
-        generatedDir: "cirrus/_generated",
+        generatedDir: "lunora/_generated",
         overlay: false,
         projectRoot: "/workspace/app",
-        schemaDir: "cirrus",
+        schemaDir: "lunora",
         studio: true,
         validateWrangler: true,
         ...overrides,
     };
 };
 
-const context = (framework: DetectedFramework, klass: FrameworkClass): CirrusPluginContext => {
+const context = (framework: DetectedFramework, klass: FrameworkClass): LunoraPluginContext => {
     return { framework: { class: klass, framework } };
 };
 
@@ -81,24 +81,24 @@ describe("framework-compose-plugin", () => {
 
             const plugin = frameworkComposePlugin(baseOptions(), context("tanstack-start", "A"));
 
-            expect(callResolveId(plugin, CIRRUS_WORKER_VIRTUAL_ID)).toBe(RESOLVED_CIRRUS_WORKER_ID);
+            expect(callResolveId(plugin, LUNORA_WORKER_VIRTUAL_ID)).toBe(RESOLVED_LUNORA_WORKER_ID);
             // Unrelated ids are never claimed.
             expect(callResolveId(plugin, "some-other-module")).toBeUndefined();
         });
 
-        it("loads a composeWorker entry that routes _cirrus to Cirrus and falls through to the framework SSR handler", () => {
+        it("loads a composeWorker entry that routes _lunora to Lunora and falls through to the framework SSR handler", () => {
             expect.hasAssertions();
 
             const plugin = frameworkComposePlugin(baseOptions(), context("react-router", "A"));
-            const source = callLoad(plugin, RESOLVED_CIRRUS_WORKER_ID);
+            const source = callLoad(plugin, RESOLVED_LUNORA_WORKER_ID);
 
             expect(typeof source).toBe("string");
 
             const code = source as string;
 
             // Composition is via composeWorker with an httpRouter seam — the
-            // worker that routes /_cirrus/* to Cirrus and everything else to the
-            // framework handler (precedence enforced inside @cirrus/runtime).
+            // worker that routes /_lunora/* to Lunora and everything else to the
+            // framework handler (precedence enforced inside @lunora/runtime).
             expect(code).toContain("composeWorker(");
             expect(code).toContain("httpRouter:");
             // React Router wiring: createRequestHandler over its virtual build.
@@ -106,10 +106,10 @@ describe("framework-compose-plugin", () => {
             expect(code).toContain("virtual:react-router/server-build");
             // Generated artifacts are wired in via ABSOLUTE paths (projectRoot +
             // generatedDir). Virtual modules have no real filesystem path so
-            // relative specifiers like "./cirrus/_generated/..." can't be resolved
+            // relative specifiers like "./lunora/_generated/..." can't be resolved
             // by Vite/rolldown — absolute paths work in all bundler environments.
-            // baseOptions() uses projectRoot="/workspace/app", generatedDir="cirrus/_generated".
-            expect(code).toContain('"/workspace/app/cirrus/_generated/functions"');
+            // baseOptions() uses projectRoot="/workspace/app", generatedDir="lunora/_generated".
+            expect(code).toContain('"/workspace/app/lunora/_generated/functions"');
             expect(code).toContain("createShardDO()");
             expect(code).toContain("shardDO: env.SHARD");
         });
@@ -118,7 +118,7 @@ describe("framework-compose-plugin", () => {
             expect.hasAssertions();
 
             const plugin = frameworkComposePlugin(baseOptions({ generatedDir: "server/gen" }), context("solid-start", "A"));
-            const code = callLoad(plugin, RESOLVED_CIRRUS_WORKER_ID) as string;
+            const code = callLoad(plugin, RESOLVED_LUNORA_WORKER_ID) as string;
 
             // Absolute path: projectRoot + custom generatedDir
             expect(code).toContain('"/workspace/app/server/gen/functions"');
@@ -132,8 +132,8 @@ describe("framework-compose-plugin", () => {
 
             const plugin = frameworkComposePlugin(baseOptions(), context("none", "C"));
 
-            expect(callResolveId(plugin, CIRRUS_WORKER_VIRTUAL_ID)).toBeUndefined();
-            expect(callLoad(plugin, RESOLVED_CIRRUS_WORKER_ID)).toBeUndefined();
+            expect(callResolveId(plugin, LUNORA_WORKER_VIRTUAL_ID)).toBeUndefined();
+            expect(callLoad(plugin, RESOLVED_LUNORA_WORKER_ID)).toBeUndefined();
         });
 
         it("resolves and loads the virtual worker entry even when cloudflare:false (BYO Cloudflare plugin)", () => {
@@ -142,12 +142,12 @@ describe("framework-compose-plugin", () => {
             // `cloudflare: false` means "don't add @cloudflare/vite-plugin a second
             // time" — the user supplied it themselves (e.g. TanStack Start's vite.config
             // puts it first). It does NOT mean "disable the composed worker entry".
-            // The virtual:cirrus/worker must still resolve so @cloudflare/vite-plugin
+            // The virtual:lunora/worker must still resolve so @cloudflare/vite-plugin
             // (added by the user) can find the main entry declared in wrangler.jsonc.
             const plugin = frameworkComposePlugin(baseOptions({ cloudflare: false }), context("tanstack-start", "A"));
 
-            expect(callResolveId(plugin, CIRRUS_WORKER_VIRTUAL_ID)).toBe(RESOLVED_CIRRUS_WORKER_ID);
-            expect(typeof callLoad(plugin, RESOLVED_CIRRUS_WORKER_ID)).toBe("string");
+            expect(callResolveId(plugin, LUNORA_WORKER_VIRTUAL_ID)).toBe(RESOLVED_LUNORA_WORKER_ID);
+            expect(typeof callLoad(plugin, RESOLVED_LUNORA_WORKER_ID)).toBe("string");
         });
 
         it("does not resolve or load anything for an undetected project", () => {
@@ -155,8 +155,8 @@ describe("framework-compose-plugin", () => {
 
             const plugin = frameworkComposePlugin(baseOptions(), {});
 
-            expect(callResolveId(plugin, CIRRUS_WORKER_VIRTUAL_ID)).toBeUndefined();
-            expect(callLoad(plugin, RESOLVED_CIRRUS_WORKER_ID)).toBeUndefined();
+            expect(callResolveId(plugin, LUNORA_WORKER_VIRTUAL_ID)).toBeUndefined();
+            expect(callLoad(plugin, RESOLVED_LUNORA_WORKER_ID)).toBeUndefined();
         });
     });
 
@@ -164,7 +164,7 @@ describe("framework-compose-plugin", () => {
         it("emits a TanStack Start entry that imports the server entry namespace and composes it", () => {
             expect.hasAssertions();
 
-            const code = buildWorkerEntrySource("tanstack-start", "./cirrus/_generated");
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated");
 
             expect(code).toContain('import * as ssrModule from "@tanstack/react-start/server-entry"');
             expect(code).toContain("httpRouter: ssrModule.default");
@@ -175,13 +175,13 @@ describe("framework-compose-plugin", () => {
             expect.hasAssertions();
 
             // SvelteKit is class B — no class-A worker wiring exists for it.
-            expect(() => buildWorkerEntrySource("sveltekit", "./cirrus/_generated")).toThrow(/no class-A worker wiring/);
+            expect(() => buildWorkerEntrySource("sveltekit", "./lunora/_generated")).toThrow(/no class-A worker wiring/);
         });
 
         it("does not re-export the generated container classes by default", () => {
             expect.hasAssertions();
 
-            expect(buildWorkerEntrySource("tanstack-start", "./cirrus/_generated")).not.toContain("/containers");
+            expect(buildWorkerEntrySource("tanstack-start", "./lunora/_generated")).not.toContain("/containers");
         });
 
         it("re-exports the generated container classes when the project declares containers", () => {
@@ -190,9 +190,9 @@ describe("framework-compose-plugin", () => {
             // wrangler requires every container class_name to be exported by the
             // worker; a class-A app has no hand-written entry, so the composed one
             // must forward them.
-            const code = buildWorkerEntrySource("tanstack-start", "./cirrus/_generated", true);
+            const code = buildWorkerEntrySource("tanstack-start", "./lunora/_generated", true);
 
-            expect(code).toContain('export * from "./cirrus/_generated/containers"');
+            expect(code).toContain('export * from "./lunora/_generated/containers"');
         });
     });
 });

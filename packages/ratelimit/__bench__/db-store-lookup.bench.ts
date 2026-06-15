@@ -1,4 +1,4 @@
-import type { Id } from "@cirrus/values";
+import type { Id } from "@lunora/values";
 import { bench, describe } from "vitest";
 
 import type { RateLimitDb, RateLimitDbIndexRange, RateLimitDbQuery, RateLimitStore } from "../src/index";

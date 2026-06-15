@@ -1,9 +1,9 @@
 /**
- * `@cirrus/container/bridge` — the container→Cirrus client.
+ * `@lunora/container/bridge` — the container→Lunora client.
  *
  * Container code (any JS runtime — Node, Bun, Deno) uses this to call back
- * into the app's Cirrus functions over the Worker's HTTP RPC endpoint
- * (`POST /_cirrus/rpc`), so a container can read/write app state through the
+ * into the app's Lunora functions over the Worker's HTTP RPC endpoint
+ * (`POST /_lunora/rpc`), so a container can read/write app state through the
  * same queries/mutations/actions the browser uses instead of reaching into a
  * database directly.
  *
@@ -14,8 +14,8 @@
  * Non-JS containers can implement the same one-line contract directly.
  */
 
-/** The RPC path the Cirrus Worker exposes. */
-const RPC_PATH = "/_cirrus/rpc";
+/** The RPC path the Lunora Worker exposes. */
+const RPC_PATH = "/_lunora/rpc";
 
 /** A `fetch` implementation — defaults to the runtime global. */
 type FetchLike = (
@@ -25,8 +25,8 @@ type FetchLike = (
 
 interface ContainerBridgeOptions {
     /**
-     * Base URL of the deployed Cirrus Worker (no trailing `/_cirrus/rpc`), e.g.
-     * `https://my-app.workers.dev`. In a Cirrus container, surface it as an
+     * Base URL of the deployed Lunora Worker (no trailing `/_lunora/rpc`), e.g.
+     * `https://my-app.workers.dev`. In a Lunora container, surface it as an
      * `env` value on the definition.
      */
     baseUrl: string;
@@ -41,7 +41,7 @@ interface ContainerBridgeOptions {
     token?: string;
 }
 
-/** Thrown when a Cirrus function returns an error envelope. Carries the wire `code`. */
+/** Thrown when a Lunora function returns an error envelope. Carries the wire `code`. */
 class ContainerBridgeError extends Error {
     public readonly code: string;
 
@@ -53,27 +53,27 @@ class ContainerBridgeError extends Error {
 }
 
 /**
- * Structural mirror of `@cirrus/client`'s `FunctionReference` — the typed
+ * Structural mirror of `@lunora/client`'s `FunctionReference` — the typed
  * handle the generated `_generated/api` object carries. Declared locally (not
  * imported) so the bridge stays dependency-free and its `.d.ts` is
- * self-contained; the `__cirrusPhantom` shape matches, so a real `api.x.y`
+ * self-contained; the `__lunoraPhantom` shape matches, so a real `api.x.y`
  * reference is assignable and its arg/return types are inferable.
  */
 interface BridgeFunctionReference<Args = unknown, Result = unknown> {
-    readonly __cirrusPhantom?: { args: Args; returns: Result };
-    readonly __cirrusRef: string;
+    readonly __lunoraPhantom?: { args: Args; returns: Result };
+    readonly __lunoraRef: string;
 }
 
-/** Infer the args type from a {@link BridgeFunctionReference} (or a `@cirrus/client` reference). */
-type ArgsOfReference<Reference> = Reference extends { __cirrusPhantom?: { args: infer Args } } ? Args : never;
+/** Infer the args type from a {@link BridgeFunctionReference} (or a `@lunora/client` reference). */
+type ArgsOfReference<Reference> = Reference extends { __lunoraPhantom?: { args: infer Args } } ? Args : never;
 
-/** Infer the result type from a {@link BridgeFunctionReference} (or a `@cirrus/client` reference). */
-type ResultOfReference<Reference> = Reference extends { __cirrusPhantom?: { returns: infer Result } } ? Result : never;
+/** Infer the result type from a {@link BridgeFunctionReference} (or a `@lunora/client` reference). */
+type ResultOfReference<Reference> = Reference extends { __lunoraPhantom?: { returns: infer Result } } ? Result : never;
 
 interface ContainerBridge {
     /** Call an `action` by `namespace:fn` path. Alias of {@link ContainerBridge.call} for intent. */
     action: <Result = unknown>(functionPath: string, args?: Record<string, unknown>, shardKey?: string) => Promise<Result>;
-    /** Call any Cirrus function by `namespace:fn` path; the server resolves its kind. */
+    /** Call any Lunora function by `namespace:fn` path; the server resolves its kind. */
     call: <Result = unknown>(functionPath: string, args?: Record<string, unknown>, shardKey?: string) => Promise<Result>;
     /** Call a `mutation` by `namespace:fn` path. Alias of {@link ContainerBridge.call} for intent. */
     mutation: <Result = unknown>(functionPath: string, args?: Record<string, unknown>, shardKey?: string) => Promise<Result>;
@@ -130,12 +130,12 @@ const parseResponseBody = async (response: BridgeResponse, functionPath: string)
 };
 
 /**
- * Build a container→Cirrus bridge bound to a Worker URL + token.
+ * Build a container→Lunora bridge bound to a Worker URL + token.
  *
  * ```ts
- * const cirrus = createContainerBridge({ baseUrl: process.env.CIRRUS_URL!, token: process.env.CIRRUS_TOKEN });
- * const messages = await cirrus.query("messages:list", { limit: 20 });
- * await cirrus.mutation("messages:markProcessed", { id });
+ * const lunora = createContainerBridge({ baseUrl: process.env.LUNORA_URL!, token: process.env.LUNORA_TOKEN });
+ * const messages = await lunora.query("messages:list", { limit: 20 });
+ * await lunora.mutation("messages:markProcessed", { id });
  * ```
  *
  * `query`/`mutation`/`action` are intent-revealing aliases of one `call` — the
@@ -199,8 +199,8 @@ const createContainerBridge = (options: ContainerBridgeOptions): ContainerBridge
         reference: Reference,
         args: ArgsOfReference<Reference>,
         shardKey?: string,
-        // eslint-disable-next-line no-underscore-dangle -- `__cirrusRef` is the generated wire-format reference id
-    ): Promise<ResultOfReference<Reference>> => call<ResultOfReference<Reference>>(reference.__cirrusRef, args as Record<string, unknown>, shardKey);
+        // eslint-disable-next-line no-underscore-dangle -- `__lunoraRef` is the generated wire-format reference id
+    ): Promise<ResultOfReference<Reference>> => call<ResultOfReference<Reference>>(reference.__lunoraRef, args as Record<string, unknown>, shardKey);
 
     return { action: call, call, mutation: call, query: call, run };
 };

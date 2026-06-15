@@ -2,12 +2,12 @@
     "$schema": "../schema/registry-item.schema.json",
     "name": "mail",
     "title": "Mail",
-    "description": "Transactional email for Cirrus — a sendEmail action (plus a fire-and-forget queueEmail) built on @cirrus/mail's Cloudflare Email Workers transport, with CR/LF + header-injection-safe address handling and a dev mail catcher that surfaces every send in the studio.",
-    "docs": "Default provider is Cloudflare Email Workers (the SEND_EMAIL send binding). Set up Email Routing: verify a destination address and replace the `destination_address` placeholder in wrangler.jsonc. Set MAIL_FROM in your env/.dev.vars and re-export from cirrus/index.ts so codegen emits api.mail.sendEmail. In `cirrus dev` every send is captured into the studio's Mail tab instead of delivered (no provider setup needed) — set CIRRUS_MAIL_CAPTURE=0 to deliver in dev, or =1 to force capture. Prefer a hosted provider? Pass `apiKey` (Resend) or a custom `transport` to createMailer in cirrus/mail/index.ts. queueEmail needs a Cloudflare Queue binding — see the README before enabling it.",
+    "description": "Transactional email for Lunora — a sendEmail action (plus a fire-and-forget queueEmail) built on @lunora/mail's Cloudflare Email Workers transport, with CR/LF + header-injection-safe address handling and a dev mail catcher that surfaces every send in the studio.",
+    "docs": "Default provider is Cloudflare Email Workers (the SEND_EMAIL send binding). Set up Email Routing: verify a destination address and replace the `destination_address` placeholder in wrangler.jsonc. Set MAIL_FROM in your env/.dev.vars and re-export from lunora/index.ts so codegen emits api.mail.sendEmail. In `lunora dev` every send is captured into the studio's Mail tab instead of delivered (no provider setup needed) — set LUNORA_MAIL_CAPTURE=0 to deliver in dev, or =1 to force capture. Prefer a hosted provider? Pass `apiKey` (Resend) or a custom `transport` to createMailer in lunora/mail/index.ts. queueEmail needs a Cloudflare Queue binding — see the README before enabling it.",
     "requires": [],
     "deps": {
-        "@cirrus/mail": "workspace:*",
-        "@cirrus/server": "workspace:*"
+        "@lunora/mail": "workspace:*",
+        "@lunora/server": "workspace:*"
     },
     "bindings": [
         {
@@ -23,5 +23,5 @@
             "secret": false
         }
     ],
-    "files": [{ "from": "mail.ts", "to": "cirrus/mail/index.ts", "merge": "create-or-skip" }]
+    "files": [{ "from": "mail.ts", "to": "lunora/mail/index.ts", "merge": "create-or-skip" }]
 }

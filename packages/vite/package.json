@@ -1,15 +1,15 @@
 {
-    "name": "@cirrus/vite",
+    "name": "@lunora/vite",
     "version": "0.0.0",
     "license": "FSL-1.1-Apache-2.0",
-    "description": "The Cirrus Vite plugin: codegen, type sync, wrangler validation, and an error overlay over @cloudflare/vite-plugin",
-    "homepage": "https://cirrus.dev",
+    "description": "The Lunora Vite plugin: codegen, type sync, wrangler validation, and an error overlay over @cloudflare/vite-plugin",
+    "homepage": "https://lunora.sh",
     "bugs": {
-        "url": "https://github.com/anolilab/cirrus/issues"
+        "url": "https://github.com/anolilab/lunora/issues"
     },
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/anolilab/cirrus.git",
+        "url": "git+https://github.com/anolilab/lunora.git",
         "directory": "packages/vite"
     },
     "author": {
@@ -17,7 +17,7 @@
         "email": "d.bannert@anolilab.de"
     },
     "keywords": [
-        "cirrus",
+        "lunora",
         "cloudflare",
         "workers",
         "durable-objects",
@@ -55,8 +55,8 @@
         "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
-        "@cirrus/codegen": "workspace:*",
-        "@cirrus/config": "workspace:*",
+        "@lunora/codegen": "workspace:*",
+        "@lunora/config": "workspace:*",
         "@cloudflare/vite-plugin": "catalog:vite",
         "@visulima/vite-overlay": "catalog:vite",
         "jsonc-parser": "catalog:vite",
@@ -72,11 +72,11 @@
         "vitest": "catalog:test"
     },
     "peerDependencies": {
-        "@cirrus/studio": "workspace:*",
+        "@lunora/studio": "workspace:*",
         "vite": "catalog:vite"
     },
     "peerDependenciesMeta": {
-        "@cirrus/studio": {
+        "@lunora/studio": {
             "optional": true
         }
     },

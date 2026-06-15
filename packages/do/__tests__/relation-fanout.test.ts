@@ -8,7 +8,7 @@ import { serveRelationFanout } from "../src/relation-fanout";
 /**
  * Unit cover for the reverse cross-backend relation per-shard reader. This is the
  * body of the codegen-emitted `ShardDO.runRelationFanoutRead` override, extracted
- * into `@cirrus/do` precisely so the guard branches and the read/count dispatch
+ * into `@lunora/do` precisely so the guard branches and the read/count dispatch
  * are testable without compiling generated output.
  */
 const schema: SchemaLike = {

@@ -10,7 +10,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { MaskOptions, MaskPolicies, Middleware } from "../src/index";
-import { CirrusError, definePermission, defineRole, initCirrus, mask } from "../src/index";
+import { LunoraError, definePermission, defineRole, initLunora, mask } from "../src/index";
 
 /**
  * The procedure builder types `ctx.db` nominally; the mask middleware's
@@ -155,7 +155,7 @@ const createFakeDatabase = (rows: (Record<string, unknown> & { _id: string; tabl
     };
 };
 
-/** Enable the optional `getWithTable` fast-path seam (mirrors `@cirrus/do`'s `lookupById`). */
+/** Enable the optional `getWithTable` fast-path seam (mirrors `@lunora/do`'s `lookupById`). */
 const enableGetWithTable = (database: FakeDatabase, rows: (Record<string, unknown> & { _id: string; table: string })[]): void => {
     const byId = new Map(rows.map((row) => [row._id, row] as const));
 
@@ -170,7 +170,7 @@ const enableGetWithTable = (database: FakeDatabase, rows: (Record<string, unknow
 
 /**
  * Install a chainable `query()` reader on the fake writer — the legacy
- * iterator-style reader that masking's `wrapReader` wraps. Mirrors `@cirrus/do`'s
+ * iterator-style reader that masking's `wrapReader` wraps. Mirrors `@lunora/do`'s
  * reader surface (`withIndex` / `order` / `filter` / terminal `collect` etc.) so
  * the full chain, including `.order()`, is exercised end-to-end.
  */
@@ -198,7 +198,7 @@ const enableQueryReader = (database: FakeDatabase, rows: (Record<string, unknown
     };
 };
 
-const cirrus = initCirrus.dataModel<Record<string, never>>().create();
+const lunora = initLunora.dataModel<Record<string, never>>().create();
 
 interface TestContext {
     auth: { roles?: ReadonlyArray<string>; userId: null | string };
@@ -229,7 +229,7 @@ describe("mask — read path", () => {
             { _id: "u2", email: "b@x.com", name: "Bo", table: "users" },
         ]);
 
-        const handler = cirrus.query
+        const handler = lunora.query
             .use(maskForTest({ users: { email: "redact" } }))
             .query(async ({ ctx }) => (ctx as unknown as TestContext).db.findMany("users"));
 
@@ -252,7 +252,7 @@ describe("mask — read path", () => {
 
         enableQueryReader(database, seed);
 
-        const handler = cirrus.query
+        const handler = lunora.query
             .use(maskForTest({ users: { email: "redact" } }))
             // `.order()` is a chainable reader link: it must survive the mask wrapper, not throw.
             .query(async ({ ctx }) => (ctx as unknown as TestContext).db.query("users").withIndex("by_email").order("desc").collect());
@@ -269,7 +269,7 @@ describe("mask — read path", () => {
 
         const database = createFakeDatabase([{ _id: "u1", email: "a@x.com", name: "Ann", table: "users" }]);
 
-        const handler = cirrus.query
+        const handler = lunora.query
             .use(maskForTest({ users: { email: "redact" } }))
             .query(async ({ ctx }) => (ctx as unknown as TestContext).db.findFirst("users"));
 
@@ -284,7 +284,7 @@ describe("mask — read path", () => {
 
         const database = createFakeDatabase([{ _id: "e1", email: "raw@x.com", table: "events" }]);
 
-        const handler = cirrus.query
+        const handler = lunora.query
             .use(maskForTest({ users: { email: "redact" } }))
             .query(async ({ ctx }) => (ctx as unknown as TestContext).db.findMany("events"));
 
@@ -302,7 +302,7 @@ describe("mask — read path", () => {
             { _id: "u3", email: "other@x.com", table: "users" },
         ]);
 
-        const handler = cirrus.query
+        const handler = lunora.query
             .use(maskForTest({ users: { email: "hash" } }))
             .query(async ({ ctx }) => (ctx as unknown as TestContext).db.findMany("users"));
 
@@ -330,7 +330,7 @@ describe("mask — custom strategies & bypass", () => {
 
         const database = createFakeDatabase([{ _id: "u1", phone: "555-0100", table: "users" }]);
 
-        const handler = cirrus.query
+        const handler = lunora.query
             .use(maskForTest(policies, { roles: [support] }))
             .query(async ({ ctx }) => (ctx as unknown as TestContext).db.findFirst("users"));
 
@@ -352,7 +352,7 @@ describe("mask — custom strategies & bypass", () => {
             users: { email: (value, context) => (context.row?.["role"] === "admin" ? value : "REDACTED") },
         };
 
-        const handler = cirrus.query.use(maskForTest(policies)).query(async ({ ctx }) => (ctx as unknown as TestContext).db.findFirst("users"));
+        const handler = lunora.query.use(maskForTest(policies)).query(async ({ ctx }) => (ctx as unknown as TestContext).db.findFirst("users"));
 
         const result = await handler.handler(makeContext(database, "u1"), {});
 
@@ -364,7 +364,7 @@ describe("mask — custom strategies & bypass", () => {
 
         const database = createFakeDatabase([{ _id: "u1", email: "a@x.com", table: "users" }]);
 
-        const handler = cirrus.query
+        const handler = lunora.query
             .use(maskForTest({ users: { email: "redact" } }, { bypass: ({ auth }) => auth.can("pii:view"), roles: [support] }))
             .query(async ({ ctx }) => (ctx as unknown as TestContext).db.findFirst("users"));
 
@@ -386,7 +386,7 @@ describe("mask — custom strategies & bypass", () => {
 
         const database = createFakeDatabase([{ _id: "u1", email: "a@x.com", table: "users" }]);
 
-        const handler = cirrus.query.use(maskForTest(policies)).query(async ({ ctx }) => (ctx as unknown as TestContext).db.findFirst("users"));
+        const handler = lunora.query.use(maskForTest(policies)).query(async ({ ctx }) => (ctx as unknown as TestContext).db.findFirst("users"));
 
         const result = await handler.handler(makeContext(database, "u1"), {});
 
@@ -400,11 +400,11 @@ describe("mask — analytical reductions fail closed", () => {
 
         const database = createFakeDatabase([{ _id: "u1", salary: 100, table: "users" }]);
 
-        const handler = cirrus.query
+        const handler = lunora.query
             .use(maskForTest({ users: { salary: "redact" } }))
             .query(async ({ ctx }) => (ctx as unknown as TestContext).db.aggregate("users", { field: "salary", op: "sum" }));
 
-        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "MASK_UNSUPPORTED", name: "CirrusError" });
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "MASK_UNSUPPORTED", name: "LunoraError" });
         expect(database.calls.some((call) => call.method === "aggregate")).toBe(false);
     });
 
@@ -413,11 +413,11 @@ describe("mask — analytical reductions fail closed", () => {
 
         const database = createFakeDatabase([{ _id: "u1", email: "a@x.com", table: "users" }]);
 
-        const handler = cirrus.query
+        const handler = lunora.query
             .use(maskForTest({ users: { email: "redact" } }))
             .query(async ({ ctx }) => (ctx as unknown as TestContext).db.groupBy("users", { by: ["email"] }));
 
-        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "MASK_UNSUPPORTED", name: "CirrusError" });
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({ code: "MASK_UNSUPPORTED", name: "LunoraError" });
         expect(database.calls.some((call) => call.method === "groupBy")).toBe(false);
     });
 
@@ -426,7 +426,7 @@ describe("mask — analytical reductions fail closed", () => {
 
         const database = createFakeDatabase([{ _id: "u1", age: 30, email: "a@x.com", table: "users" }]);
 
-        const handler = cirrus.query
+        const handler = lunora.query
             .use(maskForTest({ users: { email: "redact" } }))
             .query(async ({ ctx }) => (ctx as unknown as TestContext).db.aggregate("users", { field: "age", op: "sum" }));
 
@@ -438,7 +438,7 @@ describe("mask — analytical reductions fail closed", () => {
     it("mASK_UNSUPPORTED carries HTTP status 422", () => {
         expect.assertions(1);
 
-        expect(new CirrusError("MASK_UNSUPPORTED").status).toBe(422);
+        expect(new LunoraError("MASK_UNSUPPORTED").status).toBe(422);
     });
 });
 
@@ -451,7 +451,7 @@ describe("mask — get() table resolution", () => {
 
         enableGetWithTable(database, rows);
 
-        const handler = cirrus.query.use(maskForTest({ users: { email: "redact" } })).query(async ({ ctx }) => (ctx as unknown as TestContext).db.get("u1"));
+        const handler = lunora.query.use(maskForTest({ users: { email: "redact" } })).query(async ({ ctx }) => (ctx as unknown as TestContext).db.get("u1"));
 
         const result = await handler.handler(makeContext(database, "u1"), {});
 
@@ -464,7 +464,7 @@ describe("mask — get() table resolution", () => {
 
         const database = createFakeDatabase([{ _id: "u1", email: "a@x.com", table: "users" }]);
 
-        const handler = cirrus.query.use(maskForTest({ users: { email: "redact" } })).query(async ({ ctx }) => (ctx as unknown as TestContext).db.get("u1"));
+        const handler = lunora.query.use(maskForTest({ users: { email: "redact" } })).query(async ({ ctx }) => (ctx as unknown as TestContext).db.get("u1"));
 
         const result = await handler.handler(makeContext(database, "u1"), {});
 
@@ -478,7 +478,7 @@ describe("mask — get() table resolution", () => {
 
         const database = createFakeDatabase([{ _id: "e1", email: "raw@x.com", table: "events" }]);
 
-        const handler = cirrus.query.use(maskForTest({ users: { email: "redact" } })).query(async ({ ctx }) => (ctx as unknown as TestContext).db.get("e1"));
+        const handler = lunora.query.use(maskForTest({ users: { email: "redact" } })).query(async ({ ctx }) => (ctx as unknown as TestContext).db.get("e1"));
 
         const result = await handler.handler(makeContext(database, "u1"), {});
 
@@ -493,7 +493,7 @@ describe("mask — opt-in scope & stored data", () => {
 
         const database = createFakeDatabase([{ _id: "u1", email: "a@x.com", table: "users" }]);
 
-        const handler = cirrus.query.query(async ({ ctx }) => (ctx as unknown as TestContext).db.findFirst("users"));
+        const handler = lunora.query.query(async ({ ctx }) => (ctx as unknown as TestContext).db.findFirst("users"));
 
         const result = await handler.handler(makeContext(database, "u1"), {});
 
@@ -505,7 +505,7 @@ describe("mask — opt-in scope & stored data", () => {
 
         const database = createFakeDatabase([{ _id: "u1", email: "a@x.com", table: "users" }]);
 
-        const masked = cirrus.query
+        const masked = lunora.query
             .use(maskForTest({ users: { email: "redact" } }))
             .query(async ({ ctx }) => (ctx as unknown as TestContext).db.findFirst("users"));
 
@@ -568,7 +568,7 @@ describe("mask — per-table facade (no mask bypass)", () => {
 
         const database = createFakeDatabase([{ _id: "u1", email: "a@x.com", table: "users" }]);
 
-        const handler = cirrus.query
+        const handler = lunora.query
             .use(maskForTest({ users: { email: "redact" } }))
             .query(async ({ ctx }) => (ctx as unknown as FacadeCtx).db["users"]!.findMany());
 
@@ -585,7 +585,7 @@ describe("mask — per-table facade (no mask bypass)", () => {
         let usersEntry: unknown;
         let eventsEntry: unknown;
 
-        const handler = cirrus.query.use(maskForTest({ users: { email: "redact" } })).query(async ({ ctx }) => {
+        const handler = lunora.query.use(maskForTest({ users: { email: "redact" } })).query(async ({ ctx }) => {
             const { db } = ctx as unknown as { db: Record<string, unknown> };
 
             usersEntry = db["users"];

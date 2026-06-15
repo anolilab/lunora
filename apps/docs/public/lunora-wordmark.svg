@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 96" fill="none" role="img" aria-label="lunora">
+    <rect width="320" height="96" fill="transparent" />
+    <text
+        x="10"
+        y="68"
+        font-family="Inter Tight, Inter, Geist, system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
+        font-size="72"
+        font-weight="600"
+        letter-spacing="-3"
+        fill="#0B0F19"
+    >lunora</text>
+    <circle cx="60" cy="20" r="6" fill="#FCC419" />
+</svg>

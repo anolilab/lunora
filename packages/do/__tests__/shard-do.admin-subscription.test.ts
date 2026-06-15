@@ -122,7 +122,7 @@ describe("shardDO admin subscriptions", () => {
     it("rejects an admin subscription on a non-admin socket without registering it", async () => {
         expect.assertions(3);
 
-        const shard = new AdminSubShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new AdminSubShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const ws = createFakeWebSocket();
 
         shard.registerSocket(ws, { admin: false, subs: {} });
@@ -137,7 +137,7 @@ describe("shardDO admin subscriptions", () => {
     it("seeds an admin subscription with the current value on an admin socket", async () => {
         expect.assertions(2);
 
-        const shard = new AdminSubShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new AdminSubShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const ws = createFakeWebSocket();
 
         shard.registerSocket(ws, { admin: true, subs: {} });
@@ -150,7 +150,7 @@ describe("shardDO admin subscriptions", () => {
     it("re-runs a readTablePage subscription only when its own table is written", async () => {
         expect.assertions(3);
 
-        const shard = new AdminSubShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new AdminSubShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const ws = createFakeWebSocket();
 
         shard.registerSocket(ws, { admin: true, subs: {} });
@@ -179,7 +179,7 @@ describe("shardDO admin subscriptions", () => {
     it("re-runs a wildcard admin subscription (getMetrics) on any write-flush", async () => {
         expect.assertions(1);
 
-        const shard = new AdminSubShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new AdminSubShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const ws = createFakeWebSocket();
 
         shard.registerSocket(ws, { admin: true, subs: {} });
@@ -257,7 +257,7 @@ describe("shardDO admin-socket upgrade flagging", () => {
     it("stamps admin:true when the upgrade presents the admin token via ?token", async () => {
         expect.assertions(1);
 
-        const attachment = await upgradeAndCaptureAttachment({ CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN }, `https://shard.internal/?token=${ADMIN_TOKEN}`);
+        const attachment = await upgradeAndCaptureAttachment({ LUNORA_ADMIN_TOKEN: ADMIN_TOKEN }, `https://shard.internal/?token=${ADMIN_TOKEN}`);
 
         expect(attachment).toEqual({ admin: true, subs: {} });
     });
@@ -265,15 +265,15 @@ describe("shardDO admin-socket upgrade flagging", () => {
     it("stamps admin:false when no token is presented", async () => {
         expect.assertions(1);
 
-        const attachment = await upgradeAndCaptureAttachment({ CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN }, "https://shard.internal/");
+        const attachment = await upgradeAndCaptureAttachment({ LUNORA_ADMIN_TOKEN: ADMIN_TOKEN }, "https://shard.internal/");
 
         expect(attachment).toEqual({ admin: false, subs: {} });
     });
 
-    it("accepts the admin token as an alternate credential when CIRRUS_WS_BEARER gates the socket", async () => {
+    it("accepts the admin token as an alternate credential when LUNORA_WS_BEARER gates the socket", async () => {
         expect.assertions(1);
 
-        const attachment = await upgradeAndCaptureAttachment({ CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN, CIRRUS_WS_BEARER: "user-bearer" }, "https://shard.internal/", {
+        const attachment = await upgradeAndCaptureAttachment({ LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, LUNORA_WS_BEARER: "user-bearer" }, "https://shard.internal/", {
             Authorization: `Bearer ${ADMIN_TOKEN}`,
         });
 

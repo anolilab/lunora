@@ -3,15 +3,15 @@ title: Migrations
 description: Schema-change SQL for global tables and online, resumable data migrations.
 ---
 
-Cirrus has two distinct migration surfaces, because it has two distinct
+Lunora has two distinct migration surfaces, because it has two distinct
 storage backends:
 
 - **Sharded / root tables** live in each Durable Object's own SQLite. There is
-  no schema-migration step — editing [`cirrus/schema.ts`](/docs/concepts/schema)
+  no schema-migration step — editing [`lunora/schema.ts`](/docs/concepts/schema)
   and re-running codegen is the migration. The DO provisions tables and indexes
   on demand.
 - **Global tables** (`.global()`) live in D1. A relational store needs explicit
-  `CREATE TABLE` / `ADD COLUMN` SQL, so `cirrus migrate generate` diffs your
+  `CREATE TABLE` / `ADD COLUMN` SQL, so `lunora migrate generate` diffs your
   schema and emits a timestamped `.sql` file that is applied at deploy time.
 
 Separately, **data migrations** (`defineMigration`) rewrite existing rows in a
@@ -24,17 +24,17 @@ inside each shard's DO in resumable batches.
 
 ## Schema migrations (global tables)
 
-`cirrus migrate generate` parses `cirrus/schema.ts`, filters to `.global()`
-tables, and diffs the result against `cirrus/migrations/.snapshot.json`. When
+`lunora migrate generate` parses `lunora/schema.ts`, filters to `.global()`
+tables, and diffs the result against `lunora/migrations/.snapshot.json`. When
 the diff is non-empty it writes a timestamped SQL file and updates the snapshot.
 
 ```bash
-cirrus migrate generate                    # name defaults to "auto"
-cirrus migrate generate add_email_index    # name the migration
+lunora migrate generate                    # name defaults to "auto"
+lunora migrate generate add_email_index    # name the migration
 ```
 
-This emits `cirrus/migrations/<timestamp>_<slug>.sql` and rewrites
-`cirrus/migrations/.snapshot.json`. Commit both — they are deterministic, and
+This emits `lunora/migrations/<timestamp>_<slug>.sql` and rewrites
+`lunora/migrations/.snapshot.json`. Commit both — they are deterministic, and
 the snapshot is what the next `generate` diffs against.
 
 Supported diffs: `CREATE TABLE` (new global table), `DROP TABLE` (removed
@@ -43,19 +43,19 @@ index). Unsupported deltas — column rename, column type change, dropping a
 column or index — are surfaced as a commented `unsupported` block in the
 generated file with a warning; write that SQL by hand.
 
-The generated SQL is applied through `@cirrus/d1`'s `MigrationRunner`, which
+The generated SQL is applied through `@lunora/d1`'s `MigrationRunner`, which
 tracks applied migrations in a journal table and skips ones already run, so
 re-applying is safe.
 
 ## Data migrations (sharded tables)
 
 A data migration is a per-document transform over one table. Declare it with
-`defineMigration` from `@cirrus/server` anywhere under `cirrus/` — codegen
+`defineMigration` from `@lunora/server` anywhere under `lunora/` — codegen
 discovers it through the type checker and keys a registry on its `id`.
 
 ```ts
-// cirrus/migrations.ts
-import { defineMigration } from "@cirrus/server";
+// lunora/migrations.ts
+import { defineMigration } from "@lunora/server";
 
 export const backfillReadBy = defineMigration({
     id: "backfill-read-by",
@@ -84,13 +84,13 @@ a transform should not change row identity.
 
 ### Scaffolding
 
-`cirrus migrate create <name>` writes a `defineMigration` stub into
-`cirrus/migrations.ts`, appending to the file (and adding the import) when it
+`lunora migrate create <name>` writes a `defineMigration` stub into
+`lunora/migrations.ts`, appending to the file (and adding the import) when it
 already exists. It refuses to clobber a migration with the same id or export
 name.
 
 ```bash
-cirrus migrate create backfill_read_by --table messages
+lunora migrate create backfill_read_by --table messages
 ```
 
 The free-text name is slugified into a kebab-case `id` and a camelCase export.
@@ -99,16 +99,16 @@ placeholder you'll need to fill in.
 
 ### Running a data migration
 
-`cirrus migrate up | down | status <id>` drives the cross-shard orchestrator. It
+`lunora migrate up | down | status <id>` drives the cross-shard orchestrator. It
 resolves the migration's table locally, then POSTs an admin RPC to the worker's
-`/_cirrus/migrate` endpoint, which fans the run out to every live shard of that
+`/_lunora/migrate` endpoint, which fans the run out to every live shard of that
 table and rolls the per-shard outcomes up.
 
 ```bash
-cirrus migrate up backfill-read-by             # run forward across shards
-cirrus migrate up backfill-read-by --dry-run   # preview counts, rewrite nothing
-cirrus migrate down backfill-read-by           # apply the down transform
-cirrus migrate status backfill-read-by         # per-shard run-state
+lunora migrate up backfill-read-by             # run forward across shards
+lunora migrate up backfill-read-by --dry-run   # preview counts, rewrite nothing
+lunora migrate down backfill-read-by           # apply the down transform
+lunora migrate status backfill-read-by         # per-shard run-state
 ```
 
 | Flag           | Description                                                                                    |
@@ -117,24 +117,24 @@ cirrus migrate status backfill-read-by         # per-shard run-state
 | `--batch-size` | Rows per batch, overriding the migration's own `batchSize` and the default.                    |
 | `--steps`      | Cap on batches processed this invocation (the runner's `maxBatches`). The run stays resumable. |
 | `--url`        | Worker URL (defaults to `http://localhost:8787`).                                              |
-| `--token`      | Admin bearer token. Falls back to `CIRRUS_ADMIN_TOKEN`.                                        |
+| `--token`      | Admin bearer token. Falls back to `LUNORA_ADMIN_TOKEN`.                                        |
 | `--prod`       | Target production. Requires an explicit `--url`.                                               |
 | `--yes`        | Required alongside `--prod` for `up`/`down` — confirms running against production.             |
 
-Every run is admin-gated: pass `--token` or set `CIRRUS_ADMIN_TOKEN`. Against
+Every run is admin-gated: pass `--token` or set `LUNORA_ADMIN_TOKEN`. Against
 production, `--prod` requires an explicit `--url`, and `up`/`down` additionally
 require `--yes`.
 
 You can also apply pending data migrations as part of a deploy:
 
 ```bash
-cirrus deploy --migrate --migrate-token $CIRRUS_ADMIN_TOKEN
+lunora deploy --migrate --migrate-token $LUNORA_ADMIN_TOKEN
 ```
 
 ### Resumable and idempotent
 
 Each shard's runner tracks progress — cursor, processed/changed counts, status —
-in a reserved `__cirrus_migrations` table, persisting after every batch. Two
+in a reserved `__lunora_migrations` table, persisting after every batch. Two
 properties follow:
 
 - **Resumable.** An interrupted run (or one stopped by `--steps`) resumes from
@@ -159,19 +159,19 @@ table — `id`, `direction`, `status`, `processed`, `changed`, last `updated`, a
 any `error` — over a live channel, so an in-progress migration's counts climb in
 place. You can kick off a migration by id with a direction and an optional
 dry-run toggle; a real (non-dry-run) run is behind a confirm gate. The panel
-issues no credentials of its own — it relies on the worker's `CIRRUS_ADMIN_TOKEN`
+issues no credentials of its own — it relies on the worker's `LUNORA_ADMIN_TOKEN`
 gate like the CLI.
 
 ## Resetting local state
 
-`cirrus reset` is not a migration command, but it's the companion when a local
+`lunora reset` is not a migration command, but it's the companion when a local
 schema change leaves stale dev data. It clears the local Miniflare state
-directory (`.wrangler/state`), and with `--all` also removes `.cirrus-cache`.
+directory (`.wrangler/state`), and with `--all` also removes `.lunora-cache`.
 
 ```bash
-cirrus reset          # clear .wrangler/state (prompts to confirm)
-cirrus reset --all    # also remove .cirrus-cache
-cirrus reset --yes    # skip the prompt (required when stdin is not a TTY)
+lunora reset          # clear .wrangler/state (prompts to confirm)
+lunora reset --all    # also remove .lunora-cache
+lunora reset --yes    # skip the prompt (required when stdin is not a TTY)
 ```
 
 This only touches local state — it never reaches a deployed worker or D1.
@@ -179,5 +179,5 @@ This only touches local state — it never reaches a deployed worker or D1.
 ## See also
 
 - [Schema](/docs/concepts/schema) — tables, validators, indexes, sharding, and `.global()`.
-- [CLI](/docs/api/cli) — full `cirrus migrate`, `cirrus deploy`, and `cirrus reset` reference.
+- [CLI](/docs/api/cli) — full `lunora migrate`, `lunora deploy`, and `lunora reset` reference.
 - [Studio › Database](/docs/addons/studio#database) — the Migrations panel and the rest of the data console.

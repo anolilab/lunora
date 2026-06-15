@@ -1,6 +1,6 @@
 {
     "$schema": "node_modules/wrangler/config-schema.json",
-    "name": "cirrus-example-realtime-cursors",
+    "name": "lunora-example-realtime-cursors",
     "main": "src/server/index.ts",
     "compatibility_date": "2026-04-07",
     "compatibility_flags": ["nodejs_compat"],

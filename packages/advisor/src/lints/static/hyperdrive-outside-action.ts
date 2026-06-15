@@ -5,8 +5,8 @@ import type { Lint } from "../../types";
  * Flags a Hyperdrive `ctx.sql` access inside a `query(...)` or `mutation(...)`
  * handler body.
  *
- * Hyperdrive (`@cirrus/hyperdrive`) points at an **external** Postgres/MySQL
- * database Cirrus does not own. A `ctx.sql` query is a network round-trip with a
+ * Hyperdrive (`@lunora/hyperdrive`) points at an **external** Postgres/MySQL
+ * database Lunora does not own. A `ctx.sql` query is a network round-trip with a
  * mutable result — non-deterministic, exactly like `fetch` — so it breaks the
  * determinism the coordinator relies on when it re-runs a query on subscription
  * re-evaluation or a mutation on OCC retry. Worse, external writes are invisible
@@ -27,7 +27,7 @@ import type { Lint } from "../../types";
 const hyperdriveOutsideAction: Lint = {
     categories: ["SCHEMA"],
     description:
-        "A `query`/`mutation` handler accesses Hyperdrive via `ctx.sql`. Hyperdrive hits an external database Cirrus does not own: queries are non-deterministic (like `fetch`) and external writes are invisible to live queries. `ctx.sql` is available on `ActionCtx` only and must be confined to `action` handlers.",
+        "A `query`/`mutation` handler accesses Hyperdrive via `ctx.sql`. Hyperdrive hits an external database Lunora does not own: queries are non-deterministic (like `fetch`) and external writes are invisible to live queries. `ctx.sql` is available on `ActionCtx` only and must be confined to `action` handlers.",
     facing: "EXTERNAL",
     level: "WARN",
     name: "hyperdrive_outside_action",
@@ -45,7 +45,7 @@ const hyperdriveOutsideAction: Lint = {
             findings.push(
                 emit(hyperdriveOutsideAction, {
                     cacheKey: `hyperdrive_outside_action:${call.file}:${call.line.toString()}:${call.callee}`,
-                    detail: `\`${call.callee}(…)\` in ${call.exportName} (${call.file}:${call.line.toString()}) runs inside a ${call.kind} handler — Hyperdrive's \`ctx.sql\` is non-deterministic and non-reactive, so it is available only in actions. Move the external SQL into an \`action\` and project the result into a Cirrus table if a query/mutation needs it.`,
+                    detail: `\`${call.callee}(…)\` in ${call.exportName} (${call.file}:${call.line.toString()}) runs inside a ${call.kind} handler — Hyperdrive's \`ctx.sql\` is non-deterministic and non-reactive, so it is available only in actions. Move the external SQL into an \`action\` and project the result into a Lunora table if a query/mutation needs it.`,
                     metadata: { callee: call.callee, exportName: call.exportName, file: call.file, kind: call.kind, line: call.line },
                 }),
             );

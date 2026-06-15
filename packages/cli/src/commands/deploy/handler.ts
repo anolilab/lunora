@@ -1,16 +1,16 @@
 import { existsSync, readFileSync } from "node:fs";
 
-import type { CodegenResult } from "@cirrus/codegen";
-import { discoverMigrations, runCodegen } from "@cirrus/codegen";
+import type { CodegenResult } from "@lunora/codegen";
+import { discoverMigrations, runCodegen } from "@lunora/codegen";
 import {
     DEV_VARS_FILE,
     discoverContainerInfo,
     findWranglerFile,
-    inferCirrusBindings,
+    inferLunoraBindings,
     parseDevVariableEntries,
     readWranglerJsonc,
     reconcileWranglerBindings,
-} from "@cirrus/config";
+} from "@lunora/config";
 import { join } from "@visulima/path";
 import { Spinner } from "@visulima/spinner";
 import { Project } from "ts-morph";
@@ -55,7 +55,7 @@ interface DeployCommandOptions {
 
     /**
      * When true, after a successful `wrangler deploy`, discover and run all
-     * pending data migrations via the worker's `/_cirrus/migrate` admin RPC.
+     * pending data migrations via the worker's `/_lunora/migrate` admin RPC.
      * The worker must be live (exit 0) before migrations are attempted.
      *
      * Implementation note: the status RPC returns the full shard-level
@@ -68,7 +68,7 @@ interface DeployCommandOptions {
      */
     migrate?: boolean;
 
-    /** Admin bearer token for `--migrate` (falls back to `CIRRUS_ADMIN_TOKEN`). */
+    /** Admin bearer token for `--migrate` (falls back to `LUNORA_ADMIN_TOKEN`). */
     migrateToken?: string;
 
     /** Worker URL for `--migrate` (defaults to the wrangler deploy target). */
@@ -142,9 +142,9 @@ const checkContainerDockerPreflight = (cwd: string, logger: Logger, dockerAvaila
  * Resolve the worker entry `wrangler deploy` should bundle. Class-B frameworks
  * (SvelteKit, Astro) ship a CF adapter that owns the wrangler `main` field and
  * overwrites it with its own generated worker at build time — so `main` cannot
- * itself point at Cirrus's composition. The template instead ships a
+ * itself point at Lunora's composition. The template instead ships a
  * `src/worker.ts` that imports that generated handler, wraps it with
- * `withCirrus` (mounting `/_cirrus/*`), and re-exports `ShardDO`. When that file
+ * `withLunora` (mounting `/_lunora/*`), and re-exports `ShardDO`. When that file
  * exists we pass it as the positional deploy entry so the ONE deployed worker is
  * the composed one — the positional argument overrides `main`. Class-A/C
  * templates have no `src/worker.ts` (their `main` already points at the real
@@ -159,11 +159,11 @@ const resolveComposedWorkerEntry = (cwd: string): string | undefined => (existsS
  * error message, or `undefined` when all sources exist (or none are local).
  */
 const checkContainerSourcesExist = (cwd: string, logger: Logger): string | undefined => {
-    for (const container of discoverContainerInfo(cwd, "cirrus").containers) {
+    for (const container of discoverContainerInfo(cwd, "lunora").containers) {
         const { image } = container;
 
         if (image.kind === "dockerfile" && !existsSync(join(cwd, image.dockerfilePath))) {
-            const message = `deploy blocked: container "${container.exportName}" references a Dockerfile at "${image.dockerfilePath}" that does not exist. Create it or fix the \`image\` path in cirrus/containers.ts.`;
+            const message = `deploy blocked: container "${container.exportName}" references a Dockerfile at "${image.dockerfilePath}" that does not exist. Create it or fix the \`image\` path in lunora/containers.ts.`;
 
             logger.error(message);
 
@@ -171,7 +171,7 @@ const checkContainerSourcesExist = (cwd: string, logger: Logger): string | undef
         }
 
         if (image.kind === "build" && !existsSync(join(cwd, image.buildDir))) {
-            const message = `deploy blocked: container "${container.exportName}" references a Railpack build directory "${image.buildDir}" that does not exist. Create it or fix the \`image.build\` path in cirrus/containers.ts.`;
+            const message = `deploy blocked: container "${container.exportName}" references a Railpack build directory "${image.buildDir}" that does not exist. Create it or fix the \`image.build\` path in lunora/containers.ts.`;
 
             logger.error(message);
 
@@ -222,13 +222,13 @@ const findD1PlaceholderBinding = (cwd: string): string | undefined => {
 
 /**
  * Build + push any Railpack `{ build }` containers before wrangler runs. Reads
- * the build sources from `cirrus/containers.ts` (not wrangler.jsonc — by the
+ * the build sources from `lunora/containers.ts` (not wrangler.jsonc — by the
  * time it's reconciled the build kind is indistinguishable from a registry ref)
  * and delegates to the testable {@link buildRailpackImages} orchestrator.
  * Returns an error message when a build is blocked or fails, else `undefined`.
  */
 const buildContainerImages = async (cwd: string, options: DeployCommandOptions): Promise<string | undefined> => {
-    const targets = discoverContainerInfo(cwd, "cirrus")
+    const targets = discoverContainerInfo(cwd, "lunora")
         .containers.filter((container) => container.image.kind === "build")
         .map((container) => {
             return { buildDir: (container.image as { buildDir: string }).buildDir, exportName: container.exportName };
@@ -258,7 +258,7 @@ const buildContainerImages = async (cwd: string, options: DeployCommandOptions):
  */
 const provisionBindings = async (cwd: string, logger: Logger): Promise<void> => {
     try {
-        const inferred = await inferCirrusBindings({ projectRoot: cwd });
+        const inferred = await inferLunoraBindings({ projectRoot: cwd });
         const reconciled = reconcileWranglerBindings(cwd, inferred);
 
         if (reconciled.changed) {
@@ -277,8 +277,8 @@ const provisionBindings = async (cwd: string, logger: Logger): Promise<void> => 
 
 /**
  * Print a NON-BLOCKING reminder that `wrangler deploy` does not push secrets.
- * `cirrus deploy` ships code + bindings but never uploads `.dev.vars` values —
- * those are pushed separately via `cirrus env push`. So a user who edited
+ * `lunora deploy` ships code + bindings but never uploads `.dev.vars` values —
+ * those are pushed separately via `lunora env push`. So a user who edited
  * `.dev.vars` and then deployed would otherwise be left with stale/missing
  * deployed secrets and no signal that anything drifted (Supabase #45242).
  *
@@ -308,13 +308,13 @@ const warnDevVariablesNotPushed = (cwd: string, logger: Logger): void => {
     }
 
     logger.warn(
-        `Note: \`cirrus deploy\` does not push secrets. ${DEV_VARS_FILE} has ${String(keyCount)} key(s); ` +
-            `if you changed them, run \`cirrus env push --yes\` to update the deployed secrets.`,
+        `Note: \`lunora deploy\` does not push secrets. ${DEV_VARS_FILE} has ${String(keyCount)} key(s); ` +
+            `if you changed them, run \`lunora env push --yes\` to update the deployed secrets.`,
     );
 };
 
 /**
- * Discover migration ids from `cirrus/migrations.ts` and run them in declared
+ * Discover migration ids from `lunora/migrations.ts` and run them in declared
  * order against the now-live worker. The worker's `MigrationRunner` is
  * idempotent — running `up` on an already-applied migration is a no-op —
  * so iterating every declared id is safe even when some were previously applied.
@@ -327,11 +327,11 @@ const warnDevVariablesNotPushed = (cwd: string, logger: Logger): void => {
  */
 const runPostDeployMigrations = async (options: DeployCommandOptions, cwd: string): Promise<number> => {
     const project = new Project({ skipAddingFilesFromTsConfig: true });
-    const cirrusDirectory = join(cwd, "cirrus");
+    const lunoraDirectory = join(cwd, "lunora");
     let migrations: ReadonlyArray<{ id: string; table: string }>;
 
     try {
-        migrations = discoverMigrations(project, cirrusDirectory);
+        migrations = discoverMigrations(project, lunoraDirectory);
     } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
 
@@ -341,7 +341,7 @@ const runPostDeployMigrations = async (options: DeployCommandOptions, cwd: strin
     }
 
     if (migrations.length === 0) {
-        options.logger.info("--migrate: no data migrations declared in cirrus/");
+        options.logger.info("--migrate: no data migrations declared in lunora/");
 
         return 0;
     }
@@ -643,7 +643,7 @@ const runDeployCommand = async (options: DeployCommandOptions): Promise<DeployCo
     return result;
 };
 
-/** `cirrus deploy` handler (lazy-loaded via the command's `loader`). */
+/** `lunora deploy` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions>(async ({ cwd, logger, options }) => {
     const result = await runDeployCommand({
         allowSchemaDrift: options.allowSchemaDrift === true,

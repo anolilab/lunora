@@ -1,17 +1,17 @@
-import type { Preloaded, ReturnOf } from "@cirrus/client";
-import { useMutation, usePreloadedQuery } from "@cirrus/react";
-import { createServerClient, preloadQuery } from "@cirrus/react/server";
+import type { Preloaded, ReturnOf } from "@lunora/client";
+import { useMutation, usePreloadedQuery } from "@lunora/react";
+import { createServerClient, preloadQuery } from "@lunora/react/server";
 import { createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { useState } from "react";
 
-import { api } from "../../cirrus/_generated/api";
+import { api } from "../../lunora/_generated/api";
 
 const channelId = "channel:demo" as const;
 
 /**
  * SSR loader: runs on the server (Cloudflare Worker) before the route renders.
- * Builds a request-scoped CirrusClient that uses the HTTP RPC path (/_cirrus/rpc).
+ * Builds a request-scoped LunoraClient that uses the HTTP RPC path (/_lunora/rpc).
  *
  * `createServerFn` is imported from "@tanstack/react-start" (the allowed client-safe
  * entry). The handler closure is tree-shaken away from the client bundle — only a
@@ -22,7 +22,7 @@ const channelId = "channel:demo" as const;
  * resolved (UNLOADABLE_DEPENDENCY). Use createServerFn from the main entry instead.
  *
  * Cookie forwarding: if your app needs to forward the incoming Cookie header to
- * Cirrus RPC calls for session continuity, use createMiddleware() from
+ * Lunora RPC calls for session continuity, use createMiddleware() from
  * "@tanstack/react-start" and call getRequestHeader("cookie") inside the middleware
  * handler — middleware files that import "@tanstack/react-start/server" should live
  * in a dedicated *.server.ts file so the import-protection file rule (not the
@@ -36,7 +36,7 @@ const loadMessages = createServerFn().handler(async () => {
     // Worker URL: in Cloudflare's module-worker SSR the worker and SSR renderer share
     // the same process, so loopback to localhost works. The env var lets operators
     // point at a remote worker in preview deploys.
-    const workerUrl = typeof process !== "undefined" ? (process.env["CIRRUS_WORKER_URL"] ?? "http://localhost:8787") : "http://localhost:8787";
+    const workerUrl = typeof process !== "undefined" ? (process.env["LUNORA_WORKER_URL"] ?? "http://localhost:8787") : "http://localhost:8787";
 
     const client = createServerClient({ url: workerUrl });
 
@@ -72,7 +72,7 @@ function HomePage() {
     return (
         <div style={{ fontFamily: "system-ui", padding: 24 }}>
             <h1>{"{{name}}"}</h1>
-            <p>TanStack Start + Cirrus realtime queries.</p>
+            <p>TanStack Start + Lunora realtime queries.</p>
             <pre>{JSON.stringify(data, undefined, 2)}</pre>
             <form
                 onSubmit={(event) => {

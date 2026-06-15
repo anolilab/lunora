@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import type { Preloaded, ReturnOf } from "@cirrus/client";
-import { hydratePreloaded, useMutation } from "@cirrus/vue";
+import type { Preloaded, ReturnOf } from "@lunora/client";
+import { hydratePreloaded, useMutation } from "@lunora/vue";
 import { ref } from "vue";
 
-import { api } from "../cirrus/_generated/api";
+import { api } from "../lunora/_generated/api";
 
 const channelId = "channel:demo" as const;
 

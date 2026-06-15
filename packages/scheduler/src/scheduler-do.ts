@@ -28,25 +28,25 @@ interface SchedulerEnv {
 
     /**
      * Fallback bearer token attached to the dispatch when
-     * {@link SchedulerEnv.CIRRUS_SCHEDULER_SECRET} is not configured. Sent as
+     * {@link SchedulerEnv.LUNORA_SCHEDULER_SECRET} is not configured. Sent as
      * `authorization: Bearer &lt;token>`.
      */
-    CIRRUS_ADMIN_TOKEN?: string;
+    LUNORA_ADMIN_TOKEN?: string;
 
     /**
      * Base URL where the Worker is mounted. SchedulerDO uses this at dispatch
      * time to call back into the Worker. Read at fire time (NOT taken from the
      * request body) to prevent SSRF via a forged `originUrl` field.
      */
-    CIRRUS_ORIGIN_URL?: string;
+    LUNORA_ORIGIN_URL?: string;
 
     /**
      * Shared secret used to HMAC-sign the dispatch body so the runtime receiver
-     * can authenticate the call (header `x-cirrus-scheduler-signature`). Without
+     * can authenticate the call (header `x-lunora-scheduler-signature`). Without
      * it the dispatch is sent unsigned (optionally bearer-authenticated via
-     * {@link SchedulerEnv.CIRRUS_ADMIN_TOKEN}).
+     * {@link SchedulerEnv.LUNORA_ADMIN_TOKEN}).
      */
-    CIRRUS_SCHEDULER_SECRET?: string;
+    LUNORA_SCHEDULER_SECRET?: string;
 }
 
 const HEADER_PREFIX = "id:";
@@ -99,7 +99,7 @@ interface ScheduleRequestBody {
 
     /**
      * Legacy field accepted but ignored: dispatch always uses
-     * `env.CIRRUS_ORIGIN_URL`. Kept on the wire so older `@cirrus/scheduler`
+     * `env.LUNORA_ORIGIN_URL`. Kept on the wire so older `@lunora/scheduler`
      * clients can still talk to this DO.
      */
     originUrl?: string;
@@ -399,14 +399,14 @@ class SchedulerDO {
      * drop. After {@link MAX_RETRY_ATTEMPTS} the record is parked under a
      * `dead:` key for inspection — never silently deleted.
      *
-     * The dispatch target is taken from `env.CIRRUS_ORIGIN_URL` (NOT from the
+     * The dispatch target is taken from `env.LUNORA_ORIGIN_URL` (NOT from the
      * stored record) to prevent SSRF via a forged `originUrl` on the schedule
      * request. If that env var is missing at fire time (a deploy/binding
      * regression — schedule time already enforced its presence) we return
      * `false` so the record is retried rather than silently dropped.
      */
     protected async dispatch(record: ScheduleRecord): Promise<boolean> {
-        const originUrl = typeof this.env.CIRRUS_ORIGIN_URL === "string" && this.env.CIRRUS_ORIGIN_URL.length > 0 ? this.env.CIRRUS_ORIGIN_URL : undefined;
+        const originUrl = typeof this.env.LUNORA_ORIGIN_URL === "string" && this.env.LUNORA_ORIGIN_URL.length > 0 ? this.env.LUNORA_ORIGIN_URL : undefined;
 
         if (!originUrl) {
             // The origin was configured at schedule time (handleSchedule()
@@ -441,20 +441,20 @@ class SchedulerDO {
         // runtime-side receiver re-derives the HMAC and compares.
         //
         // Env vars (read at fire time, never from the request body):
-        //   CIRRUS_SCHEDULER_SECRET — shared HMAC secret. Preferred.
-        //   CIRRUS_ADMIN_TOKEN      — fallback bearer if no HMAC secret is set.
+        //   LUNORA_SCHEDULER_SECRET — shared HMAC secret. Preferred.
+        //   LUNORA_ADMIN_TOKEN      — fallback bearer if no HMAC secret is set.
         // With neither configured the body is sent unsigned (current behaviour);
         // the receiver should then refuse to run in that posture.
         const signature = await this.signDispatch(body);
 
         if (signature !== undefined) {
-            headers["x-cirrus-scheduler-signature"] = signature;
-        } else if (typeof this.env.CIRRUS_ADMIN_TOKEN === "string" && this.env.CIRRUS_ADMIN_TOKEN.length > 0) {
-            headers.authorization = `Bearer ${this.env.CIRRUS_ADMIN_TOKEN}`;
+            headers["x-lunora-scheduler-signature"] = signature;
+        } else if (typeof this.env.LUNORA_ADMIN_TOKEN === "string" && this.env.LUNORA_ADMIN_TOKEN.length > 0) {
+            headers.authorization = `Bearer ${this.env.LUNORA_ADMIN_TOKEN}`;
         }
 
         try {
-            const response = await fetch(`${originUrl}/_cirrus/scheduler/dispatch`, {
+            const response = await fetch(`${originUrl}/_lunora/scheduler/dispatch`, {
                 body,
                 headers,
                 method: "POST",
@@ -605,13 +605,13 @@ class SchedulerDO {
     }
 
     /**
-     * HMAC-SHA-256 sign the dispatch body with `env.CIRRUS_SCHEDULER_SECRET`,
+     * HMAC-SHA-256 sign the dispatch body with `env.LUNORA_SCHEDULER_SECRET`,
      * returning a base64url signature, or `undefined` when no secret is
-     * configured. Mirrors `@cirrus/storage`'s signed-URL HMAC pattern (WebCrypto
+     * configured. Mirrors `@lunora/storage`'s signed-URL HMAC pattern (WebCrypto
      * `crypto.subtle`, available in workerd).
      */
     private async signDispatch(body: string): Promise<string | undefined> {
-        const secret = typeof this.env.CIRRUS_SCHEDULER_SECRET === "string" ? this.env.CIRRUS_SCHEDULER_SECRET : undefined;
+        const secret = typeof this.env.LUNORA_SCHEDULER_SECRET === "string" ? this.env.LUNORA_SCHEDULER_SECRET : undefined;
 
         if (!secret || secret.length === 0) {
             return undefined;
@@ -836,8 +836,8 @@ class SchedulerDO {
         // Dispatch target lives only in env — never trust an `originUrl` from
         // the caller (would be an SSRF vector). Refuse schedules if the env
         // hasn't been configured: the job would be unfireable.
-        if (typeof this.env.CIRRUS_ORIGIN_URL !== "string" || this.env.CIRRUS_ORIGIN_URL.length === 0) {
-            return SchedulerDO.error(500, "ORIGIN_NOT_CONFIGURED", "CIRRUS_ORIGIN_URL env binding must be set on the SchedulerDO");
+        if (typeof this.env.LUNORA_ORIGIN_URL !== "string" || this.env.LUNORA_ORIGIN_URL.length === 0) {
+            return SchedulerDO.error(500, "ORIGIN_NOT_CONFIGURED", "LUNORA_ORIGIN_URL env binding must be set on the SchedulerDO");
         }
 
         const pool = typeof body.pool === "string" && body.pool.length > 0 ? body.pool : undefined;

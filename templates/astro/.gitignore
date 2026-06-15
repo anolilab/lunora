@@ -3,5 +3,5 @@ node_modules
 dist
 .output
 .wrangler
-.cirrus-cache
-cirrus/_generated
+.lunora-cache
+lunora/_generated

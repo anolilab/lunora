@@ -1,7 +1,7 @@
-# @cirrus/e2e
+# @lunora/e2e
 
 End-to-end Playwright + Miniflare test suite covering the full client →
-Vite → Worker → DO → response pipeline of the Cirrus playground app.
+Vite → Worker → DO → response pipeline of the Lunora playground app.
 
 ## Quick start
 
@@ -18,7 +18,7 @@ re-use the local browser cache.
 
 | File                    | What it proves                                                                                    |
 | ----------------------- | ------------------------------------------------------------------------------------------------- |
-| `auth.spec.ts`          | Sign-up / sign-in / sign-out / weak-password rejection via `@cirrus/auth`                         |
+| `auth.spec.ts`          | Sign-up / sign-in / sign-out / weak-password rejection via `@lunora/auth`                         |
 | `subscriptions.spec.ts` | Real-time WS deltas between tabs, offline queue + replay                                          |
 | `sharding.spec.ts`      | `shardBy("channelId")` isolates state across DOs; a failed shard doesn't bring down its neighbour |
 | `optimistic.spec.ts`    | `useMutation` shows pending instantly, then either confirms or rolls back                         |
@@ -36,8 +36,8 @@ from the RPC/WS state).
 
 The worker's env comes from a deterministic `.dev.vars` the harness writes on
 boot (and restores on teardown): `AUTH_SECRET`, `STORAGE_SECRET`,
-`PUBLIC_STORAGE_BASE_URL`/`CIRRUS_ORIGIN_URL`/`CIRRUS_WORKER_ORIGIN` (all the
-worker origin), and `CIRRUS_E2E=true`. The `CIRRUS_E2E` flag gates the
+`PUBLIC_STORAGE_BASE_URL`/`LUNORA_ORIGIN_URL`/`LUNORA_WORKER_ORIGIN` (all the
+worker origin), and `LUNORA_E2E=true`. The `LUNORA_E2E` flag gates the
 `/test/reset`, `/test/sign`, `/test/schedule`, and `/test/job-status` routes the
 suite relies on — see
 [`apps/playground/src/server/index.ts`](../../apps/playground/src/server/index.ts).
@@ -51,16 +51,16 @@ the developer's `.dev.vars`.
 
 ```bash
 # Headed mode — see the browser
-pnpm --filter @cirrus/e2e e2e:headed
+pnpm --filter @lunora/e2e e2e:headed
 
 # Playwright inspector / step debugger
-pnpm --filter @cirrus/e2e e2e:debug
+pnpm --filter @lunora/e2e e2e:debug
 
 # Time-travel viewer for the latest run
-pnpm --filter @cirrus/e2e exec playwright show-trace test-results/**/trace.zip
+pnpm --filter @lunora/e2e exec playwright show-trace test-results/**/trace.zip
 
 # Skip the suite entirely (CI flake escape hatch)
-CIRRUS_E2E=skip pnpm e2e
+LUNORA_E2E=skip pnpm e2e
 ```
 
 ## Speed and stability
@@ -78,7 +78,7 @@ CIRRUS_E2E=skip pnpm e2e
 
 The `e2e` job in `.github/workflows/test.yml` runs the suite **on pull
 requests only**. It is _not_ part of `pnpm test`, so unit-test runs stay
-fast. To skip on a known-flaky runner, set `CIRRUS_E2E=skip` in the job
+fast. To skip on a known-flaky runner, set `LUNORA_E2E=skip` in the job
 env.
 
 ## Limitations

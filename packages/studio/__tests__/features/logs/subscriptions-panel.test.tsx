@@ -1,4 +1,4 @@
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraProvider } from "@lunora/react";
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
@@ -18,7 +18,7 @@ const RESULT: SubscriptionsResult = {
                 { functionPath: "presence:list", table: "presence" },
             ],
         },
-        { admin: true, id: 1, subscriptions: [{ functionPath: "__cirrus_admin__:getMetrics" }] },
+        { admin: true, id: 1, subscriptions: [{ functionPath: "__lunora_admin__:getMetrics" }] },
     ],
     totalConnections: 2,
     totalSubscriptions: 3,
@@ -38,9 +38,9 @@ const createClient = (result: SubscriptionsResult = RESULT): MockClientHooks =>
     });
 
 const renderPanel = (mock: MockClientHooks) => (
-    <CirrusProvider client={mock.asClient}>
+    <LunoraProvider client={mock.asClient}>
         <SubscriptionsPanel />
-    </CirrusProvider>
+    </LunoraProvider>
 );
 
 describe("subscriptionsPanel", () => {

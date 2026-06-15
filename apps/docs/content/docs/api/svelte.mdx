@@ -1,10 +1,10 @@
 ---
-title: "@cirrus/svelte"
-description: Svelte 5 bindings built on @cirrus/client — live query stores, optimistic mutations, and an SSR hydration handoff.
+title: "@lunora/svelte"
+description: Svelte 5 bindings built on @lunora/client — live query stores, optimistic mutations, and an SSR hydration handoff.
 ---
 
-`@cirrus/svelte` is the Svelte adapter for Cirrus. It's a thin, idiomatic layer
-over the framework-neutral [`@cirrus/client`](/docs/api/client) — which owns the
+`@lunora/svelte` is the Svelte adapter for Lunora. It's a thin, idiomatic layer
+over the framework-neutral [`@lunora/client`](/docs/api/client) — which owns the
 WebSocket transport, subscription registry, offline queue, and delta-merge — and
 re-expresses that contract as Svelte stores you read with the `$store` idiom. A
 live query is a readable store that re-emits on every server delta; an optimistic
@@ -21,10 +21,10 @@ required to build or use it.
 ```svelte
 <!-- +layout.svelte — provide the client once at the root. -->
 <script lang="ts">
-    import { CirrusClient } from "@cirrus/client";
-    import { setCirrusClient } from "@cirrus/svelte";
+    import { LunoraClient } from "@lunora/client";
+    import { setLunoraClient } from "@lunora/svelte";
 
-    setCirrusClient(new CirrusClient({ url: import.meta.env.VITE_CIRRUS_URL }));
+    setLunoraClient(new LunoraClient({ url: import.meta.env.VITE_LUNORA_URL }));
 </script>
 
 <slot />
@@ -34,29 +34,29 @@ required to build or use it.
 
 | Symbol             | Kind     | Role                                                                                       |
 | ------------------ | -------- | ------------------------------------------------------------------------------------------ |
-| `setCirrusClient`  | function | Publish the shared `CirrusClient` on Svelte context. Call once high in the tree.           |
-| `getCirrusClient`  | function | Read the `CirrusClient` from context. Throws if none was set.                              |
+| `setLunoraClient`  | function | Publish the shared `LunoraClient` on Svelte context. Call once high in the tree.           |
+| `getLunoraClient`  | function | Read the `LunoraClient` from context. Throws if none was set.                              |
 | `query`            | function | Live query as a readable store (`$store`). Sharing one store shares one subscription.      |
 | `mutation`         | function | Optimistic mutation handle: `{ data, error, pending, mutate, reset }` stores.              |
 | `hydratePreloaded` | function | Seed a readable store synchronously from an SSR `Preloaded` token, then attach the socket. |
 
-Re-exported types: `ArgsOf`, `CirrusClient`, `FunctionReference`,
+Re-exported types: `ArgsOf`, `LunoraClient`, `FunctionReference`,
 `MutationCallOptions`, `Preloaded`, `ReturnOf`, plus `QueryStore`,
 `QueryStoreOptions`, and the `MutationHandle` interface.
 
-> Unlike React/Solid/Vue (which use `useCirrus`), the Svelte provider accessor is
-> the idiomatic `getCirrusClient`. There is no `<CirrusProvider>` component — you
-> publish the client with `setCirrusClient` during component init.
+> Unlike React/Solid/Vue (which use `useLunora`), the Svelte provider accessor is
+> the idiomatic `getLunoraClient`. There is no `<LunoraProvider>` component — you
+> publish the client with `setLunoraClient` during component init.
 
-## Provider — `setCirrusClient` / `getCirrusClient`
+## Provider — `setLunoraClient` / `getLunoraClient`
 
-`setCirrusClient(client)` publishes the `CirrusClient` on the Svelte component
+`setLunoraClient(client)` publishes the `LunoraClient` on the Svelte component
 context. Call it once, high in the tree (typically your root `+layout.svelte` or
 `App.svelte`), during component initialisation — `setContext` must run while the
 component is being constructed. This is the Svelte analogue of mounting React's
-`CirrusProvider`.
+`LunoraProvider`.
 
-`getCirrusClient()` reads it from the nearest ancestor and throws if no provider
+`getLunoraClient()` reads it from the nearest ancestor and throws if no provider
 was set, so a missing client fails loudly rather than as a later `undefined`
 dereference. Most code never calls it directly — `query` / `mutation` /
 `hydratePreloaded` resolve the ambient client for you.
@@ -77,7 +77,7 @@ underlying subscription (the client de-dupes by `(fn, args, shardKey)`).
 
 ```svelte
 <script lang="ts">
-    import { query } from "@cirrus/svelte";
+    import { query } from "@lunora/svelte";
 
     import { api } from "$lib/_generated/api";
 
@@ -92,7 +92,7 @@ underlying subscription (the client de-dupes by `(fn, args, shardKey)`).
 ```
 
 `query` is overloaded: pass `client` explicitly as the first argument, or omit it
-to resolve the ambient client published by `setCirrusClient`.
+to resolve the ambient client published by `setLunoraClient`.
 
 ```ts
 // Ambient client (default):
@@ -127,7 +127,7 @@ omit it to use the ambient client.
 
 ```svelte
 <script lang="ts">
-    import { mutation } from "@cirrus/svelte";
+    import { mutation } from "@lunora/svelte";
 
     import { api } from "$lib/_generated/api";
 
@@ -163,7 +163,7 @@ await mutate(
 
 The SSR-seed-to-live-store handoff — the Svelte equivalent of React's
 `usePreloadedQuery`. Run the query on the server with `preloadQuery` (from
-`@cirrus/svelte/server`) in a SvelteKit `+page.ts` / `+layout.ts` `load`, hand the
+`@lunora/svelte/server`) in a SvelteKit `+page.ts` / `+layout.ts` `load`, hand the
 serializable `Preloaded` token to the client, and `hydratePreloaded` seeds the
 readable store **synchronously** with `preloaded.value` — so the first `$store`
 read during hydration returns the server value with no loading flash and no
@@ -173,7 +173,7 @@ plain `query` store.
 
 ```svelte
 <script lang="ts">
-    import { hydratePreloaded } from "@cirrus/svelte";
+    import { hydratePreloaded } from "@lunora/svelte";
 
     // `data.preloaded` came from a +page.ts load → preloadQuery
     export let data;
@@ -193,22 +193,22 @@ Pass `client` as a second argument to override the ambient client. On the server
 the seeded value and opens no socket — the token's `value` is the single source
 of truth for the first paint.
 
-## `@cirrus/svelte/server`
+## `@lunora/svelte/server`
 
-Server-side preload helpers, re-exported from `@cirrus/client/ssr` — the
+Server-side preload helpers, re-exported from `@lunora/client/ssr` — the
 framework-neutral server contract shared by every adapter. This entry opens no
 WebSocket and touches no browser globals, so it is safe to import from a
 SvelteKit `+page.ts` / `+layout.ts` `load`.
 
 ```ts
 // src/routes/posts/+page.ts
-import { createServerClient, preloadQuery } from "@cirrus/svelte/server";
+import { createServerClient, preloadQuery } from "@lunora/svelte/server";
 
 import { api } from "$lib/_generated/api";
 
 export async function load({ fetch }) {
     // Forward SvelteKit's fetch so the session cookie rides along.
-    const client = createServerClient({ url: import.meta.env.VITE_CIRRUS_URL, fetch });
+    const client = createServerClient({ url: import.meta.env.VITE_LUNORA_URL, fetch });
     const preloaded = await preloadQuery(client, api.posts.list, {});
 
     return { preloaded };
@@ -219,36 +219,36 @@ Exports: `createServerClient`, `preloadQuery`, `serializePreloaded`,
 `deserializePreloaded`, `preloadedQueryResult`, `getServerSession`, plus the
 `Preloaded` / `ServerClientOptions` / `ServerSession` types.
 
-## `@cirrus/svelte/worker`
+## `@lunora/svelte/worker`
 
 Single-worker composition for SvelteKit (class-B — "own CF adapter,
 hook-injection"). SvelteKit owns its Cloudflare build via
-`@sveltejs/adapter-cloudflare`, so Cirrus cannot own the worker entry; instead it
+`@sveltejs/adapter-cloudflare`, so Lunora cannot own the worker entry; instead it
 **injects** its realtime plane into the worker SvelteKit emits. Re-exports
-`withCirrus` (`withFrameworkWorker` from [`@cirrus/runtime`](/docs/api/runtime)),
-which wraps the SvelteKit handler as Cirrus's fallback `httpRouter` — the reserved
-`/_cirrus/*` endpoints hit Cirrus and everything else delegates to SvelteKit. One
+`withLunora` (`withFrameworkWorker` from [`@lunora/runtime`](/docs/api/runtime)),
+which wraps the SvelteKit handler as Lunora's fallback `httpRouter` — the reserved
+`/_lunora/*` endpoints hit Lunora and everything else delegates to SvelteKit. One
 worker, one deploy.
 
 This entry is socket-free and runs on the worker — keep it out of client code.
 
 ```ts
 // src/worker.ts (your CF Worker entry)
-import { withCirrus } from "@cirrus/svelte/worker";
+import { withLunora } from "@lunora/svelte/worker";
 import svelteKitWorker from "../.svelte-kit/cloudflare/_worker.js"; // adapter output
 
-import { auth } from "./cirrus/auth";
+import { auth } from "./lunora/auth";
 
 // `shardDO` lives on `env` (per request), so pass a factory:
-export default withCirrus(svelteKitWorker, (env) => ({ shardDO: env.SHARD, auth }));
+export default withLunora(svelteKitWorker, (env) => ({ shardDO: env.SHARD, auth }));
 ```
 
 ## See also
 
-- [@cirrus/react](/docs/api/react) — the same contract for React
-- [@cirrus/solid](/docs/api/solid) — the SolidJS adapter
-- [@cirrus/vue](/docs/api/vue) — the Vue adapter
-- [@cirrus/client](/docs/api/client) — the framework-neutral SDK this wraps
+- [@lunora/react](/docs/api/react) — the same contract for React
+- [@lunora/solid](/docs/api/solid) — the SolidJS adapter
+- [@lunora/vue](/docs/api/vue) — the Vue adapter
+- [@lunora/client](/docs/api/client) — the framework-neutral SDK this wraps
 - [Bring your framework](/docs/frameworks/bring-your-framework) — composition + adapter maturity
 - [Reactive loaders](/docs/frameworks/reactive-loaders) — the hydrate-then-subscribe handoff
 - [Real-time](/docs/concepts/realtime)

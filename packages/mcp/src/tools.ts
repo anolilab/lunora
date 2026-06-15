@@ -1,8 +1,8 @@
-import type { CirrusClient, FunctionReference } from "@cirrus/client";
+import type { LunoraClient, FunctionReference } from "@lunora/client";
 
 /**
  * The tool surface this MCP server exposes. Each tool maps onto a method the
- * `CirrusClient` already provides, so an AI agent can introspect a deployment
+ * `LunoraClient` already provides, so an AI agent can introspect a deployment
  * (functions, global tables) and invoke its functions over HTTP RPC.
  *
  * Definitions and dispatch live here — separate from the server wiring — so the
@@ -44,27 +44,27 @@ const TOOL_DEFINITIONS: ReadonlyArray<ToolDefinition> = [
     {
         description: "List the deployment's public functions (queries, mutations, actions) with their kinds.",
         inputSchema: NO_INPUT_SCHEMA,
-        name: "cirrus_list_functions",
+        name: "lunora_list_functions",
     },
     {
         description: "List the deployment's .global() tables and their column shapes.",
         inputSchema: NO_INPUT_SCHEMA,
-        name: "cirrus_list_tables",
+        name: "lunora_list_tables",
     },
     {
         description: "Run a query and return its result. Read-only.",
         inputSchema: RUN_INPUT_SCHEMA,
-        name: "cirrus_run_query",
+        name: "lunora_run_query",
     },
     {
         description: "Run a mutation and return its result. Writes data — use with care.",
         inputSchema: RUN_INPUT_SCHEMA,
-        name: "cirrus_run_mutation",
+        name: "lunora_run_mutation",
     },
     {
         description: "Run an action and return its result. May call external services.",
         inputSchema: RUN_INPUT_SCHEMA,
-        name: "cirrus_run_action",
+        name: "lunora_run_action",
     },
 ];
 
@@ -88,7 +88,7 @@ const readRunArguments = (input: Record<string, unknown>): { args: Record<string
 };
 
 const reference = (functionPath: string): FunctionReference => {
-    return { __cirrusRef: functionPath };
+    return { __lunoraRef: functionPath };
 };
 
 const ok = (value: unknown): ToolResult => {
@@ -106,26 +106,26 @@ const ok = (value: unknown): ToolResult => {
  * returned as `isError` results (rather than rejections) so the calling model
  * sees the failure as tool output, per the MCP convention.
  */
-const callTool = async (client: CirrusClient, name: string, input: Record<string, unknown>): Promise<ToolResult> => {
+const callTool = async (client: LunoraClient, name: string, input: Record<string, unknown>): Promise<ToolResult> => {
     try {
         switch (name) {
-            case "cirrus_list_functions": {
+            case "lunora_list_functions": {
                 return ok(await client.listFunctions());
             }
-            case "cirrus_list_tables": {
+            case "lunora_list_tables": {
                 return ok(await client.listGlobalTables());
             }
-            case "cirrus_run_action": {
+            case "lunora_run_action": {
                 const { args, functionPath, shardKey } = readRunArguments(input);
 
                 return ok(await client.action(reference(functionPath), args, { shardKey }));
             }
-            case "cirrus_run_mutation": {
+            case "lunora_run_mutation": {
                 const { args, functionPath, shardKey } = readRunArguments(input);
 
                 return ok(await client.mutation(reference(functionPath), args, { shardKey }));
             }
-            case "cirrus_run_query": {
+            case "lunora_run_query": {
                 const { args, functionPath, shardKey } = readRunArguments(input);
 
                 return ok(await client.query(reference(functionPath), args, { shardKey }));

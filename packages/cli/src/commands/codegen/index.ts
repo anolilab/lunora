@@ -3,8 +3,8 @@ import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/
 import { API_SPEC_HELP } from "../../util/api-spec";
 
 const codegenCommand: Command = {
-    description: "Run codegen for cirrus/ functions and schema",
-    examples: [["cirrus codegen", "Generate cirrus/_generated/ from your schema + functions"]],
+    description: "Run codegen for lunora/ functions and schema",
+    examples: [["lunora codegen", "Generate lunora/_generated/ from your schema + functions"]],
     group: "Develop",
     loader: () =>
         import("./handler").then((m) => {

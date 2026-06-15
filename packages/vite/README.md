@@ -6,7 +6,7 @@
 
 </a>
 
-<h3 align="center">The Cirrus Vite plugin: codegen, type sync, wrangler validation, and an error overlay over @cloudflare/vite-plugin</h3>
+<h3 align="center">The Lunora Vite plugin: codegen, type sync, wrangler validation, and an error overlay over @cloudflare/vite-plugin</h3>
 
 <!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
@@ -34,43 +34,43 @@
 
 ---
 
-The Cirrus Vite plugin. It wraps [`@cloudflare/vite-plugin`](https://www.npmjs.com/package/@cloudflare/vite-plugin) and layers on the project-specific pieces a Cirrus app needs: codegen on save, type sync, `wrangler.jsonc` validation, and a runtime error overlay. `cirrus()` returns a flat array of Vite plugins you drop straight into `plugins`.
+The Lunora Vite plugin. It wraps [`@cloudflare/vite-plugin`](https://www.npmjs.com/package/@cloudflare/vite-plugin) and layers on the project-specific pieces a Lunora app needs: codegen on save, type sync, `wrangler.jsonc` validation, and a runtime error overlay. `lunora()` returns a flat array of Vite plugins you drop straight into `plugins`.
 
-Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
+Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
 ## Install
 
 ```sh
-npm install @cirrus/vite
+npm install @lunora/vite
 ```
 
 ```sh
-yarn add @cirrus/vite
+yarn add @lunora/vite
 ```
 
 ```sh
-pnpm add @cirrus/vite
+pnpm add @lunora/vite
 ```
 
 ## Usage
 
 ```ts
 // vite.config.ts
-import { cirrus } from "@cirrus/vite";
+import { lunora } from "@lunora/vite";
 import { defineConfig } from "vite";
 
 export default defineConfig({
-    plugins: [cirrus()],
+    plugins: [lunora()],
 });
 ```
 
-> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/api/vite)**.
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/api/vite)**.
 
 ## Related
 
-- [`@cirrus/cli`](https://www.npmjs.com/package/@cirrus/cli) — the CLI; `cirrus dev` builds on this plugin.
-- [`@cirrus/codegen`](https://www.npmjs.com/package/@cirrus/codegen) — the code generator run on schema changes.
-- [`@cirrus/config`](https://www.npmjs.com/package/@cirrus/config) — shared `wrangler.jsonc` validation and binding inference.
+- [`@lunora/cli`](https://www.npmjs.com/package/@lunora/cli) — the CLI; `lunora dev` builds on this plugin.
+- [`@lunora/codegen`](https://www.npmjs.com/package/@lunora/codegen) — the code generator run on schema changes.
+- [`@lunora/config`](https://www.npmjs.com/package/@lunora/config) — shared `wrangler.jsonc` validation and binding inference.
 
 ## Supported Node.js Versions
 
@@ -79,14 +79,14 @@ Here's [a post on why we think this is important](https://medium.com/the-node-js
 
 ## Contributing
 
-If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/lunora/issues) and check our [Contributing](https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
 > **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
 ## Credits
 
 - [Daniel Bannert](https://github.com/prisis)
-- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
+- [All Contributors](https://github.com/anolilab/lunora/graphs/contributors)
 
 ## Made with ❤️ at Anolilab
 
@@ -94,17 +94,17 @@ This is an open source project and will always remain free to use. If you think 
 
 ## License
 
-The Cirrus vite package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The Lunora vite package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
 
 <!-- badges -->
 
 [license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
-[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
-[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/vite?style=for-the-badge
-[npm-version]: https://www.npmjs.com/package/@cirrus/vite
-[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/vite?style=for-the-badge
-[npm-downloads]: https://www.npmjs.com/package/@cirrus/vite
+[license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@lunora/vite?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@lunora/vite
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@lunora/vite?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@lunora/vite
 [prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
-[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[prs-welcome]: https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md
 [typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
 [typescript-url]: https://www.typescriptlang.org/

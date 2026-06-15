@@ -1,5 +1,5 @@
 /**
- * Phase 4 verification gate: `cirrus()` composes cleanly with the framework
+ * Phase 4 verification gate: `lunora()` composes cleanly with the framework
  * plugins Cloudflare's vite plugin officially advertises — TanStack Start and
  * React Router v7.
  *
@@ -18,11 +18,11 @@ import type { Plugin } from "vite";
 import { resolveConfig } from "vite";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { cirrus } from "../src/index";
+import { lunora } from "../src/index";
 
-const CIRRUS_WRANGLER_ERROR = /\[cirrus\] wrangler/;
+const LUNORA_WRANGLER_ERROR = /\[lunora\] wrangler/;
 
-const SCHEMA = `import { defineSchema, defineTable, v } from "@cirrus/server";
+const SCHEMA = `import { defineSchema, defineTable, v } from "@lunora/server";
 
 export const schema = defineSchema({
     messages: defineTable({
@@ -33,7 +33,7 @@ export const schema = defineSchema({
 `;
 
 const VALID_WRANGLER = `{
-    "name": "cirrus-framework-app",
+    "name": "lunora-framework-app",
     "compatibility_date": "2026-04-07",
     "compatibility_flags": ["web_socket_auto_reply_to_close"],
     "durable_objects": {
@@ -76,9 +76,9 @@ let workdir: string;
 
 describe("framework-compose", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-vite-framework-"));
-        mkdirSync(join(workdir, "cirrus"), { recursive: true });
-        writeFileSync(join(workdir, "cirrus", "schema.ts"), SCHEMA, "utf8");
+        workdir = mkdtempSync(join(tmpdir(), "lunora-vite-framework-"));
+        mkdirSync(join(workdir, "lunora"), { recursive: true });
+        writeFileSync(join(workdir, "lunora", "schema.ts"), SCHEMA, "utf8");
         writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
     });
 
@@ -86,11 +86,11 @@ describe("framework-compose", () => {
         rmSync(workdir, { force: true, recursive: true });
     });
 
-    describe("cirrus() framework composition", () => {
+    describe("lunora() framework composition", () => {
         it("composes with a TanStack-Start-shaped plugin and resolveConfig succeeds", async () => {
             expect.hasAssertions();
 
-            const cirrusPlugins = cirrus({
+            const lunoraPlugins = lunora({
                 cloudflare: false,
                 overlay: false,
                 projectRoot: workdir,
@@ -100,7 +100,7 @@ describe("framework-compose", () => {
             const resolved = await resolveConfig(
                 {
                     configFile: false,
-                    plugins: [...tanstackStartLike(), ...cirrusPlugins],
+                    plugins: [...tanstackStartLike(), ...lunoraPlugins],
                     root: workdir,
                 },
                 "serve",
@@ -110,8 +110,8 @@ describe("framework-compose", () => {
 
             expect(names).toContain("tanstack-start");
             expect(names).toContain("tanstack-start:router");
-            expect(names).toContain("cirrus:codegen");
-            expect(names).toContain("cirrus:wrangler-validator");
+            expect(names).toContain("lunora:codegen");
+            expect(names).toContain("lunora:wrangler-validator");
 
             // Plugin names must remain unique — Vite would otherwise warn loudly.
             expect(new Set(names).size).toBe(names.length);
@@ -120,7 +120,7 @@ describe("framework-compose", () => {
         it("composes with a React-Router-v7-shaped plugin and resolveConfig succeeds", async () => {
             expect.hasAssertions();
 
-            const cirrusPlugins = cirrus({
+            const lunoraPlugins = lunora({
                 cloudflare: false,
                 overlay: false,
                 projectRoot: workdir,
@@ -130,7 +130,7 @@ describe("framework-compose", () => {
             const resolved = await resolveConfig(
                 {
                     configFile: false,
-                    plugins: [reactRouterLike(), ...cirrusPlugins],
+                    plugins: [reactRouterLike(), ...lunoraPlugins],
                     root: workdir,
                 },
                 "serve",
@@ -139,8 +139,8 @@ describe("framework-compose", () => {
             const names = resolved.plugins.map((plugin) => plugin.name);
 
             expect(names).toContain("react-router");
-            expect(names).toContain("cirrus:codegen");
-            expect(names).toContain("cirrus:wrangler-validator");
+            expect(names).toContain("lunora:codegen");
+            expect(names).toContain("lunora:wrangler-validator");
             expect(new Set(names).size).toBe(names.length);
         });
 
@@ -159,7 +159,7 @@ describe("framework-compose", () => {
                 "utf8",
             );
 
-            const cirrusPlugins = cirrus({
+            const lunoraPlugins = lunora({
                 cloudflare: false,
                 overlay: false,
                 projectRoot: workdir,
@@ -169,7 +169,7 @@ describe("framework-compose", () => {
             const resolved = await resolveConfig(
                 {
                     configFile: false,
-                    plugins: [...tanstackStartLike(), ...cirrusPlugins],
+                    plugins: [...tanstackStartLike(), ...lunoraPlugins],
                     root: workdir,
                 },
                 "serve",
@@ -178,11 +178,11 @@ describe("framework-compose", () => {
             const names = resolved.plugins.map((plugin) => plugin.name);
 
             // The compose plugin is present alongside the framework + the rest of
-            // the Cirrus pipeline. Because the composed worker is an ordinary
+            // the Lunora pipeline. Because the composed worker is an ordinary
             // module entry resolved by this plugin, `@cloudflare/vite-plugin` HMRs
             // it exactly like a hand-written entry (PLAN4 M5 risk #5) — no special
             // dev path is introduced.
-            expect(names).toContain("cirrus:framework-compose");
+            expect(names).toContain("lunora:framework-compose");
             expect(names).toContain("tanstack-start");
             expect(new Set(names).size).toBe(names.length);
         });
@@ -197,14 +197,14 @@ describe("framework-compose", () => {
             writeFileSync(
                 join(workdir, "wrangler.jsonc"),
                 `{
-                "name": "cirrus-framework-app",
+                "name": "lunora-framework-app",
                 "compatibility_date": "2026-04-07"
             }
             `,
                 "utf8",
             );
 
-            const cirrusPlugins = cirrus({
+            const lunoraPlugins = lunora({
                 cloudflare: false,
                 overlay: false,
                 projectRoot: workdir,
@@ -215,12 +215,12 @@ describe("framework-compose", () => {
                 resolveConfig(
                     {
                         configFile: false,
-                        plugins: [...tanstackStartLike(), ...cirrusPlugins],
+                        plugins: [...tanstackStartLike(), ...lunoraPlugins],
                         root: workdir,
                     },
                     "serve",
                 ),
-            ).rejects.toThrow(CIRRUS_WRANGLER_ERROR);
+            ).rejects.toThrow(LUNORA_WRANGLER_ERROR);
         });
     });
 });

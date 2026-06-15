@@ -1,31 +1,31 @@
 ---
-title: "@cirrus/react"
-description: React 18+/19 hooks built on @cirrus/client, with React Server Component data loading.
+title: "@lunora/react"
+description: React 18+/19 hooks built on @lunora/client, with React Server Component data loading.
 ---
 
-`@cirrus/react` ships the official React bindings. It's a thin layer over
-`@cirrus/client` that maps the cache to `useSyncExternalStore`, so
+`@lunora/react` ships the official React bindings. It's a thin layer over
+`@lunora/client` that maps the cache to `useSyncExternalStore`, so
 concurrent React works correctly out of the box. The hooks live in the package
 root (a client boundary); server-side data loading for React Server Components /
-the Next.js App Router lives in [`@cirrus/react/server`](#server-components-nextjs-app-router).
+the Next.js App Router lives in [`@lunora/react/server`](#server-components-nextjs-app-router).
 
 ```tsx
-import { CirrusClient } from "@cirrus/client";
-import { CirrusProvider, useMutation, useQuery } from "@cirrus/react";
-import { api } from "@/cirrus/_generated/api";
+import { LunoraClient } from "@lunora/client";
+import { LunoraProvider, useMutation, useQuery } from "@lunora/react";
+import { api } from "@/lunora/_generated/api";
 
-const client = new CirrusClient({ url: import.meta.env.VITE_CIRRUS_URL });
+const client = new LunoraClient({ url: import.meta.env.VITE_LUNORA_URL });
 
 const Root = () => (
-    <CirrusProvider client={client}>
+    <LunoraProvider client={client}>
         <Chat channelId="general" />
-    </CirrusProvider>
+    </LunoraProvider>
 );
 ```
 
-## `<CirrusProvider client={...}>`
+## `<LunoraProvider client={...}>`
 
-Mounts the shared `CirrusClient` for the subtree. Required at the root.
+Mounts the shared `LunoraClient` for the subtree. Required at the root.
 
 ## `useQuery(fn, args, options?)`
 
@@ -60,13 +60,13 @@ sign-in flow; subsequent RPC calls carry the token automatically.
 
 ## Server Components (Next.js App Router)
 
-Every hook in `@cirrus/react` calls `useState`/`useEffect` and owns a live
+Every hook in `@lunora/react` calls `useState`/`useEffect` and owns a live
 WebSocket — they're **client-only**, and each module declares `"use client"`.
 Use them inside your own Client Components (the examples below mark
 `"use client"` on the files that call them).
 
 Server-side data loading lives in a separate, server-safe entry,
-**`@cirrus/react/server`**. It opens no socket and touches no browser globals,
+**`@lunora/react/server`**. It opens no socket and touches no browser globals,
 so it's safe to call from a Server Component. There are two ways to render with
 data already present on the first paint.
 
@@ -78,15 +78,15 @@ hydrated cache (same key, no loading flash) and a live subscription attaches on
 mount.
 
 ```tsx title="app/posts/page.tsx (Server Component)"
-import { createServerClient, prefetchQuery, dehydrate, HydrationBoundary } from "@cirrus/react/server";
+import { createServerClient, prefetchQuery, dehydrate, HydrationBoundary } from "@lunora/react/server";
 import { QueryClient } from "@tanstack/react-query";
 import { cookies } from "next/headers";
-import { api } from "@/cirrus/_generated/api";
+import { api } from "@/lunora/_generated/api";
 import { PostList } from "./post-list";
 
 export default async function PostsPage() {
     const client = createServerClient({
-        url: process.env.CIRRUS_URL!,
+        url: process.env.LUNORA_URL!,
         token: (await cookies()).get("session")?.value,
     });
 
@@ -104,8 +104,8 @@ export default async function PostsPage() {
 ```tsx title="app/posts/post-list.tsx (Client Component)"
 "use client";
 
-import { useQuery } from "@cirrus/react";
-import { api } from "@/cirrus/_generated/api";
+import { useQuery } from "@lunora/react";
+import { api } from "@/lunora/_generated/api";
 
 export function PostList() {
     // Reads the server-prefetched value from cache on the first render, then
@@ -132,13 +132,13 @@ When you'd rather thread one resolved value to one component without a
 prop. The client reads it with `usePreloadedQuery`.
 
 ```tsx title="Server Component"
-import { createServerClient, preloadQuery } from "@cirrus/react/server";
-import { api } from "@/cirrus/_generated/api";
+import { createServerClient, preloadQuery } from "@lunora/react/server";
+import { api } from "@/lunora/_generated/api";
 import { Post } from "./post";
 
 export default async function PostPage({ params }: { params: Promise<{ id: string }> }) {
     const { id } = await params;
-    const client = createServerClient({ url: process.env.CIRRUS_URL! });
+    const client = createServerClient({ url: process.env.LUNORA_URL! });
     const preloaded = await preloadQuery(client, api.posts.get, { id });
 
     return <Post preloaded={preloaded} />;
@@ -148,8 +148,8 @@ export default async function PostPage({ params }: { params: Promise<{ id: strin
 ```tsx title="Client Component"
 "use client";
 
-import { usePreloadedQuery } from "@cirrus/react";
-import type { Preloaded } from "@cirrus/react/server";
+import { usePreloadedQuery } from "@lunora/react";
+import type { Preloaded } from "@lunora/react/server";
 
 export function Post({ preloaded }: { preloaded: Preloaded<{ title: string }> }) {
     const post = usePreloadedQuery(preloaded); // server value first, then live
@@ -159,26 +159,26 @@ export function Post({ preloaded }: { preloaded: Preloaded<{ title: string }> })
 
 ### Providers
 
-Mount `CirrusProvider` once in a Client Component near the root. It creates (or
+Mount `LunoraProvider` once in a Client Component near the root. It creates (or
 reuses) the TanStack `QueryClient` that `HydrationBoundary` hydrates into.
 
 ```tsx title="app/providers.tsx"
 "use client";
 
-import { CirrusClient } from "@cirrus/client";
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraClient } from "@lunora/client";
+import { LunoraProvider } from "@lunora/react";
 import { useState } from "react";
 
 export function Providers({ children }: { children: React.ReactNode }) {
-    const [client] = useState(() => new CirrusClient({ url: process.env.NEXT_PUBLIC_CIRRUS_URL! }));
-    return <CirrusProvider client={client}>{children}</CirrusProvider>;
+    const [client] = useState(() => new LunoraClient({ url: process.env.NEXT_PUBLIC_LUNORA_URL! }));
+    return <LunoraProvider client={client}>{children}</LunoraProvider>;
 }
 ```
 
-### `@cirrus/react/server` reference
+### `@lunora/react/server` reference
 
 - **`createServerClient({ url, token?, fetch? })`** — a request-scoped,
-  HTTP-only `CirrusClient`. Build one **per request** so a user's `token`
+  HTTP-only `LunoraClient`. Build one **per request** so a user's `token`
   (and any cookies forwarded via `fetch`) never leak across requests.
 - **`prefetchQuery(queryClient, client, fn, args, { shardKey? }?)`** — runs the
   query and seeds `queryClient` under the key the client hooks use.
@@ -189,5 +189,5 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
 ## See also
 
-- [@cirrus/client](/docs/api/client)
+- [@lunora/client](/docs/api/client)
 - [Add-on: auth](/docs/addons/auth)

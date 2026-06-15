@@ -1,5 +1,5 @@
-import type { ScheduleRecord } from "@cirrus/client";
-import { useCirrus } from "@cirrus/react";
+import type { ScheduleRecord } from "@lunora/client";
+import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -21,8 +21,8 @@ interface ScheduledJobsProps {
 
     /**
      * Load the pending scheduled jobs. Defaults to `client.listScheduledJobs`,
-     * which hits the worker's admin-gated `/_cirrus/admin/scheduled` endpoint —
-     * so the panel works out of the box under `&lt;CirrusProvider>`, provided the
+     * which hits the worker's admin-gated `/_lunora/admin/scheduled` endpoint —
+     * so the panel works out of the box under `&lt;LunoraProvider>`, provided the
      * worker is built with a `schedulerDO` namespace and `adminToken`. Override
      * it to source jobs from elsewhere.
      */
@@ -37,12 +37,12 @@ const formatScheduledFor = (value: number): string => (Number.isFinite(value) ? 
  * scheduler. Cron *triggers* are static wrangler config and don't appear here;
  * this lists the dynamic, in-flight schedule only.
  *
- * Works out of the box under `&lt;CirrusProvider>` via the client's scheduler
+ * Works out of the box under `&lt;LunoraProvider>` via the client's scheduler
  * admin methods; pass {@link ScheduledJobsProps.loadJobs} /
  * {@link ScheduledJobsProps.cancelJob} to override the transport.
  */
 export const ScheduledJobs = ({ cancelJob, loadJobs }: ScheduledJobsProps = {}): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const t = useT();
 
     const [jobs, setJobs] = useState<ScheduleRecord[] | null>(null);
@@ -126,7 +126,7 @@ export const ScheduledJobs = ({ cancelJob, loadJobs }: ScheduledJobsProps = {}):
     );
 
     return (
-        <div className="flex flex-col gap-3" data-testid="cirrus-scheduled-jobs">
+        <div className="flex flex-col gap-3" data-testid="lunora-scheduled-jobs">
             {error !== null && (
                 <p className="text-sm text-destructive" data-testid="sj-error" role="alert">
                     {error}

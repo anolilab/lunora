@@ -195,7 +195,7 @@ describe("introspect", () => {
     });
 
     describe("readTablePage — doc-blob expansion and refs", () => {
-        // A canonical Cirrus shard table: id / _creationTime / __doc__ JSON blob.
+        // A canonical Lunora shard table: id / _creationTime / __doc__ JSON blob.
         beforeEach(() => {
             database.raw(`CREATE TABLE "posts" ("id" TEXT PRIMARY KEY, "_creationTime" REAL NOT NULL, "__doc__" TEXT NOT NULL)`);
             database.raw(`INSERT INTO "posts" VALUES ('p1', 1, '{"title":"Hi","authorId":"u1"}'), ('p2', 2, '{"title":"Yo","authorId":"u2"}')`);
@@ -378,7 +378,7 @@ describe("introspect", () => {
             expect(hasMore).toBe(false);
         });
 
-        it("throws an unknown-table CirrusError for an internal/unknown table", () => {
+        it("throws an unknown-table LunoraError for an internal/unknown table", () => {
             expect.assertions(2);
 
             expect(() => selectMatchingIds(database.sql, { table: "nope" })).toThrow(/unknown table/u);
@@ -461,7 +461,7 @@ describe("introspect", () => {
             expect(truncated).toBe(false);
         });
 
-        it("rejects an unknown column with a CirrusError (never interpolates it)", () => {
+        it("rejects an unknown column with a LunoraError (never interpolates it)", () => {
             expect.assertions(2);
 
             // A typo'd doc field that no row has must be rejected, not silently
@@ -470,7 +470,7 @@ describe("introspect", () => {
             expect(() => facetColumn(database.sql, { column: "alsoNope", table: "messages" })).toThrow(/unknown column/u);
         });
 
-        it("throws an unknown-table CirrusError for an internal/unknown table", () => {
+        it("throws an unknown-table LunoraError for an internal/unknown table", () => {
             expect.assertions(2);
 
             expect(() => facetColumn(database.sql, { column: "x", table: "nope" })).toThrow(/unknown table/u);

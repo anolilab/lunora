@@ -1,17 +1,17 @@
-/* eslint-disable no-secrets/no-secrets -- the `__cirrus_relation__:` reserved-prefix template strings are framework constants, not credentials */
+/* eslint-disable no-secrets/no-secrets -- the `__lunora_relation__:` reserved-prefix template strings are framework constants, not credentials */
 import type { DatabaseWriterLike, SchemaLike } from "./ctx-db";
 import { RELATION_FUNCTION_PREFIX } from "./introspect";
 import type { QueryArgs } from "./query-args";
 
 /**
- * Serve a reserved `__cirrus_relation__:read` / `:count` fan-out read for reverse
+ * Serve a reserved `__lunora_relation__:read` / `:count` fan-out read for reverse
  * cross-backend relations — a `.global()` (D1) parent loading a shard-local child
  * whose rows span every shard. Returns a BARE value (the child-row array for
  * `:read`, a number for `:count`) so the Query Coordinator's `concat`/`sum` merge
  * composes the per-shard results.
  *
  * This is the body of the codegen-emitted `ShardDO.runRelationFanoutRead`
- * override, extracted into the canonical `@cirrus/do` layer so the guard branches
+ * override, extracted into the canonical `@lunora/do` layer so the guard branches
  * and the read/count dispatch are real, type-checked, unit-testable code rather
  * than a template literal in the emitter (the emitted override is a one-line
  * delegation). The guards (`UNKNOWN_TABLE`, `global`-table rejection) run BEFORE
@@ -35,7 +35,7 @@ export const serveRelationFanout = async (
     const definition = schema.tables[table];
 
     if (!definition) {
-        throw Object.assign(new Error(`${RELATION_FUNCTION_PREFIX} unknown table "${table}"`), { code: "UNKNOWN_TABLE", name: "CirrusError", status: 404 });
+        throw Object.assign(new Error(`${RELATION_FUNCTION_PREFIX} unknown table "${table}"`), { code: "UNKNOWN_TABLE", name: "LunoraError", status: 404 });
     }
 
     // Only shard-local tables live in a shard's SQLite; a `.global()` table lives
@@ -43,7 +43,7 @@ export const serveRelationFanout = async (
     if (definition.shardMode?.kind === "global") {
         throw Object.assign(new Error(`${RELATION_FUNCTION_PREFIX} table "${table}" is global, not shard-local`), {
             code: "BAD_REQUEST",
-            name: "CirrusError",
+            name: "LunoraError",
             status: 400,
         });
     }

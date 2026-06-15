@@ -1,4 +1,4 @@
-export { cirrusAuthAdapter, cirrusD1Adapter } from "./adapter";
+export { lunoraAuthAdapter, lunoraD1Adapter } from "./adapter";
 export type {
     AuthAccount,
     AuthAdmin,
@@ -15,12 +15,12 @@ export type {
     ImpersonationResult,
     ListUsersOptions,
 } from "./admin";
-export { CirrusAuthAdminError, createAuthAdmin } from "./admin";
-export type { CirrusAuth, CirrusAuthOptions } from "./create-auth";
+export { LunoraAuthAdminError, createAuthAdmin } from "./admin";
+export type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 export { createAuth } from "./create-auth";
 export { DEFAULT_AUTH_BASE_PATH, handleAuthRequest } from "./handler";
-export type { CirrusAuthApiContext, WithAuthPluginsMiddleware, WithAuthPluginsOptions } from "./middleware";
-export { CirrusAuthHeadersError, withAuthPlugins } from "./middleware";
+export type { LunoraAuthApiContext, WithAuthPluginsMiddleware, WithAuthPluginsOptions } from "./middleware";
+export { LunoraAuthHeadersError, withAuthPlugins } from "./middleware";
 export { compileMigrationsSql, ensureMigrated } from "./migrate";
 export { default as authTables } from "./schema";
 export type { SessionPolicy } from "./session";

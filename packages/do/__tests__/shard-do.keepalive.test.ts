@@ -38,7 +38,7 @@ describe("shardDO websocket keepalive auto-response", () => {
         globalScope.WebSocketRequestResponsePair = original;
     });
 
-    it("registers a cirrus-ping/cirrus-pong auto-response at construction", () => {
+    it("registers a lunora-ping/lunora-pong auto-response at construction", () => {
         expect.assertions(3);
 
         globalScope.WebSocketRequestResponsePair = FakePair;
@@ -56,7 +56,7 @@ describe("shardDO websocket keepalive auto-response", () => {
 
         const pair = captured as FakePair;
 
-        expect([pair.request, pair.response]).toStrictEqual(["cirrus-ping", "cirrus-pong"]);
+        expect([pair.request, pair.response]).toStrictEqual(["lunora-ping", "lunora-pong"]);
     });
 
     it("degrades to a no-op when the runtime lacks setWebSocketAutoResponse", () => {

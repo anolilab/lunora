@@ -2,41 +2,41 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 /**
- * Project-relative directory the Cirrus agent skills ("rules") install into.
+ * Project-relative directory the Lunora agent skills ("rules") install into.
  * This is the portable [Agent Skills](https://tanstack.com/intent/latest/docs/registry)
  * location — Cursor, Claude Code, and GitHub Copilot all discover skills here.
  */
 const AGENT_RULES_DIR = ".agents/skills";
 
 /** Env var the once-per-process-tree hint guard ({@link claimAgentRulesHint}) sets. */
-const AGENT_RULES_HINT_ENV = "CIRRUS_RULES_HINT_SHOWN";
+const AGENT_RULES_HINT_ENV = "LUNORA_RULES_HINT_SHOWN";
 
 /**
- * The Cirrus agent skills shipped by `@cirrus/cli`. The first entry (`cirrus`)
+ * The Lunora agent skills shipped by `@lunora/cli`. The first entry (`lunora`)
  * is the router skill — its presence is what {@link detectAgentRules} treats as
  * "rules installed", since every other skill is reachable through it.
  */
-const CIRRUS_SKILL_NAMES: ReadonlyArray<string> = [
-    "cirrus",
-    "cirrus-quickstart",
-    "cirrus-functions",
-    "cirrus-realtime",
-    "cirrus-setup-auth",
-    "cirrus-create-package",
-    "cirrus-migration-helper",
-    "cirrus-deploy",
-    "cirrus-performance-audit",
+const LUNORA_SKILL_NAMES: ReadonlyArray<string> = [
+    "lunora",
+    "lunora-quickstart",
+    "lunora-functions",
+    "lunora-realtime",
+    "lunora-setup-auth",
+    "lunora-create-package",
+    "lunora-migration-helper",
+    "lunora-deploy",
+    "lunora-performance-audit",
 ];
 
 /** The router skill whose presence marks the rule set as installed. */
-const ROOT_SKILL_NAME = "cirrus";
+const ROOT_SKILL_NAME = "lunora";
 
 /**
  * The single "rules not installed" message shared by every surface (the CLI
- * `cirrus dev` summary and the Vite dev plugin), so the wording and the
- * pointer at `cirrus rules install` stay identical wherever it appears.
+ * `lunora dev` summary and the Vite dev plugin), so the wording and the
+ * pointer at `lunora rules install` stay identical wherever it appears.
  */
-const AGENT_RULES_HINT = "Cirrus AI rules not installed — run `cirrus rules install` so your coding agent knows how to use Cirrus.";
+const AGENT_RULES_HINT = "Lunora AI rules not installed — run `lunora rules install` so your coding agent knows how to use Lunora.";
 
 /**
  * Process-tree guard so the hint is emitted at most once. The first surface to
@@ -56,7 +56,7 @@ const claimAgentRulesHint = (): boolean => {
 
 interface AgentRulesStatus {
     /**
-     * True when the `cirrus` router skill is installed. We key on the router
+     * True when the `lunora` router skill is installed. We key on the router
      * (not "all nine present") so a project that intentionally trims the set
      * still counts as installed and isn't nagged.
      */
@@ -72,7 +72,7 @@ interface AgentRulesStatus {
 const skillFile = (projectRoot: string, name: string): string => join(projectRoot, AGENT_RULES_DIR, name, "SKILL.md");
 
 /**
- * Detect whether the Cirrus agent skills are installed in `projectRoot` by
+ * Detect whether the Lunora agent skills are installed in `projectRoot` by
  * checking the skills folder for each `SKILL.md`. Pure filesystem reads, safe to
  * call on every dev-server / CLI startup — the CLI, the Vite plugin, and the
  * studio host all use it to decide whether to surface the "rules not installed"
@@ -82,7 +82,7 @@ const detectAgentRules = (projectRoot: string): AgentRulesStatus => {
     const present: string[] = [];
     const missing: string[] = [];
 
-    for (const name of CIRRUS_SKILL_NAMES) {
+    for (const name of LUNORA_SKILL_NAMES) {
         if (existsSync(skillFile(projectRoot, name))) {
             present.push(name);
         } else {
@@ -94,4 +94,4 @@ const detectAgentRules = (projectRoot: string): AgentRulesStatus => {
 };
 
 export type { AgentRulesStatus };
-export { AGENT_RULES_DIR, AGENT_RULES_HINT, AGENT_RULES_HINT_ENV, CIRRUS_SKILL_NAMES, claimAgentRulesHint, detectAgentRules, ROOT_SKILL_NAME };
+export { AGENT_RULES_DIR, AGENT_RULES_HINT, AGENT_RULES_HINT_ENV, LUNORA_SKILL_NAMES, claimAgentRulesHint, detectAgentRules, ROOT_SKILL_NAME };

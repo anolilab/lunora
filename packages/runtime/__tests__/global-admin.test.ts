@@ -38,7 +38,7 @@ describe("createWorker — global introspection endpoints", () => {
 
         const worker = createWorker({ adminToken: ADMIN_TOKEN, globalIntrospector: introspector(), shardDO: noopNamespace });
 
-        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/global/tables", { method: "GET" }), {}, fakeContext);
+        const response = await worker.fetch(new Request("https://app.example/_lunora/admin/global/tables", { method: "GET" }), {}, fakeContext);
 
         expect(response.status).toBe(403);
     });
@@ -49,7 +49,7 @@ describe("createWorker — global introspection endpoints", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/global/tables", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
+            new Request("https://app.example/_lunora/admin/global/tables", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
             {},
             fakeContext,
         );
@@ -67,7 +67,7 @@ describe("createWorker — global introspection endpoints", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, globalIntrospector: introspector(), shardDO: noopNamespace });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/global/tables", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
+            new Request("https://app.example/_lunora/admin/global/tables", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
             {},
             fakeContext,
         );
@@ -83,7 +83,7 @@ describe("createWorker — global introspection endpoints", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, globalIntrospector: intro, shardDO: noopNamespace });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/global/table?table=organizations&limit=10&offset=5", {
+            new Request("https://app.example/_lunora/admin/global/table?table=organizations&limit=10&offset=5", {
                 headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
                 method: "GET",
             }),
@@ -102,7 +102,7 @@ describe("createWorker — global introspection endpoints", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, globalIntrospector: introspector(), shardDO: noopNamespace });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/global/table", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
+            new Request("https://app.example/_lunora/admin/global/table", { headers: { authorization: `Bearer ${ADMIN_TOKEN}` }, method: "GET" }),
             {},
             fakeContext,
         );
@@ -118,7 +118,7 @@ describe("createWorker — global introspection endpoints", () => {
         const filters = encodeURIComponent(JSON.stringify([{ column: "name", value: "Acme" }]));
 
         const response = await worker.fetch(
-            new Request(`https://app.example/_cirrus/admin/global/table?table=organizations&filters=${filters}`, {
+            new Request(`https://app.example/_lunora/admin/global/table?table=organizations&filters=${filters}`, {
                 headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
                 method: "GET",
             }),
@@ -138,7 +138,7 @@ describe("createWorker — global introspection endpoints", () => {
         const filters = encodeURIComponent(JSON.stringify([{ column: "name", value: "Acme" }]));
 
         const response = await worker.fetch(
-            new Request(`https://app.example/_cirrus/admin/global/facet?table=organizations&column=name&limit=5&filters=${filters}`, {
+            new Request(`https://app.example/_lunora/admin/global/facet?table=organizations&column=name&limit=5&filters=${filters}`, {
                 headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
                 method: "GET",
             }),
@@ -157,7 +157,7 @@ describe("createWorker — global introspection endpoints", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, globalIntrospector: introspector(), shardDO: noopNamespace });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/global/facet?table=organizations", {
+            new Request("https://app.example/_lunora/admin/global/facet?table=organizations", {
                 headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
                 method: "GET",
             }),

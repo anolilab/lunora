@@ -3,7 +3,7 @@ import { relative, sep } from "node:path";
 import type { CallExpression, Node as TsNode, Project, PropertyAccessExpression, SourceFile } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { listCirrusSourceFiles } from "./discover-functions";
+import { listLunoraSourceFiles } from "./discover-functions";
 import type { HttpRouteIR, ValidatorIR } from "./ir";
 import { parseObjectShape, parseValidator } from "./parse-validator";
 
@@ -58,7 +58,7 @@ const readMapArgument = (call: CallExpression): Record<string, ValidatorIR> => {
 /**
  * Resolve the receiver chain's root `httpRoute.&lt;verb>(path)` segment, returning
  * the method + path, or `undefined` when the chain doesn't bottom out in a
- * `httpRoute` verb factory (so it isn't a Cirrus REST route).
+ * `httpRoute` verb factory (so it isn't a Lunora REST route).
  */
 const readRootVerb = (node: TsNode): { method: string; path: string } | undefined => {
     if (!Node.isCallExpression(node)) {
@@ -98,7 +98,7 @@ const readRootVerb = (node: TsNode): { method: string; path: string } | undefine
  * key set by a later (encountered-first) `.body()` wins over an earlier one —
  * matching the runtime's `{ ...state.body, ...validators }` spread.
  *
- * Returns `undefined` when the chain isn't a Cirrus REST route (no `httpRoute`
+ * Returns `undefined` when the chain isn't a Lunora REST route (no `httpRoute`
  * root or no string-literal path).
  */
 const walkRouteChain = (terminalCall: CallExpression, terminalStep: string): RouteChainState | undefined => {
@@ -160,7 +160,7 @@ const walkRouteChain = (terminalCall: CallExpression, terminalStep: string): Rou
 /**
  * Recognise a `httpRoute` builder terminal (`.handler(...)` / `.stream(...)`),
  * returning the fully-walked {@link HttpRouteIR} or `undefined` when the chain
- * isn't a Cirrus REST route.
+ * isn't a Lunora REST route.
  */
 const routeFromTerminal = (call: CallExpression, callee: PropertyAccessExpression, exportName: string, filePath: string): HttpRouteIR | undefined => {
     const step = callee.getName();
@@ -222,17 +222,17 @@ const discoverFileRoutes = (source: SourceFile, relativePath: string): HttpRoute
 };
 
 /**
- * Scan all `.ts` files under `cirrusDir` (skipping `_generated/` and `schema.ts`)
+ * Scan all `.ts` files under `lunoraDir` (skipping `_generated/` and `schema.ts`)
  * for `export const x = httpRoute.&lt;verb>(...)…handler(...)` typed REST routes.
  * These are the headline OpenAPI target: each becomes a real `paths` entry.
  */
-const discoverHttpRoutes = (project: Project, cirrusDirectory: string): HttpRouteIR[] => {
-    const filePaths = listCirrusSourceFiles(cirrusDirectory);
+const discoverHttpRoutes = (project: Project, lunoraDirectory: string): HttpRouteIR[] => {
+    const filePaths = listLunoraSourceFiles(lunoraDirectory);
     const routes: HttpRouteIR[] = [];
 
     for (const filePath of filePaths) {
         const source: SourceFile = project.addSourceFileAtPath(filePath);
-        const relativePath = relative(cirrusDirectory, filePath).split(sep).join("/").replace(TS_EXTENSION_RE, "");
+        const relativePath = relative(lunoraDirectory, filePath).split(sep).join("/").replace(TS_EXTENSION_RE, "");
 
         routes.push(...discoverFileRoutes(source, relativePath));
     }

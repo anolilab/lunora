@@ -1,5 +1,5 @@
-import type { VectorIndexSummary, VectorQueryMatch } from "@cirrus/client";
-import { useCirrus } from "@cirrus/react";
+import type { VectorIndexSummary, VectorQueryMatch } from "@lunora/client";
+import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -13,8 +13,8 @@ import { errorMessage, fireAndForget, formatCell } from "../../lib/internal";
 interface VectorBrowserProps {
     /**
      * Load the schema's vector indexes. Defaults to `client.listVectorIndexes`,
-     * which hits the worker's admin-gated `/_cirrus/admin/vector/indexes`
-     * endpoint — so the panel works out of the box under `&lt;CirrusProvider>`,
+     * which hits the worker's admin-gated `/_lunora/admin/vector/indexes`
+     * endpoint — so the panel works out of the box under `&lt;LunoraProvider>`,
      * provided the worker is built with a `vectorIntrospector` and `adminToken`.
      */
     readonly loadIndexes?: () => Promise<VectorIndexSummary[]>;
@@ -40,7 +40,7 @@ const Detail = ({ label, value }: { readonly label: string; readonly value: numb
 
 /**
  * Read-only **vector index browser**. Lists every Vectorize index the schema
- * declares (via the generated `CIRRUS_VECTOR_INDEXES` registry — Vectorize can't
+ * declares (via the generated `LUNORA_VECTOR_INDEXES` registry — Vectorize can't
  * enumerate indexes at runtime), each merged with live `describe()` stats
  * (vector count, processing watermark) when the binding is reachable. Selecting
  * an index shows its declared shape and offers a similarity search: the worker
@@ -49,7 +49,7 @@ const Detail = ({ label, value }: { readonly label: string; readonly value: numb
  */
 
 export const VectorBrowser = ({ loadIndexes, runQuery }: VectorBrowserProps = {}): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const t = useT();
 
     const [indexes, setIndexes] = useState<VectorIndexSummary[] | null>(null);
@@ -131,7 +131,7 @@ export const VectorBrowser = ({ loadIndexes, runQuery }: VectorBrowserProps = {}
     }, [search]);
 
     return (
-        <div className="flex flex-col gap-4" data-testid="cirrus-vector-browser">
+        <div className="flex flex-col gap-4" data-testid="lunora-vector-browser">
             {error !== null && (
                 <p className="text-sm text-destructive" data-testid="vector-error" role="alert">
                     {error}

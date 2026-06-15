@@ -17,6 +17,6 @@ import { createAuthClient } from "better-auth/react";
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const authClient: any = createAuthClient({
-    baseURL: (import.meta.env.VITE_CIRRUS_URL as string | undefined) ?? globalThis.location.origin,
+    baseURL: (import.meta.env.VITE_LUNORA_URL as string | undefined) ?? globalThis.location.origin,
     plugins: [organizationClient(), adminClient()],
 });

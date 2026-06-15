@@ -1,18 +1,18 @@
 /**
- * Re-exports of common better-auth plugins, surfaced as Cirrus-friendly
+ * Re-exports of common better-auth plugins, surfaced as Lunora-friendly
  * entry points.
  *
  * better-auth ships a rich plugin ecosystem (organizations, admin /
- * impersonation, magic-link, two-factor, …). Cirrus's stance is "thin
+ * impersonation, magic-link, two-factor, …). Lunora's stance is "thin
  * wrapper" — we don't reimplement the plugins, we just expose them under
- * `@cirrus/auth/plugins` so users don't need to know about better-auth's
+ * `@lunora/auth/plugins` so users don't need to know about better-auth's
  * subpath imports.
  *
  * # Wiring
  *
  * ```ts
- * import { createAuth } from "@cirrus/auth";
- * import { admin, organization } from "@cirrus/auth/plugins";
+ * import { createAuth } from "@lunora/auth";
+ * import { admin, organization } from "@lunora/auth/plugins";
  *
  * export const auth = createAuth({
  *     database: env.DB,
@@ -27,13 +27,13 @@
  * await auth.api.createOrganization({ body: { name: "Acme" }, headers });
  * ```
  *
- * # Cirrus integration with `@cirrus/server` plugins
+ * # Lunora integration with `@lunora/server` plugins
  *
  * To surface a better-auth plugin's API under `ctx.auth.&lt;key>` in
- * Cirrus procedures, wrap it as a `definePlugin` middleware:
+ * Lunora procedures, wrap it as a `definePlugin` middleware:
  *
  * ```ts
- * import { definePlugin } from "@cirrus/server";
+ * import { definePlugin } from "@lunora/server";
  * import { auth } from "./auth";
  *
  * export const orgPlugin = definePlugin("org", {
@@ -45,7 +45,7 @@
  * ```
  *
  * The auth instance is the source of truth; this module just hands you
- * the plugin factories with a Cirrus-namespaced import path.
+ * the plugin factories with a Lunora-namespaced import path.
  */
 
 export { passkey } from "@better-auth/passkey";
@@ -55,7 +55,7 @@ export { passkey } from "@better-auth/passkey";
 // there rather than a per-plugin subpath like the others.
 export { captcha } from "better-auth/plugins";
 // `mcp` + `withMcpAuth` (OAuth-protected Model Context Protocol servers — pairs
-// with `@cirrus/mcp`) have no dedicated subpath; both ship via the barrel.
+// with `@lunora/mcp`) have no dedicated subpath; both ship via the barrel.
 export { mcp, withMcpAuth } from "better-auth/plugins";
 // Access-control builder (`createAccessControl`) — the companion to the `admin`
 // and `organization` plugins for defining custom roles/permissions.

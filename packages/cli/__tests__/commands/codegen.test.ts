@@ -26,18 +26,18 @@ const captureStdout = (body: () => void): string => {
     return captured;
 };
 
-/** Build a `cirrus/crons.ts` with `count` distinct daily schedules (distinct hours → distinct expressions). */
+/** Build a `lunora/crons.ts` with `count` distinct daily schedules (distinct hours → distinct expressions). */
 const cronsFile = (count: number): string => {
     const lines = Array.from(
         { length: count },
         (_unused, index) => `crons.daily("job ${String(index)}", { hourUTC: ${String(index)}, minuteUTC: 0 }, internal.jobs.run${String(index)}, {});`,
     );
 
-    return `import { cronJobs } from "@cirrus/scheduler";\n\nimport { internal } from "./_generated/api.js";\n\nconst crons = cronJobs();\n\n${lines.join("\n")}\n\nexport default crons;\n`;
+    return `import { cronJobs } from "@lunora/scheduler";\n\nimport { internal } from "./_generated/api.js";\n\nconst crons = cronJobs();\n\n${lines.join("\n")}\n\nexport default crons;\n`;
 };
 
 const here = dirname(fileURLToPath(import.meta.url));
-// Reuse the same fixture that @cirrus/codegen uses for its own tests.
+// Reuse the same fixture that @lunora/codegen uses for its own tests.
 const fixtureRoot = join(here, "..", "..", "..", "codegen", "__tests__", "fixtures", "simple");
 
 const silentLogger = (): Logger => {
@@ -51,23 +51,23 @@ const silentLogger = (): Logger => {
 
 let workdir: string;
 
-describe("cirrus codegen", () => {
+describe("lunora codegen", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-cli-codegen-"));
-        cpSync(join(fixtureRoot, "cirrus"), join(workdir, "cirrus"), { recursive: true });
+        workdir = mkdtempSync(join(tmpdir(), "lunora-cli-codegen-"));
+        cpSync(join(fixtureRoot, "lunora"), join(workdir, "lunora"), { recursive: true });
     });
 
     afterEach(() => {
         rmSync(workdir, { force: true, recursive: true });
     });
 
-    describe("cirrus codegen", () => {
+    describe("lunora codegen", () => {
         it("writes the three generated files", () => {
             expect.assertions(3);
 
             runCodegenCommand({ cwd: workdir, logger: silentLogger() });
 
-            const generated = join(workdir, "cirrus", "_generated");
+            const generated = join(workdir, "lunora", "_generated");
 
             expect(existsSync(join(generated, "dataModel.ts"))).toBe(true);
             expect(existsSync(join(generated, "api.ts"))).toBe(true);
@@ -79,7 +79,7 @@ describe("cirrus codegen", () => {
 
             runCodegenCommand({ cwd: workdir, logger: silentLogger() });
 
-            const generated = join(workdir, "cirrus", "_generated");
+            const generated = join(workdir, "lunora", "_generated");
 
             expect(existsSync(join(generated, "openapi.json"))).toBe(true);
             expect(existsSync(join(generated, "openrpc.json"))).toBe(false);
@@ -90,7 +90,7 @@ describe("cirrus codegen", () => {
 
             runCodegenCommand({ apiSpec: "both", cwd: workdir, logger: silentLogger() });
 
-            const generated = join(workdir, "cirrus", "_generated");
+            const generated = join(workdir, "lunora", "_generated");
 
             expect(existsSync(join(generated, "openapi.json"))).toBe(true);
             expect(existsSync(join(generated, "openrpc.json"))).toBe(true);
@@ -110,7 +110,7 @@ describe("cirrus codegen", () => {
         it("warns when distinct cron expressions exceed the per-Worker limit", () => {
             expect.assertions(2);
 
-            writeFileSync(join(workdir, "cirrus", "crons.ts"), cronsFile(4), "utf8");
+            writeFileSync(join(workdir, "lunora", "crons.ts"), cronsFile(4), "utf8");
 
             const warnings: string[] = [];
 
@@ -128,7 +128,7 @@ describe("cirrus codegen", () => {
         it("does not warn at the cron-trigger limit", () => {
             expect.assertions(1);
 
-            writeFileSync(join(workdir, "cirrus", "crons.ts"), cronsFile(3), "utf8");
+            writeFileSync(join(workdir, "lunora", "crons.ts"), cronsFile(3), "utf8");
 
             const warnings: string[] = [];
 

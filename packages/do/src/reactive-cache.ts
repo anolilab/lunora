@@ -5,7 +5,7 @@
  * memoization layer: each query result is keyed by `(functionPath, argsHash)`
  * and stamped with the row-level dependencies it read, so a subsequent call
  * with the same inputs returns the cached value instantly until a mutation
- * touches a row in its dep set. Cirrus's per-shard model is a natural fit —
+ * touches a row in its dep set. Lunora's per-shard model is a natural fit —
  * each Durable Object is its own consistency boundary, so the cache lives in
  * DO memory and invalidates on local writes with zero coordination.
  *

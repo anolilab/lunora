@@ -9,7 +9,7 @@ import discoverAuthApiCalls from "../src/discover-authapi-calls";
 
 /** An httpAction-like exported function calling ctx.authApi.banUser with headers. */
 const WITH_HEADERS = `
-    import { httpAction } from "@cirrus/server";
+    import { httpAction } from "@lunora/server";
 
     export const a = httpAction(async (ctx, request) => {
         await ctx.authApi.banUser({ body: {}, headers: request.headers });
@@ -18,7 +18,7 @@ const WITH_HEADERS = `
 
 /** An httpAction-like exported function calling ctx.authApi.banUser WITHOUT headers. */
 const WITHOUT_HEADERS = `
-    import { httpAction } from "@cirrus/server";
+    import { httpAction } from "@lunora/server";
 
     export const b = httpAction(async (ctx) => {
         await ctx.authApi.banUser({ body: {} });
@@ -27,7 +27,7 @@ const WITHOUT_HEADERS = `
 
 /** Destructured authApi call — bare authApi.setRole without headers. */
 const DESTRUCTURED = `
-    import { httpAction } from "@cirrus/server";
+    import { httpAction } from "@lunora/server";
 
     export const c = httpAction(async (ctx) => {
         const { authApi } = ctx;
@@ -37,7 +37,7 @@ const DESTRUCTURED = `
 
 /** Not exported — should be dropped. */
 const NOT_EXPORTED = `
-    import { httpAction } from "@cirrus/server";
+    import { httpAction } from "@lunora/server";
 
     const helper = async (ctx) => {
         await ctx.authApi.banUser({ body: {} });
@@ -46,7 +46,7 @@ const NOT_EXPORTED = `
 
 /** Non-literal (variable) argument — hasHeaders should be true (conservative). */
 const VARIABLE_ARG = `
-    import { httpAction } from "@cirrus/server";
+    import { httpAction } from "@lunora/server";
 
     export const d = httpAction(async (ctx, request) => {
         const opts = { body: {}, headers: request.headers };
@@ -59,8 +59,8 @@ let project: Project;
 
 describe("discoverAuthApiCalls", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-authapi-"));
-        mkdirSync(join(workdir, "cirrus"), { recursive: true });
+        workdir = mkdtempSync(join(tmpdir(), "lunora-authapi-"));
+        mkdirSync(join(workdir, "lunora"), { recursive: true });
         project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
     });
 
@@ -71,9 +71,9 @@ describe("discoverAuthApiCalls", () => {
     it("discovers a call with headers and marks hasHeaders: true", () => {
         expect.assertions(2);
 
-        writeFileSync(join(workdir, "cirrus", "with-headers.ts"), WITH_HEADERS, "utf8");
+        writeFileSync(join(workdir, "lunora", "with-headers.ts"), WITH_HEADERS, "utf8");
 
-        const calls = discoverAuthApiCalls(project, join(workdir, "cirrus"));
+        const calls = discoverAuthApiCalls(project, join(workdir, "lunora"));
 
         expect(calls).toHaveLength(1);
         expect(calls[0]).toMatchObject({ exportName: "a", file: "with-headers", hasHeaders: true, method: "banUser" });
@@ -82,9 +82,9 @@ describe("discoverAuthApiCalls", () => {
     it("discovers a call without headers and marks hasHeaders: false", () => {
         expect.assertions(2);
 
-        writeFileSync(join(workdir, "cirrus", "without-headers.ts"), WITHOUT_HEADERS, "utf8");
+        writeFileSync(join(workdir, "lunora", "without-headers.ts"), WITHOUT_HEADERS, "utf8");
 
-        const calls = discoverAuthApiCalls(project, join(workdir, "cirrus"));
+        const calls = discoverAuthApiCalls(project, join(workdir, "lunora"));
 
         expect(calls).toHaveLength(1);
         expect(calls[0]).toMatchObject({ exportName: "b", file: "without-headers", hasHeaders: false, method: "banUser" });
@@ -93,9 +93,9 @@ describe("discoverAuthApiCalls", () => {
     it("discovers a destructured authApi call without headers and marks hasHeaders: false", () => {
         expect.assertions(2);
 
-        writeFileSync(join(workdir, "cirrus", "destructured.ts"), DESTRUCTURED, "utf8");
+        writeFileSync(join(workdir, "lunora", "destructured.ts"), DESTRUCTURED, "utf8");
 
-        const calls = discoverAuthApiCalls(project, join(workdir, "cirrus"));
+        const calls = discoverAuthApiCalls(project, join(workdir, "lunora"));
 
         expect(calls).toHaveLength(1);
         expect(calls[0]).toMatchObject({ exportName: "c", file: "destructured", hasHeaders: false, method: "setRole" });
@@ -104,9 +104,9 @@ describe("discoverAuthApiCalls", () => {
     it("drops calls that are not inside an exported declaration", () => {
         expect.assertions(1);
 
-        writeFileSync(join(workdir, "cirrus", "not-exported.ts"), NOT_EXPORTED, "utf8");
+        writeFileSync(join(workdir, "lunora", "not-exported.ts"), NOT_EXPORTED, "utf8");
 
-        const calls = discoverAuthApiCalls(project, join(workdir, "cirrus"));
+        const calls = discoverAuthApiCalls(project, join(workdir, "lunora"));
 
         expect(calls).toHaveLength(0);
     });
@@ -114,9 +114,9 @@ describe("discoverAuthApiCalls", () => {
     it("treats a non-literal argument (variable) as hasHeaders: true (conservative)", () => {
         expect.assertions(2);
 
-        writeFileSync(join(workdir, "cirrus", "variable-arg.ts"), VARIABLE_ARG, "utf8");
+        writeFileSync(join(workdir, "lunora", "variable-arg.ts"), VARIABLE_ARG, "utf8");
 
-        const calls = discoverAuthApiCalls(project, join(workdir, "cirrus"));
+        const calls = discoverAuthApiCalls(project, join(workdir, "lunora"));
 
         expect(calls).toHaveLength(1);
         expect(calls[0]).toMatchObject({ exportName: "d", hasHeaders: true, method: "banUser" });

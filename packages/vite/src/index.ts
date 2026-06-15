@@ -11,13 +11,13 @@ import frameworkDetectPlugin, { createPluginContext } from "./framework-detect-p
 import logStreamPlugin from "./log-stream-plugin";
 import { planViteRemoteBindings, remoteBindingsCleanupPlugin, withRemoteBindings } from "./remote-bindings-plugin";
 import { studioPlugin } from "./studio-plugin";
-import type { CirrusPluginOptions, CirrusPlugins, CloudflarePluginOptions, OverlayPluginOptions, ResolvedCirrusPluginOptions } from "./types";
+import type { LunoraPluginOptions, LunoraPlugins, CloudflarePluginOptions, OverlayPluginOptions, ResolvedLunoraPluginOptions } from "./types";
 import { withWorkerStartupHint } from "./worker-startup-hint";
 import { wranglerValidatorPlugin } from "./wrangler-validator-plugin";
 
-const resolveOptions = (options: CirrusPluginOptions | undefined): ResolvedCirrusPluginOptions => {
+const resolveOptions = (options: LunoraPluginOptions | undefined): ResolvedLunoraPluginOptions => {
     const input = options ?? {};
-    const schemaDirectory = input.schemaDir ?? "cirrus";
+    const schemaDirectory = input.schemaDir ?? "lunora";
 
     // Each integration toggle is `boolean | options`: `false` opts out, `true`
     // (or omitted) means defaults, an object forwards its options.
@@ -54,9 +54,9 @@ const resolveOptions = (options: CirrusPluginOptions | undefined): ResolvedCirru
 };
 
 /**
- * Cirrus Vite plugin. Returns a flat array of Vite plugins that:
+ * Lunora Vite plugin. Returns a flat array of Vite plugins that:
  *
- * 1. Run `@cirrus/codegen` on startup + on schema file changes.
+ * 1. Run `@lunora/codegen` on startup + on schema file changes.
  * 2. Validate the project's `wrangler.jsonc` against the schema's implied bindings.
  * 3. Inject `@visulima/vite-overlay` for runtime error overlays (unless `overlay: false`).
  * 4. Include `@cloudflare/vite-plugin` so users get one-import setup (unless `cloudflare: false`).
@@ -65,9 +65,9 @@ const resolveOptions = (options: CirrusPluginOptions | undefined): ResolvedCirru
  * so they're imported statically — opt out per-feature via the options rather
  * than relying on whether they're installed.
  */
-const cirrus = (options?: CirrusPluginOptions): CirrusPlugins => {
+const lunora = (options?: LunoraPluginOptions): LunoraPlugins => {
     const resolved = resolveOptions(options);
-    // Shared, mutable context threaded through every Cirrus sub-plugin so the
+    // Shared, mutable context threaded through every Lunora sub-plugin so the
     // detected meta-framework is computed once and readable downstream.
     const context = createPluginContext();
     // Captures `serve` vs `build` so the dev worker var below is injected only
@@ -83,8 +83,8 @@ const cirrus = (options?: CirrusPluginOptions): CirrusPlugins => {
         frameworkDetectPlugin(resolved, context),
         // Reads the detected framework off `context` and, for a class-A
         // framework (and only when the CF integration is on), resolves the
-        // `virtual:cirrus/worker` entry to a `composeWorker`-based worker that
-        // routes `/_cirrus/*` to Cirrus and falls through to the framework SSR
+        // `virtual:lunora/worker` entry to a `composeWorker`-based worker that
+        // routes `/_lunora/*` to Lunora and falls through to the framework SSR
         // handler — so the template never hand-wires `createWorker({ httpRouter })`.
         // A strict no-op for class-C and the `cloudflare: false` BYO path.
         frameworkComposePlugin(resolved, context),
@@ -107,8 +107,8 @@ const cirrus = (options?: CirrusPluginOptions): CirrusPlugins => {
     }
 
     if (resolved.cloudflare !== false) {
-        // Honor remote-binding dev (`CIRRUS_REMOTE` / `cirrus.json` `remote`) on
-        // the `vite dev` path too, exactly like `cirrus dev`: materialize a temp
+        // Honor remote-binding dev (`LUNORA_REMOTE` / `lunora.json` `remote`) on
+        // the `vite dev` path too, exactly like `lunora dev`: materialize a temp
         // wrangler config with `"remote": true` on each eligible binding and
         // point the cloudflare plugin's `configPath` at it. DO shards stay local.
         const remotePlan = planViteRemoteBindings({ projectRoot: resolved.projectRoot });
@@ -121,7 +121,7 @@ const cirrus = (options?: CirrusPluginOptions): CirrusPlugins => {
         const cloudflareOptions = withRemoteBindings(withDevWorkerEnv(resolved.cloudflare, isServe), isServe, remotePlan);
 
         // Wrap the Cloudflare plugins' startup hooks so a Worker-entry evaluation
-        // failure (e.g. a circular import in `cirrus/`) surfaces an actionable
+        // failure (e.g. a circular import in `lunora/`) surfaces an actionable
         // hint instead of a bare, file-less `runner-worker` TypeError.
         plugins.push(...withWorkerStartupHint(cloudflare(cloudflareOptions)));
     }
@@ -138,7 +138,7 @@ export type { DetectedFramework, FrameworkClass, FrameworkDetection } from "./de
 export { detectFramework } from "./detect-framework";
 export { default as devVariablesPlugin } from "./dev-variables-plugin";
 export { createCommandProbe, DEV_WORKER_ENV_VALUE, DEV_WORKER_ENV_VAR, withDevWorkerEnv } from "./dev-worker-env";
-// Class-A composition surface. `CIRRUS_WORKER_VIRTUAL_ID` is the virtual entry a
+// Class-A composition surface. `LUNORA_WORKER_VIRTUAL_ID` is the virtual entry a
 // class-A template points its wrangler `main` at (or re-exports) so the worker
 // composing the framework SSR handler under `composeWorker`'s `httpRouter` seam
 // is emitted by the plugin, not hand-wired. `buildWorkerEntrySource` /
@@ -146,20 +146,20 @@ export { createCommandProbe, DEV_WORKER_ENV_VALUE, DEV_WORKER_ENV_VAR, withDevWo
 export type { ClassAWiring } from "./framework-compose-plugin";
 export {
     buildWorkerEntrySource,
-    CIRRUS_WORKER_VIRTUAL_ID,
+    LUNORA_WORKER_VIRTUAL_ID,
     CLASS_A_WIRING,
     default as frameworkComposePlugin,
     isAutoComposable,
 } from "./framework-compose-plugin";
-// `framework-detect-plugin` (the `CirrusPluginContext` bag + `createPluginContext`
-// + the plugin itself) stays internal plumbing — it is wired into `cirrus()`
+// `framework-detect-plugin` (the `LunoraPluginContext` bag + `createPluginContext`
+// + the plugin itself) stays internal plumbing — it is wired into `lunora()`
 // here and consumed only there + in tests until a second reader (PLAN4 M4
 // composition) justifies a public surface. Only `detectFramework` (above) is public.
 export { default as logStreamPlugin } from "./log-stream-plugin";
 export type { PlanViteRemoteOptions, ViteRemotePlan } from "./remote-bindings-plugin";
 export { planViteRemoteBindings, remoteBindingsCleanupPlugin, withRemoteBindings } from "./remote-bindings-plugin";
 export { buildStudioUrl, STUDIO_PATH, studioPlugin } from "./studio-plugin";
-export type { CirrusPluginOptions, CirrusPlugins, CloudflarePluginOptions, OverlayPluginOptions, ResolvedCirrusPluginOptions } from "./types";
+export type { LunoraPluginOptions, LunoraPlugins, CloudflarePluginOptions, OverlayPluginOptions, ResolvedLunoraPluginOptions } from "./types";
 export { augmentWorkerStartupError, isWorkerEntryEvalError, withWorkerStartupHint, WORKER_STARTUP_HINT } from "./worker-startup-hint";
 export { wranglerValidatorPlugin } from "./wrangler-validator-plugin";
-export { cirrus, VERSION };
+export { lunora, VERSION };

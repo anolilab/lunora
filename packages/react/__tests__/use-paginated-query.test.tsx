@@ -1,14 +1,14 @@
-import type { FunctionReference } from "@cirrus/client";
+import type { FunctionReference } from "@lunora/client";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
-import { CirrusProvider } from "../src/cirrus-provider";
+import { LunoraProvider } from "../src/lunora-provider";
 import { usePaginatedQuery } from "../src/use-paginated-query";
 import { createMockClient } from "./mock-client";
 
 const makeRef = (ref: string): FunctionReference => {
-    return { __cirrusRef: ref };
+    return { __lunoraRef: ref };
 };
 
 /** Keyset-style backend over a fixed list, cursor = next offset as a string. */
@@ -51,9 +51,9 @@ describe("usePaginatedQuery", () => {
         const mock = createMockClient(makePaginator(["a", "b", "c", "d", "e"]));
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <Harness />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         expect(screen.getByTestId("status").textContent).toBe("LoadingFirstPage");
@@ -75,14 +75,14 @@ describe("usePaginatedQuery", () => {
         let loadMore: (numberItems: number) => void = (_numberItems) => undefined;
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <Harness
                     // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback used once to capture the hook's `loadMore`.
                     onLoadMore={(next) => {
                         loadMore = next;
                     }}
                 />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         await waitFor(() => {
@@ -119,14 +119,14 @@ describe("usePaginatedQuery", () => {
         let loadMore: (numberItems: number) => void = (_numberItems) => undefined;
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <Harness
                     // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback used once to capture the hook's `loadMore`.
                     onLoadMore={(next) => {
                         loadMore = next;
                     }}
                 />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         await waitFor(() => {
@@ -150,9 +150,9 @@ describe("usePaginatedQuery", () => {
         const mock = createMockClient(makePaginator(["a", "b"]));
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <Harness skip />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         expect(mock.query).not.toHaveBeenCalled();
@@ -167,9 +167,9 @@ describe("usePaginatedQuery", () => {
         const mock = createMockClient(makePaginator(["a", "b"]));
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <Harness />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         await waitFor(() => {

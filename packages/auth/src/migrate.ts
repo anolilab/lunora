@@ -1,6 +1,6 @@
 import { getMigrations } from "better-auth/db/migration";
 
-import type { CirrusAuth, CirrusAuthOptions } from "./create-auth";
+import type { LunoraAuth, LunoraAuthOptions } from "./create-auth";
 
 /**
  * Single-flight cache of in-flight (and completed) migration runs, keyed by the
@@ -32,7 +32,7 @@ const migrating = new WeakMap<object, Promise<void>>();
  * via `compileMigrationsSql` + `wrangler d1 execute`; this helper exists for
  * dev/playground and small deployments.
  */
-export const ensureMigrated = async (auth: CirrusAuth | { options: CirrusAuthOptions }): Promise<void> => {
+export const ensureMigrated = async (auth: LunoraAuth | { options: LunoraAuthOptions }): Promise<void> => {
     const { options } = auth;
 
     const inFlight = migrating.get(options);
@@ -68,7 +68,7 @@ export const ensureMigrated = async (auth: CirrusAuth | { options: CirrusAuthOpt
  * `wrangler d1 execute --file -` in CI so the deploy step applies the schema
  * before the first user request.
  */
-export const compileMigrationsSql = async (options: CirrusAuthOptions): Promise<string> => {
+export const compileMigrationsSql = async (options: LunoraAuthOptions): Promise<string> => {
     const { compileMigrations } = await getMigrations(options);
 
     return compileMigrations();

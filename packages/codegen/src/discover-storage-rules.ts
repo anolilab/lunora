@@ -1,7 +1,7 @@
 /**
  * Static discovery of `.use(storageRules([...]))` chains — the storage analogue
  * of `discoverRlsMetadata` (`./discover-rls-procedures`). Walks every exported
- * Cirrus procedure's builder chain, finds each `storageRules(rules)` call, and
+ * Lunora procedure's builder chain, finds each `storageRules(rules)` call, and
  * lifts the `{ bucket, on, prefix }` shape of every literal rule into metadata
  * the studio's read-only access-rules view lists. The `when` predicate is never
  * read — it's an opaque closure whose logic belongs in code, not the UI.
@@ -9,7 +9,7 @@
 import type { CallExpression, Node as TsNode, Project, SourceFile } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { cirrusRelativePath, classifyProcedureCall, listCirrusSourceFiles } from "./discover-functions";
+import { lunoraRelativePath, classifyProcedureCall, listLunoraSourceFiles } from "./discover-functions";
 import type { StorageRuleIR, StorageRulesMetadataIR } from "./ir";
 
 /** The operations `defineStorageRule({ on })` accepts; anything else is ignored as malformed. */
@@ -135,12 +135,12 @@ const exportedProcedureChains = (sourceFile: SourceFile): { name: string; receiv
  * `.use(storageRules(...))` chains. Only the builder form can declare rules, so
  * bare-factory procedures contribute nothing.
  */
-const discoverStorageRulesMetadata = (project: Project, cirrusDirectory: string): StorageRulesMetadataIR => {
+const discoverStorageRulesMetadata = (project: Project, lunoraDirectory: string): StorageRulesMetadataIR => {
     const rules: StorageRuleIR[] = [];
 
-    for (const filePath of listCirrusSourceFiles(cirrusDirectory)) {
+    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-        const relativePath = cirrusRelativePath(cirrusDirectory, filePath);
+        const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
 
         for (const { name, receiver } of exportedProcedureChains(sourceFile)) {
             for (const call of storageRulesCallsInChain(receiver)) {

@@ -1,12 +1,12 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
 /**
- * `cirrus logs [worker]` — stream live logs from a deployed Cirrus Worker
+ * `lunora logs [worker]` — stream live logs from a deployed Lunora Worker
  * by wrapping `wrangler tail`.
  */
 const logsCommand: Command = {
     argument: { description: "Worker name (defaults to the name in wrangler config)", name: "worker", type: String },
-    description: "Stream live logs from a deployed Cirrus Worker",
+    description: "Stream live logs from a deployed Lunora Worker",
     group: "Deploy",
     loader: () =>
         import("./handler").then((m) => {

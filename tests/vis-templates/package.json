@@ -1,8 +1,8 @@
 {
-    "name": "@cirrus/vis-templates-tests",
+    "name": "@lunora/vis-templates-tests",
     "version": "0.0.0",
     "private": true,
-    "description": "Unit tests for the cirrus-* vis generators that live at /.vis/templates/.",
+    "description": "Unit tests for the lunora-* vis generators that live at /.vis/templates/.",
     "type": "module",
     "sideEffects": false,
     "scripts": {

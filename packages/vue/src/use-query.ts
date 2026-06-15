@@ -1,9 +1,9 @@
-import type { ArgsOf, CirrusClient, FunctionReference, ReturnOf, Unsubscribe } from "@cirrus/client";
-import { createQuerySubscription } from "@cirrus/client/query";
+import type { ArgsOf, LunoraClient, FunctionReference, ReturnOf, Unsubscribe } from "@lunora/client";
+import { createQuerySubscription } from "@lunora/client/query";
 import type { MaybeRefOrGetter, Ref } from "vue";
 import { getCurrentScope, onScopeDispose, shallowRef, toValue, watch } from "vue";
 
-import { useCirrus } from "./cirrus-provider";
+import { useLunora } from "./lunora-provider";
 import type { UseQueryOptions } from "./types";
 
 /**
@@ -25,7 +25,7 @@ import type { UseQueryOptions } from "./types";
  * `getCurrentScope` guard only avoids throwing, it does not auto-clean.
  */
 export const subscribeToQuery = <F extends FunctionReference, T = ReturnOf<F>>(
-    client: CirrusClient,
+    client: LunoraClient,
     function_: F,
     args: ArgsOf<F>,
     options: { seed?: T; shardKey?: string } = {},
@@ -47,7 +47,7 @@ export const subscribeToQuery = <F extends FunctionReference, T = ReturnOf<F>>(
         onScopeDispose(unsubscribe);
     } else if (process.env.NODE_ENV !== "production") {
         console.warn(
-            "[@cirrus/vue] subscribeToQuery called with no active effect scope — its subscription will not be cleaned up automatically. " +
+            "[@lunora/vue] subscribeToQuery called with no active effect scope — its subscription will not be cleaned up automatically. " +
                 "Call it inside setup()/an effect scope, or call the returned teardown yourself.",
         );
     }
@@ -63,7 +63,7 @@ export const subscribeToQuery = <F extends FunctionReference, T = ReturnOf<F>>(
  * React's `useQuery`. `args` may be a plain value, a `ref`, or a getter: passing
  * a reactive source makes the subscription reactive — when the args change the
  * old subscription is torn down and a fresh one opens for the new args (matching
- * `@cirrus/react`/`@cirrus/solid`). Pass `"skip"` (or a source resolving to
+ * `@lunora/react`/`@lunora/solid`). Pass `"skip"` (or a source resolving to
  * `"skip"`) to short-circuit: no network call, no socket. The subscription tears
  * down automatically when the owning component unmounts (or the effect scope
  * stops).
@@ -76,14 +76,14 @@ export const useQuery = <F extends FunctionReference>(
     args: MaybeRefOrGetter<ArgsOf<F> | "skip">,
     options: UseQueryOptions = {},
 ): Ref<ReturnOf<F> | undefined> => {
-    const client = useCirrus();
+    const client = useLunora();
     const data = shallowRef<ReturnOf<F> | undefined>(undefined) as Ref<ReturnOf<F> | undefined>;
 
     // Re-subscribe whenever the (reactive) args change: `watch`'s `onCleanup`
     // tears down the previous subscription before opening the next, and also runs
     // when the surrounding effect scope stops (component unmount). A plain-value
     // `args` resolves once and the watcher never re-fires. The skip-handling,
-    // subscribe, and cleanup are owned by the shared `@cirrus/client/query` state
+    // subscribe, and cleanup are owned by the shared `@lunora/client/query` state
     // machine; this composable only binds it to a Vue `ref`.
     watch(
         () => toValue(args),

@@ -18,7 +18,7 @@ const silentLogger = (): { errors: string[]; logger: Logger } => {
     };
 };
 
-describe("cirrus logs", () => {
+describe("lunora logs", () => {
     it("spawns `pnpm exec wrangler tail`", async () => {
         expect.assertions(3);
 

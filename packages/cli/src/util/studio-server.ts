@@ -1,11 +1,11 @@
 /**
- * The `cirrus dev` studio server — the non-Vite path to the same dev
- * studio the `@cirrus/vite` plugin serves at `/__cirrus`.
+ * The `lunora dev` studio server — the non-Vite path to the same dev
+ * studio the `@lunora/vite` plugin serves at `/__lunora`.
  *
  * It's a tiny `node:http` server that:
- * - serves the prebuilt static `@cirrus/studio` bundle (with the admin token
- * and basepath injected, via the shared `@cirrus/config/studio-host` helpers), and
- * - reverse-proxies `/_cirrus/*` — both HTTP and the WebSocket upgrade — to the
+ * - serves the prebuilt static `@lunora/studio` bundle (with the admin token
+ * and basepath injected, via the shared `@lunora/config/studio-host` helpers), and
+ * - reverse-proxies `/_lunora/*` — both HTTP and the WebSocket upgrade — to the
  * `wrangler dev` worker.
  *
  * Because the studio and its API are then same-origin (this server), the
@@ -17,8 +17,8 @@ import { createServer, request as httpRequest } from "node:http";
 import { connect } from "node:net";
 import type { Duplex } from "node:stream";
 
-import { detectAgentRules } from "@cirrus/config";
-import type { LocalEndpointHandler } from "@cirrus/config/studio-host";
+import { detectAgentRules } from "@lunora/config";
+import type { LocalEndpointHandler } from "@lunora/config/studio-host";
 import {
     handlePolicyScaffoldRequest,
     handleSchemaEditRequest,
@@ -31,10 +31,10 @@ import {
     SEED_ENDPOINT,
     serveJsonHandler,
     studioAssetsStamp,
-} from "@cirrus/config/studio-host";
+} from "@lunora/config/studio-host";
 
 /** Request paths the studio server reverse-proxies to the worker (admin RPC, RPC, WS). */
-const PROXY_PREFIX = "/_cirrus";
+const PROXY_PREFIX = "/_lunora";
 
 const pathnameOf = (url: string): string => {
     const queryIndex = url.indexOf("?");
@@ -61,7 +61,7 @@ const proxyHttp = (request: IncomingMessage, response: ServerResponse, worker: U
     upstream.on("error", (error: Error) => {
         // The worker may still be booting — surface a 502 rather than hang.
         response.statusCode = 502;
-        response.end(`cirrus dev: worker unreachable (${error.message})`);
+        response.end(`lunora dev: worker unreachable (${error.message})`);
     });
 
     request.pipe(upstream);
@@ -118,7 +118,7 @@ const proxyUpgrade = (request: IncomingMessage, clientSocket: Duplex, head: Buff
 /**
  * Start the studio server and resolve once it is listening. Loads the static
  * bundle + renders the host HTML once up front; serves them and proxies
- * `/_cirrus/*` (HTTP + WS) to the worker.
+ * `/_lunora/*` (HTTP + WS) to the worker.
  */
 export const startStudioServer = async (options: StudioServerOptions): Promise<StudioServerHandle> => {
     const host = options.host ?? "127.0.0.1";
@@ -127,8 +127,8 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
     // dev route's stance; writes are admin-token-gated either way.
     const isLoopback = host === "127.0.0.1" || host === "localhost" || host === "::1";
     const worker = new URL(options.workerOrigin);
-    // Resolve `@cirrus/studio` from THIS module (a `@cirrus/cli` file, which
-    // depends on it) rather than from the shared `@cirrus/config/studio-host` (which
+    // Resolve `@lunora/studio` from THIS module (a `@lunora/cli` file, which
+    // depends on it) rather than from the shared `@lunora/config/studio-host` (which
     // doesn't).
     let assets = loadStudioAssets(options.logger, import.meta.url);
     let assetsStamp = studioAssetsStamp(import.meta.url);
@@ -152,7 +152,7 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
     // Local filesystem-mutating endpoints (schema edit, policy scaffold) are
     // loopback-only; off a loopback bind they answer 403 with a clear reason.
     // On a loopback bind the request is routed through the shared transport glue
-    // (`@cirrus/config/studio-host`), so the CLI and Vite hosts stay in lockstep.
+    // (`@lunora/config/studio-host`), so the CLI and Vite hosts stay in lockstep.
     const serveLoopbackOnly = (request: IncomingMessage, response: ServerResponse, handle: LocalEndpointHandler, deniedMessage: string): void => {
         if (isLoopback) {
             serveJsonHandler(request, response, handle, options.cwd);
@@ -178,14 +178,14 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
 
         // Local schema-edit endpoint (plan 024) — loopback-only, never proxied.
         if (pathname === SCHEMA_EDIT_ENDPOINT) {
-            serveLoopbackOnly(request, response, handleSchemaEditRequest, "Cirrus schema editing is only available on loopback hosts in dev.");
+            serveLoopbackOnly(request, response, handleSchemaEditRequest, "Lunora schema editing is only available on loopback hosts in dev.");
 
             return;
         }
 
         // Local policy-scaffold endpoint (plan 025) — same loopback-only gate.
         if (pathname === POLICY_SCAFFOLD_ENDPOINT) {
-            serveLoopbackOnly(request, response, handlePolicyScaffoldRequest, "Cirrus policy scaffolding is only available on loopback hosts in dev.");
+            serveLoopbackOnly(request, response, handlePolicyScaffoldRequest, "Lunora policy scaffolding is only available on loopback hosts in dev.");
 
             return;
         }
@@ -193,7 +193,7 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
         // Local seed-data endpoint (studio "Generate rows") — same loopback-only
         // gate. Generates rows in Node so faker never reaches the browser bundle.
         if (pathname === SEED_ENDPOINT) {
-            serveLoopbackOnly(request, response, handleSeedRequest, "Cirrus data seeding is only available on loopback hosts in dev.");
+            serveLoopbackOnly(request, response, handleSeedRequest, "Lunora data seeding is only available on loopback hosts in dev.");
 
             return;
         }
@@ -201,7 +201,7 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
         // Static assets are exact paths.
         if (pathname === "/studio.js" || pathname === "/styles.css") {
             // Re-read the bytes when the built studio files change on disk so a
-            // mid-session `@cirrus/studio` rebuild is served without a restart.
+            // mid-session `@lunora/studio` rebuild is served without a restart.
             const stamp = studioAssetsStamp(import.meta.url);
 
             if (stamp !== assetsStamp) {
@@ -212,7 +212,7 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
             if (assets === undefined) {
                 response.statusCode = 501;
                 response.setHeader("Content-Type", "text/plain");
-                response.end("Cirrus studio assets not found — install and build @cirrus/studio.");
+                response.end("Lunora studio assets not found — install and build @lunora/studio.");
 
                 return;
             }
@@ -270,7 +270,7 @@ export interface StudioServerOptions {
     cwd: string;
     /** Loopback host to bind. Defaults to `127.0.0.1` (admin tooling stays local). */
     host?: string;
-    /** One-time warning sink for a missing/unbuilt `@cirrus/studio`. */
+    /** One-time warning sink for a missing/unbuilt `@lunora/studio`. */
     logger?: { warnOnce?: (message: string) => void };
     /** Port to listen on. */
     port: number;

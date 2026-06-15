@@ -1,4 +1,4 @@
-import type { ColumnMetaLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@cirrus/do";
+import type { ColumnMetaLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@lunora/do";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createD1CtxDb as createD1ContextDatabase } from "../src/d1-ctx-db";
@@ -22,7 +22,7 @@ const col = (kind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike 
 
 // An `v.optional(inner)` column: kind is "optional", the inner validator
 // (carrying the real storage kind) lives on `_meta.inner`, mirroring
-// `@cirrus/values`' `createValidator`. The decode must unwrap to `inner.kind`.
+// `@lunora/values`' `createValidator`. The decode must unwrap to `inner.kind`.
 const optionalCol = (innerKind: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike =>
     ({
         _meta: { column: { notNull: false, ...column }, inner: { _meta: {}, kind: innerKind } },

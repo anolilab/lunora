@@ -1,6 +1,6 @@
 {
     "$schema": "node_modules/wrangler/config-schema.json",
-    "name": "cirrus-example-blog",
+    "name": "lunora-example-blog",
     "main": "src/server/index.ts",
     "compatibility_date": "2026-04-07",
     "compatibility_flags": ["nodejs_compat"],
@@ -14,14 +14,14 @@
     "d1_databases": [
         {
             "binding": "DB",
-            "database_name": "cirrus-example-blog",
+            "database_name": "lunora-example-blog",
             "database_id": "<replace-with-d1-create-id>",
         },
     ],
     "r2_buckets": [
         {
             "binding": "FILES",
-            "bucket_name": "cirrus-example-blog-files",
+            "bucket_name": "lunora-example-blog-files",
         },
     ],
     // `index_name` must match the schema's logical index name (`.vectorize("body",
@@ -41,6 +41,6 @@
         // REPLACE before deploying to production — the SchedulerDO uses
         // this to dispatch HTTP callbacks back into the Worker. Pointing at
         // localhost in production silently breaks scheduled jobs.
-        "CIRRUS_WORKER_ORIGIN": "http://localhost:8787",
+        "LUNORA_WORKER_ORIGIN": "http://localhost:8787",
     },
 }

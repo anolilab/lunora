@@ -10,7 +10,7 @@
 import { toSnapshot } from "dinero.js";
 import { add, allocate, compare, dinero, subtract } from "dinero.js/bigint";
 
-import { CirrusPaymentError } from "./errors";
+import { LunoraPaymentError } from "./errors";
 import type { CurrencyCode, Money } from "./types";
 
 // ISO-4217 minor-unit exponents (digits after the decimal). Default 2; these are the exceptions.
@@ -40,7 +40,7 @@ const fromDinero = (value: ReturnType<typeof toDinero>): Money => {
 
 const assertSameCurrency = (a: Money, b: Money): void => {
     if (a.currency !== b.currency) {
-        throw new CirrusPaymentError("CURRENCY_MISMATCH", `cannot combine ${a.currency} with ${b.currency}`);
+        throw new LunoraPaymentError("CURRENCY_MISMATCH", `cannot combine ${a.currency} with ${b.currency}`);
     }
 };
 

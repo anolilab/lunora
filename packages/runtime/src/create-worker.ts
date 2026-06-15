@@ -3,7 +3,7 @@ import { buildAuthAdminRoutes } from "./auth-admin-routes";
 import { MAX_BODY_BYTES, readBodyBytesWithLimit, readBodyTextWithLimit, readJsonBodyWithLimit } from "./body-readers";
 import { buildDataMovementAdminRoutes } from "./data-movement-admin-routes";
 import type { FunctionArgumentDescriptor } from "./describe-args";
-import { CirrusError, isStructuralCirrusError, isStructuralConflictError, toErrorResponse } from "./errors";
+import { LunoraError, isStructuralLunoraError, isStructuralConflictError, toErrorResponse } from "./errors";
 import type { ExportRow } from "./export-stream";
 import { collectKnownTables, streamExportRows } from "./export-stream";
 import { streamingImport } from "./import-stream";
@@ -19,7 +19,7 @@ import { buildStorageAdminRoutes } from "./storage-admin-routes";
 import { buildVectorAdminRoutes } from "./vector-admin-routes";
 
 /**
- * Wire-format RPC envelope. Posted to `POST /_cirrus/rpc`.
+ * Wire-format RPC envelope. Posted to `POST /_lunora/rpc`.
  *
  * `functionPath` is the `&lt;file>:&lt;function>` identifier emitted by codegen,
  * e.g. `"messages:list"`. `shardKey` is optional — when omitted the runtime
@@ -49,8 +49,8 @@ type Route = (request: Request, env: unknown, context: ExecutionContextLike) => 
  * queries/mutations/actions without a direct DB binding.
  *
  * `reference` is typed `unknown` so this structural contract stays free of a
- * `@cirrus/server` dependency while remaining assignable from the fully-typed
- * `HttpActionCtx` on the server side (`{ __cirrusRef }` is read at runtime).
+ * `@lunora/server` dependency while remaining assignable from the fully-typed
+ * `HttpActionCtx` on the server side (`{ __lunoraRef }` is read at runtime).
  */
 interface HttpActionContext {
     auth: { getIdentity: () => Promise<Record<string, unknown> | null>; userId: null | string };
@@ -65,10 +65,10 @@ interface HttpActionLike {
 }
 
 /**
- * Structural view of `@cirrus/server`'s `httpRouter()`. The worker dispatches by
+ * Structural view of `@lunora/server`'s `httpRouter()`. The worker dispatches by
  * calling `fetch` — the same shape as a hono app's `app.fetch` — so the runtime
  * stays free of a hard dependency on the server package (and on hono). The
- * per-request {@link HttpActionContext} is injected on the `__cirrusCtx` env
+ * per-request {@link HttpActionContext} is injected on the `__lunoraCtx` env
  * binding; the router lifts it into the handler's context.
  */
 interface HttpRouterLike {
@@ -88,7 +88,7 @@ interface HttpRouterLike {
  * forwarded verbatim as `ctx.auth.getIdentity()`'s return value.
  *
  * Return `null` to signal that the request is anonymous; the runtime will
- * skip both `x-cirrus-userid` and `x-cirrus-identity` headers, and
+ * skip both `x-lunora-userid` and `x-lunora-identity` headers, and
  * `ctx.auth.userId` will be `undefined` on the shard side.
  */
 interface ResolvedIdentity {
@@ -100,7 +100,7 @@ interface ResolvedIdentity {
 
 /**
  * Per-table sharding metadata the admin import endpoint needs to route rows.
- * Structural so this package stays free of `@cirrus/server`. The codegen-
+ * Structural so this package stays free of `@lunora/server`. The codegen-
  * generated worker entry passes a thin projection of the user's schema.
  */
 interface ShardingInfo {
@@ -123,7 +123,7 @@ type GlobalExportFunction = (request: { tables: ReadonlyArray<string> }) => Asyn
 
 /**
  * Read a page of the `.global()` (D1) change-data-capture log past `sinceSeq`
- * for the admin sync endpoint. Wire it to `@cirrus/d1`'s `readD1CdcChanges`.
+ * for the admin sync endpoint. Wire it to `@lunora/d1`'s `readD1CdcChanges`.
  * When omitted, the sync endpoint returns only shard-local changes.
  */
 type GlobalCdcSyncFunction = (request: { limit?: number; sinceSeq: number }) => Promise<{ changes: ReadonlyArray<Record<string, unknown>>; cursor: number }>;
@@ -143,7 +143,7 @@ type GlobalImportFunction = (request: { rows: ReadonlyArray<{ doc: Record<string
     inserted: Record<string, number>;
 }>;
 
-/** One R2 object as the storage browser surfaces it. Mirrors `@cirrus/storage`'s `R2ObjectLike`. */
+/** One R2 object as the storage browser surfaces it. Mirrors `@lunora/storage`'s `R2ObjectLike`. */
 interface StorageObject {
     customMetadata?: Record<string, string>;
     etag: string;
@@ -154,8 +154,8 @@ interface StorageObject {
 
 /**
  * One registered function, as the discovery endpoint surfaces it. Structurally
- * a subset of codegen's `RegisteredCirrusFunction` — only `kind` and
- * `visibility` matter here, so the generated `CIRRUS_FUNCTIONS` map satisfies
+ * a subset of codegen's `RegisteredLunoraFunction` — only `kind` and
+ * `visibility` matter here, so the generated `LUNORA_FUNCTIONS` map satisfies
  * the {@link FunctionRegistryLike} value shape.
  */
 interface FunctionDescriptor {
@@ -177,21 +177,21 @@ interface FunctionRegistryEntry {
      * The generated registry carries `"stream"` alongside query/mutation/action;
      * the discovery endpoint surfaces the latter three only (a `stream` function
      * isn't runnable from the function runner), but accepting the kind here lets
-     * callers pass the generated `CIRRUS_FUNCTIONS` map without a cast.
+     * callers pass the generated `LUNORA_FUNCTIONS` map without a cast.
      */
     kind: "action" | "mutation" | "query" | "stream";
     visibility?: "internal" | "public";
 }
 
 /**
- * The generated `CIRRUS_FUNCTIONS` dispatch table, narrowed to what the
+ * The generated `LUNORA_FUNCTIONS` dispatch table, narrowed to what the
  * discovery endpoint reads. Pass the map straight from `_generated/functions.ts`.
  */
 type FunctionRegistryLike = Record<string, FunctionRegistryEntry>;
 
 /**
  * Lists objects in the storage bucket for the admin file browser. Structurally
- * compatible with `@cirrus/storage`'s `Storage["list"]` — the runtime stays free
+ * compatible with `@lunora/storage`'s `Storage["list"]` — the runtime stays free
  * of a hard dependency on the storage package.
  */
 type StorageListFunction = (
@@ -201,7 +201,7 @@ type StorageListFunction = (
 
 /**
  * Deletes one object from a storage bucket for the admin file browser.
- * Structurally compatible with `@cirrus/storage`'s `Storage["delete"]`, so
+ * Structurally compatible with `@lunora/storage`'s `Storage["delete"]`, so
  * passing `createStorage(...).delete` satisfies it. The optional `bucket` selects
  * a named bucket for a multi-bucket deployment (ignored by single-bucket hosts).
  */
@@ -209,7 +209,7 @@ type StorageDeleteFunction = (key: string, options?: { bucket?: string }) => Pro
 
 /**
  * Uploads one object to a storage bucket for the admin file browser. Mirrors
- * `@cirrus/storage`'s `Storage["upload"]` (only the bits the admin endpoint
+ * `@lunora/storage`'s `Storage["upload"]` (only the bits the admin endpoint
  * needs): the key, the raw bytes, an optional content-type, and an optional
  * target `bucket` for multi-bucket deployments.
  */
@@ -223,17 +223,17 @@ type StorageUploadFunction = (
  * Mints a (signed or public) URL for one object so the admin file browser can
  * offer a "copy URL" action. The optional `expiresInSeconds` lets the caller pick
  * a share-link lifetime (the host clamps it); `bucket` selects a named bucket.
- * Structurally compatible with `@cirrus/storage`'s `Storage["getSignedUrl"]`.
+ * Structurally compatible with `@lunora/storage`'s `Storage["getSignedUrl"]`.
  */
 type StorageSignedUrlFunction = (key: string, options?: { bucket?: string; expiresInSeconds?: number }) => Promise<string> | string;
 
-/** One `.global()` table plus its row count. Mirrors `@cirrus/d1`'s `GlobalTableInfo`. */
+/** One `.global()` table plus its row count. Mirrors `@lunora/d1`'s `GlobalTableInfo`. */
 interface GlobalTableInfo {
     name: string;
     rowCount: number;
 }
 
-/** A window of rows from one global table. Mirrors `@cirrus/d1`'s `GlobalTablePage`. */
+/** A window of rows from one global table. Mirrors `@lunora/d1`'s `GlobalTablePage`. */
 interface GlobalTablePage {
     columns: string[];
     /** FK columns (local column → referenced table) for external tables with real `REFERENCES` constraints. */
@@ -242,13 +242,13 @@ interface GlobalTablePage {
     total: number;
 }
 
-/** One eq constraint a facet-value click adds to the global browser's view. Mirrors `@cirrus/d1`'s `GlobalFilterClause`. */
+/** One eq constraint a facet-value click adds to the global browser's view. Mirrors `@lunora/d1`'s `GlobalFilterClause`. */
 interface GlobalFilterClause {
     column: string;
     value: unknown;
 }
 
-/** Per-column distinct-value summary for the global browser. Mirrors `@cirrus/d1`'s `GlobalFacetResult`. */
+/** Per-column distinct-value summary for the global browser. Mirrors `@lunora/d1`'s `GlobalFacetResult`. */
 interface GlobalFacetResult {
     truncated: boolean;
     values: { count: number; value: unknown }[];
@@ -256,7 +256,7 @@ interface GlobalFacetResult {
 
 /**
  * Introspect `.global()` (D1-backed) tables for the data browser. Structurally
- * compatible with `@cirrus/d1`'s `listGlobalTables` / `readGlobalTablePage` /
+ * compatible with `@lunora/d1`'s `listGlobalTables` / `readGlobalTablePage` /
  * `facetGlobalColumn` (curried with the D1 exec + schema) — the runtime stays
  * free of a hard dependency on the D1 package.
  */
@@ -295,7 +295,7 @@ interface VectorQueryMatch {
 
 /**
  * Introspect Vectorize indexes for the studio's vector browser. Built in the
- * worker entry from the generated `CIRRUS_VECTOR_INDEXES` registry (Vectorize
+ * worker entry from the generated `LUNORA_VECTOR_INDEXES` registry (Vectorize
  * cannot enumerate indexes at runtime) paired with the env bindings + the
  * schema's per-index embedders. `queryIndex` is optional: an index with no
  * embedder (a `select`-derived Shape B index, or a deployment that withholds the
@@ -307,7 +307,7 @@ interface VectorIntrospector {
 }
 
 // The auth-admin contract (`AuthAdmin`, the wire-shape rows, capabilities) and
-// its `/_cirrus/admin/auth/*` routes live in `./auth-admin-routes`, keeping the
+// its `/_lunora/admin/auth/*` routes live in `./auth-admin-routes`, keeping the
 // whole user-management plane out of this file. Types are imported at the top
 // and re-exported from the module's export block below.
 
@@ -333,9 +333,9 @@ type CronHandler = (controller: ScheduledControllerLike, env: unknown, context: 
 
 /**
  * A single code-defined cron job, shaped like an entry of the generated
- * `CIRRUS_CRONS` map. `functionPath` is the `"namespace:fn"` to run, `args` its
+ * `LUNORA_CRONS` map. `functionPath` is the `"namespace:fn"` to run, `args` its
  * bound arguments, and `name` the human label from the `cronJobs()` builder.
- * Pass the whole `CIRRUS_CRONS` map as {@link WorkerOptions.cronJobs}; the worker
+ * Pass the whole `LUNORA_CRONS` map as {@link WorkerOptions.cronJobs}; the worker
  * dispatches each job on its firing trigger via the same authorized shard path
  * as the scheduler.
  */
@@ -362,7 +362,7 @@ interface CronJobInfo {
 }
 
 /**
- * R2-like sink for scheduled backups. Structurally a subset of `@cirrus/storage`'s
+ * R2-like sink for scheduled backups. Structurally a subset of `@lunora/storage`'s
  * `R2BucketLike` (and of the raw R2 binding), so passing `env.BACKUPS` straight
  * through satisfies it. `put` writes the NDJSON snapshot and its manifest
  * sidecar; `list`/`delete` drive retention pruning when
@@ -430,10 +430,10 @@ interface WorkerOptions {
 
     /**
      * The auth user-management plane backing the studio's users dashboard:
-     * browse via `GET /_cirrus/admin/auth/users` + `/sessions`, and (when the
+     * browse via `GET /_lunora/admin/auth/users` + `/sessions`, and (when the
      * implementation provides the optional mutations) create/ban/role/revoke/
-     * delete/impersonate via the matching admin-gated `POST /_cirrus/admin/auth/*`
-     * routes. Wire it with `@cirrus/auth`'s `createAuthAdmin(auth)`. Omit it and
+     * delete/impersonate via the matching admin-gated `POST /_lunora/admin/auth/*`
+     * routes. Wire it with `@lunora/auth`'s `createAuthAdmin(auth)`. Omit it and
      * every `/auth/*` endpoint responds `AUTH_NOT_CONFIGURED`.
      */
     authAdmin?: AuthAdmin;
@@ -447,10 +447,10 @@ interface WorkerOptions {
     authBasePath?: string;
 
     /**
-     * Optional prebound `@cirrus/auth` handler (`handleAuthRequest(auth, …)`
+     * Optional prebound `@lunora/auth` handler (`handleAuthRequest(auth, …)`
      * with its `auth` argument already bound) the worker dispatches BEFORE its
      * own routing — auth runs as a top-level `/api/auth/*` route, not through
-     * cirrus functions. It returns a `Response` for an auth route and
+     * lunora functions. It returns a `Response` for an auth route and
      * `undefined` to let the request fall through to the worker.
      *
      * Wiring it here (rather than in the host entry) lets the runtime instrument
@@ -519,7 +519,7 @@ interface WorkerOptions {
 
     /**
      * Key prefix the scheduled backup writes under (default `"backups/"`). The
-     * NDJSON object lands at `&lt;prefix>cirrus-backup-&lt;id>.ndjson` and its manifest
+     * NDJSON object lands at `&lt;prefix>lunora-backup-&lt;id>.ndjson` and its manifest
      * at the same key plus `.manifest.json`.
      */
     backupPrefix?: string;
@@ -547,7 +547,7 @@ interface WorkerOptions {
 
     /**
      * Code-defined cron jobs keyed by cron expression — pass the generated
-     * `CIRRUS_CRONS` map directly. On a firing trigger the worker runs every job
+     * `LUNORA_CRONS` map directly. On a firing trigger the worker runs every job
      * listed under the matching expression by dispatching its `functionPath`/`args`
      * to the shard, server-side, through the same authorization as the scheduler.
      * Runs alongside any {@link WorkerOptions.crons} handler and the backup.
@@ -578,8 +578,8 @@ interface WorkerOptions {
     exportGlobals?: GlobalExportFunction;
 
     /**
-     * The generated `CIRRUS_FUNCTIONS` map (from `_generated/functions.ts`). When
-     * set, the worker exposes the admin-gated `GET /_cirrus/admin/functions`
+     * The generated `LUNORA_FUNCTIONS` map (from `_generated/functions.ts`). When
+     * set, the worker exposes the admin-gated `GET /_lunora/admin/functions`
      * endpoint the studio uses to auto-discover queries/mutations/actions
      * (internal functions are filtered out). Omit it and the endpoint responds
      * `FUNCTIONS_NOT_CONFIGURED`.
@@ -588,18 +588,18 @@ interface WorkerOptions {
 
     /**
      * Read-only introspector for `.global()` (D1) tables, backing the data
-     * browser's global mode via `GET /_cirrus/admin/global/tables` and
-     * `/_cirrus/admin/global/table`. Build it from `@cirrus/d1`'s
+     * browser's global mode via `GET /_lunora/admin/global/tables` and
+     * `/_lunora/admin/global/table`. Build it from `@lunora/d1`'s
      * `listGlobalTables` / `readGlobalTablePage`. Omit it and those endpoints
      * respond `GLOBALS_NOT_CONFIGURED`.
      */
     globalIntrospector?: GlobalIntrospector;
 
     /**
-     * Router for HTTP actions (`httpRouter()` from `@cirrus/server`, a hono app).
+     * Router for HTTP actions (`httpRouter()` from `@lunora/server`, a hono app).
      * Consulted for requests that miss the explicit {@link WorkerOptions.routes}
-     * map and the internal `/_cirrus/*` endpoints. The runtime builds the action
-     * context, injects it on the `__cirrusCtx` env binding, and dispatches via
+     * map and the internal `/_lunora/*` endpoints. The runtime builds the action
+     * context, injects it on the `__lunoraCtx` env binding, and dispatches via
      * `httpRouter.fetch`; matched handlers reach the data layer through
      * `ctx.run*`, which forward to the shard. An unmatched request returns hono's
      * own 404 (a path-match with the wrong verb is a 404, not a 405).
@@ -624,13 +624,13 @@ interface WorkerOptions {
     /**
      * The generated OpenAPI 3.1 document. Import it from the codegen-emitted
      * module and pass it through:
-     * `import { openApiSpec } from "./cirrus/_generated/openapi"`. A Worker can't
+     * `import { openApiSpec } from "./lunora/_generated/openapi"`. A Worker can't
      * read the `_generated/openapi.json` file at runtime, so codegen also emits
      * `openapi.ts` (the same document inlined as `export const openApiSpec`) for
-     * exactly this wiring — it regenerates on every `cirrus/` change so the spec
+     * exactly this wiring — it regenerates on every `lunora/` change so the spec
      * stays live.
      *
-     * When set, the worker exposes the admin-gated `GET /_cirrus/admin/openapi`
+     * When set, the worker exposes the admin-gated `GET /_lunora/admin/openapi`
      * endpoint the studio's API-reference view renders. The runtime does
      * NOT assemble or validate the spec — it serves what the host injects verbatim.
      * Omit it and the endpoint returns an empty-but-valid OpenAPI 3.1 document
@@ -641,15 +641,15 @@ interface WorkerOptions {
     /**
      * The generated OpenRPC 1.x document. Import it from the codegen-emitted
      * module and pass it through:
-     * `import { openRpcSpec } from "./cirrus/_generated/openrpc"` (only emitted
+     * `import { openRpcSpec } from "./lunora/_generated/openrpc"` (only emitted
      * when the project opts into `apiSpec: "openrpc"` or `"both"`). Like
      * `openApiSpec`, codegen inlines the document into `openrpc.ts` because a
      * Worker can't read the `.json` at runtime; both regenerate together.
      *
-     * When set, the worker exposes the admin-gated `GET /_cirrus/admin/openrpc`
+     * When set, the worker exposes the admin-gated `GET /_lunora/admin/openrpc`
      * endpoint the studio's API-reference view can render. OpenRPC is the
      * RPC-native spec (a `methods` array over the JSON-RPC-shaped
-     * `POST /_cirrus/rpc` transport); it covers only the RPC functions, not
+     * `POST /_lunora/rpc` transport); it covers only the RPC functions, not
      * `httpRouter()` REST routes. The runtime does NOT assemble or validate the
      * spec — it serves what the host injects verbatim. Omit it and the endpoint
      * returns an empty-but-valid OpenRPC 1.x document (no methods), so the studio
@@ -676,7 +676,7 @@ interface WorkerOptions {
      * per RPC (and per fan-out) before the request is forwarded to the
      * shard. The returned `userId` becomes `ctx.auth.userId` on the shard
      * side; remaining keys (`email`, role flags, etc.) are JSON-encoded and
-     * forwarded as `x-cirrus-identity` so `ctx.auth.getIdentity()` can
+     * forwarded as `x-lunora-identity` so `ctx.auth.getIdentity()` can
      * return them. Returning `null` (or omitting this option) means
      * anonymous — no identity headers are injected.
      */
@@ -698,7 +698,7 @@ interface WorkerOptions {
 
     /**
      * Namespace binding for the `SchedulerDO` (typically `env.SCHEDULER`). When
-     * set, the worker exposes the admin-gated `/_cirrus/admin/scheduled`
+     * set, the worker exposes the admin-gated `/_lunora/admin/scheduled`
      * endpoints used by the studio to list and cancel `runAfter` / `runAt`
      * jobs. Omit it and those endpoints respond `SCHEDULER_NOT_CONFIGURED`.
      */
@@ -715,7 +715,7 @@ interface WorkerOptions {
 
     /**
      * Names of the storage buckets the studio's file browser offers in its bucket
-     * picker, backing `GET /_cirrus/admin/storage/buckets`. Supply the keys of a
+     * picker, backing `GET /_lunora/admin/storage/buckets`. Supply the keys of a
      * multi-bucket `createBucketStorage({...})` so the operator can switch buckets;
      * the selected name is forwarded to the storage ops as `options.bucket`. Omit
      * it (single-bucket deployments) and the picker is hidden — the ops target the
@@ -724,7 +724,7 @@ interface WorkerOptions {
     storageBuckets?: string[];
 
     /**
-     * Deletes one object, backing the admin-gated `DELETE /_cirrus/admin/storage`
+     * Deletes one object, backing the admin-gated `DELETE /_lunora/admin/storage`
      * endpoint the studio's file browser calls. Passing
      * `createStorage(...).delete` satisfies it. Omit it and the endpoint responds
      * `STORAGE_DELETE_NOT_CONFIGURED` — the studio surfaces a clear inline error.
@@ -732,9 +732,9 @@ interface WorkerOptions {
     storageDelete?: StorageDeleteFunction;
 
     /**
-     * Storage lister backing the admin-gated `GET /_cirrus/admin/storage`
+     * Storage lister backing the admin-gated `GET /_lunora/admin/storage`
      * endpoint the studio's file browser calls. The structural shape matches
-     * `@cirrus/storage`'s `Storage["list"]`, so passing `createStorage(...).list`
+     * `@lunora/storage`'s `Storage["list"]`, so passing `createStorage(...).list`
      * (or the raw R2 bucket's `list`) satisfies it. Omit it and the endpoint
      * responds `STORAGE_NOT_CONFIGURED`.
      */
@@ -742,7 +742,7 @@ interface WorkerOptions {
 
     /**
      * Mints a (signed or public) URL for one object, backing the admin-gated
-     * `GET /_cirrus/admin/storage/url` endpoint the studio's "copy URL" action
+     * `GET /_lunora/admin/storage/url` endpoint the studio's "copy URL" action
      * calls. Passing `createStorage(...).getSignedUrl` (or `.getUrl`) satisfies
      * it. Omit it and the endpoint responds `STORAGE_URL_NOT_CONFIGURED` — the
      * studio surfaces a clear inline error.
@@ -750,7 +750,7 @@ interface WorkerOptions {
     storageSignedUrl?: StorageSignedUrlFunction;
 
     /**
-     * Uploads one object, backing the admin-gated `PUT /_cirrus/admin/storage`
+     * Uploads one object, backing the admin-gated `PUT /_lunora/admin/storage`
      * endpoint the studio's file browser calls. Passing `createStorage(...).upload`
      * satisfies it. Omit it and the endpoint responds
      * `STORAGE_UPLOAD_NOT_CONFIGURED` — the studio surfaces a clear inline error.
@@ -765,9 +765,9 @@ interface WorkerOptions {
 
     /**
      * Read-only introspector for Vectorize indexes, backing the studio's vector
-     * browser via `GET /_cirrus/admin/vector/indexes` and
-     * `POST /_cirrus/admin/vector/query`. Build it from the generated
-     * `CIRRUS_VECTOR_INDEXES` registry plus the env Vectorize bindings (and the
+     * browser via `GET /_lunora/admin/vector/indexes` and
+     * `POST /_lunora/admin/vector/query`. Build it from the generated
+     * `LUNORA_VECTOR_INDEXES` registry plus the env Vectorize bindings (and the
      * schema's embedders, to enable similarity queries). Omit it and those
      * endpoints respond `VECTORS_NOT_CONFIGURED`.
      */
@@ -788,29 +788,29 @@ interface RpcContext {
  */
 const NDJSON_ENCODER = new TextEncoder();
 
-const RPC_PATH = "/_cirrus/rpc";
-const WS_PATH = "/_cirrus/ws";
-const SCHEDULER_DISPATCH_PATH = "/_cirrus/scheduler/dispatch";
+const RPC_PATH = "/_lunora/rpc";
+const WS_PATH = "/_lunora/ws";
+const SCHEDULER_DISPATCH_PATH = "/_lunora/scheduler/dispatch";
 // The cross-shard orchestration (`migrate` / `rank` / `rankpage` / `shard-traffic`)
 // + `pitr`, data-movement (`export` / `import` / `sync` / `connector/sync` /
 // `apply`), static-introspection (`functions` / `cron-jobs` / `openapi` /
-// `openrpc` / `global/*`), `/_cirrus/admin/storage/*`, `/_cirrus/admin/vector/*`,
-// `/_cirrus/admin/scheduled*`, and `/_cirrus/admin/auth/*` paths + handlers live
+// `openrpc` / `global/*`), `/_lunora/admin/storage/*`, `/_lunora/admin/vector/*`,
+// `/_lunora/admin/scheduled*`, and `/_lunora/admin/auth/*` paths + handlers live
 // in their sibling route modules.
 
 /**
- * Default base path the `@cirrus/auth` handler mounts under, mirroring
- * `@cirrus/auth`'s `DEFAULT_AUTH_BASE_PATH`. Inlined (not imported) so the
- * runtime stays free of a hard dependency on `@cirrus/auth`.
+ * Default base path the `@lunora/auth` handler mounts under, mirroring
+ * `@lunora/auth`'s `DEFAULT_AUTH_BASE_PATH`. Inlined (not imported) so the
+ * runtime stays free of a hard dependency on `@lunora/auth`.
  */
 const DEFAULT_AUTH_BASE_PATH = "/api/auth";
 
 /**
  * Reserved admin RPC the worker fires (fire-and-forget) to record one auth
  * attempt for the app-level auth-failure SLO (PLAN3 §2.3). Spelled out inline,
- * like the other admin-op sets, to avoid importing `@cirrus/do`.
+ * like the other admin-op sets, to avoid importing `@lunora/do`.
  */
-const RECORD_AUTH_EVENT_OP = "__cirrus_admin__:recordAuthEvent";
+const RECORD_AUTH_EVENT_OP = "__lunora_admin__:recordAuthEvent";
 
 /**
  * Sub-paths under the auth basePath that represent a genuine auth ATTEMPT — a
@@ -855,8 +855,8 @@ interface ForwardContext {
 
 /**
  * Build an `ObservabilityEvent` for a failed RPC dispatch. Extracts code /
- * status / message from any transport-mappable error (a {@link CirrusError} or
- * a structural `CirrusError`/`ConflictError` from a downstream package, the
+ * status / message from any transport-mappable error (a {@link LunoraError} or
+ * a structural `LunoraError`/`ConflictError` from a downstream package, the
  * same set `toErrorResponse` maps); otherwise reports `INTERNAL_SERVER_ERROR` /
  * 500 with the thrown value's message. Used by both the single-shard and
  * fan-out error branches so they emit a uniform shape — and so a `ConflictError`
@@ -868,7 +868,7 @@ const buildErrorEvent = (
     error: unknown,
     extra: { fanOut?: { table: string }; shardKey?: string },
 ): ObservabilityEvent => {
-    const mappable = error instanceof CirrusError || isStructuralCirrusError(error) || isStructuralConflictError(error);
+    const mappable = error instanceof LunoraError || isStructuralLunoraError(error) || isStructuralConflictError(error);
     const code = mappable ? (error as { code: string }).code : "INTERNAL_SERVER_ERROR";
     const status = mappable ? (error as { status: number }).status : 500;
     const message = error instanceof Error ? error.message : String(error);
@@ -886,7 +886,7 @@ const buildErrorEvent = (
 /**
  * Build the headers forwarded to the shard and the resolved identity, shared by
  * the RPC path and HTTP-action context. `userId` and `claims` mirror what the
- * DO reconstructs from the `x-cirrus-userid` / `x-cirrus-identity` headers.
+ * DO reconstructs from the `x-lunora-userid` / `x-lunora-identity` headers.
  */
 const resolveForwardContext = async (request: Request, env: unknown, resolveIdentity: WorkerOptions["resolveIdentity"]): Promise<ForwardContext> => {
     const headers: Record<string, string> = { "content-type": "application/json" };
@@ -918,7 +918,7 @@ const resolveForwardContext = async (request: Request, env: unknown, resolveIden
         return { claims: null, headers, identity: null, userId: null };
     }
 
-    headers["x-cirrus-userid"] = identity.userId;
+    headers["x-lunora-userid"] = identity.userId;
 
     // Strip `userId` so the DO doesn't see it twice. The rest of the identity
     // (claims like email/name/roles) is JSON-encoded so handlers can read it
@@ -928,7 +928,7 @@ const resolveForwardContext = async (request: Request, env: unknown, resolveIden
     const claims = Object.keys(extra).length > 0 ? extra : null;
 
     if (claims) {
-        headers["x-cirrus-identity"] = JSON.stringify(claims);
+        headers["x-lunora-identity"] = JSON.stringify(claims);
     }
 
     return { claims, headers, identity, userId };
@@ -951,32 +951,32 @@ const validateFanOut = (fanOut: unknown): FanOutSpec | undefined => {
     }
 
     if (!fanOut || typeof fanOut !== "object") {
-        throw new CirrusError("RPC `fanOut` must be an object", { code: "BAD_REQUEST", status: 400 });
+        throw new LunoraError("RPC `fanOut` must be an object", { code: "BAD_REQUEST", status: 400 });
     }
 
     const spec = fanOut as { merge?: unknown; table?: unknown };
 
     if (typeof spec.table !== "string" || spec.table.length === 0) {
-        throw new CirrusError("RPC `fanOut.table` must be a non-empty string", { code: "BAD_REQUEST", status: 400 });
+        throw new LunoraError("RPC `fanOut.table` must be a non-empty string", { code: "BAD_REQUEST", status: 400 });
     }
 
     if (!spec.merge || typeof spec.merge !== "object") {
-        throw new CirrusError("RPC `fanOut.merge` must be an object", { code: "BAD_REQUEST", status: 400 });
+        throw new LunoraError("RPC `fanOut.merge` must be an object", { code: "BAD_REQUEST", status: 400 });
     }
 
     const merge = spec.merge as { by?: unknown; k?: unknown; kind?: unknown };
 
     if (typeof merge.kind !== "string" || !KNOWN_MERGE_KINDS.has(merge.kind)) {
-        throw new CirrusError("RPC `fanOut.merge.kind` is not a recognized merge strategy", { code: "BAD_REQUEST", status: 400 });
+        throw new LunoraError("RPC `fanOut.merge.kind` is not a recognized merge strategy", { code: "BAD_REQUEST", status: 400 });
     }
 
     if (merge.kind === "topK") {
         if (typeof merge.k !== "number" || !Number.isInteger(merge.k) || merge.k < 0) {
-            throw new CirrusError("RPC `fanOut.merge.k` must be a non-negative integer", { code: "BAD_REQUEST", status: 400 });
+            throw new LunoraError("RPC `fanOut.merge.k` must be a non-negative integer", { code: "BAD_REQUEST", status: 400 });
         }
 
         if (typeof merge.by !== "string" || merge.by.length === 0) {
-            throw new CirrusError("RPC `fanOut.merge.by` must be a non-empty string", { code: "BAD_REQUEST", status: 400 });
+            throw new LunoraError("RPC `fanOut.merge.by` must be a non-empty string", { code: "BAD_REQUEST", status: 400 });
         }
     }
 
@@ -993,11 +993,11 @@ const parseEnvelope = async (request: Request): Promise<RpcEnvelope> => {
     try {
         body = JSON.parse(text);
     } catch {
-        throw new CirrusError("RPC body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
+        throw new LunoraError("RPC body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
     }
 
     if (!body || typeof body !== "object" || typeof (body as { functionPath?: unknown }).functionPath !== "string") {
-        throw new CirrusError("RPC envelope is missing `functionPath`", { code: "BAD_REQUEST", status: 400 });
+        throw new LunoraError("RPC envelope is missing `functionPath`", { code: "BAD_REQUEST", status: 400 });
     }
 
     const envelope = body as RpcEnvelope;
@@ -1049,7 +1049,7 @@ const constantTimeEqual = (expected: string, supplied: string): boolean => {
 
 /**
  * Verify an HMAC-SHA-256 (base64url, unpadded) signature over `body` against
- * `secret`. Mirrors `@cirrus/scheduler`'s `signDispatch` and `@cirrus/storage`'s
+ * `secret`. Mirrors `@lunora/scheduler`'s `signDispatch` and `@lunora/storage`'s
  * signed-URL HMAC pattern (WebCrypto `crypto.subtle`). We re-derive the expected
  * signature and constant-time compare the encoded strings so a forged or absent
  * signature can never authenticate a dispatch.
@@ -1111,21 +1111,21 @@ const checkAdminWsToken = (request: Request, expected: string | undefined): bool
 };
 
 /**
- * The composed Cirrus worker. `fetch` / `scheduled` are the standard Cloudflare
+ * The composed Lunora worker. `fetch` / `scheduled` are the standard Cloudflare
  * module-worker entrypoints (so the object can be re-exported directly as
  * `export default createWorker(...)`). `serverQuery` is the in-process fast-path
  * (PLAN4 §2.2) an SSR loader running inside the same worker calls to reach a
- * Cirrus query without a self-`fetch` to `/_cirrus/rpc`, with identity / RLS /
+ * Lunora query without a self-`fetch` to `/_lunora/rpc`, with identity / RLS /
  * auth semantics identical to the HTTP path.
  */
-interface CirrusWorker {
+interface LunoraWorker {
     fetch: (request: Request, env: unknown, context: ExecutionContextLike) => Promise<Response>;
     scheduled: (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike) => Promise<void>;
 
     /**
      * In-process query/mutation dispatch for SSR loaders co-located in this
      * worker. Resolves identity off `request` (cookies / bearer / bookmark) and
-     * runs the per-shard authorization gate exactly like `POST /_cirrus/rpc`,
+     * runs the per-shard authorization gate exactly like `POST /_lunora/rpc`,
      * then dispatches to the owning shard — no network self-fetch. Returns the
      * raw shard {@link Response}, byte-identical to the HTTP path's, so callers
      * can `.json()` it (`{ result }` / `{ error }`) or forward it verbatim. Like
@@ -1137,7 +1137,7 @@ interface CirrusWorker {
      * HTTP RPC path reads them.
      * @param env The worker `env`, forwarded to `resolveIdentity`.
      * @param reference A generated function reference (`api.foo.bar`); its
-     * `__cirrusRef` is the `"namespace:fn"` dispatched.
+     * `__lunoraRef` is the `"namespace:fn"` dispatched.
      * @param args The function arguments.
      * @param options Call options mirroring the RPC envelope.
      * @param options.shardKey Routes to a specific shard (omitted → the worker's
@@ -1150,7 +1150,7 @@ interface CirrusWorker {
  * Build a Cloudflare Worker entry. Returns an object with `fetch` so it can
  * be re-exported directly as `export default createWorker(...)`.
  */
-const createWorker = (options: WorkerOptions): CirrusWorker => {
+const createWorker = (options: WorkerOptions): LunoraWorker => {
     const defaultShard = options.defaultShardKey ?? "__root__";
 
     // Fan-out and non-default shard routing are authorization-open when neither
@@ -1173,7 +1173,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         // eslint-disable-next-line no-console -- surface the open authorization posture in logs
         console.warn(
             [
-                `[cirrus] SECURITY: received ${kind} access but neither \`authorizeShard\` nor \`authorizeFanOut\` is configured — `,
+                `[lunora] SECURITY: received ${kind} access but neither \`authorizeShard\` nor \`authorizeFanOut\` is configured — `,
                 `any caller (including unauthenticated ones) can target any shard / fan out across the table. `,
                 `Configure \`authorizeShard\`/\`authorizeFanOut\`, or set \`allowUnauthenticatedShardAccess: true\` to acknowledge this posture and silence this warning.`,
             ].join(""),
@@ -1205,17 +1205,17 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
             const allowed = await options.authorizeShard(null, shardKey);
 
             if (!allowed) {
-                throw new CirrusError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
+                throw new LunoraError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
             }
         }
 
         const forwarded = new Request("https://shard.internal/rpc", {
-            // `x-cirrus-system` marks this as a trusted server-initiated dispatch
+            // `x-lunora-system` marks this as a trusted server-initiated dispatch
             // so the shard may run `internal` functions (scheduled/cron jobs are
             // typically internal). Authorization was already enforced above; this
             // header is set only here, never on the client RPC path.
             body: JSON.stringify({ args, functionPath }),
-            headers: { "content-type": "application/json", "x-cirrus-system": "1" },
+            headers: { "content-type": "application/json", "x-lunora-system": "1" },
             method: "POST",
         });
 
@@ -1243,7 +1243,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
                     // A failed background job is operationally a 500-class "didn't
                     // run", not a client error — keep the shard's transport status
                     // in the message rather than overloading the error `status`.
-                    throw new CirrusError(`cron job "${job.name}" (${job.functionPath}) failed with shard status ${String(response.status)}`, {
+                    throw new LunoraError(`cron job "${job.name}" (${job.functionPath}) failed with shard status ${String(response.status)}`, {
                         code: "CRON_JOB_FAILED",
                         status: 500,
                     });
@@ -1286,20 +1286,20 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
      * Receiver for the `SchedulerDO`'s scheduled-job dispatch. The scheduler DO
      * POSTs `{ functionPath, args, shardKey, scheduledFor, id }` as raw JSON,
      * authenticated by an HMAC-SHA-256 (base64url) signature over the exact body
-     * in the `x-cirrus-scheduler-signature` header (secret in
-     * `env.CIRRUS_SCHEDULER_SECRET`), or — when no HMAC secret is configured on
+     * in the `x-lunora-scheduler-signature` header (secret in
+     * `env.LUNORA_SCHEDULER_SECRET`), or — when no HMAC secret is configured on
      * the scheduler — an `authorization: Bearer &lt;admin token>` fallback. An
      * unsigned/forged request is rejected with 403; we never run a job we can't
      * authenticate.
      *
      * On success the job is dispatched through the SAME shard-forward path as
-     * `/_cirrus/rpc` (re-applying `authorizeShard` for the named shard so the
+     * `/_lunora/rpc` (re-applying `authorizeShard` for the named shard so the
      * scheduler cannot bypass per-shard auth), and the shard's response is
      * propagated.
      */
     const handleSchedulerDispatch = async (request: Request, env: unknown): Promise<Response> => {
         if (request.method !== "POST") {
-            throw new CirrusError("Scheduler dispatch endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+            throw new LunoraError("Scheduler dispatch endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
         // Read the raw body verbatim (byte-budgeted) — the HMAC is computed over
@@ -1307,10 +1307,10 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         const rawBody = await readBodyTextWithLimit(request);
 
         const envRecord = (env ?? {}) as Record<string, unknown>;
-        const schedulerSecret = typeof envRecord["CIRRUS_SCHEDULER_SECRET"] === "string" ? envRecord["CIRRUS_SCHEDULER_SECRET"] : undefined;
-        const adminBearer = options.adminToken ?? (typeof envRecord["CIRRUS_ADMIN_TOKEN"] === "string" ? envRecord["CIRRUS_ADMIN_TOKEN"] : undefined);
+        const schedulerSecret = typeof envRecord["LUNORA_SCHEDULER_SECRET"] === "string" ? envRecord["LUNORA_SCHEDULER_SECRET"] : undefined;
+        const adminBearer = options.adminToken ?? (typeof envRecord["LUNORA_ADMIN_TOKEN"] === "string" ? envRecord["LUNORA_ADMIN_TOKEN"] : undefined);
 
-        const signatureHeader = request.headers.get("x-cirrus-scheduler-signature");
+        const signatureHeader = request.headers.get("x-lunora-scheduler-signature");
 
         let authenticated = false;
 
@@ -1323,7 +1323,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         }
 
         if (!authenticated) {
-            throw new CirrusError("Scheduler dispatch requires a valid signature or admin bearer", { code: "FORBIDDEN", status: 403 });
+            throw new LunoraError("Scheduler dispatch requires a valid signature or admin bearer", { code: "FORBIDDEN", status: 403 });
         }
 
         let body: unknown;
@@ -1331,13 +1331,13 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         try {
             body = JSON.parse(rawBody);
         } catch {
-            throw new CirrusError("Scheduler dispatch body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
+            throw new LunoraError("Scheduler dispatch body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
         }
 
         const candidate = (body ?? {}) as { args?: unknown; functionPath?: unknown; id?: unknown; instanceName?: unknown; pool?: unknown; shardKey?: unknown };
 
         if (typeof candidate.functionPath !== "string" || candidate.functionPath.length === 0) {
-            throw new CirrusError("Scheduler dispatch is missing `functionPath`", { code: "BAD_REQUEST", status: 400 });
+            throw new LunoraError("Scheduler dispatch is missing `functionPath`", { code: "BAD_REQUEST", status: 400 });
         }
 
         const args = (candidate.args ?? {}) as Record<string, unknown>;
@@ -1385,7 +1385,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
     /** Throw 403 unless the request carries a valid admin bearer. */
     const assertAdminAuthorized = (request: Request): void => {
         if (!checkAdminAuth(request, options.adminToken)) {
-            throw new CirrusError("admin endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
+            throw new LunoraError("admin endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
         }
     };
 
@@ -1394,7 +1394,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         assertAdminAuthorized(request);
 
         if (value === undefined) {
-            throw new CirrusError(notConfigured.message, { code: notConfigured.code, status: 400 });
+            throw new LunoraError(notConfigured.message, { code: notConfigured.code, status: 400 });
         }
 
         return value;
@@ -1428,7 +1428,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
 
     const requireSchedulerNamespace = (): ShardNamespaceLike => {
         if (options.schedulerDO === undefined) {
-            throw new CirrusError("scheduled endpoints require a `schedulerDO` namespace on the worker", { code: "SCHEDULER_NOT_CONFIGURED", status: 400 });
+            throw new LunoraError("scheduled endpoints require a `schedulerDO` namespace on the worker", { code: "SCHEDULER_NOT_CONFIGURED", status: 400 });
         }
 
         return options.schedulerDO;
@@ -1440,7 +1440,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         return resolveShard(requireSchedulerNamespace(), options.schedulerInstanceName ?? "default");
     };
 
-    // The `/_cirrus/admin/scheduled*` handlers live in a sibling module; they reach
+    // The `/_lunora/admin/scheduled*` handlers live in a sibling module; they reach
     // the admin gate, scheduler-namespace requirement, and resolved stub through
     // injected deps (mirroring the other extracted clusters below).
     const scheduledAdminRoutes = buildScheduledAdminRoutes({
@@ -1450,7 +1450,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         schedulerInstanceName: options.schedulerInstanceName ?? "default",
     });
 
-    // The `/_cirrus/admin/storage/*` + `/_cirrus/admin/vector/*` handlers live in
+    // The `/_lunora/admin/storage/*` + `/_lunora/admin/vector/*` handlers live in
     // sibling modules (mirroring `./auth-admin-routes`); they reach the admin gate,
     // option registry, and request helpers through injected deps.
     const storageAdminRoutes = buildStorageAdminRoutes({
@@ -1492,10 +1492,10 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         const { claims, headers, userId } = await resolveForwardContext(request, env, options.resolveIdentity);
 
         const run = async <R>(reference: unknown, args: Record<string, unknown> = {}): Promise<R> => {
-            const functionPath = (reference as { __cirrusRef?: unknown }).__cirrusRef;
+            const functionPath = (reference as { __lunoraRef?: unknown }).__lunoraRef;
 
             if (typeof functionPath !== "string") {
-                throw new CirrusError("ctx.run*: expected a function reference from the generated `api`", { code: "BAD_REQUEST", status: 400 });
+                throw new LunoraError("ctx.run*: expected a function reference from the generated `api`", { code: "BAD_REQUEST", status: 400 });
             }
 
             const forwarded = new Request("https://shard.internal/rpc", {
@@ -1508,7 +1508,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
             const payload: { error?: { code?: string; message?: string }; result?: unknown } = await response.json();
 
             if (payload.error) {
-                throw new CirrusError(payload.error.message ?? "shard RPC failed", {
+                throw new LunoraError(payload.error.message ?? "shard RPC failed", {
                     code: payload.error.code ?? "INTERNAL",
                     status: response.status,
                 });
@@ -1541,8 +1541,8 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
 
         // In-process serverQuery fast-path (PLAN4 §2.2 / §5.3): an SSR loader
         // running inside this worker can call `worker.serverQuery(request, env,
-        // api.foo.bar, args, { shardKey })` to reach a Cirrus query without a
-        // self-`fetch` to `/_cirrus/rpc`. It resolves identity + runs the
+        // api.foo.bar, args, { shardKey })` to reach a Lunora query without a
+        // self-`fetch` to `/_lunora/rpc`. It resolves identity + runs the
         // per-shard authorization gate identically to `handleRpc`, then
         // dispatches to the owning shard (the worker→DO hop is itself in-process
         // — not a network self-fetch). `ctx.runQuery`/`runMutation` below keep
@@ -1551,20 +1551,20 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
 
         // Error isolation (PLAN4 §1, §2.2): the `httpRouter` is the meta-framework
         // SSR handler, the LOWEST-priority matcher — it only runs after auth,
-        // explicit routes, and the reserved `/_cirrus/*` endpoints have all
+        // explicit routes, and the reserved `/_lunora/*` endpoints have all
         // declined. A framework SSR render that THROWS must not propagate past
         // this seam: containing it here (rather than letting it bubble to the
         // top-level fetch catch) keeps a render fault framed as a plain 500 from
         // the SSR plane and guarantees it can never interfere with the realtime
-        // plane. Reserved `/_cirrus/*` requests are dispatched ahead of this call
+        // plane. Reserved `/_lunora/*` requests are dispatched ahead of this call
         // and on independent fetch invocations, so a single failed SSR render
-        // leaves queries / mutations / subscriptions (`/_cirrus/rpc`, `/_cirrus/ws`)
+        // leaves queries / mutations / subscriptions (`/_lunora/rpc`, `/_lunora/ws`)
         // fully serviceable.
         try {
-            return await options.httpRouter.fetch(request, { ...(env as object), __cirrusCtx: httpContext }, context);
+            return await options.httpRouter.fetch(request, { ...(env as object), __lunoraCtx: httpContext }, context);
         } catch (error: unknown) {
             // eslint-disable-next-line no-console -- surface the SSR render fault server-side; the client gets a generic 500, never the raw message
-            console.error("[cirrus] httpRouter (SSR) handler threw:", error);
+            console.error("[lunora] httpRouter (SSR) handler threw:", error);
 
             return new Response("Internal Server Error", { status: 500 });
         }
@@ -1572,7 +1572,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
 
     const handleWebSocketUpgrade = async (request: Request, env: unknown, url: URL): Promise<Response> => {
         if (request.headers.get("Upgrade") !== "websocket") {
-            throw new CirrusError("WebSocket upgrade header missing", { code: "BAD_REQUEST", status: 426 });
+            throw new LunoraError("WebSocket upgrade header missing", { code: "BAD_REQUEST", status: 426 });
         }
 
         const shardKey = url.searchParams.get("shard") ?? defaultShard;
@@ -1587,7 +1587,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
             const allowed = await options.authorizeShard(identity, shardKey);
 
             if (!allowed) {
-                throw new CirrusError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
+                throw new LunoraError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
             }
         } else if (shardKey !== defaultShard) {
             warnUnauthenticatedShardAccessOnce("shard");
@@ -1598,7 +1598,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
 
     /**
      * Run the per-shard / fan-out authorization gate for an RPC envelope. Throws
-     * a 403 `CirrusError` when the caller is not authorized. Fan-out is a
+     * a 403 `LunoraError` when the caller is not authorized. Fan-out is a
      * privileged op: when `authorizeShard` is set but `authorizeFanOut` is not,
      * fan-out is default-denied rather than silently allowed.
      */
@@ -1614,20 +1614,20 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
                 const allowed = await options.authorizeFanOut(identity, envelope.fanOut.table, envelope.functionPath);
 
                 if (!allowed) {
-                    throw new CirrusError("Forbidden fan-out", { code: "FORBIDDEN_FANOUT", status: 403 });
+                    throw new LunoraError("Forbidden fan-out", { code: "FORBIDDEN_FANOUT", status: 403 });
                 }
-            } else if (envelope.functionPath.startsWith("__cirrus_relation__:")) {
-                // SECURITY: the reserved `__cirrus_relation__:*` fan-out reads RAW,
+            } else if (envelope.functionPath.startsWith("__lunora_relation__:")) {
+                // SECURITY: the reserved `__lunora_relation__:*` fan-out reads RAW,
                 // RLS-blind rows from every shard (reverse cross-backend relations)
-                // and — unlike `__cirrus_admin__:*` — carries no DO-level token
+                // and — unlike `__lunora_admin__:*` — carries no DO-level token
                 // backstop. So it must NEVER fall into the warn-and-allow
                 // open-posture branch below: that would hand any caller a
                 // function-less full-table dump across all shards. Default-deny it
                 // whenever `authorizeFanOut` is absent, independent of
                 // `authorizeShard` (enabling reverse cross-backend relations
                 // REQUIRES configuring `authorizeFanOut`).
-                throw new CirrusError(
-                    "reverse cross-backend relation reads (`__cirrus_relation__:*`) require `authorizeFanOut` to be configured on the worker",
+                throw new LunoraError(
+                    "reverse cross-backend relation reads (`__lunora_relation__:*`) require `authorizeFanOut` to be configured on the worker",
                     {
                         code: "FORBIDDEN_FANOUT",
                         status: 403,
@@ -1639,7 +1639,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
                 // per-shard gate by design), so default-deny instead
                 // of silently letting any authenticated caller
                 // enumerate every shard for the table.
-                throw new CirrusError("Fan-out requires `authorizeFanOut` to be configured on the worker when `authorizeShard` is set", {
+                throw new LunoraError("Fan-out requires `authorizeFanOut` to be configured on the worker when `authorizeShard` is set", {
                     code: "FORBIDDEN_FANOUT",
                     status: 403,
                 });
@@ -1656,7 +1656,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
             const allowed = await options.authorizeShard(identity, shardKeyForAuth);
 
             if (!allowed) {
-                throw new CirrusError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
+                throw new LunoraError("Forbidden shard", { code: "FORBIDDEN_SHARD", status: 403 });
             }
         } else if (envelope.shardKey !== undefined && envelope.shardKey !== defaultShard) {
             // No per-shard gate and the caller named a non-default shard.
@@ -1669,7 +1669,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
      * shard's `Response` (with the `x-d1-bookmark` propagated). Extracted from
      * {@link handleRpc} so the in-process `serverQuery` fast-path (PLAN4 §2.2 /
      * §5.3) runs the IDENTICAL shard dispatch + observability + bookmark logic
-     * as the HTTP `/_cirrus/rpc` path — same `forwardToShard`, same shard
+     * as the HTTP `/_lunora/rpc` path — same `forwardToShard`, same shard
      * routing, same error shape. The caller is responsible for having already
      * resolved identity (`resolveForwardContext`) and run the authorization gate
      * (`authorizeRpcEnvelope`); this helper performs neither, so both call sites
@@ -1726,25 +1726,25 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
 
     const handleRpc = async (request: Request, env: unknown): Promise<Response> => {
         if (request.method !== "POST") {
-            throw new CirrusError("RPC endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+            throw new LunoraError("RPC endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
         const envelope = await parseEnvelope(request);
 
         if (envelope.fanOut && envelope.shardKey) {
-            throw new CirrusError("RPC envelope cannot set both `shardKey` and `fanOut`", { code: "BAD_REQUEST", status: 400 });
+            throw new LunoraError("RPC envelope cannot set both `shardKey` and `fanOut`", { code: "BAD_REQUEST", status: 400 });
         }
 
         // Reserved cross-shard relation reads (reverse cross-backend relations)
         // are fan-out-only. A single-shard envelope naming the
-        // `__cirrus_relation__:` prefix would bypass the `authorizeFanOut` gate
+        // `__lunora_relation__:` prefix would bypass the `authorizeFanOut` gate
         // and read one shard's raw rows directly, so refuse it — the only
         // legitimate caller is the coordinator's fan-out, which carries a
         // `fanOut` spec and is authorized through `authorizeRpcEnvelope`. The
-        // literal prefix is inlined (not imported from `@cirrus/do`) to keep the
-        // runtime free of a hard `@cirrus/do` dependency.
-        if (!envelope.fanOut && envelope.functionPath.startsWith("__cirrus_relation__:")) {
-            throw new CirrusError("`__cirrus_relation__:*` is a fan-out-only reserved RPC and cannot be dispatched to a single shard", {
+        // literal prefix is inlined (not imported from `@lunora/do`) to keep the
+        // runtime free of a hard `@lunora/do` dependency.
+        if (!envelope.fanOut && envelope.functionPath.startsWith("__lunora_relation__:")) {
+            throw new LunoraError("`__lunora_relation__:*` is a fan-out-only reserved RPC and cannot be dispatched to a single shard", {
                 code: "FORBIDDEN",
                 status: 403,
             });
@@ -1755,7 +1755,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         // hook would be called for a request that's already destined for
         // a 400, wasting any DB/IO it performs to look up the user.
         if (envelope.fanOut && !options.queryCoordinator) {
-            throw new CirrusError("RPC envelope set `fanOut` but no `queryCoordinator` is configured on the worker", {
+            throw new LunoraError("RPC envelope set `fanOut` but no `queryCoordinator` is configured on the worker", {
                 code: "BAD_REQUEST",
                 status: 400,
             });
@@ -1780,7 +1780,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
                 const coordinator = options.queryCoordinator;
 
                 if (!coordinator) {
-                    throw new CirrusError("RPC envelope set `fanOut` but no `queryCoordinator` is configured on the worker", {
+                    throw new LunoraError("RPC envelope set `fanOut` but no `queryCoordinator` is configured on the worker", {
                         code: "BAD_REQUEST",
                         status: 400,
                     });
@@ -1828,7 +1828,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
      * In-process server-query fast-path (PLAN4 §2.2 bullet 3 / §5.3 / risk #3).
      *
      * An SSR loader running INSIDE this same worker (the `httpRouter` seam) can
-     * call a Cirrus query without a self-`fetch` to `/_cirrus/rpc`. Skipping the
+     * call a Lunora query without a self-`fetch` to `/_lunora/rpc`. Skipping the
      * loopback avoids re-entering `fetch()` — URL parse, the route table, and the
      * `/api/auth/*` dispatch chain — for a request whose destination is already
      * known. The worker→ShardDO hop (`forwardToShard` → `stub.fetch`) is *not* a
@@ -1842,23 +1842,23 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
      *
      * 1. `resolveForwardContext(request, env, options.resolveIdentity)` — the
      * identical identity resolution (`resolveIdentity`, cookie / authorization /
-     * `x-d1-bookmark` forwarding, `x-cirrus-userid` / `x-cirrus-identity` header
+     * `x-d1-bookmark` forwarding, `x-lunora-userid` / `x-lunora-identity` header
      * derivation). Same per-request auth context, byte-for-byte.
      * 2. `authorizeRpcEnvelope({ functionPath, shardKey }, identity)` — the
      * identical per-shard authorization gate (`authorizeShard`), so an
      * unauthenticated / unauthorized call to an auth-gated function is rejected
-     * here exactly as it is on `/_cirrus/rpc` (same `FORBIDDEN_SHARD` 403).
+     * here exactly as it is on `/_lunora/rpc` (same `FORBIDDEN_SHARD` 403).
      * 3. `dispatchSingleShard(...)` — the identical shard routing, observability
      * event, bookmark propagation, and `Response` shape.
      *
-     * Result: byte-identical to what `POST /_cirrus/rpc` returns for the same
+     * Result: byte-identical to what `POST /_lunora/rpc` returns for the same
      * function reference, args, `shardKey`, and inbound request. It returns the
      * raw shard {@link Response} (the same object `handleRpc` returns) so callers
      * and tests can compare it byte-for-byte against the HTTP path.
      *
      * Fan-out is intentionally NOT reachable here: it is the cross-shard,
      * coordinator-gated, privileged path. An SSR loader that needs fan-out uses
-     * the HTTP `/_cirrus/rpc` envelope (with `authorizeFanOut`); this fast-path
+     * the HTTP `/_lunora/rpc` envelope (with `authorizeFanOut`); this fast-path
      * stays single-shard so the simpler, stricter `authorizeShard` parity holds.
      */
     const serverQuery = async (
@@ -1869,20 +1869,20 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         callOptions: { shardKey?: string } = {},
     ): Promise<Response> => {
         // Error mapping mirrors the top-level `fetch` catch (`toErrorResponse`)
-        // EXACTLY: a thrown `CirrusError` (bad reference, a denied `authorizeShard`
+        // EXACTLY: a thrown `LunoraError` (bad reference, a denied `authorizeShard`
         // gate, a 404 from the shard) becomes the same JSON error `Response` the
-        // HTTP `/_cirrus/rpc` path returns — so an auth-gated rejection is
+        // HTTP `/_lunora/rpc` path returns — so an auth-gated rejection is
         // byte-identical on both paths rather than surfacing as a thrown value on
         // one and a 403 `Response` on the other.
         try {
-            const functionPath = (reference as { __cirrusRef?: unknown }).__cirrusRef;
+            const functionPath = (reference as { __lunoraRef?: unknown }).__lunoraRef;
 
             if (typeof functionPath !== "string") {
-                throw new CirrusError("serverQuery: expected a function reference from the generated `api`", { code: "BAD_REQUEST", status: 400 });
+                throw new LunoraError("serverQuery: expected a function reference from the generated `api`", { code: "BAD_REQUEST", status: 400 });
             }
 
             // Resolve identity off the SAME inbound request the HTTP path uses, so
-            // cookies / bearer / bookmark and the derived `x-cirrus-*` headers are
+            // cookies / bearer / bookmark and the derived `x-lunora-*` headers are
             // byte-identical to `handleRpc`'s.
             const { headers: forwardedHeaders, identity } = await resolveForwardContext(request, env, options.resolveIdentity);
 
@@ -1962,15 +1962,15 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         const coordinator = options.queryCoordinator;
 
         if (!store) {
-            throw new CirrusError("scheduled backup requires a `backupStore` on the worker", { code: "BACKUP_NOT_CONFIGURED", status: 500 });
+            throw new LunoraError("scheduled backup requires a `backupStore` on the worker", { code: "BACKUP_NOT_CONFIGURED", status: 500 });
         }
 
         if (!coordinator) {
-            throw new CirrusError("scheduled backup requires a `queryCoordinator` on the worker", { code: "BACKUP_NOT_CONFIGURED", status: 500 });
+            throw new LunoraError("scheduled backup requires a `queryCoordinator` on the worker", { code: "BACKUP_NOT_CONFIGURED", status: 500 });
         }
 
         if (!options.adminToken || options.adminToken.length === 0) {
-            throw new CirrusError("scheduled backup requires an `adminToken` to authenticate the per-shard export gate", {
+            throw new LunoraError("scheduled backup requires an `adminToken` to authenticate the per-shard export gate", {
                 code: "BACKUP_NOT_CONFIGURED",
                 status: 500,
             });
@@ -2017,7 +2017,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         const prefix = options.backupPrefix ?? "backups/";
         const timestamp = new Date(controller.scheduledTime).toISOString();
         // Colons/periods are awkward in object keys; keep the raw id for the manifest.
-        const fileKey = `${prefix}cirrus-backup-${timestamp.replaceAll(/[.:]/gu, "-")}.ndjson`;
+        const fileKey = `${prefix}lunora-backup-${timestamp.replaceAll(/[.:]/gu, "-")}.ndjson`;
         const manifestKey = `${fileKey}.manifest.json`;
 
         await store.put(fileKey, stream, { httpMetadata: { contentType: "application/x-ndjson" } });
@@ -2098,7 +2098,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
      * reserved `recordAuthEvent` admin op and the admin bearer.
      *
      * Best-effort end to end: resolves the admin token from
-     * `options.adminToken` / `CIRRUS_ADMIN_TOKEN`, skips silently when no token
+     * `options.adminToken` / `LUNORA_ADMIN_TOKEN`, skips silently when no token
      * (or, implicitly, no shard namespace) is configured, and swallows any error
      * so a recording failure NEVER surfaces. Designed to be handed to
      * `ctx.waitUntil`, so it can't block or fail the auth response it follows.
@@ -2106,7 +2106,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
     const recordAuthAttempt = async (env: unknown, outcome: "fail" | "ok"): Promise<void> => {
         try {
             const envRecord = (env ?? {}) as Record<string, unknown>;
-            const adminBearer = options.adminToken ?? (typeof envRecord["CIRRUS_ADMIN_TOKEN"] === "string" ? envRecord["CIRRUS_ADMIN_TOKEN"] : undefined);
+            const adminBearer = options.adminToken ?? (typeof envRecord["LUNORA_ADMIN_TOKEN"] === "string" ? envRecord["LUNORA_ADMIN_TOKEN"] : undefined);
 
             // No admin token ⇒ the per-shard admin gate would reject the write;
             // skip silently so the SLO signal is simply absent.
@@ -2128,7 +2128,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
     };
 
     /**
-     * Run the top-level `@cirrus/auth` handler (when configured) ahead of the
+     * Run the top-level `@lunora/auth` handler (when configured) ahead of the
      * worker's own routing, and instrument it for the app-level auth-failure SLO
      * (PLAN3 §2.3). When the handler answers a genuine auth ATTEMPT route
      * (sign-in / sign-up / callback under {@link WorkerOptions.authBasePath}),
@@ -2172,7 +2172,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         ...storageAdminRoutes,
         ...vectorAdminRoutes,
         ...introspectionAdminRoutes,
-        // `/_cirrus/admin/auth/*` — the whole user-management plane, one route per
+        // `/_lunora/admin/auth/*` — the whole user-management plane, one route per
         // `AuthAdmin` op, dispatched by the descriptor table in `./auth-admin-routes`.
         ...buildAuthAdminRoutes({
             assertAdmin: assertAdminAuthorized,
@@ -2198,11 +2198,11 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
             const contentLength = Number(request.headers.get("content-length") ?? "");
 
             if (Number.isFinite(contentLength) && contentLength > MAX_BODY_BYTES) {
-                throw new CirrusError("Body too large", { code: "PAYLOAD_TOO_LARGE", status: 413 });
+                throw new LunoraError("Body too large", { code: "PAYLOAD_TOO_LARGE", status: 413 });
             }
         }
 
-        // Top-level `@cirrus/auth` dispatch (+ SLO instrumentation). Auth runs as
+        // Top-level `@lunora/auth` dispatch (+ SLO instrumentation). Auth runs as
         // a `/api/auth/*` route, ahead of the worker's own routing, so a sign-in
         // never reaches function dispatch. Returns the auth `Response` when the
         // handler owns the path, else `undefined` to fall through.
@@ -2221,7 +2221,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
             return route(request, env, context);
         }
 
-        // Internal `/_cirrus/*` endpoints, keyed by pathname. Each entry adapts
+        // Internal `/_lunora/*` endpoints, keyed by pathname. Each entry adapts
         // to the shared `(request, env, url) => Promise<Response>` shape so the
         // dispatch stays a single table lookup rather than a long if-chain.
         const internalRoute = internalRoutes[url.pathname];
@@ -2231,7 +2231,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
         }
 
         // HTTP actions are the lowest-priority matcher: explicit routes and the
-        // internal `/_cirrus/*` endpoints above always win. Once the request
+        // internal `/_lunora/*` endpoints above always win. Once the request
         // reaches the router, hono owns routing — its 404 is the terminal 404.
         const httpRouteResponse = await dispatchHttpRoute(request, env, context);
 
@@ -2262,13 +2262,13 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
 };
 
 /**
- * Compose a meta-framework SSR handler and Cirrus into a single Cloudflare
+ * Compose a meta-framework SSR handler and Lunora into a single Cloudflare
  * Worker (PLAN4 §1, §2.2). Thin sugar over {@link createWorker} — a
  * near-pass-through whose value is naming and a documented, framework-neutral
  * entrypoint, so a template reads cleanly:
  *
  * ```ts
- * import { composeWorker } from "@cirrus/runtime";
+ * import { composeWorker } from "@lunora/runtime";
  *
  * export default composeWorker({
  *   httpRouter: ssrHandler, // TanStack Start / React Router / SolidStart / …
@@ -2281,7 +2281,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
  * {@link HttpRouterLike} (`{ fetch(request, env?, ctx?) }`). It is the
  * lowest-priority matcher: the worker dispatches auth (`/api/auth/*`), explicit
  * {@link WorkerOptions.routes}, and the reserved realtime endpoints
- * (`/_cirrus/rpc`, `/_cirrus/ws`, `/_cirrus/admin/*`) first, then falls through
+ * (`/_lunora/rpc`, `/_lunora/ws`, `/_lunora/admin/*`) first, then falls through
  * to `httpRouter.fetch` for everything else. An SSR render that throws is
  * contained at that seam and surfaced as a plain 500 — it can never take down
  * the realtime plane (see `dispatchHttpRoute`). The two flows share one worker
@@ -2291,7 +2291,7 @@ const createWorker = (options: WorkerOptions): CirrusWorker => {
  * options. Prefer this name in framework templates to make the composition
  * intent explicit.
  */
-const composeWorker = (options: WorkerOptions): CirrusWorker => createWorker(options);
+const composeWorker = (options: WorkerOptions): LunoraWorker => createWorker(options);
 
 /**
  * A meta-framework's emitted Cloudflare handler: either a bare `fetch` function
@@ -2303,7 +2303,7 @@ type FrameworkHostHandler =
     | ((request: Request, env?: unknown, context?: ExecutionContextLike) => Promise<Response> | Response)
     | (HttpRouterLike & { scheduled?: (controller: ScheduledControllerLike, env: unknown, context: ExecutionContextLike) => Promise<void> | void });
 
-/** Cirrus worker options for {@link withFrameworkWorker} — everything except `httpRouter` (supplied from the framework host). */
+/** Lunora worker options for {@link withFrameworkWorker} — everything except `httpRouter` (supplied from the framework host). */
 type FrameworkWorkerOptions = Omit<WorkerOptions, "httpRouter">;
 
 /**
@@ -2315,17 +2315,17 @@ type FrameworkWorkerOptionsInput = ((env: unknown) => FrameworkWorkerOptions) | 
 
 const toHttpRouter = (handler: FrameworkHostHandler): HttpRouterLike => (typeof handler === "function" ? { fetch: handler } : handler);
 
-/** Whether the Cirrus options configure any cron surface (so Cirrus owns `scheduled` rather than the framework host). */
-const hasCirrusCrons = (options: FrameworkWorkerOptions): boolean => Boolean(options.crons ?? options.cronJobs ?? options.backupCron);
+/** Whether the Lunora options configure any cron surface (so Lunora owns `scheduled` rather than the framework host). */
+const hasLunoraCrons = (options: FrameworkWorkerOptions): boolean => Boolean(options.crons ?? options.cronJobs ?? options.backupCron);
 
 /**
- * Compose a meta-framework's Cloudflare Worker handler with Cirrus's realtime
+ * Compose a meta-framework's Cloudflare Worker handler with Lunora's realtime
  * plane into one `{ fetch, scheduled }` Worker — the **single, shared** class-B
- * (own-CF-adapter, hook-injection) composer behind `@cirrus/svelte/worker`,
- * `@cirrus/vue/worker`, and `@cirrus/astro`'s `withCirrus` (PLAN4 §3). It wraps
+ * (own-CF-adapter, hook-injection) composer behind `@lunora/svelte/worker`,
+ * `@lunora/vue/worker`, and `@lunora/astro`'s `withLunora` (PLAN4 §3). It wraps
  * the framework handler as {@link composeWorker}'s `httpRouter`, so the reserved
- * realtime endpoints (`/_cirrus/rpc`, `/_cirrus/ws`, `/_cirrus/admin/*`) plus
- * auth/explicit `routes` go to Cirrus and **everything else** delegates to the
+ * realtime endpoints (`/_lunora/rpc`, `/_lunora/ws`, `/_lunora/admin/*`) plus
+ * auth/explicit `routes` go to Lunora and **everything else** delegates to the
  * framework. A framework render that throws is contained at the seam and
  * surfaced as a plain 500 — it can never take down the realtime plane.
  *
@@ -2333,33 +2333,33 @@ const hasCirrusCrons = (options: FrameworkWorkerOptions): boolean => Boolean(opt
  * diverged on): (1) the host may be a bare `fetch` fn or a `{ fetch }` object;
  * (2) options may be a fixed object or an `(env) => options` factory, rebuilt per
  * request so per-request bindings wire in; (3) **`scheduled` preservation** — when
- * Cirrus configures no cron surface, the framework host's own `scheduled` (if any)
- * is preserved rather than silently dropped; otherwise Cirrus owns it (crons /
+ * Lunora configures no cron surface, the framework host's own `scheduled` (if any)
+ * is preserved rather than silently dropped; otherwise Lunora owns it (crons /
  * backup).
  * @param host The framework's emitted Cloudflare handler.
- * @param optionsInput Cirrus options minus `httpRouter`, or an `(env) => options` factory.
+ * @param optionsInput Lunora options minus `httpRouter`, or an `(env) => options` factory.
  */
-const withFrameworkWorker = (host: FrameworkHostHandler, optionsInput: FrameworkWorkerOptionsInput): CirrusWorker => {
+const withFrameworkWorker = (host: FrameworkHostHandler, optionsInput: FrameworkWorkerOptionsInput): LunoraWorker => {
     const httpRouter = toHttpRouter(host);
     const hostScheduled = typeof host === "object" && typeof host.scheduled === "function" ? host.scheduled : undefined;
 
-    const build = (options: FrameworkWorkerOptions): CirrusWorker => {
-        const cirrus = composeWorker({ ...options, httpRouter });
+    const build = (options: FrameworkWorkerOptions): LunoraWorker => {
+        const lunora = composeWorker({ ...options, httpRouter });
 
-        // Preserve the framework host's own `scheduled` when Cirrus configures no
+        // Preserve the framework host's own `scheduled` when Lunora configures no
         // cron surface (so a host with cron tasks isn't silently dropped). Spread
-        // `cirrus` so `fetch`/`serverQuery` are kept and only `scheduled` is
+        // `lunora` so `fetch`/`serverQuery` are kept and only `scheduled` is
         // overridden.
-        if (hostScheduled !== undefined && !hasCirrusCrons(options)) {
+        if (hostScheduled !== undefined && !hasLunoraCrons(options)) {
             return {
-                ...cirrus,
+                ...lunora,
                 scheduled: async (controller, env, context): Promise<void> => {
                     await hostScheduled(controller, env, context);
                 },
             };
         }
 
-        return cirrus;
+        return lunora;
     };
 
     if (typeof optionsInput !== "function") {
@@ -2384,7 +2384,7 @@ export type {
     AdminTableResolver,
     BackupManifest,
     BackupStore,
-    CirrusWorker,
+    LunoraWorker,
     CronHandler,
     CronJobDispatch,
     CronJobInfo,

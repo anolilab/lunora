@@ -59,7 +59,7 @@ describe("cloudflare transport (default provider)", () => {
         sendEmail.mockResolvedValue({ error: "binding refused", success: false });
         const mailer = createMailer({ cloudflareSend: async () => undefined, from: "noreply@x.test" });
 
-        await expect(mailer.send({ subject: "Hi", text: "x", to: "user@x.test" })).rejects.toThrow("@cirrus/mail: send failed");
+        await expect(mailer.send({ subject: "Hi", text: "x", to: "user@x.test" })).rejects.toThrow("@lunora/mail: send failed");
         expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("binding refused"));
     });
 });

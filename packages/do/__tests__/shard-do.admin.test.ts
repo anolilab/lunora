@@ -24,8 +24,8 @@ import type { SocketAttachment } from "../src/types";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
- * Canonical key set of `StudioFeaturesResult`. `@cirrus/studio` hand-mirrors this
- * type (it can't import `@cirrus/do`) and duplicates this exact tuple in its own
+ * Canonical key set of `StudioFeaturesResult`. `@lunora/studio` hand-mirrors this
+ * type (it can't import `@lunora/do`) and duplicates this exact tuple in its own
  * drift guard. `lint:types` fails here if a key is added to / removed from
  * `StudioFeaturesResult` without updating this tuple — and there if the studio
  * copy drifts — forcing both packages to move together.
@@ -143,7 +143,7 @@ describe("shardDO admin introspection", () => {
     it("lists tables when a valid admin bearer is presented", async () => {
         expect.assertions(2);
 
-        const shard = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.listTables, {}, ADMIN_TOKEN));
 
@@ -154,7 +154,7 @@ describe("shardDO admin introspection", () => {
     it("reads a page of rows for a table", async () => {
         expect.assertions(2);
 
-        const shard = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.readTablePage, { limit: 1, table: "messages" }, ADMIN_TOKEN));
 
@@ -168,7 +168,7 @@ describe("shardDO admin introspection", () => {
         expect.assertions(2);
 
         // Base ShardDO can't see the user schema, so it reports an empty list.
-        const base = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const base = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const baseResponse = await base.fetch(adminRequest(ADMIN_FUNCTIONS.listTableIndexes, { table: "messages" }, ADMIN_TOKEN));
 
         await expect(baseResponse.json()).resolves.toEqual({ result: { indexes: [] } });
@@ -183,7 +183,7 @@ describe("shardDO admin introspection", () => {
             }
         }
 
-        const indexed = new IndexedShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const indexed = new IndexedShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const response = await indexed.fetch(adminRequest(ADMIN_FUNCTIONS.listTableIndexes, { table: "messages" }, ADMIN_TOKEN));
 
         await expect(response.json()).resolves.toEqual({
@@ -195,7 +195,7 @@ describe("shardDO admin introspection", () => {
         expect.assertions(2);
 
         // Base ShardDO can't see the user schema, so it reports an empty list.
-        const base = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const base = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const baseResponse = await base.fetch(adminRequest(ADMIN_FUNCTIONS.describeTable, { table: "messages" }, ADMIN_TOKEN));
 
         await expect(baseResponse.json()).resolves.toEqual({ result: { columns: [] } });
@@ -217,7 +217,7 @@ describe("shardDO admin introspection", () => {
             }
         }
 
-        const columns = new ColumnsShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const columns = new ColumnsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const response = await columns.fetch(adminRequest(ADMIN_FUNCTIONS.describeTable, { table: "messages" }, ADMIN_TOKEN));
 
         await expect(response.json()).resolves.toEqual({
@@ -251,10 +251,10 @@ describe("shardDO admin introspection", () => {
             }
         }
 
-        const shard = new ColumnsShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new ColumnsShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         // Base hook still reports nothing per-table for an unknown table.
-        const base = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const base = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const baseResponse = await base.fetch(adminRequest(ADMIN_FUNCTIONS.describeTables, { tables: ["messages"] }, ADMIN_TOKEN));
 
         await expect(baseResponse.json()).resolves.toEqual({ result: { columnsByTable: { messages: [] } } });
@@ -278,7 +278,7 @@ describe("shardDO admin introspection", () => {
         expect.assertions(2);
 
         // Base ShardDO can't see the user schema, so it reports none.
-        const base = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const base = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const baseResponse = await base.fetch(adminRequest(ADMIN_FUNCTIONS.getAdvisories, {}, ADMIN_TOKEN));
 
         await expect(baseResponse.json()).resolves.toEqual({ result: { advisories: [] } });
@@ -304,7 +304,7 @@ describe("shardDO admin introspection", () => {
             }
         }
 
-        const advised = new AdvisedShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const advised = new AdvisedShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const response = await advised.fetch(adminRequest(ADMIN_FUNCTIONS.getAdvisories, {}, ADMIN_TOKEN));
 
         await expect(response.json()).resolves.toEqual({ result: { advisories: [finding] } });
@@ -314,7 +314,7 @@ describe("shardDO admin introspection", () => {
         expect.assertions(2);
 
         // Base ShardDO can't see the user's project, so it hides every optional page.
-        const base = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const base = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const baseResponse = await base.fetch(adminRequest(ADMIN_FUNCTIONS.studioFeatures, {}, ADMIN_TOKEN));
 
         await expect(baseResponse.json()).resolves.toEqual({
@@ -336,7 +336,7 @@ describe("shardDO admin introspection", () => {
             }
         }
 
-        const featured = new FeaturedShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const featured = new FeaturedShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const response = await featured.fetch(adminRequest(ADMIN_FUNCTIONS.studioFeatures, {}, ADMIN_TOKEN));
 
         await expect(response.json()).resolves.toEqual({
@@ -357,13 +357,13 @@ describe("shardDO admin introspection", () => {
         expect.assertions(2);
 
         // Base ShardDO can't see the user's project, so it lists no workflows.
-        const base = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const base = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const baseResponse = await base.fetch(adminRequest(ADMIN_FUNCTIONS.listWorkflows, {}, ADMIN_TOKEN));
 
         await expect(baseResponse.json()).resolves.toEqual({ result: { workflows: [] } });
 
         // The codegen subclass overrides `workflowsMetadata()` with the discovered declarations.
-        const withWorkflows = new DeclaredWorkflowShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const withWorkflows = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const response = await withWorkflows.fetch(adminRequest(ADMIN_FUNCTIONS.listWorkflows, {}, ADMIN_TOKEN));
 
         await expect(response.json()).resolves.toEqual({
@@ -389,7 +389,7 @@ describe("shardDO admin introspection", () => {
 
         // A shard whose env carries a fake `WORKFLOW_*` binding and whose
         // codegen hook declares the matching workflow.
-        const shard = new DeclaredWorkflowShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN, WORKFLOW_ORDER_PIPELINE: binding });
+        const shard = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, WORKFLOW_ORDER_PIPELINE: binding });
         const response = await shard.fetch(
             adminRequest(ADMIN_FUNCTIONS.createWorkflowInstance, { exportName: "orderPipeline", params: { orderId: "o1" } }, ADMIN_TOKEN),
         );
@@ -406,7 +406,7 @@ describe("shardDO admin introspection", () => {
             get: (id: string) => Promise.resolve({ id, status: () => Promise.resolve({ output: { total: 42 }, status: "complete" }) }),
         };
 
-        const shard = new DeclaredWorkflowShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN, WORKFLOW_ORDER_PIPELINE: binding });
+        const shard = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, WORKFLOW_ORDER_PIPELINE: binding });
         const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getWorkflowInstanceStatus, { exportName: "orderPipeline", id: "wf-1" }, ADMIN_TOKEN));
 
         await expect(response.json()).resolves.toEqual({ result: { id: "wf-1", output: { total: 42 }, status: "complete" } });
@@ -415,7 +415,7 @@ describe("shardDO admin introspection", () => {
     it("rejects starting an undeclared workflow with a 400", async () => {
         expect.assertions(1);
 
-        const shard = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.createWorkflowInstance, { exportName: "ghost" }, ADMIN_TOKEN));
 
         expect(response.status).toBe(400);
@@ -425,7 +425,7 @@ describe("shardDO admin introspection", () => {
         expect.assertions(1);
 
         // Declares the workflow but provides no matching env binding.
-        const shard = new DeclaredWorkflowShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new DeclaredWorkflowShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.createWorkflowInstance, { exportName: "orderPipeline" }, ADMIN_TOKEN));
 
         expect(response.status).toBe(400);
@@ -454,7 +454,7 @@ describe("shardDO admin introspection", () => {
             }
         }
 
-        const shard = new UnusedIndexShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new UnusedIndexShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         // No reads yet → no runtime advisories (a never-queried table never spams).
         const cold = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getAdvisories, {}, ADMIN_TOKEN));
@@ -501,7 +501,7 @@ describe("shardDO admin introspection", () => {
     it("rejects (403) a missing or mismatched bearer when a token is configured", async () => {
         expect.assertions(2);
 
-        const shard = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const missing = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.listTables, {}));
         const wrong = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.listTables, {}, "wrong"));
@@ -510,10 +510,10 @@ describe("shardDO admin introspection", () => {
         expect(wrong.status).toBe(403);
     });
 
-    it("maps an unknown table to a 404 CirrusError", async () => {
+    it("maps an unknown table to a 404 LunoraError", async () => {
         expect.assertions(2);
 
-        const shard = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.readTablePage, { table: "nope" }, ADMIN_TOKEN));
 
@@ -524,9 +524,9 @@ describe("shardDO admin introspection", () => {
     it("returns 404 for an unrecognised admin op", async () => {
         expect.assertions(2);
 
-        const shard = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
-        const response = await shard.fetch(adminRequest("__cirrus_admin__:bogus", {}, ADMIN_TOKEN));
+        const response = await shard.fetch(adminRequest("__lunora_admin__:bogus", {}, ADMIN_TOKEN));
 
         expect(response.status).toBe(404);
         await expect(response.json()).resolves.toMatchObject({ error: { code: "UNKNOWN_ADMIN_OP" } });
@@ -550,7 +550,7 @@ describe("shardDO admin introspection", () => {
             makeSocket({ subs: {} }),
         ];
         const socketState: ShardDOState = { ...state, getWebSockets: () => sockets };
-        const shard = new AdminShard(socketState, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new AdminShard(socketState, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.listSubscriptions, {}, ADMIN_TOKEN));
 
@@ -578,7 +578,7 @@ describe("shardDO admin introspection", () => {
     it("listSubscriptions returns an empty, zeroed result when no sockets are connected", async () => {
         expect.assertions(2);
 
-        const shard = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.listSubscriptions, {}, ADMIN_TOKEN));
 
@@ -589,7 +589,7 @@ describe("shardDO admin introspection", () => {
     it("recordAuthEvent then getAuthMetrics round-trips the app-level auth-failure signal", async () => {
         expect.assertions(6);
 
-        const shard = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         // Two successful attempts and one failure, recorded via the write op.
         const ok1 = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.recordAuthEvent, { outcome: "ok" }, ADMIN_TOKEN));
@@ -614,7 +614,7 @@ describe("shardDO admin introspection", () => {
     it("rejects (400) a recordAuthEvent with an invalid outcome", async () => {
         expect.assertions(2);
 
-        const shard = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.recordAuthEvent, { outcome: "bogus" }, ADMIN_TOKEN));
 
@@ -625,7 +625,7 @@ describe("shardDO admin introspection", () => {
     it("admin-gates recordAuthEvent and getAuthMetrics (403 without the bearer)", async () => {
         expect.assertions(2);
 
-        const shard = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const recordResponse = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.recordAuthEvent, { outcome: "ok" }));
         const readResponse = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.getAuthMetrics, {}));
@@ -637,7 +637,7 @@ describe("shardDO admin introspection", () => {
     it("recordContainerEvent surfaces a container lifecycle event in the getLogs stream", async () => {
         expect.assertions(4);
 
-        const shard = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const envelope = {
             container: "transcoder",
@@ -645,7 +645,7 @@ describe("shardDO admin introspection", () => {
             instance: "do-abc123",
             level: "info",
             message: "runtime_signal (exit 137)",
-            source: "cirrus",
+            source: "lunora",
             ts: 1_700_000_000_000,
             type: "container",
         };
@@ -672,7 +672,7 @@ describe("shardDO admin introspection", () => {
     it("rejects (400) a recordContainerEvent with a missing envelope", async () => {
         expect.assertions(2);
 
-        const shard = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.recordContainerEvent, { event: { event: "start" } }, ADMIN_TOKEN));
 
@@ -683,7 +683,7 @@ describe("shardDO admin introspection", () => {
     it("admin-gates recordContainerEvent (403 without the bearer)", async () => {
         expect.assertions(1);
 
-        const shard = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.recordContainerEvent, { event: { container: "c", event: "start" } }));
 
@@ -730,7 +730,7 @@ class MigrationShard extends ShardDO {
 
         if (!migration) {
             return Promise.reject(
-                Object.assign(new Error(`data migration "${args.id}" is not registered`), { code: "MIGRATION_NOT_FOUND", name: "CirrusError", status: 404 }),
+                Object.assign(new Error(`data migration "${args.id}" is not registered`), { code: "MIGRATION_NOT_FOUND", name: "LunoraError", status: 404 }),
             );
         }
 
@@ -795,7 +795,7 @@ describe("shardDO admin data migrations", () => {
     it("runs a registered migration and reports completed counts", async () => {
         expect.assertions(3);
 
-        const shard = new MigrationShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new MigrationShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.runMigration, { id: "bump-version" }));
 
@@ -809,7 +809,7 @@ describe("shardDO admin data migrations", () => {
     it("records an audit entry after a successful runMigration", async () => {
         expect.assertions(3);
 
-        const shard = new MigrationShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new MigrationShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         await shard.fetch(adminRequest(ADMIN_FUNCTIONS.runMigration, { id: "bump-version" }));
 
@@ -824,7 +824,7 @@ describe("shardDO admin data migrations", () => {
     it("dryRun previews counts without rewriting rows", async () => {
         expect.assertions(3);
 
-        const shard = new MigrationShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new MigrationShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.runMigration, { dryRun: true, id: "bump-version" }));
 
@@ -837,7 +837,7 @@ describe("shardDO admin data migrations", () => {
     it("reports persisted status after a run, and [] before any run", async () => {
         expect.assertions(3);
 
-        const shard = new MigrationShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new MigrationShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const before = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.migrationStatus, {}));
 
@@ -855,7 +855,7 @@ describe("shardDO admin data migrations", () => {
     it("rejects runMigration without an id (400)", async () => {
         expect.assertions(2);
 
-        const shard = new MigrationShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new MigrationShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.runMigration, {}));
 
@@ -868,7 +868,7 @@ describe("shardDO admin data migrations", () => {
 
         // AdminShard implements `handleRpc` but not `runShardDataMigration`, so
         // the base hook's not-found rejection surfaces through the admin path.
-        const shard = new AdminShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new AdminShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(adminRequest(ADMIN_FUNCTIONS.runMigration, { id: "ghost" }));
 
@@ -879,7 +879,7 @@ describe("shardDO admin data migrations", () => {
     it("getMetrics returns a health snapshot with request/error counts", async () => {
         expect.assertions(5);
 
-        const shard = new CountingShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new CountingShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         await shard.fetch(userRequest("messages:list"));
         await shard.fetch(userRequest("boom:explode"));
@@ -901,7 +901,7 @@ describe("shardDO admin data migrations", () => {
 
         // A failed dispatch is what the log buffer captures (path + message), so
         // a single boom call yields exactly one row; the successful call is not logged.
-        const shard = new CountingShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new CountingShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         await shard.fetch(userRequest("messages:list"));
         await shard.fetch(userRequest("boom:explode"));
@@ -919,7 +919,7 @@ describe("shardDO admin data migrations", () => {
     it("getFunctionStats reports per-function call and error counts", async () => {
         expect.assertions(6);
 
-        const shard = new CountingShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new CountingShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         // Two successes for one path, one failure for another — so the two paths
         // accumulate independently and the error path advances its error counter.
@@ -947,14 +947,14 @@ describe("shardDO admin data migrations", () => {
     it("getRequestLog records one durable entry per dispatch with the acting user, outcome and redacted args", async () => {
         expect.assertions(7);
 
-        const shard = new CountingShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new CountingShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         // A user-attributed success and a failing dispatch, so the durable log
         // captures BOTH outcomes (unlike the error-only in-memory `getLogs`).
         const authedRequest = (functionPath: string): Request =>
             new Request("https://shard.internal/rpc", {
                 body: JSON.stringify({ args: { password: "p@ssw0rd" }, functionPath }), // gitleaks:allow -- test fixture password, not a real secret
-                headers: { "content-type": "application/json", "x-cirrus-userid": "u1" },
+                headers: { "content-type": "application/json", "x-lunora-userid": "u1" },
                 method: "POST",
             });
 
@@ -990,7 +990,7 @@ describe("shardDO admin data migrations", () => {
     it("samples out successful dispatches at rate 0 but always records errors", async () => {
         expect.assertions(2);
 
-        const shard = new CountingShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN, CIRRUS_REQUEST_LOG_SAMPLE: "0" });
+        const shard = new CountingShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, LUNORA_REQUEST_LOG_SAMPLE: "0" });
 
         await shard.fetch(userRequest("messages:list")); // ok → sampled out
         await shard.fetch(userRequest("messages:get")); // ok → sampled out
@@ -1003,10 +1003,10 @@ describe("shardDO admin data migrations", () => {
         expect(body.result.entries[0]).toMatchObject({ functionPath: "boom:explode", outcome: "error" });
     });
 
-    it("captures raw args in a dev environment (CIRRUS PII dev escape hatch)", async () => {
+    it("captures raw args in a dev environment (LUNORA PII dev escape hatch)", async () => {
         expect.assertions(1);
 
-        const shard = new CountingShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN, ENVIRONMENT: "development" });
+        const shard = new CountingShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, ENVIRONMENT: "development" });
 
         await shard.fetch(
             new Request("https://shard.internal/rpc", {
@@ -1023,8 +1023,8 @@ describe("shardDO admin data migrations", () => {
         expect(body.result.entries[0]!.redactedArgs).toStrictEqual({ password: "p@ssw0rd" }); // gitleaks:allow -- test fixture password, not a real secret
     });
 
-    /** Collect the parsed cirrus `type: "request"` events among a console spy's calls. */
-    const cirrusRequestEvents = (spy: { mock: { calls: unknown[][] } }): Record<string, unknown>[] =>
+    /** Collect the parsed lunora `type: "request"` events among a console spy's calls. */
+    const lunoraRequestEvents = (spy: { mock: { calls: unknown[][] } }): Record<string, unknown>[] =>
         spy.mock.calls
             .map((call) => {
                 try {
@@ -1033,17 +1033,17 @@ describe("shardDO admin data migrations", () => {
                     return undefined;
                 }
             })
-            .filter((event): event is Record<string, unknown> => event?.source === "cirrus" && event.type === "request");
+            .filter((event): event is Record<string, unknown> => event?.source === "lunora" && event.type === "request");
 
     it("always streams an error dispatch to console.error even without the emit flag", async () => {
         expect.assertions(2);
 
         const error = vi.spyOn(console, "error").mockImplementation(() => {});
-        const shard = new CountingShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new CountingShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         await shard.fetch(userRequest("boom:explode"));
 
-        const events = cirrusRequestEvents(error);
+        const events = lunoraRequestEvents(error);
 
         expect(events).toHaveLength(1);
         expect(events[0]).toMatchObject({ function: "boom:explode", outcome: "error" });
@@ -1051,22 +1051,22 @@ describe("shardDO admin data migrations", () => {
         vi.restoreAllMocks();
     });
 
-    it("does NOT stream a successful dispatch to console unless CIRRUS_REQUEST_LOG_EMIT is set", async () => {
+    it("does NOT stream a successful dispatch to console unless LUNORA_REQUEST_LOG_EMIT is set", async () => {
         expect.assertions(2);
 
         const log = vi.spyOn(console, "log").mockImplementation(() => {});
 
-        const quiet = new CountingShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const quiet = new CountingShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         await quiet.fetch(userRequest("messages:list"));
 
-        expect(cirrusRequestEvents(log)).toHaveLength(0);
+        expect(lunoraRequestEvents(log)).toHaveLength(0);
 
-        const loud = new CountingShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN, CIRRUS_REQUEST_LOG_EMIT: "1" });
+        const loud = new CountingShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, LUNORA_REQUEST_LOG_EMIT: "1" });
 
         await loud.fetch(userRequest("messages:list"));
 
-        expect(cirrusRequestEvents(log)).toHaveLength(1);
+        expect(lunoraRequestEvents(log)).toHaveLength(1);
 
         vi.restoreAllMocks();
     });
@@ -1075,12 +1075,12 @@ describe("shardDO admin data migrations", () => {
         expect.assertions(1);
 
         const log = vi.spyOn(console, "log").mockImplementation(() => {});
-        // No CIRRUS_REQUEST_LOG_EMIT — the dev env (set by `cirrus dev` / the Vite plugin) flips it on.
-        const dev = new CountingShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN, WORKER_ENV: "development" });
+        // No LUNORA_REQUEST_LOG_EMIT — the dev env (set by `lunora dev` / the Vite plugin) flips it on.
+        const dev = new CountingShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, WORKER_ENV: "development" });
 
         await dev.fetch(userRequest("messages:list"));
 
-        expect(cirrusRequestEvents(log)).toHaveLength(1);
+        expect(lunoraRequestEvents(log)).toHaveLength(1);
 
         vi.restoreAllMocks();
     });
@@ -1089,11 +1089,11 @@ describe("shardDO admin data migrations", () => {
         expect.assertions(1);
 
         const log = vi.spyOn(console, "log").mockImplementation(() => {});
-        const dev = new CountingShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN, CIRRUS_REQUEST_LOG_EMIT: "false", WORKER_ENV: "development" });
+        const dev = new CountingShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN, LUNORA_REQUEST_LOG_EMIT: "false", WORKER_ENV: "development" });
 
         await dev.fetch(userRequest("messages:list"));
 
-        expect(cirrusRequestEvents(log)).toHaveLength(0);
+        expect(lunoraRequestEvents(log)).toHaveLength(0);
 
         vi.restoreAllMocks();
     });
@@ -1103,7 +1103,7 @@ describe("shardDO admin data migrations", () => {
 
         const log = vi.spyOn(console, "log").mockImplementation(() => {});
         const seen: { args: unknown[]; functionPath: string; level: string; message: string }[] = [];
-        const shard = new LoggingShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new LoggingShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         shard.log("messages:list", "info", ["loaded", { count: 3 }], { onLog: (event) => seen.push(event) });
 
@@ -1129,7 +1129,7 @@ describe("shardDO admin data migrations", () => {
                     return undefined;
                 }
             })
-            .filter((event): event is Record<string, unknown> => event?.source === "cirrus" && event.type === "log");
+            .filter((event): event is Record<string, unknown> => event?.source === "lunora" && event.type === "log");
 
         expect(events).toHaveLength(1);
         expect(events[0]).toMatchObject({ function: "messages:list", level: "info", message: 'loaded {"count":3}' });
@@ -1148,7 +1148,7 @@ describe("shardDO admin data migrations", () => {
         expect.assertions(1);
 
         vi.spyOn(console, "log").mockImplementation(() => {});
-        const shard = new LoggingShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new LoggingShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         shard.log("a:b", "log", ["hi"]);
         vi.restoreAllMocks();
@@ -1161,7 +1161,7 @@ describe("shardDO admin data migrations", () => {
 });
 
 /**
- * Drives the `__cirrus_admin__:writeRow` op through a real schema-aware writer,
+ * Drives the `__lunora_admin__:writeRow` op through a real schema-aware writer,
  * mirroring what the codegen-generated subclass emits. Proves single-row
  * insert/patch/replace/delete land in SQLite via the admin path.
  */
@@ -1235,7 +1235,7 @@ describe("shardDO admin row writes", () => {
     it("inserts a row and returns its assigned id", async () => {
         expect.assertions(4);
 
-        const shard = new EditableShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new EditableShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(writeRequest({ doc: { name: "Ada", version: 1 }, op: "insert", table: "users" }));
 
@@ -1256,7 +1256,7 @@ describe("shardDO admin row writes", () => {
         const seed = createShardContextDatabase({ schema: usersSchema, sql: database.sql });
         const id = await seed.insert("users", { name: "old", version: 1 });
 
-        const shard = new EditableShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new EditableShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(writeRequest({ doc: { name: "new" }, id, op: "patch", table: "users" }));
 
@@ -1273,7 +1273,7 @@ describe("shardDO admin row writes", () => {
         const seed = createShardContextDatabase({ schema: usersSchema, sql: database.sql });
         const id = await seed.insert("users", { name: "doomed", version: 1 });
 
-        const shard = new EditableShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new EditableShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(writeRequest({ id, op: "delete", table: "users" }));
 
@@ -1284,7 +1284,7 @@ describe("shardDO admin row writes", () => {
     it("rejects an unknown op (400)", async () => {
         expect.assertions(1);
 
-        const shard = new EditableShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new EditableShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(writeRequest({ doc: {}, op: "bogus", table: "users" }));
 
@@ -1294,7 +1294,7 @@ describe("shardDO admin row writes", () => {
     it("requires an id for patch (400)", async () => {
         expect.assertions(1);
 
-        const shard = new EditableShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new EditableShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(writeRequest({ doc: { name: "x" }, op: "patch", table: "users" }));
 
@@ -1311,7 +1311,7 @@ describe("shardDO admin row writes", () => {
             }
         }
 
-        const shard = new BareShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new BareShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(writeRequest({ doc: { name: "x" }, op: "insert", table: "users" }));
 
@@ -1341,7 +1341,7 @@ const messagesRankSchema: SchemaLike = {
 };
 
 /**
- * Drives the `__cirrus_admin__:rankBefore` op through a real schema-aware
+ * Drives the `__lunora_admin__:rankBefore` op through a real schema-aware
  * writer, mirroring the codegen-generated subclass. Proves the cross-shard
  * rank's per-shard `{before, total}` count is served over the admin path.
  */
@@ -1423,7 +1423,7 @@ describe("shardDO admin rankBefore", () => {
         await seed.insert("messages", { _id: "m2", channelId: "c1", score: 70 }, { allowExplicitId: true });
         await seed.insert("messages", { _id: "m3", channelId: "c1", score: 20 }, { allowExplicitId: true });
 
-        const shard = new RankableShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new RankableShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         // Rank a foreign row scored 75: desc order → m1(90) is strictly before
         // it, m2(70)/m3(20) are after. before=1, total=3 (this shard's rows).
@@ -1440,7 +1440,7 @@ describe("shardDO admin rankBefore", () => {
     it("rejects a non-array sortValues (400)", async () => {
         expect.assertions(1);
 
-        const shard = new RankableShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new RankableShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(rankBeforeRequest({ index: "leaderboard", partitionKey: "", rowId: "x1", sortValues: 5, table: "messages" }));
 
@@ -1457,7 +1457,7 @@ describe("shardDO admin rankBefore", () => {
             }
         }
 
-        const shard = new BareShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new BareShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(rankBeforeRequest({ index: "leaderboard", partitionKey: "", rowId: "x1", sortValues: [75], table: "messages" }));
 
@@ -1503,7 +1503,7 @@ describe("shardDO admin rankPage", () => {
         await seed.insert("messages", { _id: "m2", channelId: "c1", score: 70 }, { allowExplicitId: true });
         await seed.insert("messages", { _id: "m3", channelId: "c1", score: 20 }, { allowExplicitId: true });
 
-        const shard = new RankableShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new RankableShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(rankPageRequest({ index: "leaderboard", table: "messages", take: 2 }));
 
@@ -1527,7 +1527,7 @@ describe("shardDO admin rankPage", () => {
         await seed.insert("messages", { _id: "m2", channelId: "c1", score: 70 }, { allowExplicitId: true });
         await seed.insert("messages", { _id: "m3", channelId: "c1", score: 20 }, { allowExplicitId: true });
 
-        const shard = new RankableShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new RankableShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         // Resume after m1 (the highest score) → the next page is m2 then m3.
         const after = rankKeyFromDoc(rankByScoreDesc, { _id: "m1", channelId: "c1", score: 90 });
@@ -1540,7 +1540,7 @@ describe("shardDO admin rankPage", () => {
     it("400s on a malformed `after` key (missing rowId)", async () => {
         expect.assertions(1);
 
-        const shard = new RankableShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new RankableShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(rankPageRequest({ after: { partitionKey: "", sortValues: [1] }, index: "leaderboard", table: "messages" }));
 
@@ -1557,7 +1557,7 @@ describe("shardDO admin rankPage", () => {
             }
         }
 
-        const shard = new BareShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new BareShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(rankPageRequest({ index: "leaderboard", table: "messages" }));
 
@@ -1601,7 +1601,7 @@ describe("shardDO admin cdcSync", () => {
         await writer.insert("users", { _id: "u_1", name: "Ada", version: 1 }, { allowExplicitId: true });
         await writer.patch("u_1", { name: "Ada Lovelace" });
 
-        const shard = new AdminShard(stateFor(database.sql), { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new AdminShard(stateFor(database.sql), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const response = await shard.fetch(cdcRequest({ sinceSeq: 0 }));
 
         expect(response.status).toBe(200);
@@ -1618,7 +1618,7 @@ describe("shardDO admin cdcSync", () => {
         database = createSqliteExec();
         runShardMigrations(database.sql, usersSchema); // CDC disabled — no __cdc_log table.
 
-        const shard = new AdminShard(stateFor(database.sql), { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new AdminShard(stateFor(database.sql), { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const response = await shard.fetch(cdcRequest({ sinceSeq: 7 }));
         const body = await response.json<{ result: { changes: unknown[]; cursor: number } }>();
 
@@ -1682,7 +1682,7 @@ describe("shardDO admin applyCdc", () => {
     it("replays an insert + a delete through the writer", async () => {
         expect.assertions(3);
 
-        const shard = new ApplyShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new ApplyShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const seed = createShardContextDatabase({ schema: usersSchema, sql: database.sql });
         const doomedId = await seed.insert("users", { name: "doomed", version: 1 });
@@ -1706,7 +1706,7 @@ describe("shardDO admin applyCdc", () => {
     it("rejects a malformed changes payload (400)", async () => {
         expect.assertions(1);
 
-        const shard = new ApplyShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new ApplyShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const response = await shard.fetch(applyRequest([{ id: "x", op: "bogus", table: "users" }]));
 
         expect(response.status).toBe(400);
@@ -1745,7 +1745,7 @@ const todosSchema: SchemaLike = {
 };
 
 /**
- * Drives the `__cirrus_admin__:deleteRows` / `__cirrus_admin__:clearTable` ops
+ * Drives the `__lunora_admin__:deleteRows` / `__lunora_admin__:clearTable` ops
  * through a real schema-aware writer, mirroring the codegen-generated subclass'
  * `deleteRowThroughWriter` override. The base `runShardBulkDelete` owns the
  * bounded id-collection loop; this only supplies the per-row writer delete, so
@@ -1816,7 +1816,7 @@ describe("shardDO admin bulk delete", () => {
         await seedProject(seed, "p1", 3);
         await seedProject(seed, "p2", 2);
 
-        const shard = new BulkDeleteShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new BulkDeleteShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(
             bulkRequest(ADMIN_FUNCTIONS.deleteRows, { filters: [{ column: "projectId", operator: "eq", value: "p1" }], table: "todos" }),
@@ -1840,7 +1840,7 @@ describe("shardDO admin bulk delete", () => {
         await seedProject(seed, "p1", 4);
         await seedProject(seed, "p2", 1);
 
-        const shard = new BulkDeleteShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new BulkDeleteShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.deleteRows, { filters: [{ column: "projectId", operator: "eq", value: "p1" }], table: "todos" }));
 
@@ -1868,7 +1868,7 @@ describe("shardDO admin bulk delete", () => {
 
         await seedProject(seed, "p1", 5);
 
-        const shard = new BulkDeleteShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new BulkDeleteShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.deleteRows, { limit: 2, table: "todos" }));
         const body = await response.json<{ result: { deleted: number; hasMore: boolean } }>();
@@ -1887,7 +1887,7 @@ describe("shardDO admin bulk delete", () => {
         await seedProject(seed, "p1", 3);
         await seedProject(seed, "p2", 2);
 
-        const shard = new BulkDeleteShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new BulkDeleteShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
 
         const response = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.clearTable, { table: "todos" }));
         const body = await response.json<{ result: { deleted: number; hasMore: boolean } }>();
@@ -1901,7 +1901,7 @@ describe("shardDO admin bulk delete", () => {
     it("rejects deleteRows without a table (400)", async () => {
         expect.assertions(1);
 
-        const shard = new BulkDeleteShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new BulkDeleteShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const response = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.deleteRows, {}));
 
         expect(response.status).toBe(400);
@@ -1910,7 +1910,7 @@ describe("shardDO admin bulk delete", () => {
     it("maps an unknown table to a 404", async () => {
         expect.assertions(1);
 
-        const shard = new BulkDeleteShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new BulkDeleteShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const response = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.deleteRows, { table: "nope" }));
 
         expect(response.status).toBe(404);
@@ -1930,7 +1930,7 @@ describe("shardDO admin bulk delete", () => {
 
         await seedProject(seed, "p1", 1);
 
-        const shard = new BareShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new BareShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const response = await shard.fetch(bulkRequest(ADMIN_FUNCTIONS.deleteRows, { table: "todos" }));
 
         // The id collection succeeds, but the base `deleteRowThroughWriter`

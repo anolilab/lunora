@@ -1,19 +1,19 @@
 /**
  * Single source of truth for the workflow facts both the wrangler validator and
  * binding inference need — mirrors `container-info.ts`: derive the facts from
- * one `@cirrus/codegen` discovery call so inference and validation can never
- * disagree about what `cirrus/workflows.ts` declares.
+ * one `@lunora/codegen` discovery call so inference and validation can never
+ * disagree about what `lunora/workflows.ts` declares.
  */
 import { existsSync } from "node:fs";
 
-import type { WorkflowIR } from "@cirrus/codegen";
-import { discoverWorkflows, WORKFLOWS_FILENAME } from "@cirrus/codegen";
+import type { WorkflowIR } from "@lunora/codegen";
+import { discoverWorkflows, WORKFLOWS_FILENAME } from "@lunora/codegen";
 import { Project } from "ts-morph";
 
 import join from "./path";
 
 interface DiscoverWorkflowInfoResult {
-    /** Parse error message, when `cirrus/workflows.ts` exists but could not be analyzed. */
+    /** Parse error message, when `lunora/workflows.ts` exists but could not be analyzed. */
     error?: string;
     /** Discovered workflow definitions; `[]` when none are declared or parsing failed. */
     workflows: ReadonlyArray<WorkflowIR>;
@@ -21,7 +21,7 @@ interface DiscoverWorkflowInfoResult {
 
 /**
  * Discover the project's `defineWorkflow` declarations. Returns
- * `{ workflows: [] }` when the project has no `cirrus/workflows.ts` (not an
+ * `{ workflows: [] }` when the project has no `lunora/workflows.ts` (not an
  * error), or `{ workflows: [], error }` when the file exists but could not be
  * parsed — callers decide whether that is a warning (validator) or ignorable
  * (inference).
@@ -45,4 +45,4 @@ const discoverWorkflowInfo = (projectRoot: string, schemaDirectory: string): Dis
 export type { DiscoverWorkflowInfoResult };
 export { discoverWorkflowInfo };
 
-export { type WorkflowIR } from "@cirrus/codegen";
+export { type WorkflowIR } from "@lunora/codegen";

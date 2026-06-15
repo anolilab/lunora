@@ -31,7 +31,7 @@
  * view for documentation but governs nothing at the `ctx.storage` layer.
  */
 import type { Middleware } from "../builder/types";
-import { CirrusError } from "../error";
+import { LunoraError } from "../error";
 import type { Permission, Role, StorageOperation, StorageRule, StorageRuleContext, StorageRulesOptions } from "./types";
 
 /** The minimal `ctx.auth` shape the middleware reads — a structural subset that the full AuthState satisfies. Tolerant of older auth states (mirrors RLS's `AuthLike`). */
@@ -145,7 +145,7 @@ const storageRules = <Context extends StorageContextIn = StorageContextIn>(
             const allowed = applicable.some((rule) => prefixMatches(rule.prefix, key) && rule.when(context) === true);
 
             if (!allowed) {
-                throw new CirrusError("FORBIDDEN", `storage ${op} on "${key}" in bucket "${bucketName}" denied by access rule`);
+                throw new LunoraError("FORBIDDEN", `storage ${op} on "${key}" in bucket "${bucketName}" denied by access rule`);
             }
         };
 

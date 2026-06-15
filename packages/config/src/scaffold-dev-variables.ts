@@ -18,7 +18,7 @@ import {
  * but the file is gitignored — so a fresh clone has none, and the worker throws
  * the moment it reads a required secret (e.g. `AUTH_SECRET is required`). Rather
  * than make every contributor hand-copy the example and run `openssl` by hand,
- * `cirrus dev` and the Vite plugin offer to generate it: we read the committed
+ * `lunora dev` and the Vite plugin offer to generate it: we read the committed
  * `.dev.vars.example`, fill in the secret-looking placeholders with real random
  * values, and keep everything else (comments, non-secret URLs) verbatim.
  *
@@ -79,7 +79,7 @@ const MARKER_ENDS_ALPHANUMERIC = /[a-z0-9]$/u;
  * Whether an (already-unquoted) value looks like a fill-me-in placeholder —
  * empty, angle-bracketed, or containing a known marker — rather than a real
  * value. Used both when scaffolding (which values to regenerate) and by
- * `cirrus env doctor` (which set values are still unfilled).
+ * `lunora env doctor` (which set values are still unfilled).
  */
 const isPlaceholderValue = (value: string): boolean => {
     const normalised = value.trim().toLowerCase();
@@ -252,7 +252,7 @@ const generatedSuffix = (keys: string[]): string => (keys.length > 0 ? ` (genera
 /**
  * Atomically create `.dev.vars`: write the content to a sibling temp file with
  * exclusive-create (`wx`), then `rename` it over the target. The rename is atomic
- * within one filesystem, so a concurrent `cirrus dev` / Vite dev server can never
+ * within one filesystem, so a concurrent `lunora dev` / Vite dev server can never
  * observe a half-written file or clobber a peer's freshly generated secrets. The
  * temp lives in the same directory so the rename never crosses devices (`EXDEV`).
  * On any failure the temp file is removed before the error propagates.
@@ -287,7 +287,7 @@ const appendDevVariables = (path: string, additions: string[]): void => {
  *
  * Prompts via `confirm` (skipped when `yes`); never overwrites existing values.
  * Returns what happened so the caller can tailor any follow-up. Shared by
- * `cirrus dev` and the `@cirrus/vite` dev server. All side effects funnel
+ * `lunora dev` and the `@lunora/vite` dev server. All side effects funnel
  * through `confirm`/`info`/`randomHex`.
  */
 const ensureDevVariables = async (deps: EnsureDevVariablesDeps): Promise<EnsureDevVariablesResult> => {

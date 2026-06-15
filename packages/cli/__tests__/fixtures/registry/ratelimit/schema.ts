@@ -1,4 +1,4 @@
-import { defineSchemaExtension, defineTable, v } from "@cirrus/server";
+import { defineSchemaExtension, defineTable, v } from "@lunora/server";
 
 export const ratelimit = {
     extension: defineSchemaExtension("ratelimit", {

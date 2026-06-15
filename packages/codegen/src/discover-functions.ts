@@ -16,12 +16,12 @@ const ANY_TOKEN_RE = /\bany\b/u;
 /** Strips a trailing `.ts` extension from a relative source path. */
 const TS_EXTENSION_RE = /\.ts$/u;
 
-/** Cirrus-relative module path for a source file: dir-relative, POSIX separators, no `.ts`. */
-const cirrusRelativePath = (cirrusDirectory: string, filePath: string): string =>
-    relative(cirrusDirectory, filePath).split(sep).join("/").replace(TS_EXTENSION_RE, "");
+/** Lunora-relative module path for a source file: dir-relative, POSIX separators, no `.ts`. */
+const lunoraRelativePath = (lunoraDirectory: string, filePath: string): string =>
+    relative(lunoraDirectory, filePath).split(sep).join("/").replace(TS_EXTENSION_RE, "");
 
 /**
- * Internal factory names exported from `@cirrus/server`, mapped to the kind
+ * Internal factory names exported from `@lunora/server`, mapped to the kind
  * they register. A call to one of these marks the function `internal`: callable
  * server-side via `ctx.run*` but absent from the client-facing `api`.
  */
@@ -40,7 +40,7 @@ interface DiscoveredFunction {
 
 /**
  * Module specifiers a registration factory (`query`/`mutation`/`action`/their
- * `internal*` twins) may legitimately come from: the public `@cirrus/server`
+ * `internal*` twins) may legitimately come from: the public `@lunora/server`
  * surface, or the generated `_generated/server` re-export. The latter is the
  * Convex idiom — user code imports `query`/`mutation`/`v` from `_generated/server`
  * so `v.id(...)` is table-name typed — and discovery must treat those imports as
@@ -48,15 +48,15 @@ interface DiscoveredFunction {
  */
 const GENERATED_SERVER_RE = /(?:^|\/)_generated\/server(?:\.js)?$/u;
 
-const isCirrusSurfaceModule = (moduleSpecifier: string): boolean => moduleSpecifier === "@cirrus/server" || GENERATED_SERVER_RE.test(moduleSpecifier);
+const isLunoraSurfaceModule = (moduleSpecifier: string): boolean => moduleSpecifier === "@lunora/server" || GENERATED_SERVER_RE.test(moduleSpecifier);
 
 /**
  * Resolve a callee identifier through its import declaration, returning the
- * **imported** name (i.e. the name as exported from `@cirrus/server` or the
+ * **imported** name (i.e. the name as exported from `@lunora/server` or the
  * generated `_generated/server` re-export). This handles aliasing like
  * `import { query as q }` where the call site uses `q` but the registration kind
  * is `query`. Returns `undefined` when the identifier is not imported from the
- * Cirrus surface, so we don't accidentally pick up a local `const query = ...`.
+ * Lunora surface, so we don't accidentally pick up a local `const query = ...`.
  */
 const resolveCalleeKind = (identifier: Identifier): string | undefined => {
     const symbol = identifier.getSymbol();
@@ -78,9 +78,9 @@ const resolveCalleeKind = (identifier: Identifier): string | undefined => {
         const importDeclaration = declaration.getImportDeclaration();
         const moduleSpecifier = importDeclaration.getModuleSpecifierValue();
 
-        // Only trust identifiers imported from the Cirrus surface (the public
+        // Only trust identifiers imported from the Lunora surface (the public
         // package or the generated `_generated/server` re-export).
-        if (!isCirrusSurfaceModule(moduleSpecifier)) {
+        if (!isLunoraSurfaceModule(moduleSpecifier)) {
             return undefined;
         }
 
@@ -90,7 +90,7 @@ const resolveCalleeKind = (identifier: Identifier): string | undefined => {
         return declaration.getNameNode().getText();
     }
 
-    // Symbol exists but no `@cirrus/server` import specifier among its
+    // Symbol exists but no `@lunora/server` import specifier among its
     // declarations — it's a local binding (`const query = ...`) or imported
     // from somewhere else. Reject so we don't pick it up as a registration.
     return undefined;
@@ -373,7 +373,7 @@ const unwrapHandlerReturn = (handler: Node): string => {
     // If `any` appears as a standalone identifier anywhere in the rendered
     // type (e.g. `{ channelId: any; ... }`), the type checker is in degraded
     // mode — typically because the consuming project lacks the tsconfig
-    // wiring to resolve `@cirrus/server`/`@cirrus/values`. Surfacing such
+    // wiring to resolve `@lunora/server`/`@lunora/values`. Surfacing such
     // partial types would mislead users; fall back to `unknown` instead.
     if (ANY_TOKEN_RE.test(rendered)) {
         return "unknown";
@@ -482,12 +482,12 @@ interface ProcedureClassification {
 }
 
 /**
- * Classify an `export const x = …` initializer call as a Cirrus registration —
+ * Classify an `export const x = …` initializer call as a Lunora registration —
  * its kind and visibility — or `undefined` when it isn't one. Handles both the
- * builder terminal (`c.query(...)`, brand-checked via `__cirrusProcedure` so we
+ * builder terminal (`c.query(...)`, brand-checked via `__lunoraProcedure` so we
  * don't pick up an unrelated method named `query` on some other object) and the
  * bare factory (`query({…})` / `internalQuery({…})`). The single source of truth
- * for "is this a Cirrus procedure, and is it internal?" — shared by function
+ * for "is this a Lunora procedure, and is it internal?" — shared by function
  * discovery here and the RLS-coverage feeder.
  */
 const classifyProcedureCall = (call: CallExpression): ProcedureClassification | undefined => {
@@ -502,14 +502,14 @@ const classifyProcedureCall = (call: CallExpression): ProcedureClassification | 
 
         const receiver = callee.getExpression();
 
-        if (!receiver.getType().getProperty("__cirrusProcedure")) {
+        if (!receiver.getType().getProperty("__lunoraProcedure")) {
             return undefined;
         }
 
-        // Internal builders carry an extra `__cirrusVisibility: "internal"`
+        // Internal builders carry an extra `__lunoraVisibility: "internal"`
         // brand the public builders don't declare, so its mere presence marks
         // the procedure internal.
-        return { kind: method, receiver, visibility: receiver.getType().getProperty("__cirrusVisibility") ? "internal" : "public" };
+        return { kind: method, receiver, visibility: receiver.getType().getProperty("__lunoraVisibility") ? "internal" : "public" };
     }
 
     if (!Node.isIdentifier(callee)) {
@@ -536,11 +536,11 @@ const classifyProcedureCall = (call: CallExpression): ProcedureClassification | 
 };
 
 /**
- * Recursively collect `.ts` files under a cirrus source directory, skipping
+ * Recursively collect `.ts` files under a lunora source directory, skipping
  * `_generated/`, `node_modules/`, and `schema.ts`. Shared by function and
  * migration discovery so both walk the same file set.
  */
-const listCirrusSourceFiles = (directory: string, accumulator: string[] = []): string[] => {
+const listLunoraSourceFiles = (directory: string, accumulator: string[] = []): string[] => {
     let entries: string[];
 
     try {
@@ -558,7 +558,7 @@ const listCirrusSourceFiles = (directory: string, accumulator: string[] = []): s
                 continue;
             }
 
-            listCirrusSourceFiles(full, accumulator);
+            listLunoraSourceFiles(full, accumulator);
         } else if (info.isFile() && extname(entry) === ".ts" && entry !== "schema.ts") {
             accumulator.push(full);
         }
@@ -568,7 +568,7 @@ const listCirrusSourceFiles = (directory: string, accumulator: string[] = []): s
 };
 
 /**
- * Classify a top-level `export const x = …` initializer call as a Cirrus
+ * Classify a top-level `export const x = …` initializer call as a Lunora
  * registration, or `undefined` when it isn't one. Handles both the bare-factory
  * form (`query({...})` / `internalQuery({...})`) and the builder terminal
  * (`c.query(...)`).
@@ -680,7 +680,7 @@ const resolveDeclarationToCall = (declaration: Node, depth: number): CallExpress
  * contributes. Handles both `export const list = query({...})` (direct, or an
  * identifier/property-access re-export resolved via {@link resolveExpressionToCall})
  * and `export const { check, reset } = component.functions` (one pair per
- * destructured element). Pairs whose call isn't a Cirrus registration are
+ * destructured element). Pairs whose call isn't a Lunora registration are
  * filtered out downstream by {@link discoverFromCall}.
  */
 const exportCallsOfDeclaration = (declaration: VariableDeclaration): [string, CallExpression][] => {
@@ -706,7 +706,7 @@ const exportCallsOfDeclaration = (declaration: VariableDeclaration): [string, Ca
     return call ? [[declaration.getName(), call]] : [];
 };
 
-/** Lift every Cirrus registration in one source file into {@link FunctionIR} entries. */
+/** Lift every Lunora registration in one source file into {@link FunctionIR} entries. */
 const discoverFileFunctions = (source: SourceFile, relativePath: string): FunctionIR[] => {
     const found: FunctionIR[] = [];
 
@@ -742,7 +742,7 @@ const discoverFileFunctions = (source: SourceFile, relativePath: string): Functi
  * Without this guard, emit silently produces duplicate `ApiTypes` keys and an
  * ambiguous dispatch table.
  *
- * Migrations are intentionally NOT considered here: the emitted `CIRRUS_MIGRATIONS`
+ * Migrations are intentionally NOT considered here: the emitted `LUNORA_MIGRATIONS`
  * table keys on the migration `id` (uniqueness-checked separately during migration
  * discovery), not on the sanitized namespace, and `emitServer` aliases imports by
  * exact `filePath`. So a migration-only file that sanitizes to the same namespace
@@ -760,7 +760,7 @@ const assertNoNamespaceCollision = (functions: ReadonlyArray<FunctionIR>): void 
                 new Error(
                     `Namespace collision: "${prior}" and "${entry.filePath}" both resolve to "${namespace}". Rename one of the files so the JS-identifier-sanitized names differ. (note: case-insensitive filesystems may also cause this — \`foo\` and \`FOO\` map to the same identifier)`,
                 ),
-                { code: "NAMESPACE_COLLISION", name: "CirrusError", paths: [prior, entry.filePath], status: 500 },
+                { code: "NAMESPACE_COLLISION", name: "LunoraError", paths: [prior, entry.filePath], status: 500 },
             );
         }
 
@@ -769,16 +769,16 @@ const assertNoNamespaceCollision = (functions: ReadonlyArray<FunctionIR>): void 
 };
 
 /**
- * Scan all .ts files under `cirrusDir` (skipping `_generated/` and `schema.ts`)
+ * Scan all .ts files under `lunoraDir` (skipping `_generated/` and `schema.ts`)
  * for top-level `export const x = query/mutation/action({...})` registrations.
  */
-const discoverFunctions = (project: Project, cirrusDirectory: string): FunctionIR[] => {
-    const filePaths = listCirrusSourceFiles(cirrusDirectory);
+const discoverFunctions = (project: Project, lunoraDirectory: string): FunctionIR[] => {
+    const filePaths = listLunoraSourceFiles(lunoraDirectory);
     const functions: FunctionIR[] = [];
 
     for (const filePath of filePaths) {
         const source: SourceFile = project.addSourceFileAtPath(filePath);
-        const relativePath = cirrusRelativePath(cirrusDirectory, filePath);
+        const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
 
         functions.push(...discoverFileFunctions(source, relativePath));
     }
@@ -791,4 +791,4 @@ const discoverFunctions = (project: Project, cirrusDirectory: string): FunctionI
 };
 
 export type { ProcedureClassification };
-export { cirrusRelativePath, classifyProcedureCall, discoverFunctions, listCirrusSourceFiles };
+export { lunoraRelativePath, classifyProcedureCall, discoverFunctions, listLunoraSourceFiles };

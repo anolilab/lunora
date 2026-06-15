@@ -1,7 +1,7 @@
 import { runCli } from "./cli";
 
 /**
- * `cirrus` binary entry point. packem builds this to `dist/bin.mjs` (with a
+ * `lunora` binary entry point. packem builds this to `dist/bin.mjs` (with a
  * `#!/usr/bin/env node` shebang prepended) and `package.json#bin` points at it,
  * so the published CLI runs compiled JS — no TypeScript loader needed at runtime.
  */

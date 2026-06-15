@@ -10,7 +10,7 @@ import { httpAction, httpRoute, httpRouter, v } from "../src/index";
  * three surfaces shipped:
  *
  * - **httpAction** — the raw `(ctx, request) => Response` adapter. The cheapest
- * path; only the cirrus-ctx middleware runs.
+ * path; only the lunora-ctx middleware runs.
  * - **httpRoute (plain)** — typed route w/ no
  * `.searchParams()/.body()/.params()/.output()`. Adds the builder-compiled
  * handler over the raw one.
@@ -23,7 +23,7 @@ import { httpAction, httpRoute, httpRouter, v } from "../src/index";
  */
 
 const context = {} as HttpActionContext;
-const contextEnv = { __cirrusCtx: context };
+const contextEnv = { __lunoraCtx: context };
 
 // httpAction — raw adapter.
 const rawApp = httpRouter();

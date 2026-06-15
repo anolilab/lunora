@@ -1,20 +1,20 @@
 ---
-title: "@cirrus/astro"
-description: Compose Astro's @astrojs/cloudflare worker with Cirrus realtime, plus reactive-loader server helpers for .astro frontmatter.
+title: "@lunora/astro"
+description: Compose Astro's @astrojs/cloudflare worker with Lunora realtime, plus reactive-loader server helpers for .astro frontmatter.
 ---
 
-`@cirrus/astro` is the Astro integration for Cirrus. Astro is multi-framework at
+`@lunora/astro` is the Astro integration for Lunora. Astro is multi-framework at
 the UI layer, so this package is **not** a new reactive runtime — reactivity
-comes from whichever island adapter you hydrate with (`@cirrus/react`,
-`@cirrus/solid`, `@cirrus/svelte`, `@cirrus/vue`). Instead it owns the two
+comes from whichever island adapter you hydrate with (`@lunora/react`,
+`@lunora/solid`, `@lunora/svelte`, `@lunora/vue`). Instead it owns the two
 server-side seams Astro needs:
 
-1. **Single-worker composition** — `withCirrus` wraps the worker
-   `@astrojs/cloudflare` emits so Cirrus realtime (`/_cirrus/rpc`, `/_cirrus/ws`,
-   `/_cirrus/admin/*`) mounts _inside_ it, and everything else falls through to
+1. **Single-worker composition** — `withLunora` wraps the worker
+   `@astrojs/cloudflare` emits so Lunora realtime (`/_lunora/rpc`, `/_lunora/ws`,
+   `/_lunora/admin/*`) mounts _inside_ it, and everything else falls through to
    Astro's SSR handler. One worker, one deploy.
 2. **Reactive-loader server helpers** — the framework-neutral
-   `@cirrus/client/ssr` contract is re-exported from `@cirrus/astro/server` for
+   `@lunora/client/ssr` contract is re-exported from `@lunora/astro/server` for
    preloading queries in Astro endpoints / `.astro` frontmatter.
 
 This is the Astro-specific companion to [Bring your framework](/docs/frameworks/bring-your-framework)
@@ -25,87 +25,87 @@ This is the Astro-specific companion to [Bring your framework](/docs/frameworks/
 ## Install
 
 ```sh
-pnpm add @cirrus/astro
+pnpm add @lunora/astro
 ```
 
 `astro` is an **optional** peer (`^6.0.0`); only the host Astro app pulls it in.
-`@cirrus/astro`'s own public types are declared structurally, so the package
+`@lunora/astro`'s own public types are declared structurally, so the package
 type-checks even when `astro` is not installed.
 
 ## Exports
 
 | Import                 | Symbol                                                                                                                         | Role                                                                    |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------- |
-| `@cirrus/astro`        | `cirrus`                                                                                                                       | The `astro.config` integration object.                                  |
-| `@cirrus/astro`        | `withCirrus`                                                                                                                   | Compose Astro's worker with Cirrus realtime (one worker).               |
-| `@cirrus/astro/server` | `createServerClient`, `preloadQuery`, `preloadedQueryResult`, `serializePreloaded`, `deserializePreloaded`, `getServerSession` | Reactive-loader server helpers (re-exported from `@cirrus/client/ssr`). |
+| `@lunora/astro`        | `lunora`                                                                                                                       | The `astro.config` integration object.                                  |
+| `@lunora/astro`        | `withLunora`                                                                                                                   | Compose Astro's worker with Lunora realtime (one worker).               |
+| `@lunora/astro/server` | `createServerClient`, `preloadQuery`, `preloadedQueryResult`, `serializePreloaded`, `deserializePreloaded`, `getServerSession` | Reactive-loader server helpers (re-exported from `@lunora/client/ssr`). |
 
-Type exports: `CirrusIntegrationOptions`, `AstroIntegrationLike`, `CirrusOptions`,
+Type exports: `LunoraIntegrationOptions`, `AstroIntegrationLike`, `LunoraOptions`,
 `AstroWorkerHandler`, `ComposedWorker` (from the package root); `Preloaded`,
 `FunctionReference`, `ArgsOf`, `ReturnOf`, `ServerClientOptions`, `ServerSession`,
 `AuthLike`, `HeadersSource` (from `/server`).
 
 ## The integration
 
-Add `cirrus()` to your `astro.config`'s `integrations` array, alongside the
+Add `lunora()` to your `astro.config`'s `integrations` array, alongside the
 `@astrojs/cloudflare` adapter:
 
 ```ts
 // astro.config.mjs
 import cloudflare from "@astrojs/cloudflare";
 import { defineConfig } from "astro/config";
-import { cirrus } from "@cirrus/astro";
+import { lunora } from "@lunora/astro";
 
 export default defineConfig({
     output: "server",
     adapter: cloudflare(),
-    integrations: [cirrus()],
+    integrations: [lunora()],
 });
 ```
 
 The integration is intentionally minimal — the load-bearing composition is the
-`withCirrus` wrapper at the server-entry boundary (below). `cirrus()` exists so
+`withLunora` wrapper at the server-entry boundary (below). `lunora()` exists so
 the wiring is declared in `astro.config` the idiomatic Astro way, and so future
 build-time hooks (binding reconcile, dev middleware) have a home without changing
 the public surface. It accepts one option:
 
 | Option        | Type     | Default           | Description                                                                                              |
 | ------------- | -------- | ----------------- | -------------------------------------------------------------------------------------------------------- |
-| `serverEntry` | `string` | `"src/worker.ts"` | Path (or specifier) of the module that calls `withCirrus` and is the composed worker's `export default`. |
+| `serverEntry` | `string` | `"src/worker.ts"` | Path (or specifier) of the module that calls `withLunora` and is the composed worker's `export default`. |
 
-## Single-worker composition with `withCirrus`
+## Single-worker composition with `withLunora`
 
-Astro owns its own Cloudflare adapter and builds its own server worker, so Cirrus
+Astro owns its own Cloudflare adapter and builds its own server worker, so Lunora
 does **not** own the worker entry (unlike class-A frameworks such as TanStack
-Start). Instead, `withCirrus` wraps the handler Astro's adapter produces and
+Start). Instead, `withLunora` wraps the handler Astro's adapter produces and
 returns a single composed worker. The reserved realtime endpoints —
-`/_cirrus/rpc`, `/_cirrus/ws`, `/_cirrus/admin/*` (plus any auth routes / explicit
-`routes`) — are handled by Cirrus; everything else falls through to the Astro SSR
+`/_lunora/rpc`, `/_lunora/ws`, `/_lunora/admin/*` (plus any auth routes / explicit
+`routes`) — are handled by Lunora; everything else falls through to the Astro SSR
 handler. The two dispatch flows share one worker but never collide, and an Astro
 render that throws is contained at the seam and surfaced as a plain 500 — it can
 never take down the realtime plane.
 
-`withCirrus` is the Astro-named alias of the framework-neutral
-`withFrameworkWorker` from `@cirrus/runtime` (the same composer behind
-`@cirrus/svelte` and `@cirrus/vue`). Its signature is:
+`withLunora` is the Astro-named alias of the framework-neutral
+`withFrameworkWorker` from `@lunora/runtime` (the same composer behind
+`@lunora/svelte` and `@lunora/vue`). Its signature is:
 
 ```ts
-withCirrus(host, options): ComposedWorker
+withLunora(host, options): ComposedWorker
 ```
 
 - **`host`** — Astro's emitted Cloudflare handler, as either a bare `fetch`
   function **or** a `{ fetch }` object (optionally carrying its own `scheduled`).
-- **`options`** — Cirrus worker options _minus_ `httpRouter` (it is supplied from
+- **`options`** — Lunora worker options _minus_ `httpRouter` (it is supplied from
   the Astro host), **or** an `(env) => options` factory. Use the factory form for
   bindings that only exist per request, like `env.SHARD` → `shardDO`.
 
 ```ts
 // src/worker.ts
 import { handle } from "@astrojs/cloudflare/handler";
-import { withCirrus } from "@cirrus/astro";
+import { withLunora } from "@lunora/astro";
 
 // `shardDO` lives on `env` (per request), so pass a factory.
-export default withCirrus(
+export default withLunora(
     (request, env, ctx) => handle(request, env, ctx),
     (env) => ({ shardDO: env.SHARD }),
 );
@@ -117,14 +117,14 @@ export default withCirrus(
 > wrap it at that boundary, as above.
 
 The factory is rebuilt per request, so per-request bindings wire in correctly. If
-Astro's host handler carries its own `scheduled` and you configure no Cirrus cron
+Astro's host handler carries its own `scheduled` and you configure no Lunora cron
 surface, that `scheduled` is preserved rather than silently dropped; configure
-Cirrus crons and Cirrus owns `scheduled` instead.
+Lunora crons and Lunora owns `scheduled` instead.
 
 ## Reactive-loader server helpers
 
-`@cirrus/astro/server` re-exports the framework-neutral server contract from
-`@cirrus/client/ssr` — there is no Astro-specific re-implementation. It opens no
+`@lunora/astro/server` re-exports the framework-neutral server contract from
+`@lunora/client/ssr` — there is no Astro-specific re-implementation. It opens no
 WebSocket and touches no browser globals, so it is safe to import from an Astro
 server endpoint or a `.astro` component's frontmatter (which runs server-side
 during SSR).
@@ -138,9 +138,9 @@ handoff.
 ```astro
 ---
 // src/pages/channels/[channelId].astro
-import { createServerClient, preloadQuery } from "@cirrus/astro/server";
+import { createServerClient, preloadQuery } from "@lunora/astro/server";
 
-import { api } from "../../../cirrus/_generated/api";
+import { api } from "../../../lunora/_generated/api";
 
 const { channelId } = Astro.params;
 
@@ -154,7 +154,7 @@ const cookieForwardingFetch: typeof fetch = (input, init) => {
 
 const client = createServerClient({
     fetch: cookieForwardingFetch,
-    url: import.meta.env.PUBLIC_CIRRUS_URL,
+    url: import.meta.env.PUBLIC_LUNORA_URL,
 });
 
 // Pass `shardKey` so the client subscription resumes the same Durable Object shard.
@@ -168,39 +168,39 @@ const preloaded = await preloadQuery(client, api.messages.list, { channelId }, {
 request** — the bearer token and forwarded cookies are per-user, so a shared
 module-level client would leak one request's identity into another. `preloadQuery`
 returns a plain JSON-serializable `Preloaded` token
-(`{ __cirrusPreloaded, functionPath, args, shardKey?, value }`), so Astro embeds it
+(`{ __lunoraPreloaded, functionPath, args, shardKey?, value }`), so Astro embeds it
 in the rendered HTML directly with no special serializer.
 
 The hydration step (read the token, seed the cache, attach the socket) is
 per-framework — it lives in the island adapter you hydrate the component with
-(`@cirrus/react`'s `usePreloadedQuery`, or the equivalent in
-`@cirrus/solid` / `@cirrus/svelte` / `@cirrus/vue`), **not** in `@cirrus/astro`.
+(`@lunora/react`'s `usePreloadedQuery`, or the equivalent in
+`@lunora/solid` / `@lunora/svelte` / `@lunora/vue`), **not** in `@lunora/astro`.
 
 ### Identity continuity
 
 The loader and the client subscription must run as the same user. On the same
 origin this is automatic: forward the request `cookie` to `createServerClient`'s
 `fetch` server-side, and the browser sends the same cookie on the WebSocket
-upgrade to `/_cirrus/ws`. For different-origin deploys, resolve the session with
+upgrade to `/_lunora/ws`. For different-origin deploys, resolve the session with
 `getServerSession(Astro.request, auth)` and pass its token to `createServerClient`
 instead:
 
 ```ts
-import { createServerClient, getServerSession } from "@cirrus/astro/server";
+import { createServerClient, getServerSession } from "@lunora/astro/server";
 
 const session = await getServerSession(Astro.request, auth); // { user, session } | null
 const client = createServerClient({ token: session?.session.token, url });
 ```
 
 `getServerSession` wraps `auth.api.getSession({ headers })`; pass a real
-`@cirrus/auth` instance to keep full type inference on `user` / `session`.
+`@lunora/auth` instance to keep full type inference on `user` / `session`.
 
 ## Deploy
 
 Because `@astrojs/cloudflare` writes its build to `dist/_worker.js/` (it does
 **not** clobber the wrangler `main` field), Astro's wiring needs no `main`
 redirection — unlike SvelteKit, whose adapter overwrites `main`. Point wrangler's
-`main` at your `withCirrus` wrapper and declare the `ShardDO` binding:
+`main` at your `withLunora` wrapper and declare the `ShardDO` binding:
 
 ```jsonc
 // wrangler.jsonc
@@ -227,4 +227,4 @@ the Astro build first so the adapter output exists, then deploy. See
 - [Bring your framework](/docs/frameworks/bring-your-framework) — the class-A/B/C composition matrix (Astro is class-B)
 - [Reactive loaders](/docs/frameworks/reactive-loaders) — the SSR-seed → live handoff this page plugs into
 - [Deploy your framework](/docs/frameworks/deploy) — one worker, one deploy
-- [@cirrus/runtime](/docs/api/runtime) — `withFrameworkWorker`, the composition primitive `withCirrus` aliases
+- [@lunora/runtime](/docs/api/runtime) — `withFrameworkWorker`, the composition primitive `withLunora` aliases

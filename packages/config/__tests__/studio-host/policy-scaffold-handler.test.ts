@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { handlePolicyScaffoldRequest } from "../../src/studio-host/policy-scaffold-handler";
 
-const SCHEMA = `import { defineSchema, defineTable, v } from "@cirrus/server";
+const SCHEMA = `import { defineSchema, defineTable, v } from "@lunora/server";
 
 export default defineSchema({
     invoices: defineTable({
@@ -23,18 +23,18 @@ export const listInvoices = c.query(async ({ ctx }) => ctx.db.query("invoices").
 // eslint-disable-next-line no-secrets/no-secrets -- the handler's function name, not a credential
 describe("handlePolicyScaffoldRequest", () => {
     let projectRoot: string;
-    let cirrusDirectory: string;
+    let lunoraDirectory: string;
 
     const writeProjectFile = (relativePath: string, source: string): void => {
-        const full = join(cirrusDirectory, relativePath);
+        const full = join(lunoraDirectory, relativePath);
 
-        mkdirSync(cirrusDirectory, { recursive: true });
+        mkdirSync(lunoraDirectory, { recursive: true });
         writeFileSync(full, source, "utf8");
     };
 
     beforeEach(() => {
-        projectRoot = mkdtempSync(join(tmpdir(), "cirrus-policy-scaffold-"));
-        cirrusDirectory = join(projectRoot, "cirrus");
+        projectRoot = mkdtempSync(join(tmpdir(), "lunora-policy-scaffold-"));
+        lunoraDirectory = join(projectRoot, "lunora");
         writeProjectFile("schema.ts", SCHEMA);
     });
 
@@ -52,8 +52,8 @@ describe("handlePolicyScaffoldRequest", () => {
         });
 
         expect(result.status).toBe(200);
-        expect(existsSync(join(cirrusDirectory, "invoices.policies.ts"))).toBe(true);
-        expect(readFileSync(join(cirrusDirectory, "invoices.policies.ts"), "utf8")).toContain("when: () => false");
+        expect(existsSync(join(lunoraDirectory, "invoices.policies.ts"))).toBe(true);
+        expect(readFileSync(join(lunoraDirectory, "invoices.policies.ts"), "utf8")).toContain("when: () => false");
     });
 
     it("refuses to overwrite an existing policy file", () => {
@@ -69,7 +69,7 @@ describe("handlePolicyScaffoldRequest", () => {
 
         expect(result.status).toBe(409);
         // The developer's existing file is left untouched.
-        expect(readFileSync(join(cirrusDirectory, "invoices.policies.ts"), "utf8")).toBe("export const invoicesPolicies = [];\n");
+        expect(readFileSync(join(lunoraDirectory, "invoices.policies.ts"), "utf8")).toBe("export const invoicesPolicies = [];\n");
     });
 
     it("appends .use(rls(...)) to an existing procedure on a wireRls POST", () => {
@@ -84,7 +84,7 @@ describe("handlePolicyScaffoldRequest", () => {
         });
 
         expect(result.status).toBe(200);
-        expect(readFileSync(join(cirrusDirectory, "invoices.ts"), "utf8")).toContain(".use(rls(invoicesPolicies))");
+        expect(readFileSync(join(lunoraDirectory, "invoices.ts"), "utf8")).toContain(".use(rls(invoicesPolicies))");
     });
 
     it("returns 404 when the procedure file is missing", () => {

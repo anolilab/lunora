@@ -1,17 +1,17 @@
 ---
-title: "@cirrus/hyperdrive"
+title: "@lunora/hyperdrive"
 description: Bring-your-own Postgres/MySQL from an action via Cloudflare Hyperdrive.
 ---
 
-`@cirrus/hyperdrive` lets an **action** read and write an existing
+`@lunora/hyperdrive` lets an **action** read and write an existing
 Postgres/MySQL database through [Cloudflare
 Hyperdrive](https://developers.cloudflare.com/hyperdrive/) — pooled, cached
 connections from the edge. It surfaces the binding's connection string and a
 driver-agnostic `ctx.sql` client.
 
-> **Integrate an existing database — don't replace the Cirrus data layer.**
-> Hyperdrive points at a database Cirrus has no visibility into, so two
-> invariants the rest of Cirrus relies on do **not** hold for it:
+> **Integrate an existing database — don't replace the Lunora data layer.**
+> Hyperdrive points at a database Lunora has no visibility into, so two
+> invariants the rest of Lunora relies on do **not** hold for it:
 >
 > 1. **Non-deterministic.** A SQL query over the network is an external,
 >    mutable read — exactly like `fetch`. It is therefore **forbidden in
@@ -19,7 +19,7 @@ driver-agnostic `ctx.sql` client.
 >    `hyperdrive_outside_action` advisor lint flags any `ctx.sql` reached from a
 >    query or mutation.
 > 2. **Non-reactive.** Live queries track writes to the DO's SQLite / D1. An
->    `UPDATE` issued over Hyperdrive produces **no** Cirrus change event, so
+>    `UPDATE` issued over Hyperdrive produces **no** Lunora change event, so
 >    **subscriptions will not re-run** when external rows change.
 >
 > Hyperdrive is the right tool for "read/write my legacy Postgres from an
@@ -31,7 +31,7 @@ driver-agnostic `ctx.sql` client.
 ## Install
 
 ```bash
-pnpm add @cirrus/hyperdrive
+pnpm add @lunora/hyperdrive
 ```
 
 No driver is bundled — `postgres`, `pg`, and `mysql2` are heavy and the choice
@@ -57,7 +57,7 @@ pnpm add mysql2          # mysql2        → fromMysql2
     This prints an `id`.
 
 2. Add the binding to `wrangler.jsonc`. Use `localConnectionString` so local
-   dev (`cirrus dev`) connects straight to your DB without the edge proxy:
+   dev (`lunora dev`) connects straight to your DB without the edge proxy:
 
     ```jsonc
     {
@@ -71,10 +71,10 @@ pnpm add mysql2          # mysql2        → fromMysql2
     }
     ```
 
-    Cirrus validates the binding (it errors when `binding` is missing and warns
+    Lunora validates the binding (it errors when `binding` is missing and warns
     when `id` is empty — a placeholder id can't connect), but it does **not**
     auto-provision the `id`: that's a remote resource only `wrangler hyperdrive
-create` can mint, so importing `@cirrus/hyperdrive` surfaces a hint rather
+create` can mint, so importing `@lunora/hyperdrive` surfaces a hint rather
     than writing the binding for you.
 
 ## The canonical recipe
@@ -83,10 +83,10 @@ Construct your driver from the connection string and wrap it with the matching
 adapter to get a `ctx.sql`. **Do this only inside an action:**
 
 ```ts
-import { createHyperdrive, fromPostgresJs } from "@cirrus/hyperdrive";
+import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
 import postgres from "postgres";
 
-import { action, v } from "@cirrus/server";
+import { action, v } from "@lunora/server";
 
 export const importLegacyOrders = action({
     args: { orgId: v.string() },
@@ -118,7 +118,7 @@ The package never rewrites SQL — use your driver's native positional syntax.
 
 ## Making external data reactive
 
-Cirrus cannot observe external writes, so a subscription over a `defineSchema`
+Lunora cannot observe external writes, so a subscription over a `defineSchema`
 table won't re-fire when Postgres changes. To make external data reactive,
 **project** it into a DO/D1 table inside the same action — that write _is_ on
 the change-feed, so live queries reading the projection re-run:
@@ -140,7 +140,7 @@ export const syncOrder = action({
 
 ## Non-goals
 
-- **No CDC / logical replication.** Cirrus does not ingest your Postgres
+- **No CDC / logical replication.** Lunora does not ingest your Postgres
   write-ahead log; the projection pattern above is the supported path to
   reactivity.
 - **No `ctx.sql` in `query`/`mutation`.** Enforced by the

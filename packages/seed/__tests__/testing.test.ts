@@ -1,6 +1,6 @@
-import { defineSchema, defineTable } from "@cirrus/server";
-import { cirrusTest } from "@cirrus/testing";
-import { v } from "@cirrus/values";
+import { defineSchema, defineTable } from "@lunora/server";
+import { lunoraTest } from "@lunora/testing";
+import { v } from "@lunora/values";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { seed } from "../src/testing";
@@ -17,7 +17,7 @@ const schema = defineSchema({
 });
 
 describe("seed (testing adapter)", () => {
-    let harness: ReturnType<typeof cirrusTest> | undefined;
+    let harness: ReturnType<typeof lunoraTest> | undefined;
 
     afterEach(() => {
         harness?.close();
@@ -27,7 +27,7 @@ describe("seed (testing adapter)", () => {
     it("inserts seeded rows and returns their ids", async () => {
         expect.hasAssertions();
 
-        harness = cirrusTest(schema);
+        harness = lunoraTest(schema);
         const ids = await seed(harness, schema, { counts: { posts: 12, users: 4 } });
 
         expect(ids.users).toHaveLength(4);

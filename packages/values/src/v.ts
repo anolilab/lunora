@@ -271,7 +271,7 @@ const createValidator = <T>(
         __type: undefined as unknown as T,
         // The Standard Schema v1 surface (https://standardschema.dev). `validate`
         // delegates to `safeParse`: on success it returns `{ value }`, on a
-        // ValidationError it maps to `{ issues: [...] }`. Cirrus paths are already
+        // ValidationError it maps to `{ issues: [...] }`. Lunora paths are already
         // `(string | number)[]`, a subset of Standard Schema's
         // `ReadonlyArray<PropertyKey | PathSegment>`, so they pass through
         // verbatim — no per-segment wrapping needed (same as Zod/Valibot, which
@@ -286,7 +286,7 @@ const createValidator = <T>(
 
                 return { issues: [{ message: result.error.message, path: result.error.path }] };
             },
-            vendor: "cirrus",
+            vendor: "lunora",
             version: 1,
         } satisfies StandardSchemaV1.Props<T, T>,
         _meta: { ...meta, column },
@@ -467,7 +467,7 @@ const id = <TableName extends string>(tableName: TableName): ColumnValidator<Id<
 
 /**
  * A reference to a stored R2 object: the column holds the object's **key** (a
- * string), the same key `@cirrus/storage` puts/gets by. Functionally it parses
+ * string), the same key `@lunora/storage` puts/gets by. Functionally it parses
  * like `v.string()`, but the distinct `"storage"` kind lets codegen and the
  * studio join the data model to R2 — the file browser uses it to show which
  * record owns a file and to flag orphaned objects no row references. The
@@ -738,7 +738,7 @@ const standardIssuePath = (path: ReadonlyArray<unknown> | undefined): (number | 
  * **Args-only.** `v.from(...)` validators must not be used as table columns —
  * `defineTable` checks the `kind` and throws a clear error if you try.
  *
- * **Sync-only.** Standard Schema allows async `validate`; Cirrus args
+ * **Sync-only.** Standard Schema allows async `validate`; Lunora args
  * validation is synchronous and throws when a Promise is returned.
  */
 const from = <S extends StandardSchemaV1>(schema: S): ColumnValidator<InferStandardOutput<S>, InferStandardOutput<S>> => {
@@ -748,7 +748,7 @@ const from = <S extends StandardSchemaV1>(schema: S): ColumnValidator<InferStand
     const props = (schema as { "~standard"?: { validate?: unknown; version?: number } })["~standard"];
 
     if (props?.version !== 1 || typeof props.validate !== "function") {
-        throw new Error('@cirrus/values: v.from() expects a Standard Schema v1 object (missing or invalid "~standard")');
+        throw new Error('@lunora/values: v.from() expects a Standard Schema v1 object (missing or invalid "~standard")');
     }
 
     const validate = props.validate as StandardSchemaV1["~standard"]["validate"];
@@ -827,9 +827,9 @@ const isOrWrapsFromValidator = (validator: Validator): boolean => {
 /**
  * The inner validator wrapped by `v.optional(inner)`, or `undefined` for any
  * other validator. The nested child lives on the validator's internal `_meta`
- * bag; this accessor keeps that knowledge inside `@cirrus/values` (the package
+ * bag; this accessor keeps that knowledge inside `@lunora/values` (the package
  * that owns validator internals) so consumers don't reach into `_meta`
- * themselves. Used by `@cirrus/server`'s `defineEnv` to coerce through a leading
+ * themselves. Used by `@lunora/server`'s `defineEnv` to coerce through a leading
  * `v.optional(...)`.
  */
 const optionalInner = (validator: Validator): Validator | undefined => {

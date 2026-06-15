@@ -5,8 +5,8 @@
  */
 import { DatabaseSync } from "node:sqlite";
 
-import type { DatabaseWriterLike, RunShardExportArgs, RunShardImportArgs, SchemaLike, ShardDOState } from "@cirrus/do";
-import { createShardCtxDb, exportShardRows, importShardRows, runShardMigrations, ShardDO } from "@cirrus/do";
+import type { DatabaseWriterLike, RunShardExportArgs, RunShardImportArgs, SchemaLike, ShardDOState } from "@lunora/do";
+import { createShardCtxDb, exportShardRows, importShardRows, runShardMigrations, ShardDO } from "@lunora/do";
 import { describe, expect, it } from "vitest";
 
 import type { ExecutionContextLike, ShardingInfo } from "../src/create-worker";
@@ -120,7 +120,7 @@ const buildCluster = (shardKeys: string[]) => {
             },
             storage: { sql },
         };
-        const shard = new TestShard(state, { CIRRUS_ADMIN_TOKEN: ADMIN_TOKEN });
+        const shard = new TestShard(state, { LUNORA_ADMIN_TOKEN: ADMIN_TOKEN });
         const writer = createShardCtxDb({ schema, sql: sql as never });
 
         shards.set(key, { close, shard, writer });
@@ -181,7 +181,7 @@ describe("admin roundtrip — 3 shards", () => {
         });
 
         const exportResponse = await sourceWorker.fetch(
-            new Request("https://app.example/_cirrus/admin/export", {
+            new Request("https://app.example/_lunora/admin/export", {
                 body: JSON.stringify({ tables: ["messages"] }),
                 headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
                 method: "POST",
@@ -209,7 +209,7 @@ describe("admin roundtrip — 3 shards", () => {
         });
 
         const importResponse = await targetWorker.fetch(
-            new Request("https://app.example/_cirrus/admin/import", {
+            new Request("https://app.example/_lunora/admin/import", {
                 body: ndjson,
                 headers: { authorization: `Bearer ${ADMIN_TOKEN}`, "content-type": "application/x-ndjson" },
                 method: "POST",

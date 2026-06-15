@@ -1,5 +1,5 @@
-import type { AdvisorShardTraffic } from "@cirrus/advisor";
-import { useCirrus } from "@cirrus/react";
+import type { AdvisorShardTraffic } from "@lunora/advisor";
+import { useLunora } from "@lunora/react";
 import { useNavigate } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -39,7 +39,7 @@ interface InsightsPanelProps {
      * Fan the cross-shard traffic feed out for `table`, returning each shard's
      * `{ shardKey, requests }` total — the input the `hot_shard` advisor lint
      * needs. Defaults to `client.shardTraffic(table)` (the admin-gated
-     * `POST /_cirrus/admin/shard-traffic` fan-out). Best-effort: a rejection
+     * `POST /_lunora/admin/shard-traffic` fan-out). Best-effort: a rejection
      * leaves `hot_shard` dormant rather than blanking the panel. Injectable so
      * tests can drive the skew without a worker.
      */
@@ -136,7 +136,7 @@ const AddIndexButton = ({ onJump, table }: AddIndexButtonProps): ReactElement =>
  * Both reads are best-effort — one failing still yields the other's insights.
  */
 export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPanelProps): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const navigate = useNavigate();
     const t = useT();
 
@@ -258,7 +258,7 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
     // Auto-refresh when the tab regains focus. The studio is a standalone app
     // (not a Vite HMR client), so it can't hear codegen reloads directly — but
     // tabbing back from your editor after a schema save (by which point the dev
-    // worker has reloaded with the new `CIRRUS_ADVISORIES`) re-pulls everything,
+    // worker has reloaded with the new `LUNORA_ADVISORIES`) re-pulls everything,
     // so advisories land fresh without a manual Refresh.
     useEffect(() => {
         const onVisible = (): void => {
@@ -353,7 +353,7 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
 
     const toolbar = <ShardInput onChange={setShardKey} testId="in-shard-input" value={shardKey} />;
 
-    return <AdvisorView error={error} rows={rows} testId="cirrus-insights" toolbar={toolbar} />;
+    return <AdvisorView error={error} rows={rows} testId="lunora-insights" toolbar={toolbar} />;
 };
 
 export type { InsightsPanelProps };

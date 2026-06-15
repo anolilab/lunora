@@ -47,7 +47,7 @@ describe("toJsonSchema", () => {
         it("annotates an id with its target table", () => {
             expect.assertions(1);
 
-            expect(toJsonSchema(v.id("users"))).toStrictEqual({ description: 'Id<"users">', type: "string", "x-cirrus-table": "users" });
+            expect(toJsonSchema(v.id("users"))).toStrictEqual({ description: 'Id<"users">', type: "string", "x-lunora-table": "users" });
         });
 
         it("emits a const for a literal", () => {
@@ -57,10 +57,10 @@ describe("toJsonSchema", () => {
             expect(toJsonSchema(v.literal(42))).toStrictEqual({ const: 42 });
         });
 
-        it("marks a storage key as a string with the cirrus-storage extension", () => {
+        it("marks a storage key as a string with the lunora-storage extension", () => {
             expect.assertions(1);
 
-            expect(toJsonSchema(v.storage())).toStrictEqual({ description: "storage object key", type: "string", "x-cirrus-storage": true });
+            expect(toJsonSchema(v.storage())).toStrictEqual({ description: "storage object key", type: "string", "x-lunora-storage": true });
         });
     });
 
@@ -116,7 +116,7 @@ describe("toJsonSchema", () => {
                 properties: {
                     author: {
                         additionalProperties: false,
-                        properties: { id: { description: 'Id<"users">', type: "string", "x-cirrus-table": "users" } },
+                        properties: { id: { description: 'Id<"users">', type: "string", "x-lunora-table": "users" } },
                         required: ["id"],
                         type: "object",
                     },
@@ -201,7 +201,7 @@ describe("argsToJsonSchema", () => {
             properties: {
                 cursor: { type: "string" },
                 limit: { type: "number" },
-                room: { description: 'Id<"rooms">', type: "string", "x-cirrus-table": "rooms" },
+                room: { description: 'Id<"rooms">', type: "string", "x-lunora-table": "rooms" },
             },
             required: ["limit", "room"],
             type: "object",

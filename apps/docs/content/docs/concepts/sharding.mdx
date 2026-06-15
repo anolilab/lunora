@@ -3,7 +3,7 @@ title: Sharding
 description: Default __root__ DO, opt-in .shardBy(), and .global() escape hatch.
 ---
 
-Cirrus is **scale-proof by default but single-shard by default**. New apps
+Lunora is **scale-proof by default but single-shard by default**. New apps
 get one Durable Object — addressable as `__root__` — that holds every table
 without an explicit tier modifier. This is exactly the Zeroback shape and
 the right answer for the first 80% of an app's life.
@@ -17,9 +17,9 @@ threshold (`1 073 741 824` bytes) is exactly 10% of the per-DO ceiling — far
 enough below the wall that a `.shardBy()` migration has runway to land.
 
 ```text
-[@cirrus/do] __root__ Durable Object SQLite size is 1075000000 bytes
+[@lunora/do] __root__ Durable Object SQLite size is 1075000000 bytes
 (>= 1 GiB, 10% of the 10 GiB per-DO ceiling). Plan a `.shardBy()` migration
-before you hit the wall. See https://cirrus.dev/docs/concepts/sharding for
+before you hit the wall. See https://lunora.sh/docs/concepts/sharding for
 guidance.
 ```
 

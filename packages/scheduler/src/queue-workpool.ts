@@ -15,7 +15,7 @@
  * handler (it dispatches each message and uses the message's native `ack()` /
  * `retry()` so failures ride Queues' retry + dead-letter machinery); and
  * `httpDispatcher` is the default dispatcher (POSTs each job to the Worker's
- * `/_cirrus/scheduler/dispatch` endpoint, authenticated with the admin bearer).
+ * `/_lunora/scheduler/dispatch` endpoint, authenticated with the admin bearer).
  */
 import type {
     ArgsOf,
@@ -43,18 +43,18 @@ const trimTrailingSlashes = (value: string): string => {
 };
 
 /**
- * Build a Queues producer that enqueues Cirrus function dispatches. Concurrency
+ * Build a Queues producer that enqueues Lunora function dispatches. Concurrency
  * and retry policy live on the consumer's `wrangler.jsonc` config, not here.
  */
 const createQueueWorkpool = (options: QueueWorkpoolOptions): QueueWorkpool => {
     // Defensive runtime guard: required by the type, but JS callers can omit it.
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untrusted JS callers despite the required type
     if (!options.queue) {
-        throw new Error("@cirrus/scheduler: `queue` (a Cloudflare Queue binding) is required");
+        throw new Error("@lunora/scheduler: `queue` (a Cloudflare Queue binding) is required");
     }
 
     const enqueue = async <F extends FunctionReference>(function_: F, args: ArgsOf<F>, enqueueOptions: QueueEnqueueOptions = {}): Promise<void> => {
-        const job: QueueJob = { args, functionPath: function_.__cirrusRef, shardKey: enqueueOptions.shardKey };
+        const job: QueueJob = { args, functionPath: function_.__lunoraRef, shardKey: enqueueOptions.shardKey };
         const sendOptions = enqueueOptions.delaySeconds === undefined ? undefined : { delaySeconds: enqueueOptions.delaySeconds };
 
         await options.queue.send(job, sendOptions);
@@ -65,7 +65,7 @@ const createQueueWorkpool = (options: QueueWorkpoolOptions): QueueWorkpool => {
         sendOptions?: QueueSendOptionsLike,
     ): Promise<void> => {
         const messages = jobs.map((job) => {
-            return { body: { args: job.args, functionPath: job.ref.__cirrusRef, shardKey: job.shardKey } satisfies QueueJob };
+            return { body: { args: job.args, functionPath: job.ref.__lunoraRef, shardKey: job.shardKey } satisfies QueueJob };
         });
 
         await options.queue.sendBatch(messages, sendOptions);
@@ -95,7 +95,7 @@ const createQueueConsumer =
             batch.messages.map(async (message) => {
                 try {
                     if (!isQueueJob(message.body)) {
-                        throw new Error("@cirrus/scheduler: queue message body is not a QueueJob (missing functionPath)");
+                        throw new Error("@lunora/scheduler: queue message body is not a QueueJob (missing functionPath)");
                     }
 
                     await options.dispatch(message.body);
@@ -110,7 +110,7 @@ const createQueueConsumer =
 
 /**
  * Default {@link QueueDispatch}: POST each job to the Worker's
- * `/_cirrus/scheduler/dispatch` endpoint (the same path SchedulerDO dispatches
+ * `/_lunora/scheduler/dispatch` endpoint (the same path SchedulerDO dispatches
  * through), authenticated with the admin bearer. A non-2xx response throws so
  * the consumer retries the message.
  */
@@ -118,10 +118,10 @@ const httpDispatcher = (options: HttpDispatcherOptions): QueueDispatch => {
     const fetchImpl = options.fetchImpl ?? (globalThis as unknown as { fetch: typeof fetch }).fetch;
 
     if (typeof fetchImpl !== "function") {
-        throw new TypeError("@cirrus/scheduler: no fetch implementation available — pass fetchImpl or run on a platform with global fetch");
+        throw new TypeError("@lunora/scheduler: no fetch implementation available — pass fetchImpl or run on a platform with global fetch");
     }
 
-    const url = `${trimTrailingSlashes(options.originUrl)}/_cirrus/scheduler/dispatch`;
+    const url = `${trimTrailingSlashes(options.originUrl)}/_lunora/scheduler/dispatch`;
 
     return async (job: QueueJob): Promise<void> => {
         const response = await fetchImpl(url, {
@@ -131,7 +131,7 @@ const httpDispatcher = (options: HttpDispatcherOptions): QueueDispatch => {
         });
 
         if (!response.ok) {
-            throw new Error(`@cirrus/scheduler: queue dispatch failed (${response.status.toString()}): ${await response.text()}`);
+            throw new Error(`@lunora/scheduler: queue dispatch failed (${response.status.toString()}): ${await response.text()}`);
         }
     };
 };

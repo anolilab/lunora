@@ -1,8 +1,8 @@
 {
     "$schema": "../../../../node_modules/wrangler/config-schema.json",
-    "name": "cirrus-storage-test-worker",
+    "name": "lunora-storage-test-worker",
     "main": "test-worker.ts",
     "compatibility_date": "2026-04-07",
     "compatibility_flags": ["nodejs_compat"],
-    "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "cirrus-storage-test" }],
+    "r2_buckets": [{ "binding": "BUCKET", "bucket_name": "lunora-storage-test" }],
 }

@@ -7,7 +7,7 @@
  * the public surface. See https://developers.cloudflare.com/browser-rendering/.
  *
  * It is intentionally opaque: callers never touch the binding directly, they
- * hand it to {@link CirrusBrowserOptions.binding} and the Playwright layer
+ * hand it to {@link LunoraBrowserOptions.binding} and the Playwright layer
  * consumes it. Typed as a non-empty marker so an arbitrary value (e.g. `{}`)
  * doesn't silently type-check where a binding is required.
  */
@@ -59,7 +59,7 @@ export interface BrowserLike {
 /**
  * Structural projection of `@cloudflare/playwright`'s `launch` export
  * (`import { launch } from "@cloudflare/playwright"`). Injected via
- * {@link CirrusBrowserOptions.launch} so the factory never imports
+ * {@link LunoraBrowserOptions.launch} so the factory never imports
  * `@cloudflare/playwright` at module top — that keeps the heavy optional peer
  * dep out of the bundle for apps that never screenshot, and lets tests pass a
  * fake. Calling it with the Browser Rendering binding resolves a {@link BrowserLike}.
@@ -110,7 +110,7 @@ export interface PdfOptions extends NavigateOptions {
     viewport?: { height: number; width: number };
 }
 
-export interface CirrusBrowserOptions {
+export interface LunoraBrowserOptions {
     /**
      * Opt out of the SSRF guard that, by default, refuses to navigate to a
      * private / internal / loopback / link-local host (RFC1918, `127.0.0.0/8`,

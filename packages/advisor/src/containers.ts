@@ -1,5 +1,5 @@
 /**
- * One container declaration discovered in `cirrus/containers.ts` — the input
+ * One container declaration discovered in `lunora/containers.ts` — the input
  * the `container_*` lints consume. Produced by the codegen feeder (which lifts
  * the static fields of each `defineContainer({...})` export); runtime callers
  * don't supply it, so the container lints simply find nothing there.
@@ -14,7 +14,7 @@ export interface AdvisorContainer {
      * the field was omitted (platform default `true`) or wasn't a static literal.
      */
     enableInternet?: boolean;
-    /** The `cirrus/containers.ts` export name, e.g. `transcoder`. */
+    /** The `lunora/containers.ts` export name, e.g. `transcoder`. */
     exportName: string;
     /** Declared `instanceType`: a named size, or a custom `{ vcpu, memoryMib, diskMb }`. */
     instanceType?: string | { diskMb?: number; memoryMib?: number; vcpu?: number };

@@ -1,5 +1,5 @@
 /**
- * Lock-aware whole-file reconcile for `cirrus add` (the upgrade story): a
+ * Lock-aware whole-file reconcile for `lunora add` (the upgrade story): a
  * re-run cleanly upgrades a file the user hasn't touched, never clobbers one
  * they have (dropping a `.new` sidecar instead), and refuses to overwrite a
  * file it never wrote. Uses a controllable temp registry so the "upstream"
@@ -34,21 +34,21 @@ const addFoo = async (): Promise<number> => {
     return result.code;
 };
 
-const destination = (): string => join(workdir, "cirrus", "foo", "index.ts");
+const destination = (): string => join(workdir, "lunora", "foo", "index.ts");
 
-describe("cirrus add — whole-file reconcile", () => {
+describe("lunora add — whole-file reconcile", () => {
     beforeEach(() => {
-        registryRoot = mkdtempSync(join(tmpdir(), "cirrus-reg-"));
+        registryRoot = mkdtempSync(join(tmpdir(), "lunora-reg-"));
         mkdirSync(join(registryRoot, "foo"), { recursive: true });
         writeFileSync(
             join(registryRoot, "foo", "registry.json"),
-            JSON.stringify({ files: [{ from: "foo.ts", merge: "create-or-skip", to: "cirrus/foo/index.ts" }], name: "foo" }, undefined, 2),
+            JSON.stringify({ files: [{ from: "foo.ts", merge: "create-or-skip", to: "lunora/foo/index.ts" }], name: "foo" }, undefined, 2),
             "utf8",
         );
         setUpstream("export const v = 1;\n");
 
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-proj-"));
-        mkdirSync(join(workdir, "cirrus"), { recursive: true });
+        workdir = mkdtempSync(join(tmpdir(), "lunora-proj-"));
+        mkdirSync(join(workdir, "lunora"), { recursive: true });
         writeFileSync(join(workdir, "package.json"), JSON.stringify({ dependencies: {}, name: "demo" }, undefined, 4), "utf8");
     });
 
@@ -61,7 +61,7 @@ describe("cirrus add — whole-file reconcile", () => {
         expect.assertions(2);
 
         await expect(addFoo()).resolves.toBe(0);
-        expect(existsSync(join(workdir, "cirrus", ".cirrus-registry.json"))).toBe(true);
+        expect(existsSync(join(workdir, "lunora", ".lunora-registry.json"))).toBe(true);
     });
 
     it("upgrades a file the user has not edited", async () => {
@@ -101,11 +101,11 @@ describe("cirrus add — whole-file reconcile", () => {
         expect(existsSync(`${destination()}.new`)).toBe(false);
     });
 
-    it("refuses to overwrite a file cirrus never added (untracked)", async () => {
+    it("refuses to overwrite a file lunora never added (untracked)", async () => {
         expect.assertions(2);
 
         // Pre-existing, hand-authored file with no lock provenance.
-        mkdirSync(join(workdir, "cirrus", "foo"), { recursive: true });
+        mkdirSync(join(workdir, "lunora", "foo"), { recursive: true });
         writeFileSync(destination(), "export const handwritten = true;\n", "utf8");
         setUpstream("export const v = 2;\n");
 

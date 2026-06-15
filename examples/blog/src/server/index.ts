@@ -1,14 +1,14 @@
-import type { CirrusAuth } from "@cirrus/auth";
-import { cirrusD1Adapter, createAuth, ensureMigrated, handleAuthRequest } from "@cirrus/auth";
-import type { ExecutionContextLike, Route, ShardNamespaceLike } from "@cirrus/runtime";
-import { createWorker } from "@cirrus/runtime";
-import { createScheduler, type DurableObjectNamespaceLike } from "@cirrus/scheduler";
-import type { R2BucketLike } from "@cirrus/storage";
-import { createStorage } from "@cirrus/storage";
-import type { VectorizeIndexLike } from "@cirrus/vectors";
+import type { LunoraAuth } from "@lunora/auth";
+import { lunoraD1Adapter, createAuth, ensureMigrated, handleAuthRequest } from "@lunora/auth";
+import type { ExecutionContextLike, Route, ShardNamespaceLike } from "@lunora/runtime";
+import { createWorker } from "@lunora/runtime";
+import { createScheduler, type DurableObjectNamespaceLike } from "@lunora/scheduler";
+import type { R2BucketLike } from "@lunora/storage";
+import { createStorage } from "@lunora/storage";
+import type { VectorizeIndexLike } from "@lunora/vectors";
 
-import { openApiSpec } from "../../cirrus/_generated/openapi.js";
-import { createShardDO } from "../../cirrus/_generated/shard.js";
+import { openApiSpec } from "../../lunora/_generated/openapi.js";
+import { createShardDO } from "../../lunora/_generated/shard.js";
 
 export { SchedulerDO } from "./scheduler-do.js";
 
@@ -23,7 +23,7 @@ interface Env {
 }
 
 interface ShardEnv {
-    CIRRUS_WORKER_ORIGIN?: string;
+    LUNORA_WORKER_ORIGIN?: string;
     FILES?: R2BucketLike;
     // Bound by the `[[vectorize]]` entry in wrangler.jsonc; required because the
     // schema declares the `posts_search` index.
@@ -37,8 +37,8 @@ export const ShardDO = createShardDO({
     scheduler: (env) => {
         const shardEnv = env as unknown as ShardEnv;
 
-        return shardEnv.SCHEDULER && shardEnv.CIRRUS_WORKER_ORIGIN
-            ? createScheduler({ namespace: shardEnv.SCHEDULER, originUrl: shardEnv.CIRRUS_WORKER_ORIGIN })
+        return shardEnv.SCHEDULER && shardEnv.LUNORA_WORKER_ORIGIN
+            ? createScheduler({ namespace: shardEnv.SCHEDULER, originUrl: shardEnv.LUNORA_WORKER_ORIGIN })
             : undefined;
     },
     storage: (env) => {
@@ -54,12 +54,12 @@ export const ShardDO = createShardDO({
 });
 
 let worker: ReturnType<typeof createWorker> | null = null;
-let auth: CirrusAuth | null = null;
-let authReady: Promise<CirrusAuth> | null = null;
+let auth: LunoraAuth | null = null;
+let authReady: Promise<LunoraAuth> | null = null;
 
 /**
  * Compose the full v0.1 add-on stack: better-auth for email/password sign-in
- * (`@cirrus/auth`), sharded function dispatch from `@cirrus/runtime`, and
+ * (`@lunora/auth`), sharded function dispatch from `@lunora/runtime`, and
  * D1-backed user storage.
  */
 const authOptions = (env: Env): Parameters<typeof createAuth>[0] => {
@@ -78,15 +78,15 @@ const authOptions = (env: Env): Parameters<typeof createAuth>[0] => {
 // its Kysely adapter through a runtime `await import(...)` in `auth.$context`
 // that hangs under `@cloudflare/vite-plugin`'s worker module runner (`pnpm dev`).
 // An explicit adapter skips that import; dev matches a deployed worker.
-const buildAuth = (env: Env): CirrusAuth => createAuth({ ...authOptions(env), database: cirrusD1Adapter(env.DB as never) });
+const buildAuth = (env: Env): LunoraAuth => createAuth({ ...authOptions(env), database: lunoraD1Adapter(env.DB as never) });
 
 // Raw-D1 instance used only to drive `ensureMigrated` (Kysely migrator → tables).
-const buildMigrationAuth = (env: Env): CirrusAuth => createAuth({ ...authOptions(env), database: env.DB as never });
+const buildMigrationAuth = (env: Env): LunoraAuth => createAuth({ ...authOptions(env), database: env.DB as never });
 
 const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
     createWorker({
         d1: env.DB,
-        // `openApiSpec` (regenerated on every `cirrus/` change) backs the
+        // `openApiSpec` (regenerated on every `lunora/` change) backs the
         // studio's always-current API-reference tab.
         openApiSpec,
         resolveIdentity: async (request) => {

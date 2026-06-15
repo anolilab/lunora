@@ -1,5 +1,5 @@
 /**
- * Bounded async-iterator queue backing `CirrusClient.stream`.
+ * Bounded async-iterator queue backing `LunoraClient.stream`.
  *
  * The server pushes one server `chunk` message per yielded value while the
  * client iterates with `for await (const chunk of stream)`. A producer that

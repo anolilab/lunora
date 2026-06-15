@@ -137,10 +137,10 @@ export interface AuthQuery {
 }
 
 /**
- * The minimal table-addressed store the `cirrusAuthAdapter` drives. This is the
- * seam a Cirrus runtime binds to its ORM: back each method with `ctx.db` over
+ * The minimal table-addressed store the `lunoraAuthAdapter` drives. This is the
+ * seam a Lunora runtime binds to its ORM: back each method with `ctx.db` over
  * the global (D1) auth tables that `authTables(...)` generates, and better-auth's
- * reads/writes flow through Cirrus's data layer (triggers, aggregates, OCC)
+ * reads/writes flow through Lunora's data layer (triggers, aggregates, OCC)
  * instead of better-auth's own adapter. Field names and table (`model`) names are
  * already the database names better-auth resolved from the schema, so a store
  * passes them straight through.
@@ -196,7 +196,7 @@ export const matchesWhere = (row: AuthRow, where: ReadonlyArray<AuthWhereClause>
 
 /**
  * Reference in-memory {@link AuthStore} — used to run better-auth end to end in
- * tests, and a worked example of the contract a Cirrus-`ctx.db`-backed store
+ * tests, and a worked example of the contract a Lunora-`ctx.db`-backed store
  * fulfils. Not for production (state is per-instance and non-durable).
  */
 export const createMemoryAuthStore = (): AuthStore => {

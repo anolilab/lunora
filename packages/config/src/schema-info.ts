@@ -7,13 +7,13 @@
  */
 import { existsSync } from "node:fs";
 
-import { discoverSchema } from "@cirrus/codegen";
+import { discoverSchema } from "@lunora/codegen";
 import { Project } from "ts-morph";
 
 import join from "./path";
 
 interface SchemaInfo {
-    /** Whether the cirrus schema declares any `.global()` table. */
+    /** Whether the lunora schema declares any `.global()` table. */
     hasGlobalTable: boolean;
     /** Names of vector indexes declared via `.vectorize()` / `defineVectorIndex()`. */
     vectorIndexNames?: ReadonlyArray<string>;

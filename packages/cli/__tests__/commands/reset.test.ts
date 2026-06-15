@@ -18,16 +18,16 @@ const silentLogger = (): Logger => {
 
 let workdir: string;
 
-describe("cirrus reset", () => {
+describe("lunora reset", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-cli-reset-"));
+        workdir = mkdtempSync(join(tmpdir(), "lunora-cli-reset-"));
     });
 
     afterEach(() => {
         rmSync(workdir, { force: true, recursive: true });
     });
 
-    describe("cirrus reset", () => {
+    describe("lunora reset", () => {
         it("removes .wrangler/state if present", async () => {
             expect.assertions(2);
 
@@ -42,11 +42,11 @@ describe("cirrus reset", () => {
             expect(result.removed).toContain(stateDir);
         });
 
-        it("--all also removes .cirrus-cache", async () => {
+        it("--all also removes .lunora-cache", async () => {
             expect.assertions(4);
 
             const stateDir = join(workdir, ".wrangler", "state");
-            const cacheDir = join(workdir, ".cirrus-cache");
+            const cacheDir = join(workdir, ".lunora-cache");
 
             mkdirSync(stateDir, { recursive: true });
             mkdirSync(cacheDir, { recursive: true });

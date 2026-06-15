@@ -16,7 +16,7 @@ interface ShardCall {
  * the real shard-do `rankPage` reader does: it walks past the `after` key with
  * the byte-identical `(__partition__, __sort_k&lt;i>__, __id__)` comparison and
  * returns up to `take` rows plus a `hasMore` flag. This is the structural
- * contract `__cirrus_admin__:rankPage` fulfills server-side.
+ * contract `__lunora_admin__:rankPage` fulfills server-side.
  */
 const RANK_CLASS = (value: unknown): number => {
     if (value === null || value === undefined) {
@@ -386,7 +386,7 @@ describe("orchestrateRankPage — failures and request forwarding", () => {
             take: 50,
         });
 
-        expect(calls[0]?.functionPath).toBe("__cirrus_admin__:rankPage");
+        expect(calls[0]?.functionPath).toBe("__lunora_admin__:rankPage");
         expect(calls[0]?.args["index"]).toBe("lb");
         expect(calls[0]?.args["take"]).toBe(50);
         expect(calls[0]?.args["partitionKey"]).toBe('{"region":"eu"}');

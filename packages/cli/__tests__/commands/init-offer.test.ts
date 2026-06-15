@@ -25,7 +25,7 @@ describe("offerRegistryExtras", () => {
         await offerRegistryExtras({ apply, interactive: false, logger, multiSelect: async () => ["auth", "email"], select: async () => "auth" });
 
         expect(apply).not.toHaveBeenCalled();
-        expect(lines.join("\n")).toMatch(/cirrus add auth/);
+        expect(lines.join("\n")).toMatch(/lunora add auth/);
     });
 
     it("applies the chosen auth provider and then email when both are selected", async () => {

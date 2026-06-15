@@ -1,5 +1,5 @@
-import type { ScheduleRecord } from "@cirrus/client";
-import { CirrusProvider } from "@cirrus/react";
+import type { ScheduleRecord } from "@lunora/client";
+import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement, ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -15,7 +15,7 @@ const RECORDS: ScheduleRecord[] = [
     { args: {}, enqueuedAt: 1, functionPath: "report:build", id: "a", scheduledFor: 1000, shardKey: "tenant-1" },
 ];
 
-const withProvider = (mock: MockClientHooks, children: ReactNode): ReactElement => <CirrusProvider client={mock.asClient}>{children}</CirrusProvider>;
+const withProvider = (mock: MockClientHooks, children: ReactNode): ReactElement => <LunoraProvider client={mock.asClient}>{children}</LunoraProvider>;
 
 const loadEmpty = async (): Promise<ScheduleRecord[]> => [];
 const loadRecords = async (): Promise<ScheduleRecord[]> => RECORDS;

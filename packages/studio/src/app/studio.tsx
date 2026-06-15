@@ -100,9 +100,9 @@ type StudioTab =
 interface StudioProps {
     /**
      * URL path prefix the studio is mounted under, passed to the router as its
-     * `basepath`. Defaults to `/` (mounted at the origin root). The `@cirrus/vite`
-     * dev route serves the studio under `/__cirrus`, so it sets this — without
-     * it the router treats `/__cirrus` as unknown and bounces to `/data`, escaping
+     * `basepath`. Defaults to `/` (mounted at the origin root). The `@lunora/vite`
+     * dev route serves the studio under `/__lunora`, so it sets this — without
+     * it the router treats `/__lunora` as unknown and bounces to `/data`, escaping
      * the mount.
      */
     readonly basePath?: string;
@@ -133,7 +133,7 @@ interface StudioProps {
      * Inline OpenAPI 3.1 document rendered by the API tab's reference sub-view.
      * Thread the generated `_generated/openapi.json` here to render it
      * without a round-trip. When omitted the reference fetches the worker's
-     * admin-gated `GET /_cirrus/admin/openapi` endpoint via the client.
+     * admin-gated `GET /_lunora/admin/openapi` endpoint via the client.
      */
     readonly openApiSpec?: unknown;
 
@@ -142,7 +142,7 @@ interface StudioProps {
      * when the OpenRPC format is selected. Thread the generated
      * `_generated/openrpc.json` here to render it without a round-trip. When
      * omitted the OpenRPC view fetches the worker's admin-gated
-     * `GET /_cirrus/admin/openrpc` endpoint via the client.
+     * `GET /_lunora/admin/openrpc` endpoint via the client.
      */
     readonly openRpcSpec?: unknown;
 
@@ -164,7 +164,7 @@ interface StudioProps {
 
     /**
      * Override how the schedule tab's Cron triggers sub-view loads triggers.
-     * Defaults to the client's `/_cirrus/admin/cron-jobs` endpoint; see
+     * Defaults to the client's `/_lunora/admin/cron-jobs` endpoint; see
      * {@link SchedulePanel}.
      */
     readonly scheduledCron?: SchedulePanelProps["loadCronJobs"];
@@ -177,7 +177,7 @@ interface StudioProps {
 
     /**
      * Enable the visual schema editor overlay on the schema diagram (add table /
-     * column / index, written back to `cirrus/schema.ts` + codegen). Off by default
+     * column / index, written back to `lunora/schema.ts` + codegen). Off by default
      * so the diagram stays read-only unless a host opts in. Like {@link
      * StudioProps.dataEditable}, only the loopback-only dev hosts set this — the
      * write path needs the project's filesystem + toolchain, so a static deploy
@@ -272,9 +272,9 @@ const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
  * Optional, package-backed tabs and the feature flag that gates each. A tab
  * listed here is hidden from the nav (and its panel made unreachable) when the
  * deployment doesn't wire up the backing package — so an app with no
- * `@cirrus/payment` never shows the Payments page, the way auth panels gate on
+ * `@lunora/payment` never shows the Payments page, the way auth panels gate on
  * capabilities. Tabs absent from this map are always shown (core surfaces). The
- * flags come from `useStudioFeatures` (the `__cirrus_admin__:studioFeatures` RPC,
+ * flags come from `useStudioFeatures` (the `__lunora_admin__:studioFeatures` RPC,
  * statically discovered by codegen). `storage` gates both the file browser and
  * the access-rules view; `scheduler` gates the scheduled-jobs view.
  */
@@ -375,7 +375,7 @@ const FULL_HEIGHT_TABS = new Set<StudioTab>(["api", "data", "sql"]);
 /** Resolve the active tab from a router pathname (`/logs` → `logs`); unknown paths fall back to `home`. */
 const tabFromPathname = (pathname: string): StudioTab => {
     // Use the last non-empty segment so this holds whether or not the router's
-    // pathname still carries a basepath prefix (`/__cirrus/logs` → `logs`).
+    // pathname still carries a basepath prefix (`/__lunora/logs` → `logs`).
     const slug = pathname.split("/").findLast(Boolean) ?? "";
 
     return (TABS as ReadonlyArray<string>).includes(slug) ? (slug as StudioTab) : "home";
@@ -523,7 +523,7 @@ const StudioLayout = (): ReactElement => {
     // studio, so each deep-linked panel gets its own document title.
     useEffect(() => {
         if (typeof document !== "undefined") {
-            document.title = `${tabLabel[current]} · cirrus`;
+            document.title = `${tabLabel[current]} · lunora`;
         }
     }, [current, tabLabel]);
 
@@ -610,7 +610,7 @@ const StudioLayout = (): ReactElement => {
     return (
         <div
             className={cn("grid min-h-0 flex-1", navCollapsed ? "grid-cols-[3rem_minmax(0,1fr)]" : "grid-cols-[3rem_13.5rem_minmax(0,1fr)]")}
-            data-testid="cirrus-studio"
+            data-testid="lunora-studio"
         >
             <CommandPalette items={commandItems} />
             {/* Icon rail — one entry per area, settings pinned to the bottom. */}
@@ -862,9 +862,9 @@ const buildRouter = ({
     const history = "window" in globalThis ? createBrowserHistory() : createMemoryHistory({ initialEntries: ["/home"] });
 
     return createRouter({
-        // When mounted under a prefix (e.g. the `/__cirrus` dev route), the router
-        // works in that subtree: `/__cirrus` matches the index route and every
-        // `navigate({ to: "/logs" })` resolves to `/__cirrus/logs`, so navigation
+        // When mounted under a prefix (e.g. the `/__lunora` dev route), the router
+        // works in that subtree: `/__lunora` matches the index route and every
+        // `navigate({ to: "/logs" })` resolves to `/__lunora/logs`, so navigation
         // never escapes the mount. Omitted for a root mount.
         ...(basePath === undefined || basePath === "/" ? {} : { basepath: basePath }),
         defaultNotFoundComponent: NotFoundRedirect,

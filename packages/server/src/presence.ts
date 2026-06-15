@@ -1,12 +1,12 @@
 /**
- * Presence / collaborative-awareness preset — the Cirrus answer to
+ * Presence / collaborative-awareness preset — the Lunora answer to
  * `@convex-dev/presence`.
  *
  * Presence is the "who's here" + cursors/awareness primitive every real-time
  * app reaches for: a room (a document, a board, a channel) and the set of
  * users/sessions currently looking at it, each carrying an optional cursor and
  * a blob of awareness `data` (selection, color, name…). Convex ships this as a
- * component; Cirrus ships it from `@cirrus/server` built on primitives the
+ * component; Lunora ships it from `@lunora/server` built on primitives the
  * framework already has — no new package, no DO-level support:
  *
  * - **Schema extension / component system** ({@link defineSchemaExtension} /
@@ -25,13 +25,13 @@
  * # Wiring
  *
  * ```ts
- * // cirrus/presence.ts
- * import { definePresence } from "@cirrus/server";
+ * // lunora/presence.ts
+ * import { definePresence } from "@lunora/server";
  *
  * export const presence = definePresence({ ttlMs: 10_000 });
  *
  * // Merge the table into the app schema (auto-namespaced to `presence_present`):
- * // cirrus/schema.ts
+ * // lunora/schema.ts
  * export const schema = defineSchema({ ... }).extend(presence.extension);
  *
  * // Re-export the functions so codegen exposes them under `presence:*`:
@@ -39,10 +39,10 @@
  * ```
  *
  * The client then calls `presence:heartbeat` on an interval and subscribes to
- * `presence:listPresent` — the `usePresence` hook in `@cirrus/react` does both.
+ * `presence:listPresent` — the `usePresence` hook in `@lunora/react` does both.
  */
 
-import { v } from "@cirrus/values";
+import { v } from "@lunora/values";
 
 import { mutation, query } from "./functions";
 import type { Component, SchemaExtension } from "./plugin";
@@ -147,7 +147,7 @@ const presenceExtension = defineSchemaExtension(PRESENCE_KEY, {
 /**
  * Build a presence {@link Component} — schema extension + heartbeat / listPresent
  * / sweep functions — wired to a single TTL. Re-export `component.functions`
- * from your `cirrus/` module so codegen exposes them, and `.extend(component.
+ * from your `lunora/` module so codegen exposes them, and `.extend(component.
  * extension)` to merge the table.
  *
  * Deviations from the brief: `sweep` is shipped as an **internal** mutation

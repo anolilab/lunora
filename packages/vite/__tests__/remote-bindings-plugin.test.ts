@@ -13,7 +13,7 @@ const materializeWith = (configPath: string | undefined, onCleanup?: () => void)
 };
 
 describe("planViteRemoteBindings", () => {
-    it("is disabled when neither CIRRUS_REMOTE nor cirrus.json opts in", () => {
+    it("is disabled when neither LUNORA_REMOTE nor lunora.json opts in", () => {
         expect.assertions(2);
 
         const plan = planViteRemoteBindings({
@@ -27,7 +27,7 @@ describe("planViteRemoteBindings", () => {
         expect(plan.configPath).toBeUndefined();
     });
 
-    it("enables + materializes a configPath when CIRRUS_REMOTE=1", () => {
+    it("enables + materializes a configPath when LUNORA_REMOTE=1", () => {
         expect.assertions(2);
 
         const plan = planViteRemoteBindings({
@@ -41,7 +41,7 @@ describe("planViteRemoteBindings", () => {
         expect(plan.configPath).toBe("/work/wrangler.remote.jsonc");
     });
 
-    it("enables via the cirrus.json `remote` preference when the env is unset", () => {
+    it("enables via the lunora.json `remote` preference when the env is unset", () => {
         expect.assertions(2);
 
         const plan = planViteRemoteBindings({
@@ -55,7 +55,7 @@ describe("planViteRemoteBindings", () => {
         expect(plan.configPath).toBe("/work/wrangler.remote.jsonc");
     });
 
-    it("lets CIRRUS_REMOTE win over a cirrus.json `remote: false`", () => {
+    it("lets LUNORA_REMOTE win over a lunora.json `remote: false`", () => {
         expect.assertions(1);
 
         const plan = planViteRemoteBindings({

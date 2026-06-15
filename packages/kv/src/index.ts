@@ -1,6 +1,6 @@
 export { createKv, scopeKey } from "./create-kv";
 export type {
-    CirrusKvOptions,
+    LunoraKvOptions,
     Kv,
     KvGetOptions,
     KvListKey,

@@ -6,7 +6,7 @@
 
 </a>
 
-<h3 align="center">Code generator for Cirrus: emits _generated/{api,server,dataModel}.ts from your schema</h3>
+<h3 align="center">Code generator for Lunora: emits _generated/{api,server,dataModel}.ts from your schema</h3>
 
 <!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
@@ -34,28 +34,28 @@
 
 ---
 
-The Cirrus code generator. It parses your `cirrus/schema.ts` plus every function file under `cirrus/`, then emits `cirrus/_generated/{api,server,dataModel}.ts` so the rest of your app gets fully typed access to its own backend. Most apps never call it directly — the `cirrus codegen` CLI command and the `@cirrus/vite` plugin invoke it for you.
+The Lunora code generator. It parses your `lunora/schema.ts` plus every function file under `lunora/`, then emits `lunora/_generated/{api,server,dataModel}.ts` so the rest of your app gets fully typed access to its own backend. Most apps never call it directly — the `lunora codegen` CLI command and the `@lunora/vite` plugin invoke it for you.
 
-Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
+Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
 ## Install
 
 ```sh
-npm install @cirrus/codegen
+npm install @lunora/codegen
 ```
 
 ```sh
-yarn add @cirrus/codegen
+yarn add @lunora/codegen
 ```
 
 ```sh
-pnpm add @cirrus/codegen
+pnpm add @lunora/codegen
 ```
 
 ## Usage
 
 ```ts
-import { runCodegen } from "@cirrus/codegen";
+import { runCodegen } from "@lunora/codegen";
 
 const result = runCodegen({ projectRoot: process.cwd() });
 
@@ -64,13 +64,13 @@ console.log(`wrote api.ts, server.ts, dataModel.ts -> ${result.outputDirectory}`
 
 The emitted `_generated/*` modules are consumed under NodeNext, so their imports carry `.js` extensions — for example `import { api } from "./_generated/api.js"`.
 
-> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/concepts/schema)**.
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/concepts/schema)**.
 
 ## Related
 
-- [`@cirrus/cli`](https://www.npmjs.com/package/@cirrus/cli) — the `cirrus codegen` command calls into this package.
-- [`@cirrus/vite`](https://www.npmjs.com/package/@cirrus/vite) — runs codegen on schema changes during dev.
-- [`@cirrus/values`](https://www.npmjs.com/package/@cirrus/values) — the `v.*` validators the parser understands.
+- [`@lunora/cli`](https://www.npmjs.com/package/@lunora/cli) — the `lunora codegen` command calls into this package.
+- [`@lunora/vite`](https://www.npmjs.com/package/@lunora/vite) — runs codegen on schema changes during dev.
+- [`@lunora/values`](https://www.npmjs.com/package/@lunora/values) — the `v.*` validators the parser understands.
 
 ## Supported Node.js Versions
 
@@ -79,14 +79,14 @@ Here's [a post on why we think this is important](https://medium.com/the-node-js
 
 ## Contributing
 
-If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/lunora/issues) and check our [Contributing](https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
 > **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
 ## Credits
 
 - [Daniel Bannert](https://github.com/prisis)
-- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
+- [All Contributors](https://github.com/anolilab/lunora/graphs/contributors)
 
 ## Made with ❤️ at Anolilab
 
@@ -94,17 +94,17 @@ This is an open source project and will always remain free to use. If you think 
 
 ## License
 
-The Cirrus codegen package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The Lunora codegen package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
 
 <!-- badges -->
 
 [license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
-[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
-[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/codegen?style=for-the-badge
-[npm-version]: https://www.npmjs.com/package/@cirrus/codegen
-[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/codegen?style=for-the-badge
-[npm-downloads]: https://www.npmjs.com/package/@cirrus/codegen
+[license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@lunora/codegen?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@lunora/codegen
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@lunora/codegen?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@lunora/codegen
 [prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
-[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[prs-welcome]: https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md
 [typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
 [typescript-url]: https://www.typescriptlang.org/

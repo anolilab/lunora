@@ -1,4 +1,4 @@
-import { useCirrus } from "@cirrus/react";
+import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -34,12 +34,12 @@ const sortRules = (rules: StorageRuleMetadata[]): StorageRuleMetadata[] =>
  *
  * Deliberately read-only: storage rules live in code (the `when` predicate is an
  * opaque closure, never serialized), so the view surfaces the schema's shape for
- * auditing. The metadata is statically discovered by `@cirrus/codegen` and
- * served by `__cirrus_admin__:storageRules`, refreshing on every codegen run.
+ * auditing. The metadata is statically discovered by `@lunora/codegen` and
+ * served by `__lunora_admin__:storageRules`, refreshing on every codegen run.
  */
 // eslint-disable-next-line import/prefer-default-export -- studio panels are named exports, mounted by name in studio.tsx
 export const StorageRulesPanel = (): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const t = useT();
 
     const [data, setData] = useState<StorageRulesResult | null>(null);
@@ -63,7 +63,7 @@ export const StorageRulesPanel = (): ReactElement => {
     const rules = useMemo<StorageRuleMetadata[]>(() => (data === null ? [] : sortRules(data.rules)), [data]);
 
     return (
-        <div className="flex flex-col gap-4" data-testid="cirrus-storage-rules-panel">
+        <div className="flex flex-col gap-4" data-testid="lunora-storage-rules-panel">
             {error !== null && (
                 <p className="text-sm text-destructive" data-testid="storage-rules-error" role="alert">
                     {error}

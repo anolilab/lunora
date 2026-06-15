@@ -1,4 +1,4 @@
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraProvider } from "@lunora/react";
 import { render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
@@ -14,7 +14,7 @@ const SPEC_WITH_METHODS: Record<string, unknown> = {
             name: "messages:list",
             params: [{ name: "args", required: true, schema: { properties: { channelId: { type: "string" } }, required: ["channelId"], type: "object" } }],
             result: { name: "result", schema: {} },
-            "x-cirrus-function-kind": "query",
+            "x-lunora-function-kind": "query",
             "x-tags": [{ name: "messages" }],
         },
     ],
@@ -24,9 +24,9 @@ const SPEC_WITH_METHODS: Record<string, unknown> = {
 const EMPTY_SPEC: Record<string, unknown> = { methods: [], openrpc: "1.3.2" };
 
 const renderPanel = (mock: MockClientHooks, spec?: unknown): ReactElement => (
-    <CirrusProvider client={mock.asClient}>
+    <LunoraProvider client={mock.asClient}>
         <OpenRpcReferencePanel spec={spec} />
-    </CirrusProvider>
+    </LunoraProvider>
 );
 
 describe("openRpcReferencePanel", () => {

@@ -1,4 +1,4 @@
-import type { Schema } from "@cirrus/server";
+import type { Schema } from "@lunora/server";
 
 import { copycat, setHashKey } from "./copycat";
 import type { OverrideContext } from "./plan";
@@ -10,7 +10,7 @@ import { seedPlan } from "./plan";
  * Where `seedPlan` generates every table at once, the client lets you author one
  * table at a time, with autocomplete on each table's columns and live foreign-key
  * connection to whatever was seeded earlier this run. Pass your generated
- * `InsertModel` type as the type argument — or let `cirrus/_generated/seed.ts`
+ * `InsertModel` type as the type argument — or let `lunora/_generated/seed.ts`
  * do that for you — for full type inference on each table's columns.
  *
  * The client is deterministic (same `seed` ⇒ same rows and ids) and pure unless a

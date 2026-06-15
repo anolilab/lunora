@@ -1,9 +1,9 @@
-import type { ArgsOf, FunctionReference, ReturnOf } from "@cirrus/client";
-import { createQuerySubscription } from "@cirrus/client/query";
+import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
+import { createQuerySubscription } from "@lunora/client/query";
 import type { Accessor } from "solid-js";
 import { createEffect, createSignal, on, onCleanup } from "solid-js";
 
-import { useCirrus } from "./context";
+import { useLunora } from "./context";
 
 export interface CreateQueryOptions {
     /** Route to a specific shard when the target function is `.shardBy(...)`-partitioned. */
@@ -16,7 +16,7 @@ export interface CreateQueryOptions {
  * The accessor reads `undefined` until the first server frame lands, then
  * updates on every delta the WebSocket pushes — Solid's fine-grained signals
  * mean only the components that read the accessor re-render, which maps cleanly
- * onto Cirrus's per-subscription delta model.
+ * onto Lunora's per-subscription delta model.
  *
  * `args` may be a plain value or an accessor; passing an accessor makes the
  * subscription reactive — when the args change the old subscription is torn down
@@ -33,7 +33,7 @@ export const createQuery = <F extends FunctionReference>(
     args: (ArgsOf<F> | "skip") | Accessor<ArgsOf<F> | "skip">,
     options: CreateQueryOptions = {},
 ): Accessor<ReturnOf<F> | undefined> => {
-    const client = useCirrus();
+    const client = useLunora();
     const { shardKey } = options;
 
     const [value, setValue] = createSignal<ReturnOf<F> | undefined>(undefined);
@@ -44,7 +44,7 @@ export const createQuery = <F extends FunctionReference>(
     // tearing down the previous subscription via `onCleanup` before opening the
     // next. A static (non-accessor) `args` resolves once and never re-runs. The
     // skip-handling, subscribe, and cleanup are owned by the shared
-    // `@cirrus/client/query` state machine; this binds it to a Solid signal. The
+    // `@lunora/client/query` state machine; this binds it to a Solid signal. The
     // `() => …` setter forms keep Solid from mistaking a function-valued server
     // result for an updater.
     createEffect(

@@ -1,7 +1,7 @@
 /**
  * `defineContainer` and the pure naming/normalization helpers shared by the
  * runtime, codegen, and the config layer. Everything here is Node-safe — no
- * Cloudflare runtime imports — so codegen and `@cirrus/config` derive class
+ * Cloudflare runtime imports — so codegen and `@lunora/config` derive class
  * names, binding names, and wrangler image fields from the exact same logic
  * the runtime uses.
  */
@@ -65,7 +65,7 @@ const normalizeContainerImage = (image: ContainerImageSource): NormalizedContain
 };
 
 /**
- * The generated Container DO class name for a `cirrus/containers.ts` export:
+ * The generated Container DO class name for a `lunora/containers.ts` export:
  * `transcoder` → `TranscoderContainer`. wrangler's `containers[].class_name`
  * and the Durable Object binding's `class_name` both reference it, so codegen
  * and the config layer MUST derive it identically — always via this helper.
@@ -82,12 +82,12 @@ const containerBindingName = (exportName: string): string => `CONTAINER_${export
 
 /**
  * The local image tag a Railpack `{ build }` container is built and pushed
- * under: `transcoder` → `cirrus-transcoder:build`. The config reconciler writes
- * it as the wrangler `containers[].image`, and `cirrus deploy` builds that tag
+ * under: `transcoder` → `lunora-transcoder:build`. The config reconciler writes
+ * it as the wrangler `containers[].image`, and `lunora deploy` builds that tag
  * with Railpack and `wrangler containers push`es it before deploying — so all
  * three derive the tag from this one helper and can never disagree.
  */
-const containerBuildTag = (exportName: string): string => `cirrus-${exportName.replaceAll(/(?<=[a-z0-9])(?=[A-Z])/g, "-").toLowerCase()}:build`;
+const containerBuildTag = (exportName: string): string => `lunora-${exportName.replaceAll(/(?<=[a-z0-9])(?=[A-Z])/g, "-").toLowerCase()}:build`;
 
 /**
  * Declare a container deployed alongside the app. Pure validation + branding:
@@ -97,7 +97,7 @@ const containerBuildTag = (exportName: string): string => `cirrus-${exportName.r
  * Object binding from the same definition.
  *
  * ```ts
- * // cirrus/containers.ts
+ * // lunora/containers.ts
  * export const transcoder = defineContainer({
  *     image: "./containers/transcoder",
  *     defaultPort: 8080,
@@ -204,12 +204,12 @@ const defineContainer = (config: ContainerConfig): ContainerDefinition => {
 
     assertValidEnvAndSecrets(config);
 
-    return { ...config, isCirrusContainer: true };
+    return { ...config, isLunoraContainer: true };
 };
 
 /** True when a value is a `defineContainer` result (the runtime brand check). */
 const isContainerDefinition = (value: unknown): value is ContainerDefinition =>
-    typeof value === "object" && value !== null && (value as { isCirrusContainer?: unknown }).isCirrusContainer === true;
+    typeof value === "object" && value !== null && (value as { isLunoraContainer?: unknown }).isLunoraContainer === true;
 
 /**
  * The container's full environment at instance start: the static `env` block

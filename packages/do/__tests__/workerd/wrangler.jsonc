@@ -6,7 +6,7 @@
 // the same way `wrangler dev` would.
 {
     "$schema": "../../../../node_modules/wrangler/config-schema.json",
-    "name": "cirrus-do-test-worker",
+    "name": "lunora-do-test-worker",
     "main": "test-worker.ts",
     "compatibility_date": "2026-04-07",
     "compatibility_flags": ["nodejs_compat"],

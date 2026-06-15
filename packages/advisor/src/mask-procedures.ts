@@ -1,5 +1,5 @@
 /**
- * One procedure (query / mutation / action) discovered in the cirrus source,
+ * One procedure (query / mutation / action) discovered in the lunora source,
  * reduced to the facts the `mask_uncovered_pii_column` lint needs: whether the
  * procedure's builder chain includes `.use(mask(...))`, which `(table, column)`
  * pairs that mask declares, and which tables the procedure reads or writes.
@@ -9,7 +9,7 @@
 export interface AdvisorMaskProcedure {
     /** The exported binding name of the procedure (e.g. `listUsers`). */
     exportName: string;
-    /** Source file relative to the cirrus dir, no extension. */
+    /** Source file relative to the lunora dir, no extension. */
     file: string;
 
     /**
@@ -26,7 +26,7 @@ export interface AdvisorMaskProcedure {
 
     /**
      * `true` when the procedure's builder chain includes `.use(mask(...))` — the
-     * `mask` callee is identified by name from `@cirrus/server`. `false` when no
+     * `mask` callee is identified by name from `@lunora/server`. `false` when no
      * `.use(mask(...))` is found in the chain (or the procedure uses the bare
      * `query({...})` factory form, which never carries a builder chain at all).
      */

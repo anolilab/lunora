@@ -1,7 +1,7 @@
 /**
- * The `/_cirrus/admin/storage*` route cluster, extracted from `create-worker.ts`
+ * The `/_lunora/admin/storage*` route cluster, extracted from `create-worker.ts`
  * (mirrors `./auth-admin-routes`). One driver per pathname backing the studio's
- * file browser: list / delete / upload (sharing `/_cirrus/admin/storage` by
+ * file browser: list / delete / upload (sharing `/_lunora/admin/storage` by
  * method), a signed-URL minter, and the bucket-name list for the bucket picker.
  *
  * Every handler is closure-free of the worker's internals — it reaches the
@@ -15,13 +15,13 @@ import type {
     StorageSignedUrlFn as StorageSignedUrlFunction,
     StorageUploadFn as StorageUploadFunction,
 } from "./create-worker";
-import { CirrusError } from "./errors";
+import { LunoraError } from "./errors";
 
-const STORAGE_PATH = "/_cirrus/admin/storage";
-const STORAGE_URL_PATH = "/_cirrus/admin/storage/url";
-const STORAGE_BUCKETS_PATH = "/_cirrus/admin/storage/buckets";
+const STORAGE_PATH = "/_lunora/admin/storage";
+const STORAGE_URL_PATH = "/_lunora/admin/storage/url";
+const STORAGE_BUCKETS_PATH = "/_lunora/admin/storage/buckets";
 
-// `@cirrus/storage`'s `buildSignedUrl` rejects an `expiresInSeconds` over 7 days;
+// `@lunora/storage`'s `buildSignedUrl` rejects an `expiresInSeconds` over 7 days;
 // mirror that ceiling so an over-max request is clamped, not a 500.
 const MAX_STORAGE_EXPIRES_IN_SECONDS = 7 * 24 * 60 * 60;
 
@@ -48,7 +48,7 @@ interface StorageAdminRouteDeps {
 }
 
 /**
- * Build the `/_cirrus/admin/storage*` route map merged into the worker's internal
+ * Build the `/_lunora/admin/storage*` route map merged into the worker's internal
  * route table.
  */
 const buildStorageAdminRoutes = (deps: StorageAdminRouteDeps): Record<string, (request: Request) => Promise<Response> | Response> => {
@@ -59,7 +59,7 @@ const buildStorageAdminRoutes = (deps: StorageAdminRouteDeps): Record<string, (r
         const key = queryParameter(url, "key");
 
         if (key === undefined) {
-            throw new CirrusError("Storage endpoint requires a `key` query parameter", { code: "BAD_REQUEST", status: 400 });
+            throw new LunoraError("Storage endpoint requires a `key` query parameter", { code: "BAD_REQUEST", status: 400 });
         }
 
         return key;
@@ -83,7 +83,7 @@ const buildStorageAdminRoutes = (deps: StorageAdminRouteDeps): Record<string, (r
 
     const handleStorageBuckets = (request: Request): Response => {
         if (request.method !== "GET") {
-            throw new CirrusError("Storage-buckets endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+            throw new LunoraError("Storage-buckets endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
         assertAdmin(request);
@@ -144,14 +144,14 @@ const buildStorageAdminRoutes = (deps: StorageAdminRouteDeps): Record<string, (r
                 return handleStorageUpload(request);
             }
             default: {
-                throw new CirrusError("Storage endpoint requires GET, PUT, POST, or DELETE", { code: "METHOD_NOT_ALLOWED", status: 405 });
+                throw new LunoraError("Storage endpoint requires GET, PUT, POST, or DELETE", { code: "METHOD_NOT_ALLOWED", status: 405 });
             }
         }
     };
 
     const handleStorageSignedUrl = async (request: Request): Promise<Response> => {
         if (request.method !== "GET") {
-            throw new CirrusError("Storage URL endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+            throw new LunoraError("Storage URL endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
         const storageSignedUrl = requireAdminOption(request, storage.storageSignedUrl, {
@@ -162,7 +162,7 @@ const buildStorageAdminRoutes = (deps: StorageAdminRouteDeps): Record<string, (r
         const url = new URL(request.url);
         const key = requireStorageKey(url);
         // Optional share-link lifetime; a non-numeric/absent value leaves the host's
-        // default. `@cirrus/storage`'s `buildSignedUrl` THROWS above its 7-day max,
+        // default. `@lunora/storage`'s `buildSignedUrl` THROWS above its 7-day max,
         // so clamp here to keep an over-max request a valid URL rather than a 500.
         const expiresInRaw = Number(queryParameter(url, "expiresIn") ?? "");
         const expiresInSeconds = Number.isFinite(expiresInRaw) && expiresInRaw > 0 ? Math.min(expiresInRaw, MAX_STORAGE_EXPIRES_IN_SECONDS) : undefined;

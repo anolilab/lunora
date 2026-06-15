@@ -2,7 +2,7 @@
 // to boot the test Worker in a real workerd runtime.
 {
     "$schema": "../../../../node_modules/wrangler/config-schema.json",
-    "name": "cirrus-runtime-test-worker",
+    "name": "lunora-runtime-test-worker",
     "main": "test-worker.ts",
     "compatibility_date": "2026-04-07",
     "compatibility_flags": ["nodejs_compat"],
@@ -10,6 +10,6 @@
         "bindings": [{ "name": "SHARD", "class_name": "TestShardDO" }],
     },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["TestShardDO"] }],
-    "r2_buckets": [{ "binding": "BACKUPS", "bucket_name": "cirrus-runtime-test-backups" }],
+    "r2_buckets": [{ "binding": "BACKUPS", "bucket_name": "lunora-runtime-test-backups" }],
     "triggers": { "crons": ["0 3 * * *"] },
 }

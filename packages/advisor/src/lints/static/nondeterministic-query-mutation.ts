@@ -5,7 +5,7 @@ import type { Lint } from "../../types";
  * Flags a non-deterministic API call inside a `query(...)` or `mutation(...)`
  * handler body.
  *
- * Cirrus queries and mutations must be **deterministic**: the coordinator may
+ * Lunora queries and mutations must be **deterministic**: the coordinator may
  * re-run a mutation on optimistic-concurrency (OCC) retry and a query on
  * subscription re-evaluation, so a handler that reads wall-clock time, draws
  * randomness, or hits the network can produce different results on each run —

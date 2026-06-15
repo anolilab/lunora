@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { ResolvedCirrusPluginOptions } from "../src/types";
+import type { ResolvedLunoraPluginOptions } from "../src/types";
 import { warnWhenDockerMissing, wranglerValidatorPlugin } from "../src/wrangler-validator-plugin";
 
 const WRANGLER_NOT_FOUND = /wrangler\.jsonc not found/u;
@@ -12,7 +12,7 @@ const SHARD_SHARDDO = /SHARD.+ShardDO/u;
 const D1_DATABASES = /d1_databases/u;
 const COMPATIBILITY_DATE = /compatibility_date/u;
 
-const SCHEMA_WITH_GLOBAL = `import { defineSchema, defineTable, v } from "@cirrus/server";
+const SCHEMA_WITH_GLOBAL = `import { defineSchema, defineTable, v } from "@lunora/server";
 
 export const schema = defineSchema({
     messages: defineTable({
@@ -27,7 +27,7 @@ export const schema = defineSchema({
 });
 `;
 
-const SCHEMA_NO_GLOBAL = `import { defineSchema, defineTable, v } from "@cirrus/server";
+const SCHEMA_NO_GLOBAL = `import { defineSchema, defineTable, v } from "@lunora/server";
 
 export const schema = defineSchema({
     messages: defineTable({
@@ -38,26 +38,26 @@ export const schema = defineSchema({
 `;
 
 const VALID_WRANGLER = `{
-    "name": "cirrus-app",
+    "name": "lunora-app",
     "main": "src/index.ts",
     "compatibility_date": "2026-04-07",
     "compatibility_flags": ["nodejs_compat", "web_socket_auto_reply_to_close"],
     "durable_objects": {
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
     },
-    "d1_databases": [{ "binding": "DB", "database_name": "cirrus-global", "database_id": "x" }]
+    "d1_databases": [{ "binding": "DB", "database_name": "lunora-global", "database_id": "x" }]
 }
 `;
 
-const makeOptions = (projectRoot: string): ResolvedCirrusPluginOptions => {
+const makeOptions = (projectRoot: string): ResolvedLunoraPluginOptions => {
     return {
         apiSpec: "openapi",
         cloudflare: false,
         studio: false,
-        generatedDir: "cirrus/_generated",
+        generatedDir: "lunora/_generated",
         overlay: false,
         projectRoot,
-        schemaDir: "cirrus",
+        schemaDir: "lunora",
         validateWrangler: true,
     };
 };
@@ -65,8 +65,8 @@ const makeOptions = (projectRoot: string): ResolvedCirrusPluginOptions => {
 let workdir: string;
 
 const writeSchema = (source: string): void => {
-    mkdirSync(join(workdir, "cirrus"), { recursive: true });
-    writeFileSync(join(workdir, "cirrus", "schema.ts"), source, "utf8");
+    mkdirSync(join(workdir, "lunora"), { recursive: true });
+    writeFileSync(join(workdir, "lunora", "schema.ts"), source, "utf8");
 };
 
 const callConfigResolved = (plugin: ReturnType<typeof wranglerValidatorPlugin>): void => {
@@ -75,7 +75,7 @@ const callConfigResolved = (plugin: ReturnType<typeof wranglerValidatorPlugin>):
 
 describe("wrangler-validator-plugin", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-vite-wrangler-"));
+        workdir = mkdtempSync(join(tmpdir(), "lunora-vite-wrangler-"));
     });
 
     afterEach(() => {

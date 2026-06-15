@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
-import { runCodegen } from "@cirrus/codegen";
+import { runCodegen } from "@lunora/codegen";
 
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
@@ -86,10 +86,10 @@ const reportVerifyResult = (logger: Logger, errors: string[], warnings: string[]
 };
 
 /**
- * Validate a Cirrus project without mutating any file. First the wrangler
+ * Validate a Lunora project without mutating any file. First the wrangler
  * config (bindings, compat date, schema-driven D1/Vectorize), then a codegen
  * dry-run that surfaces schema/function parse errors without touching
- * `cirrus/_generated/`, then a TypeScript type-check (`tsc --noEmit`) when the
+ * `lunora/_generated/`, then a TypeScript type-check (`tsc --noEmit`) when the
  * project ships a `tsconfig.json`. Exits non-zero if any step reports an error.
  */
 const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCommandResult> => {
@@ -111,7 +111,7 @@ const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCo
     const warnings: string[] = [...validation.report.warnings];
 
     try {
-        // `dryRun` keeps `cirrus/_generated/` untouched but still returns the
+        // `dryRun` keeps `lunora/_generated/` untouched but still returns the
         // current schema snapshot, so the read-only drift gate can run without
         // mutating any file (verify never writes — see `readOnly: true`).
         const codegen = runCodegen({ apiSpec: options.apiSpec, dryRun: true, projectRoot: cwd });
@@ -147,7 +147,7 @@ const runVerifyCommand = async (options: VerifyCommandOptions): Promise<VerifyCo
     return result;
 };
 
-/** `cirrus verify` handler (lazy-loaded via the command's `loader`). */
+/** `lunora verify` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<VerifyOptions> = defineHandler<VerifyOptions>(async ({ cwd, logger, options }) => {
     const result = await runVerifyCommand({
         allowSchemaDrift: options.allowSchemaDrift === true,

@@ -1,15 +1,15 @@
 {
-    "name": "@cirrus/analytics",
+    "name": "@lunora/analytics",
     "version": "0.0.0",
     "license": "FSL-1.1-Apache-2.0",
-    "description": "Cloudflare Analytics Engine for Cirrus: typed writeDataPoint helper and SQL-API read client",
-    "homepage": "https://cirrus.dev",
+    "description": "Cloudflare Analytics Engine for Lunora: typed writeDataPoint helper and SQL-API read client",
+    "homepage": "https://lunora.sh",
     "bugs": {
-        "url": "https://github.com/anolilab/cirrus/issues"
+        "url": "https://github.com/anolilab/lunora/issues"
     },
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/anolilab/cirrus.git",
+        "url": "git+https://github.com/anolilab/lunora.git",
         "directory": "packages/analytics"
     },
     "author": {
@@ -17,7 +17,7 @@
         "email": "d.bannert@anolilab.de"
     },
     "keywords": [
-        "cirrus",
+        "lunora",
         "cloudflare",
         "workers",
         "durable-objects",

@@ -1,6 +1,6 @@
-# @cirrus/vectors — DSL spike
+# @lunora/vectors — DSL spike
 
-Two candidate shapes for declaring vector indexes in `cirrus/schema.ts`. The
+Two candidate shapes for declaring vector indexes in `lunora/schema.ts`. The
 runtime adapter (`createVectors`) is shared between them — only the schema-side
 surface and the codegen output change.
 
@@ -13,8 +13,8 @@ work happens in `ActionCtx`).
 ## Shape A — `.vectorize(field, opts)` fluent chain on the table
 
 ```ts
-// cirrus/schema.ts
-import { defineSchema, defineTable, v } from "@cirrus/server";
+// lunora/schema.ts
+import { defineSchema, defineTable, v } from "@lunora/server";
 import { embed } from "../app/embed"; // user's own embedder
 
 export default defineSchema({
@@ -42,8 +42,8 @@ export default defineSchema({
 ```
 
 ```ts
-// cirrus/searchDocs.ts
-import { query, v } from "@cirrus/server";
+// lunora/searchDocs.ts
+import { query, v } from "@lunora/server";
 import { embed } from "../app/embed";
 
 export const searchDocs = query({
@@ -74,8 +74,8 @@ export const searchDocs = query({
 ## Shape B — `defineVectorIndex(...)` top-level helper
 
 ```ts
-// cirrus/schema.ts
-import { defineSchema, defineTable, defineVectorIndex, v } from "@cirrus/server";
+// lunora/schema.ts
+import { defineSchema, defineTable, defineVectorIndex, v } from "@lunora/server";
 import { embed } from "../app/embed";
 
 export default defineSchema({
@@ -112,8 +112,8 @@ export default defineSchema({
 ```
 
 ```ts
-// cirrus/searchDocs.ts
-import { query, v } from "@cirrus/server";
+// lunora/searchDocs.ts
+import { query, v } from "@lunora/server";
 import { embed } from "../app/embed";
 
 export const searchDocs = query({
@@ -185,7 +185,7 @@ the second `defineSchema` argument, hoisting both into a flat
 | Decision            | Choice                                                                                                                                        | Reason                                                                                    |
 | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
 | Embedder            | Bring-your-own (user supplies `embed: (input) => number[]`)                                                                                   | Decouple from any single provider; works with Workers AI, OpenAI, local, custom           |
-| Upsert timing       | Caller picks per-call. Default = post-commit (queued via `@cirrus/scheduler`); explicit `ctx.vectors.upsertNow(...)` for sync                 | Keeps mutation latency fast by default but doesn't lock out users who want sync semantics |
+| Upsert timing       | Caller picks per-call. Default = post-commit (queued via `@lunora/scheduler`); explicit `ctx.vectors.upsertNow(...)` for sync                 | Keeps mutation latency fast by default but doesn't lock out users who want sync semantics |
 | Delete propagation  | Auto: `db.delete(id)` on a vectorized table removes the vector(s) for `id`                                                                    | Ergonomic; only one source of truth for "this row is gone"                                |
 | Shard semantics     | Vectorize is account-global. Index lives outside DO storage; results return ids that the caller re-fetches via shard-aware `ctx.db.x.get(id)` | Matches the underlying CF resource model — no fake sharding                               |
 | Wrangler validation | Codegen surfaces required `[[vectorize]]` bindings; missing binding fails dev with a typed error                                              | Same pattern as the existing D1/R2 validators                                             |

@@ -6,9 +6,9 @@ import { parse as parseJsonc } from "jsonc-parser";
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import codegenPlugin from "../src/codegen-plugin";
-import type { ResolvedCirrusPluginOptions } from "../src/types";
+import type { ResolvedLunoraPluginOptions } from "../src/types";
 
-const CRONS_SOURCE = `import { cronJobs } from "@cirrus/scheduler";
+const CRONS_SOURCE = `import { cronJobs } from "@lunora/scheduler";
 import { internal } from "./_generated/api.js";
 
 const crons = cronJobs();
@@ -17,7 +17,7 @@ crons.daily("send digest", { hourUTC: 9, minuteUTC: 0 }, internal.messages.send,
 export default crons;
 `;
 
-const SCHEMA_SOURCE = `import { defineSchema, defineTable, v } from "@cirrus/server";
+const SCHEMA_SOURCE = `import { defineSchema, defineTable, v } from "@lunora/server";
 
 export const schema = defineSchema({
     messages: defineTable({
@@ -36,7 +36,7 @@ export const schema = defineSchema({
 });
 `;
 
-const MESSAGES_SOURCE = `import { mutation, query, v } from "@cirrus/server";
+const MESSAGES_SOURCE = `import { mutation, query, v } from "@lunora/server";
 
 export const list = query({
     args: { channelId: v.id("channels"), limit: v.optional(v.number()) },
@@ -56,27 +56,27 @@ export const send = mutation({
 let workdir: string;
 
 const writeFixture = (root: string): void => {
-    mkdirSync(join(root, "cirrus"), { recursive: true });
-    writeFileSync(join(root, "cirrus", "schema.ts"), SCHEMA_SOURCE, "utf8");
-    writeFileSync(join(root, "cirrus", "messages.ts"), MESSAGES_SOURCE, "utf8");
+    mkdirSync(join(root, "lunora"), { recursive: true });
+    writeFileSync(join(root, "lunora", "schema.ts"), SCHEMA_SOURCE, "utf8");
+    writeFileSync(join(root, "lunora", "messages.ts"), MESSAGES_SOURCE, "utf8");
 };
 
-const makeOptions = (projectRoot: string): ResolvedCirrusPluginOptions => {
+const makeOptions = (projectRoot: string): ResolvedLunoraPluginOptions => {
     return {
         apiSpec: "openapi",
         cloudflare: false,
         studio: false,
-        generatedDir: "cirrus/_generated",
+        generatedDir: "lunora/_generated",
         overlay: false,
         projectRoot,
-        schemaDir: "cirrus",
+        schemaDir: "lunora",
         validateWrangler: false,
     };
 };
 
 describe("codegen-plugin", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-vite-codegen-"));
+        workdir = mkdtempSync(join(tmpdir(), "lunora-vite-codegen-"));
     });
 
     afterEach(() => {
@@ -99,7 +99,7 @@ describe("codegen-plugin", () => {
             // because our implementation doesn't touch it.
             (hook as (this: unknown) => void).call(undefined);
 
-            const generatedDirectory = join(workdir, "cirrus", "_generated");
+            const generatedDirectory = join(workdir, "lunora", "_generated");
 
             expect(existsSync(join(generatedDirectory, "api.ts"))).toBe(true);
             expect(existsSync(join(generatedDirectory, "server.ts"))).toBe(true);
@@ -152,7 +152,7 @@ describe("codegen-plugin", () => {
             expect.assertions(3);
 
             writeFixture(workdir);
-            writeFileSync(join(workdir, "cirrus", "crons.ts"), CRONS_SOURCE, "utf8");
+            writeFileSync(join(workdir, "lunora", "crons.ts"), CRONS_SOURCE, "utf8");
             writeFileSync(join(workdir, "wrangler.jsonc"), '{\n    // app config\n    "name": "app"\n}\n', "utf8");
 
             const plugin = codegenPlugin(makeOptions(workdir));
@@ -160,7 +160,7 @@ describe("codegen-plugin", () => {
             (plugin.buildStart as (this: unknown) => void).call(undefined);
 
             // The generated dispatcher map lists both jobs.
-            const crons = readFileSync(join(workdir, "cirrus", "_generated", "crons.ts"), "utf8");
+            const crons = readFileSync(join(workdir, "lunora", "_generated", "crons.ts"), "utf8");
 
             expect(crons).toContain('name: "clear presence"');
 
@@ -178,7 +178,7 @@ describe("codegen-plugin", () => {
 
             const plugin = codegenPlugin(makeOptions(workdir));
 
-            expect(plugin.name).toBe("cirrus:codegen");
+            expect(plugin.name).toBe("lunora:codegen");
 
             expectTypeOf(plugin.configureServer).not.toBeUndefined();
         });
@@ -230,9 +230,9 @@ describe("codegen-plugin", () => {
 
             // Use a workdir WITHOUT a schema so runCodegen throws when triggered.
             // We write a bad schema file instead to force a real codegen failure.
-            mkdirSync(join(workdir, "cirrus"), { recursive: true });
+            mkdirSync(join(workdir, "lunora"), { recursive: true });
             writeFileSync(
-                join(workdir, "cirrus", "schema.ts"),
+                join(workdir, "lunora", "schema.ts"),
                 // schema missing defineSchema() call, which will cause codegen to throw
                 `export const broken = true;`,
                 "utf8",
@@ -249,7 +249,7 @@ describe("codegen-plugin", () => {
 
             expect(changeListener).toBeDefined();
 
-            changeListener!(join(workdir, "cirrus", "schema.ts"));
+            changeListener!(join(workdir, "lunora", "schema.ts"));
 
             // Advance past the debounce window.
             await vi.runAllTimersAsync();
@@ -264,12 +264,12 @@ describe("codegen-plugin", () => {
         it("codegen diagnostic error → payload includes err.loc.file and err.loc.line", async () => {
             expect.assertions(3);
 
-            mkdirSync(join(workdir, "cirrus"), { recursive: true });
+            mkdirSync(join(workdir, "lunora"), { recursive: true });
 
             // A schema with a non-literal `unique` value triggers a CodegenDiagnosticError.
             writeFileSync(
-                join(workdir, "cirrus", "schema.ts"),
-                `import { defineSchema, defineTable, v } from "@cirrus/server";
+                join(workdir, "lunora", "schema.ts"),
+                `import { defineSchema, defineTable, v } from "@lunora/server";
 const flag = true;
 export const schema = defineSchema({
     users: defineTable({ email: v.string() }).index("by_email", ["email"], { unique: flag }),
@@ -285,24 +285,24 @@ export const schema = defineSchema({
             const onChangeCalls = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls;
             const changeListener = onChangeCalls.find((args) => args[0] === "change")?.[1] as ((file: string) => void) | undefined;
 
-            changeListener!(join(workdir, "cirrus", "schema.ts"));
+            changeListener!(join(workdir, "lunora", "schema.ts"));
 
             await vi.runAllTimersAsync();
 
             const payload = send.mock.calls[0]?.[0] as { err: { loc?: { file: string; line: number } }; type: string };
 
             expect(payload.type).toBe("error");
-            expect(payload.err.loc?.file).toBe(join(workdir, "cirrus", "schema.ts"));
+            expect(payload.err.loc?.file).toBe(join(workdir, "lunora", "schema.ts"));
             expect(payload.err.loc?.line).toBeGreaterThan(0);
         });
 
         it("failure then success → second run sends type:full-reload", async () => {
             expect.assertions(2);
 
-            mkdirSync(join(workdir, "cirrus"), { recursive: true });
+            mkdirSync(join(workdir, "lunora"), { recursive: true });
 
             // Start with a broken schema.
-            const schemaPath = join(workdir, "cirrus", "schema.ts");
+            const schemaPath = join(workdir, "lunora", "schema.ts");
 
             writeFileSync(schemaPath, `export const broken = true;`, "utf8");
 
@@ -324,11 +324,11 @@ export const schema = defineSchema({
             // Fix the schema so codegen succeeds.
             writeFileSync(
                 schemaPath,
-                `import { defineSchema, defineTable, v } from "@cirrus/server";
+                `import { defineSchema, defineTable, v } from "@lunora/server";
 export const schema = defineSchema({ users: defineTable({ email: v.string() }) });`,
                 "utf8",
             );
-            writeFileSync(join(workdir, "cirrus", "messages.ts"), MESSAGES_SOURCE, "utf8");
+            writeFileSync(join(workdir, "lunora", "messages.ts"), MESSAGES_SOURCE, "utf8");
 
             // Second run — codegen succeeds, overlay should be cleared via full-reload.
             changeListener!(schemaPath);
@@ -341,8 +341,8 @@ export const schema = defineSchema({ users: defineTable({ email: v.string() }) }
         it("build mode (no dev server) → no hot.send, returns undefined on failure", async () => {
             expect.assertions(1);
 
-            mkdirSync(join(workdir, "cirrus"), { recursive: true });
-            writeFileSync(join(workdir, "cirrus", "schema.ts"), `export const broken = true;`, "utf8");
+            mkdirSync(join(workdir, "lunora"), { recursive: true });
+            writeFileSync(join(workdir, "lunora", "schema.ts"), `export const broken = true;`, "utf8");
 
             const plugin = codegenPlugin(makeOptions(workdir));
 

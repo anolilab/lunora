@@ -1,8 +1,8 @@
 /**
- * Code-first cron definitions — added by `cirrus registry add crons`.
+ * Code-first cron definitions — added by `lunora registry add crons`.
  *
- * This file is YOURS: it's a normal Cirrus module, copied into your project so
- * you own and edit it. `@cirrus/codegen` discovers the `cronJobs()` builder
+ * This file is YOURS: it's a normal Lunora module, copied into your project so
+ * you own and edit it. `@lunora/codegen` discovers the `cronJobs()` builder
  * registrations below by AST (not a runtime brand) and emits two things from
  * them:
  *
@@ -10,7 +10,7 @@
  *   - a dispatcher map the Worker's `scheduled()` handler consumes.
  *
  * So you never hand-edit `wrangler.jsonc` — declare crons here and run
- * `cirrus codegen`.
+ * `lunora codegen`.
  *
  * Every job points at an **internal** function (server-only — clients can't
  * call it) referenced statically via the generated `internal` proxy, e.g.
@@ -28,13 +28,13 @@
  * Job names must be unique across the whole project (the runtime keys the
  * dispatcher by name).
  */
-import { cronJobs } from "@cirrus/server";
+import { cronJobs } from "@lunora/server";
 
 import { internal } from "./_generated/api.js";
 
 const crons = cronJobs();
 
-// Illustrative: run the example internal mutation in cirrus/crons/jobs.ts every
+// Illustrative: run the example internal mutation in lunora/crons/jobs.ts every
 // hour. Replace the function ref (and the schedule) with your own — e.g.
 //   crons.daily("send digest", { hourUTC: 9, minuteUTC: 0 }, internal.email.digest, {});
 //   crons.interval("sweep presence", { minutes: 5 }, internal.presence.sweep, { roomId: "lobby" });

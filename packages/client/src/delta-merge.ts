@@ -1,7 +1,7 @@
 /**
  * Client-side incremental merging of structured mutation deltas.
  *
- * Cirrus's live-query fan-out has two server paths:
+ * Lunora's live-query fan-out has two server paths:
  *
  * 1. Server re-execution (subscriptions carrying a `functionPath`) pushes a
  * full `data` snapshot whenever a write touches a table the query reads. These
@@ -21,8 +21,8 @@
  */
 
 /**
- * One row change as emitted by `@cirrus/do`'s `broadcastDelta`. Mirrors
- * `MutationDelta` in `@cirrus/do` structurally so the client carries no
+ * One row change as emitted by `@lunora/do`'s `broadcastDelta`. Mirrors
+ * `MutationDelta` in `@lunora/do` structurally so the client carries no
  * dependency on it. `row` is absent on `delete` events (and may be absent on
  * older servers for any op).
  */
@@ -34,7 +34,7 @@ interface MutationDelta {
     table: string;
 }
 
-/** Identity field every Cirrus document row carries. */
+/** Identity field every Lunora document row carries. */
 const ID_FIELD = "_id";
 
 /** Creation-time field used as the default sort key for inserts. */

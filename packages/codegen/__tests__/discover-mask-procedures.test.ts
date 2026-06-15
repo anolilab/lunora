@@ -8,15 +8,15 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import discoverMaskProcedures from "../src/discover-mask-procedures";
 
 // A self-contained branded builder + mask DSL. Discovery resolves the
-// `__cirrusProcedure` brand off the receiver's *type*, so the builder is
+// `__lunoraProcedure` brand off the receiver's *type*, so the builder is
 // declared inline (the isolated test project has no workspace module
 // resolution). `.use` returns the same builder so the `.use(mask(...)).query(...)`
 // chain type-checks and the chain walk finds the `mask(...)` call. `ctx.db`
 // exposes the read/write entry points the table-access walk recognises.
 const PREAMBLE = `
-    // The bare-factory \`query\` must resolve to a \`@cirrus/server\` import for the
+    // The bare-factory \`query\` must resolve to a \`@lunora/server\` import for the
     // shared classifier to accept it (a locally-declared const is rejected).
-    import { query } from "@cirrus/server";
+    import { query } from "@lunora/server";
 
     type Strategy = "hash" | "redact" | ((value: unknown, ctx: unknown) => unknown);
     type MaskPolicies = Record<string, Record<string, Strategy>>;
@@ -32,14 +32,14 @@ const PREAMBLE = `
     declare const db: Db;
 
     interface QueryBuilder<Args> {
-        readonly __cirrusProcedure: "query";
+        readonly __lunoraProcedure: "query";
         use: <C>(middleware: (options: { ctx: unknown }) => C) => QueryBuilder<Args>;
         query: <R>(handler: (options: { args: Args; ctx: { db: Db } }) => R) => { kind: "query" };
     }
 
     interface InternalQueryBuilder<Args> {
-        readonly __cirrusProcedure: "query";
-        readonly __cirrusVisibility: "internal";
+        readonly __lunoraProcedure: "query";
+        readonly __lunoraVisibility: "internal";
         use: <C>(middleware: (options: { ctx: unknown }) => C) => InternalQueryBuilder<Args>;
         query: <R>(handler: (options: { args: Args; ctx: { db: Db } }) => R) => { kind: "query" };
     }
@@ -74,14 +74,14 @@ const ADMIN = `${PREAMBLE}
 let workdir: string;
 let project: Project;
 
-const procedureFor = (exportName: string) => discoverMaskProcedures(project, join(workdir, "cirrus")).find((procedure) => procedure.exportName === exportName);
+const procedureFor = (exportName: string) => discoverMaskProcedures(project, join(workdir, "lunora")).find((procedure) => procedure.exportName === exportName);
 
 describe("discoverMaskProcedures", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-mask-"));
-        mkdirSync(join(workdir, "cirrus"), { recursive: true });
-        writeFileSync(join(workdir, "cirrus", "users.ts"), USERS, "utf8");
-        writeFileSync(join(workdir, "cirrus", "admin.ts"), ADMIN, "utf8");
+        workdir = mkdtempSync(join(tmpdir(), "lunora-mask-"));
+        mkdirSync(join(workdir, "lunora"), { recursive: true });
+        writeFileSync(join(workdir, "lunora", "users.ts"), USERS, "utf8");
+        writeFileSync(join(workdir, "lunora", "admin.ts"), ADMIN, "utf8");
         project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
     });
 

@@ -7,7 +7,7 @@ import type { Lint } from "../../types";
  * carries sensitive columns), but whose own builder chain does NOT include
  * `.use(mask(...))`.
  *
- * Cirrus masking is **opt-in per procedure**: a `mask(policies)` object only
+ * Lunora masking is **opt-in per procedure**: a `mask(policies)` object only
  * redacts columns inside procedures whose builder chain includes
  * `.use(mask(policies))`. A procedure without it returns the raw column value —
  * even when another procedure in the same app declares that column maskable.

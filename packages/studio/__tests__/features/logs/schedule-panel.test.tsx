@@ -1,5 +1,5 @@
-import type { CronJobInfo, ScheduleRecord } from "@cirrus/client";
-import { CirrusProvider } from "@cirrus/react";
+import type { CronJobInfo, ScheduleRecord } from "@lunora/client";
+import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import type { ReactElement, ReactNode } from "react";
 import { describe, expect, it } from "vitest";
@@ -14,7 +14,7 @@ const CRONS: CronJobInfo[] = [{ args: {}, cron: "0 9 * * *", functionPath: "repo
 const loadRecords = async (): Promise<ScheduleRecord[]> => RECORDS;
 const loadCrons = async (): Promise<CronJobInfo[]> => CRONS;
 
-const withProvider = (mock: MockClientHooks, children: ReactNode): ReactElement => <CirrusProvider client={mock.asClient}>{children}</CirrusProvider>;
+const withProvider = (mock: MockClientHooks, children: ReactNode): ReactElement => <LunoraProvider client={mock.asClient}>{children}</LunoraProvider>;
 
 describe("schedulePanel", () => {
     it("defaults to the scheduled-jobs view", async () => {
@@ -24,7 +24,7 @@ describe("schedulePanel", () => {
 
         await screen.findByTestId("sj-table");
 
-        expect(screen.queryByTestId("cirrus-cron-triggers")).toBeNull();
+        expect(screen.queryByTestId("lunora-cron-triggers")).toBeNull();
     });
 
     it("switches to the cron-triggers view on toggle", async () => {

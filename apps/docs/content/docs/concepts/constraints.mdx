@@ -5,7 +5,7 @@ description: Unique, non-null and foreign-key integrity declared on the schema a
 
 A **constraint** is an invariant your data must hold: a column is unique, a
 column is never null, or a foreign key always points at a row that exists.
-Cirrus constraints are declared on the [schema](/docs/concepts/schema) — on the
+Lunora constraints are declared on the [schema](/docs/concepts/schema) — on the
 column validator or the relation — and most are enforced **at write time** by
 the storage layer, so a violating `insert` / `patch` / `delete` throws rather
 than committing.
@@ -15,8 +15,8 @@ column (`.unique()`, the default-on `NOT NULL`) or an option on a relation
 (`onDelete`). Codegen and the runtime read these off the same table definition.
 
 ```ts
-// cirrus/schema.ts
-import { defineSchema, defineTable, v } from "@cirrus/server";
+// lunora/schema.ts
+import { defineSchema, defineTable, v } from "@lunora/server";
 
 export default defineSchema({
     users: defineTable({

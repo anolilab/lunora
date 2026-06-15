@@ -1,6 +1,6 @@
 /**
  * Canonical wrangler-config location + read helpers, shared by the validator,
- * the binding inference/reconciliation, and `@cirrus/vite`'s cron sync so the
+ * the binding inference/reconciliation, and `@lunora/vite`'s cron sync so the
  * probe order and JSONC-parse boilerplate live in exactly one place.
  */
 import { existsSync, readFileSync } from "node:fs";

@@ -1,8 +1,8 @@
 {
-    "name": "@cirrus/e2e",
+    "name": "@lunora/e2e",
     "version": "0.0.0",
     "private": true,
-    "description": "End-to-end Playwright + Miniflare test suite for the Cirrus playground app.",
+    "description": "End-to-end Playwright + Miniflare test suite for the Lunora playground app.",
     "type": "module",
     "sideEffects": false,
     "scripts": {
@@ -13,7 +13,7 @@
         "lint:types": "tsc --noEmit"
     },
     "devDependencies": {
-        "@cirrus/mail": "workspace:*",
+        "@lunora/mail": "workspace:*",
         "@playwright/test": "catalog:e2e",
         "@types/node": "catalog:types",
         "cross-env": "catalog:dev",

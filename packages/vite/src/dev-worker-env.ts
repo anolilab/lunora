@@ -3,10 +3,10 @@ import type { Plugin } from "vite";
 import type { CloudflarePluginOptions } from "./types";
 
 /**
- * Worker env var the dev tooling sets so the Cirrus runtime recognises a
- * development deployment (`@cirrus/do`'s `isDevEnvironment`) and therefore
+ * Worker env var the dev tooling sets so the Lunora runtime recognises a
+ * development deployment (`@lunora/do`'s `isDevEnvironment`) and therefore
  * streams every RPC dispatch summary to the terminal by default — the
- * `cirrus dev` CLI sets the same var via `wrangler dev --var`.
+ * `lunora dev` CLI sets the same var via `wrangler dev --var`.
  *
  * It is injected ONLY during `vite` serve, never a production `vite build`, so
  * it can never leak into a deployed worker. A `WORKER_ENV` the user already
@@ -72,7 +72,7 @@ const createCommandProbe = (): { isServe: () => boolean; plugin: Plugin } => {
                 command = env.command;
             },
             enforce: "pre",
-            name: "cirrus:command-probe",
+            name: "lunora:command-probe",
         },
     };
 };

@@ -1,4 +1,4 @@
-/* eslint-disable no-underscore-dangle -- `_id` is the Cirrus document-id field; test fixtures mirror it verbatim */
+/* eslint-disable no-underscore-dangle -- `_id` is the Lunora document-id field; test fixtures mirror it verbatim */
 import { NonRetriableError } from "@tanstack/offline-transactions";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -88,7 +88,7 @@ describe(runOutboxMutation, () => {
 
     it("rethrows a code-less transient HTTP failure so the outbox retries it", async () => {
         // e.g. a 5xx gateway page / non-JSON body the rpc surfaces without a code.
-        const error = new Error("CirrusClient: response was not JSON (status 502)");
+        const error = new Error("LunoraClient: response was not JSON (status 502)");
 
         await expect(
             runOutboxMutation(() => {

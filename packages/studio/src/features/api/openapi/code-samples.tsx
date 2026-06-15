@@ -8,10 +8,10 @@ import type { ApiOperation } from "./openapi-model";
 import { exampleForSchema } from "./schema-view";
 
 /** The languages the sample switcher offers. */
-type Sample = "cirrus" | "curl" | "javascript";
+type Sample = "lunora" | "curl" | "javascript";
 
-const SAMPLE_ORDER: ReadonlyArray<Sample> = ["curl", "javascript", "cirrus"];
-const SAMPLE_LABEL: Record<Sample, string> = { cirrus: "Cirrus", curl: "cURL", javascript: "JavaScript" };
+const SAMPLE_ORDER: ReadonlyArray<Sample> = ["curl", "javascript", "lunora"];
+const SAMPLE_LABEL: Record<Sample, string> = { lunora: "Lunora", curl: "cURL", javascript: "JavaScript" };
 
 /** Map an RPC `functionPath` (`file:export`) onto its generated typed handle, e.g. `api.messages.list`. */
 const apiReferenceOf = (functionPath: string): string => `api.${functionPath.replaceAll(/[/:]/g, ".")}`;
@@ -30,7 +30,7 @@ const sampleSource = (sample: Sample, operation: ApiOperation, server: string): 
     const args = JSON.stringify(exampleForSchema(operation.argsSchema) ?? {}, undefined, 2);
 
     switch (sample) {
-        case "cirrus": {
+        case "lunora": {
             if (operation.functionPath === undefined) {
                 return `await fetch(${JSON.stringify(operation.httpPath)}, { method: ${JSON.stringify(operation.method)} });`;
             }
@@ -38,8 +38,8 @@ const sampleSource = (sample: Sample, operation: ApiOperation, server: string): 
             const method = operation.kind ?? "query";
 
             // Emit the public, documented surface — the generated `api.*` handle —
-            // not the internal `{ __cirrusRef }` admin escape hatch.
-            return `import { useCirrus } from "@cirrus/react";\nimport { api } from "./_generated/api";\n\nconst client = useCirrus();\nawait client.${method}(${apiReferenceOf(operation.functionPath)}, ${args});`;
+            // not the internal `{ __lunoraRef }` admin escape hatch.
+            return `import { useLunora } from "@lunora/react";\nimport { api } from "./_generated/api";\n\nconst client = useLunora();\nawait client.${method}(${apiReferenceOf(operation.functionPath)}, ${args});`;
         }
         case "curl": {
             const hasBody = operation.method !== "GET" && operation.method !== "HEAD";
@@ -70,7 +70,7 @@ interface CodeSamplesProps {
 
 /**
  * The right-rail request samples: a small language switcher (cURL / JavaScript /
- * Cirrus client) over the selected operation, each copy-paste ready. Mirrors the
+ * Lunora client) over the selected operation, each copy-paste ready. Mirrors the
  * code panel in Scalar's three-column layout, but rendered with the studio's own
  * primitives — no embedded Vue app.
  */

@@ -1,11 +1,11 @@
 "use client";
 
-import type { FunctionReference, Preloaded } from "@cirrus/client";
+import type { FunctionReference, Preloaded } from "@lunora/client";
 import { useQuery as useTanStackQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
 
-import { cirrusQueryKey, getSubscriptionRegistry, serializeQueryKey } from "./cache";
-import { useCirrus } from "./cirrus-provider";
+import { lunoraQueryKey, getSubscriptionRegistry, serializeQueryKey } from "./cache";
+import { useLunora } from "./lunora-provider";
 
 /**
  * Hydrate a query from a {@link Preloaded} token produced by `preloadQuery`
@@ -19,20 +19,20 @@ import { useCirrus } from "./cirrus-provider";
  * The {@link Preloaded} token's `value` seeds `initialData`; we don't need a
  * full dehydrate/hydrate dance because the consumer hands us the resolved
  * value directly. Apps that want to share a pre-populated QueryClient across
- * many preloaded queries can pass their own `queryClient` to `CirrusProvider`
+ * many preloaded queries can pass their own `queryClient` to `LunoraProvider`
  * and hydrate it themselves via TanStack's `hydrate(qc, dehydratedState)`.
  */
 const usePreloadedQuery = <T>(preloaded: Preloaded<T>): T => {
-    const client = useCirrus();
+    const client = useLunora();
     const queryClient = useQueryClient();
 
     const { args, functionPath, shardKey, value } = preloaded;
     const functionRef = useMemo<FunctionReference>(() => {
-        return { __cirrusRef: functionPath };
+        return { __lunoraRef: functionPath };
     }, [functionPath]);
-    const queryKey = useMemo(() => cirrusQueryKey(functionRef, args, shardKey), [functionRef.__cirrusRef, JSON.stringify(args), shardKey]);
+    const queryKey = useMemo(() => lunoraQueryKey(functionRef, args, shardKey), [functionRef.__lunoraRef, JSON.stringify(args), shardKey]);
 
-    // eslint-disable-next-line @tanstack/query/exhaustive-deps -- client is provider-stable (it comes from CirrusContext; swapping it remounts the provider subtree) and is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache.
+    // eslint-disable-next-line @tanstack/query/exhaustive-deps -- client is provider-stable (it comes from LunoraContext; swapping it remounts the provider subtree) and is intentionally excluded from the cache key: a non-serializable client object would break cache identity and thrash the cache.
     const { data } = useTanStackQuery<T>({
         // Seed the cache with the server value so the first paint doesn't
         // re-fetch. TanStack treats `initialData` as fresh — the WS push from

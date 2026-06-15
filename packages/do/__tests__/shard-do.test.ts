@@ -576,13 +576,13 @@ describe("shardDO identity capture", () => {
         shard = new TestShard(state, {});
     });
 
-    it("exposes x-cirrus-userid to handlers via getCurrentUserId()", async () => {
+    it("exposes x-lunora-userid to handlers via getCurrentUserId()", async () => {
         expect.assertions(1);
 
         await shard.fetch(
             new Request("https://shard.internal/rpc", {
                 body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
-                headers: { "content-type": "application/json", "x-cirrus-userid": "user_42" },
+                headers: { "content-type": "application/json", "x-lunora-userid": "user_42" },
                 method: "POST",
             }),
         );
@@ -590,7 +590,7 @@ describe("shardDO identity capture", () => {
         expect(shard.observedUserId).toBe("user_42");
     });
 
-    it("parses x-cirrus-identity JSON envelope into a plain object", async () => {
+    it("parses x-lunora-identity JSON envelope into a plain object", async () => {
         expect.assertions(1);
 
         await shard.fetch(
@@ -598,8 +598,8 @@ describe("shardDO identity capture", () => {
                 body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
                 headers: {
                     "content-type": "application/json",
-                    "x-cirrus-identity": JSON.stringify({ email: "user@example.com", roles: ["admin"] }),
-                    "x-cirrus-userid": "user_42",
+                    "x-lunora-identity": JSON.stringify({ email: "user@example.com", roles: ["admin"] }),
+                    "x-lunora-userid": "user_42",
                 },
                 method: "POST",
             }),
@@ -608,13 +608,13 @@ describe("shardDO identity capture", () => {
         expect(shard.observedIdentity).toEqual({ email: "user@example.com", roles: ["admin"] });
     });
 
-    it("collapses malformed x-cirrus-identity to undefined rather than throwing", async () => {
+    it("collapses malformed x-lunora-identity to undefined rather than throwing", async () => {
         expect.assertions(2);
 
         const response = await shard.fetch(
             new Request("https://shard.internal/rpc", {
                 body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
-                headers: { "content-type": "application/json", "x-cirrus-identity": "{not json" },
+                headers: { "content-type": "application/json", "x-lunora-identity": "{not json" },
                 method: "POST",
             }),
         );
@@ -629,7 +629,7 @@ describe("shardDO identity capture", () => {
         await shard.fetch(
             new Request("https://shard.internal/rpc", {
                 body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
-                headers: { "content-type": "application/json", "x-cirrus-userid": "user_42" },
+                headers: { "content-type": "application/json", "x-lunora-userid": "user_42" },
                 method: "POST",
             }),
         );
@@ -680,7 +680,7 @@ describe("shardDO upgrade gating", () => {
     it("rejects upgrade with 403 when origin missing and allowlist configured", async () => {
         expect.assertions(1);
 
-        const shard = new TestShard(createFakeState(), { CIRRUS_ALLOWED_ORIGINS: "https://app.example" });
+        const shard = new TestShard(createFakeState(), { LUNORA_ALLOWED_ORIGINS: "https://app.example" });
         const response = await shard.fetch(upgradeRequest("https://shard.internal/"));
 
         expect(response.status).toBe(403);
@@ -689,7 +689,7 @@ describe("shardDO upgrade gating", () => {
     it("rejects upgrade with 403 when origin not in allowlist", async () => {
         expect.assertions(1);
 
-        const shard = new TestShard(createFakeState(), { CIRRUS_ALLOWED_ORIGINS: "https://app.example" });
+        const shard = new TestShard(createFakeState(), { LUNORA_ALLOWED_ORIGINS: "https://app.example" });
         const response = await shard.fetch(upgradeRequest("https://shard.internal/", { headers: { Origin: "https://evil.example" } }));
 
         expect(response.status).toBe(403);
@@ -698,7 +698,7 @@ describe("shardDO upgrade gating", () => {
     it("passes the gate when origin matches the allowlist", async () => {
         expect.hasAssertions();
 
-        const shard = new TestShard(createFakeState(), { CIRRUS_ALLOWED_ORIGINS: "https://app.example,https://staging.example" });
+        const shard = new TestShard(createFakeState(), { LUNORA_ALLOWED_ORIGINS: "https://app.example,https://staging.example" });
 
         await expectPassedGate(shard, upgradeRequest("https://shard.internal/", { headers: { Origin: "https://staging.example" } }));
     });
@@ -706,7 +706,7 @@ describe("shardDO upgrade gating", () => {
     it("rejects upgrade with 403 when bearer required but missing", async () => {
         expect.assertions(1);
 
-        const shard = new TestShard(createFakeState(), { CIRRUS_WS_BEARER: "s3cret" });
+        const shard = new TestShard(createFakeState(), { LUNORA_WS_BEARER: "s3cret" });
         const response = await shard.fetch(upgradeRequest("https://shard.internal/"));
 
         expect(response.status).toBe(403);
@@ -715,7 +715,7 @@ describe("shardDO upgrade gating", () => {
     it("rejects upgrade with 403 when bearer token mismatches", async () => {
         expect.assertions(1);
 
-        const shard = new TestShard(createFakeState(), { CIRRUS_WS_BEARER: "s3cret" });
+        const shard = new TestShard(createFakeState(), { LUNORA_WS_BEARER: "s3cret" });
         const response = await shard.fetch(upgradeRequest("https://shard.internal/", { headers: { Authorization: "Bearer wrong" } }));
 
         expect(response.status).toBe(403);
@@ -724,7 +724,7 @@ describe("shardDO upgrade gating", () => {
     it("accepts bearer via Authorization header", async () => {
         expect.hasAssertions();
 
-        const shard = new TestShard(createFakeState(), { CIRRUS_WS_BEARER: "s3cret" });
+        const shard = new TestShard(createFakeState(), { LUNORA_WS_BEARER: "s3cret" });
 
         await expectPassedGate(shard, upgradeRequest("https://shard.internal/", { headers: { Authorization: "Bearer s3cret" } }));
     });
@@ -732,7 +732,7 @@ describe("shardDO upgrade gating", () => {
     it("accepts bearer via ?token query parameter as a browser escape hatch", async () => {
         expect.hasAssertions();
 
-        const shard = new TestShard(createFakeState(), { CIRRUS_WS_BEARER: "s3cret" });
+        const shard = new TestShard(createFakeState(), { LUNORA_WS_BEARER: "s3cret" });
 
         await expectPassedGate(shard, upgradeRequest("https://shard.internal/?token=s3cret"));
     });
@@ -831,7 +831,7 @@ describe("shardDO subscription re-execution", () => {
         shard.outcomes.set("cursors:listCursors", { result: [{ sessionId: "a", x: 1, y: 1 }], tables: new Set(["cursors"]) });
         shard.changedTableOnRpc = "cursors";
 
-        await shard.writeRpc({ "x-cirrus-userid": "user_42" });
+        await shard.writeRpc({ "x-lunora-userid": "user_42" });
 
         expect(shard.userIdDuringRpc).toBe("user_42"); // the write saw the caller's identity
         expect(shard.userIdDuringExec).toBeUndefined(); // the re-execution did not

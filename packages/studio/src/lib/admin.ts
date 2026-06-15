@@ -1,79 +1,79 @@
 /**
  * Wire constants and row shapes for the studio's admin introspection RPCs.
  *
- * These mirror the contract that `@cirrus/do`'s `introspect`, `data-migration`
- * and `admin-export-import` modules serve (the `__cirrus_admin__:*` reserved
+ * These mirror the contract that `@lunora/do`'s `introspect`, `data-migration`
+ * and `admin-export-import` modules serve (the `__lunora_admin__:*` reserved
  * `functionPath`s intercepted in `ShardDO.handleAdminRpc`). They are duplicated
  * here deliberately: the studio ships browser React components and must not
  * pull the Durable Object runtime into the bundle, so the only thing it shares
  * with the server is these plain strings and structural types.
  *
- * The one exception is `CapturedMail`: its canonical owner is `@cirrus/mail`
- * (not `@cirrus/do`), and the studio→mail dependency direction is allowed, so we
+ * The one exception is `CapturedMail`: its canonical owner is `@lunora/mail`
+ * (not `@lunora/do`), and the studio→mail dependency direction is allowed, so we
  * import + re-export that type below instead of hand-mirroring it.
  */
 
-// Canonical captured-mail wire type, owned by `@cirrus/mail`. Type-only: erased
+// Canonical captured-mail wire type, owned by `@lunora/mail`. Type-only: erased
 // at build time, so no mail *runtime* enters the studio's browser bundle.
-import type { CapturedMail } from "@cirrus/mail";
+import type { CapturedMail } from "@lunora/mail";
 
-export const ADMIN_FUNCTION_PREFIX = "__cirrus_admin__:";
+export const ADMIN_FUNCTION_PREFIX = "__lunora_admin__:";
 
 /**
  * Fully-qualified reserved paths the studio invokes via the client. The
- * `__cirrus_admin__:` prefix is spelled out inline rather than interpolated so
+ * `__lunora_admin__:` prefix is spelled out inline rather than interpolated so
  * the values stay emittable under `--isolatedDeclarations`. Every path is
  * intercepted by `ShardDO` before user dispatch and gated by the server's
- * `CIRRUS_ADMIN_TOKEN`.
+ * `LUNORA_ADMIN_TOKEN`.
  */
 export const ADMIN_FUNCTIONS = {
-    clearCapturedMail: "__cirrus_admin__:clearCapturedMail",
-    clearTable: "__cirrus_admin__:clearTable",
-    createWorkflowInstance: "__cirrus_admin__:createWorkflowInstance",
-    deleteRows: "__cirrus_admin__:deleteRows",
-    describeTable: "__cirrus_admin__:describeTable",
-    describeTables: "__cirrus_admin__:describeTables",
-    exportShard: "__cirrus_admin__:exportShard",
-    facetColumn: "__cirrus_admin__:facetColumn",
-    getAdvisories: "__cirrus_admin__:getAdvisories",
-    getAuditLog: "__cirrus_admin__:getAuditLog",
-    getAuthMetrics: "__cirrus_admin__:getAuthMetrics",
-    getCapturedMail: "__cirrus_admin__:getCapturedMail",
-    getFunctionStats: "__cirrus_admin__:getFunctionStats",
-    listSubscriptions: "__cirrus_admin__:listSubscriptions",
-    listTableIndexes: "__cirrus_admin__:listTableIndexes",
-    listWorkflows: "__cirrus_admin__:listWorkflows",
-    getLogs: "__cirrus_admin__:getLogs",
-    getMetrics: "__cirrus_admin__:getMetrics",
-    getPitrBookmark: "__cirrus_admin__:getPitrBookmark",
-    getRequestLog: "__cirrus_admin__:getRequestLog",
-    getSecurityAudit: "__cirrus_admin__:getSecurityAudit",
-    getSettings: "__cirrus_admin__:getSettings",
+    clearCapturedMail: "__lunora_admin__:clearCapturedMail",
+    clearTable: "__lunora_admin__:clearTable",
+    createWorkflowInstance: "__lunora_admin__:createWorkflowInstance",
+    deleteRows: "__lunora_admin__:deleteRows",
+    describeTable: "__lunora_admin__:describeTable",
+    describeTables: "__lunora_admin__:describeTables",
+    exportShard: "__lunora_admin__:exportShard",
+    facetColumn: "__lunora_admin__:facetColumn",
+    getAdvisories: "__lunora_admin__:getAdvisories",
+    getAuditLog: "__lunora_admin__:getAuditLog",
+    getAuthMetrics: "__lunora_admin__:getAuthMetrics",
+    getCapturedMail: "__lunora_admin__:getCapturedMail",
+    getFunctionStats: "__lunora_admin__:getFunctionStats",
+    listSubscriptions: "__lunora_admin__:listSubscriptions",
+    listTableIndexes: "__lunora_admin__:listTableIndexes",
+    listWorkflows: "__lunora_admin__:listWorkflows",
+    getLogs: "__lunora_admin__:getLogs",
+    getMetrics: "__lunora_admin__:getMetrics",
+    getPitrBookmark: "__lunora_admin__:getPitrBookmark",
+    getRequestLog: "__lunora_admin__:getRequestLog",
+    getSecurityAudit: "__lunora_admin__:getSecurityAudit",
+    getSettings: "__lunora_admin__:getSettings",
     // eslint-disable-next-line no-secrets/no-secrets -- reserved admin RPC path constant, not a credential
-    getWorkflowInstanceStatus: "__cirrus_admin__:getWorkflowInstanceStatus",
-    importShard: "__cirrus_admin__:importShard",
-    listTables: "__cirrus_admin__:listTables",
-    maskPolicies: "__cirrus_admin__:maskPolicies",
-    migrationStatus: "__cirrus_admin__:migrationStatus",
-    pitrRestore: "__cirrus_admin__:pitrRestore",
-    readTablePage: "__cirrus_admin__:readTablePage",
-    rlsPolicies: "__cirrus_admin__:rlsPolicies",
-    runAs: "__cirrus_admin__:runAs",
-    runMigration: "__cirrus_admin__:runMigration",
-    runSql: "__cirrus_admin__:runSql",
-    sendTestMail: "__cirrus_admin__:sendTestMail",
-    storageOrphans: "__cirrus_admin__:storageOrphans",
-    storageReferences: "__cirrus_admin__:storageReferences",
-    storageRules: "__cirrus_admin__:storageRules",
-    studioFeatures: "__cirrus_admin__:studioFeatures",
-    writeRow: "__cirrus_admin__:writeRow",
+    getWorkflowInstanceStatus: "__lunora_admin__:getWorkflowInstanceStatus",
+    importShard: "__lunora_admin__:importShard",
+    listTables: "__lunora_admin__:listTables",
+    maskPolicies: "__lunora_admin__:maskPolicies",
+    migrationStatus: "__lunora_admin__:migrationStatus",
+    pitrRestore: "__lunora_admin__:pitrRestore",
+    readTablePage: "__lunora_admin__:readTablePage",
+    rlsPolicies: "__lunora_admin__:rlsPolicies",
+    runAs: "__lunora_admin__:runAs",
+    runMigration: "__lunora_admin__:runMigration",
+    runSql: "__lunora_admin__:runSql",
+    sendTestMail: "__lunora_admin__:sendTestMail",
+    storageOrphans: "__lunora_admin__:storageOrphans",
+    storageReferences: "__lunora_admin__:storageReferences",
+    storageRules: "__lunora_admin__:storageRules",
+    studioFeatures: "__lunora_admin__:studioFeatures",
+    writeRow: "__lunora_admin__:writeRow",
 } as const;
 
-/** Comparison a {@link FilterClause} applies, mirroring `@cirrus/do`'s `FilterOperator`. `contains` is a substring (LIKE). */
+/** Comparison a {@link FilterClause} applies, mirroring `@lunora/do`'s `FilterOperator`. `contains` is a substring (LIKE). */
 export type FilterOperator = "contains" | "eq" | "gt" | "gte" | "lt" | "lte" | "ne";
 
 /**
- * One structured column filter passed to `readTablePage`, mirroring `@cirrus/do`'s
+ * One structured column filter passed to `readTablePage`, mirroring `@lunora/do`'s
  * `FilterClause`. AND-combined with the substring search and the other clauses.
  * `value` is sent as-is and bound server-side, so it never injects SQL.
  */
@@ -84,7 +84,7 @@ export interface FilterClause {
 }
 
 /**
- * Arguments for the `__cirrus_admin__:facetColumn` admin op — the read-only,
+ * Arguments for the `__lunora_admin__:facetColumn` admin op — the read-only,
  * Datasette-style per-column value/count summary. `filters`/`search` mirror
  * {@link TablePage}'s predicate args so the facet reflects exactly the previewed
  * rows; `column` is validated + bound server-side, never interpolated. `limit`
@@ -98,14 +98,14 @@ export interface FacetColumnArgs {
     table: string;
 }
 
-/** One distinct value of a faceted column with its row count, mirroring `@cirrus/do`'s `FacetValue`. */
+/** One distinct value of a faceted column with its row count, mirroring `@lunora/do`'s `FacetValue`. */
 export interface FacetValue {
     count: number;
     value: unknown;
 }
 
 /**
- * Payload of a `__cirrus_admin__:facetColumn` call, mirroring `@cirrus/do`'s
+ * Payload of a `__lunora_admin__:facetColumn` call, mirroring `@lunora/do`'s
  * `FacetColumnResult`: the top-N distinct `values` (each with a `count`) ordered by
  * frequency, plus `truncated` — `true` when more distinct values existed beyond the
  * cap, so the UI can say so rather than imply the list is exhaustive.
@@ -118,7 +118,7 @@ export interface FacetResult {
 /** Which single-row mutation a {@link WriteRowArgs} performs. */
 export type WriteRowOp = "delete" | "insert" | "patch" | "replace";
 
-/** Arguments for the `__cirrus_admin__:writeRow` admin op. */
+/** Arguments for the `__lunora_admin__:writeRow` admin op. */
 export interface WriteRowArgs {
     /** The row's fields. Required for insert/patch/replace; omitted for delete. */
     doc?: Record<string, unknown>;
@@ -135,7 +135,7 @@ export interface WriteRowResult {
 }
 
 /**
- * Arguments for the `__cirrus_admin__:deleteRows` admin op — the writer-routed
+ * Arguments for the `__lunora_admin__:deleteRows` admin op — the writer-routed
  * bulk delete behind "delete matching". `filters`/`search` mirror
  * {@link TablePage}'s predicate args so the deleted set equals the previewed
  * one; `limit` caps the rows removed per call (clamped server-side). The server
@@ -150,7 +150,7 @@ export interface DeleteRowsArgs {
 }
 
 /**
- * Arguments for the `__cirrus_admin__:clearTable` admin op — "empty this table".
+ * Arguments for the `__lunora_admin__:clearTable` admin op — "empty this table".
  * The same writer-routed bounded delete as {@link DeleteRowsArgs} with no
  * predicate (it matches every row).
  */
@@ -171,27 +171,27 @@ export interface BulkDeleteResult {
 }
 
 /**
- * One captured outbound email as served by `__cirrus_admin__:getCapturedMail`.
- * Persisted by `@cirrus/mail`'s dev capture transport into the root-shard
+ * One captured outbound email as served by `__lunora_admin__:getCapturedMail`.
+ * Persisted by `@lunora/mail`'s dev capture transport into the root-shard
  * mailbox and rendered by the studio Mail inbox. `html`/`text` are the rendered
  * bodies; `to`/`cc`/`bcc` are the original recipient lists; `capturedAt` is
  * epoch-ms.
  *
- * Re-exported verbatim from `@cirrus/mail`, the canonical owner of the
+ * Re-exported verbatim from `@lunora/mail`, the canonical owner of the
  * captured-mail wire type (also imported at the top of this file for local use
  * in {@link CapturedMailResult}). This is NOT one of the hand-mirrored
- * `@cirrus/do` shapes below — it shares the real source of truth, so a field
- * added in `@cirrus/mail` flows here automatically.
+ * `@lunora/do` shapes below — it shares the real source of truth, so a field
+ * added in `@lunora/mail` flows here automatically.
  */
-export type { CapturedMail } from "@cirrus/mail";
+export type { CapturedMail } from "@lunora/mail";
 
-/** Result of `__cirrus_admin__:getCapturedMail` — the dev mail-catcher inbox, newest first. */
+/** Result of `__lunora_admin__:getCapturedMail` — the dev mail-catcher inbox, newest first. */
 export interface CapturedMailResult {
     entries: CapturedMail[];
 }
 
 /**
- * Result of `__cirrus_admin__:sendTestMail` — the studio's "send a test message"
+ * Result of `__lunora_admin__:sendTestMail` — the studio's "send a test message"
  * button. The server renders a fixed sample email through the capture transport
  * (nothing is delivered) and returns the new mailbox row's primary key, so the
  * caller can refresh the inbox and surface it.
@@ -209,7 +209,7 @@ export interface CacheStats {
     misses: number;
 }
 
-/** Health snapshot returned by `__cirrus_admin__:getMetrics` for one shard. */
+/** Health snapshot returned by `__lunora_admin__:getMetrics` for one shard. */
 export interface ShardMetrics {
     cache: CacheStats | null;
     databaseSize: null | number;
@@ -222,7 +222,7 @@ export interface ShardMetrics {
 
 /**
  * One minute-bucketed per-function sample on a {@link MetricsSnapshot}, mirroring
- * `@cirrus/do`'s `FunctionMetricBucket & { path }`. `bucketMs` is the epoch-ms
+ * `@lunora/do`'s `FunctionMetricBucket & { path }`. `bucketMs` is the epoch-ms
  * floor of the 60s window; `calls`/`errors` are the per-window counts. The SLO
  * panel sums these across functions per bucket to draw the durable request /
  * error sparklines (PLAN3 §2.3) — unlike the Metrics panel's live in-memory series.
@@ -237,9 +237,9 @@ export interface MetricsHistoryBucket {
 /**
  * One declared index's recorded read count over the durable window, returned in
  * the `getMetrics` payload's `indexHits` array. The DO stamps a per-`(table,
- * index)` counter in the durable `__cirrus_metrics_index` table on every index
+ * index)` counter in the durable `__lunora_metrics_index` table on every index
  * use (`onIndexUse`); this is its surfaced shape. It is identical to
- * `@cirrus/advisor`'s `AdvisorIndexHit`, so the studio passes it straight into
+ * `@lunora/advisor`'s `AdvisorIndexHit`, so the studio passes it straight into
  * the runtime dead-index lint after summing across shards.
  */
 export interface MetricsIndexHit {
@@ -250,7 +250,7 @@ export interface MetricsIndexHit {
 
 /**
  * One per-statement SQL aggregate returned in the `queryStats` field of a
- * {@link MetricsSnapshot}. Mirrors `@cirrus/do`'s `QueryStatEntry`.
+ * {@link MetricsSnapshot}. Mirrors `@lunora/do`'s `QueryStatEntry`.
  *
  * `normalizedSql` is the SQL text with literal values stripped and truncated
  * to at most 512 characters. `execCount` is how many times the statement was
@@ -270,7 +270,7 @@ export interface QueryStatEntry {
 }
 
 /**
- * The full `__cirrus_admin__:getMetrics` payload. The wire response carries the
+ * The full `__lunora_admin__:getMetrics` payload. The wire response carries the
  * per-function lifetime stats (`functions`), the durable time buckets
  * (`history`), and the per-`(table, index)` hit counts (`indexHits`) alongside
  * the {@link ShardMetrics} snapshot; all are optional so a pre-feature worker
@@ -294,7 +294,7 @@ export interface MetricsSnapshot extends ShardMetrics {
 
 /**
  * One full-scan attribution entry on a {@link FunctionCallStat}, mirroring
- * `@cirrus/do`'s `FunctionScanAttribution`: how many times the function
+ * `@lunora/do`'s `FunctionScanAttribution`: how many times the function
  * full-scanned `table`. The causal evidence behind the "missing index" insight.
  */
 export interface FunctionScanAttribution {
@@ -303,8 +303,8 @@ export interface FunctionScanAttribution {
 }
 
 /**
- * Per-function execution counters returned by `__cirrus_admin__:getFunctionStats`
- * for one shard. Mirrors `@cirrus/do`'s `FunctionCallStat`. Counters are
+ * Per-function execution counters returned by `__lunora_admin__:getFunctionStats`
+ * for one shard. Mirrors `@lunora/do`'s `FunctionCallStat`. Counters are
  * per-DO-instance and reset on hibernation/restart — a "since this instance
  * woke" readout. Durations are handler wall-clock milliseconds.
  *
@@ -331,15 +331,15 @@ export interface FunctionCallStat {
     totalDurationMs: number;
 }
 
-/** Payload of a `__cirrus_admin__:getFunctionStats` call, mirroring `@cirrus/do`'s `FunctionStatsResult`. */
+/** Payload of a `__lunora_admin__:getFunctionStats` call, mirroring `@lunora/do`'s `FunctionStatsResult`. */
 export interface FunctionStatsResult {
     functions: FunctionCallStat[];
     sinceMs: number;
 }
 
 /**
- * One minute-bucketed auth sample returned by `__cirrus_admin__:getAuthMetrics`,
- * mirroring `@cirrus/do`'s `AuthMetricsBucket`. Backs the SLO panel's
+ * One minute-bucketed auth sample returned by `__lunora_admin__:getAuthMetrics`,
+ * mirroring `@lunora/do`'s `AuthMetricsBucket`. Backs the SLO panel's
  * auth-failure sparkline; `bucketMs` is the epoch-ms floor of the 60s window.
  */
 export interface AuthMetricsBucket {
@@ -349,13 +349,13 @@ export interface AuthMetricsBucket {
 }
 
 /**
- * App-level auth-attempt metrics returned by `__cirrus_admin__:getAuthMetrics`
- * for the root shard, mirroring `@cirrus/do`'s `AuthMetrics`. Backs the SLO
+ * App-level auth-attempt metrics returned by `__lunora_admin__:getAuthMetrics`
+ * for the root shard, mirroring `@lunora/do`'s `AuthMetrics`. Backs the SLO
  * panel's auth-failure rate (PLAN3 §2.3): `failureRate` is the precomputed
  * `attempts === 0 ? 0 : failures / attempts`, `history` the minute-bucketed
  * series (oldest first) for the sparkline, and `sinceMs` the first-attempt
  * marker. Auth runs as a top-level `/api/auth/*` route, so these are recorded by
- * the worker (not by cirrus-function metrics) and are durable across restart.
+ * the worker (not by lunora-function metrics) and are durable across restart.
  */
 export interface AuthMetrics {
     attempts: number;
@@ -366,7 +366,7 @@ export interface AuthMetrics {
 }
 
 /**
- * One declared index on a table, mirroring `@cirrus/do`'s `TableIndexInfo`.
+ * One declared index on a table, mirroring `@lunora/do`'s `TableIndexInfo`.
  * `type` is the index kind; `fields` the indexed columns (sort fields for rank,
  * text + filter fields for search, source field for vector); `unique` is set
  * only for unique secondary indexes.
@@ -378,13 +378,13 @@ export interface TableIndexInfo {
     unique?: boolean;
 }
 
-/** Payload of a `__cirrus_admin__:listTableIndexes` call, mirroring `@cirrus/do`'s `TableIndexesResult`. */
+/** Payload of a `__lunora_admin__:listTableIndexes` call, mirroring `@lunora/do`'s `TableIndexesResult`. */
 export interface TableIndexesResult {
     indexes: TableIndexInfo[];
 }
 
 /**
- * One column of a user table, mirroring `@cirrus/do`'s `ColumnMeta` — the
+ * One column of a user table, mirroring `@lunora/do`'s `ColumnMeta` — the
  * schema-sourced metadata behind the schema diagram. `type` is the validator IR
  * kind (`string`, `number`, `id`, `array`, …); `ref` names the FK target table
  * of a `v.id("ref")` column; `pk` marks the `_id` primary key.
@@ -403,12 +403,12 @@ export interface ColumnMeta {
     type: string;
 }
 
-/** Payload of a `__cirrus_admin__:describeTable` call, mirroring `@cirrus/do`'s `TableColumnsResult`. */
+/** Payload of a `__lunora_admin__:describeTable` call, mirroring `@lunora/do`'s `TableColumnsResult`. */
 export interface TableColumnsResult {
     columns: ColumnMeta[];
 }
 
-/** Payload of a `__cirrus_admin__:describeTables` call, mirroring `@cirrus/do`'s `TablesColumnsResult`. */
+/** Payload of a `__lunora_admin__:describeTables` call, mirroring `@lunora/do`'s `TablesColumnsResult`. */
 export interface TablesColumnsResult {
     columnsByTable: Record<string, ColumnMeta[]>;
 }
@@ -417,8 +417,8 @@ export interface TablesColumnsResult {
 export type AdvisoryLevel = "ERROR" | "INFO" | "WARN";
 
 /**
- * One static schema advisory, mirroring `@cirrus/advisor`'s `Finding` (served by
- * `__cirrus_admin__:getAdvisories`). These are codegen-time lints baked into the
+ * One static schema advisory, mirroring `@lunora/advisor`'s `Finding` (served by
+ * `__lunora_admin__:getAdvisories`). These are codegen-time lints baked into the
  * deployed worker — they refresh on every codegen run (dev: on save; prod: on deploy).
  */
 export interface AdvisoryFinding {
@@ -434,23 +434,23 @@ export interface AdvisoryFinding {
     title: string;
 }
 
-/** Payload of a `__cirrus_admin__:getAdvisories` call, mirroring `@cirrus/do`'s `AdvisoriesResult`. */
+/** Payload of a `__lunora_admin__:getAdvisories` call, mirroring `@lunora/do`'s `AdvisoriesResult`. */
 export interface AdvisoriesResult {
     advisories: AdvisoryFinding[];
 }
 
-/** The operation an RLS policy gates, mirroring `@cirrus/do`'s `RlsPolicyMetadata["on"]`. `read` covers get/query/findMany. */
+/** The operation an RLS policy gates, mirroring `@lunora/do`'s `RlsPolicyMetadata["on"]`. `read` covers get/query/findMany. */
 export type RlsOperation = "delete" | "insert" | "read" | "update";
 
 /**
- * One row-level-security policy entry, mirroring `@cirrus/do`'s
+ * One row-level-security policy entry, mirroring `@lunora/do`'s
  * `RlsPolicyMetadata`. Read-only metadata for the RLS inspector: the policy's
  * `table` + `on` operation and the procedure whose `.use(rls(...))` chain
  * declared it. Never the `when` predicate — that's an opaque closure whose logic
  * lives in code, so the inspector reports only that a policy exists.
  */
 export interface RlsPolicyMetadata {
-    /** Source file (relative to `cirrus/`, without extension) the policy is declared in. */
+    /** Source file (relative to `lunora/`, without extension) the policy is declared in. */
     file: string;
     /** Operation gated by the policy. */
     on: RlsOperation;
@@ -460,7 +460,7 @@ export interface RlsPolicyMetadata {
     table: string;
 }
 
-/** One RLS role declaration, mirroring `@cirrus/do`'s `RlsRoleMetadata`. */
+/** One RLS role declaration, mirroring `@lunora/do`'s `RlsRoleMetadata`. */
 export interface RlsRoleMetadata {
     /** Optional human-readable description from `defineRole(name, { description })`. */
     description?: string;
@@ -470,17 +470,17 @@ export interface RlsRoleMetadata {
     permissions: string[];
 }
 
-/** Payload of a `__cirrus_admin__:rlsPolicies` call, mirroring `@cirrus/do`'s `RlsPoliciesResult`. */
+/** Payload of a `__lunora_admin__:rlsPolicies` call, mirroring `@lunora/do`'s `RlsPoliciesResult`. */
 export interface RlsPoliciesResult {
     policies: RlsPolicyMetadata[];
     roles: RlsRoleMetadata[];
 }
 
-/** The strategy a mask policy applies, mirroring `@cirrus/do`'s `MaskColumnMetadata["strategy"]`. `custom` stands in for an opaque `(value, ctx) => …` closure. */
+/** The strategy a mask policy applies, mirroring `@lunora/do`'s `MaskColumnMetadata["strategy"]`. `custom` stands in for an opaque `(value, ctx) => …` closure. */
 export type MaskStrategy = "custom" | "hash" | "redact";
 
 /**
- * One masked column entry, mirroring `@cirrus/do`'s `MaskColumnMetadata`.
+ * One masked column entry, mirroring `@lunora/do`'s `MaskColumnMetadata`.
  * Read-only metadata for the data-browser mask preview: the `(table, column)`
  * pair plus the declared `strategy`. The masking closure itself is never sent —
  * a `custom` strategy renders a fixed sentinel in the preview.
@@ -494,16 +494,16 @@ export interface MaskColumnMetadata {
     table: string;
 }
 
-/** Payload of a `__cirrus_admin__:maskPolicies` call, mirroring `@cirrus/do`'s `MaskPoliciesResult`. */
+/** Payload of a `__lunora_admin__:maskPolicies` call, mirroring `@lunora/do`'s `MaskPoliciesResult`. */
 export interface MaskPoliciesResult {
     columns: MaskColumnMetadata[];
 }
 
-/** The operation a storage access rule gates, mirroring `@cirrus/do`'s `StorageRuleMetadata["on"]`. */
+/** The operation a storage access rule gates, mirroring `@lunora/do`'s `StorageRuleMetadata["on"]`. */
 export type StorageOperation = "delete" | "list" | "read" | "write";
 
 /**
- * One storage access-rule entry, mirroring `@cirrus/do`'s `StorageRuleMetadata`.
+ * One storage access-rule entry, mirroring `@lunora/do`'s `StorageRuleMetadata`.
  * Read-only metadata for the access-rules view: the rule's `bucket` + `on`
  * operation + optional key `prefix` and the procedure whose
  * `.use(storageRules(...))` chain declared it. Never the `when` predicate.
@@ -511,7 +511,7 @@ export type StorageOperation = "delete" | "list" | "read" | "write";
 export interface StorageRuleMetadata {
     /** Logical bucket the rule applies to. */
     bucket: string;
-    /** Source file (relative to `cirrus/`, without extension) the rule is declared in. */
+    /** Source file (relative to `lunora/`, without extension) the rule is declared in. */
     file: string;
     /** Operation gated by the rule. */
     on: StorageOperation;
@@ -521,23 +521,23 @@ export interface StorageRuleMetadata {
     procedure: string;
 }
 
-/** Payload of a `__cirrus_admin__:storageRules` call, mirroring `@cirrus/do`'s `StorageRulesResult`. */
+/** Payload of a `__lunora_admin__:storageRules` call, mirroring `@lunora/do`'s `StorageRulesResult`. */
 export interface StorageRulesResult {
     rules: StorageRuleMetadata[];
 }
 
 /**
- * Payload of a `__cirrus_admin__:studioFeatures` call, hand-mirroring
- * `@cirrus/do`'s `StudioFeaturesResult` (the studio can't import `@cirrus/do`).
+ * Payload of a `__lunora_admin__:studioFeatures` call, hand-mirroring
+ * `@lunora/do`'s `StudioFeaturesResult` (the studio can't import `@lunora/do`).
  * Each flag is `true` when the app wires up that optional, package-backed feature
  * (discovered at codegen time from imports / `ctx.*` reads / schema signals / the
  * package being a declared dependency). The studio hides a nav page whose flag is
- * `false` — so an app with no `@cirrus/payment` never renders the Payments page
+ * `false` — so an app with no `@lunora/payment` never renders the Payments page
  * (and never surfaces its "unknown table: subscriptions" error). A worker
  * predating this RPC returns nothing; the studio treats that as "show everything"
  * (back-compat).
  *
- * A key-exhaustiveness drift guard in this package's tests (and `@cirrus/do`'s)
+ * A key-exhaustiveness drift guard in this package's tests (and `@lunora/do`'s)
  * fails the build if these keys ever diverge from the source contract.
  */
 export interface StudioFeaturesResult {
@@ -550,10 +550,10 @@ export interface StudioFeaturesResult {
 }
 
 /**
- * One declared Cloudflare Workflow, hand-mirroring `@cirrus/do`'s
- * `WorkflowMetadata` (the studio can't import `@cirrus/do`). Pure declaration
+ * One declared Cloudflare Workflow, hand-mirroring `@lunora/do`'s
+ * `WorkflowMetadata` (the studio can't import `@lunora/do`). Pure declaration
  * data — workflows hold no shard runtime state — discovered at codegen time from
- * `cirrus/workflows.ts`. `binding` is the wrangler `Workflow` binding name,
+ * `lunora/workflows.ts`. `binding` is the wrangler `Workflow` binding name,
  * `className` the generated `WorkflowEntrypoint` subclass, `exportName` the
  * `defineWorkflow` export, and `name` the stable deployed `workflows[].name`.
  */
@@ -564,7 +564,7 @@ export interface WorkflowMetadata {
     name: string;
 }
 
-/** Payload of a `__cirrus_admin__:listWorkflows` call, hand-mirroring `@cirrus/do`'s `WorkflowsResult`. */
+/** Payload of a `__lunora_admin__:listWorkflows` call, hand-mirroring `@lunora/do`'s `WorkflowsResult`. */
 export interface WorkflowsResult {
     workflows: WorkflowMetadata[];
 }
@@ -572,18 +572,18 @@ export interface WorkflowsResult {
 /* eslint-disable no-secrets/no-secrets -- reserved admin RPC names are framework constants, not credentials */
 
 /**
- * Lifecycle state of a workflow instance, hand-mirroring `@cirrus/do`'s
- * `WorkflowInstanceState` (itself mirrored from `@cirrus/workflow`).
+ * Lifecycle state of a workflow instance, hand-mirroring `@lunora/do`'s
+ * `WorkflowInstanceState` (itself mirrored from `@lunora/workflow`).
  */
 export type WorkflowInstanceState = "complete" | "errored" | "paused" | "queued" | "running" | "terminated" | "unknown" | "waiting" | "waitingForPause";
 
-/** Payload of a `__cirrus_admin__:createWorkflowInstance` call: the new instance id and its initial status. */
+/** Payload of a `__lunora_admin__:createWorkflowInstance` call: the new instance id and its initial status. */
 export interface CreateWorkflowInstanceResult {
     id: string;
     status: WorkflowInstanceState;
 }
 
-/** Payload of a `__cirrus_admin__:getWorkflowInstanceStatus` call: the instance's current status plus output/error when present. */
+/** Payload of a `__lunora_admin__:getWorkflowInstanceStatus` call: the instance's current status plus output/error when present. */
 export interface WorkflowInstanceStatusResult {
     error?: { message: string; name: string };
     id: string;
@@ -592,13 +592,13 @@ export interface WorkflowInstanceStatusResult {
 }
 /* eslint-enable no-secrets/no-secrets */
 
-/** Severity of a buffered log entry, mirroring `@cirrus/do`'s `LogLevel`. */
+/** Severity of a buffered log entry, mirroring `@lunora/do`'s `LogLevel`. */
 export type LogLevel = "debug" | "error" | "info" | "warn";
 
 /**
- * One buffered log line returned by `__cirrus_admin__:getLogs`. `functionPath`
+ * One buffered log line returned by `__lunora_admin__:getLogs`. `functionPath`
  * is the RPC that produced it (when known); `timestamp` is epoch-ms. Mirrors
- * `@cirrus/do`'s `LogEntry`.
+ * `@lunora/do`'s `LogEntry`.
  */
 export interface LogEntry {
     functionPath?: string;
@@ -607,14 +607,14 @@ export interface LogEntry {
     timestamp: number;
 }
 
-/** Payload of a `__cirrus_admin__:getLogs` call: the buffered entries, newest first. */
+/** Payload of a `__lunora_admin__:getLogs` call: the buffered entries, newest first. */
 export interface LogsResult {
     entries: LogEntry[];
 }
 
 /**
- * One recorded admin operation returned by `__cirrus_admin__:getAuditLog`,
- * mirroring `@cirrus/do`'s `AuditEntry`. Unlike the in-memory logs, the audit
+ * One recorded admin operation returned by `__lunora_admin__:getAuditLog`,
+ * mirroring `@lunora/do`'s `AuditEntry`. Unlike the in-memory logs, the audit
  * log is durable and survives hibernation/restart. `seq` is a monotonic
  * per-shard cursor; `op` the short op name (`writeRow`, `runMigration`,
  * `importShard`, `applyCdc`); `table`/`id` are present when the op targets one;
@@ -629,14 +629,14 @@ export interface AuditEntry {
     ts: number;
 }
 
-/** Payload of a `__cirrus_admin__:getAuditLog` call: the recorded entries, newest first. */
+/** Payload of a `__lunora_admin__:getAuditLog` call: the recorded entries, newest first. */
 export interface AuditLogResult {
     entries: AuditEntry[];
 }
 
 /**
  * One live subscription tracked on a shard's WebSocket, returned by
- * `__cirrus_admin__:listSubscriptions` and mirroring `@cirrus/do`'s
+ * `__lunora_admin__:listSubscriptions` and mirroring `@lunora/do`'s
  * `SubscriptionInfo`. `functionPath` is the `&lt;file>:&lt;function>` query re-run on
  * a matching write (absent on legacy delta-only subscriptions), `table` the
  * table the raw-delta fan-out matches, and `args` the query args.
@@ -649,7 +649,7 @@ export interface SubscriptionInfo {
 
 /**
  * One connected WebSocket and the subscriptions it tracks, mirroring
- * `@cirrus/do`'s `SubscriptionConnection`. `id` is the socket's index within a
+ * `@lunora/do`'s `SubscriptionConnection`. `id` is the socket's index within a
  * single read (a label, not a durable identifier); `admin` is `true` when the
  * socket upgraded with the admin token.
  */
@@ -660,7 +660,7 @@ export interface SubscriptionConnection {
 }
 
 /**
- * Payload of a `__cirrus_admin__:listSubscriptions` call, mirroring `@cirrus/do`'s
+ * Payload of a `__lunora_admin__:listSubscriptions` call, mirroring `@lunora/do`'s
  * `SubscriptionsResult`: a read-only snapshot of every connected socket and its
  * subscriptions, plus aggregate counts. Derived live from the shard's sockets —
  * nothing durable.
@@ -671,12 +671,12 @@ export interface SubscriptionsResult {
     totalSubscriptions: number;
 }
 
-/** Outcome of one dispatch in the request log, mirroring `@cirrus/do`'s `RequestOutcome`. */
+/** Outcome of one dispatch in the request log, mirroring `@lunora/do`'s `RequestOutcome`. */
 export type RequestOutcome = "error" | "ok";
 
 /**
- * One structured `/rpc` dispatch returned by `__cirrus_admin__:getRequestLog`,
- * mirroring `@cirrus/do`'s `RequestLogEntry`. Unlike the in-memory `getLogs`
+ * One structured `/rpc` dispatch returned by `__lunora_admin__:getRequestLog`,
+ * mirroring `@lunora/do`'s `RequestLogEntry`. Unlike the in-memory `getLogs`
  * error buffer, the request log is durable and records EVERY dispatch with the
  * app-level context Cloudflare cannot attribute: the `&lt;file>:&lt;function>` path,
  * the shard key, the acting `userId`/identity, the (server-side redacted) args,
@@ -715,14 +715,14 @@ export interface RequestLogEntry {
     userId?: string;
 }
 
-/** Payload of a `__cirrus_admin__:getRequestLog` call: the recorded entries, newest first. */
+/** Payload of a `__lunora_admin__:getRequestLog` call: the recorded entries, newest first. */
 export interface RequestLogResult {
     entries: RequestLogEntry[];
 }
 
 /**
- * Correlated filters accepted by `__cirrus_admin__:getRequestLog`, mirroring
- * `@cirrus/do`'s `ReadRequestLogOptions`. All AND-combined and bound server-side.
+ * Correlated filters accepted by `__lunora_admin__:getRequestLog`, mirroring
+ * `@lunora/do`'s `ReadRequestLogOptions`. All AND-combined and bound server-side.
  */
 export interface RequestLogQuery {
     functionPathPrefix?: string;
@@ -735,14 +735,14 @@ export interface RequestLogQuery {
 }
 
 /**
- * How a deployment binding/var classifies, mirroring `@cirrus/do`'s `SettingKind`.
+ * How a deployment binding/var classifies, mirroring `@lunora/do`'s `SettingKind`.
  * `var` is a plain Worker var, `secret` a sensitive string (always masked), and
  * `binding` a non-string binding object (R2/KV/DO/D1/queue/service).
  */
 export type SettingKind = "binding" | "secret" | "var";
 
 /**
- * One row of the read-only deployment-settings view, mirroring `@cirrus/do`'s
+ * One row of the read-only deployment-settings view, mirroring `@lunora/do`'s
  * `SettingEntry`. `value` is a masked preview for `var`/`secret` strings (never
  * the raw secret) and `null` for `binding` entries. The server masks every
  * string value, so the studio only ever renders the masked text.
@@ -756,7 +756,7 @@ export interface SettingEntry {
 }
 
 /**
- * Best-effort deploy metadata, mirroring `@cirrus/do`'s `DeployInfo`. Every
+ * Best-effort deploy metadata, mirroring `@lunora/do`'s `DeployInfo`. Every
  * field is optional: the server reads only what the Worker `env` exposes and
  * omits the rest.
  */
@@ -767,21 +767,21 @@ export interface DeployInfo {
     workerUrl?: string;
 }
 
-/** Payload of a `__cirrus_admin__:getSettings` call, mirroring `@cirrus/do`'s `SettingsResult`. */
+/** Payload of a `__lunora_admin__:getSettings` call, mirroring `@lunora/do`'s `SettingsResult`. */
 export interface SettingsResult {
     deploy: DeployInfo;
     settings: SettingEntry[];
 }
 
 /**
- * Ordering/visual weight of a {@link SecurityFinding}, mirroring `@cirrus/do`'s
+ * Ordering/visual weight of a {@link SecurityFinding}, mirroring `@lunora/do`'s
  * `SecurityFindingLevel`. Shares the studio's insight-severity vocabulary so the
  * Security and Performance advisors render with one badge palette.
  */
 export type SecurityFindingLevel = "error" | "info" | "warning";
 
 /**
- * Which deployment-level security heuristic fired, mirroring `@cirrus/do`'s
+ * Which deployment-level security heuristic fired, mirroring `@lunora/do`'s
  * `SecurityFindingKind`. The studio maps each kind to a localized title,
  * explanation, and remediation hint; the wire payload carries only the kind,
  * level, and optional `detail`.
@@ -789,8 +789,8 @@ export type SecurityFindingLevel = "error" | "info" | "warning";
 export type SecurityFindingKind = "admin-token-weak" | "dev-args-unredacted" | "ws-gate-open";
 
 /**
- * One detected security issue from `__cirrus_admin__:getSecurityAudit`, mirroring
- * `@cirrus/do`'s `SecurityFinding`. `detail` carries kind-specific context the
+ * One detected security issue from `__lunora_admin__:getSecurityAudit`, mirroring
+ * `@lunora/do`'s `SecurityFinding`. `detail` carries kind-specific context the
  * studio interpolates into the localized copy (e.g. `{ length, min }` for a weak
  * admin token); absent when the kind needs none.
  */
@@ -800,13 +800,13 @@ export interface SecurityFinding {
     level: SecurityFindingLevel;
 }
 
-/** Payload of a `__cirrus_admin__:getSecurityAudit` call, mirroring `@cirrus/do`'s `SecurityAuditResult`: every finding, worst-first. */
+/** Payload of a `__lunora_admin__:getSecurityAudit` call, mirroring `@lunora/do`'s `SecurityAuditResult`: every finding, worst-first. */
 export interface SecurityAuditResult {
     findings: SecurityFinding[];
 }
 
 /**
- * Payload of a `__cirrus_admin__:runSql` call, mirroring `@cirrus/do`'s
+ * Payload of a `__lunora_admin__:runSql` call, mirroring `@lunora/do`'s
  * `SqlConsoleResult`: a read-only query's `columns` (from the first row), the
  * (capped) `rows`, the true `rowCount`, and whether the rows were `truncated`.
  */
@@ -818,7 +818,7 @@ export interface SqlConsoleResult {
 }
 
 /**
- * Payload of a `__cirrus_admin__:getPitrBookmark` call, mirroring `@cirrus/do`'s
+ * Payload of a `__lunora_admin__:getPitrBookmark` call, mirroring `@lunora/do`'s
  * `PitrBookmarkResult`. `current` names the shard's present point in history;
  * `forTime` is the bookmark nearest a queried time, present only when one was
  * asked for. Bookmarks are opaque, lexically-comparable strings.
@@ -829,7 +829,7 @@ export interface PitrBookmarkResult {
 }
 
 /**
- * Arguments for the `__cirrus_admin__:pitrRestore` RPC, mirroring `@cirrus/do`'s
+ * Arguments for the `__lunora_admin__:pitrRestore` RPC, mirroring `@lunora/do`'s
  * `PitrRestoreArgs`. Provide a `bookmark` (wins) or a `time` (epoch-ms or ISO,
  * within 30 days); `restart` also `ctx.abort()`s so recovery applies now.
  */
@@ -840,7 +840,7 @@ export interface PitrRestoreArgs {
 }
 
 /**
- * Result of a `__cirrus_admin__:pitrRestore` call, mirroring `@cirrus/do`'s
+ * Result of a `__lunora_admin__:pitrRestore` call, mirroring `@lunora/do`'s
  * `PitrRestoreResult`. `undoBookmark` names the instant before recovery — keep
  * it to reverse the restore; `restarted` is whether the shard was aborted now.
  */
@@ -867,7 +867,7 @@ export interface TablePage {
 
 /**
  * One row that references a stored R2 object through a `v.storage()` column,
- * mirroring `@cirrus/do`'s `StorageReference`. `id` is the owning row's primary
+ * mirroring `@lunora/do`'s `StorageReference`. `id` is the owning row's primary
  * key, `table`/`column` locate the reference — enough for the file browser to
  * deep-link from a file to the record that owns it.
  */
@@ -878,7 +878,7 @@ export interface StorageReference {
 }
 
 /**
- * Payload of a `__cirrus_admin__:storageReferences` call, mirroring `@cirrus/do`'s
+ * Payload of a `__lunora_admin__:storageReferences` call, mirroring `@lunora/do`'s
  * `StorageReferenceResult` — the file browser's records↔files join (PLAN3 §1.3).
  * `storageColumns` is the schema's declared `v.storage()` columns (`{ table:
  * [field, …] }`), so the UI can tell "this app models no storage refs" apart from
@@ -893,7 +893,7 @@ export interface StorageReferenceResult {
 
 /**
  * One record field whose `v.storage()` value points at an object key that does
- * NOT exist in the bucket — a **dangling reference**, mirroring `@cirrus/do`'s
+ * NOT exist in the bucket — a **dangling reference**, mirroring `@lunora/do`'s
  * `DanglingReference`. `table`/`id`/`column` locate the owning record's field;
  * `key` is the missing object it references. The inverse of an orphan: the file
  * is gone, the record still points at it.
@@ -906,7 +906,7 @@ export interface DanglingReference {
 }
 
 /**
- * Payload of a `__cirrus_admin__:storageOrphans` call, mirroring `@cirrus/do`'s
+ * Payload of a `__lunora_admin__:storageOrphans` call, mirroring `@lunora/do`'s
  * `DanglingReferenceResult` — the inverse of the records↔files join. Given the
  * bucket's live object keys, `references` lists every record `v.storage()` field
  * pointing at a key the bucket no longer has. `scanned` is how many storage-field
@@ -920,15 +920,15 @@ export interface DanglingReferenceResult {
     truncated: boolean;
 }
 
-/** Direction a data migration is run in. Mirrors `@cirrus/do`. */
+/** Direction a data migration is run in. Mirrors `@lunora/do`. */
 export type MigrationDirection = "down" | "up";
 
-/** Lifecycle of a data-migration run. Mirrors `@cirrus/do`. */
+/** Lifecycle of a data-migration run. Mirrors `@lunora/do`. */
 export type MigrationStatus = "completed" | "failed" | "in_progress";
 
 /**
  * One persisted migration run-state row, as returned by the
- * `__cirrus_admin__:migrationStatus` RPC (`{ migrations: MigrationStatusRow[] }`).
+ * `__lunora_admin__:migrationStatus` RPC (`{ migrations: MigrationStatusRow[] }`).
  */
 export interface MigrationStatusRow {
     changed: number;
@@ -942,7 +942,7 @@ export interface MigrationStatusRow {
     updatedAt: null | number;
 }
 
-/** Result of a single `__cirrus_admin__:runMigration` invocation against one shard. */
+/** Result of a single `__lunora_admin__:runMigration` invocation against one shard. */
 export interface MigrationRunResult {
     changed: number;
     cursor: null | string;
@@ -953,7 +953,7 @@ export interface MigrationRunResult {
     status: MigrationStatus;
 }
 
-/** Arguments accepted by the `__cirrus_admin__:runMigration` RPC. */
+/** Arguments accepted by the `__lunora_admin__:runMigration` RPC. */
 export interface RunMigrationArgs {
     batchSize?: number;
     direction?: MigrationDirection;
@@ -976,7 +976,7 @@ export interface ImportError {
     table: string;
 }
 
-/** Result of a single `__cirrus_admin__:importShard` invocation against one shard. */
+/** Result of a single `__lunora_admin__:importShard` invocation against one shard. */
 export interface ImportShardResult {
     conflicts: number;
     errors: ImportError[];
@@ -988,8 +988,8 @@ export interface ImportShardResult {
 /* -------------------------------------------------------------------------- */
 
 /**
- * One shard's request total from the worker's `POST /_cirrus/admin/shard-traffic`
- * endpoint, mirroring `@cirrus/runtime`'s `ShardTrafficEntry`. `requests` is the
+ * One shard's request total from the worker's `POST /_lunora/admin/shard-traffic`
+ * endpoint, mirroring `@lunora/runtime`'s `ShardTrafficEntry`. `requests` is the
  * shard's lifetime dispatch count (`0` for a shard that failed/timed out);
  * `shardKey` is the DO id name (`""` for the root shard). The cross-shard feed
  * the `hot_shard` runtime advisor consumes to compute skew.
@@ -1000,7 +1000,7 @@ export interface ShardTrafficEntry {
 }
 
 /**
- * Payload of a `POST /_cirrus/admin/shard-traffic` call, mirroring the runtime
+ * Payload of a `POST /_lunora/admin/shard-traffic` call, mirroring the runtime
  * coordinator's shard-traffic fan-out result: one `{ shardKey, requests }` entry
  * per live shard plus the ok / failed counts. Fanned out on demand (not on the
  * metrics hot path) so the panel can feed `hot_shard` the whole shard set's

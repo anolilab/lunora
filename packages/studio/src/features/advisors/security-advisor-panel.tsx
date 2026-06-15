@@ -1,4 +1,4 @@
-import { useCirrus } from "@cirrus/react";
+import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -22,7 +22,7 @@ const findingTitle = (t: TFunction, finding: SecurityFinding): string =>
 
 /** The env binding each finding concerns, shown in the Entity column. */
 const findingEntity = (finding: SecurityFinding): string =>
-    ({ "admin-token-weak": "CIRRUS_ADMIN_TOKEN", "dev-args-unredacted": "request log", "ws-gate-open": "CIRRUS_WS_BEARER" })[finding.kind];
+    ({ "admin-token-weak": "LUNORA_ADMIN_TOKEN", "dev-args-unredacted": "request log", "ws-gate-open": "LUNORA_WS_BEARER" })[finding.kind];
 
 /** Localized one-line explanation + remediation per finding kind. `admin-token-weak` interpolates the offending length. */
 const findingDetail = (t: TFunction, finding: SecurityFinding): string =>
@@ -35,7 +35,7 @@ const findingDetail = (t: TFunction, finding: SecurityFinding): string =>
             "This worker reports a development environment, so the request log stores raw args and identity. Confirm it isn't a mislabeled production deploy.",
         ),
         "ws-gate-open": t(
-            "CIRRUS_WS_BEARER is unset, so the WebSocket upgrade gate is open: live admin subscriptions need no credential. Set it to gate them like the HTTP admin RPCs.",
+            "LUNORA_WS_BEARER is unset, so the WebSocket upgrade gate is open: live admin subscriptions need no credential. Set it to gate them like the HTTP admin RPCs.",
         ),
     })[finding.kind];
 
@@ -45,11 +45,11 @@ const findingDetail = (t: TFunction, finding: SecurityFinding): string =>
  * (deployment-wide, so it targets the root shard and needs no shard selector) and
  * maps each finding the server derived from the Worker `env` — weak admin token,
  * an open WebSocket gate, a dev-mode request log keeping un-redacted args — into a
- * row. These are signals only cirrus can surface: Cloudflare's dashboard can't
- * reason about cirrus's admin/WS gates or its log-redaction policy.
+ * row. These are signals only lunora can surface: Cloudflare's dashboard can't
+ * reason about lunora's admin/WS gates or its log-redaction policy.
  */
 const SecurityAdvisorPanel = (): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const t = useT();
 
     const [findings, setFindings] = useState<SecurityFinding[] | null>(null);
@@ -88,7 +88,7 @@ const SecurityAdvisorPanel = (): ReactElement => {
         [findings, t],
     );
 
-    return <AdvisorView error={error} rows={rows} testId="cirrus-security-advisor" />;
+    return <AdvisorView error={error} rows={rows} testId="lunora-security-advisor" />;
 };
 
 export default SecurityAdvisorPanel;

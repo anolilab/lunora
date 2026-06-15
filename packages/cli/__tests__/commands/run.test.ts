@@ -13,7 +13,7 @@ const silentLogger = (): Logger => {
     };
 };
 
-describe("cirrus run", () => {
+describe("lunora run", () => {
     it("pOSTs the RPC payload to the configured URL", async () => {
         expect.assertions(4);
 
@@ -41,7 +41,7 @@ describe("cirrus run", () => {
         });
 
         expect(result.code).toBe(0);
-        expect(result.requestUrl).toBe("http://localhost:9999/_cirrus/rpc");
+        expect(result.requestUrl).toBe("http://localhost:9999/_lunora/rpc");
         expect(calls).toHaveLength(1);
         expect(calls[0]?.body).toEqual({
             args: { channelId: "channel:1", text: "hi" },

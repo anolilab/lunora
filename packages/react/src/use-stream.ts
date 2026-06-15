@@ -1,9 +1,9 @@
 "use client";
 
-import type { ArgsOf, FunctionReference, ReturnOf } from "@cirrus/client";
+import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
 import { useEffect, useReducer, useRef } from "react";
 
-import { useCirrus } from "./cirrus-provider";
+import { useLunora } from "./lunora-provider";
 import { stableStringify } from "./query-key";
 
 /** The lifecycle of a stream the hook is observing. */
@@ -72,7 +72,7 @@ const useStream = <F extends FunctionReference<"stream">>(
     args: "skip" | ArgsOf<F>,
     options: UseStreamOptions = {},
 ): UseStreamResult<ReturnOf<F>> => {
-    const client = useCirrus();
+    const client = useLunora();
     const [state, dispatch] = useReducer<State<ReturnOf<F>>, [Action<ReturnOf<F>>]>(reducer<ReturnOf<F>>, { chunks: [], error: undefined, status: "idle" });
 
     const skipped = args === "skip";
@@ -144,7 +144,7 @@ const useStream = <F extends FunctionReference<"stream">>(
             cancel();
             cancelRef.current = undefined;
         };
-    }, [client, function_.__cirrusRef, serialized, skipped, options.shardKey, options.maxBuffer]);
+    }, [client, function_.__lunoraRef, serialized, skipped, options.shardKey, options.maxBuffer]);
 
     return {
         cancel: () => {

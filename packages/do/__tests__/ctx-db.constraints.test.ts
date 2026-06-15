@@ -260,8 +260,8 @@ describe("ctx-db constraints", () => {
     describe("write-time refinements (`.check()` on column validators)", () => {
         /**
          * Build a validator whose `parse()` runs the user predicate, mirroring
-         * what `@cirrus/values`' `.check()` returns. The DO ctx-db package has no
-         * runtime dep on `@cirrus/values` (kept light on purpose), so unit tests
+         * what `@lunora/values`' `.check()` returns. The DO ctx-db package has no
+         * runtime dep on `@lunora/values` (kept light on purpose), so unit tests
          * pass a structural fake — same shape, hand-rolled `parse`.
          */
         const checked = (kind: string, predicate: (value: unknown) => boolean, message: string, column: Partial<ColumnMetaLike> = {}): ValidatorLike => {

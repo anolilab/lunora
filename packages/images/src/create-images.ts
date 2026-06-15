@@ -7,7 +7,7 @@
  * their own modules and are safe anywhere.
  */
 import type {
-    CirrusImagesOptions,
+    LunoraImagesOptions,
     ImageInfoLike,
     ImageInput,
     ImageOutputFormat,
@@ -18,7 +18,7 @@ import type {
     TransformOptions,
 } from "./types";
 
-/** Output MIME types Cirrus permits. A request for anything else is rejected before it hits the binding. */
+/** Output MIME types Lunora permits. A request for anything else is rejected before it hits the binding. */
 const ALLOWED_OUTPUT_FORMATS: ReadonlySet<ImageOutputFormat> = new Set<ImageOutputFormat>(["image/avif", "image/gif", "image/jpeg", "image/png", "image/webp"]);
 
 /** Ceiling on any single `width`/`height` so a hostile request can't ask for a multi-gigapixel canvas. */
@@ -42,7 +42,7 @@ const toStream = (input: ImageInput): ReadableStream<Uint8Array> => {
 
     if (isR2ObjectBody(input)) {
         if (input.body === null) {
-            throw new Error("@cirrus/images: R2 object body is null (object missing or already consumed)");
+            throw new Error("@lunora/images: R2 object body is null (object missing or already consumed)");
         }
 
         return input.body as ReadableStream<Uint8Array>;
@@ -78,7 +78,7 @@ const sanitizeTransform = (transform: TransformOptions | undefined, maxDimension
         }
 
         if (!Number.isFinite(value) || value <= 0) {
-            throw new Error("@cirrus/images: width/height must be a positive finite number");
+            throw new Error("@lunora/images: width/height must be a positive finite number");
         }
 
         return Math.min(Math.floor(value), maxDimension);
@@ -95,7 +95,7 @@ const resolveOutput = (output: OutputOptions | undefined): OutputOptions & { for
     const format = output?.format ?? DEFAULT_OUTPUT_FORMAT;
 
     if (!ALLOWED_OUTPUT_FORMATS.has(format)) {
-        throw new Error(`@cirrus/images: unsupported output format "${format}" (allowed: ${[...ALLOWED_OUTPUT_FORMATS].join(", ")})`);
+        throw new Error(`@lunora/images: unsupported output format "${format}" (allowed: ${[...ALLOWED_OUTPUT_FORMATS].join(", ")})`);
     }
 
     return { ...output, format };
@@ -114,7 +114,7 @@ const resolveOutput = (output: OutputOptions | undefined): OutputOptions & { for
  * ```
  */
 // eslint-disable-next-line import/prefer-default-export -- named export: the package barrel re-exports by name, per the repo's no-default-mixing convention
-export const createImages = (options: CirrusImagesOptions): Images => {
+export const createImages = (options: LunoraImagesOptions): Images => {
     const { binding } = options;
     const maxDimension = options.maxDimension ?? DEFAULT_MAX_DIMENSION;
 

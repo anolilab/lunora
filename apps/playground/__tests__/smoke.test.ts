@@ -2,20 +2,20 @@
  * Phase 7 verification gate: the playground project — our exemplar app —
  * stays loadable end-to-end by the rest of the toolchain.
  *
- * If a refactor in `cirrus-codegen` or `cirrus-config` breaks the playground,
+ * If a refactor in `lunora-codegen` or `lunora-config` breaks the playground,
  * we catch it here instead of on a deploy. We deliberately don't boot Vite or
  * `wrangler dev` (slow, flaky inside the workspace) — we compose-check the
- * same pieces a real `cirrus dev` would run:
+ * same pieces a real `lunora dev` would run:
  *
- *   1. `runCodegen`               → parses schema + functions under `cirrus/`
+ *   1. `runCodegen`               → parses schema + functions under `lunora/`
  *   2. `validateWranglerProject`  → asserts bindings line up with the schema
  */
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { runCodegen } from "@cirrus/codegen";
-import { validateWranglerProject } from "@cirrus/config";
+import { runCodegen } from "@lunora/codegen";
+import { validateWranglerProject } from "@lunora/config";
 import { describe, expect, it } from "vitest";
 
 const testDirectory = fileURLToPath(new URL(".", import.meta.url));
@@ -56,7 +56,7 @@ describe("playground compose smoke (Phase 7)", () => {
         // SHARD DO for shard-local tables (`messages`)
         expect(text).toContain('"SHARD"');
         expect(text).toContain("ShardDO");
-        // SCHEDULER DO for `cirrus-scheduler`
+        // SCHEDULER DO for `lunora-scheduler`
         expect(text).toContain('"SCHEDULER"');
         expect(text).toContain("SchedulerDO");
         // D1 binding for `.global()` tables (`users`, `channels`)

@@ -4,11 +4,11 @@
  * logic can be unit-tested without a DOM renderer.
  *
  * Re-exports the advisor schema types that the studio already depends on
- * (transitively, via `@cirrus/advisor`) so the preview component has a single
+ * (transitively, via `@lunora/advisor`) so the preview component has a single
  * import for all cascade-related types.
  */
 
-import type { AdvisorRelation, AdvisorSchema } from "@cirrus/advisor";
+import type { AdvisorRelation, AdvisorSchema } from "@lunora/advisor";
 
 /**
  * Build a map from `parentTable → relations that point at it from child tables`.
@@ -78,5 +78,5 @@ const walkCascade = <T extends { children: T[] }>(root: T, predicate: (node: T) 
     return results;
 };
 
-export type { AdvisorRelation, AdvisorSchema, AdvisorTable } from "@cirrus/advisor";
+export type { AdvisorRelation, AdvisorSchema, AdvisorTable } from "@lunora/advisor";
 export { buildCascadeMap, walkCascade };

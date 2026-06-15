@@ -1,4 +1,4 @@
-# `@cirrus/do` — Test Layout
+# `@lunora/do` — Test Layout
 
 This package has two parallel test suites that run together under a single
 `pnpm test`.
@@ -48,13 +48,13 @@ alarms, or any behavior whose correctness depends on workerd lifecycle (e.g.
 
 ```bash
 # Both projects:
-pnpm --filter @cirrus/do test
+pnpm --filter @lunora/do test
 
 # Just the legacy mocks:
-pnpm --filter @cirrus/do test -- --project mocks
+pnpm --filter @lunora/do test -- --project mocks
 
 # Just the workerd integration suite:
-pnpm --filter @cirrus/do test -- --project workerd
+pnpm --filter @lunora/do test -- --project workerd
 ```
 
 `vis run test` from the repo root invokes the same script and continues to work.

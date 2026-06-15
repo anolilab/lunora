@@ -37,7 +37,7 @@ export type Category = "PERFORMANCE" | "SCHEMA" | "SECURITY";
  *
  * `static` runs against the declared {@link AdvisorSchema} alone (tables,
  * indexes, relations) — deterministic, runnable at codegen/build time, and
- * catches a problem _before_ it ships. This is the edge Cirrus has over a
+ * catches a problem _before_ it ships. This is the edge Lunora has over a
  * live-DB-only advisor like Supabase's.
  *
  * `runtime` needs observed signal from a running shard (full-scan attribution,
@@ -88,7 +88,7 @@ export interface LintContext {
     authApiCalls?: ReadonlyArray<AdvisorAuthApiCall>;
 
     /**
-     * Containers declared in `cirrus/containers.ts` — the `container_*` lint
+     * Containers declared in `lunora/containers.ts` — the `container_*` lint
      * input. Supplied by the codegen feeder; absent for runtime callers, where
      * the container lints find nothing.
      */
@@ -106,7 +106,7 @@ export interface LintContext {
      * Per-declared-index hit counts observed at runtime (the dead-index half of
      * the `index_utilization` lint input). Supplied by the studio backend, which
      * sums the per-`(table, index)` reads each shard records in the durable
-     * `__cirrus_metrics_index` table and surfaces through the `getMetrics` admin
+     * `__lunora_metrics_index` table and surfaces through the `getMetrics` admin
      * RPC (see {@link AdvisorIndexHit}). Absent for static callers, where the
      * dead-index check finds nothing.
      */
@@ -161,7 +161,7 @@ export interface LintContext {
     /**
      * Per-shard observed traffic — the `hot_shard` lint input. Supplied by the
      * studio backend, which fans out over a sharded function's shards and reads
-     * each shard's recorded request volume from the durable `__cirrus_metrics`
+     * each shard's recorded request volume from the durable `__lunora_metrics`
      * accumulator. Absent for static callers, where the lint finds nothing.
      */
     shardTraffic?: ReadonlyArray<AdvisorShardTraffic>;
@@ -184,7 +184,7 @@ export interface LintContext {
     /**
      * Per-table full-scan volume observed at runtime (the hot-scan half of the
      * `index_utilization` lint input). Sourced from the per-`(function, table)`
-     * full-scan attribution the runtime records (`__cirrus_metrics_scans`,
+     * full-scan attribution the runtime records (`__lunora_metrics_scans`,
      * surfaced as `FunctionCallStat.scannedTables`), aggregated across functions
      * and shards. Absent for static callers, where the lint finds nothing.
      */
@@ -200,7 +200,7 @@ export interface LintContext {
     workflowCalls?: ReadonlyArray<AdvisorWorkflowCall>;
 
     /**
-     * Workflows declared via `defineWorkflow` exports in `cirrus/workflows.ts` —
+     * Workflows declared via `defineWorkflow` exports in `lunora/workflows.ts` —
      * the declaration-side input for the `workflow_*` lints. Supplied by the
      * codegen feeder; absent for runtime callers, where the workflow lints find
      * nothing.

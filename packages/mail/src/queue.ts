@@ -50,7 +50,7 @@ export const toQueuedPayload = (options: SendOptions): QueuedSend => {
  */
 export const consumeQueuedSend = async (mailer: Mailer, payload: unknown): Promise<{ id: string }> => {
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-        throw new Error("@cirrus/mail: queue message body must be an object");
+        throw new Error("@lunora/mail: queue message body must be an object");
     }
 
     const candidate = payload as Record<string, unknown>;
@@ -60,14 +60,14 @@ export const consumeQueuedSend = async (mailer: Mailer, payload: unknown): Promi
     // malformed payload here would otherwise surface as an obscure provider
     // error downstream.
     if (typeof candidate.subject !== "string") {
-        throw new TypeError("@cirrus/mail: queue message must have a string `subject`");
+        throw new TypeError("@lunora/mail: queue message must have a string `subject`");
     }
 
     const recipientIsString = typeof candidate.to === "string";
     const recipientIsStringArray = Array.isArray(candidate.to) && candidate.to.every((value) => typeof value === "string");
 
     if (!recipientIsString && !recipientIsStringArray) {
-        throw new Error("@cirrus/mail: queue message `to` must be a string or string[]");
+        throw new Error("@lunora/mail: queue message `to` must be a string or string[]");
     }
 
     const assertOptionalString = (field: string, value: unknown): string | undefined => {
@@ -76,7 +76,7 @@ export const consumeQueuedSend = async (mailer: Mailer, payload: unknown): Promi
         }
 
         if (typeof value !== "string") {
-            throw new TypeError(`@cirrus/mail: queue message \`${field}\` must be a string`);
+            throw new TypeError(`@lunora/mail: queue message \`${field}\` must be a string`);
         }
 
         return value;
@@ -99,21 +99,21 @@ export const consumeQueuedSend = async (mailer: Mailer, payload: unknown): Promi
             return value;
         }
 
-        throw new TypeError(`@cirrus/mail: queue message \`${field}\` must be a string or string[]`);
+        throw new TypeError(`@lunora/mail: queue message \`${field}\` must be a string or string[]`);
     };
 
     let headers: Record<string, string> | undefined;
 
     if (candidate.headers !== undefined) {
         if (!candidate.headers || typeof candidate.headers !== "object" || Array.isArray(candidate.headers)) {
-            throw new TypeError("@cirrus/mail: queue message `headers` must be an object of string values");
+            throw new TypeError("@lunora/mail: queue message `headers` must be an object of string values");
         }
 
         const entries = Object.entries(candidate.headers as Record<string, unknown>);
 
         for (const [key, value] of entries) {
             if (typeof value !== "string") {
-                throw new TypeError(`@cirrus/mail: queue message header "${key}" must be a string`);
+                throw new TypeError(`@lunora/mail: queue message header "${key}" must be a string`);
             }
         }
 

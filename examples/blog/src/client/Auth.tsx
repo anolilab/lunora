@@ -5,7 +5,7 @@ import { authClient } from "./auth-client.js";
 
 /**
  * Email/password sign-in + sign-up. Talks to the `/api/auth/*` routes
- * mounted by `@cirrus/auth` (better-auth). better-auth sets an HttpOnly
+ * mounted by `@lunora/auth` (better-auth). better-auth sets an HttpOnly
  * session cookie on the response; the authenticated view in {@link App.tsx}
  * picks that up via `authClient.useSession()`.
  */

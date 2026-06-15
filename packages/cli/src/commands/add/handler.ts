@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 
-import { findWranglerFile, promptSelect } from "@cirrus/config";
+import { findWranglerFile, promptSelect } from "@lunora/config";
 import { join } from "@visulima/path";
 
 import type { CommandHandler } from "../../util/command";
@@ -91,7 +91,7 @@ const resolveFeatureItems = async (feature: NormalizedFeature, options: AddFeatu
 };
 
 /**
- * `cirrus add &lt;feature>`: validate we're in a Cirrus project, resolve the
+ * `lunora add &lt;feature>`: validate we're in a Lunora project, resolve the
  * feature to its registry item(s) (prompting for the auth provider when
  * interactive), and apply via `runAddCommand`. Returns the applied items so
  * tests/callers can assert without re-reading the filesystem.
@@ -102,21 +102,21 @@ const runAddFeature = async (options: AddFeatureOptions): Promise<AddFeatureResu
     const feature = options.feature === undefined ? undefined : normalizeFeature(options.feature);
 
     if (feature === undefined) {
-        options.logger.error("add requires a feature or registry item. Usage: cirrus add <auth|email|storage|crons|presence|…>");
+        options.logger.error("add requires a feature or registry item. Usage: lunora add <auth|email|storage|crons|presence|…>");
 
         return { code: 1, items: [] };
     }
 
-    // Must be inside a Cirrus project: a `cirrus/` source dir + a wrangler config.
-    if (!existsSync(join(cwd, "cirrus")) || findWranglerFile(cwd) === undefined) {
-        options.logger.error("add: not a Cirrus project here (need a cirrus/ directory and a wrangler.jsonc). Run `cirrus init` first.");
+    // Must be inside a Lunora project: a `lunora/` source dir + a wrangler config.
+    if (!existsSync(join(cwd, "lunora")) || findWranglerFile(cwd) === undefined) {
+        options.logger.error("add: not a Lunora project here (need a lunora/ directory and a wrangler.jsonc). Run `lunora init` first.");
 
         return { code: 1, items: [] };
     }
 
     const items = await resolveFeatureItems(feature, options);
 
-    // The act of running `cirrus add` IS the opt-in, so skip the registry's
+    // The act of running `lunora add` IS the opt-in, so skip the registry's
     // package.json-mutation confirmation (yes: true) and apply directly.
     const result = await runAddCommand({
         allowUnsafeSource: options.allowUnsafeSource,
@@ -131,7 +131,7 @@ const runAddFeature = async (options: AddFeatureOptions): Promise<AddFeatureResu
     return { code: result.code, items };
 };
 
-/** `cirrus add &lt;feature>` handler (lazy-loaded via the command's `loader`). */
+/** `lunora add &lt;feature>` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<AddOptions> = defineHandler<AddOptions>(async ({ argument, cwd, logger, options }) => {
     const result = await runAddFeature({
         allowUnsafeSource: options.allowUnsafeSource === true,

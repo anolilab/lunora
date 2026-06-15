@@ -6,7 +6,7 @@ export type { Permission, Role } from "../rls/types";
  * decides *which column values* are returned in the clear.
  *
  * ```ts
- * import { mask } from "@cirrus/server";
+ * import { mask } from "@lunora/server";
  *
  * export const listUsers = query(...)
  *     .use(mask({
@@ -29,7 +29,7 @@ export type { Permission, Role } from "../rls/types";
  * in the clear even if `users` is masked (the same boundary RLS has). Mask a
  * relation at its own read site if it can surface PII.
  *
- * `aggregate()` / `groupBy()` over a masked column throw a `CirrusError` with
+ * `aggregate()` / `groupBy()` over a masked column throw a `LunoraError` with
  * code `MASK_UNSUPPORTED` (422): a group key *is* the raw value and an aggregate
  * is computed *from* it, so neither can be served without leaking what the mask
  * hides. The reduction fails closed, mirroring `COUNT_RLS_UNSUPPORTED`.

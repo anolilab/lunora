@@ -1,5 +1,5 @@
-import type { AuthCapabilities } from "@cirrus/client";
-import { useCirrus } from "@cirrus/react";
+import type { AuthCapabilities } from "@lunora/client";
+import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useEffect, useState } from "react";
 
@@ -31,7 +31,7 @@ const CAPABILITY_ROWS: ReadonlyArray<{ key: keyof AuthCapabilities; label: Messa
  */
 // eslint-disable-next-line import/prefer-default-export -- studio panels are named exports, mounted by name in studio.tsx
 export const AuthConfigPanel = (): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const t = useT();
 
     const [capabilities, setCapabilities] = useState<AuthCapabilities | null>(null);

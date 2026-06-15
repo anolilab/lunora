@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { discoverRlsMetadata } from "../src/discover-rls-procedures";
 
 // A self-contained branded builder + RLS DSL. Discovery resolves the
-// `__cirrusProcedure` brand off the receiver's *type*, so the builder is
+// `__lunoraProcedure` brand off the receiver's *type*, so the builder is
 // declared inline (the isolated test project has no workspace module
 // resolution). `.use` returns the same builder so the `.use(rls(...)).query(...)`
 // chain type-checks and the chain walk finds the `rls(...)` call.
@@ -22,13 +22,13 @@ const PREAMBLE = `
     declare const query: <R>(config: { args: Record<string, unknown>; handler: (ctx: unknown) => R }) => { kind: "query" };
 
     interface QueryBuilder<Args> {
-        readonly __cirrusProcedure: "query";
+        readonly __lunoraProcedure: "query";
         use: <C>(middleware: (options: { ctx: unknown }) => C) => QueryBuilder<Args>;
         query: <R>(handler: (options: { args: Args; ctx: unknown }) => R) => { kind: "query" };
     }
 
     interface MutationBuilder<Args> {
-        readonly __cirrusProcedure: "mutation";
+        readonly __lunoraProcedure: "mutation";
         use: <C>(middleware: (options: { ctx: unknown }) => C) => MutationBuilder<Args>;
         mutation: <R>(handler: (options: { args: Args; ctx: unknown }) => R) => { kind: "mutation" };
     }
@@ -81,10 +81,10 @@ let project: Project;
 
 describe("discoverRlsMetadata", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-rls-meta-"));
-        mkdirSync(join(workdir, "cirrus"), { recursive: true });
-        writeFileSync(join(workdir, "cirrus", "documents.ts"), DOCUMENTS, "utf8");
-        writeFileSync(join(workdir, "cirrus", "posts.ts"), POSTS, "utf8");
+        workdir = mkdtempSync(join(tmpdir(), "lunora-rls-meta-"));
+        mkdirSync(join(workdir, "lunora"), { recursive: true });
+        writeFileSync(join(workdir, "lunora", "documents.ts"), DOCUMENTS, "utf8");
+        writeFileSync(join(workdir, "lunora", "posts.ts"), POSTS, "utf8");
         project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
     });
 
@@ -95,7 +95,7 @@ describe("discoverRlsMetadata", () => {
     it("extracts each policy's table + operation and the declaring procedure", () => {
         expect.assertions(3);
 
-        const { policies } = discoverRlsMetadata(project, join(workdir, "cirrus"));
+        const { policies } = discoverRlsMetadata(project, join(workdir, "lunora"));
 
         expect(policies).toContainEqual({ file: "documents", on: "read", procedure: "list", table: "documents" });
         expect(policies).toContainEqual({ file: "documents", on: "update", procedure: "list", table: "documents" });
@@ -105,7 +105,7 @@ describe("discoverRlsMetadata", () => {
     it("captures role names, descriptions, and permission names, deduping by name", () => {
         expect.assertions(3);
 
-        const { roles } = discoverRlsMetadata(project, join(workdir, "cirrus"));
+        const { roles } = discoverRlsMetadata(project, join(workdir, "lunora"));
 
         // The "admin" role appears once (the richer first declaration wins the dedupe).
         expect(roles.filter((role) => role.name === "admin")).toHaveLength(1);
@@ -116,7 +116,7 @@ describe("discoverRlsMetadata", () => {
     it("ignores bare-factory procedures and non-rls chains", () => {
         expect.assertions(1);
 
-        const { policies } = discoverRlsMetadata(project, join(workdir, "cirrus"));
+        const { policies } = discoverRlsMetadata(project, join(workdir, "lunora"));
 
         // `peek` has no builder chain, so it can declare no policy.
         expect(policies.some((policy) => policy.procedure === "peek")).toBe(false);

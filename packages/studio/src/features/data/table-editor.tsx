@@ -1,4 +1,4 @@
-import { useCirrus } from "@cirrus/react";
+import { useLunora } from "@lunora/react";
 import { useNavigate, useRouter, useSearch } from "@tanstack/react-router";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -73,7 +73,7 @@ const SchemaSwitch = ({ onChange, tier }: { readonly onChange: (tier: StorageTie
  * selection and re-open whatever the URL names.
  */
 export const TableEditor = ({ editable = false, initialShardKey }: TableEditorProps): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const navigate = useNavigate();
     const router = useRouter();
 
@@ -97,7 +97,7 @@ export const TableEditor = ({ editable = false, initialShardKey }: TableEditorPr
     // can land after a tab switch, so they consult this to avoid yanking the route back
     // to the data tab. Reads the router's *live* location (not a render snapshot, which
     // an unmounting panel never updates to the new route) and matches the last path
-    // segment, so it holds under a mount prefix too (`/__cirrus/data`).
+    // segment, so it holds under a mount prefix too (`/__lunora/data`).
     const onDataRoute = useCallback((): boolean => router.state.location.pathname.split("/").findLast(Boolean) === "data", [router]);
     const tier: StorageTier = view.tier ?? "shard";
     const tableParameter = view.table;

@@ -2,7 +2,7 @@
  * Dialect-agnostic lifecycle-trigger runner shared by both ORM backends.
  *
  * Triggers are user-declared `before`/`after` hooks on a table's CRUD writes
- * (`.triggers((t) => …)` in `@cirrus/server`). Unlike relations — which are
+ * (`.triggers((t) => …)` in `@lunora/server`). Unlike relations — which are
  * pure data descriptors — trigger handlers are **closures**, so they cannot
  * round-trip through codegen. They reach the runtime by riding the live
  * `schema` object the generated `shard.ts` imports (`import schema from
@@ -28,7 +28,7 @@ export type TriggerTimingLike = "after" | "before";
 export type TriggerOpLike = "delete" | "insert" | "update";
 
 /**
- * Structural mirror of `@cirrus/server`'s `Scheduler` (kept local so this
+ * Structural mirror of `@lunora/server`'s `Scheduler` (kept local so this
  * package takes no runtime dependency on the server package — same reasoning
  * as `RelationDefinitionLike`).
  */
@@ -55,7 +55,7 @@ export interface TriggerContextLike {
 }
 
 /**
- * Structural mirror of `@cirrus/server`'s `TriggerDefinition` (kept local —
+ * Structural mirror of `@lunora/server`'s `TriggerDefinition` (kept local —
  * same reasoning as `RelationDefinitionLike`). Stored on the table's
  * `triggerMap` keyed by accessor name.
  */

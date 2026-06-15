@@ -39,7 +39,7 @@ const promptYesNo = async (prompt: string, options?: { defaultYes?: boolean }): 
 
 /**
  * Build a default-yes `confirm(message)` for the scaffolders' `ensureDevVariables`:
- * an interactive `[Y/n]` prompt (optionally prefixed, e.g. `"[cirrus] "`) when
+ * an interactive `[Y/n]` prompt (optionally prefixed, e.g. `"[lunora] "`) when
  * stdin is a TTY, or an immediate `false` otherwise — so CI declines silently
  * instead of blocking. Keeps the "non-interactive ⇒ decline" policy in one place
  * rather than re-stated at every call site.

@@ -1,7 +1,7 @@
 /**
  * Schema-independent type machinery for the generated data model.
  *
- * `@cirrus/codegen` emits `cirrus/_generated/dataModel.ts` with the
+ * `@lunora/codegen` emits `lunora/_generated/dataModel.ts` with the
  * schema-specific pieces (the per-table `Doc_*` / `Insert_*` interfaces, the
  * `DataModel` / `Relations` / index-name maps) and then binds the generics
  * below to them. Everything here is identical for every project, so it lives
@@ -28,7 +28,7 @@
 /** A branded id for table `TName`. Structurally a `string` at runtime. */
 export type Id<TName extends string> = string & { readonly __table: TName };
 
-/** Field-level operators for the typed `where` DSL (see `@cirrus/do`'s compiler). */
+/** Field-level operators for the typed `where` DSL (see `@lunora/do`'s compiler). */
 export interface WhereOperators<T> {
     contains?: string;
     eq?: T;
@@ -113,7 +113,7 @@ export type AggregateOp = "avg" | "count" | "max" | "min" | "sum";
  * Query-options shape shared by every aggregate reader. The RLS-aware ctx
  * populates `baseWhere` so it composes here without a hard import.
  * `restrictsCounts: true` flips `count()` into a thrown `COUNT_RLS_UNSUPPORTED`
- * `CirrusError` rather than silently undercount.
+ * `LunoraError` rather than silently undercount.
  */
 export interface RestrictableQueryOptions<TDocument> {
     baseWhere?: Where<TDocument>;

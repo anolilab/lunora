@@ -11,9 +11,9 @@ suggestions about codegen output, or anything else that doesn't fit the structur
 For bugs, please use the Bug Report template instead.
 For feature requests, please use the Feature Request template.
 
-Cirrus runs on Cloudflare Workers. When relevant, please include:
+Lunora runs on Cloudflare Workers. When relevant, please include:
   - Node version (`node --version`)
   - pnpm version (`pnpm --version`)
   - Wrangler version (`npx wrangler --version`)
-  - Which @cirrus/* package(s) you're using
+  - Which @lunora/* package(s) you're using
 -->

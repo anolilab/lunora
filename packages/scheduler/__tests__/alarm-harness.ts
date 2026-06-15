@@ -90,7 +90,7 @@ export const createAlarmHarness = <T extends SchedulerDO>(
         await innerDeleteAlarm();
     };
 
-    const env = options.env ?? { CIRRUS_ORIGIN_URL: "https://app.test" };
+    const env = options.env ?? { LUNORA_ORIGIN_URL: "https://app.test" };
     const scheduler = factory(base, env);
 
     return {

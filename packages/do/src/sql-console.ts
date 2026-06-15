@@ -1,7 +1,7 @@
 import type { SqlExec } from "./ctx-db.js";
 
 /**
- * Result of a `__cirrus_admin__:runSql` read-only query: the column names (from
+ * Result of a `__lunora_admin__:runSql` read-only query: the column names (from
  * the first row), the rows (capped), the total row count the query produced, and
  * whether the rows were truncated to the cap.
  */
@@ -39,12 +39,12 @@ const TRAILING_SEMICOLON = /;\s*$/u;
 /** Strip leading whitespace and SQL comments so the read-verb check sees the real first token. */
 const stripLeading = (sql: string): string => sql.replace(LEADING_NOISE, "");
 
-/** Build a tagged CirrusError the runtime serializes with its `status`. */
-const sqlError = (message: string, code: string): Error => Object.assign(new Error(message), { code, name: "CirrusError", status: 400 });
+/** Build a tagged LunoraError the runtime serializes with its `status`. */
+const sqlError = (message: string, code: string): Error => Object.assign(new Error(message), { code, name: "LunoraError", status: 400 });
 
 /**
  * Reject anything that isn't a single read-only statement. Throws a 400
- * CirrusError the studio surfaces inline. Enforces: non-empty, a single
+ * LunoraError the studio surfaces inline. Enforces: non-empty, a single
  * statement (no `;`-separated batch), a leading `SELECT`/`WITH`/`EXPLAIN`, and no
  * mutating/DDL keyword anywhere.
  */

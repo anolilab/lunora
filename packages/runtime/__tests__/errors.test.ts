@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { CirrusError, toErrorResponse } from "../src/errors";
+import { LunoraError, toErrorResponse } from "../src/errors";
 
-describe("cirrusError", () => {
+describe("lunoraError", () => {
     it("defaults to 500 INTERNAL when no status is provided", () => {
         expect.assertions(2);
 
-        const error = new CirrusError("boom", { code: "INTERNAL" });
+        const error = new LunoraError("boom", { code: "INTERNAL" });
 
         expect(error.status).toBe(500);
         expect(error.code).toBe("INTERNAL");
@@ -15,17 +15,17 @@ describe("cirrusError", () => {
     it("toResponse roundtrips through JSON", async () => {
         expect.assertions(2);
 
-        const error = new CirrusError("nope", { code: "FORBIDDEN", status: 403 });
+        const error = new LunoraError("nope", { code: "FORBIDDEN", status: 403 });
         const response = error.toResponse();
 
         expect(response.status).toBe(403);
         await expect(response.json()).resolves.toEqual({ error: { code: "FORBIDDEN", message: "nope" } });
     });
 
-    it("toErrorResponse passes CirrusError through unchanged", async () => {
+    it("toErrorResponse passes LunoraError through unchanged", async () => {
         expect.assertions(2);
 
-        const error = new CirrusError("missing", { code: "NOT_FOUND", status: 404 });
+        const error = new LunoraError("missing", { code: "NOT_FOUND", status: 404 });
         const response = toErrorResponse(error);
 
         expect(response.status).toBe(404);
@@ -56,7 +56,7 @@ describe("cirrusError", () => {
     it("toErrorResponse maps a structural ConflictError shape to 409", async () => {
         expect.assertions(2);
 
-        // Structurally identical to what `@cirrus/do` throws — the runtime
+        // Structurally identical to what `@lunora/do` throws — the runtime
         // does not take a hard dependency on that package, so we recognise
         // the shape (name + numeric status + string code) instead.
         const conflict = Object.assign(new Error("stale version"), {
@@ -70,16 +70,16 @@ describe("cirrusError", () => {
         await expect(response.json()).resolves.toEqual({ error: { code: "CONFLICT", message: "stale version" } });
     });
 
-    it("toErrorResponse maps a structural CirrusError shape (name + code + status) to its status", async () => {
+    it("toErrorResponse maps a structural LunoraError shape (name + code + status) to its status", async () => {
         expect.assertions(2);
 
-        // `@cirrus/do`'s `CountRlsUnsupportedError` (and any future
-        // cross-package error mirroring CirrusError's shape) lets the runtime
+        // `@lunora/do`'s `CountRlsUnsupportedError` (and any future
+        // cross-package error mirroring LunoraError's shape) lets the runtime
         // route it without an `instanceof` check, so the DO package stays
-        // free of a runtime dep on `@cirrus/server`.
+        // free of a runtime dep on `@lunora/server`.
         const countUnsupported = Object.assign(new Error("count() is not supported in an RLS-restricted context"), {
             code: "COUNT_RLS_UNSUPPORTED",
-            name: "CirrusError",
+            name: "LunoraError",
             status: 422,
         });
         const response = toErrorResponse(countUnsupported);

@@ -72,7 +72,7 @@ const reportAddResult = (
 ): void => {
     logger.success(`add complete: ${String(written)} written, ${String(skipped)} skipped`);
     logger.info("next steps:");
-    logger.info("  cirrus codegen   # regenerate _generated/ so the new tables/functions appear");
+    logger.info("  lunora codegen   # regenerate _generated/ so the new tables/functions appear");
 
     if (deps.length > 0) {
         logger.info("  pnpm install     # install newly-added dependencies");
@@ -85,7 +85,7 @@ const reportAddResult = (
     }
 };
 
-/** `cirrus registry list`: enumerate available registry items (local `--from` or remote). */
+/** `lunora registry list`: enumerate available registry items (local `--from` or remote). */
 const runListCommand = async (options: AddCommandOptions): Promise<AddCommandResult> => {
     const empty = emptyResult();
     const gate = sourceGateError("list", options);
@@ -127,7 +127,7 @@ const runListCommand = async (options: AddCommandOptions): Promise<AddCommandRes
     }
 };
 
-/** `cirrus registry add` (one or more item names): scaffold items into the project. */
+/** `lunora registry add` (one or more item names): scaffold items into the project. */
 const runAddCommand = async (options: AddCommandOptions): Promise<AddCommandResult> => {
     const cwd = options.cwd ?? process.cwd();
     const empty = emptyResult();
@@ -137,7 +137,7 @@ const runAddCommand = async (options: AddCommandOptions): Promise<AddCommandResu
     }
 
     if (options.names.length === 0) {
-        options.logger.error("add requires at least one item name. Usage: cirrus registry add <name> [...names]");
+        options.logger.error("add requires at least one item name. Usage: lunora registry add <name> [...names]");
 
         return { ...empty, code: 1 };
     }
@@ -203,7 +203,7 @@ const runAddCommand = async (options: AddCommandOptions): Promise<AddCommandResu
 };
 
 /**
- * `cirrus registry view` — inspect a registry item without installing it:
+ * `lunora registry view` — inspect a registry item without installing it:
  * print its plan (files / deps / env vars) followed by the full contents of each
  * file it would scaffold. Resolves only the named item — no `requires` expansion.
  */
@@ -211,7 +211,7 @@ const runRegistryViewCommand = async (options: AddCommandOptions): Promise<AddCo
     const empty = emptyResult();
 
     if (options.names.length === 0) {
-        options.logger.error("view requires an item name. Usage: cirrus registry view <name>");
+        options.logger.error("view requires an item name. Usage: lunora registry view <name>");
 
         return { ...empty, code: 1 };
     }
@@ -261,7 +261,7 @@ const runRegistryViewCommand = async (options: AddCommandOptions): Promise<AddCo
 };
 
 /**
- * `cirrus registry build` — regenerate `index.json` from the item directories
+ * `lunora registry build` — regenerate `index.json` from the item directories
  * (the catalog `list` reads). With `--check`, verify the committed index matches
  * instead of rewriting it (exits non-zero on drift) — a CI guard.
  */
@@ -291,7 +291,7 @@ const runBuildIndexCommand = async (options: AddCommandOptions): Promise<AddComm
         const drift = JSON.stringify(current.items ?? []) !== JSON.stringify(index.items);
 
         if (drift) {
-            options.logger.error(`registry: ${outputPath} is stale — run \`cirrus registry build\` to regenerate it`);
+            options.logger.error(`registry: ${outputPath} is stale — run \`lunora registry build\` to regenerate it`);
 
             return { ...empty, code: 1 };
         }

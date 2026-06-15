@@ -1,15 +1,15 @@
 {
-    "name": "@cirrus/codegen",
+    "name": "@lunora/codegen",
     "version": "0.0.0",
     "license": "FSL-1.1-Apache-2.0",
-    "description": "Code generator for Cirrus: emits _generated/{api,server,dataModel}.ts from your schema",
-    "homepage": "https://cirrus.dev",
+    "description": "Code generator for Lunora: emits _generated/{api,server,dataModel}.ts from your schema",
+    "homepage": "https://lunora.sh",
     "bugs": {
-        "url": "https://github.com/anolilab/cirrus/issues"
+        "url": "https://github.com/anolilab/lunora/issues"
     },
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/anolilab/cirrus.git",
+        "url": "git+https://github.com/anolilab/lunora.git",
         "directory": "packages/codegen"
     },
     "author": {
@@ -17,7 +17,7 @@
         "email": "d.bannert@anolilab.de"
     },
     "keywords": [
-        "cirrus",
+        "lunora",
         "cloudflare",
         "workers",
         "durable-objects",
@@ -57,16 +57,16 @@
         "bench": "vitest bench --run"
     },
     "dependencies": {
-        "@cirrus/advisor": "workspace:*",
-        "@cirrus/container": "workspace:*",
-        "@cirrus/scheduler": "workspace:*",
-        "@cirrus/values": "workspace:*",
-        "@cirrus/workflow": "workspace:*",
+        "@lunora/advisor": "workspace:*",
+        "@lunora/container": "workspace:*",
+        "@lunora/scheduler": "workspace:*",
+        "@lunora/values": "workspace:*",
+        "@lunora/workflow": "workspace:*",
         "ts-morph": "catalog:tooling"
     },
     "devDependencies": {
-        "@cirrus/do": "workspace:*",
-        "@cirrus/server": "workspace:*",
+        "@lunora/do": "workspace:*",
+        "@lunora/server": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",

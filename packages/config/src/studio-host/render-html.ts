@@ -20,31 +20,31 @@ const forAttribute = (value: string): string => value.replaceAll("&", "&amp;").r
  * host is a loopback dev server (so the data browser allows edits).
  */
 const renderStudioHtml = (config: StudioHtmlConfig): string => {
-    const settings = [`window.__CIRRUS_BASE_PATH__=${forInlineScript(config.basePath)};`];
+    const settings = [`window.__LUNORA_BASE_PATH__=${forInlineScript(config.basePath)};`];
 
     if (config.adminToken !== undefined && config.adminToken !== "") {
-        settings.push(`window.__CIRRUS_ADMIN_TOKEN__=${forInlineScript(config.adminToken)};`);
+        settings.push(`window.__LUNORA_ADMIN_TOKEN__=${forInlineScript(config.adminToken)};`);
     }
 
     if (config.dataEditable === true) {
         // eslint-disable-next-line no-secrets/no-secrets -- a static JS assignment string, not a credential
-        settings.push("window.__CIRRUS_DATA_EDITABLE__=true;");
+        settings.push("window.__LUNORA_DATA_EDITABLE__=true;");
     }
 
     if (config.runAsIdentity === true) {
         // eslint-disable-next-line no-secrets/no-secrets -- a static JS assignment string, not a credential
-        settings.push("window.__CIRRUS_RUN_AS_IDENTITY__=true;");
+        settings.push("window.__LUNORA_RUN_AS_IDENTITY__=true;");
     }
 
     if (config.schemaEditable === true) {
         // eslint-disable-next-line no-secrets/no-secrets -- a static JS assignment string, not a credential
-        settings.push("window.__CIRRUS_SCHEMA_EDITABLE__=true;");
+        settings.push("window.__LUNORA_SCHEMA_EDITABLE__=true;");
     }
 
     if (config.rulesInstalled === false) {
         // Only emitted when explicitly missing, so a static deploy (flag unset) never nags.
         // eslint-disable-next-line no-secrets/no-secrets -- a static JS assignment string, not a credential
-        settings.push("window.__CIRRUS_RULES_INSTALLED__=false;");
+        settings.push("window.__LUNORA_RULES_INSTALLED__=false;");
     }
 
     return `<!doctype html>
@@ -52,7 +52,7 @@ const renderStudioHtml = (config: StudioHtmlConfig): string => {
     <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Cirrus Studio</title>
+        <title>Lunora Studio</title>
         <script>${settings.join("")}</script>
         <link rel="stylesheet" href="${forAttribute(config.styleHref)}" />
     </head>

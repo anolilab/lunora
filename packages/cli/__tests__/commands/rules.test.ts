@@ -21,9 +21,9 @@ const captureLogger = (): { logger: Logger; messages: string[] } => {
 
 let workdir: string;
 
-describe("cirrus rules", () => {
+describe("lunora rules", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-cli-rules-"));
+        workdir = mkdtempSync(join(tmpdir(), "lunora-cli-rules-"));
     });
 
     afterEach(() => {
@@ -37,28 +37,28 @@ describe("cirrus rules", () => {
         const result = runRulesInstall({ cwd: workdir, logger });
 
         expect(result.code).toBe(0);
-        expect(result.installed).toContain("cirrus");
-        expect(existsSync(join(workdir, ".agents", "skills", "cirrus", "SKILL.md"))).toBe(true);
+        expect(result.installed).toContain("lunora");
+        expect(existsSync(join(workdir, ".agents", "skills", "lunora", "SKILL.md"))).toBe(true);
     });
 
     it("install skips existing files unless --overwrite is set", () => {
         expect.assertions(3);
 
-        const skillFile = join(workdir, ".agents", "skills", "cirrus", "SKILL.md");
+        const skillFile = join(workdir, ".agents", "skills", "lunora", "SKILL.md");
 
-        mkdirSync(join(workdir, ".agents", "skills", "cirrus"), { recursive: true });
+        mkdirSync(join(workdir, ".agents", "skills", "lunora"), { recursive: true });
         writeFileSync(skillFile, "EDITED", "utf8");
 
         const { logger } = captureLogger();
 
         const skipped = runRulesInstall({ cwd: workdir, logger });
 
-        expect(skipped.skipped).toContain("cirrus");
+        expect(skipped.skipped).toContain("lunora");
         expect(readFileSync(skillFile, "utf8")).toBe("EDITED");
 
         const overwritten = runRulesInstall({ cwd: workdir, logger, overwrite: true });
 
-        expect(overwritten.installed).toContain("cirrus");
+        expect(overwritten.installed).toContain("lunora");
     });
 
     it("check reports installed status", () => {
@@ -91,17 +91,17 @@ describe("cirrus rules", () => {
     it("resolveBundledSkillsDirectory walks up a dist layout to the package skills/", () => {
         expect.assertions(2);
 
-        // Simulate `node_modules/@cirrus/cli/dist/chunks/handler.mjs` next to a
+        // Simulate `node_modules/@lunora/cli/dist/chunks/handler.mjs` next to a
         // sibling `skills/` — the resolver should walk up to the package root.
-        const pkgRoot = join(workdir, "node_modules", "@cirrus", "cli");
+        const pkgRoot = join(workdir, "node_modules", "@lunora", "cli");
         const start = join(pkgRoot, "dist", "chunks");
 
         mkdirSync(start, { recursive: true });
         mkdirSync(join(pkgRoot, "skills"), { recursive: true });
-        writeFileSync(join(pkgRoot, "package.json"), JSON.stringify({ name: "@cirrus/cli" }), "utf8");
+        writeFileSync(join(pkgRoot, "package.json"), JSON.stringify({ name: "@lunora/cli" }), "utf8");
 
         expect(resolveBundledSkillsDirectory(start)).toBe(join(pkgRoot, "skills"));
-        // No @cirrus/cli package.json above an unrelated dir → undefined.
-        expect(resolveBundledSkillsDirectory(mkdtempSync(join(tmpdir(), "cirrus-no-pkg-")))).toBeUndefined();
+        // No @lunora/cli package.json above an unrelated dir → undefined.
+        expect(resolveBundledSkillsDirectory(mkdtempSync(join(tmpdir(), "lunora-no-pkg-")))).toBeUndefined();
     });
 });

@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
-import type { Finding } from "@cirrus/advisor";
+import type { Finding } from "@lunora/advisor";
 import { Project } from "ts-morph";
 
 import { lintSchema } from "./advisor";
@@ -9,7 +9,7 @@ import discoverAuthApiCalls from "./discover-authapi-calls";
 import { discoverContainers } from "./discover-containers";
 import discoverCrons from "./discover-crons";
 import { buildStudioFeatures, discoverFeatureUsage } from "./discover-feature-usage";
-import { discoverFunctions, listCirrusSourceFiles } from "./discover-functions";
+import { discoverFunctions, listLunoraSourceFiles } from "./discover-functions";
 import discoverHttpRoutes from "./discover-http-routes";
 import discoverInserts from "./discover-inserts";
 import discoverMaskProcedures, { discoverMaskMetadata } from "./discover-mask-procedures";
@@ -45,11 +45,11 @@ import { buildSchemaSnapshot, serializeSchemaSnapshot } from "./schema-drift";
 
 /**
  * Committed, tracked baseline file holding the blessed structural schema
- * snapshot the pre-deploy drift gate diffs against. Lives in `cirrus/` (NOT the
+ * snapshot the pre-deploy drift gate diffs against. Lives in `lunora/` (NOT the
  * gitignored `_generated/`) so it is committed alongside `schema.ts`. Leading
  * dot keeps it tucked away next to the schema it describes.
  */
-const SCHEMA_SNAPSHOT_FILENAME = ".cirrus-schema.json";
+const SCHEMA_SNAPSHOT_FILENAME = ".lunora-schema.json";
 
 const writeIfChanged = (filePath: string, content: string): void => {
     // Avoid spurious writes (and downstream HMR reloads) when the rendered
@@ -107,7 +107,7 @@ const toPosixPath = (path: string): string => path.replaceAll("\\", "/");
 
 /**
  * Construct the ts-morph `Project` codegen discovers over. Prefers the user's
- * `tsconfig.json` (when one is found walking up from `cirrusDirectory`) so
+ * `tsconfig.json` (when one is found walking up from `lunoraDirectory`) so
  * cross-file type resolution and path aliases work; falls back to an isolated
  * project otherwise. This is the exact construction {@link runCodegen} uses
  * when no `project` is injected — exported so a long-lived caller (the Vite
@@ -115,8 +115,8 @@ const toPosixPath = (path: string): string => path.replaceAll("\\", "/");
  * {@link refreshCodegenProject} instead of re-parsing the user's whole TS
  * program on every save.
  */
-export const createCodegenProject = (cirrusDirectory: string): Project => {
-    const tsconfigPath = findTsconfig(cirrusDirectory);
+export const createCodegenProject = (lunoraDirectory: string): Project => {
+    const tsconfigPath = findTsconfig(lunoraDirectory);
 
     return tsconfigPath
         ? new Project({ skipAddingFilesFromTsConfig: false, tsConfigFilePath: tsconfigPath, useInMemoryFileSystem: false })
@@ -125,25 +125,25 @@ export const createCodegenProject = (cirrusDirectory: string): Project => {
 
 /**
  * Synchronise a reused {@link createCodegenProject} Project with the current
- * on-disk state of `cirrusDirectory`, so the next {@link runCodegen} sees the
+ * on-disk state of `lunoraDirectory`, so the next {@link runCodegen} sees the
  * same files a freshly-constructed Project would — without re-parsing the whole
  * TS program. Adds any on-disk source file the Project doesn't yet have, and
  * `refreshFromFileSystemSync()`es the ones it does (picking up edits); then
- * removes Project source files under `cirrusDirectory` that no longer exist on
+ * removes Project source files under `lunoraDirectory` that no longer exist on
  * disk (the classic stale-deleted-file cache bug).
  *
- * Files outside `cirrusDirectory` (e.g. those pulled in by the user's tsconfig)
+ * Files outside `lunoraDirectory` (e.g. those pulled in by the user's tsconfig)
  * are left untouched — they back type resolution and rarely change in the
  * dev-loop; a tsconfig change invalidates the whole cached Project upstream.
  */
-export const refreshCodegenProject = (project: Project, cirrusDirectory: string): void => {
+export const refreshCodegenProject = (project: Project, lunoraDirectory: string): void => {
     // The exact set discovery reads: every non-`schema.ts` source file (the
-    // canonical `listCirrusSourceFiles`, shared with function/migration
+    // canonical `listLunoraSourceFiles`, shared with function/migration
     // discovery) plus `schema.ts`, which `discoverSchema` loads separately.
     // Reusing the canonical walker keeps the reused Project's file set in
     // lockstep with a freshly-constructed one instead of forking the rules.
-    const diskPaths = listCirrusSourceFiles(cirrusDirectory);
-    const schemaPath = join(cirrusDirectory, "schema.ts");
+    const diskPaths = listLunoraSourceFiles(lunoraDirectory);
+    const schemaPath = join(lunoraDirectory, "schema.ts");
 
     if (existsSync(schemaPath)) {
         diskPaths.push(schemaPath);
@@ -159,31 +159,31 @@ export const refreshCodegenProject = (project: Project, cirrusDirectory: string)
         }
     }
 
-    // Drop source files under the cirrus directory that vanished from disk, so a
+    // Drop source files under the lunora directory that vanished from disk, so a
     // deleted query/table never lingers in the reused Project's discovery set.
     // `getFilePath()` is always POSIX while `diskPaths` carry the OS separator —
     // normalise both sides or the removal silently never fires on Windows.
     const onDisk = new Set(diskPaths.map((path) => toPosixPath(path)));
-    const cirrusRoot = toPosixPath(cirrusDirectory);
-    const cirrusPrefix = `${cirrusRoot}/`;
+    const lunoraRoot = toPosixPath(lunoraDirectory);
+    const lunoraPrefix = `${lunoraRoot}/`;
 
     for (const sourceFile of project.getSourceFiles()) {
         const filePath = sourceFile.getFilePath();
 
-        if ((filePath === cirrusRoot || filePath.startsWith(cirrusPrefix)) && !onDisk.has(filePath)) {
+        if ((filePath === lunoraRoot || filePath.startsWith(lunoraPrefix)) && !onDisk.has(filePath)) {
             project.removeSourceFile(sourceFile);
         }
     }
 };
 
 /**
- * Top-level codegen entry. Parses `&lt;projectRoot>/cirrus/schema.ts` and every
- * function file under `&lt;projectRoot>/cirrus/`, then writes
+ * Top-level codegen entry. Parses `&lt;projectRoot>/lunora/schema.ts` and every
+ * function file under `&lt;projectRoot>/lunora/`, then writes
  * `_generated/{api,server,dataModel}.ts` next to them.
  */
 export const runCodegen = (options: CodegenOptions): CodegenResult => {
-    const cirrusDirectory = join(options.projectRoot, options.cirrusDirectory ?? "cirrus");
-    const schemaPath = join(cirrusDirectory, "schema.ts");
+    const lunoraDirectory = join(options.projectRoot, options.lunoraDirectory ?? "lunora");
+    const schemaPath = join(lunoraDirectory, "schema.ts");
 
     if (!existsSync(schemaPath)) {
         throw new Error(`schema.ts not found at ${schemaPath}`);
@@ -192,13 +192,13 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // Reuse an injected Project (the caller owns refreshing its source files
     // from disk — see refreshCodegenProject) when provided; otherwise build one
     // exactly as createCodegenProject would.
-    const project = options.project ?? createCodegenProject(cirrusDirectory);
+    const project = options.project ?? createCodegenProject(lunoraDirectory);
 
     const schema = discoverSchema(project, schemaPath);
-    const functions = discoverFunctions(project, cirrusDirectory);
-    const httpRoutes = discoverHttpRoutes(project, cirrusDirectory);
-    const migrations = discoverMigrations(project, cirrusDirectory);
-    const crons = discoverCrons(project, cirrusDirectory);
+    const functions = discoverFunctions(project, lunoraDirectory);
+    const httpRoutes = discoverHttpRoutes(project, lunoraDirectory);
+    const migrations = discoverMigrations(project, lunoraDirectory);
+    const crons = discoverCrons(project, lunoraDirectory);
 
     // Static advisories (unindexed FKs, redundant indexes, unknown index/relation
     // fields, filter-without-index, …). Cheap, derived from the schema + the
@@ -207,59 +207,59 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // job: the result carries the findings and each caller surfaces them through
     // its own channel (the CLI logger, the vite overlay, the studio Advisors
     // table) rather than this library printing.
-    // Containers declared via `defineContainer` exports in `cirrus/containers.ts`.
+    // Containers declared via `defineContainer` exports in `lunora/containers.ts`.
     // Gates `_generated/containers.ts` (the Container DO classes) + the typed
     // `ctx.containers` on ActionCtx, feeds the config layer's wrangler
     // reconciliation (containers[] + CONTAINER_* DO bindings + migrations), and
     // the `container_*` advisor lints below.
-    const containers = discoverContainers(project, cirrusDirectory);
+    const containers = discoverContainers(project, lunoraDirectory);
 
-    // Workflows declared via `defineWorkflow` exports in `cirrus/workflows.ts`.
+    // Workflows declared via `defineWorkflow` exports in `lunora/workflows.ts`.
     // Gates `_generated/workflows.ts` (the WorkflowEntrypoint classes) + the
     // typed `ctx.workflows` on Mutation/Action contexts, and feeds the config
     // layer's wrangler reconciliation (the `workflows[]` array — NOT a Durable
     // Object binding or migration; workflows are not DOs).
-    const workflows = discoverWorkflows(project, cirrusDirectory);
+    const workflows = discoverWorkflows(project, lunoraDirectory);
 
     const advisories =
         options.lint === false
             ? []
             : lintSchema(
                   schema,
-                  discoverQueries(project, cirrusDirectory),
-                  discoverInserts(project, cirrusDirectory),
-                  discoverAuthApiCalls(project, cirrusDirectory),
-                  discoverRlsProcedures(project, cirrusDirectory),
+                  discoverQueries(project, lunoraDirectory),
+                  discoverInserts(project, lunoraDirectory),
+                  discoverAuthApiCalls(project, lunoraDirectory),
+                  discoverRlsProcedures(project, lunoraDirectory),
                   containers,
                   workflows,
-                  discoverWorkflowCalls(project, cirrusDirectory),
-                  discoverMaskProcedures(project, cirrusDirectory),
-                  discoverNondeterministicCalls(project, cirrusDirectory),
+                  discoverWorkflowCalls(project, lunoraDirectory),
+                  discoverMaskProcedures(project, lunoraDirectory),
+                  discoverNondeterministicCalls(project, lunoraDirectory),
               );
 
     // Read-only RLS metadata (policies + roles) the studio's RLS inspector lists,
     // emitted into the generated ShardDO's `rlsMetadata()` override. Statically
     // discovered from every `.use(rls(...))` chain — never the `when` predicate.
-    const rlsMetadata = discoverRlsMetadata(project, cirrusDirectory);
+    const rlsMetadata = discoverRlsMetadata(project, lunoraDirectory);
 
     // Read-only masking metadata (table + column + strategy) the studio's
     // data-browser mask toggle previews, emitted into the generated ShardDO's
     // `maskMetadata()` override. Statically discovered from every
     // `.use(mask(...))` chain — never the masking closure.
-    const maskMetadata = discoverMaskMetadata(project, cirrusDirectory);
+    const maskMetadata = discoverMaskMetadata(project, lunoraDirectory);
 
     // Read-only storage access-rule metadata (the studio's access-rules view),
     // statically discovered from every `.use(storageRules(...))` chain and
     // emitted into the generated ShardDO's `storageRulesMetadata()` override.
-    const storageRulesMetadata = discoverStorageRulesMetadata(project, cirrusDirectory);
+    const storageRulesMetadata = discoverStorageRulesMetadata(project, lunoraDirectory);
 
     // Single-pass code-usage detection for every optional, package-backed
-    // feature: each flag is set when a `cirrus/` source imports the feature's
-    // `@cirrus/*` package or reads its generated `ctx.*` helper. `ai` and
+    // feature: each flag is set when a `lunora/` source imports the feature's
+    // `@lunora/*` package or reads its generated `ctx.*` helper. `ai` and
     // `payments` gate wiring the SDK into the generated ShardDO + the typed
     // ActionCtx — so a non-AI / non-payment project never imports those into its
     // worker; the rest additionally feed the studio nav gating below.
-    const featureUsage = discoverFeatureUsage(project, cirrusDirectory);
+    const featureUsage = discoverFeatureUsage(project, lunoraDirectory);
     const hasAi = featureUsage.ai;
     const hasPayments = featureUsage.payments;
     // New Cloudflare-capability ctx augmentations (Plans 027/028/031/032/035/036).
@@ -274,9 +274,9 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
 
     // Which optional, package-backed features the studio should show a nav page
     // for. `buildStudioFeatures` OR's the code-usage flags with the schema/project
-    // signals the `cirrus/`-scoped scan can't see: storage columns + access rules,
+    // signals the `lunora/`-scoped scan can't see: storage columns + access rules,
     // declared crons, vector indexes, and — crucially for packages wired only in
-    // the worker entry (e.g. `@cirrus/mail`) — the project's declared dependencies.
+    // the worker entry (e.g. `@lunora/mail`) — the project's declared dependencies.
     // Emitted into the generated ShardDO's `studioFeatures()` override so the
     // studio hides only pages whose backing package the app genuinely never wires.
     const dependencies = discoverPackageDependencies(options.projectRoot);
@@ -328,10 +328,10 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const cronsContent = emitCrons(crons);
     const vectorsContent = emitVectors(schema.vectorIndexes);
     const drizzleFiles = emitDrizzleSchema(schema);
-    // Only emit the project-bound seed client when `@cirrus/seed` is a declared
+    // Only emit the project-bound seed client when `@lunora/seed` is a declared
     // dependency — seeding is a dev/test concern, so a project that never
     // installs it keeps a clean `_generated/` and never imports the package.
-    const seedContent = emitSeed(dependencies.has("@cirrus/seed"));
+    const seedContent = emitSeed(dependencies.has("@lunora/seed"));
 
     // Which API spec(s) the run emits. Defaults to `"openapi"` so existing
     // projects (and the golden fixtures) keep writing only `openapi.json`.
@@ -363,10 +363,10 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         schema,
         migrations.map((migration) => migration.id),
     );
-    const schemaSnapshotPath = join(cirrusDirectory, SCHEMA_SNAPSHOT_FILENAME);
+    const schemaSnapshotPath = join(lunoraDirectory, SCHEMA_SNAPSHOT_FILENAME);
     const schemaSnapshotExists = existsSync(schemaSnapshotPath);
 
-    const outputDirectory = join(cirrusDirectory, "_generated");
+    const outputDirectory = join(lunoraDirectory, "_generated");
 
     if (!options.dryRun) {
         if (!existsSync(outputDirectory)) {
@@ -386,9 +386,9 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
         // Conditionally-emitted files: each is written only when its feature is
         // in use (the `emit*` helper returns `""` otherwise), so projects that
         // don't use them keep a clean `_generated/` and never import the package.
-        //   - containers.ts  → `@cirrus/container`, when containers are declared
-        //   - workflows.ts   → `@cirrus/workflow`, when workflows are declared
-        //   - seed.ts        → `@cirrus/seed`, when it's a declared dependency
+        //   - containers.ts  → `@lunora/container`, when containers are declared
+        //   - workflows.ts   → `@lunora/workflow`, when workflows are declared
+        //   - seed.ts        → `@lunora/seed`, when it's a declared dependency
         writeIfPresent(join(outputDirectory, "containers.ts"), containersContent);
         writeIfPresent(join(outputDirectory, "workflows.ts"), workflowsContent);
         writeIfPresent(join(outputDirectory, "seed.ts"), seedContent);
@@ -460,8 +460,8 @@ export interface CodegenOptions {
      */
     apiSpec?: "both" | "none" | "openapi" | "openrpc";
 
-    /** Override the cirrus subdirectory name. Defaults to `"cirrus"`. */
-    cirrusDirectory?: string;
+    /** Override the lunora subdirectory name. Defaults to `"lunora"`. */
+    lunoraDirectory?: string;
 
     /**
      * When true, run discovery + emit (so any schema/function parse error
@@ -488,11 +488,11 @@ export interface CodegenOptions {
      */
     project?: Project;
 
-    /** Project root containing the `cirrus/` directory. */
+    /** Project root containing the `lunora/` directory. */
     projectRoot: string;
 
     /**
-     * Re-bless the committed schema-drift baseline (`cirrus/.cirrus-schema.json`)
+     * Re-bless the committed schema-drift baseline (`lunora/.lunora-schema.json`)
      * with the current structural snapshot. The baseline is ALWAYS written on
      * first capture (when the file is absent); set this to overwrite an existing
      * one — e.g. after the developer has added the data migration that justifies
@@ -513,7 +513,7 @@ export interface CodegenResult {
 
     /**
      * Containers discovered from `defineContainer` exports in
-     * `cirrus/containers.ts` — the list the config layer reconciles into
+     * `lunora/containers.ts` — the list the config layer reconciles into
      * wrangler's `containers[]`, `CONTAINER_*` Durable Object bindings, and
      * migration classes. Empty when the project declares no containers.
      */
@@ -554,11 +554,11 @@ export interface CodegenResult {
          * `apiSpec` includes `openrpc`.
          */
         openRpcModule: string;
-        /** Project-bound seed client (`_generated/seed.ts`); `""` (and not written) when `@cirrus/seed` is not a declared dependency. */
+        /** Project-bound seed client (`_generated/seed.ts`); `""` (and not written) when `@lunora/seed` is not a declared dependency. */
         seed: string;
         server: string;
         shard: string;
-        /** Static vector-index registry (`_generated/vectors.ts`) — `CIRRUS_VECTOR_INDEXES`. Empty array body when the schema declares none. */
+        /** Static vector-index registry (`_generated/vectors.ts`) — `LUNORA_VECTOR_INDEXES`. Empty array body when the schema declares none. */
         vectors: string;
         /** WorkflowEntrypoint classes (`_generated/workflows.ts`); `""` (and not written) when no workflows are declared. */
         workflows: string;
@@ -574,12 +574,12 @@ export interface CodegenResult {
      */
     schemaSnapshot: SchemaSnapshot;
 
-    /** Absolute path of the committed baseline file (`cirrus/.cirrus-schema.json`). */
+    /** Absolute path of the committed baseline file (`lunora/.lunora-schema.json`). */
     schemaSnapshotPath: string;
 
     /**
      * Workflows discovered from `defineWorkflow` exports in
-     * `cirrus/workflows.ts` — the list the config layer reconciles into
+     * `lunora/workflows.ts` — the list the config layer reconciles into
      * wrangler's `workflows[]` array. Workflows are NOT Durable Objects, so this
      * adds no binding or migration. Empty when the project declares no workflows.
      */

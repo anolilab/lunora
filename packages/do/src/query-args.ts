@@ -25,12 +25,12 @@ type OrderByInput = Record<string, SortDirection>;
 
 interface QueryArgs {
     /**
-     * Predicate injected by the runtime (e.g. by `@cirrus/server`'s RLS
+     * Predicate injected by the runtime (e.g. by `@lunora/server`'s RLS
      * middleware, §3.2). AND-merged into `where` before compilation so the
      * policy is enforced at the SQL layer regardless of caller input. This is
      * an internal seam; user-facing call sites should pass `where`, not
      * `baseWhere`. Public on the option type so cross-package consumers
-     * (RLS in `@cirrus/server`, aggregates in §3.1) can populate it without
+     * (RLS in `@lunora/server`, aggregates in §3.1) can populate it without
      * a server-only import.
      */
     baseWhere?: WhereInput;
@@ -40,7 +40,7 @@ interface QueryArgs {
 
     /**
      * When `true`, `count()` invocations on the same table are rejected with
-     * `CirrusError("COUNT_RLS_UNSUPPORTED")`. Set alongside `baseWhere` by RLS
+     * `LunoraError("COUNT_RLS_UNSUPPORTED")`. Set alongside `baseWhere` by RLS
      * to mirror kitcn's documented constraint that count is unsupported in an
      * RLS-restricted context. The `baseWhere` itself still applies to row
      * reads (`findMany`/`findFirst`) — this flag specifically guards `count`.
@@ -143,11 +143,11 @@ const encodeCursor = (record: Record<string, unknown>, keys: OrderKey[]): string
 
 /**
  * The cursor is client-supplied, so any decode failure is a bad request, not
- * a server fault. Returns a `CirrusError`-shaped error the runtime's error
+ * a server fault. Returns a `LunoraError`-shaped error the runtime's error
  * mapper renders as a 400 (a raw `TypeError`/`SyntaxError` would fall through
  * to a generic 500).
  */
-const invalidCursor = (): Error => Object.assign(new TypeError("invalid cursor"), { code: "BAD_REQUEST", name: "CirrusError", status: 400 });
+const invalidCursor = (): Error => Object.assign(new TypeError("invalid cursor"), { code: "BAD_REQUEST", name: "LunoraError", status: 400 });
 
 /** Decode a cursor back into its ordered sort-key values (orderBy fields, then id). */
 const decodeCursor = (cursor: string): unknown[] => {

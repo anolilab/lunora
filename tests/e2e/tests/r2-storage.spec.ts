@@ -1,4 +1,4 @@
-import { expect, test } from "../fixtures/cirrus.js";
+import { expect, test } from "../fixtures/lunora.js";
 
 /**
  * R2 storage E2E — verifies the signed-URL flow against Miniflare's R2 stub.
@@ -7,7 +7,7 @@ import { expect, test } from "../fixtures/cirrus.js";
  *   - `getSignedUrl` produces an HMAC-signed URL with an expiry. The signing
  *     logic is unit-tested, but the *integration* between the URL the worker
  *     hands the client and the GET handler that validates it lives in
- *     `@cirrus/storage`'s router — easy to break in a refactor.
+ *     `@lunora/storage`'s router — easy to break in a refactor.
  *   - Miniflare's R2 stub uses an on-disk SQLite — `wrangler dev --persist-to`
  *     keeps the blob around between requests so we can fetch what we put.
  */
@@ -19,7 +19,7 @@ test.beforeEach(async ({ resetServer }) => {
 test("upload returns a signed URL and the URL serves the bytes back", async ({ user }) => {
     // `user.request` carries the better-auth session cookie set during signup,
     // so the RPC is authenticated without an explicit header.
-    const rpcResponse = await user.request.post(`/_cirrus/rpc`, {
+    const rpcResponse = await user.request.post(`/_lunora/rpc`, {
         data: {
             args: { contentType: "image/png", key: "profile" },
             functionPath: "avatars:uploadAvatar",
@@ -52,7 +52,7 @@ test("upload returns a signed URL and the URL serves the bytes back", async ({ u
     expect(putResponse.ok()).toBe(true);
 
     // Now fetch back via the GET signed URL.
-    const getRpc = await user.request.post(`/_cirrus/rpc`, {
+    const getRpc = await user.request.post(`/_lunora/rpc`, {
         data: { args: {}, functionPath: "avatars:getAvatar" },
     });
 

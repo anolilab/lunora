@@ -1,17 +1,17 @@
 ---
-title: "@cirrus/ratelimit"
+title: "@lunora/ratelimit"
 description: Token-bucket, fixed-window, and sliding-window rate limiting as procedure middleware.
 ---
 
-`@cirrus/ratelimit` enforces named rate limits over a pluggable store. You build
+`@lunora/ratelimit` enforces named rate limits over a pluggable store. You build
 one `RateLimiter` per app from a config map, then either attach the `rateLimit`
 middleware to a procedure's `.use(...)` chain or call `limiter.limit(...)`
-directly. On rejection the middleware throws a structural `CirrusError` that the
+directly. On rejection the middleware throws a structural `LunoraError` that the
 runtime maps to `429 Too Many Requests` (or `403 Forbidden` for a deny-list hit),
 carrying `retryAfter` in milliseconds.
 
 ```ts
-import { RateLimiter, rateLimit } from "@cirrus/ratelimit";
+import { RateLimiter, rateLimit } from "@lunora/ratelimit";
 
 import { mutation } from "./_generated/server";
 
@@ -103,7 +103,7 @@ Per-call `RateLimitArgs`:
 call time (handy for an ORM-backed store, see [Stores](#pluggable-stores)).
 
 ```ts
-import { RateLimiter, rateLimit, createDbStore } from "@cirrus/ratelimit";
+import { RateLimiter, rateLimit, createDbStore } from "@lunora/ratelimit";
 
 import { mutation } from "./_generated/server";
 
@@ -183,14 +183,14 @@ are shipped:
 | ------------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------- |
 | `createMemoryStore()`     | An in-process `Map`. The default when no `store` is given.         | Single-DO/process limits where state needn't survive eviction.       |
 | `createSqlStore({ sql })` | `state.storage.sql` (workerd `SqlStorage`, also `node:sqlite`).    | Durable per-DO state that survives hibernation — you have raw SQL.   |
-| `createDbStore({ db })`   | A Cirrus table via `ctx.db` (the ORM writer on a mutation/action). | Durable per-DO limits inside a procedure, where there is no raw SQL. |
+| `createDbStore({ db })`   | A Lunora table via `ctx.db` (the ORM writer on a mutation/action). | Durable per-DO limits inside a procedure, where there is no raw SQL. |
 
-`createSqlStore` creates its table (default `_cirrus_rate_limits`) if missing.
+`createSqlStore` creates its table (default `_lunora_rate_limits`) if missing.
 `createDbStore` expects a table you declare in your schema with a key column and
 its index (defaults: table `rateLimits`, index `by_key`, key column `key`):
 
 ```ts
-import { defineTable, v } from "@cirrus/server";
+import { defineTable, v } from "@lunora/server";
 
 export const rateLimits = defineTable({
     key: v.string(),
@@ -213,7 +213,7 @@ call `limit()`/`check()`/`reset()` programmatically instead of (or alongside) th
 enforcing middleware. Install its middleware with one `.use(...)`:
 
 ```ts
-import { RateLimiter, ratelimitPlugin } from "@cirrus/ratelimit";
+import { RateLimiter, ratelimitPlugin } from "@lunora/ratelimit";
 
 import { mutation } from "./_generated/server";
 
@@ -238,4 +238,4 @@ was built with — so it is middleware-only and skipped by the plugin schema fol
 
 - [Row-level security](/docs/concepts/rls) — the row-path `.use(...)` companion.
 - [Data masking](/docs/concepts/masking) — the column-path `.use(...)` companion.
-- [@cirrus/server](/docs/api/server) — the procedure builder whose `.use()` chain the middleware rides.
+- [@lunora/server](/docs/api/server) — the procedure builder whose `.use()` chain the middleware rides.

@@ -21,14 +21,14 @@ const EMPTY_SCHEMA: SchemaIR = { tables: [], vectorIndexes: [] };
 
 describe("discover-workflows", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-workflow-disco-"));
+        workdir = mkdtempSync(join(tmpdir(), "lunora-workflow-disco-"));
     });
 
     afterEach(() => {
         rmSync(workdir, { force: true, recursive: true });
     });
 
-    it("returns [] when cirrus/workflows.ts does not exist", () => {
+    it("returns [] when lunora/workflows.ts does not exist", () => {
         expect.assertions(1);
 
         expect(discoverWorkflows(newProject(), workdir)).toEqual([]);
@@ -38,7 +38,7 @@ describe("discover-workflows", () => {
         expect.assertions(1);
 
         writeWorkflows(`
-            import { defineWorkflow } from "@cirrus/workflow";
+            import { defineWorkflow } from "@lunora/workflow";
 
             export const orderPipeline = defineWorkflow({
                 handler: async (ctx) => ctx.params,
@@ -70,7 +70,7 @@ describe("discover-workflows", () => {
         expect.assertions(1);
 
         writeWorkflows(`
-            import { defineWorkflow } from "@cirrus/workflow";
+            import { defineWorkflow } from "@lunora/workflow";
 
             export const notAWorkflow = { handler: async () => undefined };
             const internalOnly = defineWorkflow({ handler: async () => undefined });
@@ -84,7 +84,7 @@ describe("discover-workflows", () => {
         expect.assertions(1);
 
         writeWorkflows(`
-            import { defineWorkflow as dw } from "@cirrus/workflow";
+            import { defineWorkflow as dw } from "@lunora/workflow";
 
             export const cleanup = dw({ handler: async () => undefined });
         `);
@@ -96,7 +96,7 @@ describe("discover-workflows", () => {
         expect.assertions(1);
 
         writeWorkflows(`
-            import { defineWorkflow } from "@cirrus/workflow";
+            import { defineWorkflow } from "@lunora/workflow";
             const label = "nightly";
             export const etl = defineWorkflow({ handler: async () => undefined, name: label });
         `);
@@ -107,7 +107,7 @@ describe("discover-workflows", () => {
 
 describe("emit (workflows)", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-workflow-emit-"));
+        workdir = mkdtempSync(join(tmpdir(), "lunora-workflow-emit-"));
     });
 
     afterEach(() => {
@@ -116,7 +116,7 @@ describe("emit (workflows)", () => {
 
     const discover = (): ReturnType<typeof discoverWorkflows> => {
         writeWorkflows(`
-            import { defineWorkflow } from "@cirrus/workflow";
+            import { defineWorkflow } from "@lunora/workflow";
             export const orderPipeline = defineWorkflow({ handler: async (ctx) => ctx.params });
         `);
 
@@ -128,12 +128,12 @@ describe("emit (workflows)", () => {
 
         const content = emitWorkflows(discover());
 
-        expect(content).toContain('import CirrusWorkflow from "@cirrus/workflow/do";');
+        expect(content).toContain('import LunoraWorkflow from "@lunora/workflow/do";');
         expect(content).toContain('import { orderPipeline } from "../workflows.js";');
 
         expect(content).toContain(
             // eslint-disable-next-line no-secrets/no-secrets -- asserting on dense generated TS, not a credential
-            "export class OrderPipelineWorkflow extends CirrusWorkflow<WorkflowParamsOf<typeof orderPipeline>, WorkflowOutputOf<typeof orderPipeline>> {",
+            "export class OrderPipelineWorkflow extends LunoraWorkflow<WorkflowParamsOf<typeof orderPipeline>, WorkflowOutputOf<typeof orderPipeline>> {",
         );
         expect(content).toContain('super(ctx, env, orderPipeline, "orderPipeline");');
         // eslint-disable-next-line no-secrets/no-secrets -- asserting on dense generated TS, not a credential
@@ -152,12 +152,12 @@ describe("emit (workflows)", () => {
 
         const withWorkflows = emitServer({ schema: EMPTY_SCHEMA, workflows: discover() });
 
-        expect(withWorkflows).toContain('import type { WorkflowHandle } from "@cirrus/workflow";');
-        expect(withWorkflows).toContain("export interface CirrusWorkflows {");
+        expect(withWorkflows).toContain('import type { WorkflowHandle } from "@lunora/workflow";');
+        expect(withWorkflows).toContain("export interface LunoraWorkflows {");
         expect(withWorkflows).toContain('get(name: "orderPipeline"): WorkflowHandle<');
-        expect(withWorkflows).toContain("readonly workflows: CirrusWorkflows;");
+        expect(withWorkflows).toContain("readonly workflows: LunoraWorkflows;");
 
-        expect(emitServer({ schema: EMPTY_SCHEMA })).not.toContain("CirrusWorkflows");
+        expect(emitServer({ schema: EMPTY_SCHEMA })).not.toContain("LunoraWorkflows");
     });
 
     it("emitShard wires createWorkflowContext into the built ctx", () => {
@@ -165,15 +165,15 @@ describe("emit (workflows)", () => {
 
         const shard = emitShard({ schema: EMPTY_SCHEMA, workflows: discover() });
 
-        expect(shard).toContain('import { createWorkflowContext } from "@cirrus/workflow";');
+        expect(shard).toContain('import { createWorkflowContext } from "@lunora/workflow";');
         expect(shard).toContain('{ binding: "WORKFLOW_ORDER_PIPELINE", exportName: "orderPipeline" },');
-        expect(shard).toContain("const workflows = createWorkflowContext(env, CIRRUS_WORKFLOWS);");
+        expect(shard).toContain("const workflows = createWorkflowContext(env, LUNORA_WORKFLOWS);");
         expect(shard).toContain("workflows,");
     });
 
     it("emitShard stays workflow-free without definitions", () => {
         expect.assertions(1);
 
-        expect(emitShard({ schema: EMPTY_SCHEMA })).not.toContain("CIRRUS_WORKFLOWS");
+        expect(emitShard({ schema: EMPTY_SCHEMA })).not.toContain("LUNORA_WORKFLOWS");
     });
 });

@@ -6,7 +6,7 @@
 
 </a>
 
-<h3 align="center">Svelte adapter for Cirrus — live stores, optimistic mutations, and reactive loaders</h3>
+<h3 align="center">Svelte adapter for Lunora — live stores, optimistic mutations, and reactive loaders</h3>
 
 <!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
@@ -34,46 +34,46 @@
 
 ---
 
-The Svelte adapter for Cirrus. Thin, idiomatic glue over the framework-neutral `@cirrus/client`, re-expressed as Svelte stores you read with the `$store` idiom: live query stores, optimistic mutations, and a `hydratePreloaded` SSR handoff. Plain `.ts` over stores — no `.svelte` compiler is required to build or test it.
+The Svelte adapter for Lunora. Thin, idiomatic glue over the framework-neutral `@lunora/client`, re-expressed as Svelte stores you read with the `$store` idiom: live query stores, optimistic mutations, and a `hydratePreloaded` SSR handoff. Plain `.ts` over stores — no `.svelte` compiler is required to build or test it.
 
-Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
+Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
 ## Install
 
 ```sh
-npm install @cirrus/svelte
+npm install @lunora/svelte
 ```
 
 ```sh
-yarn add @cirrus/svelte
+yarn add @lunora/svelte
 ```
 
 ```sh
-pnpm add @cirrus/svelte
+pnpm add @lunora/svelte
 ```
 
 ## Usage
 
 ```ts
-import { CirrusClient } from "@cirrus/client";
-import { setCirrusClient, query, mutation } from "@cirrus/svelte";
+import { LunoraClient } from "@lunora/client";
+import { setLunoraClient, query, mutation } from "@lunora/svelte";
 import { api } from "$lib/_generated/api";
 
 // In +layout.svelte: provide the client once at the root.
-setCirrusClient(new CirrusClient({ url: import.meta.env.VITE_CIRRUS_URL }));
+setLunoraClient(new LunoraClient({ url: import.meta.env.VITE_LUNORA_URL }));
 
 // In a component: `$messages` updates on every server delta.
 const messages = query(api.messages.list, { room: "general" });
 const { mutate, pending } = mutation(api.messages.send);
 ```
 
-> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/frameworks/reactive-loaders)**.
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/frameworks/reactive-loaders)**.
 
 ## Related
 
-- [`@cirrus/client`](https://www.npmjs.com/package/@cirrus/client) — the framework-neutral browser SDK this adapter wraps.
-- `@cirrus/client/ssr` — the server preload contract behind `@cirrus/svelte/server`.
-- [`@cirrus/react`](https://www.npmjs.com/package/@cirrus/react) — the same contract for React.
+- [`@lunora/client`](https://www.npmjs.com/package/@lunora/client) — the framework-neutral browser SDK this adapter wraps.
+- `@lunora/client/ssr` — the server preload contract behind `@lunora/svelte/server`.
+- [`@lunora/react`](https://www.npmjs.com/package/@lunora/react) — the same contract for React.
 
 ## Supported Node.js Versions
 
@@ -82,14 +82,14 @@ Here's [a post on why we think this is important](https://medium.com/the-node-js
 
 ## Contributing
 
-If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/lunora/issues) and check our [Contributing](https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
 > **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
 ## Credits
 
 - [Daniel Bannert](https://github.com/prisis)
-- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
+- [All Contributors](https://github.com/anolilab/lunora/graphs/contributors)
 
 ## Made with ❤️ at Anolilab
 
@@ -97,17 +97,17 @@ This is an open source project and will always remain free to use. If you think 
 
 ## License
 
-The Cirrus svelte package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The Lunora svelte package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
 
 <!-- badges -->
 
 [license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
-[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
-[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/svelte?style=for-the-badge
-[npm-version]: https://www.npmjs.com/package/@cirrus/svelte
-[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/svelte?style=for-the-badge
-[npm-downloads]: https://www.npmjs.com/package/@cirrus/svelte
+[license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@lunora/svelte?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@lunora/svelte
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@lunora/svelte?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@lunora/svelte
 [prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
-[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[prs-welcome]: https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md
 [typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
 [typescript-url]: https://www.typescriptlang.org/

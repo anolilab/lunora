@@ -15,7 +15,7 @@ const introspect = (validator: Validator): Introspectable => validator;
 const metaOf = (validator: Validator): Record<string, unknown> => introspect(validator)._meta ?? {};
 
 /**
- * The {@link SchemaNodeReader} over runtime `@cirrus/values` validators: children
+ * The {@link SchemaNodeReader} over runtime `@lunora/values` validators: children
  * and metadata live on the validator's internal `_meta` bag. A `.nullable()`
  * validator keeps its base `kind` but clears `column.notNull`; a `.check()`/
  * `.meta()` that contributed a JSON Schema fragment stores it on `_meta.constraints`
@@ -41,7 +41,7 @@ const validatorReader: SchemaNodeReader<Validator> = {
 };
 
 /**
- * Convert a single `@cirrus/values` validator to a JSON Schema node (Draft
+ * Convert a single `@lunora/values` validator to a JSON Schema node (Draft
  * 2020-12 / OpenAPI 3.1). A thin wrapper over the shared {@link jsonSchemaFromNode}
  * core with the runtime {@link validatorReader}; see that core for the full
  * kind→schema mapping (date/timestamp → epoch-ms integer, bigint → int64, bytes →

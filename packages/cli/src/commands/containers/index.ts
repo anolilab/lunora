@@ -1,20 +1,20 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
 /**
- * `cirrus containers &lt;build|push|images|list|info|delete>` — thin wrappers over
+ * `lunora containers &lt;build|push|images|list|info|delete>` — thin wrappers over
  * `wrangler containers …` so container image + instance management lives under
  * the same CLI as the rest of the deploy workflow (and CI recipes can split
- * image build/push from `cirrus deploy`).
+ * image build/push from `lunora deploy`).
  */
 const containersCommand: Command = {
     argument: { description: "<build|push|images|list|info|delete> [args…]", name: "args", type: String },
     description: "Build/push container images and manage container instances (wraps wrangler containers)",
     examples: [
-        ["cirrus containers build ./containers/transcoder --tag transcoder:v1", "Build a container image with the local Docker engine"],
-        ["cirrus containers build ./containers/transcoder --tag transcoder:v1 --push", "Build and push to the Cloudflare Registry in one step"],
-        ["cirrus containers push transcoder:v1", "Push a locally-tagged image to the Cloudflare Registry"],
-        ["cirrus containers images list", "List images in your Cloudflare Registry"],
-        ["cirrus containers images delete transcoder:v1", "Delete an image to free registry storage"],
+        ["lunora containers build ./containers/transcoder --tag transcoder:v1", "Build a container image with the local Docker engine"],
+        ["lunora containers build ./containers/transcoder --tag transcoder:v1 --push", "Build and push to the Cloudflare Registry in one step"],
+        ["lunora containers push transcoder:v1", "Push a locally-tagged image to the Cloudflare Registry"],
+        ["lunora containers images list", "List images in your Cloudflare Registry"],
+        ["lunora containers images delete transcoder:v1", "Delete an image to free registry storage"],
     ],
     group: "Deploy",
     loader: () =>

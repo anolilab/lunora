@@ -15,7 +15,7 @@ type FetchLike = (
 }>;
 
 /** The reserved admin RPC the report reads — the per-function metrics feed. */
-const GET_FUNCTION_STATS_OP = "__cirrus_admin__:getFunctionStats";
+const GET_FUNCTION_STATS_OP = "__lunora_admin__:getFunctionStats";
 
 /** Default rows shown per report section before `--limit` overrides it. */
 const DEFAULT_LIMIT = 10;
@@ -23,8 +23,8 @@ const DEFAULT_LIMIT = 10;
 const TRAILING_SLASH = /\/$/u;
 
 /**
- * One per-function metrics row as returned by `__cirrus_admin__:getFunctionStats`,
- * mirroring `@cirrus/do`'s `FunctionCallStat`. Only the fields the report reads
+ * One per-function metrics row as returned by `__lunora_admin__:getFunctionStats`,
+ * mirroring `@lunora/do`'s `FunctionCallStat`. Only the fields the report reads
  * are typed; `conflicts` is optional because a worker predating conflict tracking
  * omits it (treated as 0).
  */
@@ -193,11 +193,11 @@ const resolveLimit = (raw: number | undefined): number => {
 };
 
 /**
- * `cirrus insights` core: read the live worker's per-function metrics over the
- * `__cirrus_admin__:getFunctionStats` admin RPC (bearer-gated by
- * `CIRRUS_ADMIN_TOKEN`), then print the {@link buildInsightsReport} report as
+ * `lunora insights` core: read the live worker's per-function metrics over the
+ * `__lunora_admin__:getFunctionStats` admin RPC (bearer-gated by
+ * `LUNORA_ADMIN_TOKEN`), then print the {@link buildInsightsReport} report as
  * text (default) or JSON (`--json`). The admin bearer rides the same
- * `/_cirrus/rpc` transport the studio uses; `resolveAdminBaseUrl` refuses to
+ * `/_lunora/rpc` transport the studio uses; `resolveAdminBaseUrl` refuses to
  * send it in cleartext to a non-loopback host.
  */
 const runInsightsCommand = async (options: InsightsCommandOptions): Promise<InsightsCommandResult> => {
@@ -207,10 +207,10 @@ const runInsightsCommand = async (options: InsightsCommandOptions): Promise<Insi
         return { code: 1 };
     }
 
-    const token = options.token ?? process.env.CIRRUS_ADMIN_TOKEN;
+    const token = options.token ?? process.env.LUNORA_ADMIN_TOKEN;
 
     if (!token) {
-        options.logger.error("admin token required — pass --token or set CIRRUS_ADMIN_TOKEN");
+        options.logger.error("admin token required — pass --token or set LUNORA_ADMIN_TOKEN");
 
         return { code: 1 };
     }
@@ -221,7 +221,7 @@ const runInsightsCommand = async (options: InsightsCommandOptions): Promise<Insi
         return { code: 1 };
     }
 
-    const requestUrl = `${baseUrl.replace(TRAILING_SLASH, "")}/_cirrus/rpc`;
+    const requestUrl = `${baseUrl.replace(TRAILING_SLASH, "")}/_lunora/rpc`;
     const fetchImpl: FetchLike = options.fetchImpl ?? (globalThis as unknown as { fetch: FetchLike }).fetch;
 
     if (typeof fetchImpl !== "function") {
@@ -278,7 +278,7 @@ const runInsightsCommand = async (options: InsightsCommandOptions): Promise<Insi
     return { code: 0, report };
 };
 
-/** `cirrus insights` handler (lazy-loaded via the command's `loader`). */
+/** `lunora insights` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<InsightsOptions> = defineHandler<InsightsOptions>(({ logger, options }) => {
     const limit = options.limit === undefined ? undefined : Number.parseInt(options.limit, 10);
 

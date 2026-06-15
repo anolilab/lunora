@@ -1,5 +1,5 @@
 "name": "\U0001F41E Bug report"
-"description": "Report an issue with Cirrus"
+"description": "Report an issue with Lunora"
 "labels": ["s: pending triage", "c: bug"]
 "body":
     - "type": "markdown"
@@ -9,8 +9,8 @@
 
               If you are unsure whether your problem is a bug or not, you can check the following:
 
-              - open a new [discussion](https://github.com/anolilab/cirrus/discussions) and ask your question there
-              - use [StackOverflow using the tag `cirrus`](https://stackoverflow.com/questions/tagged/cirrus)
+              - open a new [discussion](https://github.com/anolilab/lunora/discussions) and ask your question there
+              - use [StackOverflow using the tag `lunora`](https://stackoverflow.com/questions/tagged/lunora)
 
     - "type": "checkboxes"
       "id": "checkboxes"
@@ -18,15 +18,15 @@
           "label": "Pre-Checks"
           "description": "Before submitting the issue, please make sure you do the following"
           "options":
-              - "label": "Follow our [Code of Conduct](https://github.com/anolilab/cirrus/blob/main/.github/CODE_OF_CONDUCT.md)."
+              - "label": "Follow our [Code of Conduct](https://github.com/anolilab/lunora/blob/main/.github/CODE_OF_CONDUCT.md)."
                 "required": true
-              - "label": "Read the [Contributing Guidelines](https://github.com/anolilab/cirrus/blob/main/.github/CONTRIBUTING.md)."
+              - "label": "Read the [Contributing Guidelines](https://github.com/anolilab/lunora/blob/main/.github/CONTRIBUTING.md)."
                 "required": true
-              - "label": "Check that there isn't [already an issue](https://github.com/anolilab/cirrus/issues) that reports the same bug to avoid creating a duplicate."
+              - "label": "Check that there isn't [already an issue](https://github.com/anolilab/lunora/issues) that reports the same bug to avoid creating a duplicate."
                 "required": true
-              - "label": "Make sure this is a Cirrus issue and not a problem with Cloudflare Workers, Wrangler, or another upstream dependency."
+              - "label": "Make sure this is a Lunora issue and not a problem with Cloudflare Workers, Wrangler, or another upstream dependency."
                 "required": true
-              - "label": "Check that this is a concrete bug. For Q&A open a [GitHub Discussion](https://github.com/anolilab/cirrus/discussions)."
+              - "label": "Check that this is a concrete bug. For Q&A open a [GitHub Discussion](https://github.com/anolilab/lunora/discussions)."
                 "required": true
               - "label": "The provided reproduction is a [minimal reproducible example](https://stackoverflow.com/help/minimal-reproducible-example) of the bug."
                 "required": true
@@ -54,24 +54,24 @@
       "id": "affected-package"
       "attributes":
           "label": "Affected package(s)"
-          "description": "Which Cirrus package(s) does this bug affect?"
+          "description": "Which Lunora package(s) does this bug affect?"
           "multiple": true
           "options":
-              - "@cirrus/cli"
-              - "@cirrus/codegen"
-              - "@cirrus/config"
-              - "@cirrus/runtime"
-              - "@cirrus/server"
-              - "@cirrus/client"
-              - "@cirrus/react"
-              - "@cirrus/d1"
-              - "@cirrus/do"
-              - "@cirrus/storage"
-              - "@cirrus/values"
-              - "@cirrus/auth"
-              - "@cirrus/mail"
-              - "@cirrus/scheduler"
-              - "@cirrus/vite"
+              - "@lunora/cli"
+              - "@lunora/codegen"
+              - "@lunora/config"
+              - "@lunora/runtime"
+              - "@lunora/server"
+              - "@lunora/client"
+              - "@lunora/react"
+              - "@lunora/d1"
+              - "@lunora/do"
+              - "@lunora/storage"
+              - "@lunora/values"
+              - "@lunora/auth"
+              - "@lunora/mail"
+              - "@lunora/scheduler"
+              - "@lunora/vite"
               - "apps/playground"
               - "apps/docs"
               - "Unsure"
@@ -108,8 +108,8 @@
               # OS
               $ uname -a
 
-              # Cirrus package versions (from the affected workspace)
-              $ pnpm ls --depth 0 | grep "@cirrus/"
+              # Lunora package versions (from the affected workspace)
+              $ pnpm ls --depth 0 | grep "@lunora/"
       "validations":
           "required": true
 
@@ -132,7 +132,7 @@
       "id": "package-manager"
       "attributes":
           "label": "Used package manager"
-          "description": "Cirrus officially supports pnpm; other managers are best-effort."
+          "description": "Lunora officially supports pnpm; other managers are best-effort."
           "options":
               - "pnpm"
               - "npm"

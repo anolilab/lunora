@@ -1,14 +1,14 @@
-import type { CirrusClient, FunctionReference, Unsubscribe } from "@cirrus/client";
+import type { LunoraClient, FunctionReference, Unsubscribe } from "@lunora/client";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
-import { CirrusProvider } from "../src/cirrus-provider";
+import { LunoraProvider } from "../src/lunora-provider";
 import { usePaginatedQuery } from "../src/use-paginated-query";
 
 const makeRef = (ref: string): FunctionReference => {
-    return { __cirrusRef: ref };
+    return { __lunoraRef: ref };
 };
 
 interface PaginationOpts {
@@ -82,7 +82,7 @@ const createCountingBackend = (initial: string[]) => {
         query,
         setAuthToken: vi.fn<(token: string | null) => void>(),
         subscribe,
-    } as unknown as CirrusClient;
+    } as unknown as LunoraClient;
 
     return {
         asClient,
@@ -126,14 +126,14 @@ describe("usePaginatedCore — attach/detach refcount churn", () => {
         let setVariant: (variant: number) => void = () => undefined;
 
         const { unmount } = render(
-            <CirrusProvider client={backend.asClient}>
+            <LunoraProvider client={backend.asClient}>
                 <ChurnHarness
                     // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback capturing the variant setter.
                     onSetVariant={(set) => {
                         setVariant = set;
                     }}
                 />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         await waitFor(() => {
@@ -181,14 +181,14 @@ describe("usePaginatedCore — attach/detach refcount churn", () => {
         let setVariant: (variant: number) => void = () => undefined;
 
         const { unmount } = render(
-            <CirrusProvider client={backend.asClient}>
+            <LunoraProvider client={backend.asClient}>
                 <ChurnHarness
                     // eslint-disable-next-line react-perf/jsx-no-new-function-as-prop -- test harness callback capturing the variant setter.
                     onSetVariant={(set) => {
                         setVariant = set;
                     }}
                 />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         await waitFor(() => {

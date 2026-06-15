@@ -144,7 +144,7 @@ interface D1Like {
 
 /**
  * The minimal SQL seam a {@link createSqlAuthStore} runs on — structurally the
- * same `{ all, run }` contract as `@cirrus/d1`'s `D1Exec`, so a Cirrus D1 binding
+ * same `{ all, run }` contract as `@lunora/d1`'s `D1Exec`, so a Lunora D1 binding
  * satisfies it directly (see {@link d1Executor}) and a `node:sqlite` handle does
  * too in tests. `all` runs reads and returns rows; `run` runs writes.
  */
@@ -156,14 +156,14 @@ export interface SqlExecutor {
 /**
  * An {@link AuthStore} backed by a SQL database through the {@link SqlExecutor}
  * seam — the production counterpart to `createMemoryAuthStore`. Point it at the
- * same database that hosts Cirrus's global (D1) tables (the ones `authTables(...)`
- * generates) and better-auth's reads/writes land there as ordinary rows Cirrus
- * can also query. Assumes the auth tables already exist (Cirrus owns the schema /
+ * same database that hosts Lunora's global (D1) tables (the ones `authTables(...)`
+ * generates) and better-auth's reads/writes land there as ordinary rows Lunora
+ * can also query. Assumes the auth tables already exist (Lunora owns the schema /
  * migrations); it never issues DDL.
  *
  * ```ts
  * const store = createSqlAuthStore(d1Executor(env.DB));
- * const auth = createAuth({ secret: env.AUTH_SECRET, database: cirrusAuthAdapter(store) });
+ * const auth = createAuth({ secret: env.AUTH_SECRET, database: lunoraAuthAdapter(store) });
  * ```
  *
  * Clause semantics match `createMemoryAuthStore` (operator parity is
@@ -273,7 +273,7 @@ export const createSqlAuthStore = (executor: SqlExecutor): AuthStore => {
 /**
  * Wrap a Cloudflare D1 binding (`env.DB`) as a {@link SqlExecutor}, so
  * `createSqlAuthStore(d1Executor(env.DB))` routes better-auth onto D1 — the same
- * binding Cirrus's `.global()` tables use.
+ * binding Lunora's `.global()` tables use.
  */
 export const d1Executor = (database: D1Like): SqlExecutor => {
     return {

@@ -1,7 +1,7 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
 /**
- * `cirrus registry &lt;add|list|view|build>` — the component-registry command.
+ * `lunora registry &lt;add|list|view|build>` — the component-registry command.
  * Metadata only; `./handler` dispatches the subcommand. (The sibling `./index`
  * barrel stays the library entry that exports the `run*` orchestrators + types.)
  */
@@ -9,9 +9,9 @@ const registryCommand: Command = {
     argument: { description: "<add|list|view|build> [item names…]", name: "args", type: String },
     description: "Component registry: add/list/view items, or build the catalog",
     examples: [
-        ["cirrus registry list", "List available registry items"],
-        ["cirrus registry add presence", "Scaffold a registry item into cirrus/"],
-        ["cirrus registry build --check", "Verify the committed catalog is current"],
+        ["lunora registry list", "List available registry items"],
+        ["lunora registry add presence", "Scaffold a registry item into lunora/"],
+        ["lunora registry build --check", "Verify the committed catalog is current"],
     ],
     group: "Project",
     loader: () =>

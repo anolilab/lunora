@@ -51,8 +51,8 @@ describe("request-log module", () => {
             expect(rows[0]!.cacheHit).toBeUndefined();
             expect(rows[0]!.userId).toBe("u1");
 
-            // The reserved table carries the `__cirrus` prefix so the data browser hides it.
-            expect(REQUEST_LOG_TABLE.startsWith("__cirrus")).toBe(true);
+            // The reserved table carries the `__lunora` prefix so the data browser hides it.
+            expect(REQUEST_LOG_TABLE.startsWith("__lunora")).toBe(true);
         } finally {
             database.close();
         }
@@ -145,7 +145,7 @@ describe("request-log module", () => {
         }
     });
 
-    it("honours a retention override (CIRRUS_REQUEST_LOG_RETENTION)", () => {
+    it("honours a retention override (LUNORA_REQUEST_LOG_RETENTION)", () => {
         expect.assertions(2);
 
         const database = createSqliteExec();
@@ -237,7 +237,7 @@ describe("emitRequestLogEvent (PLAN3 §3.3 Logpush emit)", () => {
         vi.restoreAllMocks();
     });
 
-    it("emits a cirrus-attributed structured event with args + identity redacted", () => {
+    it("emits a lunora-attributed structured event with args + identity redacted", () => {
         expect.assertions(8);
 
         const log = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -257,7 +257,7 @@ describe("emitRequestLogEvent (PLAN3 §3.3 Logpush emit)", () => {
 
         const event = JSON.parse(log.mock.calls.at(0)?.at(0) as string) as Record<string, unknown>;
 
-        expect(event).toMatchObject({ function: "messages:list", outcome: "ok", shard: "room-9", source: "cirrus", type: "request", userId: "user-1" });
+        expect(event).toMatchObject({ function: "messages:list", outcome: "ok", shard: "room-9", source: "lunora", type: "request", userId: "user-1" });
         expect(event.cacheHit).toBe(true);
         expect(event.tablesRead).toEqual(["messages"]);
         // Sensitive arg/identity values are masked, never emitted verbatim — shape preserved.
@@ -342,7 +342,7 @@ describe("emitLogEvent (ctx.log → console)", () => {
             level: "info",
             message: 'hello {"token":"s3cr3t"}',
             shard: "room-9",
-            source: "cirrus",
+            source: "lunora",
             type: "log",
             userId: "user-1",
         });

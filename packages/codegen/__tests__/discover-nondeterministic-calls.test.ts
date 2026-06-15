@@ -9,7 +9,7 @@ import discoverNondeterministicCalls from "../src/discover-nondeterministic-call
 
 /** A mutation handler that reads wall-clock time via `Date.now()`. */
 const MUTATION_DATE_NOW = `
-    import { mutation } from "@cirrus/server";
+    import { mutation } from "@lunora/server";
 
     export const sendMessage = mutation({
         args: {},
@@ -22,7 +22,7 @@ const MUTATION_DATE_NOW = `
 
 /** The same `Date.now()` call, but inside an action — must NOT be recorded. */
 const ACTION_DATE_NOW = `
-    import { action } from "@cirrus/server";
+    import { action } from "@lunora/server";
 
     export const syncWithStripe = action({
         args: {},
@@ -35,7 +35,7 @@ const ACTION_DATE_NOW = `
 
 /** A query handler exercising every recognised non-deterministic callee. */
 const QUERY_ALL_CALLEES = `
-    import { query } from "@cirrus/server";
+    import { query } from "@lunora/server";
 
     export const listThings = query({
         args: {},
@@ -53,7 +53,7 @@ const QUERY_ALL_CALLEES = `
 
 /** A deterministic mutation — no non-deterministic calls to record. */
 const CLEAN_MUTATION = `
-    import { mutation } from "@cirrus/server";
+    import { mutation } from "@lunora/server";
 
     export const setName = mutation({
         args: {},
@@ -68,8 +68,8 @@ let project: Project;
 
 describe("discoverNondeterministicCalls", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-nondet-"));
-        mkdirSync(join(workdir, "cirrus"), { recursive: true });
+        workdir = mkdtempSync(join(tmpdir(), "lunora-nondet-"));
+        mkdirSync(join(workdir, "lunora"), { recursive: true });
         project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
     });
 
@@ -80,9 +80,9 @@ describe("discoverNondeterministicCalls", () => {
     it("records a Date.now() call inside a mutation handler as evidence", () => {
         expect.assertions(2);
 
-        writeFileSync(join(workdir, "cirrus", "messages.ts"), MUTATION_DATE_NOW, "utf8");
+        writeFileSync(join(workdir, "lunora", "messages.ts"), MUTATION_DATE_NOW, "utf8");
 
-        const calls = discoverNondeterministicCalls(project, join(workdir, "cirrus"));
+        const calls = discoverNondeterministicCalls(project, join(workdir, "lunora"));
 
         expect(calls).toHaveLength(1);
         expect(calls[0]).toMatchObject({ callee: "Date.now", exportName: "sendMessage", file: "messages", kind: "mutation" });
@@ -91,9 +91,9 @@ describe("discoverNondeterministicCalls", () => {
     it("does NOT record a Date.now() call inside an action handler", () => {
         expect.assertions(1);
 
-        writeFileSync(join(workdir, "cirrus", "sync.ts"), ACTION_DATE_NOW, "utf8");
+        writeFileSync(join(workdir, "lunora", "sync.ts"), ACTION_DATE_NOW, "utf8");
 
-        const calls = discoverNondeterministicCalls(project, join(workdir, "cirrus"));
+        const calls = discoverNondeterministicCalls(project, join(workdir, "lunora"));
 
         expect(calls).toHaveLength(0);
     });
@@ -101,9 +101,9 @@ describe("discoverNondeterministicCalls", () => {
     it("records every recognised callee inside a query handler", () => {
         expect.assertions(2);
 
-        writeFileSync(join(workdir, "cirrus", "things.ts"), QUERY_ALL_CALLEES, "utf8");
+        writeFileSync(join(workdir, "lunora", "things.ts"), QUERY_ALL_CALLEES, "utf8");
 
-        const calls = discoverNondeterministicCalls(project, join(workdir, "cirrus"));
+        const calls = discoverNondeterministicCalls(project, join(workdir, "lunora"));
 
         // Math.random, crypto.randomUUID, crypto.getRandomValues, fetch, globalThis.fetch, self.fetch.
         expect(calls.map((call) => call.callee).toSorted((a, b) => a.localeCompare(b))).toStrictEqual([
@@ -120,9 +120,9 @@ describe("discoverNondeterministicCalls", () => {
     it("records nothing for a deterministic mutation", () => {
         expect.assertions(1);
 
-        writeFileSync(join(workdir, "cirrus", "users.ts"), CLEAN_MUTATION, "utf8");
+        writeFileSync(join(workdir, "lunora", "users.ts"), CLEAN_MUTATION, "utf8");
 
-        const calls = discoverNondeterministicCalls(project, join(workdir, "cirrus"));
+        const calls = discoverNondeterministicCalls(project, join(workdir, "lunora"));
 
         expect(calls).toHaveLength(0);
     });

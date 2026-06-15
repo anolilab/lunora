@@ -1,8 +1,8 @@
-/* eslint-disable no-underscore-dangle -- `__cirrusRef` is the Cirrus function-reference field the wire types expose; fixtures mirror it verbatim. */
-import type { CirrusClient, FunctionReference, Unsubscribe } from "@cirrus/client";
+/* eslint-disable no-underscore-dangle -- `__lunoraRef` is the Lunora function-reference field the wire types expose; fixtures mirror it verbatim. */
+import type { LunoraClient, FunctionReference, Unsubscribe } from "@lunora/client";
 
 /**
- * A minimal stand-in for `CirrusClient` exposing just the surface the Solid
+ * A minimal stand-in for `LunoraClient` exposing just the surface the Solid
  * adapter touches (`subscribe` / `mutation`). It records subscriptions and lets a
  * test push values to the live callback, so we can assert the synchronous seed
  * vs. the later live update without a real WebSocket.
@@ -16,8 +16,8 @@ export interface FakeSubscription {
 }
 
 export interface FakeClient {
-    /** As a typed `CirrusClient` for passing through the provider. */
-    asClient: CirrusClient;
+    /** As a typed `LunoraClient` for passing through the provider. */
+    asClient: LunoraClient;
     mutationCalls: { args: unknown; functionPath: string }[];
     /** Resolve the next `mutation()` with this value (default: echoes args). */
     setMutationResult: (value: unknown) => void;
@@ -35,7 +35,7 @@ export const createFakeClient = (): FakeClient => {
 
     const client = {
         mutation: (function_: FunctionReference, args: unknown) => {
-            mutationCalls.push({ args, functionPath: function_.__cirrusRef });
+            mutationCalls.push({ args, functionPath: function_.__lunoraRef });
 
             if (mutationThrow) {
                 return Promise.reject(mutationThrow);
@@ -51,7 +51,7 @@ export const createFakeClient = (): FakeClient => {
         ): Unsubscribe => {
             const sub: FakeSubscription = {
                 args,
-                functionPath: function_.__cirrusRef,
+                functionPath: function_.__lunoraRef,
                 push: callback,
                 shardKey: options?.shardKey,
                 unsubscribed: false,
@@ -66,7 +66,7 @@ export const createFakeClient = (): FakeClient => {
     };
 
     return {
-        asClient: client as unknown as CirrusClient,
+        asClient: client as unknown as LunoraClient,
         mutationCalls,
         setMutationResult: (value: unknown) => {
             mutationResult = value;

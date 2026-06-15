@@ -1,15 +1,15 @@
 export type { AdapterRegistry, PaymentAdapter, WebhookHeaders, WebhookInput } from "./adapter";
 export { createAdapterRegistry } from "./adapter";
-export type { CirrusDatabaseLike, PaymentContextLike, PaymentsFromContextOptions } from "./context";
-export { cirrusDatabaseToPaymentDatabase, paymentsFromContext } from "./context";
-export type { AuthorizeReference, CirrusPayment, CreatePaymentOptions } from "./create-payment";
+export type { LunoraDatabaseLike, PaymentContextLike, PaymentsFromContextOptions } from "./context";
+export { lunoraDatabaseToPaymentDatabase, paymentsFromContext } from "./context";
+export type { AuthorizeReference, LunoraPayment, CreatePaymentOptions } from "./create-payment";
 export { createPayment } from "./create-payment";
 export type { PaymentDatabase, PaymentRow } from "./database-store";
 export { createDatabasePaymentStore } from "./database-store";
 export type { Entitlements, EntitlementsConfig, PlanDefinition } from "./entitlements";
 export { entitlementsForReference, featureNames, hasActivePrice, resolveEntitlements, usagePeriodStart } from "./entitlements";
 export type { PaymentErrorCode } from "./errors";
-export { CirrusPaymentError } from "./errors";
+export { LunoraPaymentError } from "./errors";
 export { default as idempotencyKey } from "./idempotency";
 export type { MoneyJSON } from "./money";
 export {

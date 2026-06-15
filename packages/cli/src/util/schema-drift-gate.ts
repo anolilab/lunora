@@ -1,10 +1,10 @@
 /**
  * Pre-deploy schema-drift gate.
  *
- * Reads the committed structural baseline (`cirrus/.cirrus-schema.json`),
+ * Reads the committed structural baseline (`lunora/.lunora-schema.json`),
  * compares it against the snapshot codegen produced this run, and decides
  * whether breaking drift without an accompanying data migration should block
- * the deploy. The pure diff/classify/decision logic lives in `@cirrus/codegen`
+ * the deploy. The pure diff/classify/decision logic lives in `@lunora/codegen`
  * (`evaluateSchemaDrift`); this module is the thin I/O + logging shell the
  * deploy / verify / prepare commands call, mirroring the D1-placeholder guard.
  *
@@ -17,8 +17,8 @@
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 
-import type { CodegenResult, SchemaDriftDecision, SchemaSnapshot } from "@cirrus/codegen";
-import { evaluateSchemaDrift, parseSchemaSnapshot, SchemaSnapshotParseError, serializeSchemaSnapshot } from "@cirrus/codegen";
+import type { CodegenResult, SchemaDriftDecision, SchemaSnapshot } from "@lunora/codegen";
+import { evaluateSchemaDrift, parseSchemaSnapshot, SchemaSnapshotParseError, serializeSchemaSnapshot } from "@lunora/codegen";
 
 import type { Logger } from "./logger";
 
@@ -87,7 +87,7 @@ interface SchemaDriftGateResult {
  * baseline path), `allowDrift` (the `--allow-schema-drift` override — report but
  * never block), `updateBaseline` (re-bless the baseline even on a blocked
  * outcome, deliberately accepting the new shape), and `readOnly` (evaluate +
- * report but never write — used by `cirrus verify`).
+ * report but never write — used by `lunora verify`).
  *
  * The returned `rebless` thunk (when present) is the ONLY baseline write — the
  * caller invokes it on success so a failed deploy never advances the baseline.
@@ -108,7 +108,7 @@ interface GateContext {
 const corruptBaselineResult = (context: GateContext): SchemaDriftGateResult => {
     const reason =
         `schema-drift gate: the committed baseline ${context.snapshotPath} is unreadable or malformed, so schema drift cannot be checked. ` +
-        `Fix it (e.g. resolve a merge conflict in cirrus/.cirrus-schema.json), or pass --update-schema-baseline to regenerate it from the current schema.`;
+        `Fix it (e.g. resolve a merge conflict in lunora/.lunora-schema.json), or pass --update-schema-baseline to regenerate it from the current schema.`;
 
     if (context.updateBaseline && !context.readOnly) {
         context.logger.warn(

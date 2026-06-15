@@ -9,28 +9,28 @@ describe("buildStudioUrl", () => {
     it("prefers Vite's resolved local URL", () => {
         expect.assertions(2);
 
-        expect(buildStudioUrl({ resolvedLocal: "http://localhost:5173/" })).toBe("http://localhost:5173/__cirrus");
-        expect(buildStudioUrl({ resolvedLocal: "https://localhost:4000" })).toBe("https://localhost:4000/__cirrus");
+        expect(buildStudioUrl({ resolvedLocal: "http://localhost:5173/" })).toBe("http://localhost:5173/__lunora");
+        expect(buildStudioUrl({ resolvedLocal: "https://localhost:4000" })).toBe("https://localhost:4000/__lunora");
     });
 
     it("falls back to the socket address, normalising the wildcard host", () => {
         expect.assertions(2);
 
-        expect(buildStudioUrl({ address: { address: "0.0.0.0", family: "IPv4", port: 5173 } })).toBe("http://localhost:5173/__cirrus");
-        expect(buildStudioUrl({ address: { address: "::", family: "IPv6", port: 4321 } })).toBe("http://localhost:4321/__cirrus");
+        expect(buildStudioUrl({ address: { address: "0.0.0.0", family: "IPv4", port: 5173 } })).toBe("http://localhost:5173/__lunora");
+        expect(buildStudioUrl({ address: { address: "::", family: "IPv6", port: 4321 } })).toBe("http://localhost:4321/__lunora");
     });
 
     it("brackets IPv6 hosts", () => {
         expect.assertions(1);
 
         // eslint-disable-next-line sonarjs/no-clear-text-protocols -- a local Vite dev server is plain http; asserting that is the point
-        expect(buildStudioUrl({ address: { address: "::1", family: "IPv6", port: 5173 } })).toBe("http://[::1]:5173/__cirrus");
+        expect(buildStudioUrl({ address: { address: "::1", family: "IPv6", port: 5173 } })).toBe("http://[::1]:5173/__lunora");
     });
 
     it("honours a non-root base", () => {
         expect.assertions(1);
 
-        expect(buildStudioUrl({ address: { address: "127.0.0.1", family: "IPv4", port: 5173 }, base: "/app/" })).toBe("http://127.0.0.1:5173/app/__cirrus");
+        expect(buildStudioUrl({ address: { address: "127.0.0.1", family: "IPv4", port: 5173 }, base: "/app/" })).toBe("http://127.0.0.1:5173/app/__lunora");
     });
 
     it("falls back to a default when the address is a pipe string or undefined", () => {
@@ -39,8 +39,8 @@ describe("buildStudioUrl", () => {
         // eslint-disable-next-line sonarjs/publicly-writable-directories -- not a real path, just a stand-in for a named-pipe address string
         const pipe = "/tmp/vite.sock";
 
-        expect(buildStudioUrl({ address: pipe })).toBe("http://localhost:5173/__cirrus");
-        expect(buildStudioUrl({ address: undefined })).toBe("http://localhost:5173/__cirrus");
+        expect(buildStudioUrl({ address: pipe })).toBe("http://localhost:5173/__lunora");
+        expect(buildStudioUrl({ address: undefined })).toBe("http://localhost:5173/__lunora");
     });
 });
 
@@ -51,13 +51,13 @@ describe("studioPlugin", () => {
 
         const plugin = studioPlugin();
 
-        expect(plugin.name).toBe("cirrus:studio");
+        expect(plugin.name).toBe("lunora:studio");
         expect(plugin.apply).toBe("serve");
 
         expectTypeOf(plugin.configureServer).not.toBeUndefined();
     });
 
-    it("serves static studio HTML at /__cirrus and passes other paths through", () => {
+    it("serves static studio HTML at /__lunora and passes other paths through", () => {
         expect.assertions(7);
 
         const plugin = studioPlugin();
@@ -114,7 +114,7 @@ describe("studioPlugin", () => {
         post();
 
         // eslint-disable-next-line @typescript-eslint/unbound-method -- vi.fn mock on the fake server's logger; no `this` binding to lose
-        expect(server.config.logger.info).toHaveBeenCalledWith(expect.stringContaining("/__cirrus"));
+        expect(server.config.logger.info).toHaveBeenCalledWith(expect.stringContaining("/__lunora"));
     });
 
     const installMiddleware = (configuredHost: unknown): ((request: { url?: string }, response: ServerResponse, next: () => void) => void) => {
@@ -159,7 +159,7 @@ describe("studioPlugin", () => {
         const next = vi.fn<() => void>();
 
         // Both the script and stylesheet routes are owned by the plugin. They
-        // resolve to 200 when @cirrus/studio is built, or 501 when it isn't —
+        // resolve to 200 when @lunora/studio is built, or 501 when it isn't —
         // either way the request must not fall through to the next middleware.
         for (const url of [`${STUDIO_PATH}/studio.js`, `${STUDIO_PATH}/styles.css`]) {
             const { end, response } = makeResponse();
@@ -190,7 +190,7 @@ describe("studioPlugin", () => {
     it("403s the schema-edit endpoint on a non-loopback bind", () => {
         expect.assertions(2);
 
-        // The schema-edit endpoint (plan 024) lives under `/__cirrus`, so it is
+        // The schema-edit endpoint (plan 024) lives under `/__lunora`, so it is
         // gated by the same loopback check as the rest of the studio mount.
         const middleware = installMiddleware("0.0.0.0");
         const { response } = makeResponse();

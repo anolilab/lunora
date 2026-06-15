@@ -1,4 +1,4 @@
-import { expect, test } from "../fixtures/cirrus.js";
+import { expect, test } from "../fixtures/lunora.js";
 
 /**
  * Sharding E2E — proves `shardBy("channelId")` routes each channel's writes
@@ -19,7 +19,7 @@ test("messages.list(channelA) doesn't see channel B's messages, and vice versa",
     // slow and adds no extra coverage versus the network round-trip. The
     // better-auth session cookie travels with `user.request`.
     const rpc = async (functionPath: string, args: Record<string, unknown>): Promise<unknown> => {
-        const response = await user.request.post(`/_cirrus/rpc`, {
+        const response = await user.request.post(`/_lunora/rpc`, {
             data: { args, functionPath },
         });
 
@@ -59,7 +59,7 @@ test("messages.list(channelA) doesn't see channel B's messages, and vice versa",
 
 test("both channels run independently — a thrown error in A doesn't kill B", async ({ user }) => {
     const rpc = async (functionPath: string, args: Record<string, unknown>): Promise<unknown> => {
-        const response = await user.request.post(`/_cirrus/rpc`, {
+        const response = await user.request.post(`/_lunora/rpc`, {
             data: { args, functionPath },
         });
 
@@ -75,7 +75,7 @@ test("both channels run independently — a thrown error in A doesn't kill B", a
     // validation with a 4xx. (Sending to a *non-existent* channel id wouldn't
     // error — `shardBy` mints a shard on demand.) The point is resilience: a
     // rejected request must not poison the worker so B's writes still land.
-    const bogusResponse = await user.request.post(`/_cirrus/rpc`, {
+    const bogusResponse = await user.request.post(`/_lunora/rpc`, {
         data: { args: { channelId: channelA, text: 123 }, functionPath: "messages:send" },
     });
 

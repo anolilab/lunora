@@ -4,8 +4,8 @@ const exportCommand: Command = {
     argument: { description: "Optional path (alias for --out)", name: "path", type: String },
     description: "Stream NDJSON of every shard-local + global table from the worker",
     examples: [
-        ["cirrus export --out backup.ndjson", "Dump every table to an NDJSON file"],
-        ["cirrus export --tables messages,users", "Export only specific tables"],
+        ["lunora export --out backup.ndjson", "Dump every table to an NDJSON file"],
+        ["lunora export --tables messages,users", "Export only specific tables"],
     ],
     group: "Data",
     loader: () =>
@@ -18,7 +18,7 @@ const exportCommand: Command = {
         { description: "Comma-separated table allowlist", name: "tables", type: String },
         { description: "Target production — requires an explicit --url", name: "prod", type: Boolean },
         { description: "Worker URL (default http://localhost:8787)", name: "url", type: String },
-        { description: "Admin bearer token (or CIRRUS_ADMIN_TOKEN)", name: "token", type: String },
+        { description: "Admin bearer token (or LUNORA_ADMIN_TOKEN)", name: "token", type: String },
     ],
 };
 

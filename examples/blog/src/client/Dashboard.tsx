@@ -1,9 +1,9 @@
-import { useMutation, useQuery } from "@cirrus/react";
+import { useMutation, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
-import { api } from "../../cirrus/_generated/api.js";
-import type { Doc } from "../../cirrus/_generated/dataModel.js";
+import { api } from "../../lunora/_generated/api.js";
+import type { Doc } from "../../lunora/_generated/dataModel.js";
 
 /**
  * Author dashboard. Lets a signed-in user write a markdown post, attach a

@@ -1,7 +1,7 @@
 /**
- * Canonical error type for Cirrus procedures and middleware.
+ * Canonical error type for Lunora procedures and middleware.
  *
- * The runtime's structural error mapper keys off `name === "CirrusError"` plus
+ * The runtime's structural error mapper keys off `name === "LunoraError"` plus
  * the numeric `status`, so throwing one of these from a handler or middleware
  * yields the right RPC/HTTP status without any further wiring. `code` carries
  * the machine-readable reason for clients.
@@ -39,16 +39,16 @@ const CODE_STATUS = {
     UNPROCESSABLE: 422,
 } as const;
 
-export type CirrusErrorCode = keyof typeof CODE_STATUS;
+export type LunoraErrorCode = keyof typeof CODE_STATUS;
 
-export class CirrusError extends Error {
-    public override readonly name = "CirrusError";
+export class LunoraError extends Error {
+    public override readonly name = "LunoraError";
 
-    public readonly code: CirrusErrorCode;
+    public readonly code: LunoraErrorCode;
 
     public readonly status: number;
 
-    public constructor(code: CirrusErrorCode, message?: string) {
+    public constructor(code: LunoraErrorCode, message?: string) {
         super(message ?? code);
         this.code = code;
         this.status = CODE_STATUS[code];

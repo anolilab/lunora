@@ -1,8 +1,8 @@
 /**
  * Tiny client for the studio's local seed-data endpoint (the "Generate rows"
  * action). Like the schema-edit client, this is NOT a worker admin RPC: it
- * talks to the dev host (the `@cirrus/vite` middleware or the `cirrus dev`
- * studio server) over a same-origin `fetch`. The host runs `@cirrus/seed`'s
+ * talks to the dev host (the `@lunora/vite` middleware or the `lunora dev`
+ * studio server) over a same-origin `fetch`. The host runs `@lunora/seed`'s
  * deterministic planner in Node and returns the generated rows; the caller then
  * inserts them through the worker's `writeRow` admin RPC.
  *
@@ -13,12 +13,12 @@
  *
  * Both hosts mount the handler at the absolute path below — independent of the
  * studio's `basePath` — so the client targets it directly. Keep this in sync
- * with `SEED_ENDPOINT` in `@cirrus/config/studio-host`.
+ * with `SEED_ENDPOINT` in `@lunora/config/studio-host`.
  */
 import type { ColumnMeta } from "./admin";
 
 /** Endpoint both dev hosts mount the seed-data handler at. */
-const SEED_ENDPOINT = "/__cirrus/seed";
+const SEED_ENDPOINT = "/__lunora/seed";
 
 /**
  * The maximum number of rows the studio will request in a single call. Bounded

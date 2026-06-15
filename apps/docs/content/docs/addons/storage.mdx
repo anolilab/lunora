@@ -1,14 +1,14 @@
 ---
-title: "@cirrus/storage"
+title: "@lunora/storage"
 description: R2 object storage with signed URLs.
 ---
 
-`@cirrus/storage` wraps the R2 binding with an ergonomic API and signed URL
+`@lunora/storage` wraps the R2 binding with an ergonomic API and signed URL
 helpers so the browser can upload/download directly without proxying through
 your Worker.
 
 ```ts
-import { createStorage } from "@cirrus/storage";
+import { createStorage } from "@lunora/storage";
 
 export const storage = createStorage({
     bucket: env.FILES,
@@ -20,7 +20,7 @@ export const storage = createStorage({
 ## Direct upload from a mutation
 
 ```ts
-import { mutation, v } from "@cirrus/server";
+import { mutation, v } from "@lunora/server";
 import { storage } from "./storage";
 
 export const uploadAvatar = mutation({
@@ -55,5 +55,5 @@ direct GETs without round-tripping back to R2 for ACL checks.
 
 ## See also
 
-- [@cirrus/server](/docs/api/server)
+- [@lunora/server](/docs/api/server)
 - [Architecture](/docs/architecture)

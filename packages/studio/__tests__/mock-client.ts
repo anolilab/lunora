@@ -2,7 +2,7 @@ import type {
     AuthPage,
     AuthSession,
     AuthUser,
-    CirrusClient,
+    LunoraClient,
     CronJobInfo,
     FunctionDescriptor,
     FunctionReference,
@@ -15,12 +15,12 @@ import type {
     StorageListPage,
     VectorIndexSummary,
     VectorQueryMatch,
-} from "@cirrus/client";
+} from "@lunora/client";
 import { vi } from "vitest";
 
 interface MockClientHooks {
     action: ReturnType<typeof vi.fn>;
-    asClient: CirrusClient;
+    asClient: LunoraClient;
     banAuthUser: ReturnType<typeof vi.fn>;
     cancelAuthOrgInvitation: ReturnType<typeof vi.fn>;
     cancelScheduledJob: ReturnType<typeof vi.fn>;
@@ -88,7 +88,7 @@ type Impl = (reference: string, args: unknown, options: unknown) => unknown;
 
 const makeMethod = (impl?: Impl): ReturnType<typeof vi.fn> =>
     vi.fn<(function_: FunctionReference, args: unknown, options: unknown) => Promise<unknown>>(
-        async (function_: FunctionReference, args: unknown, options: unknown) => (impl ? impl(function_.__cirrusRef, args, options) : undefined),
+        async (function_: FunctionReference, args: unknown, options: unknown) => (impl ? impl(function_.__lunoraRef, args, options) : undefined),
     );
 
 interface MockClientImpls {
@@ -228,11 +228,11 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
             options?: { onError?: (error: { message: string }) => void },
         ) => () => void
     >((function_: FunctionReference, _args: unknown, callback: (value: unknown) => void, options?: { onError?: (error: { message: string }) => void }) => {
-        const set = subscribers.get(function_.__cirrusRef) ?? new Set<Sub>();
+        const set = subscribers.get(function_.__lunoraRef) ?? new Set<Sub>();
         const sub: Sub = { onError: options?.onError, onValue: callback };
 
         set.add(sub);
-        subscribers.set(function_.__cirrusRef, set);
+        subscribers.set(function_.__lunoraRef, set);
 
         return () => {
             set.delete(sub);
@@ -314,7 +314,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         subscribeScheduledJobs,
         uploadStorageObject,
         ...authAdminMethods,
-    } as unknown as CirrusClient;
+    } as unknown as LunoraClient;
 
     return {
         action,

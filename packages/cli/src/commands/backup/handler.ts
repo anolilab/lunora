@@ -1,5 +1,5 @@
 /**
- * `cirrus backup create | list | restore | pitr` — managed snapshot backups on
+ * `lunora backup create | list | restore | pitr` — managed snapshot backups on
  * top of the export/import admin endpoints, plus native point-in-time recovery.
  *
  * `create` exports every table to a timestamped NDJSON file under a backup
@@ -27,13 +27,13 @@ import type { FetchLike } from "../run/handler";
 import type { BackupOptions } from "./index";
 
 /** Default directory (relative to cwd) backups and their manifest live in. */
-const DEFAULT_BACKUP_DIR = ".cirrus-backups";
+const DEFAULT_BACKUP_DIR = ".lunora-backups";
 const MANIFEST_FILE = "manifest.json";
 
-/** Worker endpoint that forwards a per-shard native-PITR admin op (see `@cirrus/runtime`). */
-const PITR_ENDPOINT_PATH = "/_cirrus/admin/pitr";
-const GET_PITR_BOOKMARK_OP = "__cirrus_admin__:getPitrBookmark";
-const PITR_RESTORE_OP = "__cirrus_admin__:pitrRestore";
+/** Worker endpoint that forwards a per-shard native-PITR admin op (see `@lunora/runtime`). */
+const PITR_ENDPOINT_PATH = "/_lunora/admin/pitr";
+const GET_PITR_BOOKMARK_OP = "__lunora_admin__:getPitrBookmark";
+const PITR_RESTORE_OP = "__lunora_admin__:pitrRestore";
 
 type BackupSubcommand = "create" | "list" | "pitr" | "restore";
 
@@ -53,7 +53,7 @@ interface BackupCommandOptions {
     /** `pitr restore`: an explicit bookmark to restore to (e.g. an undo bookmark). Wins over `--at`. */
     bookmark?: string;
     cwd?: string;
-    /** Backup directory (relative to cwd). Defaults to `.cirrus-backups`. */
+    /** Backup directory (relative to cwd). Defaults to `.lunora-backups`. */
     dir?: string;
     fetchImpl?: StreamingFetchLike;
     logger: Logger;
@@ -116,7 +116,7 @@ const runBackupCreate = async (options: BackupCommandOptions, directory: string)
 
     const timestamp = (options.now ?? (() => new Date()))().toISOString();
     // Colons/periods are awkward in filenames across platforms; keep the raw id.
-    const file = `cirrus-backup-${timestamp.replaceAll(/[.:]/gu, "-")}.ndjson`;
+    const file = `lunora-backup-${timestamp.replaceAll(/[.:]/gu, "-")}.ndjson`;
 
     const result = await runExportCommand({
         cwd: options.cwd,
@@ -164,7 +164,7 @@ const runBackupRestore = async (options: BackupCommandOptions, directory: string
     const { target } = options;
 
     if (target === undefined || target.length === 0) {
-        options.logger.error("restore requires a backup id or file path. Usage: cirrus backup restore <id|file>");
+        options.logger.error("restore requires a backup id or file path. Usage: lunora backup restore <id|file>");
 
         return { code: 1 };
     }
@@ -193,17 +193,17 @@ const runBackupRestore = async (options: BackupCommandOptions, directory: string
 
     // Plain snapshot import — the off-platform / portable restore. For in-place
     // time-travel to an arbitrary moment in the last 30 days, use native PITR
-    // (`cirrus backup pitr` / the studio) rather than replaying a snapshot.
+    // (`lunora backup pitr` / the studio) rather than replaying a snapshot.
     return { code: result.code };
 };
 
 /**
- * `cirrus backup pitr` — native Durable-Object point-in-time recovery (the
+ * `lunora backup pitr` — native Durable-Object point-in-time recovery (the
  * in-place ≤30-day tier). With no flags it reads the shard's current bookmark;
  * `--at &lt;time>` previews the bookmark nearest that moment. `--restore` arms a
  * restore (to `--bookmark`, or the one nearest `--at`) and returns an undo
  * bookmark; `--restart` applies it immediately. Hits the admin-gated
- * `/_cirrus/admin/pitr` endpoint, which forwards the op to one shard.
+ * `/_lunora/admin/pitr` endpoint, which forwards the op to one shard.
  */
 interface PitrRequest {
     fetchImpl: FetchLike;
@@ -213,10 +213,10 @@ interface PitrRequest {
 
 /** Validate the guards and resolve the token / URL / fetch for a `pitr` call. Logs and returns `undefined` on any failure. */
 const resolvePitrRequest = (options: BackupCommandOptions): PitrRequest | undefined => {
-    const token = options.token ?? process.env.CIRRUS_ADMIN_TOKEN;
+    const token = options.token ?? process.env.LUNORA_ADMIN_TOKEN;
 
     if (!token) {
-        options.logger.error("admin token required — pass --token or set CIRRUS_ADMIN_TOKEN");
+        options.logger.error("admin token required — pass --token or set LUNORA_ADMIN_TOKEN");
 
         return undefined;
     }
@@ -330,7 +330,7 @@ const runBackupCommand = async (options: BackupCommandOptions): Promise<BackupCo
 /** Narrow a raw argument to a known {@link BackupSubcommand}. */
 const isBackupSubcommand = (value: unknown): value is BackupSubcommand => value === "create" || value === "list" || value === "pitr" || value === "restore";
 
-/** `cirrus backup &lt;subcommand>` handler (lazy-loaded via the command's `loader`). */
+/** `lunora backup &lt;subcommand>` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<BackupOptions> = defineHandler<BackupOptions>(({ argument, cwd, logger, options }) => {
     const sub = argument[0];
 

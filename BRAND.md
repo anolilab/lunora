@@ -1,10 +1,10 @@
-# Cirrus Brand Guide
+# Lunora Brand Guide
 
-Short and opinionated. The goal: make Cirrus instantly recognizable, **distinct from Cloudflare itself**, and friendly to monochrome contexts (terminal, README, docs site).
+Short and opinionated. The goal: make Lunora instantly recognizable, **distinct from Cloudflare itself**, and friendly to monochrome contexts (terminal, README, docs site).
 
 ## Logo
 
-The Cirrus mark is the **triple streak** — three thin parallel horizontal strokes of decreasing length, top-aligned left, trailing right.
+The Lunora mark is the **triple streak** — three thin parallel horizontal strokes of decreasing length, top-aligned left, trailing right.
 
 - Reads as: speed, layers (worker / DO / D1), and the edge of a cloud.
 - ASCII form: `≡` (used in CLI prompts and where rasterised art is wasted).
@@ -16,9 +16,9 @@ All in [`apps/docs/public/`](./apps/docs/public/):
 
 | File                  | Purpose                                                  |
 | --------------------- | -------------------------------------------------------- |
-| `cirrus-mark.svg`     | Mark only — monochrome ink, 120×80 viewBox.              |
-| `cirrus-wordmark.svg` | Wordmark only — lowercase, with the accent dot on the i. |
-| `cirrus-lockup.svg`   | Standard lockup — mark + wordmark, side by side.         |
+| `lunora-mark.svg`     | Mark only — monochrome ink, 120×80 viewBox.              |
+| `lunora-wordmark.svg` | Wordmark only — lowercase, with the accent dot on the i. |
+| `lunora-lockup.svg`   | Standard lockup — mark + wordmark, side by side.         |
 | `og.svg`              | Open Graph card, 1200×630, dark mode.                    |
 | `favicon.svg`         | 32×32 mark for browser tabs.                             |
 
@@ -31,7 +31,7 @@ All in [`apps/docs/public/`](./apps/docs/public/):
 | Brand yellow | `#FCC419` | The accent. The dot on the `i`, primary buttons, links, focus rings. |
 | Mute         | `#A0A0A0` | Secondary text on dark backgrounds (taglines, captions).             |
 
-**Hard rule:** _never_ tint the mark Cloudflare orange (`#F38020`) or any orange. Cirrus runs on Cloudflare but is not a Cloudflare product, and orange immediately confuses that. The brand accent is a clear lemon-gold yellow (`#FCC419`) — keep it on the yellow side of the line, never let it drift toward amber/orange.
+**Hard rule:** _never_ tint the mark Cloudflare orange (`#F38020`) or any orange. Lunora runs on Cloudflare but is not a Cloudflare product, and orange immediately confuses that. The brand accent is a clear lemon-gold yellow (`#FCC419`) — keep it on the yellow side of the line, never let it drift toward amber/orange.
 
 The brand-yellow accent is a single visual hook — use it on the i-dot, primary buttons, link colour, focus rings, and code-block string highlights. One hook per surface; don't flood large areas with it.
 
@@ -42,15 +42,15 @@ docs/marketing site and the studio — it expands into a tokenised UI scale that
 keeps the same anchors (neutral-dark base, brand-yellow accent, no orange) but
 adds the surfaces, borders and semantic colours an interface needs. The product
 surfaces follow **Supabase Studio's neutral-gray scale** — swap their signature
-green for the Cirrus yellow, keep everything else.
+green for the Lunora yellow, keep everything else.
 
 The canonical tokens live in **[`brand/tokens.css`](./brand/tokens.css)** as CSS
-custom properties (`--cirrus-*`). The **dark theme is primary** — a near-black
-night sky above the cirrus layer — with a `:root[data-theme="light"]` paper
+custom properties (`--lunora-*`). The **dark theme is primary** — a near-black
+night sky above the lunora layer — with a `:root[data-theme="light"]` paper
 variant. A self-contained reference page that exercises the whole language
 (mark, palette, type, components, a studio mock) is at
-**[`brand/cirrus-brand.html`](./brand/cirrus-brand.html)** — open it in a browser
-when designing the cirrus page.
+**[`brand/lunora-brand.html`](./brand/lunora-brand.html)** — open it in a browser
+when designing the lunora page.
 
 | Role               | Dark (primary) | Light (paper) | Notes                                   |
 | ------------------ | -------------- | ------------- | --------------------------------------- |
@@ -68,7 +68,7 @@ headings), **JetBrains Mono** for eyebrows, code, IDs and every number. The
 mono-eyebrow + tight-display pairing is the product's signature — it reads
 engineered, not marketed.
 
-The studio (`@cirrus/studio`) mirrors these values under a `--c-*` namespace
+The studio (`@lunora/studio`) mirrors these values under a `--c-*` namespace
 in its own scoped stylesheet (it can't ship globals into a host page); the layout
 is a top bar + grouped left sidebar + content, in the spirit of a studio console.
 
@@ -79,7 +79,7 @@ is a top bar + grouped left sidebar + content, in the spirit of a studio console
 - **Body / docs:** Inter or system-ui at weight 400.
 - **Code:** JetBrains Mono, Menlo, Consolas, monospace.
 
-The wordmark is always lowercase (`cirrus`, never `Cirrus` or `CIRRUS`). In prose, the product name is capitalised at sentence start as a normal English word.
+The wordmark is always lowercase (`lunora`, never `Lunora` or `LUNORA`). In prose, the product name is capitalised at sentence start as a normal English word.
 
 ## Do
 
@@ -99,6 +99,6 @@ The wordmark is always lowercase (`cirrus`, never `Cirrus` or `CIRRUS`). In pros
 
 ## Voice
 
-- Direct, technical, not marketing-y. Cirrus is for engineers who already know what a Durable Object is.
+- Direct, technical, not marketing-y. Lunora is for engineers who already know what a Durable Object is.
 - Be honest about the alpha status and the trade-offs (fewer features than Convex; you own the infra).
 - Avoid superlatives. Show, don't claim.

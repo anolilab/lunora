@@ -9,4 +9,4 @@ export type { QueuedSend } from "./queue";
 export { consumeQueuedSend, toQueuedPayload } from "./queue";
 export { default as renderEmail } from "./render";
 export { default as createResendTransport } from "./resend-transport";
-export type { CirrusMailOptions, Mailer, MailTransport, QueueLike, SendOptions, SendPayload } from "./types";
+export type { LunoraMailOptions, Mailer, MailTransport, QueueLike, SendOptions, SendPayload } from "./types";

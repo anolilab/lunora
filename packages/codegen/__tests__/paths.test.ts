@@ -13,7 +13,7 @@ describe("sanitizeNamespace", () => {
     it("collapses a directory's index to the directory name (component convention)", () => {
         expect.assertions(2);
 
-        // cirrus/ratelimit/index.ts → api.ratelimit.* (not api.ratelimit_index.*)
+        // lunora/ratelimit/index.ts → api.ratelimit.* (not api.ratelimit_index.*)
         expect(sanitizeNamespace("ratelimit/index")).toBe("ratelimit");
         expect(sanitizeNamespace("billing/stripe/index")).toBe("billing_stripe");
     });

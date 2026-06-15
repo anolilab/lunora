@@ -1,4 +1,4 @@
-import { useCirrus } from "@cirrus/react";
+import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -57,11 +57,11 @@ const groupByTable = (policies: RlsPolicyMetadata[]): TableCoverage[] => {
  * It is deliberately read-only: RLS lives in code (the `when` predicate is an
  * opaque closure, never serialized), so the inspector surfaces the schema's
  * shape for auditing — DDL-from-UI is a non-goal. The metadata is statically
- * discovered by `@cirrus/codegen` and served by `__cirrus_admin__:rlsPolicies`,
+ * discovered by `@lunora/codegen` and served by `__lunora_admin__:rlsPolicies`,
  * so it refreshes on every codegen run (dev: on save; prod: on deploy).
  */
 const RlsPanel = (): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const t = useT();
 
     const [data, setData] = useState<RlsPoliciesResult | null>(null);
@@ -92,7 +92,7 @@ const RlsPanel = (): ReactElement => {
     const roles = useMemo<RlsRoleMetadata[]>(() => data?.roles ?? [], [data]);
 
     return (
-        <div className="flex flex-col gap-6" data-testid="cirrus-rls-panel">
+        <div className="flex flex-col gap-6" data-testid="lunora-rls-panel">
             {error !== null && (
                 <p className="text-sm text-destructive" data-testid="rls-error" role="alert">
                     {error}

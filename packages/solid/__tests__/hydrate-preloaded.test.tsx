@@ -1,14 +1,14 @@
-import type { Preloaded } from "@cirrus/client";
+import type { Preloaded } from "@lunora/client";
 import { render } from "@solidjs/testing-library";
 import { describe, expect, it } from "vitest";
 
-import { CirrusProvider } from "../src/cirrus-provider";
+import { LunoraProvider } from "../src/lunora-provider";
 import hydratePreloaded from "../src/hydrate-preloaded";
 import { createFakeClient } from "./fake-client";
 
 const makePreloaded = <T,>(value: T): Preloaded<T> => {
     return {
-        __cirrusPreloaded: true,
+        __lunoraPreloaded: true,
         args: { channelId: "channel:demo" },
         functionPath: "messages:list",
         shardKey: "channel:demo",
@@ -29,7 +29,7 @@ describe(hydratePreloaded, () => {
                 // not undefined — so there is no Suspense/loading window.
                 return <pre>{JSON.stringify(data())}</pre>;
             },
-            { wrapper: (props) => <CirrusProvider client={fake.asClient}>{props.children}</CirrusProvider> },
+            { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
         );
 
         expect(container.textContent).toBe(JSON.stringify({ messages: ["seeded"] }));
@@ -45,7 +45,7 @@ describe(hydratePreloaded, () => {
 
                 return <pre>{JSON.stringify(data())}</pre>;
             },
-            { wrapper: (props) => <CirrusProvider client={fake.asClient}>{props.children}</CirrusProvider> },
+            { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
         );
 
         // The effect ran on mount and opened exactly one subscription, carrying
@@ -70,7 +70,7 @@ describe(hydratePreloaded, () => {
 
                 return <pre>{JSON.stringify(data())}</pre>;
             },
-            { wrapper: (props) => <CirrusProvider client={fake.asClient}>{props.children}</CirrusProvider> },
+            { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
         );
 
         expect(fake.subscriptions[0]?.unsubscribed).toBe(false);

@@ -12,7 +12,7 @@ const isLeadingPrefix = (a: ReadonlyArray<string>, b: ReadonlyArray<string>): bo
 };
 
 /**
- * Cirrus port of splinter's `0009_duplicate_index`.
+ * Lunora port of splinter's `0009_duplicate_index`.
  *
  * A btree secondary index is redundant when another index already serves every
  * lookup it does — i.e. its columns are a leading prefix of the other's

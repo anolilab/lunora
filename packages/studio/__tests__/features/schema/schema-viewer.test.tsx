@@ -1,4 +1,4 @@
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
@@ -52,9 +52,9 @@ const createClient = (): MockClientHooks =>
     });
 
 const renderViewer = (mock: MockClientHooks) => (
-    <CirrusProvider client={mock.asClient}>
+    <LunoraProvider client={mock.asClient}>
         <SchemaViewer />
-    </CirrusProvider>
+    </LunoraProvider>
 );
 
 describe("schemaViewer", () => {
@@ -62,9 +62,9 @@ describe("schemaViewer", () => {
         expect.assertions(3);
 
         render(
-            <CirrusProvider client={createClient().asClient}>
+            <LunoraProvider client={createClient().asClient}>
                 <SchemaViewer schemaEditable />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         await screen.findByTestId("sc-table-messages");
@@ -114,7 +114,7 @@ describe("schemaViewer", () => {
         fireEvent.click(screen.getByTestId("sc-toggle-messages"));
         fireEvent.click(screen.getByTestId("sc-toggle-messages"));
 
-        const pageCalls = mock.query.mock.calls.filter((call) => call[0].__cirrusRef === ADMIN_FUNCTIONS.readTablePage);
+        const pageCalls = mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.readTablePage);
 
         expect(pageCalls).toHaveLength(1);
     });

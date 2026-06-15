@@ -1,4 +1,4 @@
-import { CirrusClient } from "../cirrus-client";
+import { LunoraClient } from "../lunora-client";
 
 /** Options accepted by {@link createServerClient}. */
 export interface ServerClientOptions {
@@ -19,14 +19,14 @@ export interface ServerClientOptions {
      */
     token?: string;
 
-    /** Base URL of the deployed Cirrus worker, e.g. `https://app.example.workers.dev`. */
+    /** Base URL of the deployed Lunora worker, e.g. `https://app.example.workers.dev`. */
     url: string;
 }
 
 /**
- * Build a request-scoped {@link CirrusClient} for use inside an SSR loader. SSR
+ * Build a request-scoped {@link LunoraClient} for use inside an SSR loader. SSR
  * data loading only ever calls `.query()` (HTTP RPC over `fetch`); a
- * `CirrusClient` opens a socket lazily on `.subscribe()`/`.stream()` and those
+ * `LunoraClient` opens a socket lazily on `.subscribe()`/`.stream()` and those
  * are never called server-side, so no live connection is established even if the
  * server runtime happens to expose a global `WebSocket`.
  *
@@ -35,12 +35,12 @@ export interface ServerClientOptions {
  * would leak one request's identity into another.
  *
  * This is the framework-neutral home of the helper that previously lived only in
- * `@cirrus/react/server`; the React server module re-exports the same surface so
+ * `@lunora/react/server`; the React server module re-exports the same surface so
  * existing imports keep working.
  */
-export const createServerClient = (options: ServerClientOptions): CirrusClient => {
-    // `fetch` falls back to the ambient global inside CirrusClient when omitted.
-    const client = new CirrusClient({ fetch: options.fetch, url: options.url });
+export const createServerClient = (options: ServerClientOptions): LunoraClient => {
+    // `fetch` falls back to the ambient global inside LunoraClient when omitted.
+    const client = new LunoraClient({ fetch: options.fetch, url: options.url });
 
     if (options.token !== undefined) {
         client.setAuthToken(options.token);

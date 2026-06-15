@@ -1,15 +1,15 @@
-import type { JsonSchema } from "@cirrus/values";
+import type { JsonSchema } from "@lunora/values";
 
 import { GENERATED_HEADER } from "./emit";
 import type { FunctionIR } from "./ir";
 import sanitizeNamespace from "./paths";
-import { argsObjectSchema, CIRRUS_ERROR_CODES } from "./schema-ir";
+import { argsObjectSchema, LUNORA_ERROR_CODES } from "./schema-ir";
 
 // ─── OpenRPC document assembly ───────────────────────────────────────────────
 //
 // OpenRPC (https://spec.open-rpc.org) is "the OpenAPI for JSON-RPC": instead of
-// HTTP `paths`, it describes a flat `methods` array. Cirrus's RPC transport is
-// JSON-RPC-shaped — one endpoint `POST /_cirrus/rpc` with an envelope of
+// HTTP `paths`, it describes a flat `methods` array. Lunora's RPC transport is
+// JSON-RPC-shaped — one endpoint `POST /_lunora/rpc` with an envelope of
 // `{ functionPath, args }` — so OpenRPC is the RPC-native spec, complementing
 // the OpenAPI document (which additionally covers `httpRouter()` REST routes;
 // those are NOT representable in OpenRPC and are intentionally excluded here).
@@ -28,7 +28,7 @@ const inferredResultSchema = (): JsonSchema => {
 };
 
 /**
- * Build one OpenRPC method object for a query/mutation/action. Cirrus passes a
+ * Build one OpenRPC method object for a query/mutation/action. Lunora passes a
  * single args object per call (`{ functionPath, args }`), so the method exposes
  * exactly one named param — `args` — whose `schema` is the function's
  * `v.*`-derived args object. Modelling it as a single object param (rather than
@@ -37,7 +37,7 @@ const inferredResultSchema = (): JsonSchema => {
  *
  * `result` comes from `.output()` when declared, else a permissive inferred
  * schema. The method is namespaced/grouped by file via the `x-tags` extension
- * (OpenRPC has no first-class tag grouping), and the standard `CirrusError`
+ * (OpenRPC has no first-class tag grouping), and the standard `LunoraError`
  * codes are enumerated under `errors` so clients can switch on `error.code`.
  */
 const rpcMethod = (definition: FunctionIR): Record<string, unknown> => {
@@ -45,9 +45,9 @@ const rpcMethod = (definition: FunctionIR): Record<string, unknown> => {
     const functionPath = `${namespace}:${definition.exportName}`;
 
     return {
-        description: `Invoke the \`${definition.kind}\` \`${functionPath}\` over the Cirrus RPC envelope (POST /_cirrus/rpc, body \`{ "functionPath": "${functionPath}", "args": { … } }\`).`,
-        errors: CIRRUS_ERROR_CODES.map((code, index) => {
-            // OpenRPC error `code`s are integers; Cirrus's codes are strings, so
+        description: `Invoke the \`${definition.kind}\` \`${functionPath}\` over the Lunora RPC envelope (POST /_lunora/rpc, body \`{ "functionPath": "${functionPath}", "args": { … } }\`).`,
+        errors: LUNORA_ERROR_CODES.map((code, index) => {
+            // OpenRPC error `code`s are integers; Lunora's codes are strings, so
             // the machine-readable string is carried under `data.code` (what
             // clients switch on) and a synthetic stable integer fills `code`.
             return { code: -32_000 - index, data: { code }, message: code };
@@ -69,7 +69,7 @@ const rpcMethod = (definition: FunctionIR): Record<string, unknown> => {
             schema: inferredResultSchema(),
         },
         summary: `${definition.kind}: ${functionPath}`,
-        "x-cirrus-function-kind": definition.kind,
+        "x-lunora-function-kind": definition.kind,
         // OpenRPC has no first-class tag grouping; surface the file namespace as
         // an `x-tags` extension so tooling can group methods by source file.
         "x-tags": [{ name: namespace }],
@@ -84,7 +84,7 @@ interface OpenRpcEmitInput {
 }
 
 /**
- * Emit an OpenRPC 1.x document describing Cirrus's JSON-RPC surface.
+ * Emit an OpenRPC 1.x document describing Lunora's JSON-RPC surface.
  *
  * Only the RPC `query`/`mutation`/`action` functions become `methods` — one per
  * function, `name` = `file:fn`. `internal` (off the external RPC path) and
@@ -92,7 +92,7 @@ interface OpenRpcEmitInput {
  * the OpenAPI emitter applies. Each method's single `args` param is typed from
  * the function's `v.*` validators (`argsObjectSchema`); `result` is the
  * `.output()` schema when declared, else a best-effort inferred schema. The
- * standard `CirrusError` codes ride along under each method's `errors`.
+ * standard `LunoraError` codes ride along under each method's `errors`.
  *
  * `httpRouter()` typed REST routes are deliberately omitted — OpenRPC is
  * RPC-only and cannot represent REST paths; the OpenAPI document is the spec
@@ -112,8 +112,8 @@ const buildOpenRpcDocument = (input: OpenRpcEmitInput): Record<string, unknown> 
 
     const document = {
         info: {
-            description: "Auto-generated from @cirrus/values-typed functions by @cirrus/codegen. Do not edit — run `cirrus codegen` to regenerate.",
-            title: "Cirrus RPC",
+            description: "Auto-generated from @lunora/values-typed functions by @lunora/codegen. Do not edit — run `lunora codegen` to regenerate.",
+            title: "Lunora RPC",
             // TODO: thread the project/app package version through here when available.
             version,
         },

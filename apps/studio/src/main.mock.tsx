@@ -1,7 +1,7 @@
 import "./index.css";
 
-import type { FunctionDescriptor, StudioAppProps } from "@cirrus/studio";
-import { StudioApp } from "@cirrus/studio";
+import type { FunctionDescriptor, StudioAppProps } from "@lunora/studio";
+import { StudioApp } from "@lunora/studio";
 import { createRoot } from "react-dom/client";
 
 import createDevMockClient from "./mock/dev-client.js";
@@ -21,7 +21,7 @@ const MOCK_FUNCTIONS: FunctionDescriptor[] = [
 const MOCK_OPENAPI_SPEC: Record<string, unknown> = {
     components: {
         responses: {
-            CirrusError: {
+            LunoraError: {
                 content: {
                     "application/json": {
                         schema: {
@@ -40,14 +40,14 @@ const MOCK_OPENAPI_SPEC: Record<string, unknown> = {
                         },
                     },
                 },
-                description: "A Cirrus error response.",
+                description: "A Lunora error response.",
             },
         },
     },
-    info: { description: "Mock spec for the studio design harness.", title: "Cirrus API", version: "0.0.0" },
+    info: { description: "Mock spec for the studio design harness.", title: "Lunora API", version: "0.0.0" },
     openapi: "3.1.0",
     paths: {
-        "/_cirrus/rpc#messages:list": {
+        "/_lunora/rpc#messages:list": {
             post: {
                 operationId: "messages:list",
                 requestBody: {
@@ -65,21 +65,21 @@ const MOCK_OPENAPI_SPEC: Record<string, unknown> = {
                     },
                     required: true,
                 },
-                responses: { "200": { description: "Successful RPC result." }, default: { $ref: "#/components/responses/CirrusError" } },
+                responses: { "200": { description: "Successful RPC result." }, default: { $ref: "#/components/responses/LunoraError" } },
                 summary: "query: messages:list",
                 tags: ["messages"],
             },
         },
-        "/_cirrus/rpc#messages:send": {
+        "/_lunora/rpc#messages:send": {
             post: {
                 operationId: "messages:send",
-                responses: { "200": { description: "Successful RPC result." }, default: { $ref: "#/components/responses/CirrusError" } },
+                responses: { "200": { description: "Successful RPC result." }, default: { $ref: "#/components/responses/LunoraError" } },
                 summary: "mutation: messages:send",
                 tags: ["messages"],
             },
         },
     },
-    tags: [{ description: "Operations declared in `cirrus/messages`.", name: "messages" }],
+    tags: [{ description: "Operations declared in `lunora/messages`.", name: "messages" }],
 };
 
 // Hoisted to module scope so the JSX prop is a single stable object, not a fresh

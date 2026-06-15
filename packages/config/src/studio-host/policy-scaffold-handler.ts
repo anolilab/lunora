@@ -1,12 +1,12 @@
 /**
  * Local policy-scaffold request handler for the access-rule editor (plan 025
  * Item 3). The RLS sibling of {@link ./schema-edit-handler}: transport-agnostic
- * so both dev hosts — the `@cirrus/vite` `/__cirrus` middleware and the
- * `cirrus dev` studio server — can mount it, each adapting its own
+ * so both dev hosts — the `@lunora/vite` `/__lunora` middleware and the
+ * `lunora dev` studio server — can mount it, each adapting its own
  * request/response object to {@link PolicyScaffoldRequest} / the returned
  * {@link PolicyScaffoldResponse}.
  *
- * Local-dev-only by construction: it writes a new policy stub under `cirrus/`
+ * Local-dev-only by construction: it writes a new policy stub under `lunora/`
  * (or appends `.use(rls(...))` to a procedure file) and runs codegen, both of
  * which need the project's filesystem + toolchain, so it is never reachable from
  * a deployed worker. The dev hosts mount it only on a loopback bind, gated by
@@ -21,7 +21,7 @@
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { isAbsolute, relative } from "node:path";
 
-import { CodegenDiagnosticError, runCodegen } from "@cirrus/codegen";
+import { CodegenDiagnosticError, runCodegen } from "@lunora/codegen";
 
 import join from "../path";
 import type { DestructivePolicyEdit, PolicyEdit, PolicyScaffoldFailureReason, ScaffoldPolicyEdit, WireRlsEdit } from "../schema-edit/policy-scaffold";
@@ -29,14 +29,14 @@ import { classifyPolicyEdit, scaffoldPolicyFile, wireRlsIntoProcedure } from "..
 
 /**
  * Endpoint path both dev hosts mount the handler at. A sibling of the schema
- * editor's `/__cirrus/schema-edit`; the double underscore keeps it clear of the
- * CLI's `/_cirrus/*` worker proxy (single underscore).
+ * editor's `/__lunora/schema-edit`; the double underscore keeps it clear of the
+ * CLI's `/_lunora/*` worker proxy (single underscore).
  */
-const POLICY_SCAFFOLD_ENDPOINT = "/__cirrus/policy-scaffold";
+const POLICY_SCAFFOLD_ENDPOINT = "/__lunora/policy-scaffold";
 
 /** A `wireRls` request additionally carries the procedure's source-file path. */
 interface WirePolicyEdit extends WireRlsEdit {
-    /** Cirrus-relative module path of the procedure file (no extension), e.g. `messages/list`. */
+    /** Lunora-relative module path of the procedure file (no extension), e.g. `messages/list`. */
     readonly filePath: string;
 }
 
@@ -49,9 +49,9 @@ interface PolicyScaffoldRequest {
     readonly body?: unknown;
     /** HTTP method — only `POST` is handled. */
     readonly method: string;
-    /** Project root containing the `cirrus/` directory. */
+    /** Project root containing the `lunora/` directory. */
     readonly projectRoot: string;
-    /** Override the cirrus subdirectory name. Defaults to `"cirrus"`. */
+    /** Override the lunora subdirectory name. Defaults to `"lunora"`. */
     readonly schemaDirectory?: string;
 }
 
@@ -78,7 +78,7 @@ const statusForFailure = (reason: PolicyScaffoldFailureReason): number => {
 
 /** Write source atomically (temp file + rename) so a crash can't leave a half-written file. */
 const writeAtomic = (path: string, text: string): void => {
-    const temporaryPath = `${path}.cirrus-tmp`;
+    const temporaryPath = `${path}.lunora-tmp`;
 
     writeFileSync(temporaryPath, text, "utf8");
     renameSync(temporaryPath, path);
@@ -94,7 +94,7 @@ const runCodegenForResponse = (request: PolicyScaffoldRequest, okBody: Record<st
     let diagnostics: ReadonlyArray<string> = [];
 
     try {
-        runCodegen({ cirrusDirectory: request.schemaDirectory ?? "cirrus", projectRoot: request.projectRoot });
+        runCodegen({ lunoraDirectory: request.schemaDirectory ?? "lunora", projectRoot: request.projectRoot });
     } catch (error: unknown) {
         if (error instanceof CodegenDiagnosticError) {
             diagnostics = [error.message];
@@ -128,8 +128,8 @@ const handleScaffoldPolicy = (request: PolicyScaffoldRequest, edit: ScaffoldPoli
         return { body: { error: result.reason, ok: false }, status: statusForFailure(result.reason) };
     }
 
-    const cirrusDirectory = request.schemaDirectory ?? "cirrus";
-    const targetPath = join(request.projectRoot, cirrusDirectory, result.fileName);
+    const lunoraDirectory = request.schemaDirectory ?? "lunora";
+    const targetPath = join(request.projectRoot, lunoraDirectory, result.fileName);
 
     // Never clobber an existing policy file — that could erase a developer's
     // real rules. Refuse and let the editor surface the conflict.
@@ -143,17 +143,17 @@ const handleScaffoldPolicy = (request: PolicyScaffoldRequest, edit: ScaffoldPoli
 };
 
 /**
- * Resolve a procedure file path inside the cirrus directory, rejecting absolute
+ * Resolve a procedure file path inside the lunora directory, rejecting absolute
  * paths and `..` traversal so a request can't reach outside the project tree.
  */
-const resolveProcedureFile = (projectRoot: string, cirrusDirectory: string, filePath: string): string | undefined => {
+const resolveProcedureFile = (projectRoot: string, lunoraDirectory: string, filePath: string): string | undefined => {
     if (typeof filePath !== "string" || filePath.length === 0 || isAbsolute(filePath) || filePath.includes("\\")) {
         return undefined;
     }
 
-    const cirrusRoot = join(projectRoot, cirrusDirectory);
-    const resolved = join(cirrusRoot, `${filePath}.ts`);
-    const relativePath = relative(cirrusRoot, resolved);
+    const lunoraRoot = join(projectRoot, lunoraDirectory);
+    const resolved = join(lunoraRoot, `${filePath}.ts`);
+    const relativePath = relative(lunoraRoot, resolved);
 
     if (relativePath.startsWith("..") || isAbsolute(relativePath)) {
         return undefined;
@@ -164,7 +164,7 @@ const resolveProcedureFile = (projectRoot: string, cirrusDirectory: string, file
 
 /** Handle a `wireRls` request: append `.use(rls(policies))` to an existing procedure's chain. */
 const handleWireRls = (request: PolicyScaffoldRequest, edit: WirePolicyEdit): PolicyScaffoldResponse => {
-    const procedurePath = resolveProcedureFile(request.projectRoot, request.schemaDirectory ?? "cirrus", edit.filePath);
+    const procedurePath = resolveProcedureFile(request.projectRoot, request.schemaDirectory ?? "lunora", edit.filePath);
 
     if (procedurePath === undefined || !existsSync(procedurePath)) {
         return { body: { error: "unknown-procedure", ok: false }, status: 404 };

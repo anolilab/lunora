@@ -6,16 +6,16 @@
  * over the admin RPC so a Playwright test can drive "request reset → read the
  * email → follow the link → set a new password" deterministically.
  *
- * Import from `@cirrus/mail/testing` (a dev/test-only entry — it pulls in
+ * Import from `@lunora/mail/testing` (a dev/test-only entry — it pulls in
  * nothing from the runtime bundle, just `fetch`).
  */
 import type { CapturedMail } from "./capture-transport";
 
 /** Reserved admin RPC path that reads the captured-mail inbox from the root shard. */
-const GET_CAPTURED_MAIL_OP = "__cirrus_admin__:getCapturedMail";
+const GET_CAPTURED_MAIL_OP = "__lunora_admin__:getCapturedMail";
 
-/** Default worker RPC endpoint (`POST /_cirrus/rpc`). */
-const DEFAULT_RPC_PATH = "/_cirrus/rpc";
+/** Default worker RPC endpoint (`POST /_lunora/rpc`). */
+const DEFAULT_RPC_PATH = "/_lunora/rpc";
 
 /** Minimal `fetch` projection so a test can inject a stub. */
 type FetchLike = (
@@ -24,7 +24,7 @@ type FetchLike = (
 ) => Promise<{ json: () => Promise<unknown>; ok: boolean; status: number }>;
 
 interface InboxOptions {
-    /** Admin bearer token (`CIRRUS_ADMIN_TOKEN`) the worker gates introspection behind. */
+    /** Admin bearer token (`LUNORA_ADMIN_TOKEN`) the worker gates introspection behind. */
     adminToken: string;
     /** App base URL, e.g. `http://localhost:8787`. */
     baseUrl: string;
@@ -67,7 +67,7 @@ const listCapturedMail = async (options: InboxOptions): Promise<CapturedMail[]> 
     });
 
     if (!response.ok) {
-        throw new Error(`@cirrus/mail/testing: getCapturedMail failed (HTTP ${String(response.status)})`);
+        throw new Error(`@lunora/mail/testing: getCapturedMail failed (HTTP ${String(response.status)})`);
     }
 
     const body = (await response.json()) as { result?: { entries?: CapturedMail[] } };
@@ -98,7 +98,7 @@ const waitForMail = async (options: WaitForMailOptions): Promise<CapturedMail> =
 
         if (Date.now() >= deadline) {
             throw new Error(
-                `@cirrus/mail/testing: no mail to "${options.to}"${options.subjectMatch === undefined ? "" : ` matching "${options.subjectMatch}"`} within ${String(timeoutMs)}ms`,
+                `@lunora/mail/testing: no mail to "${options.to}"${options.subjectMatch === undefined ? "" : ` matching "${options.subjectMatch}"`} within ${String(timeoutMs)}ms`,
             );
         }
 
@@ -129,7 +129,7 @@ const extractLink = (mail: CapturedMail, options: { match?: string } = {}): stri
         }
     }
 
-    throw new Error(`@cirrus/mail/testing: no link${options.match === undefined ? "" : ` containing "${options.match}"`} found in the captured message`);
+    throw new Error(`@lunora/mail/testing: no link${options.match === undefined ? "" : ` containing "${options.match}"`} found in the captured message`);
 };
 
 export { extractLink, listCapturedMail, waitForMail };

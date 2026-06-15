@@ -1,11 +1,11 @@
-import type { Schema } from "@cirrus/server";
+import type { Schema } from "@lunora/server";
 
 import type { SchemaIR, ValidatorIR } from "./ir";
 
 /**
- * Bridge the static {@link SchemaIR} (lifted from `cirrus/schema.ts` by ts-morph
- * via {@link ./discover-schema}) into the runtime `Schema` shape `@cirrus/seed`'s
- * introspection reads. Neither the CLI (`cirrus seed`) nor the studio's
+ * Bridge the static {@link SchemaIR} (lifted from `lunora/schema.ts` by ts-morph
+ * via {@link ./discover-schema}) into the runtime `Schema` shape `@lunora/seed`'s
+ * introspection reads. Neither the CLI (`lunora seed`) nor the studio's
  * generate-rows endpoint ever executes the user's schema module — they only have
  * the IR — so we synthesize validator-like objects carrying the `kind` + `_meta`
  * surface `introspectSchema`/`generateValue` touch (`column`, `inner`, `members`,
@@ -16,7 +16,7 @@ import type { SchemaIR, ValidatorIR } from "./ir";
  */
 
 /**
- * The minimal validator surface `@cirrus/seed` reads off `_meta` — a structural
+ * The minimal validator surface `@lunora/seed` reads off `_meta` — a structural
  * subset of that package's `ValidatorMeta`. `constraints` (`.check()`/`.meta()`)
  * and `defaultFn` are intentionally absent: neither is recoverable from the
  * static IR, so this path generates without those bounds.
@@ -106,7 +106,7 @@ const convertValidator = (ir: ValidatorIR): SyntheticValidator => {
 
 /**
  * Convert a {@link SchemaIR} into a synthetic runtime {@link Schema} carrying just
- * the `tables[name].shape` surface `@cirrus/seed` introspects. System columns
+ * the `tables[name].shape` surface `@lunora/seed` introspects. System columns
  * (`_id`, `_creationTime`) are absent from the IR shape, exactly as the seed
  * engine expects (it assigns `_id` itself).
  */
@@ -118,7 +118,7 @@ const schemaFromIr = (ir: SchemaIR): Schema => {
         ]),
     );
 
-    // The synthetic tables carry only the `shape` surface `@cirrus/seed`'s
+    // The synthetic tables carry only the `shape` surface `@lunora/seed`'s
     // introspection reads — never the full `TableDefinition` (indexes,
     // relationMap, …) — so the cast through `unknown` is load-bearing.
     return { tables } as unknown as Schema;

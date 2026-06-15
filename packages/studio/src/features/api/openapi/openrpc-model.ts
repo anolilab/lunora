@@ -16,7 +16,7 @@ interface OpenRpcMethod {
     params?: OpenRpcParameter[];
     result?: { name?: string; schema?: SchemaNode };
     summary?: string;
-    "x-cirrus-function-kind"?: string;
+    "x-lunora-function-kind"?: string;
     "x-tags"?: { name: string }[];
 }
 
@@ -41,9 +41,9 @@ const toOperation = (method: OpenRpcMethod): ApiOperation => {
         argsSchema,
         description: method.description,
         functionPath: method.name,
-        httpPath: "/_cirrus/rpc",
+        httpPath: "/_lunora/rpc",
         key: method.name,
-        kind: method["x-cirrus-function-kind"],
+        kind: method["x-lunora-function-kind"],
         method: "POST",
         operationId: method.name,
         requestSchema: argsSchema,

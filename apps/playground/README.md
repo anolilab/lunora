@@ -1,6 +1,6 @@
-# @cirrus/playground
+# @lunora/playground
 
-A real-time chat app that exercises every part of Cirrus v0.1 — sharded
+A real-time chat app that exercises every part of Lunora v0.1 — sharded
 Durable Objects, D1, R2 signed URLs, email/password auth, and the scheduler.
 
 It doubles as the v0.1 smoke test: if this project type-checks against the
@@ -11,20 +11,20 @@ public release is good.
 
 | Capability                     | Wired through                        | Where it shows up                 |
 | ------------------------------ | ------------------------------------ | --------------------------------- |
-| `defineSchema` / `defineTable` | `@cirrus/server`                     | `cirrus/schema.ts`                |
-| `.shardBy()` routing           | `@cirrus/runtime` + `@cirrus/do`     | `messages` table → per-channel DO |
-| `.global()` (D1)               | `@cirrus/d1`                         | `channels` + `users` tables       |
-| RPC + WebSocket subscriptions  | `@cirrus/runtime` + `@cirrus/client` | `Chat.tsx`                        |
-| Email/password auth            | `@cirrus/auth`                       | `Login.tsx`, `/auth/*` routes     |
-| R2 signed URLs                 | `@cirrus/storage`                    | `avatars.ts`                      |
-| Cron + deferred jobs           | `@cirrus/scheduler`                  | `cleanup.ts`                      |
-| Vite codegen + HMR             | `@cirrus/vite`                       | `vite.config.ts`                  |
+| `defineSchema` / `defineTable` | `@lunora/server`                     | `lunora/schema.ts`                |
+| `.shardBy()` routing           | `@lunora/runtime` + `@lunora/do`     | `messages` table → per-channel DO |
+| `.global()` (D1)               | `@lunora/d1`                         | `channels` + `users` tables       |
+| RPC + WebSocket subscriptions  | `@lunora/runtime` + `@lunora/client` | `Chat.tsx`                        |
+| Email/password auth            | `@lunora/auth`                       | `Login.tsx`, `/auth/*` routes     |
+| R2 signed URLs                 | `@lunora/storage`                    | `avatars.ts`                      |
+| Cron + deferred jobs           | `@lunora/scheduler`                  | `cleanup.ts`                      |
+| Vite codegen + HMR             | `@lunora/vite`                       | `vite.config.ts`                  |
 
 ## Layout
 
 ```text
 apps/playground/
-├── cirrus/
+├── lunora/
 │   ├── schema.ts            # tables + sharding modifiers
 │   ├── channels.ts          # global D1 table reads/writes
 │   ├── messages.ts          # shard-local query + mutation
@@ -36,7 +36,7 @@ apps/playground/
 │   │   ├── ShardDO.ts       # concrete ShardDO subclass
 │   │   └── SchedulerDO.ts   # concrete SchedulerDO subclass
 │   └── client/
-│       ├── main.tsx         # CirrusProvider mount
+│       ├── main.tsx         # LunoraProvider mount
 │       ├── App.tsx          # login or chat
 │       ├── Chat.tsx         # channel list + messages
 │       └── Login.tsx        # email/password form
@@ -49,7 +49,7 @@ apps/playground/
 
 ```bash
 pnpm install
-pnpm --filter @cirrus/playground dev
+pnpm --filter @lunora/playground dev
 ```
 
 This spins up Vite + Wrangler. Codegen runs on schema edits, deltas land via
@@ -60,7 +60,7 @@ WebSocket within ~10 ms locally.
 1. Create the D1 database:
 
     ```bash
-    pnpm dlx wrangler d1 create cirrus-playground
+    pnpm dlx wrangler d1 create lunora-playground
     ```
 
     Paste the returned `database_id` into `wrangler.jsonc`.
@@ -68,7 +68,7 @@ WebSocket within ~10 ms locally.
 2. Create the R2 bucket:
 
     ```bash
-    pnpm dlx wrangler r2 bucket create cirrus-playground-files
+    pnpm dlx wrangler r2 bucket create lunora-playground-files
     ```
 
 3. Set secrets:
@@ -81,7 +81,7 @@ WebSocket within ~10 ms locally.
 4. Deploy:
 
     ```bash
-    pnpm --filter @cirrus/playground deploy
+    pnpm --filter @lunora/playground deploy
     ```
 
 ## Deferred for v0.2

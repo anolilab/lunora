@@ -1,14 +1,14 @@
 /**
  * Local seed-data request handler for the studio's "Generate rows" action. A
  * sibling of {@link ./schema-edit-handler} / {@link ./policy-scaffold-handler}:
- * transport-agnostic so both dev hosts — the `@cirrus/vite` `/__cirrus`
- * middleware and the `cirrus dev` studio server — can mount it, each adapting
+ * transport-agnostic so both dev hosts — the `@lunora/vite` `/__lunora`
+ * middleware and the `lunora dev` studio server — can mount it, each adapting
  * its own request/response object.
  *
- * Why a Node endpoint rather than generating in the browser: `@cirrus/seed`'s
+ * Why a Node endpoint rather than generating in the browser: `@lunora/seed`'s
  * generator is built on `@faker-js/faker`, a heavy dependency. Running it here
  * keeps faker out of both the studio's browser bundle **and** the deployed
- * worker — the schema is lifted statically from `cirrus/schema.ts` (the project
+ * worker — the schema is lifted statically from `lunora/schema.ts` (the project
  * filesystem + toolchain), so this is local-dev-only by construction and never
  * reachable from a deployed worker. The dev hosts mount it on a loopback bind.
  *
@@ -19,18 +19,18 @@
  */
 import { existsSync } from "node:fs";
 
-import { discoverSchema, schemaFromIr } from "@cirrus/codegen";
-import { seedPlan } from "@cirrus/seed";
+import { discoverSchema, schemaFromIr } from "@lunora/codegen";
+import { seedPlan } from "@lunora/seed";
 import { Project } from "ts-morph";
 
 import join from "../path";
 
 /**
  * Endpoint path both dev hosts mount the handler at. A sibling of the schema
- * editor's `/__cirrus/schema-edit`; the double underscore keeps it clear of the
- * CLI's `/_cirrus/*` worker proxy (single underscore).
+ * editor's `/__lunora/schema-edit`; the double underscore keeps it clear of the
+ * CLI's `/_lunora/*` worker proxy (single underscore).
  */
-const SEED_ENDPOINT = "/__cirrus/seed";
+const SEED_ENDPOINT = "/__lunora/seed";
 
 /**
  * Hard upper bound on rows generated per request — a safety net independent of
@@ -64,9 +64,9 @@ interface SeedRequest {
     readonly body?: unknown;
     /** HTTP method — only `POST` is handled. */
     readonly method: string;
-    /** Project root containing the `cirrus/` directory. */
+    /** Project root containing the `lunora/` directory. */
     readonly projectRoot: string;
-    /** Override the cirrus subdirectory name. Defaults to `"cirrus"`. */
+    /** Override the lunora subdirectory name. Defaults to `"lunora"`. */
     readonly schemaDirectory?: string;
 }
 
@@ -79,7 +79,7 @@ interface SeedResponse {
 /**
  * Make a generated row JSON-safe: a `v.bigint` cell becomes a number (the
  * generator's range is small and safe) and a `v.bytes` `ArrayBuffer` becomes a
- * byte array. Mirrors the `cirrus seed` CLI's NDJSON serialization so both
+ * byte array. Mirrors the `lunora seed` CLI's NDJSON serialization so both
  * adapters hand the writer the same wire shape. Every other generated value is
  * already JSON-native.
  */
@@ -126,8 +126,8 @@ const handleSeedRequest = (request: SeedRequest): SeedResponse => {
         return { body: { error: "missing-table", ok: false }, status: 400 };
     }
 
-    const cirrusDirectory = request.schemaDirectory ?? "cirrus";
-    const schemaPath = join(request.projectRoot, cirrusDirectory, "schema.ts");
+    const lunoraDirectory = request.schemaDirectory ?? "lunora";
+    const schemaPath = join(request.projectRoot, lunoraDirectory, "schema.ts");
 
     if (!existsSync(schemaPath)) {
         return { body: { error: "schema-not-found", ok: false }, status: 404 };

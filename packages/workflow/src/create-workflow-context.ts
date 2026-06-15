@@ -1,7 +1,7 @@
 /**
  * `createWorkflowContext` — the codegen-facing factory that builds the
  * `ctx.workflows` surface from the Worker `env` plus the binding specs emitted
- * into `_generated/shard.ts`. Mirrors `@cirrus/container`'s
+ * into `_generated/shard.ts`. Mirrors `@lunora/container`'s
  * `createContainerContext`: codegen owns the spec list, this resolves each
  * `env[binding]` and hands the map to {@link createWorkflows}.
  *
@@ -15,7 +15,7 @@ import type { WorkflowBindingLike, Workflows } from "./types";
 export interface WorkflowBindingSpec {
     /** The Cloudflare `Workflow` binding name, e.g. `WORKFLOW_ORDER_PIPELINE`. */
     binding: string;
-    /** The `cirrus/workflows.ts` export name, e.g. `orderPipeline`. */
+    /** The `lunora/workflows.ts` export name, e.g. `orderPipeline`. */
     exportName: string;
 }
 

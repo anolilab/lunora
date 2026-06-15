@@ -1,25 +1,25 @@
 ---
 title: Bring your framework
-description: Compose any meta-framework's SSR with Cirrus realtime in one Cloudflare Worker.
+description: Compose any meta-framework's SSR with Lunora realtime in one Cloudflare Worker.
 ---
 
-Cirrus is not a web framework, and it does not want to be one. It is the
+Lunora is not a web framework, and it does not want to be one. It is the
 **reactive backend that any meta-framework plugs into** — TanStack Start, React
 Router, SolidStart, SvelteKit, Nuxt, Astro — composed into **one Cloudflare
-Worker**. You keep your framework's routing, rendering, and DX; Cirrus adds
+Worker**. You keep your framework's routing, rendering, and DX; Lunora adds
 type-safe data and the thing no other backend has: [live loaders](/docs/frameworks/reactive-loaders).
 
 > **Bring your framework. Your loaders are live.**
 
 ## One worker, two dispatch flows
 
-A Cirrus worker is created with `createWorker(...)`, which already accepts an
+A Lunora worker is created with `createWorker(...)`, which already accepts an
 optional `httpRouter` — any object shaped like `{ fetch(request, env?, ctx?) }`.
 Every meta-framework's SSR handler is structurally exactly that, so you mount it
-as the `httpRouter` and Cirrus dispatches by path:
+as the `httpRouter` and Lunora dispatches by path:
 
 ```ts
-import { createWorker } from "@cirrus/runtime";
+import { createWorker } from "@lunora/runtime";
 
 import { ssrHandler } from "./framework-entry"; // your framework's SSR fetch handler
 
@@ -33,41 +33,41 @@ export default createWorker({
 
 The worker resolves each request in this order:
 
-1. `/api/auth/*` → `@cirrus/auth`
+1. `/api/auth/*` → `@lunora/auth`
 2. explicit routes → webhooks / callbacks
 3. **`httpRouter.fetch`** → your meta-framework's SSR handler (everything else)
-4. `/_cirrus/rpc` → query / mutation RPC
-5. `/_cirrus/ws` → subscriptions / deltas
-6. `/_cirrus/admin/*` → studio / observability
+4. `/_lunora/rpc` → query / mutation RPC
+5. `/_lunora/ws` → subscriptions / deltas
+6. `/_lunora/admin/*` → studio / observability
 
-Cirrus realtime is mounted under the reserved **`/_cirrus/*`** namespace, so it
+Lunora realtime is mounted under the reserved **`/_lunora/*`** namespace, so it
 never collides with your framework's routes. Pages and API go to your framework;
-queries, mutations, and subscriptions go to `/_cirrus/*`. A 500 from your SSR
+queries, mutations, and subscriptions go to `/_lunora/*`. A 500 from your SSR
 handler does not take down the realtime endpoints.
 
-> **Shipped:** a `composeWorker({ httpRouter, ...cirrusOptions })` helper — thin
+> **Shipped:** a `composeWorker({ httpRouter, ...lunoraOptions })` helper — thin
 > sugar over `createWorker` — so templates read cleanly, plus an in-process
-> `serverQuery` fast-path so an SSR loader can call Cirrus _directly_ inside the
-> same worker instead of round-tripping `/_cirrus/rpc`. (`serverQuery` keeps the
+> `serverQuery` fast-path so an SSR loader can call Lunora _directly_ inside the
+> same worker instead of round-tripping `/_lunora/rpc`. (`serverQuery` keeps the
 > worker→Durable-Object hop — dispatch lives inside the DO, so a worker-side
 > `createCaller` is impossible — but drops the self-`fetch` loopback while keeping
 > byte-identical identity/RLS semantics.)
 
 ## The per-framework matrix
 
-How a framework composes with Cirrus depends on who owns the worker entry. This
+How a framework composes with Lunora depends on who owns the worker entry. This
 mirrors void's class-a/b/c model.
 
 | Class                                  | Frameworks                                      | Composition strategy                                                                                                                                                                   | Status                                                                  |
 | -------------------------------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
 | **A — Vite-native, we own the entry**  | TanStack Start, React Router (Vite), SolidStart | `createWorker({ httpRouter: <framework SSR handler> })` directly in the worker entry. Cleanest tier; in-process `serverQuery` available here.                                          | TanStack Start proven; React Router + SolidStart templated, in progress |
-| **B — own CF adapter, hook-injection** | SvelteKit, Nuxt, Astro                          | The framework builds its own server; `src/worker.ts` wraps that output with `withCirrus` (realtime under `/_cirrus/*`) and `cirrus deploy` bundles it as the deploy entry. One worker. | SvelteKit proven end-to-end; Astro/Nuxt wired on the same mechanism     |
-| **C — non-CF or SSR-less**             | static / SPA                                    | No SSR loaders. Ship the client adapter plus a standalone Cirrus worker (the current default for SPA apps). Data is still live; it just hydrates client-side instead of from the HTML. | shipped                                                                 |
+| **B — own CF adapter, hook-injection** | SvelteKit, Nuxt, Astro                          | The framework builds its own server; `src/worker.ts` wraps that output with `withLunora` (realtime under `/_lunora/*`) and `lunora deploy` bundles it as the deploy entry. One worker. | SvelteKit proven end-to-end; Astro/Nuxt wired on the same mechanism     |
+| **C — non-CF or SSR-less**             | static / SPA                                    | No SSR loaders. Ship the client adapter plus a standalone Lunora worker (the current default for SPA apps). Data is still live; it just hydrates client-side instead of from the HTML. | shipped                                                                 |
 
 **Class A** is the cleanest: we own the Cloudflare worker entry, so we drop the
 framework's SSR handler straight into `httpRouter`. **Class B** frameworks bundle
-their own worker, so Cirrus is injected into their server entry rather than
-fighting their build (the adapter ships `withCirrus()`-style wrappers). **Class
+their own worker, so Lunora is injected into their server entry rather than
+fighting their build (the adapter ships `withLunora()`-style wrappers). **Class
 C** has no SSR loaders, so there's nothing to make live on the server — the client
 adapter still gives you live queries, they just hydrate on the client.
 
@@ -75,29 +75,29 @@ adapter still gives you live queries, they just hydrate on the client.
 > introduce is that their Cloudflare adapter owns the build. `@sveltejs/adapter-cloudflare`
 > **overwrites whatever the wrangler `main` field points at** with its own generated
 > worker — so `main` cannot point at the template's `src/worker.ts` (the build would
-> clobber it). The working wiring, proven by a real `cirrus init -t sveltekit` →
+> clobber it). The working wiring, proven by a real `lunora init -t sveltekit` →
 > `vite build` → `wrangler deploy --dry-run` smoke:
 >
 > 1. Point wrangler `main` at the adapter's **own** default output
 >    (`.svelte-kit/cloudflare/_worker.js`) — so the adapter writes there and never
 >    touches `src/worker.ts`.
-> 2. Keep `src/worker.ts` as the `withCirrus` wrapper: it imports that emitted
->    handler, mounts Cirrus realtime under `/_cirrus/*`, and re-exports `ShardDO`.
-> 3. `cirrus deploy` passes `src/worker.ts` as the **positional** deploy entry,
+> 2. Keep `src/worker.ts` as the `withLunora` wrapper: it imports that emitted
+>    handler, mounts Lunora realtime under `/_lunora/*`, and re-exports `ShardDO`.
+> 3. `lunora deploy` passes `src/worker.ts` as the **positional** deploy entry,
 >    which overrides `main`, so the single worker Cloudflare runs is the composed
 >    one. (The template's `deploy` script runs `vite build` first so the adapter
 >    output exists.)
 >
 > The dry-run confirms a single worker exporting `ShardDO` with both the `SHARD`
 > (Durable Object) and `ASSETS` bindings — no second worker, no class-C fallback.
-> Astro composes the same way via `src/worker.ts` + `withCirrus`; because
+> Astro composes the same way via `src/worker.ts` + `withLunora`; because
 > `@astrojs/cloudflare` writes to `dist/_worker.js/` (it does **not** clobber `main`),
 > its wiring needs no `main` redirection. Nuxt uses Nitro's emitted server as `main`
 > directly.
 
 ## Client adapters
 
-The browser SDK, `@cirrus/client`, is **framework-neutral** — transport,
+The browser SDK, `@lunora/client`, is **framework-neutral** — transport,
 subscriptions, the offline queue, delta-merge, and reconnect have zero framework
 code. Each adapter is a thin idiomatic layer on top, and every adapter exposes the
 same handoff: a live `useQuery`/equivalent, an optimistic `useMutation`/
@@ -106,13 +106,13 @@ an SSR value into a live subscription.
 
 | Adapter          | Idiom                            | Status  |
 | ---------------- | -------------------------------- | ------- |
-| `@cirrus/react`  | hooks + context                  | shipped |
-| `@cirrus/solid`  | signals / resources              | preview |
-| `@cirrus/svelte` | stores (`$store`) / runes        | preview |
-| `@cirrus/vue`    | composables (`ref` / `reactive`) | preview |
+| `@lunora/react`  | hooks + context                  | shipped |
+| `@lunora/solid`  | signals / resources              | preview |
+| `@lunora/svelte` | stores (`$store`) / runes        | preview |
+| `@lunora/vue`    | composables (`ref` / `reactive`) | preview |
 
 > Solid lands first after React: its fine-grained signals map most directly onto
-> Cirrus deltas, so it showcases live loaders with the least glue.
+> Lunora deltas, so it showcases live loaders with the least glue.
 
 The Solid, Svelte, and Vue adapter **packages exist** and expose the same
 hydrate-then-subscribe handoff under their idiom — but they are **preview**: not
@@ -135,55 +135,55 @@ worth calling out for anyone who tracked the earlier previews:
   updates are passed **per call** via the `optimisticUpdate` option on `mutate`;
   the Vue adapter no longer ships a bound `withOptimisticUpdate(...)` handle
   (React keeps it). Use `mutate(args, { optimisticUpdate })` everywhere instead.
-- **Provider accessor is `useCirrus`** in React/Solid/Vue (Svelte uses the
-  idiomatic `getCirrusClient`). The Vue adapter's earlier `useCirrusClient` name
-  is gone — use `useCirrus`.
+- **Provider accessor is `useLunora`** in React/Solid/Vue (Svelte uses the
+  idiomatic `getLunoraClient`). The Vue adapter's earlier `useLunoraClient` name
+  is gone — use `useLunora`.
 
 ## Scaffolding
 
-Scaffold a new project wired for your framework with `cirrus init`:
+Scaffold a new project wired for your framework with `lunora init`:
 
 ```bash
-cirrus init my-app -t tanstack-start   # class A — proven, with a live-loader route
-cirrus init my-app -t vite             # SPA (class C) — the default
-cirrus init my-app -t standalone       # worker-only, no frontend
+lunora init my-app -t tanstack-start   # class A — proven, with a live-loader route
+lunora init my-app -t vite             # SPA (class C) — the default
+lunora init my-app -t standalone       # worker-only, no frontend
 ```
 
-`cirrus init -t tanstack-start` is fully wired: it mounts the framework SSR
+`lunora init -t tanstack-start` is fully wired: it mounts the framework SSR
 handler as the worker's `httpRouter`, ships a sample **live loader** route, and
-sets up the `@cirrus/react` provider. `cirrus init -t sveltekit` is proven
-end-to-end — its `src/worker.ts` + `wrangler.jsonc` + `cirrus deploy` compose
+sets up the `@lunora/react` provider. `lunora init -t sveltekit` is proven
+end-to-end — its `src/worker.ts` + `wrangler.jsonc` + `lunora deploy` compose
 into a single worker (verified through `vite build` → `wrangler deploy --dry-run`,
 exporting `ShardDO` with the `SHARD` and `ASSETS` bindings). Templates for
 `react-router`, `solid-start`, `nuxt`, and `astro` exist alongside their
 adapters and are wired on the same composition seam; they are **preview** —
 scaffoldable, not yet each smoke-proven end-to-end.
 
-To add Cirrus to an **existing** meta-framework app, the in-place patcher
-`cirrus init --here` detects your framework from `package.json`, classifies it
-(A/B/C), patches your Vite config where applicable, scaffolds `cirrus/` (schema +
+To add Lunora to an **existing** meta-framework app, the in-place patcher
+`lunora init --here` detects your framework from `package.json`, classifies it
+(A/B/C), patches your Vite config where applicable, scaffolds `lunora/` (schema +
 a sample query/mutation) idempotently, and prints **per-framework next steps**:
-the right `@cirrus/<adapter>` to install plus the worker composition to wire
-(`httpRouter` for class A, hook-injection for class B). The `cirrus/` scaffold and
+the right `@lunora/<adapter>` to install plus the worker composition to wire
+(`httpRouter` for class A, hook-injection for class B). The `lunora/` scaffold and
 the config patch are applied automatically; the provider mount and worker
 composition live in framework-owned files, so the CLI prints precise steps for
 those rather than guessing.
 
 ## Vite composition
 
-Under Vite, the Cirrus plugin stacks alongside your framework's plugin so a single
+Under Vite, the Lunora plugin stacks alongside your framework's plugin so a single
 worker is emitted. Pass `cloudflare: false` to let the framework supply its own
-Cloudflare/SSR build while the Cirrus plugins (codegen, studio, wrangler
+Cloudflare/SSR build while the Lunora plugins (codegen, studio, wrangler
 validate/reconcile) run beside it:
 
 ```ts
 // vite.config.ts
-import { cirrus } from "@cirrus/vite";
+import { lunora } from "@lunora/vite";
 
 export default defineConfig({
     plugins: [
         frameworkPlugin(), // your framework's Vite plugin
-        cirrus({ cloudflare: false }), // codegen + studio + wrangler reconcile, no CF takeover
+        lunora({ cloudflare: false }), // codegen + studio + wrangler reconcile, no CF takeover
     ],
 });
 ```
@@ -197,6 +197,6 @@ frameworks are in progress.
 - [Deploy your framework](/docs/frameworks/deploy) — one worker, one deploy
 - [Manual end-to-end verification](/docs/frameworks/verify-live-loaders) — prove live loaders work
 - [Real-time](/docs/concepts/realtime)
-- [@cirrus/runtime](/docs/api/runtime) — `createWorker`, the `httpRouter` seam
-- [@cirrus/cli](/docs/api/cli) — `cirrus init -t <framework>`
+- [@lunora/runtime](/docs/api/runtime) — `createWorker`, the `httpRouter` seam
+- [@lunora/cli](/docs/api/cli) — `lunora init -t <framework>`
 - [Deployment](/docs/deployment)

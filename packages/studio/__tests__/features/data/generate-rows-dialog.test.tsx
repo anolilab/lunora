@@ -125,7 +125,7 @@ describe("generateRowsDialog", () => {
             expect(onInsertRows).toHaveBeenCalledTimes(1);
         });
 
-        expect(globalThis.fetch).toHaveBeenCalledWith("/__cirrus/seed", expect.objectContaining({ method: "POST" }));
+        expect(globalThis.fetch).toHaveBeenCalledWith("/__lunora/seed", expect.objectContaining({ method: "POST" }));
     });
 
     it("shows success message after successful insert", async () => {

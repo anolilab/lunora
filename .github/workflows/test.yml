@@ -170,17 +170,17 @@
               "if": "github.event_name == 'pull_request'"
               "run": "pnpm run test:affected"
               "env":
-                  # Opt into the workerd-pool integration suites (cirrus-do,
-                  # cirrus-client, cirrus-scheduler, cirrus-storage). Locally
+                  # Opt into the workerd-pool integration suites (lunora-do,
+                  # lunora-client, lunora-scheduler, lunora-storage). Locally
                   # gated by a flag because sandboxed dev environments can't
                   # loopback to `cloudflare:test-internal`; GitHub runners can.
-                  "CIRRUS_WORKERD_TESTS": "1"
+                  "LUNORA_WORKERD_TESTS": "1"
 
             - "name": "Run all tests with coverage on push / dispatch"
               "if": "github.event_name != 'pull_request'"
               "run": "pnpm run test:coverage"
               "env":
-                  "CIRRUS_WORKERD_TESTS": "1"
+                  "LUNORA_WORKERD_TESTS": "1"
 
             # Upload coverage on main/alpha pushes only, with Node 22.14.
             - "name": "Upload coverage to Codecov"
@@ -303,12 +303,12 @@
               # The cache key includes the playwright version so we don't
               # invalidate on unrelated dep changes. The image already has
               # Firefox/Chromium system deps so we don't need --with-deps.
-              "run": "pnpm --filter @cirrus/e2e exec playwright install chromium firefox"
+              "run": "pnpm --filter @lunora/e2e exec playwright install chromium firefox"
 
             - "name": "Run E2E suite"
               "env":
                   "CI": "true"
-                  "CIRRUS_E2E": "true"
+                  "LUNORA_E2E": "true"
               "run": "pnpm e2e"
 
             - "name": "Upload Playwright report on failure"

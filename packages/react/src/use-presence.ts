@@ -1,13 +1,13 @@
 "use client";
 
-import type { ArgsOf, FunctionReference, ReturnOf } from "@cirrus/client";
+import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { useCirrus } from "./cirrus-provider";
+import { useLunora } from "./lunora-provider";
 
 /**
  * `usePresence` — collaborative-awareness hook, the client half of the
- * `@cirrus/server` `definePresence` preset (Convex `@convex-dev/presence`
+ * `@lunora/server` `definePresence` preset (Convex `@convex-dev/presence`
  * parity).
  *
  * It drives the two presence functions the server component ships:
@@ -95,7 +95,7 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
     roomId: string,
     options: UsePresenceOptions<H, L>,
 ): UsePresenceResult<L> => {
-    const client = useCirrus();
+    const client = useLunora();
 
     const { heartbeat, intervalMs = DEFAULT_INTERVAL_MS, listPresent, shardKey } = options;
 
@@ -176,7 +176,7 @@ export const usePresence = <H extends HeartbeatReference, L extends ListPresentR
             cancelled = true;
             unsubscribe();
         };
-    }, [client, listPresent.__cirrusRef, roomId, shardKey]);
+    }, [client, listPresent.__lunoraRef, roomId, shardKey]);
 
     return { present, sessionId: generatedSessionId, setData };
 };

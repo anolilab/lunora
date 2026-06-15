@@ -4,7 +4,7 @@ import type { ApplyEditResult } from "../../src/schema-edit/mutate";
 import { applyAdditiveEdit, classifyEdit } from "../../src/schema-edit/mutate";
 import { parseSchema } from "../../src/schema-edit/parse";
 
-const SCHEMA = `import { defineSchema, defineTable, v } from "@cirrus/server";
+const SCHEMA = `import { defineSchema, defineTable, v } from "@lunora/server";
 
 // Keep this comment intact across edits.
 export default defineSchema({
@@ -99,7 +99,7 @@ describe("applyAdditiveEdit", () => {
     it("reports aliased-define-schema rather than rewriting an aliased import", () => {
         expect.assertions(1);
 
-        const aliased = `import { defineSchema as ds, defineTable, v } from "@cirrus/server";\nexport default ds({ a: defineTable({ x: v.string() }) });\n`;
+        const aliased = `import { defineSchema as ds, defineTable, v } from "@lunora/server";\nexport default ds({ a: defineTable({ x: v.string() }) });\n`;
 
         expect(reasonOf(applyAdditiveEdit(aliased, { kind: "addTable", table: "b" }))).toBe("aliased-define-schema");
     });

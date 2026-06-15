@@ -1,12 +1,12 @@
 /**
- * `cirrus prepare` — CI-friendly pre-deploy preparation without booting Vite.
+ * `lunora prepare` — CI-friendly pre-deploy preparation without booting Vite.
  * Runs codegen, reconciles `wrangler.jsonc` bindings, then validates the config.
  * Returns `code: 0` only when both codegen and validation pass.
- * Idempotent and safe to run in CI before `cirrus deploy`.
+ * Idempotent and safe to run in CI before `lunora deploy`.
  */
-import type { CodegenResult } from "@cirrus/codegen";
-import { runCodegen } from "@cirrus/codegen";
-import { inferCirrusBindings, reconcileWranglerBindings } from "@cirrus/config";
+import type { CodegenResult } from "@lunora/codegen";
+import { runCodegen } from "@lunora/codegen";
+import { inferLunoraBindings, reconcileWranglerBindings } from "@lunora/config";
 
 import type { ApiSpec } from "../../util/api-spec";
 import { parseApiSpec } from "../../util/api-spec";
@@ -48,7 +48,7 @@ interface PrepareCommandResult {
  */
 const provisionBindings = async (cwd: string, logger: Logger): Promise<void> => {
     try {
-        const inferred = await inferCirrusBindings({ projectRoot: cwd });
+        const inferred = await inferLunoraBindings({ projectRoot: cwd });
         const reconciled = reconcileWranglerBindings(cwd, inferred);
 
         if (reconciled.changed) {
@@ -66,7 +66,7 @@ const provisionBindings = async (cwd: string, logger: Logger): Promise<void> => 
 };
 
 /**
- * `cirrus prepare` — get the project ready for deployment without booting Vite.
+ * `lunora prepare` — get the project ready for deployment without booting Vite.
  *
  * Suitable for CI pipelines: runs codegen, reconciles `wrangler.jsonc` bindings,
  * and validates the config, stopping at the first failure with a non-zero code.
@@ -94,8 +94,8 @@ const runPrepareCommand = async (options: PrepareCommandOptions): Promise<Prepar
     }
 
     // Schema-drift gate — block when breaking schema changes ship without a new
-    // data migration. CI-friendly: `cirrus prepare` is the canonical pre-deploy
-    // step, so the gate lives here as well as in `cirrus deploy`.
+    // data migration. CI-friendly: `lunora prepare` is the canonical pre-deploy
+    // step, so the gate lives here as well as in `lunora deploy`.
     const gate = runSchemaDriftGate({
         allowDrift: options.allowSchemaDrift === true,
         codegen,
@@ -140,7 +140,7 @@ const runPrepareCommand = async (options: PrepareCommandOptions): Promise<Prepar
     return { code: 0, validation };
 };
 
-/** `cirrus prepare` handler (lazy-loaded via the command's `loader`). */
+/** `lunora prepare` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<PrepareOptions> = defineHandler<PrepareOptions>(({ cwd, logger, options }) =>
     runPrepareCommand({
         allowSchemaDrift: options.allowSchemaDrift === true,

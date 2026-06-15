@@ -24,17 +24,17 @@ const coverage = {
 };
 
 /**
- * Two-project Vitest config (matches @cirrus/scheduler / @cirrus/client):
+ * Two-project Vitest config (matches @lunora/scheduler / @lunora/client):
  *
  *  - `mocks`   — fast unit suite over in-memory R2 fakes, plain Node, always on.
  *  - `workerd` — Phase 6 verification gate. Spins up workerd with a real R2
- *               binding via Miniflare's emulator. Gated by `CIRRUS_WORKERD_TESTS=1`
+ *               binding via Miniflare's emulator. Gated by `LUNORA_WORKERD_TESTS=1`
  *               because the pool needs unrestricted localhost-loopback between
  *               workerd and the test host — sandboxed CI blocks that. Locally:
  *
- *                   CIRRUS_WORKERD_TESTS=1 pnpm --filter @cirrus/storage test
+ *                   LUNORA_WORKERD_TESTS=1 pnpm --filter @lunora/storage test
  */
-const runWorkerd = process.env.CIRRUS_WORKERD_TESTS === "1";
+const runWorkerd = process.env.LUNORA_WORKERD_TESTS === "1";
 
 export default defineConfig({
     test: {

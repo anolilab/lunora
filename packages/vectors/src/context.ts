@@ -1,8 +1,8 @@
 import { concurrentMap, UPSERT_EMBED_CONCURRENCY } from "./concurrent";
-import type { CirrusVectors } from "./types";
+import type { LunoraVectors } from "./types";
 
 /**
- * `(input: string) => vector`. Matches `@cirrus/server`'s `VectorEmbedder` so
+ * `(input: string) => vector`. Matches `@lunora/server`'s `VectorEmbedder` so
  * the bridged surface is assignable to the server's `VectorSearch` contract.
  */
 type VectorEmbedderLike = (input: string) => Promise<ReadonlyArray<number>> | ReadonlyArray<number>;
@@ -42,8 +42,8 @@ interface VectorUpsertInputLike {
 }
 
 /**
- * Structural mirror of `@cirrus/server`'s `VectorSearch`. Declared here so the
- * adapter never imports `@cirrus/server` (keeps the dependency edge one-way:
+ * Structural mirror of `@lunora/server`'s `VectorSearch`. Declared here so the
+ * adapter never imports `@lunora/server` (keeps the dependency edge one-way:
  * the generated DO depends on both, neither depends on the other).
  */
 interface VectorSearchLike {
@@ -55,14 +55,14 @@ interface VectorSearchLike {
 }
 
 /**
- * Bridge `CirrusVectors` (returns Vectorize mutation receipts) to the server's
+ * Bridge `LunoraVectors` (returns Vectorize mutation receipts) to the server's
  * `VectorSearch` contract (void mutations, server match/record shapes). Both
  * `upsert` and `upsertNow` write inline — this design has no post-commit queue,
  * so "now" and "deferred" collapse to the same synchronous call.
  */
-const createContextVectors = (cirrus: CirrusVectors): VectorSearchLike => {
+const createContextVectors = (lunora: LunoraVectors): VectorSearchLike => {
     const upsert = async (indexName: string, input: VectorUpsertInputLike): Promise<void> => {
-        await cirrus.upsert(indexName, {
+        await lunora.upsert(indexName, {
             embed: input.embed,
             id: input.id,
             input: input.input,
@@ -73,17 +73,17 @@ const createContextVectors = (cirrus: CirrusVectors): VectorSearchLike => {
 
     return {
         deleteByIds: async (indexName: string, ids: ReadonlyArray<string>): Promise<void> => {
-            await cirrus.deleteByIds(indexName, ids);
+            await lunora.deleteByIds(indexName, ids);
         },
         getByIds: async (indexName: string, ids: ReadonlyArray<string>): Promise<ReadonlyArray<VectorRecordLike>> => {
-            const records = await cirrus.getByIds(indexName, ids);
+            const records = await lunora.getByIds(indexName, ids);
 
             return records.map((record) => {
                 return { id: record.id, metadata: record.metadata, values: record.values };
             });
         },
         query: async (indexName: string, input: VectorQueryInputLike): Promise<VectorMatchesLike> => {
-            const result = await cirrus.query(indexName, {
+            const result = await lunora.query(indexName, {
                 embed: input.embed,
                 filter: input.filter,
                 input: input.input,
@@ -140,7 +140,7 @@ interface VectorIndexDefinitionLike {
 }
 
 /**
- * Structural mirror of `@cirrus/server`'s `Schema`, narrowed to the fields the
+ * Structural mirror of `@lunora/server`'s `Schema`, narrowed to the fields the
  * sync hook reads. Carries live `embed`/`select` closures, so the hook must be
  * built from the imported `schema` value — never a serialized descriptor.
  */
@@ -171,7 +171,7 @@ const warnSharedMetadata = (indexName: string): void => {
 
     // eslint-disable-next-line no-console
     console.warn(
-        `[@cirrus/vectors] index "${indexName}" syncs metadata without a namespace — in a\n` +
+        `[@lunora/vectors] index "${indexName}" syncs metadata without a namespace — in a\n` +
             "multi-tenant/sharded app this exposes one tenant's vectors+metadata to others.\n" +
             "Pass `namespace` (the shard/tenant key) on both write and query. Suppress via\n" +
             "{ allowSharedMetadata: true }.",
@@ -268,7 +268,7 @@ const createVectorSyncHook = (options: { allowSharedMetadata?: boolean; namespac
         for (const { index, value } of inlineToUpsert) {
             if (typeof value !== "string") {
                 throw new TypeError(
-                    `@cirrus/vectors: inline index "${index.name}" expects a string source at "${index.field}" on table "${event.table}" (got ${typeof value}); use a standalone defineVectorIndex with a select() to derive text from non-string columns`,
+                    `@lunora/vectors: inline index "${index.name}" expects a string source at "${index.field}" on table "${event.table}" (got ${typeof value}); use a standalone defineVectorIndex with a select() to derive text from non-string columns`,
                 );
             }
         }

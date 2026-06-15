@@ -46,9 +46,9 @@ const FIXED_NOW = (): Date => new Date("2026-06-03T12:00:00.000Z");
 
 let workDir: string;
 
-describe("cirrus backup", () => {
+describe("lunora backup", () => {
     beforeEach(() => {
-        workDir = mkdtempSync(join(tmpdir(), "cirrus-cli-backup-"));
+        workDir = mkdtempSync(join(tmpdir(), "lunora-cli-backup-"));
     });
 
     afterEach(() => {
@@ -72,7 +72,7 @@ describe("cirrus backup", () => {
 
         expect(result.code).toBe(0);
 
-        const directory = join(workDir, ".cirrus-backups");
+        const directory = join(workDir, ".lunora-backups");
         const manifest = JSON.parse(readFileSync(join(directory, "manifest.json"), "utf8")) as { file: string; rows: number }[];
 
         expect(manifest).toHaveLength(1);
@@ -140,7 +140,7 @@ describe("cirrus backup", () => {
         });
 
         expect(result.code).toBe(0);
-        expect(importCalls[0]).toContain("/_cirrus/admin/import");
+        expect(importCalls[0]).toContain("/_lunora/admin/import");
     });
 
     it("restore fails for an unknown target", async () => {
@@ -190,11 +190,11 @@ describe("cirrus backup", () => {
             });
 
             expect(result.code).toBe(0);
-            expect(calls[0]?.url).toBe("http://localhost:8787/_cirrus/admin/pitr");
+            expect(calls[0]?.url).toBe("http://localhost:8787/_lunora/admin/pitr");
 
             const body = JSON.parse(calls[0]?.body ?? "{}") as { args: Record<string, unknown>; functionPath: string };
 
-            expect(body.functionPath).toBe("__cirrus_admin__:getPitrBookmark");
+            expect(body.functionPath).toBe("__lunora_admin__:getPitrBookmark");
             expect(body.args).toStrictEqual({});
         });
 
@@ -217,7 +217,7 @@ describe("cirrus backup", () => {
 
             const body = JSON.parse(calls[0]?.body ?? "{}") as { args: Record<string, unknown>; functionPath: string; shardKey?: string };
 
-            expect(body.functionPath).toBe("__cirrus_admin__:getPitrBookmark");
+            expect(body.functionPath).toBe("__lunora_admin__:getPitrBookmark");
             expect(body.args).toStrictEqual({ time: "2026-06-01T00:00:00.000Z" });
             expect(body.shardKey).toBe("tenant-7");
         });
@@ -244,7 +244,7 @@ describe("cirrus backup", () => {
 
             const body = JSON.parse(calls[0]?.body ?? "{}") as { args: Record<string, unknown>; functionPath: string };
 
-            expect(body.functionPath).toBe("__cirrus_admin__:pitrRestore");
+            expect(body.functionPath).toBe("__lunora_admin__:pitrRestore");
             expect(body.args).toStrictEqual({ bookmark: "bm-target", restart: true });
         });
 
@@ -294,9 +294,9 @@ describe("cirrus backup", () => {
             expect.assertions(1);
 
             const { logger } = capturingLogger();
-            const previous = process.env.CIRRUS_ADMIN_TOKEN;
+            const previous = process.env.LUNORA_ADMIN_TOKEN;
 
-            delete process.env.CIRRUS_ADMIN_TOKEN;
+            delete process.env.LUNORA_ADMIN_TOKEN;
 
             try {
                 const result = await runBackupCommand({ cwd: workDir, logger, subcommand: "pitr", url: "http://localhost:8787" });
@@ -304,7 +304,7 @@ describe("cirrus backup", () => {
                 expect(result.code).toBe(1);
             } finally {
                 if (previous !== undefined) {
-                    process.env.CIRRUS_ADMIN_TOKEN = previous;
+                    process.env.LUNORA_ADMIN_TOKEN = previous;
                 }
             }
         });

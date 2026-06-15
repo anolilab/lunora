@@ -4,17 +4,17 @@
     "private": true,
     "type": "module",
     "scripts": {
-        "dev": "cirrus dev",
-        "codegen": "cirrus codegen",
-        "deploy": "cirrus deploy"
+        "dev": "lunora dev",
+        "codegen": "lunora codegen",
+        "deploy": "lunora deploy"
     },
     "dependencies": {
-        "@cirrus/do": "^0.0.0",
-        "@cirrus/runtime": "^0.0.0",
-        "@cirrus/server": "^0.0.0"
+        "@lunora/do": "^0.0.0",
+        "@lunora/runtime": "^0.0.0",
+        "@lunora/server": "^0.0.0"
     },
     "devDependencies": {
-        "@cirrus/cli": "^0.0.0",
+        "@lunora/cli": "^0.0.0",
         "@cloudflare/workers-types": "^4.20260611.1",
         "typescript": "^6.0.3",
         "wrangler": "^4.100.0"

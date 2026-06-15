@@ -1,11 +1,11 @@
 <div align="center">
-  <h3>@cirrus/seed</h3>
-  <p>Schema-driven, deterministic database seeding for Cirrus.</p>
+  <h3>@lunora/seed</h3>
+  <p>Schema-driven, deterministic database seeding for Lunora.</p>
 </div>
 
 ---
 
-`@cirrus/seed` populates a Cirrus database with realistic, production-like fake
+`@lunora/seed` populates a Lunora database with realistic, production-like fake
 data derived from your `defineSchema`. It introspects every table, maps each
 field to a generator (field-name aware — a `string` column called `email`
 becomes an email address, `firstName` a first name, and so on), resolves
@@ -23,8 +23,8 @@ and machines.
 ### Generate a plan
 
 ```ts
-import { seedPlan } from "@cirrus/seed";
-import schema from "./cirrus/schema";
+import { seedPlan } from "@lunora/seed";
+import schema from "./lunora/schema";
 
 const plan = seedPlan(schema, {
     counts: { users: 10, posts: 30 },
@@ -41,11 +41,11 @@ const plan = seedPlan(schema, {
 ### Seed an in-memory test harness
 
 ```ts
-import { cirrusTest } from "@cirrus/testing";
-import { seed } from "@cirrus/seed/testing";
-import schema from "./cirrus/schema";
+import { lunoraTest } from "@lunora/testing";
+import { seed } from "@lunora/seed/testing";
+import schema from "./lunora/schema";
 
-const harness = cirrusTest(schema);
+const harness = lunoraTest(schema);
 const ids = await seed(harness, schema, { counts: { users: 5, posts: 20 } });
 // ids.users / ids.posts — the inserted document ids, for assertions
 ```
@@ -58,8 +58,8 @@ run, FK parents are pulled in automatically, and state accumulates on
 `$store`/`$ids` (clear it with `$reset()`):
 
 ```ts
-import { createSeedClient } from "@cirrus/seed";
-import schema from "./cirrus/schema";
+import { createSeedClient } from "@lunora/seed";
+import schema from "./lunora/schema";
 
 const seed = createSeedClient(schema, { seed: 1 });
 
@@ -79,11 +79,11 @@ each batch as it is generated (parents first).
 ### Seed a running dev worker
 
 ```bash
-cirrus seed --count 25                  # 25 rows per table
-cirrus seed --table posts --count 100   # one table (FK parents seeded automatically)
-cirrus seed --seed 42                    # reproducible run
-cirrus seed --reset                      # wipe local .wrangler/state first (local dev only)
-cirrus seed --dry-run                    # print NDJSON, write nothing
+lunora seed --count 25                  # 25 rows per table
+lunora seed --table posts --count 100   # one table (FK parents seeded automatically)
+lunora seed --seed 42                    # reproducible run
+lunora seed --reset                      # wipe local .wrangler/state first (local dev only)
+lunora seed --dry-run                    # print NDJSON, write nothing
 ```
 
 ## Limitations
@@ -99,5 +99,5 @@ cirrus seed --dry-run                    # print NDJSON, write nothing
 
 ## License
 
-The Cirrus framework is open-sourced software licensed under the
+The Lunora framework is open-sourced software licensed under the
 [FSL-1.1-Apache-2.0 license](./LICENSE.md).

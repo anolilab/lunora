@@ -1,5 +1,5 @@
-import type { GlobalTablePage } from "@cirrus/client";
-import { CirrusProvider } from "@cirrus/react";
+import type { GlobalTablePage } from "@lunora/client";
+import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
@@ -49,9 +49,9 @@ const createBrowserClient = (): MockClientHooks =>
     });
 
 const renderBrowser = (mock: MockClientHooks): ReactElement => (
-    <CirrusProvider client={mock.asClient}>
+    <LunoraProvider client={mock.asClient}>
         <GlobalDataBrowser />
-    </CirrusProvider>
+    </LunoraProvider>
 );
 
 describe("globalDataBrowser", () => {

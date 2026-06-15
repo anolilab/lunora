@@ -1,6 +1,6 @@
 ---
 title: Build a real-time chat app in 15 minutes
-description: End-to-end Cirrus walkthrough — schema, query, mutation, subscription, React, sharding.
+description: End-to-end Lunora walkthrough — schema, query, mutation, subscription, React, sharding.
 ---
 
 This tutorial ships a working multi-channel chat in roughly fifteen minutes of
@@ -14,21 +14,21 @@ Node 22+, pnpm 10+, and a Cloudflare account if you want to deploy.
 ## 1. Scaffold
 
 ```bash
-pnpm create cirrus@latest chat
+pnpm create lunora@latest chat
 cd chat
 pnpm install
 ```
 
-The template gives you a `cirrus/schema.ts`, a starter `cirrus/messages.ts`,
-and a `src/server/index.ts` that boots `@cirrus/runtime`'s `createWorker`.
+The template gives you a `lunora/schema.ts`, a starter `lunora/messages.ts`,
+and a `src/server/index.ts` that boots `@lunora/runtime`'s `createWorker`.
 
 ## 2. Model the data
 
-Replace `cirrus/schema.ts` with two tables — `channels` (global, so every shard
+Replace `lunora/schema.ts` with two tables — `channels` (global, so every shard
 sees them) and `messages` (sharded by channel, so each room gets its own DO):
 
 ```ts
-import { defineSchema, defineTable, v } from "@cirrus/server";
+import { defineSchema, defineTable, v } from "@lunora/server";
 
 export const schema = defineSchema({
     channels: defineTable({
@@ -56,23 +56,23 @@ exhaust another room's budget.
 
 ## 3. Generate the migration
 
-`channels` is global, so it needs a D1 migration. Cirrus reads the schema
+`channels` is global, so it needs a D1 migration. Lunora reads the schema
 and writes the SQL for you:
 
 ```bash
-pnpm cirrus migrate generate init
-# wrote cirrus/migrations/20240401123456_init.sql
+pnpm lunora migrate generate init
+# wrote lunora/migrations/20240401123456_init.sql
 ```
 
 Commit the SQL and the `.snapshot.json` next to it — both are deterministic.
 
 ## 4. Write the query
 
-Create `cirrus/messages.ts` (the template already has a starter version — replace
+Create `lunora/messages.ts` (the template already has a starter version — replace
 its contents with the real implementation):
 
 ```ts
-import { mutation, query, v } from "@cirrus/server";
+import { mutation, query, v } from "@lunora/server";
 
 export const list = query({
     args: { channelId: v.id("channels"), limit: v.optional(v.number()) },
@@ -86,7 +86,7 @@ export const list = query({
 });
 ```
 
-Every Cirrus `query` doubles as a subscription. The React side calls
+Every Lunora `query` doubles as a subscription. The React side calls
 `useQuery` and re-renders whenever a mutation in the same shard touches the
 `messages` table.
 
@@ -114,12 +114,12 @@ client subscribed to `list` for that `channelId` re-renders.
 
 ## 6. Wire the React app
 
-`src/client/main.tsx` already wraps your tree in `CirrusProvider`. Build the
+`src/client/main.tsx` already wraps your tree in `LunoraProvider`. Build the
 chat panel:
 
 ```tsx
-import { api } from "@/cirrus/_generated/api";
-import { useMutation, useQuery } from "@cirrus/react";
+import { api } from "@/lunora/_generated/api";
+import { useMutation, useQuery } from "@lunora/react";
 import { useState } from "react";
 
 export const Chat = ({ channelId }: { channelId: string }) => {
@@ -165,10 +165,10 @@ Durable Object back to every subscriber.
 ## 8. Deploy
 
 ```bash
-pnpm cirrus deploy
+pnpm lunora deploy
 ```
 
-`cirrus deploy` runs codegen, validates `wrangler.jsonc`, applies any pending
+`lunora deploy` runs codegen, validates `wrangler.jsonc`, applies any pending
 D1 migrations through `MigrationRunner`, and finally invokes
 `wrangler deploy`. Your chat is now live on Cloudflare's edge — one DO per
 channel, hibernated when idle, billed by the millisecond.
@@ -177,7 +177,7 @@ channel, hibernated when idle, billed by the millisecond.
 
 - [Concepts: sharding](/docs/concepts/sharding) — when to reach for `.shardBy()`
   vs. `.global()`
-- [@cirrus/auth](/docs/addons/auth) — replace the `must be signed in` stub
+- [@lunora/auth](/docs/addons/auth) — replace the `must be signed in` stub
   with real sessions
-- [@cirrus/storage](/docs/addons/storage) — attach images and files to messages
+- [@lunora/storage](/docs/addons/storage) — attach images and files to messages
 - [Limits](/docs/limits) — the per-DO ceilings you're now under

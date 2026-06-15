@@ -23,10 +23,10 @@ import type { Mailer, SendPayload } from "./types";
 type MailEnv = Record<string, unknown>;
 
 /** Reserved admin RPC the capture sink records one message through. */
-const RECORD_MAIL_OP = "__cirrus_admin__:recordMail";
+const RECORD_MAIL_OP = "__lunora_admin__:recordMail";
 /** Default shard the studio's Mail inbox reads from (the runtime's default shard). */
 const DEFAULT_ROOT_SHARD = "__root__";
-/** Env-name values that denote a development deployment (`cirrus dev` sets `WORKER_ENV=development`). */
+/** Env-name values that denote a development deployment (`lunora dev` sets `WORKER_ENV=development`). */
 const DEV_ENVIRONMENT_PATTERN = /^(?:dev(?:elopment)?|local(?:host)?|test)$/iu;
 const ENVIRONMENT_VARS = ["CF_ENV", "ENVIRONMENT", "NODE_ENV", "WORKER_ENV"] as const;
 
@@ -53,7 +53,7 @@ const requireStringEnv = (env: MailEnv, name: string): string => {
     const value = env[name];
 
     if (typeof value !== "string" || value === "") {
-        throw new Error(`@cirrus/mail: missing env var \`${name}\` — set it in .dev.vars (and \`wrangler secret put ${name}\` for secrets).`);
+        throw new Error(`@lunora/mail: missing env var \`${name}\` — set it in .dev.vars (and \`wrangler secret put ${name}\` for secrets).`);
     }
 
     return value;
@@ -61,13 +61,13 @@ const requireStringEnv = (env: MailEnv, name: string): string => {
 
 /**
  * Whether outbound mail should be captured (into the studio inbox) rather than
- * delivered. Explicit `CIRRUS_MAIL_CAPTURE` (`"1"`/`"true"` vs `"0"`/`"false"`)
+ * delivered. Explicit `LUNORA_MAIL_CAPTURE` (`"1"`/`"true"` vs `"0"`/`"false"`)
  * always wins; unset, capture is on only in a development environment. It does
  * NOT fall back to "no SEND_EMAIL binding ⇒ capture" — a production deploy that
  * forgot the binding must fail loudly on send, not silently swallow mail.
  */
 const shouldCaptureMail = (env: MailEnv): boolean => {
-    const flag = env["CIRRUS_MAIL_CAPTURE"];
+    const flag = env["LUNORA_MAIL_CAPTURE"];
 
     if (typeof flag === "string") {
         return flag === "1" || flag.toLowerCase() === "true";
@@ -84,14 +84,14 @@ const shouldCaptureMail = (env: MailEnv): boolean => {
  * Build the {@link MailboxSink} that records a captured message into the studio's
  * root-shard inbox via the reserved `recordMail` admin RPC — the same
  * worker→root-shard path the runtime uses for auth events. Best-effort: without
- * the `SHARD` binding or `CIRRUS_ADMIN_TOKEN` it returns a sentinel id so a send
+ * the `SHARD` binding or `LUNORA_ADMIN_TOKEN` it returns a sentinel id so a send
  * never fails for lack of somewhere to record.
  */
 const createCaptureSink = (env: MailEnv, rootShard: string = DEFAULT_ROOT_SHARD): MailboxSink => {
     return {
         record: async (mail: SendPayload): Promise<{ id: string }> => {
             const namespace = env["SHARD"] as ShardNamespaceLike | undefined;
-            const adminToken = typeof env["CIRRUS_ADMIN_TOKEN"] === "string" ? env["CIRRUS_ADMIN_TOKEN"] : undefined;
+            const adminToken = typeof env["LUNORA_ADMIN_TOKEN"] === "string" ? env["LUNORA_ADMIN_TOKEN"] : undefined;
 
             if (namespace === undefined || adminToken === undefined) {
                 return { id: "uncaptured" };
@@ -138,7 +138,7 @@ const createMailerFromEnv = (env: MailEnv, options: FromEnvOptions = {}): Mailer
     }
 
     throw new Error(
-        "@cirrus/mail: no transport configured — provide `cloudflareSend` (a SEND_EMAIL binding) or RESEND_API_KEY, or run in a dev environment to capture.",
+        "@lunora/mail: no transport configured — provide `cloudflareSend` (a SEND_EMAIL binding) or RESEND_API_KEY, or run in a dev environment to capture.",
     );
 };
 

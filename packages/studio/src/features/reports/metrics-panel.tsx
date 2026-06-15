@@ -1,4 +1,4 @@
-import { useCirrus } from "@cirrus/react";
+import { useLunora } from "@lunora/react";
 import type { ReactElement, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -73,8 +73,8 @@ const StatCard = ({ label, testId, value, valueSize = "lg" }: { label: string; t
 /**
  * Health snapshot for a single shard: request / error counts (since the DO last
  * woke), its live SQLite size, and reactive-cache hit/miss stats when a cache is
- * configured. Reads via the `__cirrus_admin__:getMetrics` RPC over the
- * {@link useCirrus} client; gated by the server's `CIRRUS_ADMIN_TOKEN`.
+ * configured. Reads via the `__lunora_admin__:getMetrics` RPC over the
+ * {@link useLunora} client; gated by the server's `LUNORA_ADMIN_TOKEN`.
  *
  * Counters are per-DO-instance and reset on hibernation/restart — this is a
  * "since this instance woke" readout, not a durable time series.
@@ -87,7 +87,7 @@ const StatCard = ({ label, testId, value, valueSize = "lg" }: { label: string; t
  * remount.
  */
 export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const t = useT();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
@@ -293,7 +293,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
     }, []);
 
     return (
-        <div className="flex flex-col gap-4" data-testid="cirrus-metrics">
+        <div className="flex flex-col gap-4" data-testid="lunora-metrics">
             <div className="flex flex-wrap items-center gap-2">
                 <ShardInput onChange={setShardKey} testId="mt-shard-input" value={shardKey} />
                 <LiveError message={liveError} prefix="mt" />

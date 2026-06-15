@@ -1,4 +1,4 @@
-import { useCirrus } from "@cirrus/react";
+import { useLunora } from "@lunora/react";
 import { useCallback, useState } from "react";
 
 import type { ColumnMeta, TableColumnsResult, TablePage, WriteRowResult } from "../../../lib/admin";
@@ -74,7 +74,7 @@ interface UseGenerateRowsModel {
  * Used exclusively by `DataBrowser` — not a shared hook.
  */
 const useGenerateRows = (onRefresh: () => void): UseGenerateRowsModel => {
-    const client = useCirrus();
+    const client = useLunora();
 
     const [open, setOpen] = useState<boolean>(false);
     const [table, setTable] = useState<string | undefined>(undefined);

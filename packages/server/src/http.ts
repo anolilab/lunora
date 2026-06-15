@@ -1,10 +1,10 @@
-import type { Infer, Validator, ValidatorKind } from "@cirrus/values";
-import { ValidationError } from "@cirrus/values";
+import type { Infer, Validator, ValidatorKind } from "@lunora/values";
+import { ValidationError } from "@lunora/values";
 import type { Context } from "hono";
 import { Hono } from "hono";
 
 import type { EmptyArgs } from "./builder/index";
-import { CirrusError } from "./error";
+import { LunoraError } from "./error";
 import { parseValidatorMap } from "./functions";
 import type { ActionCtx as ActionContext, ArgsValidator, InferArgs } from "./types";
 
@@ -27,34 +27,34 @@ type HttpActionHandler = (context: HttpActionCtx, request: Request) => Promise<R
 /**
  * The hono {@link https://hono.dev | Hono} environment used by {@link httpRouter}.
  * The runtime injects the per-request {@link HttpActionCtx} on the private
- * `__cirrusCtx` binding; the router's lifting middleware promotes it to
- * `c.var.cirrus` so handlers can read it as a typed variable.
+ * `__lunoraCtx` binding; the router's lifting middleware promotes it to
+ * `c.var.lunora` so handlers can read it as a typed variable.
  */
-interface CirrusHttpEnv {
-    Bindings: Record<string, unknown> & { __cirrusCtx?: HttpActionCtx };
-    Variables: { cirrus: HttpActionCtx };
+interface LunoraHttpEnv {
+    Bindings: Record<string, unknown> & { __lunoraCtx?: HttpActionCtx };
+    Variables: { lunora: HttpActionCtx };
 }
 
 /** The hono app type {@link httpRouter} returns. */
-type CirrusHttpApp = Hono<CirrusHttpEnv>;
+type LunoraHttpApp = Hono<LunoraHttpEnv>;
 
 /** A compiled route handler: a hono handler that resolves to a raw {@link Response}. */
-type CirrusRouteHandler = (c: Context<CirrusHttpEnv>) => Promise<Response>;
+type LunoraRouteHandler = (c: Context<LunoraHttpEnv>) => Promise<Response>;
 
 /**
  * Wrap a `(ctx, request) => Response` handler as a hono handler. The raw escape
  * hatch — mount it with `app.all(path, httpAction(fn))`. `ctx` is the
- * runtime-injected {@link HttpActionCtx} lifted into `c.var.cirrus` by
+ * runtime-injected {@link HttpActionCtx} lifted into `c.var.lunora` by
  * {@link httpRouter}; `request` is the underlying `c.req.raw`.
  */
 const httpAction =
-    (handler: HttpActionHandler): CirrusRouteHandler =>
+    (handler: HttpActionHandler): LunoraRouteHandler =>
     async (c) =>
-        handler(c.get("cirrus"), c.req.raw);
+        handler(c.get("lunora"), c.req.raw);
 
 /**
  * Create the hono app for HTTP actions. Pre-wired with a middleware that lifts
- * the runtime-injected `c.env.__cirrusCtx` into `c.var.cirrus`, so both
+ * the runtime-injected `c.env.__lunoraCtx` into `c.var.lunora`, so both
  * {@link httpAction} and the typed {@link httpRoute} builder can read the action
  * context. The full hono surface is available — plugins, path params, `.route`:
  *
@@ -69,22 +69,22 @@ const httpAction =
  * The lifting middleware throws if the context is absent. `createWorker` injects
  * it on every request the router sees, so this only trips when the app is run
  * outside the runtime — a misconfiguration we surface loudly rather than let
- * `c.var.cirrus` be silently `undefined` despite its non-optional type.
+ * `c.var.lunora` be silently `undefined` despite its non-optional type.
  */
-const httpRouter = (): CirrusHttpApp => {
-    const app = new Hono<CirrusHttpEnv>();
+const httpRouter = (): LunoraHttpApp => {
+    const app = new Hono<LunoraHttpEnv>();
 
     app.use("*", async (c, next) => {
-        const injected = c.env.__cirrusCtx;
+        const injected = c.env.__lunoraCtx;
 
         if (!injected) {
-            throw new CirrusError(
+            throw new LunoraError(
                 "INTERNAL_SERVER_ERROR",
                 "HttpActionCtx was not injected — mount httpRouter() on createWorker(), which supplies it per request.",
             );
         }
 
-        c.set("cirrus", injected);
+        c.set("lunora", injected);
 
         await next();
     });
@@ -125,14 +125,14 @@ interface HttpStreamHandlerOptions<SearchParams extends ArgsValidator, Params ex
  * serialization. `[Output] extends [undefined]` is tuple-wrapped so a union
  * `Output` doesn't distribute and the test is for the exact sentinel.
  *
- * The terminal `.handler()` yields a {@link CirrusRouteHandler} — mount it
+ * The terminal `.handler()` yields a {@link LunoraRouteHandler} — mount it
  * directly with `app.get(path, route)`.
  */
 interface HttpRouteBuilder<SearchParams extends ArgsValidator, Body extends ArgsValidator, Params extends ArgsValidator, Output = undefined> {
     body: <B extends ArgsValidator>(validators: B) => HttpRouteBuilder<SearchParams, B & Body, Params, Output>;
     handler: [Output] extends [undefined]
-        ? <R>(handler: (options: HttpRouteHandlerOptions<SearchParams, Body, Params>) => Promise<R> | R) => CirrusRouteHandler
-        : (handler: (options: HttpRouteHandlerOptions<SearchParams, Body, Params>) => Output | Promise<Output>) => CirrusRouteHandler;
+        ? <R>(handler: (options: HttpRouteHandlerOptions<SearchParams, Body, Params>) => Promise<R> | R) => LunoraRouteHandler
+        : (handler: (options: HttpRouteHandlerOptions<SearchParams, Body, Params>) => Output | Promise<Output>) => LunoraRouteHandler;
     output: <V extends Validator>(validator: V) => HttpRouteBuilder<SearchParams, Body, Params, Infer<V>>;
     params: <P extends ArgsValidator>(validators: P) => HttpRouteBuilder<SearchParams, Body, P & Params, Output>;
     searchParams: <S extends ArgsValidator>(validators: S) => HttpRouteBuilder<S & SearchParams, Body, Params, Output>;
@@ -146,7 +146,7 @@ interface HttpRouteBuilder<SearchParams extends ArgsValidator, Body extends Args
      * the stream closes. The chunks are JSON-encoded; `R` is inferred from the
      * handler's yielded type.
      */
-    stream: <R>(handler: (options: HttpStreamHandlerOptions<SearchParams, Params>) => AsyncGenerator<R, void, void> | AsyncIterable<R>) => CirrusRouteHandler;
+    stream: <R>(handler: (options: HttpStreamHandlerOptions<SearchParams, Params>) => AsyncGenerator<R, void, void> | AsyncIterable<R>) => LunoraRouteHandler;
 }
 
 /** Opens a fresh {@link HttpRouteBuilder}. The `path` documents intent; hono owns the actual routing at mount. */
@@ -183,7 +183,7 @@ const unwrapOptional = (validator: Validator): Validator =>
     validator.kind === "optional" ? ((validator as ValidatorWithMeta)._meta?.inner ?? validator) : validator;
 
 /**
- * Query-string values arrive as strings, but `@cirrus/values` validators are
+ * Query-string values arrive as strings, but `@lunora/values` validators are
  * strict (no coercion). Coerce the scalar kinds back to their declared type so
  * `?limit=5` satisfies `v.number()`; a malformed value (e.g. `?limit=abc` → NaN)
  * is left for the validator to reject. Unrecognised kinds pass through as-is.
@@ -227,7 +227,7 @@ const coerceScalar = (kind: ValidatorKind, raw: string): unknown => {
  * `array` validator collects every repeated occurrence (`?tag=a&amp;tag=b`) via
  * `c.req.queries`, coercing each element.
  */
-const coerceSearchParameter = (validator: Validator, c: Context<CirrusHttpEnv>, key: string): unknown => {
+const coerceSearchParameter = (validator: Validator, c: Context<LunoraHttpEnv>, key: string): unknown => {
     const effective = unwrapOptional(validator);
 
     if (effective.kind === "array") {
@@ -247,7 +247,7 @@ const coerceSearchParameter = (validator: Validator, c: Context<CirrusHttpEnv>, 
     return raw === undefined ? undefined : coerceScalar(effective.kind, raw);
 };
 
-const parseSearchParams = (validators: ArgsValidator, c: Context<CirrusHttpEnv>): Record<string, unknown> => {
+const parseSearchParams = (validators: ArgsValidator, c: Context<LunoraHttpEnv>): Record<string, unknown> => {
     const raw: Record<string, unknown> = {};
 
     for (const key of Object.keys(validators)) {
@@ -264,7 +264,7 @@ const parseSearchParams = (validators: ArgsValidator, c: Context<CirrusHttpEnv>)
 };
 
 /** Coerce + validate the declared hono path params (`/users/:id`). Path params arrive as strings. */
-const parseParams = (validators: ArgsValidator, c: Context<CirrusHttpEnv>): Record<string, unknown> => {
+const parseParams = (validators: ArgsValidator, c: Context<LunoraHttpEnv>): Record<string, unknown> => {
     const provided = c.req.param() as Record<string, string | undefined>;
     const raw: Record<string, unknown> = {};
 
@@ -291,17 +291,17 @@ type LooseHandler = (options: {
 }) => unknown;
 
 /** Read + validate the JSON body. A non-JSON or non-object payload is a 400. */
-const parseBody = async (validators: ArgsValidator, c: Context<CirrusHttpEnv>): Promise<Record<string, unknown>> => {
+const parseBody = async (validators: ArgsValidator, c: Context<LunoraHttpEnv>): Promise<Record<string, unknown>> => {
     let json: unknown;
 
     try {
         json = await c.req.json();
     } catch {
-        throw new CirrusError("BAD_REQUEST", "Invalid JSON body");
+        throw new LunoraError("BAD_REQUEST", "Invalid JSON body");
     }
 
     if (typeof json !== "object" || json === null || Array.isArray(json)) {
-        throw new CirrusError("BAD_REQUEST", "Expected a JSON object body");
+        throw new LunoraError("BAD_REQUEST", "Expected a JSON object body");
     }
 
     return parseValidatorMap(validators, json as Record<string, unknown>, "body");
@@ -316,7 +316,7 @@ const applyOutput = (output: Validator, result: unknown): unknown => {
         return output.parse(result);
     } catch (error: unknown) {
         if (error instanceof ValidationError) {
-            throw new CirrusError("INTERNAL_SERVER_ERROR", `Response did not match the declared output schema: ${error.message}`);
+            throw new LunoraError("INTERNAL_SERVER_ERROR", `Response did not match the declared output schema: ${error.message}`);
         }
 
         throw error;
@@ -329,7 +329,7 @@ const errorResponse = (error: unknown): Response => {
         return Response.json({ code: "BAD_REQUEST", error: error.message }, { status: 400 });
     }
 
-    if (error instanceof CirrusError) {
+    if (error instanceof LunoraError) {
         return Response.json({ code: error.code, error: error.message }, { status: error.status });
     }
 
@@ -337,16 +337,16 @@ const errorResponse = (error: unknown): Response => {
 };
 
 /**
- * Compile the accumulated route state into a {@link CirrusRouteHandler}. Reads
- * `ctx` from `c.var.cirrus` (set by {@link httpRouter}'s middleware). Input
+ * Compile the accumulated route state into a {@link LunoraRouteHandler}. Reads
+ * `ctx` from `c.var.lunora` (set by {@link httpRouter}'s middleware). Input
  * decode failures (bad query / body / params) surface as 400; a result that
  * violates `.output()` surfaces as 500 (see {@link applyOutput}).
  */
 const buildRouteHandler =
-    (state: RouteState, userHandler: LooseHandler): CirrusRouteHandler =>
+    (state: RouteState, userHandler: LooseHandler): LunoraRouteHandler =>
     async (c) => {
         try {
-            const context = c.get("cirrus");
+            const context = c.get("lunora");
             const searchParams = Object.keys(state.searchParams).length > 0 ? parseSearchParams(state.searchParams, c) : {};
             const params = Object.keys(state.params).length > 0 ? parseParams(state.params, c) : {};
             const body = Object.keys(state.body).length > 0 ? await parseBody(state.body, c) : {};
@@ -369,21 +369,21 @@ type LooseStreamHandler = (options: {
 }) => AsyncGenerator<unknown, void, void> | AsyncIterable<unknown>;
 
 /**
- * Structural match for a {@link CirrusError} that survives cross-package class
- * identity. A handler may throw a `CirrusError` minted by a different copy of
- * `@cirrus/server` (duplicated in the dep graph), so `instanceof` is unreliable
- * — key off the public shape (`name === "CirrusError"` + string `code`) the way
- * `@cirrus/runtime`'s `toErrorResponse` does. Only such known-safe errors get
+ * Structural match for a {@link LunoraError} that survives cross-package class
+ * identity. A handler may throw a `LunoraError` minted by a different copy of
+ * `@lunora/server` (duplicated in the dep graph), so `instanceof` is unreliable
+ * — key off the public shape (`name === "LunoraError"` + string `code`) the way
+ * `@lunora/runtime`'s `toErrorResponse` does. Only such known-safe errors get
  * their `code`/`message` echoed to the client.
  */
-const isCirrusErrorLike = (error: unknown): error is { code: string; message: string } => {
+const isLunoraErrorLike = (error: unknown): error is { code: string; message: string } => {
     if (!error || typeof error !== "object") {
         return false;
     }
 
     const candidate = error as { code?: unknown; message?: unknown; name?: unknown };
 
-    return candidate.name === "CirrusError" && typeof candidate.code === "string" && typeof candidate.message === "string";
+    return candidate.name === "LunoraError" && typeof candidate.code === "string" && typeof candidate.message === "string";
 };
 
 /**
@@ -399,7 +399,7 @@ const sseFrame = (chunk: unknown, event?: "complete" | "error"): string => {
 };
 
 /**
- * Compile the accumulated route state into an SSE {@link CirrusRouteHandler}.
+ * Compile the accumulated route state into an SSE {@link LunoraRouteHandler}.
  * Pumps the user iterator into a `text/event-stream` `ReadableStream`. The
  * stream wires the client `request.signal` through to the user handler so a
  * disconnect aborts in-flight work, and surfaces handler-thrown errors as an
@@ -407,8 +407,8 @@ const sseFrame = (chunk: unknown, event?: "complete" | "error"): string => {
  * opaque transport-level disconnect).
  */
 const buildStreamHandler =
-    (state: RouteState, userHandler: LooseStreamHandler): CirrusRouteHandler =>
-    // eslint-disable-next-line @typescript-eslint/require-await -- CirrusRouteHandler is contractually `(c) => Promise<Response>`; this handler returns synchronously (all awaits live inside the ReadableStream pump), so `async` is required by the type, not the body.
+    (state: RouteState, userHandler: LooseStreamHandler): LunoraRouteHandler =>
+    // eslint-disable-next-line @typescript-eslint/require-await -- LunoraRouteHandler is contractually `(c) => Promise<Response>`; this handler returns synchronously (all awaits live inside the ReadableStream pump), so `async` is required by the type, not the body.
     async (c) => {
         let searchParams: Record<string, unknown>;
         let params: Record<string, unknown>;
@@ -420,7 +420,7 @@ const buildStreamHandler =
             return errorResponse(error);
         }
 
-        const context = c.get("cirrus");
+        const context = c.get("lunora");
         const request = c.req.raw;
         const encoder = new TextEncoder();
         const ac = new AbortController();
@@ -473,18 +473,18 @@ const buildStreamHandler =
 
                     controller.enqueue(encoder.encode(sseFrame({}, "complete")));
                 } catch (error: unknown) {
-                    // Mirror `@cirrus/runtime`'s `toErrorResponse` policy: only a
-                    // known-safe CirrusError-shaped value gets its `code`/`message`
+                    // Mirror `@lunora/runtime`'s `toErrorResponse` policy: only a
+                    // known-safe LunoraError-shaped value gets its `code`/`message`
                     // echoed to the client. Everything else (which may carry stack
                     // traces, file paths, or internal identifiers in `.message`) is
                     // logged server-side and replaced with a generic frame.
                     let payload: { code: string; message: string };
 
-                    if (isCirrusErrorLike(error)) {
+                    if (isLunoraErrorLike(error)) {
                         payload = { code: error.code, message: error.message };
                     } else {
                         // eslint-disable-next-line no-console -- log internal errors server-side; never echo raw details to the client
-                        console.error("[cirrus] unhandled stream handler error:", error);
+                        console.error("[lunora] unhandled stream handler error:", error);
                         payload = { code: "INTERNAL_SERVER_ERROR", message: "Internal error" };
                     }
 
@@ -510,11 +510,11 @@ const buildStreamHandler =
 const makeRouteBuilder = (state: RouteState): Record<string, unknown> => {
     return {
         body: (validators: ArgsValidator) => makeRouteBuilder({ ...state, body: { ...state.body, ...validators } }),
-        handler: (userHandler: LooseHandler): CirrusRouteHandler => buildRouteHandler(state, userHandler),
+        handler: (userHandler: LooseHandler): LunoraRouteHandler => buildRouteHandler(state, userHandler),
         output: (validator: Validator) => makeRouteBuilder({ ...state, output: validator }),
         params: (validators: ArgsValidator) => makeRouteBuilder({ ...state, params: { ...state.params, ...validators } }),
         searchParams: (validators: ArgsValidator) => makeRouteBuilder({ ...state, searchParams: { ...state.searchParams, ...validators } }),
-        stream: (userHandler: LooseStreamHandler): CirrusRouteHandler => buildStreamHandler(state, userHandler),
+        stream: (userHandler: LooseStreamHandler): LunoraRouteHandler => buildStreamHandler(state, userHandler),
     };
 };
 
@@ -524,7 +524,7 @@ const makeRouteFactory =
         makeRouteBuilder({ body: {}, method, params: {}, path, searchParams: {} }) as unknown as HttpRouteBuilder<EmptyArgs, EmptyArgs, EmptyArgs>;
 
 /**
- * Typed REST route builder. Compiles down to a {@link CirrusRouteHandler}, so a
+ * Typed REST route builder. Compiles down to a {@link LunoraRouteHandler}, so a
  * typed route and a hand-written {@link httpAction} are interchangeable when
  * mounted on {@link httpRouter}:
  *
@@ -556,9 +556,9 @@ const httpRoute: HttpRoute = {
 };
 
 /**
- * Structural view of an R2 object body, as returned by `@cirrus/storage`'s
- * `download()`. Re-declared here (not imported) so `@cirrus/server` takes no
- * runtime dependency on `@cirrus/storage`; the real binding satisfies the shape.
+ * Structural view of an R2 object body, as returned by `@lunora/storage`'s
+ * `download()`. Re-declared here (not imported) so `@lunora/server` takes no
+ * runtime dependency on `@lunora/storage`; the real binding satisfies the shape.
  */
 interface StorageObjectBody {
     /** The object body stream (`null` for a zero-byte object). */
@@ -566,7 +566,7 @@ interface StorageObjectBody {
     etag: string;
     httpMetadata?: { contentType?: string };
     key: string;
-    /** Hex SHA-256, when R2 carries a checksum (surfaced by `@cirrus/storage`). */
+    /** Hex SHA-256, when R2 carries a checksum (surfaced by `@lunora/storage`). */
     sha256?: string;
     /** Base64 SHA-256 (RFC 9530 digest encoding), when R2 carries a checksum. */
     sha256Base64?: string;
@@ -779,9 +779,9 @@ const serveStorageObject = async (context: ContextWithStorage, key: string, requ
 export { httpAction, httpRoute, httpRouter, serveStorageObject };
 
 export type {
-    CirrusHttpApp,
-    CirrusHttpEnv,
-    CirrusRouteHandler,
+    LunoraHttpApp,
+    LunoraHttpEnv,
+    LunoraRouteHandler,
     HttpActionCtx,
     HttpActionHandler,
     HttpMethod,

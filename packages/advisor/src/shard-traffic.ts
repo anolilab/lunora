@@ -2,7 +2,7 @@
  * One shard's observed traffic share — the input the `hot_shard` runtime lint
  * consumes. Produced by the studio backend, which fans out over a sharded
  * function's shards and reads each shard's recorded request volume from the
- * durable `__cirrus_metrics` accumulator (`SUM(calls)`) — or, equivalently, the
+ * durable `__lunora_metrics` accumulator (`SUM(calls)`) — or, equivalently, the
  * per-shard request-log count. Codegen and other static callers don't supply
  * it, so the lint simply finds nothing there.
  *

@@ -1,13 +1,13 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 
-// Shared studio-hosting helpers from the internal `@cirrus/config` layer.
-// `@cirrus/cli`'s `cirrus dev` imports the same module, so the Vite route and
-// the CLI server render an identical studio. The heavy `@cirrus/studio` SPA it
+// Shared studio-hosting helpers from the internal `@lunora/config` layer.
+// `@lunora/cli`'s `lunora dev` imports the same module, so the Vite route and
+// the CLI server render an identical studio. The heavy `@lunora/studio` SPA it
 // hosts stays an optional peer — these helpers resolve its prebuilt assets
 // lazily (and degrade gracefully when it isn't installed).
-import { detectAgentRules } from "@cirrus/config";
-import type { StudioAssets } from "@cirrus/config/studio-host";
+import { detectAgentRules } from "@lunora/config";
+import type { StudioAssets } from "@lunora/config/studio-host";
 import {
     handlePolicyScaffoldRequest,
     handleSchemaEditRequest,
@@ -20,11 +20,11 @@ import {
     SEED_ENDPOINT,
     serveJsonHandler,
     studioAssetsStamp,
-} from "@cirrus/config/studio-host";
+} from "@lunora/config/studio-host";
 import type { Plugin, ViteDevServer } from "vite";
 
 /** Dev-server path the studio SPA is served from. */
-const STUDIO_PATH = "/__cirrus";
+const STUDIO_PATH = "/__lunora";
 /** Static asset routes the studio document references. */
 const STUDIO_SCRIPT_PATH: string = `${STUDIO_PATH}/studio.js`;
 const STUDIO_STYLE_PATH: string = `${STUDIO_PATH}/styles.css`;
@@ -68,7 +68,7 @@ const buildStudioUrl = (input: { address?: AddressInfo | string; base?: string; 
 
 /**
  * Parse the request pathname, tolerating a query string and a trailing slash so
- * `/__cirrus`, `/__cirrus?x`, `/__cirrus/`, and `/__cirrus/?x` all match.
+ * `/__lunora`, `/__lunora?x`, `/__lunora/`, and `/__lunora/?x` all match.
  */
 const pathnameOf = (url: string): string => {
     try {
@@ -82,7 +82,7 @@ const pathnameOf = (url: string): string => {
  * Connect middleware that serves the static studio. Extracted from
  * `configureServer` so each function stays small. Caches the asset bytes but
  * re-reads them when the built files change on disk (compared via
- * {@link studioAssetsStamp}), so a `@cirrus/studio` rebuild is picked up live
+ * {@link studioAssetsStamp}), so a `@lunora/studio` rebuild is picked up live
  * without a dev server restart.
  */
 const createStudioHandler = (
@@ -99,8 +99,8 @@ const createStudioHandler = (
     return (request: IncomingMessage, response: ServerResponse, next: () => void): void => {
         const pathname = pathnameOf(request.url ?? "");
 
-        // Own the mount and everything under it (`/__cirrus`, `/__cirrus/`,
-        // `/__cirrus/data`, …); anything else passes through.
+        // Own the mount and everything under it (`/__lunora`, `/__lunora/`,
+        // `/__lunora/data`, …); anything else passes through.
         if (pathname !== STUDIO_PATH && !pathname.startsWith(`${STUDIO_PATH}/`)) {
             next();
 
@@ -112,7 +112,7 @@ const createStudioHandler = (
         if (isNonLoopbackBind) {
             response.statusCode = 403;
             response.setHeader("Content-Type", "text/plain");
-            response.end("Cirrus studio is only available on loopback hosts in dev.");
+            response.end("Lunora studio is only available on loopback hosts in dev.");
 
             return;
         }
@@ -144,10 +144,10 @@ const createStudioHandler = (
 
         // Static assets are exact paths; every other route under the mount is an
         // SPA route and gets the history fallback (the document) below, so a hard
-        // load of a deep link like `/__cirrus/data` boots the router there.
+        // load of a deep link like `/__lunora/data` boots the router there.
         if (pathname === STUDIO_SCRIPT_PATH || pathname === STUDIO_STYLE_PATH) {
             // Re-read the bytes when the built studio files change on disk so a
-            // mid-session `@cirrus/studio` rebuild is served without a restart.
+            // mid-session `@lunora/studio` rebuild is served without a restart.
             const stamp = studioAssetsStamp();
 
             if (assets === undefined || stamp !== assetsStamp) {
@@ -158,7 +158,7 @@ const createStudioHandler = (
             if (assets === undefined) {
                 response.statusCode = 501;
                 response.setHeader("Content-Type", "text/plain");
-                response.end("Cirrus studio assets not found — install and build @cirrus/studio.");
+                response.end("Lunora studio assets not found — install and build @lunora/studio.");
 
                 return;
             }
@@ -191,12 +191,12 @@ const createStudioHandler = (
 };
 
 /**
- * Vite plugin that serves the composed Cirrus studio at
+ * Vite plugin that serves the composed Lunora studio at
  * {@link STUDIO_PATH} during dev and prints its URL once the server is
  * listening. Dev-only (`apply: "serve"`); it adds nothing to production builds.
  *
- * Because `cirrus dev` spawns Vite, this makes the studio available on
- * `cirrus dev` and on a plain `vite` with no per-project files. The studio
+ * Because `lunora dev` spawns Vite, this makes the studio available on
+ * `lunora dev` and on a plain `vite` with no per-project files. The studio
  * is served as a prebuilt static bundle, independent of the host app.
  */
 const studioPlugin = (): Plugin => {
@@ -226,8 +226,8 @@ const studioPlugin = (): Plugin => {
                     });
 
                     // Match Vite's banner format so the line slots in beneath the
-                    // Local/Network URLs (`Cirrus:` padded to align the colons).
-                    server.config.logger.info(`  [32m➜[39m  [1mCirrus[22m:  [36m${url}[39m`);
+                    // Local/Network URLs (`Lunora:` padded to align the colons).
+                    server.config.logger.info(`  [32m➜[39m  [1mLunora[22m:  [36m${url}[39m`);
                 };
 
                 // Preferred: splice the line into Vite's startup banner by
@@ -249,7 +249,7 @@ const studioPlugin = (): Plugin => {
                 }
             };
         },
-        name: "cirrus:studio",
+        name: "lunora:studio",
     };
 };
 

@@ -1,4 +1,4 @@
-import { useCirrus } from "@cirrus/react";
+import { useLunora } from "@lunora/react";
 import type { ReactElement, ReactNode } from "react";
 import { useCallback, useMemo, useState } from "react";
 
@@ -34,7 +34,7 @@ import { TableListSidebar } from "./table-list-sidebar";
 interface DataBrowserProps {
     /**
      * Allow editing: surfaces insert/edit/delete actions that issue
-     * `__cirrus_admin__:writeRow` ops through the schema-aware writer. Off by
+     * `__lunora_admin__:writeRow` ops through the schema-aware writer. Off by
      * default — the browser is read-only unless the host opts in.
      */
     readonly editable?: boolean;
@@ -243,12 +243,12 @@ const DataBrowserViewControls = ({
 
 /**
  * Read-only data browser for a single shard's SQLite database. Lists the user
- * tables (via the `__cirrus_admin__:listTables` RPC), then pages through the
- * rows of whichever table is selected (`__cirrus_admin__:readTablePage`).
+ * tables (via the `__lunora_admin__:listTables` RPC), then pages through the
+ * rows of whichever table is selected (`__lunora_admin__:readTablePage`).
  *
- * Both calls travel over the ordinary `useCirrus` client transport; the
+ * Both calls travel over the ordinary `useLunora` client transport; the
  * admin RPCs are intercepted inside the Durable Object and are gated by the
- * server's `CIRRUS_ADMIN_TOKEN`. The host is responsible for configuring the
+ * server's `LUNORA_ADMIN_TOKEN`. The host is responsible for configuring the
  * client's auth token — this component issues no credentials of its own.
  *
  * The table view is built on a headless `@tanstack/react-table` model: column
@@ -332,7 +332,7 @@ export const DataBrowser = ({
         writeError,
     } = useDataBrowser({ initialFilters, initialOrderBy, initialSearch, initialShardKey, onSelectTable, onViewChange, pageSize: initialPageSize, tableParam });
 
-    const client = useCirrus();
+    const client = useLunora();
 
     // Fetch the table list for a given shard key — used by the ShardExplorer to
     // show a live table/row-count summary when the operator picks a recent shard.
@@ -345,7 +345,7 @@ export const DataBrowser = ({
         [client],
     );
 
-    // Generate & insert dummy rows via the local seed endpoint (Node-side @cirrus/seed).
+    // Generate & insert dummy rows via the local seed endpoint (Node-side @lunora/seed).
     const onRefreshAfterGenerate = useCallback((): void => {
         if (selectedTable !== null) {
             selectTable(selectedTable);
@@ -473,7 +473,7 @@ export const DataBrowser = ({
     }, [handleNavigateRef, page?.refs, previewRef]);
 
     return (
-        <div className="flex h-full min-w-0" data-testid="cirrus-data-browser">
+        <div className="flex h-full min-w-0" data-testid="lunora-data-browser">
             <TableListSidebar
                 header={
                     <DataBrowserSidebarHeader

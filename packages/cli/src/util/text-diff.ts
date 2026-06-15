@@ -1,5 +1,5 @@
 /**
- * Minimal line-level diff for `cirrus add --diff` previews. Not a full LCS —
+ * Minimal line-level diff for `lunora add --diff` previews. Not a full LCS —
  * it trims the common prefix/suffix and marks the differing middle as removed
  * (`-`) / added (`+`), with a few lines of surrounding context. That's enough
  * to preview what an install or upgrade would change before any file is written.

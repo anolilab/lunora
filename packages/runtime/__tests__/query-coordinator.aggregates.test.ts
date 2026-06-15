@@ -9,7 +9,7 @@ import type { ShardNamespaceLike } from "../src/resolve-shard";
  * `groupBy` fan-outs collapse per-shard payloads via the
  * `MergeStrategy` so the coordinator can serve a global answer over a
  * shardBy table. `avg` is explicitly unsupported in v1 and surfaces a
- * `CirrusError`.
+ * `LunoraError`.
  */
 
 interface ShardSpy {

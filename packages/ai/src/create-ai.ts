@@ -1,7 +1,7 @@
 import type { EmbeddingModel, LanguageModel } from "ai";
 import { createWorkersAI } from "workers-ai-provider";
 
-import type { AiBindingLike, CirrusAi, CirrusAiOptions, EmbeddingModelInput, ModelInput, WorkersAiProviderLike } from "./types";
+import type { AiBindingLike, LunoraAi, LunoraAiOptions, EmbeddingModelInput, ModelInput, WorkersAiProviderLike } from "./types";
 
 /**
  * Build the Workers AI provider from a binding, threading the optional AI
@@ -9,22 +9,22 @@ import type { AiBindingLike, CirrusAi, CirrusAiOptions, EmbeddingModelInput, Mod
  * caller-supplied `provider` without duplicating the construction. `AiBindingLike`
  * is the structural subset of `createWorkersAI`'s binding that we actually call.
  */
-const buildProvider = (binding: AiBindingLike, gateway?: CirrusAiOptions["gateway"]): WorkersAiProviderLike => createWorkersAI({ binding, gateway });
+const buildProvider = (binding: AiBindingLike, gateway?: LunoraAiOptions["gateway"]): WorkersAiProviderLike => createWorkersAI({ binding, gateway });
 
 /**
  * Create the `ctx.ai` helper over a Workers `AI` binding.
  *
- * Workers AI is the zero-config default, but `@cirrus/ai` is provider-agnostic:
+ * Workers AI is the zero-config default, but `@lunora/ai` is provider-agnostic:
  * every helper takes either a model id string (resolved against the Workers AI
  * provider) or any AI SDK {@link LanguageModel}/{@link EmbeddingModel} object
  * (`@ai-sdk/openai`, `@ai-sdk/anthropic`, OpenRouter, …), so apps are never
- * locked to Workers AI. Pair `embed` with `@cirrus/vectors` for RAG.
+ * locked to Workers AI. Pair `embed` with `@lunora/vectors` for RAG.
  *
  * Combine with the re-exported `generateText`/`streamText`/`generateObject`/
  * `embed`/`tool` from this package:
  *
  * ```ts
- * import { streamText } from "@cirrus/ai";
+ * import { streamText } from "@lunora/ai";
  *
  * const result = streamText({
  *   model: ctx.ai.model("@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
@@ -32,11 +32,11 @@ const buildProvider = (binding: AiBindingLike, gateway?: CirrusAiOptions["gatewa
  * });
  * ```
  */
-const createAi = (options: CirrusAiOptions): CirrusAi => {
+const createAi = (options: LunoraAiOptions): LunoraAi => {
     const { binding, defaultModel, gateway, provider } = options;
 
     if (!provider && !binding) {
-        throw new Error("@cirrus/ai: createAi requires a `binding` (env.AI) or a pre-built `provider`");
+        throw new Error("@lunora/ai: createAi requires a `binding` (env.AI) or a pre-built `provider`");
     }
 
     // A caller-supplied provider wins; otherwise construct one from the binding.
@@ -46,7 +46,7 @@ const createAi = (options: CirrusAiOptions): CirrusAi => {
     const model = (input?: ModelInput): LanguageModel => {
         if (input === undefined) {
             if (!defaultModel) {
-                throw new Error("@cirrus/ai: no model supplied and no `defaultModel` configured — pass a model id or an AI SDK model");
+                throw new Error("@lunora/ai: no model supplied and no `defaultModel` configured — pass a model id or an AI SDK model");
             }
 
             return workersai(defaultModel);
@@ -62,7 +62,7 @@ const createAi = (options: CirrusAiOptions): CirrusAi => {
 
         if (typeof factory !== "function") {
             throw new TypeError(
-                "@cirrus/ai: the Workers AI provider does not expose `textEmbeddingModel`; pass an AI SDK EmbeddingModel (e.g. from @ai-sdk/openai) to embed()",
+                "@lunora/ai: the Workers AI provider does not expose `textEmbeddingModel`; pass an AI SDK EmbeddingModel (e.g. from @ai-sdk/openai) to embed()",
             );
         }
 
@@ -85,7 +85,7 @@ const createAi = (options: CirrusAiOptions): CirrusAi => {
 
         if (!modelId) {
             throw new Error(
-                "@cirrus/ai: no embedding model supplied and no `defaultModel` configured — pass an embedding model id or an AI SDK EmbeddingModel",
+                "@lunora/ai: no embedding model supplied and no `defaultModel` configured — pass an embedding model id or an AI SDK EmbeddingModel",
             );
         }
 
@@ -94,7 +94,7 @@ const createAi = (options: CirrusAiOptions): CirrusAi => {
 
     const run = async (modelId: string, inputs: Record<string, unknown>, runOptions?: Record<string, unknown>): Promise<unknown> => {
         if (!binding) {
-            throw new Error("@cirrus/ai: ai.run requires the `binding` (env.AI) — it is unavailable when only a custom `provider` was supplied");
+            throw new Error("@lunora/ai: ai.run requires the `binding` (env.AI) — it is unavailable when only a custom `provider` was supplied");
         }
 
         return binding.run(modelId, inputs, runOptions);

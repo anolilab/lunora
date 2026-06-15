@@ -1,5 +1,5 @@
 /**
- * Real-D1 integration tests for `@cirrus/d1`.
+ * Real-D1 integration tests for `@lunora/d1`.
  *
  * These boot a real Miniflare D1 instance via `@cloudflare/vitest-pool-workers`
  * and verify the Sessions API + MigrationRunner against the actual binding.

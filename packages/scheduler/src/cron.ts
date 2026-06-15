@@ -4,7 +4,7 @@ import { assertValidCronExpression } from "./validate-cron";
 interface CronTriggerOptions {
     /** Args passed to the function. */
     args?: Record<string, unknown>;
-    /** The Cirrus function to invoke on each trigger fire. */
+    /** The Lunora function to invoke on each trigger fire. */
     fn: FunctionReference;
     /** Standard cron expression, e.g. `"0 * * * *"`. */
     schedule: string;
@@ -24,14 +24,14 @@ interface CronTriggerSnippet {
 
 /**
  * Produces the wrangler.jsonc fragment + dispatcher metadata for a recurring
- * function. The actual cron handler is mounted by `@cirrus/runtime` — we only
+ * function. The actual cron handler is mounted by `@lunora/runtime` — we only
  * emit the configuration here.
  */
 const createCronTrigger = (options: CronTriggerOptions): CronTriggerSnippet => {
     // Defensive runtime guard: both are required by the type, but JS callers can omit them.
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untrusted JS callers despite the required type
     if (!options.schedule || !options.fn) {
-        throw new Error("@cirrus/scheduler: createCronTrigger() requires `schedule` and `fn`");
+        throw new Error("@lunora/scheduler: createCronTrigger() requires `schedule` and `fn`");
     }
 
     assertValidCronExpression(options.schedule);
@@ -50,7 +50,7 @@ const createCronTrigger = (options: CronTriggerOptions): CronTriggerSnippet => {
         crons: [options.schedule],
         dispatcher: {
             args: options.args ?? {},
-            functionPath: options.fn.__cirrusRef,
+            functionPath: options.fn.__lunoraRef,
         },
         wranglerJsonc: snippet,
     };

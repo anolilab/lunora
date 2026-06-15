@@ -52,7 +52,7 @@ const captureStdout = (lines: string[], { tty = false }: { tty?: boolean } = {})
     return received;
 };
 
-const logLine = JSON.stringify({ function: "messages:list", level: "info", message: "hi", source: "cirrus", type: "log" });
+const logLine = JSON.stringify({ function: "messages:list", level: "info", message: "hi", source: "lunora", type: "log" });
 
 describe("logStreamPlugin", () => {
     afterEach(() => {
@@ -65,12 +65,12 @@ describe("logStreamPlugin", () => {
         expect(logStreamPlugin().apply).toBe("serve");
     });
 
-    it("rewrites a cirrus event line into a tagged, attributed line", () => {
+    it("rewrites a lunora event line into a tagged, attributed line", () => {
         expect.assertions(1);
 
         const received = captureStdout([`${logLine}\n`]);
 
-        expect(received.join("")).toBe("[cirrus] messages:list  hi\n");
+        expect(received.join("")).toBe("[lunora] messages:list  hi\n");
     });
 
     it("wraps the tag in a real SGR escape sequence on a TTY", () => {
@@ -80,11 +80,11 @@ describe("logStreamPlugin", () => {
 
         // The cyan (info) tag must use the actual ESC control byte (\u001B), not
         // the bare `[36m` text — the regression that printed literal escapes.
-        expect(received).toBe("\u001B[36m[cirrus]\u001B[0m messages:list  hi\n");
+        expect(received).toBe("\u001B[36m[lunora]\u001B[0m messages:list  hi\n");
         expect(received).toContain("\u001B[");
     });
 
-    it("passes non-cirrus output through unchanged", () => {
+    it("passes non-lunora output through unchanged", () => {
         expect.assertions(1);
 
         const received = captureStdout(["vite v8 ready in 120 ms\n"]);
@@ -92,12 +92,12 @@ describe("logStreamPlugin", () => {
         expect(received.join("")).toBe("vite v8 ready in 120 ms\n");
     });
 
-    it("rewrites only the cirrus lines inside a mixed multi-line chunk", () => {
+    it("rewrites only the lunora lines inside a mixed multi-line chunk", () => {
         expect.assertions(1);
 
         const received = captureStdout([`before\n${logLine}\nafter\n`]);
 
-        expect(received.join("")).toBe("before\n[cirrus] messages:list  hi\nafter\n");
+        expect(received.join("")).toBe("before\n[lunora] messages:list  hi\nafter\n");
     });
 
     it("restores the original write once the server closes", () => {
@@ -105,7 +105,7 @@ describe("logStreamPlugin", () => {
 
         captureStdout([`${logLine}\n`]);
 
-        // After restore, a cirrus line written outside the patched window is untouched.
+        // After restore, a lunora line written outside the patched window is untouched.
         const realWrite = process.stdout.write.bind(process.stdout);
         let seen = "";
 

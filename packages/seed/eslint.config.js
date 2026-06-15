@@ -1,6 +1,6 @@
 import { createConfig } from "@anolilab/eslint-config";
 
-// Self-contained flat config for @cirrus/seed. Each package owns its own setup
+// Self-contained flat config for @lunora/seed. Each package owns its own setup
 // (no shared local preset); rules build on @anolilab/eslint-config.
 export default createConfig(
     {

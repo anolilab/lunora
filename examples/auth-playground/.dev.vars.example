@@ -1,5 +1,5 @@
 # Local dev secrets for the auth-playground worker (gitignored as `.dev.vars`).
-# `cirrus dev` / the Vite dev server offer to generate `.dev.vars` from this
+# `lunora dev` / the Vite dev server offer to generate `.dev.vars` from this
 # file on first run — secret placeholders below are auto-filled. Or by hand:
 #
 #   cp .dev.vars.example .dev.vars   # then fill in

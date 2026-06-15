@@ -1,4 +1,4 @@
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
@@ -47,9 +47,9 @@ const createMaskedClient = (policies: unknown = MASK_POLICIES): MockClientHooks 
     });
 
 const renderBrowser = (mock: MockClientHooks): ReactElement => (
-    <CirrusProvider client={mock.asClient}>
+    <LunoraProvider client={mock.asClient}>
         <DataBrowser />
-    </CirrusProvider>
+    </LunoraProvider>
 );
 
 const openUsers = async (mock: MockClientHooks): Promise<void> => {

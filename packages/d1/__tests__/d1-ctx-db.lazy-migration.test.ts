@@ -1,4 +1,4 @@
-import type { AggregateIndexDefinitionLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@cirrus/do";
+import type { AggregateIndexDefinitionLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@lunora/do";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { D1Exec } from "../src/d1-ctx-db";
@@ -303,7 +303,7 @@ describe("d1 ctx-db avg divisor excludes non-numeric fields", () => {
 
 /**
  * `D1Exec` decorator that forces the fts5-availability probe to report "not
- * available" — the probe creates a `__cirrus_fts_probe` virtual table, so we
+ * available" — the probe creates a `__lunora_fts_probe` virtual table, so we
  * make that one CREATE throw while passing every other statement through to the
  * underlying engine. This deterministically routes `.search()` down the
  * LIKE-scan fallback (`searchViaScan`) regardless of whether the test runner's
@@ -313,7 +313,7 @@ const withoutFts5 = (inner: D1Exec): D1Exec => {
     return {
         all: (sql, parameters) => inner.all(sql, parameters),
         run: (sql, parameters) => {
-            if (sql.includes("__cirrus_fts_probe") && sql.includes("CREATE")) {
+            if (sql.includes("__lunora_fts_probe") && sql.includes("CREATE")) {
                 return Promise.reject(new Error("fts5 unavailable (forced)"));
             }
 

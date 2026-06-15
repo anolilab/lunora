@@ -1,15 +1,15 @@
 /**
- * Presence schema extension + plugin — added by `cirrus add presence`.
+ * Presence schema extension + plugin — added by `lunora add presence`.
  *
  * Presence is the "who's here" primitive every real-time app reaches for: a
  * room (a document, a board, a channel) and the set of users/sessions currently
  * looking at it, each carrying an optional `data` awareness blob (cursor,
  * selection, name, color…). Convex ships this as `@convex-dev/presence`; here
- * it's built from primitives Cirrus already has — a live-query table plus a
+ * it's built from primitives Lunora already has — a live-query table plus a
  * read-time TTL filter, no Durable-Object-level support.
  *
- * This file is YOURS to own and edit. `cirrus add` splices a managed
- * `.extend(presence.extension)` into `cirrus/schema.ts`, so the `present` table
+ * This file is YOURS to own and edit. `lunora add` splices a managed
+ * `.extend(presence.extension)` into `lunora/schema.ts`, so the `present` table
  * below merges into your schema as **`presence_present`** (extension tables are
  * auto-prefixed with the plugin key — write the bare name here). The handlers in
  * `./index.ts` read/write that prefixed name via {@link PRESENCE_TABLE}.
@@ -20,7 +20,7 @@
  *     `(roomId, sessionId)`), so re-heartbeats patch instead of churning.
  *   - `byRoom` — drives the `listPresent` / `sweep` per-room scans.
  */
-import { definePlugin, defineSchemaExtension, defineTable, v } from "@cirrus/server";
+import { definePlugin, defineSchemaExtension, defineTable, v } from "@lunora/server";
 
 /**
  * The merged table name. The bare `present` table is auto-prefixed with the
@@ -38,7 +38,7 @@ export const PRESENCE_TABLE = "presence_present";
 export const PRESENCE_TTL_MS = 30_000;
 
 /**
- * The presence plugin: a single `present` table (no middleware). `cirrus/
+ * The presence plugin: a single `present` table (no middleware). `lunora/
  * schema.ts` wires the extension in via the managed `.extend(presence.extension)`
  * block.
  */

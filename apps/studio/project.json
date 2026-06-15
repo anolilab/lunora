@@ -1,5 +1,5 @@
 {
-    "name": "cirrus-studio-app",
+    "name": "lunora-studio-app",
     "tags": ["type:app", "category:studio"],
     "targets": {
         "lint:eslint": {

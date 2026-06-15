@@ -1,4 +1,4 @@
-import type { SchemaLike, ValidatorLike } from "@cirrus/do";
+import type { SchemaLike, ValidatorLike } from "@lunora/do";
 import { describe, expect, it } from "vitest";
 
 import type { D1Exec } from "../src/d1-ctx-db";
@@ -12,7 +12,7 @@ import { createD1CtxDb as createD1ContextDatabase, runD1SearchMigrations } from 
  * captures every statement + params. We verify the virtual-table DDL, the
  * delete-then-insert write sync, and the MATCH/JOIN/ORDER-BY-rank search query.
  * Behavioral correctness of the query surface is covered by the LIKE-scan suite
- * in `d1-ctx-db.search.test.ts`. The D1 twin of `@cirrus/do`'s
+ * in `d1-ctx-db.search.test.ts`. The D1 twin of `@lunora/do`'s
  * `ctx-db.search.fts.test.ts`.
  */
 

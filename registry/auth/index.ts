@@ -1,8 +1,8 @@
 /**
- * Auth instance + request handler — added by `cirrus registry add auth`.
+ * Auth instance + request handler — added by `lunora registry add auth`.
  *
  * This file is YOURS: it's copied into your project so you own and edit it.
- * `@cirrus/auth` is a thin wrapper over better-auth — `createAuth(options)` is
+ * `@lunora/auth` is a thin wrapper over better-auth — `createAuth(options)` is
  * `betterAuth(options)` with a clearer error when `secret` is missing, and it
  * passes every better-auth option (`socialProviders`, `plugins`, `session`, …)
  * straight through. See https://www.better-auth.com/docs for the full surface.
@@ -18,7 +18,7 @@
  * Wiring (in your Worker entry, e.g. `src/server/index.ts`):
  *
  * ```ts
- * import { mountAuth } from "../../cirrus/auth/index.js";
+ * import { mountAuth } from "../../lunora/auth/index.js";
  *
  * export default {
  *     async fetch(request: Request, env: Env, ctx: ExecutionContext) {
@@ -29,16 +29,16 @@
  * };
  * ```
  *
- * Resolve the caller's identity for Cirrus procedures by passing
+ * Resolve the caller's identity for Lunora procedures by passing
  * `resolveIdentity` to `createWorker`, calling `getAuth(env).api.getSession({
  * headers: request.headers })` inside it.
  */
-import type { CirrusAuth } from "@cirrus/auth";
-import { createAuth, ensureMigrated, handleAuthRequest } from "@cirrus/auth";
-import { createMailerFromEnv } from "@cirrus/mail";
+import type { LunoraAuth } from "@lunora/auth";
+import { createAuth, ensureMigrated, handleAuthRequest } from "@lunora/auth";
+import { createMailerFromEnv } from "@lunora/mail";
 
 /**
- * The Worker env bindings this module needs. Cirrus generates a richer `Env`
+ * The Worker env bindings this module needs. Lunora generates a richer `Env`
  * for your project; this is the minimal slice `buildAuth` reads. `DB` is your
  * D1 binding (declared in `wrangler.jsonc`); better-auth accepts a D1Database
  * directly as its `database`.
@@ -54,12 +54,12 @@ export interface AuthEnv {
 
 /**
  * Send a transactional auth email (verification link, password reset) through
- * `@cirrus/mail`. In a dev environment this is captured into the studio's Mail
+ * `@lunora/mail`. In a dev environment this is captured into the studio's Mail
  * inbox; in production it delivers via the `SEND_EMAIL` binding (or
  * `RESEND_API_KEY`). `createMailerFromEnv` owns the capture-vs-deliver decision,
  * so auth mail behaves exactly like `api.mail.sendEmail`.
  *
- * If mail isn't set up yet (`MAIL_FROM` unset — you haven't run `cirrus add
+ * If mail isn't set up yet (`MAIL_FROM` unset — you haven't run `lunora add
  * email`), the link is logged to the console instead so sign-up / reset still
  * work in dev. Cast through the full `env` since the mailer reads bindings
  * (`SHARD`, `SEND_EMAIL`) and vars (`MAIL_FROM`) outside {@link AuthEnv}'s slice.
@@ -68,7 +68,7 @@ const sendAuthEmail = async (env: AuthEnv, message: { subject: string; text: str
     const fullEnv = env as unknown as Record<string, unknown>;
 
     if (typeof fullEnv["MAIL_FROM"] !== "string") {
-        // Mail not configured — log the link so the flow still works in dev. Run `cirrus add email`.
+        // Mail not configured — log the link so the flow still works in dev. Run `lunora add email`.
         // eslint-disable-next-line no-console -- dev fallback: surface the auth link when no mailer is set up
         console.log(`[auth] email → ${message.to}: ${message.subject}\n${message.text}`);
 
@@ -80,7 +80,7 @@ const sendAuthEmail = async (env: AuthEnv, message: { subject: string; text: str
         const binding = fullEnv["SEND_EMAIL"] as { send: (m: InstanceType<typeof EmailMessage>) => Promise<void> } | undefined;
 
         if (binding === undefined) {
-            throw new Error("auth: no SEND_EMAIL binding to deliver mail — run `cirrus add email` or set RESEND_API_KEY.");
+            throw new Error("auth: no SEND_EMAIL binding to deliver mail — run `lunora add email` or set RESEND_API_KEY.");
         }
 
         await binding.send(new EmailMessage(from, to, raw));
@@ -91,16 +91,16 @@ const sendAuthEmail = async (env: AuthEnv, message: { subject: string; text: str
 
 /**
  * Construct the better-auth instance. Edit freely — add `socialProviders`,
- * `plugins` (from `@cirrus/auth/plugins`), or a `session` policy
- * (`sessionPresets` from `@cirrus/auth`). The `auth-clerk` / `auth-auth0`
+ * `plugins` (from `@lunora/auth/plugins`), or a `session` policy
+ * (`sessionPresets` from `@lunora/auth`). The `auth-clerk` / `auth-auth0`
  * registry items scaffold provider snippets you merge into the options here.
  *
  * Email/password sign-up enables verification + a forgot-password reset; both
  * deliver through {@link sendAuthEmail} (captured into the studio Mail tab in
  * dev). Edit the subjects/bodies — or swap to a React template via
- * `@cirrus/mail`'s `renderEmail` — to taste.
+ * `@lunora/mail`'s `renderEmail` — to taste.
  */
-export const buildAuth = (env: AuthEnv): CirrusAuth =>
+export const buildAuth = (env: AuthEnv): LunoraAuth =>
     createAuth({
         baseURL: env.BETTER_AUTH_URL,
         // better-auth accepts a D1Database directly; cast since AuthEnv keeps
@@ -125,10 +125,10 @@ export const buildAuth = (env: AuthEnv): CirrusAuth =>
  * across invocations within an isolate, so building once keeps the migration
  * single-flight cache warm (see `ensureMigrated`).
  */
-let cached: CirrusAuth | undefined;
+let cached: LunoraAuth | undefined;
 
 /** Get (or lazily build) the memoized auth instance for this isolate. */
-export const getAuth = (env: AuthEnv): CirrusAuth => {
+export const getAuth = (env: AuthEnv): LunoraAuth => {
     cached ??= buildAuth(env);
 
     return cached;

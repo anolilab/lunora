@@ -158,7 +158,7 @@ describe("observabilitySink", () => {
             const worker = createWorker({ observability: sink, shardDO: shard.namespace });
 
             const response = await worker.fetch(
-                new Request("https://app.example/_cirrus/rpc", {
+                new Request("https://app.example/_lunora/rpc", {
                     body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
                     method: "POST",
                 }),
@@ -183,7 +183,7 @@ describe("observabilitySink", () => {
             const worker = createWorker({ observability: sink, shardDO: shard.namespace });
 
             await worker.fetch(
-                new Request("https://app.example/_cirrus/rpc", {
+                new Request("https://app.example/_lunora/rpc", {
                     body: JSON.stringify({ args: {}, functionPath: "x:y", shardKey: "tenant-7" }),
                     method: "POST",
                 }),
@@ -203,7 +203,7 @@ describe("observabilitySink", () => {
             const worker = createWorker({ observability: sink, shardDO: shard.namespace });
 
             await worker.fetch(
-                new Request("https://app.example/_cirrus/rpc", {
+                new Request("https://app.example/_lunora/rpc", {
                     body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
                     method: "POST",
                 }),
@@ -228,7 +228,7 @@ describe("observabilitySink", () => {
             // so the caller sees a 500 — but the sink must still see the
             // original error captured before the response was built.
             const response = await worker.fetch(
-                new Request("https://app.example/_cirrus/rpc", {
+                new Request("https://app.example/_lunora/rpc", {
                     body: JSON.stringify({ args: {}, functionPath: "messages:list" }),
                     method: "POST",
                 }),
@@ -250,14 +250,14 @@ describe("observabilitySink", () => {
             const { events, sink } = collectEvents();
 
             // Structural ConflictError shape (name/code/status) — mirrors what
-            // `@cirrus/do` throws without taking a runtime dependency on it.
+            // `@lunora/do` throws without taking a runtime dependency on it.
             const conflict = Object.assign(new Error("write conflict"), { code: "CONFLICT", name: "ConflictError", status: 409 });
 
             shard.throwOnFetch = conflict;
             const worker = createWorker({ observability: sink, shardDO: shard.namespace });
 
             await worker.fetch(
-                new Request("https://app.example/_cirrus/rpc", {
+                new Request("https://app.example/_lunora/rpc", {
                     body: JSON.stringify({ args: {}, functionPath: "messages:send" }),
                     method: "POST",
                 }),
@@ -283,7 +283,7 @@ describe("observabilitySink", () => {
             const worker = createWorker({ observability: sink, queryCoordinator: coordinator, shardDO: shard.namespace });
 
             const response = await worker.fetch(
-                new Request("https://app.example/_cirrus/rpc", {
+                new Request("https://app.example/_lunora/rpc", {
                     body: JSON.stringify({
                         args: {},
                         fanOut: { merge: { kind: "sum" }, table: "messages" },
@@ -313,7 +313,7 @@ describe("observabilitySink", () => {
             const worker = createWorker({ observability: sink, shardDO: shard.namespace });
 
             const response = await worker.fetch(
-                new Request("https://app.example/_cirrus/rpc", {
+                new Request("https://app.example/_lunora/rpc", {
                     body: JSON.stringify({ args: {}, functionPath: "x:y" }),
                     method: "POST",
                 }),

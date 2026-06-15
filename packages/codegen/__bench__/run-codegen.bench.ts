@@ -28,8 +28,8 @@ describe("runCodegen end-to-end (simple fixture)", () => {
     bench(
         "cold run — fresh workdir, full project setup",
         () => {
-            workdir = mkdtempSync(join(tmpdir(), "cirrus-codegen-bench-"));
-            cpSync(join(fixtureRoot, "cirrus"), join(workdir, "cirrus"), { recursive: true });
+            workdir = mkdtempSync(join(tmpdir(), "lunora-codegen-bench-"));
+            cpSync(join(fixtureRoot, "lunora"), join(workdir, "lunora"), { recursive: true });
 
             try {
                 runCodegen({ projectRoot: workdir });
@@ -48,8 +48,8 @@ describe("runCodegen end-to-end (simple fixture)", () => {
         {
             iterations: 20,
             setup: () => {
-                workdir = mkdtempSync(join(tmpdir(), "cirrus-codegen-bench-warm-"));
-                cpSync(join(fixtureRoot, "cirrus"), join(workdir, "cirrus"), { recursive: true });
+                workdir = mkdtempSync(join(tmpdir(), "lunora-codegen-bench-warm-"));
+                cpSync(join(fixtureRoot, "lunora"), join(workdir, "lunora"), { recursive: true });
                 // Prime the on-disk output so the second pass exercises the
                 // `writeIfChanged` no-op path.
                 runCodegen({ projectRoot: workdir });

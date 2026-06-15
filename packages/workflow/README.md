@@ -1,17 +1,17 @@
-# @cirrus/workflow
+# @lunora/workflow
 
-Durable workflows for Cirrus, built on [Cloudflare Workflows](https://developers.cloudflare.com/workflows/) (GA durable execution).
+Durable workflows for Lunora, built on [Cloudflare Workflows](https://developers.cloudflare.com/workflows/) (GA durable execution).
 
 `defineWorkflow` lets you author a multi-step, durable program whose steps are
 **memoized and retried** automatically and that **survives Worker restarts and
 redeploys**. Codegen emits the `WorkflowEntrypoint` class and wires the typed
-`ctx.workflows` handle; `@cirrus/config` reconciles the `[[workflows]]` binding.
+`ctx.workflows` handle; `@lunora/config` reconciles the `[[workflows]]` binding.
 
 ## Authoring
 
 ```ts
-// cirrus/workflows.ts
-import { defineWorkflow } from "@cirrus/workflow";
+// lunora/workflows.ts
+import { defineWorkflow } from "@lunora/workflow";
 import { api } from "./_generated/api";
 
 export const orderPipeline = defineWorkflow<{ orderId: string }>({
@@ -34,7 +34,7 @@ export const orderPipeline = defineWorkflow<{ orderId: string }>({
 The handler context bundles:
 
 - `ctx.step` — the native Cloudflare durable-step API (`do` / `sleep` / `sleepUntil` / `waitForEvent`).
-- `ctx.run(ref, args, opts?)` — call a Cirrus query / mutation / action; wrap in `ctx.step.do(...)` for durability.
+- `ctx.run(ref, args, opts?)` — call a Lunora query / mutation / action; wrap in `ctx.step.do(...)` for durability.
 - `ctx.event` / `ctx.params` — the triggering event and its payload.
 - `ctx.env` — the Worker bindings.
 - `ctx.log` — a workflow-prefixed logger surfaced in `wrangler tail` / Studio.
@@ -52,20 +52,20 @@ const status = await instance.status();
 
 `ctx.run` dispatches back into the Worker, so the workflow's `env` must carry:
 
-- `CIRRUS_ORIGIN_URL` — where the Worker is mounted.
-- `CIRRUS_ADMIN_TOKEN` — the admin bearer the dispatch endpoint accepts.
+- `LUNORA_ORIGIN_URL` — where the Worker is mounted.
+- `LUNORA_ADMIN_TOKEN` — the admin bearer the dispatch endpoint accepts.
 
 ## Manual wiring (without codegen)
 
-1. Author `cirrus/workflows.ts` as above.
+1. Author `lunora/workflows.ts` as above.
 2. Re-export the generated class from your worker entry — wrangler requires every
    `workflows[].class_name` to be exported:
 
     ```ts
-    import CirrusWorkflow from "@cirrus/workflow/do";
-    import { orderPipeline } from "./cirrus/workflows";
+    import LunoraWorkflow from "@lunora/workflow/do";
+    import { orderPipeline } from "./lunora/workflows";
 
-    export class OrderPipelineWorkflow extends CirrusWorkflow {
+    export class OrderPipelineWorkflow extends LunoraWorkflow {
         constructor(ctx: ExecutionContext, env: Record<string, unknown>) {
             super(ctx, env, orderPipeline, "orderPipeline");
         }

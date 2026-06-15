@@ -1,7 +1,7 @@
 import { bench, describe } from "vitest";
 
 import type { Middleware } from "../src/index";
-import { initCirrus } from "../src/index";
+import { initLunora } from "../src/index";
 
 /**
  * The procedure builder's `.use(mw)` chain composes middleware onion-style;
@@ -18,7 +18,7 @@ import { initCirrus } from "../src/index";
  * user code inside the middleware.
  */
 
-const cirrus = initCirrus.dataModel<Record<string, never>>().create();
+const lunora = initLunora.dataModel<Record<string, never>>().create();
 
 // Cast through `Middleware<any, any>` so the chain accepts a passthrough
 // without the builder narrowing ctx to `unknown` at the terminal — same
@@ -29,7 +29,7 @@ const buildHandler = (count: number) => {
     // Each `.use(...)` widens the chain's ctx type; for a passthrough we
     // erase it at the boundary so the terminal stays callable. Real apps
     // type their middleware concretely.
-    let builder = cirrus.query as any;
+    let builder = lunora.query as any;
 
     for (let index = 0; index < count; index += 1) {
         builder = builder.use(passthrough);

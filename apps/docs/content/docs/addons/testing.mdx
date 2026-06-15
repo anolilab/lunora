@@ -1,22 +1,22 @@
 ---
-title: "@cirrus/testing"
+title: "@lunora/testing"
 description: In-memory harness for queries, mutations, and actions, plus E2E mail-catcher helpers.
 ---
 
-`@cirrus/testing` is the toolkit for testing a Cirrus app. It ships two
-surfaces: an **in-memory function harness** (`cirrusTest`) that runs your
+`@lunora/testing` is the toolkit for testing a Lunora app. It ships two
+surfaces: an **in-memory function harness** (`lunoraTest`) that runs your
 `query` / `mutation` / `action` functions against a fresh `node:sqlite`
 database — no Durable Object, no `wrangler`, no network — and the **mail-catcher
-helpers** re-exported from [`@cirrus/mail/testing`](/docs/addons/mail) for
+helpers** re-exported from [`@lunora/mail/testing`](/docs/addons/mail) for
 driving end-to-end email flows.
 
 ```sh
-pnpm add -D @cirrus/testing
+pnpm add -D @lunora/testing
 ```
 
 ## In-memory harness
 
-`cirrusTest(schema)` runs the migrations against a fresh in-memory SQLite
+`lunoraTest(schema)` runs the migrations against a fresh in-memory SQLite
 database, builds the same `ctx.db` writer the real Durable Object builds, and
 returns a harness whose methods execute a registered function's `handler`
 directly. It mirrors the first five methods of Convex's `convexTest`, and all
@@ -24,8 +24,8 @@ of them share one database — so a write from a mutation is visible to a later
 query.
 
 ```ts
-import { defineSchema, defineTable, mutation, query, v } from "@cirrus/server";
-import { cirrusTest } from "@cirrus/testing";
+import { defineSchema, defineTable, mutation, query, v } from "@lunora/server";
+import { lunoraTest } from "@lunora/testing";
 import { afterEach, expect, test } from "vitest";
 
 const schema = defineSchema({
@@ -46,7 +46,7 @@ const list = query({
 });
 
 test("sends and lists a message", async () => {
-    const t = cirrusTest(schema);
+    const t = lunoraTest(schema);
 
     await t.mutation(send, { author: "ada", body: "hi" });
 
@@ -54,12 +54,12 @@ test("sends and lists a message", async () => {
 });
 ```
 
-Each `cirrusTest(...)` opens one in-memory database backed by a native handle.
+Each `lunoraTest(...)` opens one in-memory database backed by a native handle.
 Call `t.close()` (typically in an `afterEach`) to release it when a test
 finishes — it is idempotent, so closing any view of the harness is safe.
 
 ```ts
-const open: ReturnType<typeof cirrusTest>[] = [];
+const open: ReturnType<typeof lunoraTest>[] = [];
 
 afterEach(() => {
     while (open.length > 0) {
@@ -70,7 +70,7 @@ afterEach(() => {
 
 ### Harness API
 
-`cirrusTest(schema)` returns a `TestHarness`:
+`lunoraTest(schema)` returns a `TestHarness`:
 
 | Method                      | Description                                                                            |
 | --------------------------- | -------------------------------------------------------------------------------------- |
@@ -89,7 +89,7 @@ reference plus its args, **or** a bare inline handler:
 
 ```ts
 test("inline access to the db", async () => {
-    const t = cirrusTest(schema);
+    const t = lunoraTest(schema);
 
     await t.run(async (ctx) => ctx.db.insert("messages", { author: "grace", body: "from run" }));
 
@@ -119,7 +119,7 @@ const whoAmI = query({
 });
 
 test("reflects the injected identity", async () => {
-    const t = cirrusTest(schema);
+    const t = lunoraTest(schema);
 
     await expect(t.query(whoAmI, {})).resolves.toBeNull();
 
@@ -149,7 +149,7 @@ enforces that contract: calling one through `t.query` / `t.mutation` /
 system dispatch.
 
 ```ts
-import { internalMutation } from "@cirrus/server";
+import { internalMutation } from "@lunora/server";
 
 const internalSend = internalMutation({
     args: { author: v.string(), body: v.string() },
@@ -163,7 +163,7 @@ const sendViaInternal = mutation({
 });
 
 test("internal functions are only reachable via ctx.run*", async () => {
-    const t = cirrusTest(schema);
+    const t = lunoraTest(schema);
 
     // Direct call on the external surface is rejected.
     await expect(t.mutation(internalSend, { author: "ada", body: "leak" })).rejects.toThrow("is an internal function");
@@ -189,9 +189,9 @@ const scheduleSomething = mutation({
 });
 
 test("stubbed surfaces throw a clear error", async () => {
-    const t = cirrusTest(schema);
+    const t = lunoraTest(schema);
 
-    await expect(t.mutation(scheduleSomething, {})).rejects.toThrow("ctx.scheduler is not available in the in-memory @cirrus/testing harness (v1)");
+    await expect(t.mutation(scheduleSomething, {})).rejects.toThrow("ctx.scheduler is not available in the in-memory @lunora/testing harness (v1)");
 
     t.close();
 });
@@ -204,12 +204,12 @@ test("stubbed surfaces throw a clear error", async () => {
 
 ## Mail-catcher helpers (E2E)
 
-In `cirrus dev`, [`@cirrus/mail`](/docs/addons/mail) captures every outbound
+In `lunora dev`, [`@lunora/mail`](/docs/addons/mail) captures every outbound
 email (sign-up verification, forgot-password, magic links) into the studio's
 root-shard inbox instead of hitting a real provider. The mail-catcher helpers
 read that inbox over the admin RPC, so a Playwright (or any HTTP) test can drive
 "request reset → read the email → follow the link → set a new password"
-deterministically. They are re-exported from `@cirrus/testing`:
+deterministically. They are re-exported from `@lunora/testing`:
 
 | Export               | Description                                                                         |
 | -------------------- | ----------------------------------------------------------------------------------- |
@@ -220,19 +220,19 @@ deterministically. They are re-exported from `@cirrus/testing`:
 | `WaitForMailOptions` | Type — options for `waitForMail`.                                                   |
 
 `waitForMail` takes the worker `baseUrl`, the admin bearer token (the worker
-gates introspection behind `CIRRUS_ADMIN_TOKEN`), the recipient `to`, and an
+gates introspection behind `LUNORA_ADMIN_TOKEN`), the recipient `to`, and an
 optional `subjectMatch`. It polls (default every 250ms, timing out after 10s)
 and returns the matching `CapturedMail` — or throws on timeout. `extractLink`
 takes an optional `match` substring to disambiguate the action link from a logo
 or footer URL.
 
 ```ts
-import { extractLink, waitForMail } from "@cirrus/testing";
+import { extractLink, waitForMail } from "@lunora/testing";
 import { expect, test } from "vitest";
 
 test("password reset email carries a working link", async () => {
     const baseUrl = "http://localhost:8787";
-    const adminToken = process.env.CIRRUS_ADMIN_TOKEN!;
+    const adminToken = process.env.LUNORA_ADMIN_TOKEN!;
 
     // Trigger the flow (e.g. POST /api/auth/forgot-password).
     await fetch(`${baseUrl}/api/auth/forgot-password`, {
@@ -261,7 +261,7 @@ test("password reset email carries a working link", async () => {
 
 | Option         | Default      | Description                                         |
 | -------------- | ------------ | --------------------------------------------------- |
-| `adminToken`   | —            | Admin bearer token (`CIRRUS_ADMIN_TOKEN`).          |
+| `adminToken`   | —            | Admin bearer token (`LUNORA_ADMIN_TOKEN`).          |
 | `baseUrl`      | —            | App base URL, e.g. `http://localhost:8787`.         |
 | `to`           | —            | Recipient address the message must be addressed to. |
 | `subjectMatch` | —            | Only match a subject containing this substring.     |
@@ -274,5 +274,5 @@ test("password reset email carries a working link", async () => {
 
 - [Concepts: queries & mutations](/docs/concepts/queries-mutations) — the `query` / `mutation` / `action` functions the harness runs
 - [Concepts: row-level security](/docs/concepts/rls) — drive procedures with `withIdentity` to test authorization
-- [@cirrus/mail](/docs/addons/mail) — captures the outbound email the helpers read
-- [@cirrus/auth](/docs/addons/auth) — the verification / reset / magic-link flows you test end-to-end
+- [@lunora/mail](/docs/addons/mail) — captures the outbound email the helpers read
+- [@lunora/auth](/docs/addons/auth) — the verification / reset / magic-link flows you test end-to-end

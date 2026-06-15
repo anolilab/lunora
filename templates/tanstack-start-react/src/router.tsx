@@ -12,7 +12,7 @@ export const getRouter = () => {
     const queryClient = new QueryClient({
         defaultOptions: {
             queries: {
-                // Cirrus pushes data over WS, so a long stale time keeps
+                // Lunora pushes data over WS, so a long stale time keeps
                 // TanStack Query from racing the live subscription.
                 staleTime: Number.POSITIVE_INFINITY,
             },

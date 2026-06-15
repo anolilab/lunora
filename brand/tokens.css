@@ -1,12 +1,12 @@
 /**
- * Cirrus design tokens — the canonical visual language.
+ * Lunora design tokens — the canonical visual language.
  *
  * One source of truth for the brand: colours, type, spacing, radii, motion.
  * Consumed by the marketing/landing page and the docs site; the studio
  * mirrors the same values under a `--c-*` namespace in its scoped stylesheet
  * (packages/studio/src/theme.tsx) because it must not leak globals.
  *
- * System: Supabase-Studio neutral grays + the Cirrus brand YELLOW accent. The
+ * System: Supabase-Studio neutral grays + the Lunora brand YELLOW accent. The
  * yellow (#FCC419) is the SINGLE brand hook — one per surface. Green is freed up
  * for success/connected states; red for destructive. Never tint the mark orange.
  *
@@ -16,76 +16,76 @@
 
 :root {
     /* ── Brand anchors ─────────────────────────────────────────────── */
-    --cirrus-ink: #121212; /* near-black base, neutral (no blue tint) */
-    --cirrus-paper: #ffffff;
-    --cirrus-yellow: #fcc419; /* the brand accent */
-    --cirrus-mute: #a0a0a0;
+    --lunora-ink: #121212; /* near-black base, neutral (no blue tint) */
+    --lunora-paper: #ffffff;
+    --lunora-yellow: #fcc419; /* the brand accent */
+    --lunora-mute: #a0a0a0;
 
     /* ── Surfaces (dark, primary) — Supabase Studio neutrals ───────── */
-    --cirrus-bg: #121212; /* app / content background */
-    --cirrus-surface: #1c1c1c; /* chrome, panels, cards */
-    --cirrus-surface-2: #232323; /* raised / table header / hover */
-    --cirrus-surface-3: #2a2a2a; /* active */
-    --cirrus-border: #2e2e2e;
-    --cirrus-border-strong: #3e3e3e;
+    --lunora-bg: #121212; /* app / content background */
+    --lunora-surface: #1c1c1c; /* chrome, panels, cards */
+    --lunora-surface-2: #232323; /* raised / table header / hover */
+    --lunora-surface-3: #2a2a2a; /* active */
+    --lunora-border: #2e2e2e;
+    --lunora-border-strong: #3e3e3e;
 
     /* ── Foreground ────────────────────────────────────────────────── */
-    --cirrus-fg: #ededed;
-    --cirrus-fg-muted: #a0a0a0;
-    --cirrus-fg-subtle: #707070;
+    --lunora-fg: #ededed;
+    --lunora-fg-muted: #a0a0a0;
+    --lunora-fg-subtle: #707070;
 
     /* ── Accent (brand yellow) ─────────────────────────────────────── */
-    --cirrus-accent: #fcc419;
-    --cirrus-accent-hover: #ffd43b;
-    --cirrus-accent-press: #f0b400;
-    --cirrus-accent-text: #ffd43b; /* legible link/label on dark */
-    --cirrus-accent-fg: #1a1500; /* near-black text on a yellow fill */
-    --cirrus-accent-soft: rgba(252, 196, 25, 0.13);
-    --cirrus-accent-line: rgba(252, 196, 25, 0.4);
-    --cirrus-glow: rgba(252, 196, 25, 0.4);
+    --lunora-accent: #fcc419;
+    --lunora-accent-hover: #ffd43b;
+    --lunora-accent-press: #f0b400;
+    --lunora-accent-text: #ffd43b; /* legible link/label on dark */
+    --lunora-accent-fg: #1a1500; /* near-black text on a yellow fill */
+    --lunora-accent-soft: rgba(252, 196, 25, 0.13);
+    --lunora-accent-line: rgba(252, 196, 25, 0.4);
+    --lunora-glow: rgba(252, 196, 25, 0.4);
 
     /* ── Semantic ──────────────────────────────────────────────────── */
-    --cirrus-success: #3ecf8e; /* the green is now a state, not the brand */
-    --cirrus-warning: #fcc419;
-    --cirrus-danger: #f25c5c;
+    --lunora-success: #3ecf8e; /* the green is now a state, not the brand */
+    --lunora-warning: #fcc419;
+    --lunora-danger: #f25c5c;
 
     /* ── Type ──────────────────────────────────────────────────────── */
-    --cirrus-font-display: "Inter Tight", Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    --cirrus-font-body: "Inter Tight", Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    --cirrus-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    --lunora-font-display: "Inter Tight", Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --lunora-font-body: "Inter Tight", Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --lunora-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 
     /* Display headings ride tight; mono carries eyebrows + technical labels. */
-    --cirrus-tracking-display: -0.035em;
-    --cirrus-tracking-eyebrow: 0.22em;
+    --lunora-tracking-display: -0.035em;
+    --lunora-tracking-eyebrow: 0.22em;
 
     /* ── Shape & motion ────────────────────────────────────────────── */
-    --cirrus-radius-sm: 4px;
-    --cirrus-radius: 6px;
-    --cirrus-radius-lg: 9px;
-    --cirrus-radius-xl: 16px;
-    --cirrus-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.4);
-    --cirrus-shadow-glow: 0 0 0 1px var(--cirrus-accent-line), 0 8px 40px var(--cirrus-glow);
-    --cirrus-ease: cubic-bezier(0.22, 1, 0.36, 1);
+    --lunora-radius-sm: 4px;
+    --lunora-radius: 6px;
+    --lunora-radius-lg: 9px;
+    --lunora-radius-xl: 16px;
+    --lunora-shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 32px rgba(0, 0, 0, 0.4);
+    --lunora-shadow-glow: 0 0 0 1px var(--lunora-accent-line), 0 8px 40px var(--lunora-glow);
+    --lunora-ease: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 :root[data-theme="light"] {
-    --cirrus-bg: #fbfbfb;
-    --cirrus-surface: #ffffff;
-    --cirrus-surface-2: #f4f4f5;
-    --cirrus-surface-3: #ededed;
-    --cirrus-border: #e6e6e6;
-    --cirrus-border-strong: #d4d4d4;
+    --lunora-bg: #fbfbfb;
+    --lunora-surface: #ffffff;
+    --lunora-surface-2: #f4f4f5;
+    --lunora-surface-3: #ededed;
+    --lunora-border: #e6e6e6;
+    --lunora-border-strong: #d4d4d4;
 
-    --cirrus-fg: #171717;
-    --cirrus-fg-muted: #5d5d5d;
-    --cirrus-fg-subtle: #8f8f8f;
+    --lunora-fg: #171717;
+    --lunora-fg-muted: #5d5d5d;
+    --lunora-fg-subtle: #8f8f8f;
 
-    --cirrus-accent-text: #8a6100; /* dark gold clears contrast on paper */
-    --cirrus-accent-soft: rgba(252, 196, 25, 0.18);
-    --cirrus-glow: rgba(252, 196, 25, 0.3);
+    --lunora-accent-text: #8a6100; /* dark gold clears contrast on paper */
+    --lunora-accent-soft: rgba(252, 196, 25, 0.18);
+    --lunora-glow: rgba(252, 196, 25, 0.3);
 
-    --cirrus-success: #1a9d6a;
-    --cirrus-danger: #d92d20;
+    --lunora-success: #1a9d6a;
+    --lunora-danger: #d92d20;
 
-    --cirrus-shadow: 0 1px 2px rgba(0, 0, 0, 0.05), 0 12px 32px rgba(0, 0, 0, 0.08);
+    --lunora-shadow: 0 1px 2px rgba(0, 0, 0, 0.05), 0 12px 32px rgba(0, 0, 0, 0.08);
 }

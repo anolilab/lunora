@@ -6,7 +6,7 @@ export interface UseQueryOptions {
 
 export {
     type ArgsOf,
-    type CirrusClient,
+    type LunoraClient,
     type FunctionReference,
     type MutationCallOptions,
     type OptimisticLocalStore,
@@ -15,4 +15,4 @@ export {
     type ReturnOf,
     type Unsubscribe,
     type User,
-} from "@cirrus/client";
+} from "@lunora/client";

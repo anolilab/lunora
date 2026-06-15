@@ -5,7 +5,7 @@
  * long-lived admin credential on disk. All access is guarded so a missing or
  * throwing storage (SSR, privacy mode) degrades to in-memory-only.
  */
-const STORAGE_KEY = "cirrus-studio-admin-token";
+const STORAGE_KEY = "lunora-studio-admin-token";
 
 const store = (): Storage | undefined => {
     try {

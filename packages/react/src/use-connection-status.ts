@@ -1,9 +1,9 @@
 "use client";
 
-import type { ConnectionStatus } from "@cirrus/client";
+import type { ConnectionStatus } from "@lunora/client";
 import { useSyncExternalStore } from "react";
 
-import { useCirrus } from "./cirrus-provider";
+import { useLunora } from "./lunora-provider";
 
 /**
  * Reactive view of the client's aggregate live-socket status across all shard
@@ -12,7 +12,7 @@ import { useCirrus } from "./cirrus-provider";
  * operator can tell a healthy live channel from a silently-dropped socket.
  */
 const useConnectionStatus = (): ConnectionStatus => {
-    const client = useCirrus();
+    const client = useLunora();
 
     // No manual memoization: React Compiler (enabled in the build) stabilises
     // the subscribe callback, so the store subscription stays steady.

@@ -1,61 +1,61 @@
 ---
-title: "@cirrus/cli"
-description: The standalone `cirrus` binary — scaffold, codegen, deploy.
+title: "@lunora/cli"
+description: The standalone `lunora` binary — scaffold, codegen, deploy.
 ---
 
-`@cirrus/cli` is the standalone alternative to the Vite plugin. It powers
-the `cirrus` binary you got when you ran `pnpm create cirrus@latest`. The
-plugin and the CLI share the same `@cirrus/codegen` core, so the generated
+`@lunora/cli` is the standalone alternative to the Vite plugin. It powers
+the `lunora` binary you got when you ran `pnpm create lunora@latest`. The
+plugin and the CLI share the same `@lunora/codegen` core, so the generated
 files are identical regardless of how they were produced.
 
 ## Commands
 
 ```bash
 # Project
-cirrus init [name] [-t <template>]      # scaffold a new project (default template: vite)
+lunora init [name] [-t <template>]      # scaffold a new project (default template: vite)
             [-i | --yes]                 #   offer (or skip) adding auth + email
-cirrus add <auth|email>                 # add a feature to the current project
-cirrus view [--remote]                  # open the Cirrus studio in your browser
-cirrus docs [section]                   # open the docs site in your browser
-cirrus info [--json]                    # print versions, wrangler summary, schema overview
-cirrus registry <add|list|view|build>   # component registry
-cirrus rules <install|check>            # install the AI agent skills into .agents/skills/
+lunora add <auth|email>                 # add a feature to the current project
+lunora view [--remote]                  # open the Lunora studio in your browser
+lunora docs [section]                   # open the docs site in your browser
+lunora info [--json]                    # print versions, wrangler summary, schema overview
+lunora registry <add|list|view|build>   # component registry
+lunora rules <install|check>            # install the AI agent skills into .agents/skills/
 
 # Develop
-cirrus dev [--port n] [--worker-port n] # wrangler worker + studio + codegen watch
+lunora dev [--port n] [--worker-port n] # wrangler worker + studio + codegen watch
             [--no-studio] [--no-codegen]
-cirrus codegen [--api-spec <spec>]      # one-shot codegen
-cirrus run <fn> [--args <json>]         # send a single RPC to a running worker
+lunora codegen [--api-spec <spec>]      # one-shot codegen
+lunora run <fn> [--args <json>]         # send a single RPC to a running worker
             [--shard <key>] [--url <u>]
-cirrus reset [--all] [--yes]            # clear local Miniflare state
+lunora reset [--all] [--yes]            # clear local Miniflare state
 
 # Deploy
-cirrus prepare [--api-spec <spec>]      # codegen + wrangler validation — for CI
-cirrus deploy [--env <name>]            # codegen, validate wrangler, then wrangler deploy
+lunora prepare [--api-spec <spec>]      # codegen + wrangler validation — for CI
+lunora deploy [--env <name>]            # codegen, validate wrangler, then wrangler deploy
               [--migrate] [--api-spec]
-cirrus verify [--api-spec <spec>]       # dry-run codegen + tsc --noEmit (no files written)
+lunora verify [--api-spec <spec>]       # dry-run codegen + tsc --noEmit (no files written)
               [--no-typecheck]
-cirrus analyze [--json]                 # wrangler dry-run: bundle size + top modules
+lunora analyze [--json]                 # wrangler dry-run: bundle size + top modules
 
 # Data
-cirrus logs [worker]                    # stream live Worker logs via wrangler tail
+lunora logs [worker]                    # stream live Worker logs via wrangler tail
             [--format <pretty|json>]    #   [--status <s>] [--search <q>] [--env <n>]
-cirrus migrate <generate|create|up|down|status> [name|id]
-cirrus env <list|get|set|unset|push|doctor>
-cirrus export [--out <file>] [--tables <t1,t2>] [--url <u>] [--token <tok>]
-cirrus import <file> [--table <name>] [--batch-size n]
-cirrus backup <create|list|restore|pitr> [--dir <d>] [--at <iso>]
+lunora migrate <generate|create|up|down|status> [name|id]
+lunora env <list|get|set|unset|push|doctor>
+lunora export [--out <file>] [--tables <t1,t2>] [--url <u>] [--token <tok>]
+lunora import <file> [--table <name>] [--batch-size n]
+lunora backup <create|list|restore|pitr> [--dir <d>] [--at <iso>]
 ```
 
-### `cirrus init`
+### `lunora init`
 
-Scaffolds a new Cirrus project by fetching a template from
-`gh:anolilab/cirrus/templates/<type>#<version>`. Pass `-t` / `--template`
+Scaffolds a new Lunora project by fetching a template from
+`gh:anolilab/lunora/templates/<type>#<version>`. Pass `-t` / `--template`
 to choose the starting point:
 
 | Template         | Description                                                                                    |
 | ---------------- | ---------------------------------------------------------------------------------------------- |
-| `vite`           | React + Vite + the Cirrus plugin (the default)                                                 |
+| `vite`           | React + Vite + the Lunora plugin (the default)                                                 |
 | `standalone`     | Worker-only, no frontend                                                                       |
 | `astro`          | Astro + the standalone CLI                                                                     |
 | `nuxt`           | Nuxt + the standalone CLI                                                                      |
@@ -68,179 +68,179 @@ Additional flags:
 - `--from <dir>` — copy from a local templates root instead of fetching remotely (offline-friendly; expects `<type>/` subdirs)
 - `--source <ref>` — override the remote template source (e.g. `gh:owner/repo/sub#ref`)
 - `--allow-unsafe-source` — permit `--source` values outside `gh:/github:/https://`
-- `--here` — add Cirrus to an existing project: detect the framework, patch the config, scaffold `cirrus/`, print per-framework wiring steps
+- `--here` — add Lunora to an existing project: detect the framework, patch the config, scaffold `lunora/`, print per-framework wiring steps
 - `-i` / `--interactive` — after scaffolding, offer to add authentication and transactional email. Defaults on when stdin is a TTY; never prompts in CI.
 - `-y` / `--yes` — skip the auth/email offer and scaffold only.
 
-### `cirrus add`
+### `lunora add`
 
-Adds a feature to the **current** Cirrus project (you must be inside one — a `cirrus/` directory and a `wrangler.jsonc`). A thin front door over `cirrus registry add`: it maps a feature to its registry item(s), applies them, and prints the next steps.
+Adds a feature to the **current** Lunora project (you must be inside one — a `lunora/` directory and a `wrangler.jsonc`). A thin front door over `lunora registry add`: it maps a feature to its registry item(s), applies them, and prints the next steps.
 
 ```bash
-cirrus add auth                 # authentication (asks which provider)
-cirrus add auth --provider clerk   # Clerk, without prompting (also: auth0, auth)
-cirrus add auth --yes           # default provider (email & password), no prompt
-cirrus add email                # transactional email (Cloudflare Email Workers + dev mail catcher)
+lunora add auth                 # authentication (asks which provider)
+lunora add auth --provider clerk   # Clerk, without prompting (also: auth0, auth)
+lunora add auth --yes           # default provider (email & password), no prompt
+lunora add email                # transactional email (Cloudflare Email Workers + dev mail catcher)
 ```
 
 | Feature | Installs                                                  | Notes                                                                                                              |
 | ------- | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `auth`  | the `auth` registry item (or `auth-clerk` / `auth-auth0`) | Adds `@cirrus/auth` + a D1 `DB` binding; verification / reset mail is captured into the studio **Mail** tab in dev |
+| `auth`  | the `auth` registry item (or `auth-clerk` / `auth-auth0`) | Adds `@lunora/auth` + a D1 `DB` binding; verification / reset mail is captured into the studio **Mail** tab in dev |
 | `email` | the `mail` registry item                                  | Cloudflare Email Workers transport (`SEND_EMAIL` binding) + the dev mail catcher                                   |
 
 Flags: `--provider <auth\|clerk\|auth0>`, `--yes`, `--from <dir>` (local registry root), `--source <ref>`, `--allow-unsafe-source`.
 
-### `cirrus dev`
+### `lunora dev`
 
 Starts three concurrent processes: `wrangler dev` (Worker), the embedded
-Cirrus studio, and codegen in watch mode. All three reload on file changes.
+Lunora studio, and codegen in watch mode. All three reload on file changes.
 
 ```bash
-cirrus dev                # default ports: studio 6173, worker 8787
-cirrus dev --port 7000    # custom studio port
-cirrus dev --no-studio    # Worker + codegen only
+lunora dev                # default ports: studio 6173, worker 8787
+lunora dev --port 7000    # custom studio port
+lunora dev --no-studio    # Worker + codegen only
 ```
 
-### `cirrus deploy`
+### `lunora deploy`
 
 Runs codegen, validates `wrangler.jsonc`, then invokes `wrangler deploy`.
 Pass `--migrate` to apply pending data migrations against the live worker
 immediately after a successful deploy.
 
 ```bash
-cirrus deploy
-cirrus deploy --env staging
-cirrus deploy --migrate --migrate-token $CIRRUS_ADMIN_TOKEN
+lunora deploy
+lunora deploy --env staging
+lunora deploy --migrate --migrate-token $LUNORA_ADMIN_TOKEN
 ```
 
-### `cirrus prepare`
+### `lunora prepare`
 
-Same pipeline as `cirrus deploy` but stops before `wrangler deploy` — no
+Same pipeline as `lunora deploy` but stops before `wrangler deploy` — no
 Vite step, no network traffic. Use it in CI to catch codegen drift and
 `wrangler.jsonc` validation errors before the deploy job runs.
 
-### `cirrus verify`
+### `lunora verify`
 
 Validates `wrangler.jsonc`, runs a codegen dry-run, and type-checks the
 project with `tsc --noEmit`. Nothing is written to disk. Exits non-zero on
 any error so you can gate merges on it.
 
-### `cirrus migrate`
+### `lunora migrate`
 
 Manages both schema migrations (D1 SQL) and online data migrations (row
 transforms that run against a live worker):
 
 ```bash
-cirrus migrate generate add_email_index   # diff schema.ts → emit D1 SQL
-cirrus migrate create --name backfill_at  # scaffold a data-migration stub
-cirrus migrate up                         # run pending data migrations (dev)
-cirrus migrate up --prod --url <url>      # run against production (requires --yes)
-cirrus migrate status                     # show pending / applied / failed
+lunora migrate generate add_email_index   # diff schema.ts → emit D1 SQL
+lunora migrate create --name backfill_at  # scaffold a data-migration stub
+lunora migrate up                         # run pending data migrations (dev)
+lunora migrate up --prod --url <url>      # run against production (requires --yes)
+lunora migrate status                     # show pending / applied / failed
 ```
 
-`generate` parses `cirrus/schema.ts`, filters to `.global()` tables (sharded
+`generate` parses `lunora/schema.ts`, filters to `.global()` tables (sharded
 tables live in per-DO SQLite — no migration needed), diffs against
-`cirrus/migrations/.snapshot.json`, and emits a timestamped SQL file. Commit
+`lunora/migrations/.snapshot.json`, and emits a timestamped SQL file. Commit
 both the SQL and the snapshot — they are deterministic.
 
-### `cirrus run`
+### `lunora run`
 
 Send a single RPC to a running Worker without spinning up the client SDK:
 
 ```bash
-cirrus run messages:send --args '{"channelId":"general","text":"hi"}'
+lunora run messages:send --args '{"channelId":"general","text":"hi"}'
 ```
 
 `--shard` overrides shard routing; `--url` lets you point at a deployed
 Worker instead of `http://localhost:8787`.
 
-### `cirrus env`
+### `lunora env`
 
 Manage `.dev.vars` (local secrets) and push them to Cloudflare via `wrangler secret`:
 
 ```bash
-cirrus env list              # list all keys in .dev.vars
-cirrus env get DATABASE_URL  # read a single key
-cirrus env set FOO bar       # write a key
-cirrus env unset FOO         # remove a key
-cirrus env push              # upload to Cloudflare (prompts unless --yes)
-cirrus env push --prod --yes # push to the production environment
-cirrus env doctor            # validate .dev.vars against wrangler.jsonc bindings
+lunora env list              # list all keys in .dev.vars
+lunora env get DATABASE_URL  # read a single key
+lunora env set FOO bar       # write a key
+lunora env unset FOO         # remove a key
+lunora env push              # upload to Cloudflare (prompts unless --yes)
+lunora env push --prod --yes # push to the production environment
+lunora env doctor            # validate .dev.vars against wrangler.jsonc bindings
 ```
 
-### `cirrus export` / `cirrus import`
+### `lunora export` / `lunora import`
 
 Bulk data transfer between workers — mirrors Convex's `convex export` /
 `convex import`:
 
 ```bash
-cirrus export --out ./backup.ndjson
-cirrus export --tables messages,channels --url https://my-worker.workers.dev --token $TOKEN
+lunora export --out ./backup.ndjson
+lunora export --tables messages,channels --url https://my-worker.workers.dev --token $TOKEN
 
-cirrus import ./backup.ndjson
-cirrus import ./users.ndjson --table users   # wrap bare docs as {table,doc} envelopes
+lunora import ./backup.ndjson
+lunora import ./users.ndjson --table users   # wrap bare docs as {table,doc} envelopes
 ```
 
-### `cirrus backup`
+### `lunora backup`
 
 Managed snapshot backups and native point-in-time recovery (PITR):
 
 ```bash
-cirrus backup create                   # snapshot the running shard
-cirrus backup list                     # list available snapshots
-cirrus backup restore <id>             # restore a snapshot
-cirrus backup pitr --at 2024-06-01T12:00:00Z   # read PITR bookmark
-cirrus backup pitr --at 2024-06-01T12:00:00Z --restore --yes   # restore to that point
+lunora backup create                   # snapshot the running shard
+lunora backup list                     # list available snapshots
+lunora backup restore <id>             # restore a snapshot
+lunora backup pitr --at 2024-06-01T12:00:00Z   # read PITR bookmark
+lunora backup pitr --at 2024-06-01T12:00:00Z --restore --yes   # restore to that point
 ```
 
-### `cirrus registry`
+### `lunora registry`
 
-Fetch and manage reusable Cirrus components (queries, mutations, UI widgets):
+Fetch and manage reusable Lunora components (queries, mutations, UI widgets):
 
 ```bash
-cirrus registry list
-cirrus registry view auth/session-token
-cirrus registry add auth/session-token
-cirrus registry build   # regenerate the local catalog index.json
+lunora registry list
+lunora registry view auth/session-token
+lunora registry add auth/session-token
+lunora registry build   # regenerate the local catalog index.json
 ```
 
-### `cirrus rules`
+### `lunora rules`
 
-Installs the Cirrus **agent skills** — portable instructions that teach AI
-coding agents (Claude Code, Cursor, Copilot) how to use Cirrus — into the
-project's `.agents/skills/`. `cirrus dev`, the Vite plugin, and the studio nudge
+Installs the Lunora **agent skills** — portable instructions that teach AI
+coding agents (Claude Code, Cursor, Copilot) how to use Lunora — into the
+project's `.agents/skills/`. `lunora dev`, the Vite plugin, and the studio nudge
 you to run this when the rules are missing.
 
 ```bash
-cirrus rules install              # copy the skills into .agents/skills/ (skips edited files)
-cirrus rules install --overwrite  # reinstall, replacing local edits
-cirrus rules check                # report which skills are present
-cirrus rules check --strict       # exit non-zero when missing (CI gate)
+lunora rules install              # copy the skills into .agents/skills/ (skips edited files)
+lunora rules install --overwrite  # reinstall, replacing local edits
+lunora rules check                # report which skills are present
+lunora rules check --strict       # exit non-zero when missing (CI gate)
 ```
 
-### `cirrus analyze`
+### `lunora analyze`
 
 Runs a `wrangler` dry-deploy and reports bundle size, the heaviest modules,
 and the state of `_generated/` files. Pass `--json` to pipe the output to a
 CI artifact.
 
-### `cirrus logs`
+### `lunora logs`
 
-Streams live logs from a deployed Cirrus Worker by wrapping `wrangler tail`:
+Streams live logs from a deployed Lunora Worker by wrapping `wrangler tail`:
 
 ```bash
-cirrus logs
-cirrus logs my-worker --format json --status error
-cirrus logs --search "auth" --env staging
+lunora logs
+lunora logs my-worker --format json --status error
+lunora logs --search "auth" --env staging
 ```
 
-## Writing Cirrus functions by hand
+## Writing Lunora functions by hand
 
-Queries, mutations, and actions are plain TypeScript files under `cirrus/`.
+Queries, mutations, and actions are plain TypeScript files under `lunora/`.
 There is no scaffolding command — create the file yourself:
 
-```ts title="cirrus/messages.ts"
-import { mutation, query, v } from "@cirrus/server";
+```ts title="lunora/messages.ts"
+import { mutation, query, v } from "@lunora/server";
 
 export const list = query({
     args: { channelId: v.id("channels"), limit: v.optional(v.number()) },
@@ -266,13 +266,13 @@ export const send = mutation({
 });
 ```
 
-After saving, `cirrus dev` picks up the change and re-runs codegen
-automatically. Run `cirrus codegen` once manually if you are outside the dev
+After saving, `lunora dev` picks up the change and re-runs codegen
+automatically. Run `lunora codegen` once manually if you are outside the dev
 loop.
 
 ## Codegen output
 
-`cirrus/_generated/`:
+`lunora/_generated/`:
 
 - `api.ts` — the typed `api.<file>.<function>` namespace
 - `server.ts` — `internalQuery`, `internalMutation` exports re-typed against your schema
@@ -283,6 +283,6 @@ the result to catch drift.
 
 ## See also
 
-- [@cirrus/vite](/docs/api/vite)
-- [@cirrus/d1](/docs/api/d1)
+- [@lunora/vite](/docs/api/vite)
+- [@lunora/d1](/docs/api/d1)
 - [Deployment](/docs/deployment)

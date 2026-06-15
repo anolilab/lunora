@@ -1,12 +1,12 @@
-import type { FunctionReference } from "@cirrus/client";
+import type { FunctionReference } from "@lunora/client";
 import { render } from "@solidjs/testing-library";
 import { describe, expect, it } from "vitest";
 
-import { CirrusProvider } from "../src/cirrus-provider";
+import { LunoraProvider } from "../src/lunora-provider";
 import { createQuery } from "../src/create-query";
 import { createFakeClient } from "./fake-client";
 
-const listRef = { __cirrusRef: "messages:list" } as FunctionReference;
+const listRef = { __lunoraRef: "messages:list" } as FunctionReference;
 
 describe(createQuery, () => {
     it("reads undefined until the first frame, then updates on every push", () => {
@@ -18,7 +18,7 @@ describe(createQuery, () => {
 
                 return <pre>{data() === undefined ? "loading" : JSON.stringify(data())}</pre>;
             },
-            { wrapper: (props) => <CirrusProvider client={fake.asClient}>{props.children}</CirrusProvider> },
+            { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
         );
 
         expect(container.textContent).toBe("loading");
@@ -39,7 +39,7 @@ describe(createQuery, () => {
 
                 return <pre>{String(data())}</pre>;
             },
-            { wrapper: (props) => <CirrusProvider client={fake.asClient}>{props.children}</CirrusProvider> },
+            { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
         );
 
         expect(fake.subscriptions).toHaveLength(0);

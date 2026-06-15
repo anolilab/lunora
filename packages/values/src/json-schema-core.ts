@@ -2,7 +2,7 @@ import type { ValidatorKind } from "./v";
 
 /**
  * A JSON Schema node (Draft 2020-12 / OpenAPI 3.1 compatible). Intentionally a
- * loose bag — Cirrus only emits a known subset, but consumers (OpenAPI/OpenRPC
+ * loose bag — Lunora only emits a known subset, but consumers (OpenAPI/OpenRPC
  * builders, Swagger UI, form generators) treat it as an opaque schema object.
  */
 interface JsonSchema {
@@ -12,8 +12,8 @@ interface JsonSchema {
 /**
  * Structural reader over a validator-like node. The shared mapping algorithm
  * ({@link jsonSchemaFromNode}) is parameterized by this interface so the same
- * switch/recursion serves both inputs Cirrus maps to JSON Schema: the runtime
- * `@cirrus/values` validator (children + metadata live on `_meta`), and the
+ * switch/recursion serves both inputs Lunora maps to JSON Schema: the runtime
+ * `@lunora/values` validator (children + metadata live on `_meta`), and the
  * build-time validator IR consumed by codegen (children are plain fields, with
  * no runtime metadata — so `constraints`/`isNullable` may be inert there).
  *
@@ -64,12 +64,12 @@ interface SchemaNodeReader<TNode> {
 
 /**
  * The single validator→JSON-Schema mapping algorithm, shared by the runtime
- * `toJsonSchema` (over `@cirrus/values` validators) and codegen's IR-backed
+ * `toJsonSchema` (over `@lunora/values` validators) and codegen's IR-backed
  * mapper. It walks a node recursively via the supplied {@link SchemaNodeReader},
  * so nested objects/arrays/unions/records are fully expanded (never collapsed to
  * one level).
  *
- * `date`/`timestamp` are epoch-millisecond numbers in Cirrus (not ISO strings),
+ * `date`/`timestamp` are epoch-millisecond numbers in Lunora (not ISO strings),
  * so they schema as integers; `bigint` schemas as an int64 (JSON has no bigint
  * type, so `format: int64` is the conventional OpenAPI carrier); `bytes` is an
  * `ArrayBuffer`, surfaced as base64 per JSON Schema 2020-12 content encoding.
@@ -104,7 +104,7 @@ const jsonSchemaFromNode = <TNode>(node: TNode, reader: SchemaNodeReader<TNode>)
                 return { description: "epoch milliseconds (date)", type: "integer" };
             }
             case "id": {
-                return { description: `Id<"${String(reader.tableName(node))}">`, type: "string", "x-cirrus-table": reader.tableName(node) };
+                return { description: `Id<"${String(reader.tableName(node))}">`, type: "string", "x-lunora-table": reader.tableName(node) };
             }
             case "literal": {
                 return reader.literalSchema(node);
@@ -132,7 +132,7 @@ const jsonSchemaFromNode = <TNode>(node: TNode, reader: SchemaNodeReader<TNode>)
                 return { additionalProperties: value === undefined ? {} : jsonSchemaFromNode(value, reader), type: "object" };
             }
             case "storage": {
-                return { description: "storage object key", type: "string", "x-cirrus-storage": true };
+                return { description: "storage object key", type: "string", "x-lunora-storage": true };
             }
             case "string": {
                 return { type: "string" };

@@ -1,5 +1,5 @@
-import { CirrusClient } from "@cirrus/client";
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraClient } from "@lunora/client";
+import { LunoraProvider } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -30,15 +30,15 @@ interface StudioAppProps {
 
     /**
      * URL path prefix the studio is mounted under (router `basepath`). Defaults
-     * to `/`. The `@cirrus/vite` dev route sets `/__cirrus`. Forwarded to the
+     * to `/`. The `@lunora/vite` dev route sets `/__lunora`. Forwarded to the
      * composed {@link Studio}.
      */
     readonly basePath?: string;
 
     /**
-     * Base URL of the Cirrus worker the studio talks to. Defaults to the
+     * Base URL of the Lunora worker the studio talks to. Defaults to the
      * current origin, which is correct when the studio is served from the
-     * same worker (the `@cirrus/vite` dev route) or proxied to it.
+     * same worker (the `@lunora/vite` dev route) or proxied to it.
      */
     readonly baseUrl?: string;
 
@@ -48,15 +48,15 @@ interface StudioAppProps {
      * the client) so the chrome renders against a supplied client; when set,
      * `baseUrl`/`adminToken` are ignored and this client is never closed here.
      */
-    readonly client?: CirrusClient;
+    readonly client?: LunoraClient;
 
     /** UI language for the studio's own strings. Defaults to `en`. */
     readonly locale?: string;
 
     /**
-     * Whether the project's Cirrus agent skills ("rules") are installed. When
+     * Whether the project's Lunora agent skills ("rules") are installed. When
      * explicitly `false`, the studio shows a one-line banner pointing at
-     * `cirrus rules install`. The loopback dev hosts inject this; a static deploy
+     * `lunora rules install`. The loopback dev hosts inject this; a static deploy
      * leaves it unset (no banner).
      */
     readonly rulesInstalled?: boolean;
@@ -66,7 +66,7 @@ interface StudioAppProps {
 }
 
 /**
- * The Cirrus triple-streak mark (see `BRAND.md`): three thin strokes,
+ * The Lunora triple-streak mark (see `BRAND.md`): three thin strokes,
  * long → medium → short. Drawn with `currentColor` so it inherits the top-bar
  * foreground in both themes.
  */
@@ -90,7 +90,7 @@ interface StudioAppBodyProps {
 }
 
 /** `localStorage` key remembering that the developer dismissed the rules banner. */
-const RULES_BANNER_DISMISSED_KEY = "cirrus.studio.rulesBannerDismissed";
+const RULES_BANNER_DISMISSED_KEY = "lunora.studio.rulesBannerDismissed";
 
 /** Read the persisted "rules banner dismissed" flag, tolerating storage being unavailable. */
 const readBannerDismissed = (): boolean => {
@@ -134,7 +134,7 @@ const StudioAppBody = ({ basePath, clearToken, studio, onToggleTheme, onTokenCha
             <header className="flex h-12 shrink-0 items-center gap-3 border-b border-border bg-background px-3" data-testid="dash-app-header">
                 <span className="flex items-center gap-2">
                     <BrandMark />
-                    <strong className="text-sm font-semibold tracking-tight">cirrus</strong>
+                    <strong className="text-sm font-semibold tracking-tight">lunora</strong>
                     <span aria-hidden="true" className="size-1 rounded-full bg-primary" />
                     <Badge className="ms-1 px-1.5 text-[10px] tracking-wider uppercase" variant="secondary">
                         {t("Studio")}
@@ -193,7 +193,7 @@ const StudioAppBody = ({ basePath, clearToken, studio, onToggleTheme, onTokenCha
                                     data-testid="dash-app-token"
                                     id="dash-app-token"
                                     onChange={onTokenChange}
-                                    placeholder="CIRRUS_ADMIN_TOKEN"
+                                    placeholder="LUNORA_ADMIN_TOKEN"
                                     type="password"
                                     value={token}
                                 />
@@ -279,9 +279,9 @@ const StudioAppBody = ({ basePath, clearToken, studio, onToggleTheme, onTokenCha
                         ⚠
                     </span>
                     <span>
-                        {t("Cirrus AI rules aren't installed.")}{" "}
-                        <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">cirrus rules install</code>{" "}
-                        {t("lets your coding agent use Cirrus correctly.")}
+                        {t("Lunora AI rules aren't installed.")}{" "}
+                        <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">lunora rules install</code>{" "}
+                        {t("lets your coding agent use Lunora correctly.")}
                     </span>
                     <button
                         aria-label={t("Dismiss")}
@@ -338,11 +338,11 @@ const resolveBaseUrl = (explicit: string | undefined): string => {
 };
 
 /**
- * A fully self-contained studio page: it constructs a {@link CirrusClient}
- * pointed at the worker, wires it through a `&lt;CirrusProvider>`, manages the
+ * A fully self-contained studio page: it constructs a {@link LunoraClient}
+ * pointed at the worker, wires it through a `&lt;LunoraProvider>`, manages the
  * admin token, and renders the composed {@link Studio}.
  *
- * Mount this directly (the standalone app and the `@cirrus/vite` dev route both
+ * Mount this directly (the standalone app and the `@lunora/vite` dev route both
  * do) when you want the batteries-included page rather than composing panels
  * yourself. For embedding into an existing admin UI, use the individual panels
  * or `&lt;Studio>` under your own provider instead.
@@ -358,7 +358,7 @@ export const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClien
     }, [token]);
 
     // Debounce the value that feeds the client so typing/pasting a multi-character
-    // token doesn't rebuild the CirrusClient (and tear down its WebSocket +
+    // token doesn't rebuild the LunoraClient (and tear down its WebSocket +
     // reconnect timers) once per keystroke. The raw `token` still drives the
     // controlled input; the client rebuilds at most once per typing pause.
     const debouncedToken = useDebounced(token, 300);
@@ -373,7 +373,7 @@ export const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClien
         // The token doubles as the WS credential (`wsToken`) so live admin
         // subscriptions clear the upgrade's admin gate, mirroring the bearer the
         // HTTP admin RPCs already send.
-        const created = new CirrusClient({ url: resolveBaseUrl(baseUrl), ...(debouncedToken === "" ? {} : { wsToken: debouncedToken }) });
+        const created = new LunoraClient({ url: resolveBaseUrl(baseUrl), ...(debouncedToken === "" ? {} : { wsToken: debouncedToken }) });
 
         if (debouncedToken !== "") {
             created.setAuthToken(debouncedToken);
@@ -420,9 +420,9 @@ export const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClien
     return (
         <div
             className={cn(STUDIO_ROOT_CLASS, theme === "dark" && "dark", "flex h-dvh flex-col overflow-hidden bg-background text-sm text-foreground")}
-            data-testid="cirrus-studio-app"
+            data-testid="lunora-studio-app"
         >
-            <CirrusProvider client={client}>
+            <LunoraProvider client={client}>
                 <StudioI18nProvider i18n={i18n}>
                     <TooltipProvider>
                         <StudioAppBody
@@ -437,7 +437,7 @@ export const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClien
                         />
                     </TooltipProvider>
                 </StudioI18nProvider>
-            </CirrusProvider>
+            </LunoraProvider>
         </div>
     );
 };

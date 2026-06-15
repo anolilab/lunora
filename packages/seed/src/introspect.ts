@@ -1,19 +1,19 @@
-import type { Schema } from "@cirrus/server";
-import type { Validator } from "@cirrus/values";
-import { optionalInner } from "@cirrus/values";
+import type { Schema } from "@lunora/server";
+import type { Validator } from "@lunora/values";
+import { optionalInner } from "@lunora/values";
 
 /**
  * Schema introspection for seeding. Reads the runtime `Schema` produced by
  * `defineSchema` into a flat, generator-friendly description of every table and
  * column, and computes a foreign-key-respecting insert order.
  *
- * The validator internals (`kind`, `_meta`) are the same surface `@cirrus/codegen`
+ * The validator internals (`kind`, `_meta`) are the same surface `@lunora/codegen`
  * reads to build its IR. We touch `_meta` directly here — it is the documented
  * reflection bag — but unwrap `v.optional(...)` through the exported
  * {@link optionalInner} accessor rather than reaching in for `inner`.
  */
 
-/** The internal reflection bag every validator carries (see `@cirrus/values`). */
+/** The internal reflection bag every validator carries (see `@lunora/values`). */
 interface ValidatorMeta {
     column?: { defaultFn?: unknown; defaultValue?: unknown; notNull?: boolean; unique?: boolean };
     constraints?: Record<string, unknown>;

@@ -1,12 +1,12 @@
 import type { Command, CommandExecute, CreateOptions, Toolbox } from "@visulima/cerebro";
 
 const seedCommand: Command = {
-    description: "Generate deterministic fake data from cirrus/schema.ts and bulk-insert it via the worker's admin endpoint",
+    description: "Generate deterministic fake data from lunora/schema.ts and bulk-insert it via the worker's admin endpoint",
     examples: [
-        ["cirrus seed", "Seed every table with the default row count"],
-        ["cirrus seed --table posts --count 50", "Seed 50 posts; FK-parent tables are seeded automatically"],
-        ["cirrus seed --reset", "Wipe local .wrangler/state, then seed from scratch"],
-        ["cirrus seed --seed 7 --dry-run", "Print the NDJSON for seed 7 without inserting"],
+        ["lunora seed", "Seed every table with the default row count"],
+        ["lunora seed --table posts --count 50", "Seed 50 posts; FK-parent tables are seeded automatically"],
+        ["lunora seed --reset", "Wipe local .wrangler/state, then seed from scratch"],
+        ["lunora seed --seed 7 --dry-run", "Print the NDJSON for seed 7 without inserting"],
     ],
     group: "Data",
     loader: () =>
@@ -23,7 +23,7 @@ const seedCommand: Command = {
         { description: "Rows per HTTP request (default 500)", name: "batch-size", type: Number },
         { description: "Target production — requires an explicit --url", name: "prod", type: Boolean },
         { description: "Worker URL (default http://localhost:8787)", name: "url", type: String },
-        { description: "Admin bearer token (or CIRRUS_ADMIN_TOKEN)", name: "token", type: String },
+        { description: "Admin bearer token (or LUNORA_ADMIN_TOKEN)", name: "token", type: String },
     ],
 };
 

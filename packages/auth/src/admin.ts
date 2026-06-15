@@ -1,4 +1,4 @@
-import type { CirrusAuth } from "./create-auth";
+import type { LunoraAuth } from "./create-auth";
 
 /**
  * A timestamp as it leaves the admin API: epoch-ms (better-auth stores `Date`s,
@@ -226,12 +226,12 @@ interface CreateAuthAdminOptions {
  * surface that `code` so the runtime can map it onto an HTTP status and the
  * studio can show a meaningful message instead of a generic 500.
  */
-class CirrusAuthAdminError extends Error {
+class LunoraAuthAdminError extends Error {
     public readonly code: string;
 
     public constructor(message: string, code: string) {
         super(message);
-        this.name = "CirrusAuthAdminError";
+        this.name = "LunoraAuthAdminError";
         this.code = code;
     }
 }
@@ -275,12 +275,12 @@ const normalizeRow = (row: Record<string, unknown>): Record<string, unknown> => 
 const serializeRole = (role: string | string[]): string => (Array.isArray(role) ? role.join(",") : role);
 
 /**
- * Re-throw an unknown error as a {@link CirrusAuthAdminError}, lifting a
+ * Re-throw an unknown error as a {@link LunoraAuthAdminError}, lifting a
  * better-auth `APIError`'s `body.code` when present so the caller sees a stable
  * machine code rather than an opaque message.
  */
-const asAdminError = (error: unknown): CirrusAuthAdminError => {
-    if (error instanceof CirrusAuthAdminError) {
+const asAdminError = (error: unknown): LunoraAuthAdminError => {
+    if (error instanceof LunoraAuthAdminError) {
         return error;
     }
 
@@ -288,14 +288,14 @@ const asAdminError = (error: unknown): CirrusAuthAdminError => {
     const code = candidate?.body?.code ?? candidate?.code ?? "AUTH_ADMIN_ERROR";
     const message = candidate?.body?.message ?? candidate?.message ?? "auth admin operation failed";
 
-    return new CirrusAuthAdminError(message, code);
+    return new LunoraAuthAdminError(message, code);
 };
 
 /**
  * Build the studio's auth user-management plane on top of better-auth.
  *
  * Pass the result as the runtime's `authAdmin` option; the runtime exposes each
- * method behind an admin-token-gated `/_cirrus/admin/auth/*` endpoint. The set
+ * method behind an admin-token-gated `/_lunora/admin/auth/*` endpoint. The set
  * of usable surfaces is reported by {@link AuthAdmin.capabilities} — derived
  * from the enabled better-auth plugins, so enabling `admin()`, `organization()`,
  * `twoFactor()`, or the passkey plugin in the auth config is what lights up the
@@ -305,21 +305,21 @@ const asAdminError = (error: unknown): CirrusAuthAdminError => {
  * `internalAdapter` (and `adapter`/password hasher) **directly**, deliberately
  * bypassing the plugins' own endpoints, which require the caller to hold an
  * admin-role session. That session check is the wrong gate here: the runtime
- * already authorizes every call with `CIRRUS_ADMIN_TOKEN`, so this helper acts
+ * already authorizes every call with `LUNORA_ADMIN_TOKEN`, so this helper acts
  * as a trusted server-side operator. It is therefore not an end-user-callable
  * API — never expose it on a path that isn't admin-token gated.
  *
  * `auth.$context` is a promise (better-auth resolves the adapter, password
  * config, etc. lazily); we memoize it so the first call pays the cost once.
  */
-const createAuthAdmin = (auth: CirrusAuth, options: CreateAuthAdminOptions = {}): AuthAdmin => {
+const createAuthAdmin = (auth: LunoraAuth, options: CreateAuthAdminOptions = {}): AuthAdmin => {
     // `auth.$context` is a single resolved-once promise; holding the reference
     // memoizes the (lazy) adapter/password-config resolution across calls.
     const context = auth.$context;
     const features = options.features ?? {};
 
     /** Resolve the better-auth context once, then run `fn`, normalizing any thrown `APIError`. */
-    const withContext = async <R>(function_: (context_: Awaited<CirrusAuth["$context"]>) => Promise<R>): Promise<R> => {
+    const withContext = async <R>(function_: (context_: Awaited<LunoraAuth["$context"]>) => Promise<R>): Promise<R> => {
         try {
             return await function_(await context);
         } catch (error) {
@@ -331,7 +331,7 @@ const createAuthAdmin = (auth: CirrusAuth, options: CreateAuthAdminOptions = {})
 
     /** Page a model via the raw adapter with optional where/sort; shared by every list endpoint. */
     const page = async <T>(
-        context_: Awaited<CirrusAuth["$context"]>,
+        context_: Awaited<LunoraAuth["$context"]>,
         model: string,
         options_: { limit?: number; offset?: number; sortBy?: { direction: "asc" | "desc"; field: string }; where?: WhereClause[] },
     ): Promise<AuthPage<T>> => {
@@ -396,7 +396,7 @@ const createAuthAdmin = (auth: CirrusAuth, options: CreateAuthAdminOptions = {})
                 const normalizedEmail = email.toLowerCase();
 
                 if (await context_.internalAdapter.findUserByEmail(normalizedEmail)) {
-                    throw new CirrusAuthAdminError("a user with this email already exists", "USER_ALREADY_EXISTS");
+                    throw new LunoraAuthAdminError("a user with this email already exists", "USER_ALREADY_EXISTS");
                 }
 
                 // `data` carries app-defined `additionalFields`. It is spread last and so
@@ -439,7 +439,7 @@ const createAuthAdmin = (auth: CirrusAuth, options: CreateAuthAdminOptions = {})
                 const user = await context_.internalAdapter.findUserById(userId);
 
                 if (!user) {
-                    throw new CirrusAuthAdminError("user not found", "USER_NOT_FOUND");
+                    throw new LunoraAuthAdminError("user not found", "USER_NOT_FOUND");
                 }
 
                 const rawSeconds = options.impersonationSeconds;
@@ -447,7 +447,7 @@ const createAuthAdmin = (auth: CirrusAuth, options: CreateAuthAdminOptions = {})
 
                 if (rawSeconds !== undefined) {
                     if (!Number.isInteger(rawSeconds) || !Number.isFinite(rawSeconds) || rawSeconds <= 0) {
-                        throw new CirrusAuthAdminError("impersonationSeconds must be a positive finite integer", "INVALID_IMPERSONATION_SECONDS");
+                        throw new LunoraAuthAdminError("impersonationSeconds must be a positive finite integer", "INVALID_IMPERSONATION_SECONDS");
                     }
 
                     ttlSeconds = Math.min(rawSeconds, MAX_IMPERSONATION_SECONDS);
@@ -575,11 +575,11 @@ const createAuthAdmin = (auth: CirrusAuth, options: CreateAuthAdminOptions = {})
                 const max = context_.password.config.maxPasswordLength;
 
                 if (newPassword.length < min) {
-                    throw new CirrusAuthAdminError(`password must be at least ${min.toString()} characters`, "PASSWORD_TOO_SHORT");
+                    throw new LunoraAuthAdminError(`password must be at least ${min.toString()} characters`, "PASSWORD_TOO_SHORT");
                 }
 
                 if (newPassword.length > max) {
-                    throw new CirrusAuthAdminError(`password must be at most ${max.toString()} characters`, "PASSWORD_TOO_LONG");
+                    throw new LunoraAuthAdminError(`password must be at most ${max.toString()} characters`, "PASSWORD_TOO_LONG");
                 }
 
                 const hashed = await context_.password.hash(newPassword);
@@ -633,4 +633,4 @@ export type {
     ImpersonationResult,
     ListUsersOptions,
 };
-export { CirrusAuthAdminError, createAuthAdmin };
+export { LunoraAuthAdminError, createAuthAdmin };

@@ -2,5 +2,5 @@
     "name": "needs-ratelimit",
     "description": "Depends transitively on ratelimit",
     "requires": ["ratelimit"],
-    "files": [{ "from": "feature.ts", "to": "cirrus/needs-ratelimit/index.ts", "merge": "create-or-skip" }]
+    "files": [{ "from": "feature.ts", "to": "lunora/needs-ratelimit/index.ts", "merge": "create-or-skip" }]
 }

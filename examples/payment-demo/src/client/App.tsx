@@ -1,8 +1,8 @@
-import { CheckoutButton, CustomerPortalButton, useCirrus, useQuery } from "@cirrus/react";
+import { CheckoutButton, CustomerPortalButton, useLunora, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
-import { api } from "../../cirrus/_generated/api.js";
+import { api } from "../../lunora/_generated/api.js";
 
 interface SubscriptionRow {
     providerSubscriptionId: string;
@@ -16,14 +16,14 @@ interface SubscriptionRow {
  * store (reactive `useQuery`).
  */
 export const App = (): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const [priceId, setPriceId] = useState("price_123");
 
     const subscriptions = useQuery(api.billing.mySubscriptions, {}) as SubscriptionRow[] | undefined;
 
     return (
         <main style={{ fontFamily: "system-ui", margin: "0 auto", maxWidth: 480, padding: 24 }}>
-            <h1>Cirrus Payment Demo</h1>
+            <h1>Lunora Payment Demo</h1>
             <label style={{ display: "block", marginBottom: 8 }}>
                 Stripe price id
                 <input onChange={(event) => setPriceId(event.target.value)} style={{ display: "block", width: "100%" }} value={priceId} />

@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
-import { isInteractive, promptMultiSelect, promptSelect } from "@cirrus/config";
+import { isInteractive, promptMultiSelect, promptSelect } from "@lunora/config";
 import { walkSync } from "@visulima/fs";
 import { dirname, join, relative, resolve } from "@visulima/path";
 import { downloadTemplate } from "giget";
@@ -39,7 +39,7 @@ interface InitCommandOptions {
     from?: string;
 
     /**
-     * When true, configure Cirrus into the CURRENT project (`cwd`) instead of
+     * When true, configure Lunora into the CURRENT project (`cwd`) instead of
      * scaffolding a new directory. Finds an existing `vite.config.*` and
      * patches it via `patchViteConfig`, or creates a minimal one when absent.
      * All other scaffold options (`name`, `templateType`, `source`, `from`)
@@ -65,12 +65,12 @@ interface InitCommandOptions {
 
     /** Local registry root for the offer's `runAddCommand` (offline / tests). Mirrors `from` but for registry items. */
     registryFrom?: string;
-    /** Override the remote registry source base for the offer (default `gh:anolilab/cirrus/registry`). */
+    /** Override the remote registry source base for the offer (default `gh:anolilab/lunora/registry`). */
     registrySource?: string;
 
     /**
      * Override the remote source giget downloads from. Default:
-     * `gh:anolilab/cirrus/templates/&lt;templateType>#v&lt;cliVersion>`. Tests
+     * `gh:anolilab/lunora/templates/&lt;templateType>#v&lt;cliVersion>`. Tests
      * typically use `from` instead to skip the network.
      */
     source?: string;
@@ -93,13 +93,13 @@ const VITE_CONFIG_CANDIDATES = ["vite.config.ts", "vite.config.mts", "vite.confi
 
 /** Minimal vite config written when none exists during in-place init. */
 const MINIMAL_VITE_CONFIG = `import { defineConfig } from "vite";
-import { cirrus } from "@cirrus/vite";
+import { lunora } from "@lunora/vite";
 
-export default defineConfig({ plugins: [cirrus()] });
+export default defineConfig({ plugins: [lunora()] });
 `;
 
-/** Sample `cirrus/schema.ts` written when scaffolding Cirrus into an existing app. */
-const SAMPLE_SCHEMA = `import { defineSchema, defineTable, v } from "@cirrus/server";
+/** Sample `lunora/schema.ts` written when scaffolding Lunora into an existing app. */
+const SAMPLE_SCHEMA = `import { defineSchema, defineTable, v } from "@lunora/server";
 
 export default defineSchema({
     messages: defineTable({
@@ -111,8 +111,8 @@ export default defineSchema({
 });
 `;
 
-/** Sample `cirrus/messages.ts` (one query + one mutation) written alongside the schema. */
-const SAMPLE_FUNCTION = `import { mutation, query, v } from "@cirrus/server";
+/** Sample `lunora/messages.ts` (one query + one mutation) written alongside the schema. */
+const SAMPLE_FUNCTION = `import { mutation, query, v } from "@lunora/server";
 
 export const list = query({
     args: { channelId: v.id("channels"), limit: v.optional(v.number()) },
@@ -129,7 +129,7 @@ export const send = mutation({
 });
 `;
 
-const DEFAULT_SOURCE_BASE = "gh:anolilab/cirrus/templates";
+const DEFAULT_SOURCE_BASE = "gh:anolilab/lunora/templates";
 const DEFAULT_SOURCE_REF_FALLBACK = "alpha";
 
 /**
@@ -140,7 +140,7 @@ const DEFAULT_SOURCE_REF_FALLBACK = "alpha";
  */
 const resolveCliVersion = (): string => {
     try {
-        // Walk up from this module's directory to find @cirrus/cli's package.json.
+        // Walk up from this module's directory to find @lunora/cli's package.json.
         // Works whether the file is the built `dist/index.mjs` or the source under `src/`.
         let directory = dirname(fileURLToPath(import.meta.url));
 
@@ -150,7 +150,7 @@ const resolveCliVersion = (): string => {
             if (existsSync(candidate)) {
                 const parsed = JSON.parse(readFileSync(candidate, "utf8")) as { name?: string; version?: string };
 
-                if (parsed.name === "@cirrus/cli" && typeof parsed.version === "string") {
+                if (parsed.name === "@lunora/cli" && typeof parsed.version === "string") {
                     return parsed.version;
                 }
             }
@@ -283,7 +283,7 @@ const scaffoldFromRemote = async (
     name: string,
     logger: Logger,
 ): Promise<InitCommandResult> => {
-    const stagingRoot = mkdtempSync(join(tmpdir(), "cirrus-init-fetch-"));
+    const stagingRoot = mkdtempSync(join(tmpdir(), "lunora-init-fetch-"));
     const stagingDirectory = join(stagingRoot, "template");
 
     try {
@@ -342,7 +342,7 @@ const createMinimalViteConfig = (cwd: string, logger: Logger): InitCommandResult
         return { code: 1, files: [], target: cwd };
     }
 
-    logger.success(`created ${target} with cirrus() plugin`);
+    logger.success(`created ${target} with lunora() plugin`);
 
     return { code: 0, files: [target], target: cwd };
 };
@@ -382,23 +382,23 @@ const patchExistingViteConfig = (viteConfigPath: string, cwd: string, logger: Lo
         return { code: 1, files: [], target: cwd };
     }
 
-    logger.success(`patched ${viteConfigPath} — added cirrus() plugin`);
+    logger.success(`patched ${viteConfigPath} — added lunora() plugin`);
 
     return { code: 0, files: [viteConfigPath], target: cwd };
 };
 
 /**
- * Scaffold `cirrus/{schema,messages}.ts` into `cwd` when absent. Idempotent:
- * an existing `cirrus/schema.ts` is left untouched and reported, so re-running
- * `cirrus init --here` never double-patches the schema. Returns the list of
+ * Scaffold `lunora/{schema,messages}.ts` into `cwd` when absent. Idempotent:
+ * an existing `lunora/schema.ts` is left untouched and reported, so re-running
+ * `lunora init --here` never double-patches the schema. Returns the list of
  * files actually written (empty when the directory already had a schema).
  */
-const scaffoldCirrusDirectory = (cwd: string, logger: Logger): ReadonlyArray<string> => {
-    const cirrusDirectory = join(cwd, "cirrus");
-    const schemaPath = join(cirrusDirectory, "schema.ts");
+const scaffoldLunoraDirectory = (cwd: string, logger: Logger): ReadonlyArray<string> => {
+    const lunoraDirectory = join(cwd, "lunora");
+    const schemaPath = join(lunoraDirectory, "schema.ts");
 
     if (existsSync(schemaPath)) {
-        logger.info(`cirrus/ already present — left ${schemaPath} untouched`);
+        logger.info(`lunora/ already present — left ${schemaPath} untouched`);
 
         return [];
     }
@@ -406,11 +406,11 @@ const scaffoldCirrusDirectory = (cwd: string, logger: Logger): ReadonlyArray<str
     const written: string[] = [];
 
     try {
-        mkdirSync(cirrusDirectory, { recursive: true });
+        mkdirSync(lunoraDirectory, { recursive: true });
         writeFileSync(schemaPath, SAMPLE_SCHEMA, "utf8");
         written.push(schemaPath);
 
-        const functionPath = join(cirrusDirectory, "messages.ts");
+        const functionPath = join(lunoraDirectory, "messages.ts");
 
         // The function file is only written when missing so a hand-edited one is
         // never clobbered on a re-run.
@@ -419,11 +419,11 @@ const scaffoldCirrusDirectory = (cwd: string, logger: Logger): ReadonlyArray<str
             written.push(functionPath);
         }
 
-        logger.success(`scaffolded cirrus/ (${String(written.length)} file(s))`);
+        logger.success(`scaffolded lunora/ (${String(written.length)} file(s))`);
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
 
-        logger.error(`init --here: could not scaffold cirrus/: ${message}`);
+        logger.error(`init --here: could not scaffold lunora/: ${message}`);
     }
 
     return written;
@@ -431,10 +431,10 @@ const scaffoldCirrusDirectory = (cwd: string, logger: Logger): ReadonlyArray<str
 
 /**
  * Per-framework "next steps" copy printed after the in-place patch. Each entry
- * names the idiomatic Cirrus adapter to install and the composition wiring
+ * names the idiomatic Lunora adapter to install and the composition wiring
  * the user must add by hand (worker `httpRouter` for class A, hook-injection for
  * class B). This is the honest "auto-patched vs instructed" boundary: the CLI
- * scaffolds `cirrus/` and patches the Vite config; the provider + worker
+ * scaffolds `lunora/` and patches the Vite config; the provider + worker
  * composition is printed for the user to wire because it is framework-specific
  * and lives in files the CLI does not own.
  */
@@ -444,28 +444,28 @@ const printFrameworkNextSteps = (detection: FrameworkDetection, logger: Logger):
     logger.info("");
     logger.info(`detected framework: ${framework} (class ${frameworkClass})`);
     logger.info("next steps:");
-    logger.info(`  1. install the adapter:  pnpm add ${adapter} @cirrus/client @cirrus/runtime @cirrus/server`);
-    logger.info("  2. run codegen:          cirrus codegen");
+    logger.info(`  1. install the adapter:  pnpm add ${adapter} @lunora/client @lunora/runtime @lunora/server`);
+    logger.info("  2. run codegen:          lunora codegen");
 
     if (frameworkClass === "A") {
-        // Class A — Cirrus owns the worker entry: drop the framework SSR handler
+        // Class A — Lunora owns the worker entry: drop the framework SSR handler
         // into createWorker({ httpRouter }).
         logger.info("  3. compose one worker:   wrap your worker entry with");
         logger.info("       createWorker({ httpRouter: <your framework SSR handler>, shardDO: ShardDO, ... })");
         logger.info(`  4. add the provider:     mount the ${adapter} provider in your root layout/route`);
         logger.info("  5. make a loader live:   preloadQuery() in a loader, usePreloadedQuery() in the component");
-        logger.info("     see https://cirrus.dev/docs/frameworks/reactive-loaders");
+        logger.info("     see https://lunora.sh/docs/frameworks/reactive-loaders");
     } else if (frameworkClass === "B") {
-        // Class B — the framework owns its CF adapter: Cirrus realtime is injected
+        // Class B — the framework owns its CF adapter: Lunora realtime is injected
         // into the framework's server entry/hooks; it keeps the rest.
-        logger.info("  3. inject Cirrus:        mount Cirrus realtime under /_cirrus/* in your server hook");
-        logger.info(`       (${framework} owns its Cloudflare adapter — Cirrus composes into its server entry)`);
+        logger.info("  3. inject Lunora:        mount Lunora realtime under /_lunora/* in your server hook");
+        logger.info(`       (${framework} owns its Cloudflare adapter — Lunora composes into its server entry)`);
         logger.info(`  4. add the provider:     mount the ${adapter} provider in your root layout`);
-        logger.info("  5. read the guide:       https://cirrus.dev/docs/frameworks/deploy");
+        logger.info("  5. read the guide:       https://lunora.sh/docs/frameworks/deploy");
     } else {
-        // Class C — SPA / SSR-less: client adapter + standalone Cirrus worker.
-        logger.info("  3. add the provider:     wrap your app with the CirrusProvider from @cirrus/react");
-        logger.info("  4. read the guide:       https://cirrus.dev/docs/frameworks/bring-your-framework");
+        // Class C — SPA / SSR-less: client adapter + standalone Lunora worker.
+        logger.info("  3. add the provider:     wrap your app with the LunoraProvider from @lunora/react");
+        logger.info("  4. read the guide:       https://lunora.sh/docs/frameworks/bring-your-framework");
     }
 
     logger.info("");
@@ -487,7 +487,7 @@ const findExistingViteConfig = (cwd: string): string | undefined => {
 /**
  * Patch (or create) the project's Vite config for the in-place path, skipping
  * the work for class-B frameworks that ship their own Cloudflare adapter and
- * wire Cirrus through their server entry rather than a `cirrus()` Vite plugin.
+ * wire Lunora through their server entry rather than a `lunora()` Vite plugin.
  * Returns the InitCommandResult so a hard write failure aborts the whole run.
  */
 const patchOrCreateViteConfig = (cwd: string, framework: DetectedFramework, logger: Logger): InitCommandResult => {
@@ -495,9 +495,9 @@ const patchOrCreateViteConfig = (cwd: string, framework: DetectedFramework, logg
 
     if (viteConfigPath === undefined) {
         // SvelteKit/Nuxt own their build via their own config; don't drop a
-        // standalone vite.config.ts on them. They get cirrus/ + instructions only.
+        // standalone vite.config.ts on them. They get lunora/ + instructions only.
         if (framework === "sveltekit" || framework === "nuxt" || framework === "astro") {
-            logger.info(`no Vite config found — ${framework} wires Cirrus through its server entry (see next steps)`);
+            logger.info(`no Vite config found — ${framework} wires Lunora through its server entry (see next steps)`);
 
             return { code: 0, files: [], target: cwd };
         }
@@ -509,13 +509,13 @@ const patchOrCreateViteConfig = (cwd: string, framework: DetectedFramework, logg
 };
 
 /**
- * In-place mode: configure Cirrus into an existing project at `cwd`. Detects the
+ * In-place mode: configure Lunora into an existing project at `cwd`. Detects the
  * meta-framework from `package.json`, patches/creates the Vite config where
- * applicable, scaffolds `cirrus/` (schema + sample function) idempotently, and
+ * applicable, scaffolds `lunora/` (schema + sample function) idempotently, and
  * prints framework-specific next steps (adapter install + provider/worker
  * wiring). Re-running is a no-op for already-patched pieces.
  *
- * Auto-patched: the Vite config (class A/C) and the `cirrus/` scaffold.
+ * Auto-patched: the Vite config (class A/C) and the `lunora/` scaffold.
  * Instructed: the adapter dependency, the provider mount, and the worker
  * `httpRouter` composition (class A) / hook injection (class B) — these live in
  * framework-owned files, so the CLI prints precise steps instead of guessing.
@@ -529,7 +529,7 @@ const runInPlaceInit = (cwd: string, logger: Logger): InitCommandResult => {
         return viteResult;
     }
 
-    const scaffolded = scaffoldCirrusDirectory(cwd, logger);
+    const scaffolded = scaffoldLunoraDirectory(cwd, logger);
 
     printFrameworkNextSteps(detection, logger);
 
@@ -580,7 +580,7 @@ const maybeOfferExtras = async (options: InitCommandOptions, projectDirectory: s
 
 /** Scaffold a brand-new project directory (the non-`--here` path). */
 const scaffoldNewProject = async (options: InitCommandOptions, cwd: string): Promise<InitCommandResult> => {
-    const name = options.name ?? "cirrus-app";
+    const name = options.name ?? "lunora-app";
     const templateType: Template = options.templateType ?? "vite";
 
     if (templateType === "next") {
@@ -631,7 +631,7 @@ const scaffoldNewProject = async (options: InitCommandOptions, cwd: string): Pro
 };
 
 /**
- * `cirrus init` entry: scaffold (in-place or a new directory), then — on success
+ * `lunora init` entry: scaffold (in-place or a new directory), then — on success
  * — offer to add auth + email via the registry. The offer never affects the
  * scaffold's exit code.
  */
@@ -657,7 +657,7 @@ const isTemplate = (value: unknown): value is Template =>
     value === "tanstack-start-solid" ||
     value === "vite";
 
-/** `cirrus init [name]` handler (lazy-loaded via the command's `loader`). */
+/** `lunora init [name]` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<InitOptions> = defineHandler<InitOptions>(({ argument, cwd, logger, options }) => {
     const templateRaw = options.template ?? "vite";
     const template: Template = isTemplate(templateRaw) ? templateRaw : "vite";

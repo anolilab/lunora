@@ -6,7 +6,7 @@
 
 </a>
 
-<h3 align="center">TanStack DB binding: typed, live-synced collections and a durable offline outbox over the Cirrus client</h3>
+<h3 align="center">TanStack DB binding: typed, live-synced collections and a durable offline outbox over the Lunora client</h3>
 
 <!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
@@ -34,33 +34,33 @@
 
 ---
 
-A [TanStack DB](https://tanstack.com/db) binding for the Cirrus client. `defineCollections` wires your Cirrus queries and mutations into live, indexed client collections (reads) and a durable, retried offline-transactions outbox (writes) — so a write renders instantly, survives reloads and offline windows, is superseded by the real server row on acknowledgement, and rolls back if the server rejects it. Peer-depends on `@tanstack/db` and `@tanstack/offline-transactions`.
+A [TanStack DB](https://tanstack.com/db) binding for the Lunora client. `defineCollections` wires your Lunora queries and mutations into live, indexed client collections (reads) and a durable, retried offline-transactions outbox (writes) — so a write renders instantly, survives reloads and offline windows, is superseded by the real server row on acknowledgement, and rolls back if the server rejects it. Peer-depends on `@tanstack/db` and `@tanstack/offline-transactions`.
 
-Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
+Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
 ## Install
 
 ```sh
-npm install @cirrus/db
+npm install @lunora/db
 ```
 
 ```sh
-yarn add @cirrus/db
+yarn add @lunora/db
 ```
 
 ```sh
-pnpm add @cirrus/db
+pnpm add @lunora/db
 ```
 
 ## Usage
 
 ```ts
-import { defineCollections } from "@cirrus/db";
+import { defineCollections } from "@lunora/db";
 
 import { api } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 
-export const createCollections = (client: CirrusClient) =>
+export const createCollections = (client: LunoraClient) =>
     defineCollections(client, {
         messages: {
             list: api.messages.list,
@@ -82,15 +82,15 @@ export const createCollections = (client: CirrusClient) =>
 //   db.scope.* (re-point sharded collections), db.executor (the outbox)
 ```
 
-> `vis generate cirrus-collections` scaffolds this from your `schema.ts` + functions.
+> `vis generate lunora-collections` scaffolds this from your `schema.ts` + functions.
 
-> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/addons/db)**.
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/addons/db)**.
 
 ## Related
 
-- [`@cirrus/client`](https://www.npmjs.com/package/@cirrus/client) — the browser SDK this layer syncs over.
-- [`@cirrus/react`](https://www.npmjs.com/package/@cirrus/react) — React hooks for Cirrus queries and mutations.
-- [`@cirrus/server`](https://www.npmjs.com/package/@cirrus/server) — server primitives that define the queries and mutations you bind.
+- [`@lunora/client`](https://www.npmjs.com/package/@lunora/client) — the browser SDK this layer syncs over.
+- [`@lunora/react`](https://www.npmjs.com/package/@lunora/react) — React hooks for Lunora queries and mutations.
+- [`@lunora/server`](https://www.npmjs.com/package/@lunora/server) — server primitives that define the queries and mutations you bind.
 
 ## Supported Node.js Versions
 
@@ -99,14 +99,14 @@ Here's [a post on why we think this is important](https://medium.com/the-node-js
 
 ## Contributing
 
-If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/lunora/issues) and check our [Contributing](https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
 > **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
 ## Credits
 
 - [Daniel Bannert](https://github.com/prisis)
-- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
+- [All Contributors](https://github.com/anolilab/lunora/graphs/contributors)
 
 ## Made with ❤️ at Anolilab
 
@@ -114,17 +114,17 @@ This is an open source project and will always remain free to use. If you think 
 
 ## License
 
-The Cirrus db package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The Lunora db package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
 
 <!-- badges -->
 
 [license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
-[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
-[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/db?style=for-the-badge
-[npm-version]: https://www.npmjs.com/package/@cirrus/db
-[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/db?style=for-the-badge
-[npm-downloads]: https://www.npmjs.com/package/@cirrus/db
+[license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@lunora/db?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@lunora/db
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@lunora/db?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@lunora/db
 [prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
-[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[prs-welcome]: https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md
 [typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
 [typescript-url]: https://www.typescriptlang.org/

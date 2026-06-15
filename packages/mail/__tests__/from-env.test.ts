@@ -9,13 +9,13 @@ describe("shouldCaptureMail", () => {
         expect(shouldCaptureMail({ WORKER_ENV: "development" })).toBe(true);
     });
 
-    it("respects an explicit CIRRUS_MAIL_CAPTURE flag over the environment", () => {
+    it("respects an explicit LUNORA_MAIL_CAPTURE flag over the environment", () => {
         expect.assertions(2);
 
         // Explicit off in a dev env.
-        expect(shouldCaptureMail({ CIRRUS_MAIL_CAPTURE: "0", WORKER_ENV: "development" })).toBe(false);
+        expect(shouldCaptureMail({ LUNORA_MAIL_CAPTURE: "0", WORKER_ENV: "development" })).toBe(false);
         // Explicit on in a prod env.
-        expect(shouldCaptureMail({ CIRRUS_MAIL_CAPTURE: "1", WORKER_ENV: "production" })).toBe(true);
+        expect(shouldCaptureMail({ LUNORA_MAIL_CAPTURE: "1", WORKER_ENV: "production" })).toBe(true);
     });
 
     it("does NOT capture in production, even with no SEND_EMAIL binding", () => {
@@ -44,7 +44,7 @@ describe("createCaptureSink", () => {
             return { fetch };
         });
         const idFromName = vi.fn<(name: string) => string>((name: string) => `id:${name}`);
-        const env = { CIRRUS_ADMIN_TOKEN: "secret", SHARD: { get, idFromName } };
+        const env = { LUNORA_ADMIN_TOKEN: "secret", SHARD: { get, idFromName } };
 
         const sink = createCaptureSink(env);
         const result = await sink.record({ subject: "Hi", to: "a@b.test" });
@@ -86,7 +86,7 @@ describe("createMailerFromEnv", () => {
             };
         });
         const env = {
-            CIRRUS_ADMIN_TOKEN: "secret",
+            LUNORA_ADMIN_TOKEN: "secret",
             MAIL_FROM: "noreply@x.test",
             SHARD: {
                 get: () => {

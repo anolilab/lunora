@@ -4,7 +4,7 @@ import type { Lint } from "../../types";
 /**
  * Flags a declared table that no function inserts into.
  *
- * Using `@cirrus/codegen`'s write-side discovery (the analog of the read
+ * Using `@lunora/codegen`'s write-side discovery (the analog of the read
  * discovery that feeds `filter_without_index`), this lint cross-references every
  * schema table against the set of tables some exported function writes via
  * `ctx.db.insert("&lt;table>", …)`. A table with no such write either is dead schema

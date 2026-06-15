@@ -1,7 +1,7 @@
 import type { CallExpression, Node as TsNode, Project, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { cirrusRelativePath, classifyProcedureCall, listCirrusSourceFiles } from "./discover-functions";
+import { lunoraRelativePath, classifyProcedureCall, listLunoraSourceFiles } from "./discover-functions";
 import type { NondeterministicCallIR } from "./ir";
 
 /**
@@ -174,7 +174,7 @@ const callsInSourceFile = (sourceFile: SourceFile, relativePath: string): Nondet
  * Discover non-deterministic API calls (`Date.now`, `Math.random`,
  * `crypto.randomUUID`, `crypto.getRandomValues`, `fetch`) lexically inside the
  * handler body of every exported `query(...)` / `mutation(...)` registration
- * under the cirrus source directory — the `nondeterministic_query_mutation` lint
+ * under the lunora source directory — the `nondeterministic_query_mutation` lint
  * input. `action(...)` (and `stream(...)`) registrations are intentionally
  * skipped: actions run exactly once and may use ambient APIs freely.
  *
@@ -184,13 +184,13 @@ const callsInSourceFile = (sourceFile: SourceFile, relativePath: string): Nondet
  * not attributed to the query/mutation. One {@link NondeterministicCallIR} is
  * produced per call site.
  */
-const discoverNondeterministicCalls = (project: Project, cirrusDirectory: string): NondeterministicCallIR[] => {
+const discoverNondeterministicCalls = (project: Project, lunoraDirectory: string): NondeterministicCallIR[] => {
     const calls: NondeterministicCallIR[] = [];
 
-    for (const filePath of listCirrusSourceFiles(cirrusDirectory)) {
+    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
 
-        calls.push(...callsInSourceFile(sourceFile, cirrusRelativePath(cirrusDirectory, filePath)));
+        calls.push(...callsInSourceFile(sourceFile, lunoraRelativePath(lunoraDirectory, filePath)));
     }
 
     return calls;

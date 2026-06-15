@@ -1,5 +1,5 @@
 /**
- * String-casing helpers shared by the cirrus-* generators. Kept here so each
+ * String-casing helpers shared by the lunora-* generators. Kept here so each
  * template stays small and the conversion rules don't drift between them.
  */
 // sonarjs/slow-regex: the character classes [-_\s] and \w don't overlap, so

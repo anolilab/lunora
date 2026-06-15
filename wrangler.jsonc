@@ -1,19 +1,19 @@
-// Template wrangler config for Cirrus apps.
+// Template wrangler config for Lunora apps.
 // Copy into your project and fill in the database id placeholders.
 {
     "$schema": "node_modules/wrangler/config-schema.json",
-    "name": "cirrus-app",
+    "name": "lunora-app",
     "main": "src/index.ts",
     "compatibility_date": "2026-04-07",
     "compatibility_flags": ["nodejs_compat"],
     "durable_objects": {
         "bindings": [
             { "name": "SHARD", "class_name": "ShardDO" },
-            // SessionDO owns auth session state when `@cirrus/auth` is wired up.
+            // SessionDO owns auth session state when `@lunora/auth` is wired up.
             { "name": "SESSION", "class_name": "SessionDO" },
         ],
     },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "SessionDO"] }],
-    "d1_databases": [{ "binding": "DB", "database_name": "cirrus-global", "database_id": "<replace>" }],
-    "r2_buckets": [{ "binding": "FILES", "bucket_name": "cirrus-files" }],
+    "d1_databases": [{ "binding": "DB", "database_name": "lunora-global", "database_id": "<replace>" }],
+    "r2_buckets": [{ "binding": "FILES", "bucket_name": "lunora-files" }],
 }

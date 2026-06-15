@@ -4,18 +4,18 @@
     "private": true,
     "type": "module",
     "scripts": {
-        "dev": "cirrus dev",
-        "build": "cirrus codegen && vite build",
+        "dev": "lunora dev",
+        "build": "lunora codegen && vite build",
         "preview": "vite preview",
-        "codegen": "cirrus codegen",
-        "deploy": "cirrus deploy"
+        "codegen": "lunora codegen",
+        "deploy": "lunora deploy"
     },
     "dependencies": {
-        "@cirrus/client": "^0.0.0",
-        "@cirrus/do": "^0.0.0",
-        "@cirrus/react": "^0.0.0",
-        "@cirrus/runtime": "^0.0.0",
-        "@cirrus/server": "^0.0.0",
+        "@lunora/client": "^0.0.0",
+        "@lunora/do": "^0.0.0",
+        "@lunora/react": "^0.0.0",
+        "@lunora/runtime": "^0.0.0",
+        "@lunora/server": "^0.0.0",
         "@tanstack/react-query": "^5.101.0",
         "@tanstack/react-router": "^1.170.15",
         "@tanstack/react-start": "^1.168.25",
@@ -23,8 +23,8 @@
         "react-dom": "^19.0.0"
     },
     "devDependencies": {
-        "@cirrus/cli": "^0.0.0",
-        "@cirrus/vite": "^0.0.0",
+        "@lunora/cli": "^0.0.0",
+        "@lunora/vite": "^0.0.0",
         "@cloudflare/vite-plugin": "^1.29.0",
         "@cloudflare/workers-types": "^4.20260610.1",
         "@vitejs/plugin-react": "^6.0.1",

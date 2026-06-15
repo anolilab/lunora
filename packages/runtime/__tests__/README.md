@@ -1,7 +1,7 @@
-# `@cirrus/runtime` — Test Layout
+# `@lunora/runtime` — Test Layout
 
 This package has two parallel test suites coordinated by a single
-`pnpm --filter @cirrus/runtime test`.
+`pnpm --filter @lunora/runtime test`.
 
 ```
 __tests__/
@@ -37,10 +37,10 @@ sanitization, and any future behaviour that depends on the real
 
 ```bash
 # Mocks only (default):
-pnpm --filter @cirrus/runtime test
+pnpm --filter @lunora/runtime test
 
 # Both projects (opt-in — requires unrestricted localhost-loopback
 # access between workerd and the test host; see top-level
 # workerd-integration note in packages/do/__tests__/README.md):
-CIRRUS_WORKERD_TESTS=1 pnpm --filter @cirrus/runtime test
+LUNORA_WORKERD_TESTS=1 pnpm --filter @lunora/runtime test
 ```

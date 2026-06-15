@@ -25,7 +25,7 @@ interface AnalyzeFileEntry {
 }
 
 interface AnalyzeReport {
-    /** Files under cirrus/_generated, when present. */
+    /** Files under lunora/_generated, when present. */
     generatedFiles: ReadonlyArray<AnalyzeFileEntry>;
     outdir: string;
     /** All files in the build output, sorted largest-first. */
@@ -129,7 +129,7 @@ const runAnalyzeCommand = async (options: AnalyzeCommandOptions): Promise<Analyz
     if (options.inspectOnly) {
         outdir = options.inspectOnly;
     } else {
-        outdir = mkdtempSync(join(tmpdir(), "cirrus-analyze-"));
+        outdir = mkdtempSync(join(tmpdir(), "lunora-analyze-"));
         temporary = true;
         descriptor = {
             args: ["exec", "wrangler", "deploy", "--dry-run", "--outdir", outdir],
@@ -162,7 +162,7 @@ const runAnalyzeCommand = async (options: AnalyzeCommandOptions): Promise<Analyz
         const report = buildReport(outdir);
 
         if (options.json) {
-            // Write straight to stdout so `cirrus analyze --json | jq` works —
+            // Write straight to stdout so `lunora analyze --json | jq` works —
             // Pail prefixes (level + timestamps) would break parsing.
             process.stdout.write(`${JSON.stringify(report, undefined, 2)}\n`);
         } else {
@@ -181,7 +181,7 @@ const runAnalyzeCommand = async (options: AnalyzeCommandOptions): Promise<Analyz
     }
 };
 
-/** `cirrus analyze` handler (lazy-loaded via the command's `loader`). */
+/** `lunora analyze` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<AnalyzeOptions> = defineHandler<AnalyzeOptions>(({ cwd, logger, options }) =>
     runAnalyzeCommand({ cwd, json: options.json === true, logger }),
 );

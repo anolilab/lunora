@@ -2,7 +2,7 @@
  * Per-statement SQL query metrics.
  *
  * Records per-normalized-statement timing and row-access aggregates in the
- * reserved `__cirrus_metrics_queries` table so the Studio can surface a
+ * reserved `__lunora_metrics_queries` table so the Studio can surface a
  * slow-query leaderboard without the operator adding instrumentation by hand.
  *
  * A "normalized statement" is the SQL text with literal values stripped and
@@ -20,8 +20,8 @@
 
 import type { SqlCursor, SqlExec } from "./ctx-db";
 
-/** Reserved table name. Auto-hidden from the data browser by the `__cirrus` prefix. */
-const QUERY_METRICS_TABLE = "__cirrus_metrics_queries";
+/** Reserved table name. Auto-hidden from the data browser by the `__lunora` prefix. */
+const QUERY_METRICS_TABLE = "__lunora_metrics_queries";
 
 /**
  * Maximum characters of normalised SQL stored per entry. Longer statements
@@ -37,7 +37,7 @@ const QUERY_METRICS_MAX_SQL_LEN = 512;
  */
 const QUERY_METRICS_MAX_STATEMENTS = 500;
 
-/** One row of the `__cirrus_metrics_queries` table, as returned by `readQueryMetrics`. */
+/** One row of the `__lunora_metrics_queries` table, as returned by `readQueryMetrics`. */
 interface QueryStatEntry {
     /** Total number of times this statement was executed. */
     execCount: number;
@@ -61,7 +61,7 @@ const runSql = <Row = Record<string, unknown>>(sql: SqlExec, query: string, ...p
 /**
  * Normalise a SQL string by collapsing whitespace, stripping string literals,
  * numeric literals, and hex literals, replacing them with `?`, then truncating.
- * The result is used as the primary key of `__cirrus_metrics_queries`, so two
+ * The result is used as the primary key of `__lunora_metrics_queries`, so two
  * executions of the same parameterised query collapse to one row regardless of
  * argument values. Single-quoted strings and hex literals become `?`; numeric
  * literals preceded by `=`, `(`, `,`, or whitespace become `?`; double-quoted

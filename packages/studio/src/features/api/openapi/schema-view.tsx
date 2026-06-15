@@ -5,10 +5,10 @@ import { useT } from "../../../i18n/i18n-context";
 
 /**
  * A JSON-Schema-ish node as it appears in the generated OpenAPI / OpenRPC
- * documents. Cirrus emits a small, predictable subset (objects, arrays, scalars,
+ * documents. Lunora emits a small, predictable subset (objects, arrays, scalars,
  * `const`, `anyOf`), so this models only those fields plus the handful of
  * validation keywords the reference surfaces as badges (`format`, numeric
- * bounds). The `x-cirrus-table` extension marks an id string that references a
+ * bounds). The `x-lunora-table` extension marks an id string that references a
  * table, so the schema view can surface the referenced table name.
  */
 interface SchemaNode {
@@ -25,7 +25,7 @@ interface SchemaNode {
     properties?: Record<string, SchemaNode>;
     required?: string[];
     type?: string;
-    "x-cirrus-table"?: string;
+    "x-lunora-table"?: string;
 }
 
 /** The scalar type name implied by a literal value (used to label an enum's base type). */
@@ -41,7 +41,7 @@ const scalarOf = (value: unknown): string => {
     return "string";
 };
 
-/** The enumerated values a node constrains to — a JSON-Schema `enum`, or Cirrus's `anyOf` of `const`s — else undefined. */
+/** The enumerated values a node constrains to — a JSON-Schema `enum`, or Lunora's `anyOf` of `const`s — else undefined. */
 const enumValues = (schema: SchemaNode): undefined | unknown[] => {
     if (schema.enum !== undefined && schema.enum.length > 0) {
         return schema.enum;
@@ -211,7 +211,7 @@ const FieldRow = ({ name, required, schema }: FieldRowProps): ReactElement => {
 
     const range = rangeText(schema);
     const values = valueInText(schema);
-    const relation = schema["x-cirrus-table"];
+    const relation = schema["x-lunora-table"];
     const hasBadges = schema.format !== undefined || range !== undefined || values !== undefined || relation !== undefined;
     const nested = childObject(schema);
 

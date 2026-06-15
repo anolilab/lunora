@@ -19,9 +19,9 @@ const silentLogger = (): Logger => {
 
 let workDir: string;
 
-describe("cirrus data-transfer", () => {
+describe("lunora data-transfer", () => {
     beforeEach(() => {
-        workDir = mkdtempSync(join(tmpdir(), "cirrus-cli-data-transfer-"));
+        workDir = mkdtempSync(join(tmpdir(), "lunora-cli-data-transfer-"));
     });
 
     afterEach(() => {
@@ -44,9 +44,9 @@ describe("cirrus data-transfer", () => {
         it("fails when no admin token is provided", async () => {
             expect.hasAssertions();
 
-            const previous = process.env["CIRRUS_ADMIN_TOKEN"];
+            const previous = process.env["LUNORA_ADMIN_TOKEN"];
 
-            delete process.env["CIRRUS_ADMIN_TOKEN"];
+            delete process.env["LUNORA_ADMIN_TOKEN"];
 
             try {
                 const result = await runExportCommand({ logger: silentLogger() });
@@ -54,7 +54,7 @@ describe("cirrus data-transfer", () => {
                 expect(result.code).toBe(1);
             } finally {
                 if (previous !== undefined) {
-                    process.env["CIRRUS_ADMIN_TOKEN"] = previous;
+                    process.env["LUNORA_ADMIN_TOKEN"] = previous;
                 }
             }
         });
@@ -89,7 +89,7 @@ describe("cirrus data-transfer", () => {
 
             expect(result.code).toBe(0);
             expect(result.rows).toBe(2);
-            expect(calls[0]!.url).toBe("http://localhost:8787/_cirrus/admin/export");
+            expect(calls[0]!.url).toBe("http://localhost:8787/_lunora/admin/export");
             expect(calls[0]!.headers?.["authorization"]).toBe("Bearer test-token");
             expect(readFileSync(outPath, "utf8")).toBe(ndjson);
         });
@@ -193,7 +193,7 @@ describe("cirrus data-transfer", () => {
             expect(result.code).toBe(0);
             expect(result.inserted).toBe(3);
             expect(calls).toHaveLength(2);
-            expect(calls[0]!.url).toBe("http://localhost:8787/_cirrus/admin/import");
+            expect(calls[0]!.url).toBe("http://localhost:8787/_lunora/admin/import");
         });
 
         it("wraps bare docs with `--table` into `{table,doc}` envelopes", async () => {

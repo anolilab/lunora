@@ -4,9 +4,9 @@ import type { ReactNode } from "react";
 import { useCallback, useState } from "react";
 
 /**
- * Client-safe mirror of `@cirrus/payment`'s `Subscription`. Re-declared here
+ * Client-safe mirror of `@lunora/payment`'s `Subscription`. Re-declared here
  * (rather than imported) so this React entry never pulls in the server-only
- * `@cirrus/payment` module graph — the kit stays React + DOM only. Keep this in
+ * `@lunora/payment` module graph — the kit stays React + DOM only. Keep this in
  * sync with `packages/payment/src/types.ts`.
  */
 interface Subscription {
@@ -27,7 +27,7 @@ interface RedirectTarget {
     readonly url: string;
 }
 
-/** A thunk the app supplies that calls its own Cirrus action and resolves a redirect URL. */
+/** A thunk the app supplies that calls its own Lunora action and resolves a redirect URL. */
 type RedirectTrigger = () => Promise<RedirectTarget>;
 
 interface UseCheckoutResult {
@@ -42,7 +42,7 @@ interface UseCheckoutResult {
 /**
  * Decoupled redirect-on-resolve primitive shared by `CheckoutButton` and
  * `CustomerPortalButton`. The app passes a `trigger` thunk that calls its own
- * Cirrus action (the one wrapping `CirrusPayment.createCheckout` /
+ * Lunora action (the one wrapping `LunoraPayment.createCheckout` /
  * `createPortalSession`) and resolves `{ url }`; this hook awaits it, flips
  * `pending`, surfaces any `error`, and on success navigates via
  * `location.assign(url)`.
@@ -173,5 +173,5 @@ const CustomerPortalButton = ({ onPortal, ...rest }: CustomerPortalButtonProps):
 };
 
 export type { CheckoutButtonProps, CustomerPortalButtonProps, RedirectTarget, RedirectTrigger, Subscription, UseCheckoutResult };
-// eslint-disable-next-line react-refresh/only-export-components -- useCheckout is the shared hook these buttons build on and is part of the kit's public API; colocating it with the buttons keeps the payment surface in one module (same pattern as useCirrus alongside CirrusProvider).
+// eslint-disable-next-line react-refresh/only-export-components -- useCheckout is the shared hook these buttons build on and is part of the kit's public API; colocating it with the buttons keeps the payment surface in one module (same pattern as useLunora alongside LunoraProvider).
 export { CheckoutButton, CustomerPortalButton, useCheckout };

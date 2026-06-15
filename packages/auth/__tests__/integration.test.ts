@@ -3,8 +3,8 @@ import { DatabaseSync } from "node:sqlite";
 import { getAuthTables } from "better-auth/db";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { cirrusAuthAdapter } from "../src/adapter";
-import type { CirrusAuth } from "../src/create-auth";
+import { lunoraAuthAdapter } from "../src/adapter";
+import type { LunoraAuth } from "../src/create-auth";
 import { createAuth } from "../src/create-auth";
 import type { SqlExecutor } from "../src/sql-store";
 import { createSqlAuthStore } from "../src/sql-store";
@@ -15,8 +15,8 @@ import { createSqlAuthStore } from "../src/sql-store";
  * memory fake — neither catches the cross-session, time-sensitive behaviour
  * that actually protects users. These tests wire a **real** better-auth
  * instance onto a **real** in-memory SQLite database (`node:sqlite`'s
- * `DatabaseSync`, the same engine the sql-store suite uses) through Cirrus's
- * `cirrusAuthAdapter` + `createSqlAuthStore`, then drive whole flows:
+ * `DatabaseSync`, the same engine the sql-store suite uses) through Lunora's
+ * `lunoraAuthAdapter` + `createSqlAuthStore`, then drive whole flows:
  *
  * (a) two concurrent logins for the same user produce two independent sessions,
  * (b) a session revoked in one place is rejected on its next use elsewhere,
@@ -27,7 +27,7 @@ import { createSqlAuthStore } from "../src/sql-store";
  * no-op fake can't model.
  */
 
-const SECRET = "cirrus-integration-secret-cirrus-integration-xx";
+const SECRET = "lunora-integration-secret-lunora-integration-xx";
 const EMAIL = "ada@example.com";
 // test-only credential for an in-memory better-auth instance — never a real secret
 const PASSWORD = "correct-horse-battery-staple"; // secret-scanner:allow
@@ -91,7 +91,7 @@ interface SignedInSession {
  * would set on a real response; we strip it down to the `name=value` pair a
  * subsequent request would echo in its `Cookie` header.
  */
-const signIn = async (auth: CirrusAuth): Promise<SignedInSession> => {
+const signIn = async (auth: LunoraAuth): Promise<SignedInSession> => {
     const { headers, response } = (await auth.api.signInEmail({
         body: { email: EMAIL, password: PASSWORD },
         returnHeaders: true,
@@ -110,10 +110,10 @@ describe("auth integration — real better-auth over in-memory SQLite", () => {
         secret: SECRET,
     } as const;
 
-    const buildAuth = (sessionPolicy?: NonNullable<Parameters<typeof createAuth>[0]>["session"]): CirrusAuth =>
+    const buildAuth = (sessionPolicy?: NonNullable<Parameters<typeof createAuth>[0]>["session"]): LunoraAuth =>
         createAuth({
             ...baseOptions,
-            database: cirrusAuthAdapter(createSqlAuthStore(executorFor(database))),
+            database: lunoraAuthAdapter(createSqlAuthStore(executorFor(database))),
             // Disable the signed-cookie cache so each getSession round-trips to
             // the SQLite row — that's what makes revocation observable.
             session: { cookieCache: { enabled: false }, ...sessionPolicy },

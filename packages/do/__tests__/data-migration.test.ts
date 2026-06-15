@@ -9,7 +9,7 @@ import createSqliteExec from "./_helpers/node-sqlite";
 /**
  * Exercises the online data-migration runner against a real SQLite engine (per
  * AGENTS.md — never the SQL-string fake), so keyset resumption, idempotent
- * completion, and the `__cirrus_migrations` state round-trip behave the way
+ * completion, and the `__lunora_migrations` state round-trip behave the way
  * they would inside a Durable Object. A fixed clock makes every row share a
  * `_creationTime`, forcing iteration to lean on the id tiebreak — the same
  * stress the runner faces when it rewrites a row mid-scan.

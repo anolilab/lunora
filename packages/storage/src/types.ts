@@ -137,7 +137,7 @@ export interface PresignedUrlOptions {
     method?: "GET" | "PUT";
 }
 
-export interface CirrusStorageOptions {
+export interface LunoraStorageOptions {
     bucket: R2BucketLike;
     /** Public base URL used by `getSignedUrl()`. Required for signed URLs. */
     publicBaseUrl?: string;
@@ -243,7 +243,7 @@ export interface Storage {
      * Mint a native S3 **presigned URL** (SigV4) that hits R2 directly, bypassing
      * the Worker. Use for large downloads/uploads where you don't need per-request
      * app gating and want the bytes off the Worker's CPU/bandwidth budget. Requires
-     * {@link CirrusStorageOptions.s3} credentials; throws if they're absent. For
+     * {@link LunoraStorageOptions.s3} credentials; throws if they're absent. For
      * app-gated access (auth/policy/rate-limit) prefer {@link Storage.getSignedUrl}.
      */
     getPresignedUrl: (key: string, options?: PresignedUrlOptions) => Promise<string>;

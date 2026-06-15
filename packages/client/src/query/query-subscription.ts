@@ -1,4 +1,4 @@
-import type { ArgsOf, CirrusClient, FunctionReference, ReturnOf, SubscriptionError, SubscriptionErrorCallback, Unsubscribe } from "../index";
+import type { ArgsOf, LunoraClient, FunctionReference, ReturnOf, SubscriptionError, SubscriptionErrorCallback, Unsubscribe } from "../index";
 
 /**
  * The sentinel a framework adapter resolves its reactive args to when it wants
@@ -44,7 +44,7 @@ export const toSubscriptionError = (error: unknown): SubscriptionError => {
 
 /**
  * The subscribe → snapshot → error/reset → cleanup state machine shared by
- * every Cirrus framework adapter's live-query hook.
+ * every Lunora framework adapter's live-query hook.
  *
  * Given a `client`, a function reference, the already-resolved `args` (a
  * framework reads its own reactive source first, then hands the plain value in),
@@ -69,7 +69,7 @@ export const toSubscriptionError = (error: unknown): SubscriptionError => {
  * in-flight push reaches the sinks.
  */
 export const createQuerySubscription = <F extends FunctionReference, T = ReturnOf<F>>(
-    client: CirrusClient,
+    client: LunoraClient,
     function_: F,
     args: ResolvedArgs<F>,
     sinks: QuerySubscriptionSinks<T>,

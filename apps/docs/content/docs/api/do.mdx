@@ -1,9 +1,9 @@
 ---
-title: "@cirrus/do"
+title: "@lunora/do"
 description: The Durable Object base classes — ShardDO and SessionDO.
 ---
 
-`@cirrus/do` ships the two Durable Object base classes the runtime expects.
+`@lunora/do` ships the two Durable Object base classes the runtime expects.
 You only touch them in `src/server/*.ts` when you need to add a custom RPC
 method or wire bespoke storage logic. The defaults are enough for most apps.
 
@@ -14,7 +14,7 @@ DO instance), broadcasts subscription deltas to connected WebSockets, and
 implements the RPC fan-in.
 
 ```ts
-import { ShardDO } from "@cirrus/do";
+import { ShardDO } from "@lunora/do";
 
 export class MyShardDO extends ShardDO {
     // Optional: extend with custom RPC methods.
@@ -31,12 +31,12 @@ hits its single-instance ceiling.
 
 ## `SessionDO`
 
-Stateful session record for `@cirrus/auth`. Holds short-lived state
+Stateful session record for `@lunora/auth`. Holds short-lived state
 (refresh-token rotation, MFA challenges) and TTLs itself out after
 `SESSION_DO_TTL_DEFAULT` ms of inactivity.
 
 ```ts
-import { SessionDO } from "@cirrus/do";
+import { SessionDO } from "@lunora/do";
 
 export class MySessionDO extends SessionDO {}
 ```
@@ -77,5 +77,5 @@ type their broadcast payloads.
 
 ## See also
 
-- [@cirrus/runtime](/docs/api/runtime)
+- [@lunora/runtime](/docs/api/runtime)
 - [Concepts: sharding](/docs/concepts/sharding)

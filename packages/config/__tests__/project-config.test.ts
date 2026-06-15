@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { CIRRUS_CONFIG_FILE, interpretRemote, readProjectRemotePreference } from "../src/project-config";
+import { LUNORA_CONFIG_FILE, interpretRemote, readProjectRemotePreference } from "../src/project-config";
 
 describe("interpretRemote", () => {
     it("passes a boolean through unchanged", () => {
@@ -35,14 +35,14 @@ describe("readProjectRemotePreference", () => {
     let root: string;
 
     beforeEach(() => {
-        root = mkdtempSync(join(tmpdir(), "cirrus-project-config-"));
+        root = mkdtempSync(join(tmpdir(), "lunora-project-config-"));
     });
 
     afterEach(() => {
         rmSync(root, { force: true, recursive: true });
     });
 
-    it("returns undefined when cirrus.json is absent", () => {
+    it("returns undefined when lunora.json is absent", () => {
         expect.assertions(1);
 
         expect(readProjectRemotePreference(root)).toBeUndefined();
@@ -51,7 +51,7 @@ describe("readProjectRemotePreference", () => {
     it("reads `remote: true`", () => {
         expect.assertions(1);
 
-        writeFileSync(join(root, CIRRUS_CONFIG_FILE), `{ "remote": true }`, "utf8");
+        writeFileSync(join(root, LUNORA_CONFIG_FILE), `{ "remote": true }`, "utf8");
 
         expect(readProjectRemotePreference(root)).toBe(true);
     });
@@ -59,7 +59,7 @@ describe("readProjectRemotePreference", () => {
     it("reads `remote: false`", () => {
         expect.assertions(1);
 
-        writeFileSync(join(root, CIRRUS_CONFIG_FILE), `{ "remote": false }`, "utf8");
+        writeFileSync(join(root, LUNORA_CONFIG_FILE), `{ "remote": false }`, "utf8");
 
         expect(readProjectRemotePreference(root)).toBe(false);
     });
@@ -67,7 +67,7 @@ describe("readProjectRemotePreference", () => {
     it("tolerates JSONC comments + trailing commas", () => {
         expect.assertions(1);
 
-        writeFileSync(join(root, CIRRUS_CONFIG_FILE), `{\n  // project default\n  "remote": true,\n}`, "utf8");
+        writeFileSync(join(root, LUNORA_CONFIG_FILE), `{\n  // project default\n  "remote": true,\n}`, "utf8");
 
         expect(readProjectRemotePreference(root)).toBe(true);
     });
@@ -75,7 +75,7 @@ describe("readProjectRemotePreference", () => {
     it("returns undefined for malformed JSONC rather than throwing", () => {
         expect.assertions(1);
 
-        writeFileSync(join(root, CIRRUS_CONFIG_FILE), `{ not valid `, "utf8");
+        writeFileSync(join(root, LUNORA_CONFIG_FILE), `{ not valid `, "utf8");
 
         expect(readProjectRemotePreference(root)).toBeUndefined();
     });
@@ -83,7 +83,7 @@ describe("readProjectRemotePreference", () => {
     it("returns undefined when the file has no remote key", () => {
         expect.assertions(1);
 
-        writeFileSync(join(root, CIRRUS_CONFIG_FILE), `{ "name": "app" }`, "utf8");
+        writeFileSync(join(root, LUNORA_CONFIG_FILE), `{ "name": "app" }`, "utf8");
 
         expect(readProjectRemotePreference(root)).toBeUndefined();
     });

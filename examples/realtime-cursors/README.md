@@ -1,6 +1,6 @@
-# @cirrus-example/realtime-cursors
+# @lunora-example/realtime-cursors
 
-Live multi-user cursor sharing built on Cirrus subscriptions and the
+Live multi-user cursor sharing built on Lunora subscriptions and the
 `.shardBy()` modifier. Open the URL in two browser tabs (or two devices)
 pointed at the same room and watch each other's cursors move in real time.
 
@@ -16,7 +16,7 @@ pointed at the same room and watch each other's cursors move in real time.
 
 ```bash
 pnpm install
-pnpm --filter @cirrus-example/realtime-cursors dev
+pnpm --filter @lunora-example/realtime-cursors dev
 ```
 
 The dev server listens on <http://localhost:5174>. Append `#<room>` to the
@@ -24,7 +24,7 @@ URL to enter a different room (defaults to `lobby`).
 
 ## Key snippets
 
-### Sharding by room (`cirrus/schema.ts`)
+### Sharding by room (`lunora/schema.ts`)
 
 ```ts
 cursors: defineTable({
@@ -45,7 +45,7 @@ const cursors = useQuery(api.cursors.listCursors, { roomId }, { shardKey: roomId
 ```
 
 `shardKey` tells the runtime which DO to route the subscription to. Pass
-the same value as the field you sharded on and Cirrus opens exactly one
+the same value as the field you sharded on and Lunora opens exactly one
 DO connection per room.
 
 ### Throttling pointer moves to ~30fps

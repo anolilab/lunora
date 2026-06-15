@@ -1,4 +1,4 @@
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraProvider } from "@lunora/react";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
@@ -62,9 +62,9 @@ const createBrowserClient = (): MockClientHooks =>
     });
 
 const renderBrowser = (mock: MockClientHooks, props: DataBrowserProps = {}): ReactElement => (
-    <CirrusProvider client={mock.asClient}>
+    <LunoraProvider client={mock.asClient}>
         <DataBrowser editable={props.editable} initialShardKey={props.initialShardKey} pageSize={props.pageSize} />
-    </CirrusProvider>
+    </LunoraProvider>
 );
 
 describe("dataBrowser", () => {
@@ -176,7 +176,7 @@ describe("dataBrowser", () => {
         fireEvent.change(screen.getByTestId("db-page-size"), { target: { value: "25" } });
 
         await waitFor(() => {
-            const lastPage = mock.query.mock.calls.findLast((call) => (call[0] as { __cirrusRef: string }).__cirrusRef === ADMIN_FUNCTIONS.readTablePage) as [
+            const lastPage = mock.query.mock.calls.findLast((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.readTablePage) as [
                 unknown,
                 { limit?: number },
             ];
@@ -186,7 +186,7 @@ describe("dataBrowser", () => {
             }
         });
 
-        const lastPage = mock.query.mock.calls.findLast((call) => (call[0] as { __cirrusRef: string }).__cirrusRef === ADMIN_FUNCTIONS.readTablePage) as [
+        const lastPage = mock.query.mock.calls.findLast((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.readTablePage) as [
             unknown,
             { limit?: number },
         ];
@@ -210,7 +210,7 @@ describe("dataBrowser", () => {
         await waitFor(() => {
             const calls = mock.query.mock.calls.filter(
                 (call) =>
-                    (call[0] as { __cirrusRef: string }).__cirrusRef === ADMIN_FUNCTIONS.listTables &&
+                    (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.listTables &&
                     (call[2] as { shardKey?: string } | undefined)?.shardKey === "room-9",
             );
 
@@ -219,7 +219,7 @@ describe("dataBrowser", () => {
             }
         });
 
-        const listCalls = mock.query.mock.calls.filter((call) => (call[0] as { __cirrusRef: string }).__cirrusRef === ADMIN_FUNCTIONS.listTables);
+        const listCalls = mock.query.mock.calls.filter((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.listTables);
         const lastListCall = listCalls.at(-1) as [unknown, unknown, { shardKey?: string }];
 
         expect(lastListCall[2]).toEqual({ shardKey: "room-9" });
@@ -429,7 +429,7 @@ describe("dataBrowser", () => {
 
         expect(rowTexts()).toEqual(["world"]);
 
-        const searchCall = mock.query.mock.calls.findLast((call) => (call[0] as { __cirrusRef: string }).__cirrusRef === ADMIN_FUNCTIONS.readTablePage) as [
+        const searchCall = mock.query.mock.calls.findLast((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.readTablePage) as [
             unknown,
             { offset: number; search: string },
             unknown,
@@ -477,7 +477,7 @@ describe("dataBrowser", () => {
         await screen.findByTestId("db-rows");
 
         const pageCalls = (): number =>
-            mock.query.mock.calls.filter((call) => (call[0] as { __cirrusRef: string }).__cirrusRef === ADMIN_FUNCTIONS.readTablePage).length;
+            mock.query.mock.calls.filter((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.readTablePage).length;
 
         // Sorting is server-side — clicking a header re-fetches the whole table in
         // the new order (so paging through a sorted view stays correct).
@@ -494,7 +494,7 @@ describe("dataBrowser", () => {
         expect(pageCalls()).toBeGreaterThan(beforeSort);
 
         // The re-fetch carries the orderBy for the clicked column, ascending first.
-        const sortCall = mock.query.mock.calls.findLast((call) => (call[0] as { __cirrusRef: string }).__cirrusRef === ADMIN_FUNCTIONS.readTablePage) as [
+        const sortCall = mock.query.mock.calls.findLast((call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.readTablePage) as [
             unknown,
             { orderBy?: { column: string; direction: string } },
         ];
@@ -570,9 +570,9 @@ describe("dataBrowser — editable", () => {
 
     const openMessages = async (mock: MockClientHooks): Promise<void> => {
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <DataBrowser editable pageSize={2} />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         fireEvent.click(await screen.findByTestId("db-table-messages"));
@@ -586,9 +586,9 @@ describe("dataBrowser — editable", () => {
         const mock = createBrowserClient();
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <DataBrowser pageSize={2} />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         fireEvent.click(await screen.findByTestId("db-table-messages"));
@@ -610,12 +610,12 @@ describe("dataBrowser — editable", () => {
         fireEvent.click(screen.getByTestId("db-delete-m1-confirm"));
 
         await waitFor(() => {
-            if (!mock.query.mock.calls.some((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow)) {
+            if (!mock.query.mock.calls.some((c) => c[0].__lunoraRef === ADMIN_FUNCTIONS.writeRow)) {
                 throw new Error("writeRow not called yet");
             }
         });
 
-        const call = mock.query.mock.calls.find((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow) as [unknown, Record<string, unknown>, unknown];
+        const call = mock.query.mock.calls.find((c) => c[0].__lunoraRef === ADMIN_FUNCTIONS.writeRow) as [unknown, Record<string, unknown>, unknown];
 
         expect(call[1]).toMatchObject({ id: "m1", op: "delete", table: "messages" });
     });
@@ -634,12 +634,12 @@ describe("dataBrowser — editable", () => {
         fireEvent.click(screen.getByTestId("db-editor-save"));
 
         await waitFor(() => {
-            if (!mock.query.mock.calls.some((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow)) {
+            if (!mock.query.mock.calls.some((c) => c[0].__lunoraRef === ADMIN_FUNCTIONS.writeRow)) {
                 throw new Error("writeRow not called yet");
             }
         });
 
-        const call = mock.query.mock.calls.find((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow) as [unknown, Record<string, unknown>, unknown];
+        const call = mock.query.mock.calls.find((c) => c[0].__lunoraRef === ADMIN_FUNCTIONS.writeRow) as [unknown, Record<string, unknown>, unknown];
 
         expect(call[1]).toMatchObject({ doc: { text: "fresh" }, op: "insert", table: "messages" });
     });
@@ -662,12 +662,12 @@ describe("dataBrowser — editable", () => {
         fireEvent.click(screen.getByTestId("db-editor-save"));
 
         await waitFor(() => {
-            if (!mock.query.mock.calls.some((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow)) {
+            if (!mock.query.mock.calls.some((c) => c[0].__lunoraRef === ADMIN_FUNCTIONS.writeRow)) {
                 throw new Error("writeRow not called yet");
             }
         });
 
-        const call = mock.query.mock.calls.find((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow) as [unknown, Record<string, unknown>, unknown];
+        const call = mock.query.mock.calls.find((c) => c[0].__lunoraRef === ADMIN_FUNCTIONS.writeRow) as [unknown, Record<string, unknown>, unknown];
 
         expect(call[1]).toMatchObject({ doc: { text: "from-form" }, op: "insert", table: "messages" });
     });
@@ -697,12 +697,12 @@ describe("dataBrowser — editable", () => {
         fireEvent.click(screen.getByTestId("db-staged-commit"));
 
         await waitFor(() => {
-            if (!mock.query.mock.calls.some((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow)) {
+            if (!mock.query.mock.calls.some((c) => c[0].__lunoraRef === ADMIN_FUNCTIONS.writeRow)) {
                 throw new Error("writeRow not called yet");
             }
         });
 
-        const call = mock.query.mock.calls.find((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow) as [unknown, Record<string, unknown>, unknown];
+        const call = mock.query.mock.calls.find((c) => c[0].__lunoraRef === ADMIN_FUNCTIONS.writeRow) as [unknown, Record<string, unknown>, unknown];
 
         expect(call[1]).toMatchObject({ doc: { text: "edited" }, id: "m1", op: "patch", table: "messages" });
     });
@@ -722,7 +722,7 @@ describe("dataBrowser — editable", () => {
         const writeError = await screen.findByTestId("db-write-error");
 
         expect(writeError.textContent).toContain("Invalid JSON");
-        expect(mock.query.mock.calls.some((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow)).toBe(false);
+        expect(mock.query.mock.calls.some((c) => c[0].__lunoraRef === ADMIN_FUNCTIONS.writeRow)).toBe(false);
     });
 
     it("edits an existing row (patch) prefilled from its doc", async () => {
@@ -744,12 +744,12 @@ describe("dataBrowser — editable", () => {
         fireEvent.click(screen.getByTestId("db-editor-save"));
 
         await waitFor(() => {
-            if (!mock.query.mock.calls.some((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow)) {
+            if (!mock.query.mock.calls.some((c) => c[0].__lunoraRef === ADMIN_FUNCTIONS.writeRow)) {
                 throw new Error("writeRow not called yet");
             }
         });
 
-        const call = mock.query.mock.calls.find((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow) as [unknown, Record<string, unknown>, unknown];
+        const call = mock.query.mock.calls.find((c) => c[0].__lunoraRef === ADMIN_FUNCTIONS.writeRow) as [unknown, Record<string, unknown>, unknown];
 
         expect(call[1]).toMatchObject({ doc: { text: "edited" }, id: "m1", op: "patch", table: "messages" });
     });
@@ -760,9 +760,9 @@ describe("dataBrowser — editable", () => {
         const mock = createEditableClient();
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <DataBrowser editable pageSize={10} />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         fireEvent.click(await screen.findByTestId("db-table-messages"));
@@ -793,12 +793,12 @@ describe("dataBrowser — editable", () => {
         fireEvent.click(screen.getByTestId("db-editor-save"));
 
         await waitFor(() => {
-            if (!mock.query.mock.calls.some((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow)) {
+            if (!mock.query.mock.calls.some((c) => c[0].__lunoraRef === ADMIN_FUNCTIONS.writeRow)) {
                 throw new Error("writeRow not called yet");
             }
         });
 
-        const call = mock.query.mock.calls.find((c) => c[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow) as [unknown, Record<string, unknown>, unknown];
+        const call = mock.query.mock.calls.find((c) => c[0].__lunoraRef === ADMIN_FUNCTIONS.writeRow) as [unknown, Record<string, unknown>, unknown];
 
         expect(call[1]).toMatchObject({ doc: { text: "patched" }, id: "m2", op: "patch", table: "messages" });
     });
@@ -815,7 +815,7 @@ describe("dataBrowser — editable", () => {
 
         // No Live toggle — loading a page opens both a readTablePage and a listTables
         // subscription; assert the page one is among them (order isn't contractual).
-        const references = mock.subscribe.mock.calls.map((call) => (call[0] as { __cirrusRef: string }).__cirrusRef);
+        const references = mock.subscribe.mock.calls.map((call) => (call[0] as { __lunoraRef: string }).__lunoraRef);
 
         expect(references).toContain(ADMIN_FUNCTIONS.readTablePage);
 
@@ -841,7 +841,7 @@ describe("dataBrowser — editable", () => {
         // settled before snapshotting — otherwise a late load-time subscribe would be
         // misattributed to the keystroke below and flake the count.
         await waitFor(() => {
-            const refs = mock.subscribe.mock.calls.map((call) => (call[0] as { __cirrusRef: string }).__cirrusRef);
+            const refs = mock.subscribe.mock.calls.map((call) => (call[0] as { __lunoraRef: string }).__lunoraRef);
 
             expect(refs).toEqual(expect.arrayContaining([ADMIN_FUNCTIONS.readTablePage, ADMIN_FUNCTIONS.listTables]));
         });
@@ -1070,7 +1070,7 @@ describe("dataBrowser — structured filters and bulk delete", () => {
             }
         });
 
-        const lastRead = mock.query.mock.calls.findLast((call) => call[0].__cirrusRef === ADMIN_FUNCTIONS.readTablePage);
+        const lastRead = mock.query.mock.calls.findLast((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.readTablePage);
 
         expect((lastRead?.[1] as { filters?: FilterArg[] }).filters).toStrictEqual([{ column: "status", operator: "eq", value: "archived" }]);
         expect(screen.getByTestId("db-row").textContent).toContain("again");
@@ -1109,8 +1109,8 @@ describe("dataBrowser — structured filters and bulk delete", () => {
 
         // One server `deleteRows` round-trip (not the old per-row N+1 loop), and
         // never a single-row writeRow delete.
-        const bulk = mock.query.mock.calls.filter((call) => call[0].__cirrusRef === ADMIN_FUNCTIONS.deleteRows);
-        const perRow = mock.query.mock.calls.filter((call) => call[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow);
+        const bulk = mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.deleteRows);
+        const perRow = mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.writeRow);
 
         expect(bulk).toHaveLength(1);
         expect((bulk[0]?.[1] as { filters?: FilterArg[] }).filters).toStrictEqual([{ column: "status", operator: "eq", value: "active" }]);
@@ -1148,12 +1148,12 @@ describe("dataBrowser — structured filters and bulk delete", () => {
             }
         });
 
-        const bulk = mock.query.mock.calls.filter((call) => call[0].__cirrusRef === ADMIN_FUNCTIONS.deleteRows);
+        const bulk = mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.deleteRows);
 
         // Two bounded round-trips (cap=1, two matches), then a third that reports
         // hasMore=false stops the loop — so at least two, capped by the loop.
         expect(bulk.length).toBeGreaterThanOrEqual(2);
-        expect(mock.query.mock.calls.some((call) => call[0].__cirrusRef === ADMIN_FUNCTIONS.writeRow)).toBe(false);
+        expect(mock.query.mock.calls.some((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.writeRow)).toBe(false);
     });
 
     it("clears the whole table via the clearTable op when no filter is active", async () => {
@@ -1176,7 +1176,7 @@ describe("dataBrowser — structured filters and bulk delete", () => {
             }
         });
 
-        const clears = mock.query.mock.calls.filter((call) => call[0].__cirrusRef === ADMIN_FUNCTIONS.clearTable);
+        const clears = mock.query.mock.calls.filter((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.clearTable);
 
         expect(clears).toHaveLength(1);
         expect((clears[0]?.[1] as { table: string }).table).toBe("messages");
@@ -1221,7 +1221,7 @@ describe("dataBrowser — structured filters and bulk delete", () => {
 
         await waitFor(() => {
             const deletes = mock.query.mock.calls.filter(
-                (call) => (call[0] as { __cirrusRef: string }).__cirrusRef === ADMIN_FUNCTIONS.writeRow && (call[1] as { op: string }).op === "delete",
+                (call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.writeRow && (call[1] as { op: string }).op === "delete",
             );
 
             if (deletes.length !== 3) {
@@ -1230,7 +1230,7 @@ describe("dataBrowser — structured filters and bulk delete", () => {
         });
 
         const deletes = mock.query.mock.calls.filter(
-            (call) => (call[0] as { __cirrusRef: string }).__cirrusRef === ADMIN_FUNCTIONS.writeRow && (call[1] as { op: string }).op === "delete",
+            (call) => (call[0] as { __lunoraRef: string }).__lunoraRef === ADMIN_FUNCTIONS.writeRow && (call[1] as { op: string }).op === "delete",
         );
 
         // One delete per selected row, each addressing a fixture id.
@@ -1394,7 +1394,7 @@ describe("dataBrowser — facets", () => {
             }
         });
 
-        const lastRead = mock.query.mock.calls.findLast((call) => call[0].__cirrusRef === ADMIN_FUNCTIONS.readTablePage);
+        const lastRead = mock.query.mock.calls.findLast((call) => call[0].__lunoraRef === ADMIN_FUNCTIONS.readTablePage);
 
         expect((lastRead?.[1] as { filters?: FilterArg[] }).filters).toStrictEqual([{ column: "status", operator: "eq", value: "archived" }]);
         expect(screen.getByTestId("db-row").textContent).toContain("again");

@@ -3,7 +3,7 @@
  *
  * Like `ConflictError`, `code` / `status` are declared as own properties
  * so the cross-package structural error mapper maps it to a 404 without an
- * `instanceof` check against `@cirrus/do`.
+ * `instanceof` check against `@lunora/do`.
  */
 class NotFoundError extends Error {
     public readonly code: string = "NOT_FOUND";

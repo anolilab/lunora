@@ -1,7 +1,7 @@
-import type { CodegenOptions } from "@cirrus/codegen";
+import type { CodegenOptions } from "@lunora/codegen";
 
 /**
- * The `--api-spec` flag's accepted values, mirroring `@cirrus/codegen`'s
+ * The `--api-spec` flag's accepted values, mirroring `@lunora/codegen`'s
  * `CodegenOptions["apiSpec"]`. `"openapi"` (the default) emits `openapi.json`;
  * `"openrpc"` emits `openrpc.json`; `"both"` emits both; `"none"` emits neither.
  */

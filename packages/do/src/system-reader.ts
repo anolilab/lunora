@@ -1,9 +1,9 @@
 /**
- * `ctx.db.system` — a best-effort, read-only reader over Cirrus's *system*
+ * `ctx.db.system` — a best-effort, read-only reader over Lunora's *system*
  * tables.
  *
  * Convex surfaces a handful of read-only system tables (`_scheduled_functions`,
- * `_storage`, ...) through `ctx.db.system`. Cirrus mirrors that surface, but with
+ * `_storage`, ...) through `ctx.db.system`. Lunora mirrors that surface, but with
  * one load-bearing caveat: **the data these tables expose does not live in the
  * shard's SQLite**. Scheduled functions live in the `SchedulerDO`; storage
  * objects live in R2. So unlike `ctx.db.&lt;table>` — which reads the same
@@ -30,14 +30,14 @@
  * planner against a remote source.
  */
 
-/* eslint-disable unicorn/prevent-abbreviations -- `Doc`/`SystemDoc`/`ScheduledFunctionDoc` are the deliberate public API names for `ctx.db.system` (they mirror Convex's `Doc` naming and the spec the consuming `@cirrus/server` types re-export); `doc`/`docs` is the domain term for a stored document throughout the DO ORM (see ctx-db.ts). Renaming would break the documented surface. */
+/* eslint-disable unicorn/prevent-abbreviations -- `Doc`/`SystemDoc`/`ScheduledFunctionDoc` are the deliberate public API names for `ctx.db.system` (they mirror Convex's `Doc` naming and the spec the consuming `@lunora/server` types re-export); `doc`/`docs` is the domain term for a stored document throughout the DO ORM (see ctx-db.ts). Renaming would break the documented surface. */
 
 /** The system tables `ctx.db.system` can read. */
 type SystemTableName = "_scheduled_functions" | "_storage";
 
 /**
  * A pending scheduled invocation as surfaced by `_scheduled_functions`. A clean
- * mirror of `@cirrus/scheduler`'s `ScheduleRecord` / `@cirrus/server`'s
+ * mirror of `@lunora/scheduler`'s `ScheduleRecord` / `@lunora/server`'s
  * `ScheduledJob`, re-declared here so this package keeps no dependency on either
  * (matching the structural-mirror convention used throughout `ctx-db.ts`).
  */
@@ -60,7 +60,7 @@ interface ScheduledFunctionDoc {
 
 /**
  * Per-object metadata as surfaced by `_storage`. Structural mirror of
- * `@cirrus/server`'s `StorageMetadata` (which itself mirrors `@cirrus/storage`'s
+ * `@lunora/server`'s `StorageMetadata` (which itself mirrors `@lunora/storage`'s
  * `ObjectMetadata`), kept local so this package depends on neither.
  */
 interface StorageMetadata {
@@ -94,7 +94,7 @@ interface SystemQuery<T extends SystemTableName> {
 }
 
 /**
- * Read-only reader over Cirrus's system tables. See the module doc for the
+ * Read-only reader over Lunora's system tables. See the module doc for the
  * eventual-consistency / not-in-snapshot caveats — every method is a best-effort
  * async read against the backing source (the `SchedulerDO` for
  * `_scheduled_functions`, R2 for `_storage`), never the shard's SQLite snapshot.
@@ -121,8 +121,8 @@ interface SystemDatabaseReader {
  *
  * Note this is wider than `ctx-db.ts`'s `SchedulerLike` (which only carries
  * `runAfter`/`runAt` for the trigger context): `_scheduled_functions` reads need
- * the `list` / `get` read half. The real `@cirrus/scheduler` `Scheduler` and
- * `@cirrus/server`'s `Scheduler` both satisfy this.
+ * the `list` / `get` read half. The real `@lunora/scheduler` `Scheduler` and
+ * `@lunora/server`'s `Scheduler` both satisfy this.
  */
 interface SystemReaderSchedulerLike {
     get: (id: string) => Promise<Record<string, unknown> | null>;
@@ -132,7 +132,7 @@ interface SystemReaderSchedulerLike {
 /**
  * Structural projection of the read-only storage surface the system reader
  * needs: `list` to enumerate `_storage`, `getMetadata` for a by-key `get`. The
- * real `@cirrus/storage` adapter (and the generated `storageStub`) satisfy this.
+ * real `@lunora/storage` adapter (and the generated `storageStub`) satisfy this.
  */
 interface SystemReaderStorageLike {
     getMetadata: (key: string) => Promise<StorageMetadata | null>;

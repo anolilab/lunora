@@ -52,7 +52,7 @@ const fakeNamespace = (responses: Record<string, unknown> = DEFAULT_RESPONSES): 
     return { calls, namespace };
 };
 
-const fnRef: FunctionReference = { __cirrusRef: "messages.send" };
+const fnRef: FunctionReference = { __lunoraRef: "messages.send" };
 
 describe("createScheduler", () => {
     it("requires a namespace + originUrl", () => {

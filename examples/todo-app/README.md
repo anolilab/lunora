@@ -1,30 +1,30 @@
-# @cirrus-example/todo-app
+# @lunora-example/todo-app
 
-A minimal CRUD demo for Cirrus. List, create, toggle, and delete todos with
+A minimal CRUD demo for Lunora. List, create, toggle, and delete todos with
 optimistic updates and live subscriptions over WebSocket.
 
 ## What it demonstrates
 
 - `defineSchema` with a single root-scoped table and an index
-- `query` + `mutation` handlers in `cirrus/todos.ts`
+- `query` + `mutation` handlers in `lunora/todos.ts`
 - The full client pipeline: `useQuery` for live data, `useMutation` with the
   `optimistic` callback for zero-latency UI
 - A minimal Worker entry: `createWorker({ openApiSpec, shardDO: ... })`, where
-  `openApiSpec` is imported from `cirrus/_generated/openapi` so the studio's
-  API-reference tab stays in sync on every `cirrus/` change
+  `openApiSpec` is imported from `lunora/_generated/openapi` so the studio's
+  API-reference tab stays in sync on every `lunora/` change
 
 ## Run it
 
 ```bash
 pnpm install
-pnpm --filter @cirrus-example/todo-app dev
+pnpm --filter @lunora-example/todo-app dev
 ```
 
 That spins up Vite + Wrangler in Miniflare; open <http://localhost:5173>.
 
 ## Key snippets
 
-### Schema (`cirrus/schema.ts`)
+### Schema (`lunora/schema.ts`)
 
 ```ts
 export default defineSchema({
@@ -36,7 +36,7 @@ export default defineSchema({
 });
 ```
 
-### Mutation (`cirrus/todos.ts`)
+### Mutation (`lunora/todos.ts`)
 
 ```ts
 export const add = mutation({

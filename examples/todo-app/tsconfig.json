@@ -11,6 +11,6 @@
         "noUnusedLocals": false,
         "noUnusedParameters": false
     },
-    "include": ["src/**/*", "cirrus/**/*", "vite.config.ts"],
+    "include": ["src/**/*", "lunora/**/*", "vite.config.ts"],
     "exclude": ["node_modules", "dist"]
 }

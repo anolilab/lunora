@@ -4,7 +4,7 @@
 #
 # For each of the 8 templates under templates/ this script:
 #   1. Copies the template into a fresh scratch subdirectory.
-#   2. Injects pnpm overrides that map every @cirrus/* dep to a local
+#   2. Injects pnpm overrides that map every @lunora/* dep to a local
 #      packed tarball so pnpm install never touches the npm registry.
 #   3. Runs `pnpm install`.
 #   4. Runs `pnpm run build` (skipped with a notice if no build script).
@@ -19,7 +19,7 @@
 #   ./scripts/template-build-smoke.sh       # same
 #   ./scripts/template-build-smoke.sh vite  # single template (fast iteration)
 #
-# Scaffolding note: `cirrus init -t` only supports vite|standalone|tanstack-start
+# Scaffolding note: `lunora init -t` only supports vite|standalone|tanstack-start
 # (next is unfinished). All 8 templates are obtained by direct `cp -R` from the
 # templates/ root — offline-deterministic, identical to what giget would produce.
 # This avoids the isTemplate guard in init/handler.ts that falls back to "vite"
@@ -34,13 +34,13 @@ set -euo pipefail
 
 # Disable Astro's anonymous telemetry ping (telemetry.astro.build) so the build
 # is fully offline-deterministic. Harmless for the other frameworks. (Note: the
-# astro template's actual offline-build fix was running `cirrus codegen` before
-# `astro build` in its build script — the @cirrus/astro integration, unlike the
+# astro template's actual offline-build fix was running `lunora codegen` before
+# `astro build` in its build script — the @lunora/astro integration, unlike the
 # Vite plugin, does not run codegen itself.)
 export ASTRO_TELEMETRY_DISABLED=1
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SCRATCH="$(mktemp -d -t cirrus-tmpl-XXXXXX)"
+SCRATCH="$(mktemp -d -t lunora-tmpl-XXXXXX)"
 trap 'rm -rf "$SCRATCH"' EXIT
 
 PACK_DIR="$SCRATCH/tarballs"
@@ -60,7 +60,7 @@ ONLY_TEMPLATE="${1:-}"
 # remove it from the list when the fix lands).
 # ---------------------------------------------------------------------------
 # (react-router + solid-start templates were removed: their build tools
-# (@react-router/dev, vinxi/@solidjs/start) only support Vite <=7 while Cirrus
+# (@react-router/dev, vinxi/@solidjs/start) only support Vite <=7 while Lunora
 # is standardized on Vite 8 — see the official CF react-router starter which
 # pins vite ^7. Re-add the templates when those frameworks ship Vite 8 support.)
 XFAIL_BUILD=()
@@ -82,12 +82,12 @@ fi
 echo "==> Discovered ${#TEMPLATES[@]} templates: ${TEMPLATES[*]}"
 
 # ---------------------------------------------------------------------------
-# Step 1: Pack all @cirrus/* packages once.
+# Step 1: Pack all @lunora/* packages once.
 # ---------------------------------------------------------------------------
-echo "==> Packing all @cirrus/* workspace packages into $PACK_DIR"
+echo "==> Packing all @lunora/* workspace packages into $PACK_DIR"
 for pkg_dir in "$REPO_ROOT"/packages/*/; do
     pkg_name="$(node -e "try{process.stdout.write(require('$pkg_dir/package.json').name||'')}catch{}" 2>/dev/null)"
-    if [[ "$pkg_name" == @cirrus/* ]]; then
+    if [[ "$pkg_name" == @lunora/* ]]; then
         pushd "$pkg_dir" >/dev/null
         pnpm pack --pack-destination "$PACK_DIR" >/dev/null
         popd >/dev/null
@@ -106,14 +106,14 @@ const lines = fs.readdirSync(dir)
   .filter(f => f.endsWith('.tgz'))
   .map(f => {
     const base = f.replace(/-[0-9]+\.[0-9]+\.[0-9]+\.tgz\$/, '');
-    const scope = base.replace(/^cirrus-/, '@cirrus/');
+    const scope = base.replace(/^lunora-/, '@lunora/');
     return '  \"' + scope + '\": \"file:' + path.join(dir, f) + '\"';
   });
 process.stdout.write(lines.join('\n'));
 ")"
 
 # ---------------------------------------------------------------------------
-# Helper: inject @cirrus/* overrides into a scaffold directory.
+# Helper: inject @lunora/* overrides into a scaffold directory.
 # ---------------------------------------------------------------------------
 inject_overrides() {
     local scaffold_dir="$1"
@@ -175,7 +175,7 @@ for tname in "${TEMPLATES[@]}"; do
     echo "  ==> scaffold: cp -R $src_dir/ $scaffold_dir"
     cp -R "$src_dir/." "$scaffold_dir/"
 
-    # Replace {{name}} placeholder (matches what cirrus init does).
+    # Replace {{name}} placeholder (matches what lunora init does).
     # Includes .vue and .svelte files so framework-specific templates that
     # embed {{name}} in their component markup are correctly substituted.
     find "$scaffold_dir" -type f \( -name "*.json" -o -name "*.jsonc" -o -name "*.ts" -o -name "*.tsx" -o -name "*.js" -o -name "*.mjs" -o -name "*.html" -o -name "*.md" -o -name "*.vue" -o -name "*.svelte" \) \

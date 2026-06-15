@@ -1,4 +1,4 @@
-import type { StorageObject } from "@cirrus/client";
+import type { StorageObject } from "@lunora/client";
 import type { ReactElement } from "react";
 import { useCallback } from "react";
 

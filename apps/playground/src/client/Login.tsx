@@ -8,7 +8,7 @@ const FORM_STYLE: CSSProperties = { display: "grid", gap: 12, margin: "4rem auto
 
 /**
  * Email/password sign-in + sign-up. Posts at the `/api/auth/*` routes
- * mounted by `@cirrus/auth` (better-auth). The HttpOnly session cookie is
+ * mounted by `@lunora/auth` (better-auth). The HttpOnly session cookie is
  * set by the response — there's no token to plumb back into client state.
  *
  * `authClient.useSession()` in {@link App.tsx} reactively flips to the

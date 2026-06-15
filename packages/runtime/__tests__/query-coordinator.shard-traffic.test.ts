@@ -9,7 +9,7 @@ interface ShardCall {
 }
 
 /**
- * A fake shard namespace that serves `__cirrus_admin__:getMetrics` per shard,
+ * A fake shard namespace that serves `__lunora_admin__:getMetrics` per shard,
  * echoing a fixed lifetime `requests` total in the `{ result }` envelope the
  * real `handleAdminRpc` uses. A shard listed in `failing` returns a 500 so the
  * partial-failure path is exercised.
@@ -61,7 +61,7 @@ describe("orchestrateShardTraffic", () => {
             { requests: 20, shardKey: "quiet" },
         ]);
         // It must fan the cheap metrics read, not some heavier op.
-        expect(calls.every((call) => call.functionPath === "__cirrus_admin__:getMetrics")).toBe(true);
+        expect(calls.every((call) => call.functionPath === "__lunora_admin__:getMetrics")).toBe(true);
     });
 
     it("reports a failed shard as requests:0 and keeps the rest (partial)", async () => {

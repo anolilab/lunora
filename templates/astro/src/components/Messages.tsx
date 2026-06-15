@@ -1,9 +1,9 @@
-import { CirrusClient } from "@cirrus/client";
-import type { Preloaded } from "@cirrus/react";
-import { CirrusProvider, hydratePreloaded, useMutation } from "@cirrus/react";
+import { LunoraClient } from "@lunora/client";
+import type { Preloaded } from "@lunora/react";
+import { LunoraProvider, hydratePreloaded, useMutation } from "@lunora/react";
 import { useMemo, useState } from "react";
 
-import { api } from "../../cirrus/_generated/api";
+import { api } from "../../lunora/_generated/api";
 
 type MessagesResult = Preloaded<{ channelId: string; limit: number; messages: { _id: string; text: string }[] }>;
 
@@ -15,9 +15,9 @@ const channelId = "channel:demo";
  * opens the WebSocket subscription so the list re-renders on every server write.
  *
  * This island is hydrated with `client:load` from `index.astro`. The reactivity
- * is React's (this is a `@cirrus/react` island) — Astro itself stays
- * framework-neutral; swap this for a `@cirrus/solid` / `@cirrus/svelte` /
- * `@cirrus/vue` island and the server half (`index.astro`) is unchanged.
+ * is React's (this is a `@lunora/react` island) — Astro itself stays
+ * framework-neutral; swap this for a `@lunora/solid` / `@lunora/svelte` /
+ * `@lunora/vue` island and the server half (`index.astro`) is unchanged.
  */
 const MessageList = ({ preloaded }: { preloaded: MessagesResult }): React.ReactElement => {
     const data = hydratePreloaded(preloaded);
@@ -51,18 +51,18 @@ const MessageList = ({ preloaded }: { preloaded: MessagesResult }): React.ReactE
 };
 
 /**
- * Island entry: build the browser `CirrusClient` (it opens the WebSocket lazily
+ * Island entry: build the browser `LunoraClient` (it opens the WebSocket lazily
  * on the first subscription) and provide it. The client talks to the SAME origin
- * the page was served from, so `/_cirrus/ws` loops back into this app's composed
+ * the page was served from, so `/_lunora/ws` loops back into this app's composed
  * worker and resumes the cookie-based session SSR used — no separate worker.
  */
 const Messages = ({ preloaded }: { preloaded: MessagesResult }): React.ReactElement => {
-    const client = useMemo(() => new CirrusClient({ url: globalThis.location.origin }), []);
+    const client = useMemo(() => new LunoraClient({ url: globalThis.location.origin }), []);
 
     return (
-        <CirrusProvider client={client}>
+        <LunoraProvider client={client}>
             <MessageList preloaded={preloaded} />
-        </CirrusProvider>
+        </LunoraProvider>
     );
 };
 

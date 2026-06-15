@@ -1,4 +1,4 @@
-<h3 align="center">Typed Workers KV for Cirrus: JSON helpers and ctx.kv</h3>
+<h3 align="center">Typed Workers KV for Lunora: JSON helpers and ctx.kv</h3>
 
 <br />
 
@@ -23,22 +23,22 @@
 
 ---
 
-Typed [Cloudflare Workers KV](https://developers.cloudflare.com/kv/) for Cirrus. Wraps a `KVNamespace` binding with a small typed API (`get`, `put`, `delete`, `list`, `getWithMetadata`) that JSON-encodes/decodes by default, with a raw escape hatch for text/binary/stream values, TTL + metadata pass-through, and optional per-tenant key scoping.
+Typed [Cloudflare Workers KV](https://developers.cloudflare.com/kv/) for Lunora. Wraps a `KVNamespace` binding with a small typed API (`get`, `put`, `delete`, `list`, `getWithMetadata`) that JSON-encodes/decodes by default, with a raw escape hatch for text/binary/stream values, TTL + metadata pass-through, and optional per-tenant key scoping.
 
-Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
+Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
 ## Install
 
 ```sh
-pnpm add @cirrus/kv
+pnpm add @lunora/kv
 ```
 
-KV namespace bindings are user-defined, so `@cirrus/kv` is opt-in: add a `kv_namespaces` entry to your `wrangler.jsonc` and pass `env.<BINDING>` to `createKv`. When a Cirrus function imports `@cirrus/kv` (or reads `ctx.kv`), codegen wires a typed `ctx.kv` onto `ActionCtx` (KV is a network call, so it is **not** exposed on query/mutation ctx).
+KV namespace bindings are user-defined, so `@lunora/kv` is opt-in: add a `kv_namespaces` entry to your `wrangler.jsonc` and pass `env.<BINDING>` to `createKv`. When a Lunora function imports `@lunora/kv` (or reads `ctx.kv`), codegen wires a typed `ctx.kv` onto `ActionCtx` (KV is a network call, so it is **not** exposed on query/mutation ctx).
 
 ## Usage
 
 ```ts
-import { createKv } from "@cirrus/kv";
+import { createKv } from "@lunora/kv";
 
 const kv = createKv({ namespace: env.KV });
 
@@ -59,7 +59,7 @@ const { keys, cursor, listComplete } = await kv.list({ prefix: "flags:" });
 Pass a `keyPrefix` so every operation is namespaced to a tenant, or compose keys explicitly with `scopeKey`:
 
 ```ts
-import { createKv, scopeKey } from "@cirrus/kv";
+import { createKv, scopeKey } from "@lunora/kv";
 
 const tenantKv = createKv({ namespace: env.KV, keyPrefix: `tenant/${tenantId}` });
 await tenantKv.put("session", payload); // writes `tenant/<id>/session`
@@ -81,13 +81,13 @@ await kv.put(scopeKey(`tenant/${tenantId}`, "session"), payload);
 
 ## License
 
-The cirrus `@cirrus/kv` package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The lunora `@lunora/kv` package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
 
 [license]: LICENSE.md
 [license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-brightgreen.svg?style=for-the-badge
-[npm-version]: https://www.npmjs.com/package/@cirrus/kv/v/latest
-[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/kv/latest.svg?style=for-the-badge
-[npm-downloads]: https://www.npmjs.com/package/@cirrus/kv
-[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/kv?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@lunora/kv/v/latest
+[npm-version-badge]: https://img.shields.io/npm/v/@lunora/kv/latest.svg?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@lunora/kv
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@lunora/kv?style=for-the-badge
 [prs-welcome]: https://makeapullrequest.com
 [prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge

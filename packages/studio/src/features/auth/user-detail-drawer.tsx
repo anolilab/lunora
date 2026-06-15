@@ -1,5 +1,5 @@
-import type { AuthCapabilities, AuthUser } from "@cirrus/client";
-import { useCirrus } from "@cirrus/react";
+import type { AuthCapabilities, AuthUser } from "@lunora/client";
+import { useLunora } from "@lunora/react";
 import type { ChangeEvent, ReactElement } from "react";
 import { useCallback, useState } from "react";
 
@@ -47,7 +47,7 @@ const formatField = (key: string, value: unknown): string => {
  * panels refetch on success and the parent list is notified via `onChanged`.
  */
 export const UserDetailDrawer = ({ capabilities, onChanged, onClose, user }: UserDetailDrawerProps): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const t = useT();
 
     const banned = user.banned === true;

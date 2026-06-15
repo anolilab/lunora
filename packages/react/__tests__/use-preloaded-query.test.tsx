@@ -1,16 +1,16 @@
-import type { Preloaded } from "@cirrus/client";
+import type { Preloaded } from "@lunora/client";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { renderToString } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
-import { CirrusProvider } from "../src/cirrus-provider";
+import { LunoraProvider } from "../src/lunora-provider";
 import usePreloadedQuery, { hydratePreloaded } from "../src/use-preloaded-query";
 import { createMockClient } from "./mock-client";
 
 const preloaded = <T,>(functionPath: string, value: T, args: Record<string, unknown> = {}): Preloaded<T> => {
     return {
-        __cirrusPreloaded: true,
+        __lunoraPreloaded: true,
         args,
         functionPath,
         value,
@@ -33,9 +33,9 @@ describe("usePreloadedQuery", () => {
         });
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <Display token={preloaded("posts:list", { count: 1 })} />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         expect(screen.getByTestId("display").textContent).toBe(JSON.stringify({ count: 1 }));
@@ -50,9 +50,9 @@ describe("usePreloadedQuery", () => {
         });
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <Display token={preloaded("posts:list", { count: 1 })} />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         await waitFor(() => {
@@ -80,9 +80,9 @@ describe("usePreloadedQuery", () => {
         });
 
         const view = renderToString(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <Display token={preloaded("posts:list", { count: 42 })} />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         // React HTML-escapes the quotes in the serialized JSON, so decode them
@@ -110,9 +110,9 @@ describe("hydratePreloaded (PLAN4 §1 alias)", () => {
         });
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <HydrateDisplay token={preloaded("posts:list", { count: 7 })} />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         expect(screen.getByTestId("hydrate").textContent).toBe(JSON.stringify({ count: 7 }));
@@ -127,9 +127,9 @@ describe("hydratePreloaded (PLAN4 §1 alias)", () => {
         });
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <HydrateDisplay token={preloaded("posts:list", { count: 1 })} />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         await waitFor(() => {
@@ -155,9 +155,9 @@ describe("hydratePreloaded (PLAN4 §1 alias)", () => {
         });
 
         const view = renderToString(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <HydrateDisplay token={preloaded("posts:list", { count: 42 })} />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         expect(view.replaceAll("&quot;", '"')).toContain(JSON.stringify({ count: 42 }));

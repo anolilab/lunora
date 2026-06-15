@@ -1,5 +1,5 @@
 /**
- * AST-merge helper for `cirrus-cron` — kept in `_helpers/` so the tests
+ * AST-merge helper for `lunora-cron` — kept in `_helpers/` so the tests
  * under `tests/vis-templates/` can import it without pulling in the vis
  * runtime (`@visulima/vis/generate`).
  */
@@ -10,7 +10,7 @@ export type InsertCronResult = { ok: true; text: string } | { ok: false; reason:
 
 /**
  * Append a `crons.interval(<name>, ...)` registration to an existing
- * `cirrus/crons.ts`. The call is inserted right after the last existing
+ * `lunora/crons.ts`. The call is inserted right after the last existing
  * `crons.<kind>(...)` statement (or after the `const crons = cronJobs()`
  * declaration if there are none yet), so the trailing `export default crons`
  * and any surrounding comments survive the edit.

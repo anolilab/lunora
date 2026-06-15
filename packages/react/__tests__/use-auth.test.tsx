@@ -3,7 +3,7 @@ import type { ReactElement } from "react";
 import { useEffect } from "react";
 import { describe, expect, it } from "vitest";
 
-import { CirrusProvider } from "../src/cirrus-provider";
+import { LunoraProvider } from "../src/lunora-provider";
 import useAuth from "../src/use-auth";
 import { createMockClient } from "./mock-client";
 
@@ -34,9 +34,9 @@ describe("useAuth", () => {
         mock.getAuthToken.mockReturnValue("seeded-token");
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <Display />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         expect(screen.getByTestId("display").textContent).toBe("seeded-token|anon");
@@ -48,9 +48,9 @@ describe("useAuth", () => {
         const mock = createMockClient();
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <Display />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         expect(screen.getByTestId("display").textContent).toBe("null|anon");
@@ -78,9 +78,9 @@ describe("useAuth", () => {
         mock.setCurrentUser({ id: "u_1" });
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <Display />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         // No token ⇒ getCurrentUser is short-circuited, user stays anon.
@@ -96,9 +96,9 @@ describe("useAuth", () => {
         mock.setCurrentUser({ email: "a@b.co", id: "u_42" });
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <Display />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         expect(screen.getByTestId("display").textContent).toBe("null|anon");
@@ -120,9 +120,9 @@ describe("useAuth", () => {
         mock.setCurrentUser({ id: "u_7" });
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <Display />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         // Sign in, then wait for the user to resolve.

@@ -1,4 +1,4 @@
-import { expect, test } from "../fixtures/cirrus.js";
+import { expect, test } from "../fixtures/lunora.js";
 
 /**
  * Scheduler E2E — schedules a job through `ctx.scheduler.runAfter` and waits

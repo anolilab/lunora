@@ -1,5 +1,5 @@
-import type { AdvisorIndexHit, AdvisorShardTraffic, AdvisorTableScan, AnalyticsRuntimeMetrics } from "@cirrus/advisor";
-import { runAdvisor, RUNTIME_LINTS } from "@cirrus/advisor";
+import type { AdvisorIndexHit, AdvisorShardTraffic, AdvisorTableScan, AnalyticsRuntimeMetrics } from "@lunora/advisor";
+import { runAdvisor, RUNTIME_LINTS } from "@lunora/advisor";
 
 import type { FunctionCallStat, MetricsIndexHit, TableIndexInfo } from "../../lib/admin";
 import type { AdvisorRow } from "./advisor-view";
@@ -21,7 +21,7 @@ interface DeclaredIndex {
 interface RuntimeAdvisoryInputs {
     /**
      * Optional Analytics-Engine-derived runtime metrics, fetched out-of-band via
-     * `@cirrus/advisor`'s analytics runtime-metrics loader when an AE read token is
+     * `@lunora/advisor`'s analytics runtime-metrics loader when an AE read token is
      * configured. Each non-empty array **replaces** the corresponding in-DO
      * signal below (AE's cross-shard scan attribution is the authoritative source
      * when available); an empty/absent array falls back to the in-DO counters, so
@@ -53,7 +53,7 @@ interface RuntimeAdvisoryInputs {
 
     /**
      * The cross-shard request distribution from the worker's
-     * `POST /_cirrus/admin/shard-traffic` endpoint (`@cirrus/runtime`'s
+     * `POST /_lunora/admin/shard-traffic` endpoint (`@lunora/runtime`'s
      * `orchestrateShardTraffic` fans `getMetrics` out across the live shards).
      * One `{ shardKey, requests }` per shard — fed straight into the `hot_shard`
      * lint, which fires when one shard takes a disproportionate share. Best-effort
@@ -130,7 +130,7 @@ const declaredIndexesFor = (table: string, indexes: ReadonlyArray<TableIndexInfo
 /* eslint-disable jsdoc/check-indentation -- intentional nested bullet list documenting the inputs */
 
 /**
- * Build the runtime {@link import("@cirrus/advisor").LintContext} from the
+ * Build the runtime {@link import("@lunora/advisor").LintContext} from the
  * studio-gathered admin signal, run the `runtime`-source lints, and return their
  * findings as Advisor table rows in the same shape `insights-panel`'s static
  * `advisoryRow` produces.
@@ -144,7 +144,7 @@ const declaredIndexesFor = (table: string, indexes: ReadonlyArray<TableIndexInfo
  * - **tableScans** — `FunctionCallStat.scannedTables` aggregated per table across
  *   every function; a table over the lint's hot-scan threshold is flagged.
  * - **shardTraffic** — the cross-shard request distribution from the worker's
- *   `POST /_cirrus/admin/shard-traffic` fan-out (`orchestrateShardTraffic`),
+ *   `POST /_lunora/admin/shard-traffic` fan-out (`orchestrateShardTraffic`),
  *   passed straight through so the `hot_shard` lint fires when one shard takes a
  *   disproportionate share. Best-effort: when the panel hasn't fanned it out (or
  *   the worker predates the endpoint) it's absent and `hot_shard` finds nothing.

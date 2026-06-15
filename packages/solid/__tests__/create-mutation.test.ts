@@ -1,11 +1,11 @@
-import type { FunctionReference } from "@cirrus/client";
+import type { FunctionReference } from "@lunora/client";
 import { createRoot } from "solid-js";
 import { describe, expect, it } from "vitest";
 
 import type { MutationClient } from "../src/create-mutation";
 import { createMutationForClient } from "../src/create-mutation";
 
-const sendRef = { __cirrusRef: "messages:send" } as FunctionReference;
+const sendRef = { __lunoraRef: "messages:send" } as FunctionReference;
 
 describe(createMutationForClient, () => {
     it("resolves with the server result and exposes it on data()", async () => {

@@ -3,7 +3,7 @@
  *
  * better-auth's `auth.api.getSession({ headers })` returns `{ user, session }`
  * when a valid session cookie is present, or `null` otherwise. We keep `user`
- * and `session` as open records so `@cirrus/client/ssr` carries no hard dependency on
+ * and `session` as open records so `@lunora/client/ssr` carries no hard dependency on
  * better-auth's concrete `User`/`Session` types — the adapter passing the real
  * `auth` instance keeps full inference, while this package stays decoupled.
  */
@@ -15,7 +15,7 @@ interface ServerSession<User extends Record<string, unknown> = Record<string, un
 /**
  * Structural subset of a better-auth instance: just the one endpoint
  * `getServerSession` needs. Typing it this way (rather than importing
- * `@cirrus/auth`'s `CirrusAuth`) means `@cirrus/client/ssr` does not depend on
+ * `@lunora/auth`'s `LunoraAuth`) means `@lunora/client/ssr` does not depend on
  * better-auth internals — any object exposing `api.getSession` works, including
  * a test stub. The concrete return type is inferred from the passed instance.
  */
@@ -52,7 +52,7 @@ const extractHeaders = (source: HeadersSource): Headers => {
  *
  * The `auth` parameter is structurally typed ({@link AuthLike}), so this
  * package does not depend on better-auth internals; pass a real
- * `@cirrus/auth` instance to keep full type inference on `user`/`session`.
+ * `@lunora/auth` instance to keep full type inference on `user`/`session`.
  * Forward the resolved session's token to `createServerClient` to run the
  * server-side load (and the later WS subscription) as the same identity.
  */

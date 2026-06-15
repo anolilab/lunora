@@ -119,7 +119,7 @@ describe("shardDO.runInTransaction", () => {
             shard.callRunInTransaction(async () => {
                 await shard.callRunInTransaction(() => 1);
             }),
-        ).rejects.toMatchObject({ code: "NESTED_TRANSACTION", name: "CirrusError", status: 500 });
+        ).rejects.toMatchObject({ code: "NESTED_TRANSACTION", name: "LunoraError", status: 500 });
     });
 
     it("swallows secondary ROLLBACK errors so the original throw propagates", async () => {

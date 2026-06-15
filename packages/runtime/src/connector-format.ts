@@ -2,7 +2,7 @@
  * Turn-key incremental-sync source helpers for warehouse connectors
  * (Fivetran custom functions, Airbyte incremental sources).
  *
- * The runtime's admin `/_cirrus/admin/connector/sync` endpoint returns a
+ * The runtime's admin `/_lunora/admin/connector/sync` endpoint returns a
  * {@link ConnectorSyncPage}: a flat list of change records since an opaque
  * cursor, a `nextCursor` to resume from, and a `hasMore` flag. These helpers
  * reshape that page into the response envelopes the two ecosystems expect, so a
@@ -76,7 +76,7 @@ type AirbyteMessage =
           type: "STATE";
       };
 
-/** Default primary-key column for Cirrus documents. */
+/** Default primary-key column for Lunora documents. */
 const DEFAULT_PRIMARY_KEY = "_id";
 
 /**
@@ -136,7 +136,7 @@ const toFivetranResponse = (page: ConnectorSyncPage, primaryKey: Record<string, 
  * these as line-delimited JSON to stdout.
  *
  * Airbyte's protocol has no native delete verb in `RECORD`; a delete is emitted
- * as a `RECORD` with a `_cirrus_deleted: true` marker on the row so a downstream
+ * as a `RECORD` with a `_lunora_deleted: true` marker on the row so a downstream
  * normalization / dbt step can tombstone it. Callers needing true CDC deletes
  * should run Airbyte's CDC-deletion handling on that marker.
  * @param page the page returned by the connector sync endpoint.
@@ -146,7 +146,7 @@ const toAirbyteMessages = (page: ConnectorSyncPage, emittedAt: number = Date.now
     const messages: AirbyteMessage[] = [];
 
     for (const change of page.changes) {
-        const data = change.op === "delete" ? { ...change.doc, _cirrus_deleted: true } : change.doc;
+        const data = change.op === "delete" ? { ...change.doc, _lunora_deleted: true } : change.doc;
 
         messages.push({ record: { data, emitted_at: emittedAt, stream: change.table }, type: "RECORD" });
     }

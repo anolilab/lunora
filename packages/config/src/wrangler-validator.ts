@@ -1,6 +1,6 @@
 /**
  * Shared wrangler.jsonc validator used by both the Vite plugin
- * (`@cirrus/vite`) and the CLI (`@cirrus/cli`).
+ * (`@lunora/vite`) and the CLI (`@lunora/cli`).
  *
  * Two entry points are provided:
  * - `validateWranglerConfig(wrangler, schemaInfo)` — pure: takes a parsed
@@ -78,17 +78,17 @@ interface WranglerConfig {
     containers?: ReadonlyArray<WranglerContainerEntry | null | undefined>;
     d1_databases?: ReadonlyArray<{ binding?: string }>;
     // Workers for Platforms dispatch namespaces — passthrough/shape-check only
-    // (the `outbound` shape is deep WfP territory Cirrus does not police). See
+    // (the `outbound` shape is deep WfP territory Lunora does not police). See
     // `validateDispatchNamespaces`.
     dispatch_namespaces?: ReadonlyArray<{ binding?: string; namespace?: string; outbound?: unknown } | null | undefined>;
     durable_objects?: { bindings?: ReadonlyArray<WranglerDurableObjectBinding> };
     // Hyperdrive (bring-your-own Postgres/MySQL). The `id` is a remote resource
-    // (`wrangler hyperdrive create`) Cirrus can't mint — warn, don't fail. See
+    // (`wrangler hyperdrive create`) Lunora can't mint — warn, don't fail. See
     // `validateHyperdriveBindings`.
     hyperdrive?: ReadonlyArray<{ binding?: string; id?: string; localConnectionString?: string } | null | undefined>;
     // Cloudflare Images binding (`env.IMAGES`). Self-describing { binding }.
     images?: { binding?: string };
-    // Workers KV namespaces. The namespace `id` is a remote resource Cirrus
+    // Workers KV namespaces. The namespace `id` is a remote resource Lunora
     // can't mint — warn, don't fail. See `validateKvNamespaces`.
     kv_namespaces?: ReadonlyArray<{ binding?: string; id?: string } | null | undefined>;
     // Cloudflare Logpush toggle (jobs are created out-of-band via dashboard/API).
@@ -100,7 +100,7 @@ interface WranglerConfig {
     mtls_certificates?: ReadonlyArray<{ binding?: string; certificate_id?: string } | null | undefined>;
     observability?: { enabled?: boolean };
     // Pipelines (R2-backed streaming ingestion). The `pipeline` name is a remote
-    // resource (`wrangler pipelines create`) Cirrus can't mint — warn, don't
+    // resource (`wrangler pipelines create`) Lunora can't mint — warn, don't
     // fail. See `validatePipelineBindings`.
     pipelines?: ReadonlyArray<{ binding?: string; pipeline?: string } | null | undefined>;
     // Smart Placement (`{ mode: "smart" }` — the only documented mode). See
@@ -112,7 +112,7 @@ interface WranglerConfig {
     // `validateSendEmail`.
     send_email?: ReadonlyArray<{ allowed_destination_addresses?: ReadonlyArray<string>; destination_address?: string; name?: string } | null | undefined>;
     // Service bindings (worker-to-worker RPC / fetch). The `service` target is
-    // an external worker Cirrus can't discover — validate shape only, hint-only
+    // an external worker Lunora can't discover — validate shape only, hint-only
     // inference (the binding name is user-supplied). See `validateServices`.
     services?: ReadonlyArray<{ binding?: string; entrypoint?: string; environment?: string; service?: string } | null | undefined>;
     // Parsed from untrusted JSONC, so individual entries may be `null` or
@@ -230,7 +230,7 @@ const validateContainerEntry = (entry: WranglerContainerEntry | null | undefined
 
     if (!boundClasses.has(entry.class_name)) {
         errors.push(
-            `${label} class "${entry.class_name}" has no matching durable_objects binding — run \`cirrus dev\` to auto-reconcile wrangler.jsonc, or add { "name": "...", "class_name": "${entry.class_name}" }`,
+            `${label} class "${entry.class_name}" has no matching durable_objects binding — run \`lunora dev\` to auto-reconcile wrangler.jsonc, or add { "name": "...", "class_name": "${entry.class_name}" }`,
         );
     }
 
@@ -346,7 +346,7 @@ const asBindingEntries = (value: ReadonlyArray<unknown>): ReadonlyArray<Record<s
 
 /**
  * Hint-style binding arrays: each entry needs a non-empty `binding` (error); its
- * secondary field is a remote resource Cirrus can't mint (a KV namespace id, a
+ * secondary field is a remote resource Lunora can't mint (a KV namespace id, a
  * Hyperdrive id, a Pipelines pipeline name, an AE dataset), so a missing one is
  * a warning — the binding can't resolve/connect without it, but only the user
  * can supply it. One descriptor table replaces four near-identical validators.
@@ -451,7 +451,7 @@ const validateSelfDescribingBinding = (wrangler: WranglerConfig, rule: (typeof S
 /**
  * Binding arrays whose entries carry two or more **required** string fields (a
  * missing field is an error, not a hint). Unlike the hint bindings these
- * reference targets Cirrus can't discover (a service worker, a dispatch
+ * reference targets Lunora can't discover (a service worker, a dispatch
  * namespace, an mTLS cert id), so the shape is all we police. One table replaces
  * the Services/DispatchNamespaces/MtlsCertificates validators.
  */
@@ -598,7 +598,7 @@ const validatePlacement = (wrangler: WranglerConfig, errors: string[]): void => 
 /**
  * `assets` is the Workers Static Assets block — serves the client build from the
  * same worker (Cloudflare serves files for free, only invoking the worker on a
- * miss, so the Cirrus SSR/API handler is unaffected). NOT Cloudflare Pages,
+ * miss, so the Lunora SSR/API handler is unaffected). NOT Cloudflare Pages,
  * which is an explicit non-goal — the worker is the deploy unit. A present block
  * must declare a non-empty string `directory`; `binding`/`html_handling`/
  * `not_found_handling` if present must be strings. The directory-existence
@@ -702,7 +702,7 @@ const validateWranglerConfig = (wrangler: WranglerConfig | undefined, schema?: S
 
     if (!shardBinding) {
         errors.push(
-            'durable_objects.bindings must include { "name": "SHARD", "class_name": "ShardDO" } — run `cirrus dev` to auto-reconcile wrangler.jsonc, or add the binding manually',
+            'durable_objects.bindings must include { "name": "SHARD", "class_name": "ShardDO" } — run `lunora dev` to auto-reconcile wrangler.jsonc, or add the binding manually',
         );
     }
 
@@ -731,7 +731,7 @@ const validateWranglerConfig = (wrangler: WranglerConfig | undefined, schema?: S
 
         if (!databaseBinding) {
             errors.push(
-                'schema declares .global() tables; d1_databases must include a binding named "DB" — run `cirrus dev` to auto-reconcile wrangler.jsonc, or add the binding manually',
+                'schema declares .global() tables; d1_databases must include a binding named "DB" — run `lunora dev` to auto-reconcile wrangler.jsonc, or add the binding manually',
             );
         }
     }
@@ -819,7 +819,7 @@ const collectContainerImageErrors = (
  * `{ problems, wranglerPath }` shape plus the structured `report`.
  */
 const validateWranglerProject = (options: WranglerProjectValidationOptions): WranglerProjectValidationResult => {
-    const schemaDirectory = options.schemaDir ?? "cirrus";
+    const schemaDirectory = options.schemaDir ?? "lunora";
     const wranglerPath = findWranglerFile(options.projectRoot);
 
     if (!wranglerPath) {

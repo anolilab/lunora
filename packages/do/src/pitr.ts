@@ -5,8 +5,8 @@
  * is an opaque, lexically-comparable string naming a moment in the object's
  * change log, and the runtime can restore the whole SQLite database (SQL + KV)
  * to any bookmark within the last 30 days. This module is the thin, testable
- * wrapper Cirrus's admin layer drives; the heavier snapshot-to-R2 + CDC-replay
- * path (`registry/backup` + `cirrus backup restore`) is the complementary tier
+ * wrapper Lunora's admin layer drives; the heavier snapshot-to-R2 + CDC-replay
+ * path (`registry/backup` + `lunora backup restore`) is the complementary tier
  * for >30-day / off-platform / portable recovery.
  *
  * See https://developers.cloudflare.com/durable-objects/api/storage-api/ — the
@@ -65,10 +65,10 @@ interface PitrRestoreArgs {
 /** Error thrown when the runtime doesn't expose the native PITR API (local dev / non-SQLite DO). */
 const pitrUnavailable = (): Error =>
     Object.assign(
-        new Error("native PITR is unavailable here (local dev or a non-SQLite Durable Object); use `cirrus backup restore` for off-platform recovery"),
+        new Error("native PITR is unavailable here (local dev or a non-SQLite Durable Object); use `lunora backup restore` for off-platform recovery"),
         {
             code: "PITR_UNAVAILABLE",
-            name: "CirrusError",
+            name: "LunoraError",
             status: 409,
         },
     );
@@ -84,7 +84,7 @@ const toTime = (time: number | string): Date | number => {
     if (Number.isNaN(parsed)) {
         throw Object.assign(new Error(`pitr: invalid time "${time}" — expected epoch-ms or an ISO timestamp`), {
             code: "BAD_REQUEST",
-            name: "CirrusError",
+            name: "LunoraError",
             status: 400,
         });
     }
@@ -128,7 +128,7 @@ const armRestore = async (storage: PitrStorage, args: PitrRestoreArgs): Promise<
         if (args.time === undefined) {
             throw Object.assign(new Error("pitrRestore: provide a `bookmark` or a `time` to restore to"), {
                 code: "BAD_REQUEST",
-                name: "CirrusError",
+                name: "LunoraError",
                 status: 400,
             });
         }

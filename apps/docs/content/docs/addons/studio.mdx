@@ -1,10 +1,10 @@
 ---
-title: "@cirrus/studio"
-description: The Cirrus Studio — a local admin console for your schema, data, functions, logs, and advisors.
+title: "@lunora/studio"
+description: The Lunora Studio — a local admin console for your schema, data, functions, logs, and advisors.
 ---
 
-The Cirrus Studio is a self-contained admin console for inspecting and operating
-a Cirrus backend: browse and edit data, run functions, read logs, inspect the
+The Lunora Studio is a self-contained admin console for inspecting and operating
+a Lunora backend: browse and edit data, run functions, read logs, inspect the
 schema, run advisors, manage auth, and more. It ships as a React component
 library so you can mount the whole console, embed a single panel, or compose your
 own layout.
@@ -18,28 +18,28 @@ Router over the History API), so deep links and back/forward work.
 
 Three ways, smallest setup first:
 
-1. **`cirrus dev` (zero config).** The [`@cirrus/vite`](/docs/api/vite) plugin
-   serves the studio at **`/__cirrus`** during dev and prints the URL on startup.
-   Add `@cirrus/studio` to your project's deps and it just works; opt out with
-   `cirrus({ studio: false })`.
+1. **`lunora dev` (zero config).** The [`@lunora/vite`](/docs/api/vite) plugin
+   serves the studio at **`/__lunora`** during dev and prints the URL on startup.
+   Add `@lunora/studio` to your project's deps and it just works; opt out with
+   `lunora({ studio: false })`.
 2. **Standalone app.** `apps/studio` is a deployable Vite SPA that points at any
-   worker via `VITE_CIRRUS_URL` — for hosting the studio separately from dev.
+   worker via `VITE_LUNORA_URL` — for hosting the studio separately from dev.
 3. **Embed.** Mount the batteries-included console, or compose individual panels
-   under your own `<CirrusProvider>`.
+   under your own `<LunoraProvider>`.
 
 ```ts
 // mount the whole console into <div id="root">
-import { mountStudio } from "@cirrus/studio/mount";
+import { mountStudio } from "@lunora/studio/mount";
 
 mountStudio({ baseUrl: "https://my-app.workers.dev" });
 ```
 
 ```tsx
 // or embed the shell / a single panel in your own React app
-import { StudioApp, Studio, DataBrowser } from "@cirrus/studio";
+import { StudioApp, Studio, DataBrowser } from "@lunora/studio";
 
 <StudioApp baseUrl="https://my-app.workers.dev" />;
-<Studio dataEditable functions={CIRRUS_FUNCTIONS} />;
+<Studio dataEditable functions={LUNORA_FUNCTIONS} />;
 ```
 
 The `<Studio>` shell takes a few host-controlled switches worth knowing:
@@ -130,7 +130,7 @@ The data console — everything that reads or shapes stored state.
 
 ## Auth
 
-Backed by [`@cirrus/auth`](/docs/addons/auth)'s admin API. Capability-driven —
+Backed by [`@lunora/auth`](/docs/addons/auth)'s admin API. Capability-driven —
 each page shows only when its better-auth plugin is enabled.
 
 - **Users** — _Manage auth users — roles, bans, sessions, and identity._
@@ -171,9 +171,9 @@ Operational streams and the optional package-backed pages.
 - **Logs** — _A live stream of recent function logs_ (the shard's log ring
   buffer).
 - **Audit** — _A durable log of admin state-changing operations._
-- **Scheduled** — _Inspect and cancel scheduled jobs_ ([`@cirrus/scheduler`](/docs/addons/scheduler)).
+- **Scheduled** — _Inspect and cancel scheduled jobs_ ([`@lunora/scheduler`](/docs/addons/scheduler)).
 - **Realtime** — _Active WebSocket subscriptions on this shard._
-- **Mail** — _Email your app sent, captured in dev_ ([`@cirrus/mail`](/docs/addons/mail)).
+- **Mail** — _Email your app sent, captured in dev_ ([`@lunora/mail`](/docs/addons/mail)).
 - **Log drains** — _Forward logs to Logpush, Tail Workers, or a webhook
   collector._
 - **Payments** — _Synced customers, subscriptions, and webhook events._
@@ -185,12 +185,12 @@ bottom of the rail.
 
 ## Admin gate
 
-The studio reaches the backend two ways: reserved `__cirrus_admin__:*` RPCs that
+The studio reaches the backend two ways: reserved `__lunora_admin__:*` RPCs that
 `ShardDO` intercepts (data, schema, metrics, logs, migrations, export), and
-admin-gated worker endpoints under `/_cirrus/admin/*` for things that live
+admin-gated worker endpoints under `/_lunora/admin/*` for things that live
 outside the shard (scheduler, storage, functions, global tables, auth).
 
-**Both are disabled unless the server sets `CIRRUS_ADMIN_TOKEN`**, and the client
+**Both are disabled unless the server sets `LUNORA_ADMIN_TOKEN`**, and the client
 must present a matching `Authorization: Bearer` token. The components issue no
 credentials of their own — configure the client's auth token at the host.
 
@@ -198,15 +198,15 @@ credentials of their own — configure the client's auth token at the host.
 // worker entry — every admin surface is gated by adminToken
 createWorker({
     shardDO: env.SHARD,
-    adminToken: env.CIRRUS_ADMIN_TOKEN,
+    adminToken: env.LUNORA_ADMIN_TOKEN,
     schedulerDO: env.SCHEDULER, // enables the scheduled-jobs page
-    functions: CIRRUS_FUNCTIONS, // enables function discovery
+    functions: LUNORA_FUNCTIONS, // enables function discovery
     storageList: createStorage({ bucket: env.FILES }).list, // enables the file browser
 });
 ```
 
 `globalIntrospector` (D1 tables) and `authAdmin` (the user-management +
-organization dashboard, via `@cirrus/auth`'s `createAuthAdmin(auth)`) wire up the
+organization dashboard, via `@lunora/auth`'s `createAuthAdmin(auth)`) wire up the
 remaining pages; see the package README for the full per-page configuration. The
 auth dashboard is capability-driven — it shows only the surfaces whose
 better-auth plugin is enabled. Pages whose data source isn't configured are
@@ -214,36 +214,36 @@ omitted from the `<Studio>` shell.
 
 ## Optional-package nav gating
 
-The studio also hides the pages for optional `@cirrus/*` packages your app
+The studio also hides the pages for optional `@lunora/*` packages your app
 doesn't use — Payments, Mail, Files + Access Rules, Vectors, Scheduler, and
 Workflows — so you never land on a page that errors with "unknown table". This is
 automatic: codegen statically detects which features a deployment wires up and
 emits the result into the generated `ShardDO`, which the studio reads once over
-the `__cirrus_admin__:studioFeatures` RPC.
+the `__lunora_admin__:studioFeatures` RPC.
 
 A feature's page shows when **any** of these is true:
 
-- a `cirrus/` source imports its package (e.g. `@cirrus/mail`) or reads its
+- a `lunora/` source imports its package (e.g. `@lunora/mail`) or reads its
   context helper (`ctx.payments`, `ctx.storage`, `ctx.vectors`, `ctx.scheduler`,
   `ctx.workflows`);
 - a schema signal implies it — a `v.storage()` column or storage access rule
   (Files), a declared cron (Scheduler), a vector index (Vectors), or a declared
   workflow (Workflows);
 - the package is a declared dependency in your `package.json` — so a package
-  wired only in your worker entry (outside `cirrus/`), like `@cirrus/mail`, still
+  wired only in your worker entry (outside `lunora/`), like `@lunora/mail`, still
   shows its page.
 
 The gating **fails open**: every page stays visible until the RPC resolves, and a
 worker predating the RPC (or one that errors) keeps showing everything. A page is
 only ever hidden once the worker positively reports its feature as unused — so the
 worst case is an extra empty page, never a missing working one. No configuration
-is required; re-run codegen (`cirrus dev` does this on save) after adding or
+is required; re-run codegen (`lunora dev` does this on save) after adding or
 removing a package and the nav updates itself.
 
 ## See also
 
-- [@cirrus/vite](/docs/api/vite) — the `studio` plugin option
-- [@cirrus/cli](/docs/api/cli) — `cirrus dev`
+- [@lunora/vite](/docs/api/vite) — the `studio` plugin option
+- [@lunora/cli](/docs/api/cli) — `lunora dev`
 - [Advisors](/docs/concepts/advisors) — the lints behind the Advisors domain
 - [Data masking](/docs/concepts/masking) — the mask preview in the data browser
 - [Workflows](/docs/addons/workflows) — the Workflows inspector

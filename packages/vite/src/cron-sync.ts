@@ -1,6 +1,6 @@
 import { writeFileSync } from "node:fs";
 
-import { findWranglerFile, readWranglerJsonc } from "@cirrus/config";
+import { findWranglerFile, readWranglerJsonc } from "@lunora/config";
 import { applyEdits, modify } from "jsonc-parser";
 
 /** Shallow structural equality for two string arrays (order-sensitive). */
@@ -26,7 +26,7 @@ export interface ReconcileResult {
  * crons stop firing.
  *
  * This intentionally writes the SAME `triggers.crons` shape the
- * `@cirrus/config` validator accepts, so the wrangler validator never fights
+ * `@lunora/config` validator accepts, so the wrangler validator never fights
  * the generated value.
  */
 export const reconcileWranglerCrons = (projectRoot: string, cronTriggers: ReadonlyArray<string>): ReconcileResult => {

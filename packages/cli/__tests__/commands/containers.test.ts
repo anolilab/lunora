@@ -13,7 +13,7 @@ const silentLogger = (): { errors: string[]; logger: Logger } => {
     };
 };
 
-describe("cirrus containers", () => {
+describe("lunora containers", () => {
     it("forwards build with positional args and curated options to wrangler", async () => {
         expect.assertions(2);
 

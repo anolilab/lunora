@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { handleSeedRequest } from "../../src/studio-host/seed-handler";
 
-const SCHEMA = `import { defineSchema, defineTable, v } from "@cirrus/server";
+const SCHEMA = `import { defineSchema, defineTable, v } from "@lunora/server";
 
 export default defineSchema({
     users: defineTable({
@@ -22,13 +22,13 @@ export default defineSchema({
 
 describe("handleSeedRequest", () => {
     let projectRoot: string;
-    let cirrusDirectory: string;
+    let lunoraDirectory: string;
 
     beforeEach(() => {
-        projectRoot = mkdtempSync(join(tmpdir(), "cirrus-seed-handler-"));
-        cirrusDirectory = join(projectRoot, "cirrus");
-        mkdirSync(cirrusDirectory, { recursive: true });
-        writeFileSync(join(cirrusDirectory, "schema.ts"), SCHEMA, "utf8");
+        projectRoot = mkdtempSync(join(tmpdir(), "lunora-seed-handler-"));
+        lunoraDirectory = join(projectRoot, "lunora");
+        mkdirSync(lunoraDirectory, { recursive: true });
+        writeFileSync(join(lunoraDirectory, "schema.ts"), SCHEMA, "utf8");
     });
 
     afterEach(() => {
@@ -91,7 +91,7 @@ describe("handleSeedRequest", () => {
     it("returns 404 when the schema file is missing", () => {
         expect.assertions(1);
 
-        rmSync(join(cirrusDirectory, "schema.ts"));
+        rmSync(join(lunoraDirectory, "schema.ts"));
 
         expect(handleSeedRequest({ body: { table: "users" }, method: "POST", projectRoot }).status).toBe(404);
     });

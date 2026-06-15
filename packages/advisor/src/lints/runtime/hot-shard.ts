@@ -30,7 +30,7 @@ const MIN_TOTAL_REQUESTS = 50;
  *
  * The per-shard request volume comes from the runtime feeder
  * (`context.shardTraffic`): the studio backend fans out over the function's
- * shards and reads each shard's recorded `__cirrus_metrics` call total. The lint
+ * shards and reads each shard's recorded `__lunora_metrics` call total. The lint
  * is pure over that distribution, so it only fires once the window has more than
  * one shard and enough total requests (`MIN_TOTAL_REQUESTS`) for the proportion
  * to be trustworthy.

@@ -38,7 +38,7 @@ const methodTone = (method: string): Tone => {
     }
 };
 
-/** Cirrus function kind → tone (query reads green, mutation writes amber, action external violet). */
+/** Lunora function kind → tone (query reads green, mutation writes amber, action external violet). */
 const kindTone = (kind: string): Tone => {
     switch (kind) {
         case "action": {
@@ -57,7 +57,7 @@ const kindTone = (kind: string): Tone => {
 };
 
 interface MethodBadgeProps {
-    /** The cirrus function kind (`x-cirrus-function-kind`); when present it's the primary chip. */
+    /** The lunora function kind (`x-lunora-function-kind`); when present it's the primary chip. */
     readonly kind?: string;
     /** The HTTP method. Shown when there's no function kind (e.g. a REST `httpRouter()` route). */
     readonly method: string;
@@ -65,9 +65,9 @@ interface MethodBadgeProps {
 }
 
 /**
- * The sidebar / header chip identifying an operation. For a Cirrus RPC function
+ * The sidebar / header chip identifying an operation. For a Lunora RPC function
  * the kind (query/mutation/action) is the meaningful label — every RPC op is a
- * `POST /_cirrus/rpc`, so the HTTP method alone is noise. For a plain REST route
+ * `POST /_lunora/rpc`, so the HTTP method alone is noise. For a plain REST route
  * (no kind) it falls back to the colour-coded HTTP method.
  */
 const MethodBadge = ({ kind, method, testId }: MethodBadgeProps): ReactElement => {

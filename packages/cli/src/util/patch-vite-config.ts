@@ -1,5 +1,5 @@
 /**
- * AST-patching helper that injects the cirrus/vite plugin into an existing
+ * AST-patching helper that injects the lunora/vite plugin into an existing
  * vite.config.ts (or .mts / .js / .mjs). Uses ts-morph to locate the plugins
  * array (or the config object) and MagicString to splice the edit so original
  * formatting and comments are preserved.
@@ -9,7 +9,7 @@
  * - `export default defineConfig({})` (no plugins key yet)
  * - `export default { plugins: [...] }` / `export default {}`
  *
- * Idempotent: returns `changed: false` when `cirrus(` already appears in the
+ * Idempotent: returns `changed: false` when `lunora(` already appears in the
  * source or when no recognisable config shape can be found.
  */
 import MagicString from "magic-string";
@@ -22,15 +22,15 @@ interface PatchViteConfigResult {
     reason?: string;
 }
 
-const CIRRUS_CALL = "cirrus()";
-const CIRRUS_IMPORT = 'import { cirrus } from "@cirrus/vite";';
+const LUNORA_CALL = "lunora()";
+const LUNORA_IMPORT = 'import { lunora } from "@lunora/vite";';
 
-/** Hoisted regex — matches a `cirrus(` call anywhere in the source. */
-const CIRRUS_CALL_RE = /\bcirrus\s*\(/u;
+/** Hoisted regex — matches a `lunora(` call anywhere in the source. */
+const LUNORA_CALL_RE = /\blunora\s*\(/u;
 
-/** Hoisted check for the cirrus/vite import specifier. */
-const CIRRUS_VITE_DOUBLE = '"@cirrus/vite"';
-const CIRRUS_VITE_SINGLE = "'@cirrus/vite'";
+/** Hoisted check for the lunora/vite import specifier. */
+const LUNORA_VITE_DOUBLE = '"@lunora/vite"';
+const LUNORA_VITE_SINGLE = "'@lunora/vite'";
 
 /**
  * Locate the config object inside a ts-morph SourceFile for a defineConfig
@@ -126,19 +126,19 @@ const importInsertPosition = (sourceText: string): number => {
     return last.getEnd();
 };
 
-/** Splice the import for cirrus/vite into `ms` at the right position. */
+/** Splice the import for lunora/vite into `ms` at the right position. */
 const addImport = (ms: MagicString, source: string): void => {
     const insertAt = importInsertPosition(source);
 
     if (insertAt === 0) {
-        ms.prepend(`${CIRRUS_IMPORT}\n`);
+        ms.prepend(`${LUNORA_IMPORT}\n`);
     } else {
-        ms.appendLeft(insertAt, `\n${CIRRUS_IMPORT}`);
+        ms.appendLeft(insertAt, `\n${LUNORA_IMPORT}`);
     }
 };
 
 /**
- * Insert `cirrus()` into the plugins array that `pluginsProp` points at.
+ * Insert `lunora()` into the plugins array that `pluginsProp` points at.
  * When the array is empty, fills it; otherwise prepends before the first
  * element.
  */
@@ -151,19 +151,19 @@ const patchPluginsArray = (ms: MagicString, configObject: ObjectLiteralExpressio
         const openBrace = configObject.getStart() + 1;
 
         if (properties.length === 0) {
-            ms.appendLeft(openBrace, ` plugins: [${CIRRUS_CALL}] `);
+            ms.appendLeft(openBrace, ` plugins: [${LUNORA_CALL}] `);
         } else {
             const firstProp = properties[0];
 
             if (firstProp !== undefined) {
-                ms.appendLeft(firstProp.getStart(), `plugins: [${CIRRUS_CALL}],\n    `);
+                ms.appendLeft(firstProp.getStart(), `plugins: [${LUNORA_CALL}],\n    `);
             }
         }
 
         return;
     }
 
-    // Property exists — find its array literal and prepend cirrus().
+    // Property exists — find its array literal and prepend lunora().
     const arrayLit = pluginsProp.getDescendantsOfKind(SyntaxKind.ArrayLiteralExpression)[0];
 
     if (arrayLit === undefined) {
@@ -173,26 +173,26 @@ const patchPluginsArray = (ms: MagicString, configObject: ObjectLiteralExpressio
     const elements = arrayLit.getElements();
 
     if (elements.length === 0) {
-        ms.appendLeft(arrayLit.getStart() + 1, CIRRUS_CALL);
+        ms.appendLeft(arrayLit.getStart() + 1, LUNORA_CALL);
     } else {
         const firstElement = elements[0];
 
         if (firstElement !== undefined) {
-            ms.appendLeft(firstElement.getStart(), `${CIRRUS_CALL}, `);
+            ms.appendLeft(firstElement.getStart(), `${LUNORA_CALL}, `);
         }
     }
 };
 
 /**
- * Rewrite `source` so that it contains the cirrus/vite import and has
- * `cirrus()` as the first entry of the Vite `plugins` array (adding the
+ * Rewrite `source` so that it contains the lunora/vite import and has
+ * `lunora()` as the first entry of the Vite `plugins` array (adding the
  * property when the config object exists but lacks it).
  *
  * Returns `{ code: source, changed: false, reason }` for any no-op path.
  */
 const patchViteConfig = (source: string): PatchViteConfigResult => {
-    if (CIRRUS_CALL_RE.test(source)) {
-        return { changed: false, code: source, reason: "cirrus plugin already present" };
+    if (LUNORA_CALL_RE.test(source)) {
+        return { changed: false, code: source, reason: "lunora plugin already present" };
     }
 
     const configObject = findConfigObject(source);
@@ -202,7 +202,7 @@ const patchViteConfig = (source: string): PatchViteConfigResult => {
     }
 
     const ms = new MagicString(source);
-    const alreadyImported = source.includes(CIRRUS_VITE_DOUBLE) || source.includes(CIRRUS_VITE_SINGLE);
+    const alreadyImported = source.includes(LUNORA_VITE_DOUBLE) || source.includes(LUNORA_VITE_SINGLE);
 
     if (alreadyImported) {
         patchPluginsArray(ms, configObject);

@@ -4,7 +4,7 @@
  * The machine is a **projection** of provider state: legal transitions advance the row,
  * illegal/stale/out-of-order ones are rejected (no-ops). This is what makes duplicate and
  * reordered webhooks safe by construction. The tables live behind this seam so they can later
- * be extracted into a shared `@cirrus/machine` primitive without touching call sites.
+ * be extracted into a shared `@lunora/machine` primitive without touching call sites.
  */
 import type { PaymentState, SubscriptionState } from "./types";
 

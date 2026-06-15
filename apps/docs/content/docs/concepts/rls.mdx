@@ -11,7 +11,7 @@ both are **opt-in per procedure** — a bare `query`/`mutation` sees an unwrappe
 `ctx.db` and no policy applies, even if another procedure guards the same table.
 
 ```ts
-import { definePolicy, definePolicies, rls } from "@cirrus/server";
+import { definePolicy, definePolicies, rls } from "@lunora/server";
 
 import { query } from "./_generated/server";
 
@@ -75,7 +75,7 @@ Rather than enumerate role strings inside every policy, declare a named
 middleware, and check it with `auth.can(...)`:
 
 ```ts
-import { definePermission, defineRole, definePolicy, definePolicies, rls } from "@cirrus/server";
+import { definePermission, defineRole, definePolicy, definePolicies, rls } from "@lunora/server";
 
 import { mutation } from "./_generated/server";
 

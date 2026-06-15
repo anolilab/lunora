@@ -1,10 +1,10 @@
-import type { CirrusClient, FunctionReference } from "@cirrus/client";
+import type { LunoraClient, FunctionReference } from "@lunora/client";
 import { get } from "svelte/store";
 import { describe, expect, it, vi } from "vitest";
 
 import { query } from "../src/query";
 
-const fnRef = { __cirrusRef: "messages:list" } as unknown as FunctionReference;
+const fnRef = { __lunoraRef: "messages:list" } as unknown as FunctionReference;
 const args = { room: "general" } as unknown;
 
 const createFakeClient = () => {
@@ -17,7 +17,7 @@ const createFakeClient = () => {
         return unsubscribe;
     });
 
-    const client = { subscribe } as unknown as CirrusClient;
+    const client = { subscribe } as unknown as LunoraClient;
 
     return { client, emit: (value: unknown) => lastCallback?.(value), subscribe, unsubscribe };
 };

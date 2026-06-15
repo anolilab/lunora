@@ -1,4 +1,4 @@
-import type { AnalyticsSqlResult } from "@cirrus/analytics";
+import type { AnalyticsSqlResult } from "@lunora/analytics";
 import { render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 

@@ -15,7 +15,7 @@ export interface Draft {
 const draftsCollection: Collection<Draft, string> = createCollection(
     localStorageCollectionOptions<Draft, string>({
         getKey: (draft) => draft.channelId,
-        storageKey: "cirrus-playground-drafts",
+        storageKey: "lunora-playground-drafts",
     }),
 );
 

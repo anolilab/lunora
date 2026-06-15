@@ -10,7 +10,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Middleware, Policy, Role } from "../src/index";
-import { CirrusError, definePermission, definePolicies, definePolicy, defineRole, initCirrus, rls } from "../src/index";
+import { LunoraError, definePermission, definePolicies, definePolicy, defineRole, initLunora, rls } from "../src/index";
 
 /**
  * The procedure builder types `ctx.db` nominally (`DatabaseReader`/
@@ -157,7 +157,7 @@ const createFakeDatabase = (rows: (Record<string, unknown> & { _id: string; tabl
 /**
  * Enable the optional `getWithTable` fast-path seam on a fake writer, answering
  * `{ row, tableName }` from the seeded rows in one shot — mirroring what
- * `@cirrus/do`'s `lookupById` returns. Records a `getWithTable` call so a test
+ * `@lunora/do`'s `lookupById` returns. Records a `getWithTable` call so a test
  * can assert the probe fan-out (`findFirst` per policy table) was skipped.
  */
 const enableGetWithTable = (database: FakeDatabase, rows: (Record<string, unknown> & { _id: string; table: string })[]): void => {
@@ -172,7 +172,7 @@ const enableGetWithTable = (database: FakeDatabase, rows: (Record<string, unknow
     };
 };
 
-const cirrus = initCirrus.dataModel<Record<string, never>>().create();
+const lunora = initLunora.dataModel<Record<string, never>>().create();
 
 interface TestContext {
     auth: { roles?: ReadonlyArray<string>; userId: null | string };
@@ -188,7 +188,7 @@ const makeContext = (database: FakeDatabase, userId: null | string, roles: strin
 
 /** Build a one-off insert handler running through an `rls()` chain over a single policy. */
 const insertWithPolicy = (policy: Policy<TestContext>) => (document: Record<string, unknown>) =>
-    cirrus.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.insert("documents", document));
+    lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.insert("documents", document));
 
 /* -------------------------------------------------------------------------
  * Tests
@@ -211,7 +211,7 @@ describe("rls — read path", () => {
             { _id: "d2", ownerId: "u2", table: "documents" },
         ]);
 
-        const handler = cirrus.query
+        const handler = lunora.query
             .use(rlsForTest<TestContext>(policies))
             .query(async ({ ctx }) => ctx.db.findMany("documents", { where: { archived: false } }));
 
@@ -238,7 +238,7 @@ describe("rls — read path", () => {
         const policies = definePolicies([policy]);
         const database = createFakeDatabase([]);
 
-        const handler = cirrus.query.use(rlsForTest<TestContext>(policies)).query(async ({ ctx }) => ctx.db.findMany("documents"));
+        const handler = lunora.query.use(rlsForTest<TestContext>(policies)).query(async ({ ctx }) => ctx.db.findMany("documents"));
 
         await handler.handler(makeContext(database, "u1"), {});
 
@@ -257,7 +257,7 @@ describe("rls — read path", () => {
         });
         const database = createFakeDatabase([]);
 
-        const handler = cirrus.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => ctx.db.findMany("documents"));
+        const handler = lunora.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => ctx.db.findMany("documents"));
 
         await handler.handler(makeContext(database, "u1"), {});
 
@@ -278,7 +278,7 @@ describe("rls — read path", () => {
         });
         const database = createFakeDatabase([]);
 
-        const handler = cirrus.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => ctx.db.findMany("documents"));
+        const handler = lunora.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => ctx.db.findMany("documents"));
 
         await handler.handler(makeContext(database, "u1", ["admin"]), {});
         const adminCall = database.calls.at(-1);
@@ -294,10 +294,10 @@ describe("rls — read path", () => {
     it("count() throws COUNT_RLS_UNSUPPORTED when a policy applies", async () => {
         expect.hasAssertions();
 
-        // We can't observe the underlying CirrusError here without wiring the
+        // We can't observe the underlying LunoraError here without wiring the
         // fake DB to honor `restrictsCounts`. Instead we assert the wrapper
         // *passes* `restrictsCounts: true` down to the writer — the ORM is
-        // responsible for converting that into the thrown CirrusError, and
+        // responsible for converting that into the thrown LunoraError, and
         // we assert that in the ORM tests below.
         const policy = definePolicy<TestContext>({
             on: "read",
@@ -306,7 +306,7 @@ describe("rls — read path", () => {
         });
         const database = createFakeDatabase([]);
 
-        const handler = cirrus.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => ctx.db.count("documents"));
+        const handler = lunora.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => ctx.db.count("documents"));
 
         await handler.handler(makeContext(database, "u1"), {});
 
@@ -330,7 +330,7 @@ describe("rls — read path", () => {
 
         // Honest fake: when `baseWhere` is set the membership check returns
         // null if the row doesn't satisfy the predicate — mirroring what
-        // `@cirrus/do`'s `findFirst` does at runtime. The buggy wrapper used
+        // `@lunora/do`'s `findFirst` does at runtime. The buggy wrapper used
         // to swallow this null and fall through to the unrestricted `row`
         // from `base.get()`, leaking what the policy was meant to hide.
         const fake = createFakeDatabase([{ _id: "d1", ownerId: "u2", table: "documents" }]);
@@ -347,7 +347,7 @@ describe("rls — read path", () => {
             return candidate["ownerId"] === baseWhere.ownerId ? candidate : null;
         };
 
-        const handler = cirrus.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => ctx.db.get("d1"));
+        const handler = lunora.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => ctx.db.get("d1"));
 
         await expect(handler.handler(makeContext(fake, "u1"), {})).resolves.toBeNull();
     });
@@ -368,7 +368,7 @@ describe("rls — read path", () => {
 
         const fake = createFakeDatabase([{ _id: "a1", event: "login", table: "audit" }]);
 
-        const handler = cirrus.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => ctx.db.get("a1"));
+        const handler = lunora.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => ctx.db.get("a1"));
 
         const result = await handler.handler(makeContext(fake, "u1"), {});
 
@@ -416,9 +416,9 @@ describe("rls — read path", () => {
             return candidate["ownerId"] === baseWhere.ownerId ? candidate : null;
         };
 
-        const denied = cirrus.query.use(rlsForTest<TestContext>([docsPolicy, notesPolicy])).query(async ({ ctx }) => ctx.db.get("d1"));
-        const allowed = cirrus.query.use(rlsForTest<TestContext>([docsPolicy, notesPolicy])).query(async ({ ctx }) => ctx.db.get("n1"));
-        const absent = cirrus.query.use(rlsForTest<TestContext>([docsPolicy, notesPolicy])).query(async ({ ctx }) => ctx.db.get("missing"));
+        const denied = lunora.query.use(rlsForTest<TestContext>([docsPolicy, notesPolicy])).query(async ({ ctx }) => ctx.db.get("d1"));
+        const allowed = lunora.query.use(rlsForTest<TestContext>([docsPolicy, notesPolicy])).query(async ({ ctx }) => ctx.db.get("n1"));
+        const absent = lunora.query.use(rlsForTest<TestContext>([docsPolicy, notesPolicy])).query(async ({ ctx }) => ctx.db.get("missing"));
 
         // d1 exists in "documents" but is denied → null (NOT the leaked row).
         await expect(denied.handler(makeContext(fake, "u1"), {})).resolves.toBeNull();
@@ -448,7 +448,7 @@ describe("rls — read path", () => {
         enableGetWithTable(fake, rows);
 
         // Owned + allowed: single getWithTable lookup + one policy-check findFirst.
-        const handler = cirrus.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => ctx.db.get("d1"));
+        const handler = lunora.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => ctx.db.get("d1"));
         const result = await handler.handler(makeContext(fake, "u1"), {});
 
         expect(result?.["_id"]).toBe("d1");
@@ -471,7 +471,7 @@ describe("rls — read path", () => {
         });
         const database = createFakeDatabase([]);
 
-        const handler = cirrus.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => ctx.db.count("other_table"));
+        const handler = lunora.query.use(rlsForTest<TestContext>([policy])).query(async ({ ctx }) => ctx.db.count("other_table"));
 
         await handler.handler(makeContext(database, "u1"), {});
 
@@ -492,11 +492,11 @@ describe("rls — write path", () => {
         });
         const database = createFakeDatabase([{ _id: "d1", ownerId: "u2", table: "documents" }]);
 
-        const handler = cirrus.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.patch("d1", { title: "new" }));
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.patch("d1", { title: "new" }));
 
         await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({
             code: "FORBIDDEN",
-            name: "CirrusError",
+            name: "LunoraError",
         });
 
         expect(database.calls.some((call) => call.method === "patch")).toBe(false);
@@ -512,7 +512,7 @@ describe("rls — write path", () => {
         });
         const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
 
-        const handler = cirrus.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.patch("d1", { title: "new" }));
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.patch("d1", { title: "new" }));
 
         await handler.handler(makeContext(database, "u1"), {});
 
@@ -531,11 +531,11 @@ describe("rls — write path", () => {
         });
         const database = createFakeDatabase([{ _id: "d1", ownerId: "u2", table: "documents" }]);
 
-        const handler = cirrus.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.delete("d1"));
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.delete("d1"));
 
         await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({
             code: "FORBIDDEN",
-            name: "CirrusError",
+            name: "LunoraError",
         });
 
         expect(database.calls.some((call) => call.method === "delete")).toBe(false);
@@ -551,13 +551,13 @@ describe("rls — write path", () => {
         });
         const database = createFakeDatabase([]);
 
-        const handler = cirrus.mutation
+        const handler = lunora.mutation
             .use(rlsForTest<TestContext>([policy]))
             .mutation(async ({ ctx }) => ctx.db.insert("documents", { ownerId: "someone-else", title: "x" }));
 
         await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({
             code: "FORBIDDEN",
-            name: "CirrusError",
+            name: "LunoraError",
         });
     });
 });
@@ -575,7 +575,7 @@ describe("rls — write policies returning a WhereInput predicate", () => {
         });
         const database = createFakeDatabase([]);
 
-        const handler = cirrus.mutation
+        const handler = lunora.mutation
             .use(rlsForTest<TestContext>([policy]))
             .mutation(async ({ ctx }) => ctx.db.insert("documents", { ownerId: "u1", title: "x" }));
 
@@ -601,13 +601,13 @@ describe("rls — write policies returning a WhereInput predicate", () => {
         });
         const database = createFakeDatabase([]);
 
-        const handler = cirrus.mutation
+        const handler = lunora.mutation
             .use(rlsForTest<TestContext>([policy]))
             .mutation(async ({ ctx }) => ctx.db.insert("documents", { ownerId: "u1", title: "x" }));
 
         await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({
             code: "FORBIDDEN",
-            name: "CirrusError",
+            name: "LunoraError",
         });
         expect(database.calls.some((call) => call.method === "insert")).toBe(false);
     });
@@ -624,13 +624,13 @@ describe("rls — write policies returning a WhereInput predicate", () => {
         });
         const database = createFakeDatabase([]);
 
-        const handler = cirrus.mutation
+        const handler = lunora.mutation
             .use(rlsForTest<TestContext>([policy]))
             .mutation(async ({ ctx }) => ctx.db.insert("documents", { ownerId: "someone-else", title: "x" }));
 
         await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({
             code: "FORBIDDEN",
-            name: "CirrusError",
+            name: "LunoraError",
         });
         expect(database.calls.some((call) => call.method === "insert")).toBe(false);
     });
@@ -648,8 +648,8 @@ describe("rls — write policies returning a WhereInput predicate", () => {
         const allowed = createFakeDatabase([{ _id: "d1", archived: false, table: "documents" }]);
         const denied = createFakeDatabase([{ _id: "d2", archived: true, table: "documents" }]);
 
-        const allowedHandler = cirrus.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.patch("d1", { title: "new" }));
-        const deniedHandler = cirrus.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.patch("d2", { title: "new" }));
+        const allowedHandler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.patch("d1", { title: "new" }));
+        const deniedHandler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.patch("d2", { title: "new" }));
 
         await allowedHandler.handler(makeContext(allowed, "u1"), {});
 
@@ -676,8 +676,8 @@ describe("rls — write policies returning a WhereInput predicate", () => {
             { _id: "theirs", ownerId: "u2", table: "documents" },
         ]);
 
-        const allowedHandler = cirrus.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.delete("mine"));
-        const deniedHandler = cirrus.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.delete("theirs"));
+        const allowedHandler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.delete("mine"));
+        const deniedHandler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.delete("theirs"));
 
         await allowedHandler.handler(makeContext(database, "u1"), {});
 
@@ -778,7 +778,7 @@ describe("rls — opt-in scope", () => {
 
         const database = createFakeDatabase([]);
 
-        const handler = cirrus.query.query(async ({ ctx }) => (ctx as unknown as TestContext).db.findMany("documents"));
+        const handler = lunora.query.query(async ({ ctx }) => (ctx as unknown as TestContext).db.findMany("documents"));
 
         await handler.handler(makeContext(database, "u1"), {});
 
@@ -788,7 +788,7 @@ describe("rls — opt-in scope", () => {
         expect((findManyCall?.args as { baseWhere?: unknown } | undefined)?.baseWhere).toBeUndefined();
     });
 
-    it("a CirrusError thrown from a policy denial carries status 403", async () => {
+    it("a LunoraError thrown from a policy denial carries status 403", async () => {
         expect.assertions(3);
 
         const policy = definePolicy<TestContext>({
@@ -798,7 +798,7 @@ describe("rls — opt-in scope", () => {
         });
         const database = createFakeDatabase([{ _id: "d1", table: "documents" }]);
 
-        const handler = cirrus.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.delete("d1"));
+        const handler = lunora.mutation.use(rlsForTest<TestContext>([policy])).mutation(async ({ ctx }) => ctx.db.delete("d1"));
 
         const error = await handler.handler(makeContext(database, "u1"), {}).then(
             () => {
@@ -807,9 +807,9 @@ describe("rls — opt-in scope", () => {
             (error_: unknown) => error_,
         );
 
-        expect(error).toBeInstanceOf(CirrusError);
-        expect((error as CirrusError).status).toBe(403);
-        expect((error as CirrusError).code).toBe("FORBIDDEN");
+        expect(error).toBeInstanceOf(LunoraError);
+        expect((error as LunoraError).status).toBe(403);
+        expect((error as LunoraError).code).toBe("FORBIDDEN");
     });
 });
 
@@ -899,7 +899,7 @@ describe("rls — analytical reads (baseWhere on the full facade)", () => {
         expect.assertions(1);
 
         const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
-        const handler = cirrus.query
+        const handler = lunora.query
             .use(rlsForTest<TestContext>([ownerPolicy]))
             .query(async ({ ctx }) => (ctx as unknown as TestContext).db.aggregate("documents", { op: "sum", where: { archived: false } }));
 
@@ -914,7 +914,7 @@ describe("rls — analytical reads (baseWhere on the full facade)", () => {
         expect.assertions(1);
 
         const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
-        const handler = cirrus.query
+        const handler = lunora.query
             .use(rlsForTest<TestContext>([ownerPolicy]))
             .query(async ({ ctx }) => (ctx as unknown as TestContext).db.groupBy("documents", { by: ["status"] }));
 
@@ -929,7 +929,7 @@ describe("rls — analytical reads (baseWhere on the full facade)", () => {
         expect.assertions(2);
 
         const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
-        const handler = cirrus.query
+        const handler = lunora.query
             .use(rlsForTest<TestContext>([ownerPolicy]))
             .query(async ({ ctx }) => (ctx as unknown as TestContext).db.rank("documents", "byScore", { row: "d1" }));
 
@@ -942,7 +942,7 @@ describe("rls — analytical reads (baseWhere on the full facade)", () => {
         expect.assertions(2);
 
         const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
-        const handler = cirrus.query
+        const handler = lunora.query
             .use(rlsForTest<TestContext>([ownerPolicy]))
             .query(async ({ ctx }) => (ctx as unknown as TestContext).db.rankPage("documents", "byScore"));
 
@@ -956,7 +956,7 @@ describe("rls — analytical reads (baseWhere on the full facade)", () => {
         // Policy targets "documents"; "events" carries none, so its analytical
         // reads pass through with no baseWhere and rank() doesn't throw.
         const database = createFakeDatabase([{ _id: "e1", table: "events" }]);
-        const handler = cirrus.query.use(rlsForTest<TestContext>([ownerPolicy])).query(async ({ ctx }) => {
+        const handler = lunora.query.use(rlsForTest<TestContext>([ownerPolicy])).query(async ({ ctx }) => {
             const typed = (ctx as unknown as TestContext).db;
 
             await typed.aggregate("events", { op: "sum" });
@@ -1066,7 +1066,7 @@ describe("rls — per-table facade + orm (no RLS bypass)", () => {
         expect.assertions(1);
 
         const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
-        const handler = cirrus.query
+        const handler = lunora.query
             .use(rlsForTest<TestContext>([ownerPolicy]))
             .query(async ({ ctx }) => (ctx as unknown as FacadeCtx).db["documents"]!.findMany({ where: { archived: false } }));
 
@@ -1081,7 +1081,7 @@ describe("rls — per-table facade + orm (no RLS bypass)", () => {
         expect.assertions(1);
 
         const database = createFakeDatabase([{ _id: "d1", ownerId: "u1", table: "documents" }]);
-        const handler = cirrus.query
+        const handler = lunora.query
             .use(rlsForTest<TestContext>([ownerPolicy]))
             .query(async ({ ctx }) => (ctx as unknown as FacadeCtx).orm.query["documents"]!.findMany());
 
@@ -1096,7 +1096,7 @@ describe("rls — per-table facade + orm (no RLS bypass)", () => {
         expect.assertions(1);
 
         const database = createFakeDatabase([]);
-        const handler = cirrus.query
+        const handler = lunora.query
             .use(rlsForTest<TestContext>([ownerPolicy]))
             .query(async ({ ctx }) => (ctx as unknown as FacadeCtx).db["documents"]!.count());
 
@@ -1114,7 +1114,7 @@ describe("rls — per-table facade + orm (no RLS bypass)", () => {
         // baseWhere (returns null when the row fails the predicate).
         const database = createFakeDatabase([{ _id: "d2", ownerId: "u2", table: "documents" }]);
 
-        // Honour baseWhere in the fake's findFirst, mirroring @cirrus/do.
+        // Honour baseWhere in the fake's findFirst, mirroring @lunora/do.
         const originalFindFirst = database.writer.findFirst.bind(database.writer);
 
         database.writer.findFirst = async (tableName, args) => {
@@ -1128,7 +1128,7 @@ describe("rls — per-table facade + orm (no RLS bypass)", () => {
             return row;
         };
 
-        const handler = cirrus.query
+        const handler = lunora.query
             .use(rlsForTest<TestContext>([ownerPolicy]))
             .query(async ({ ctx }) => (ctx as unknown as FacadeCtx).db["documents"]!.get("d2"));
 
@@ -1149,7 +1149,7 @@ describe("rls — per-table facade + orm (no RLS bypass)", () => {
         let documentsEntry: unknown;
         let eventsEntry: unknown;
 
-        const handler = cirrus.query.use(rlsForTest<TestContext>([ownerPolicy])).query(async ({ ctx }) => {
+        const handler = lunora.query.use(rlsForTest<TestContext>([ownerPolicy])).query(async ({ ctx }) => {
             const { db } = ctx as unknown as { db: Record<string, unknown> };
 
             documentsEntry = db["documents"];
@@ -1186,7 +1186,7 @@ describe("rls — permissions / can()", () => {
         (rls as unknown as (p: ReadonlyArray<Policy<TestContext>>, options: { roles: ReadonlyArray<Role> }) => Middleware<any, any>)([policy], { roles });
 
     const insertHandler = (roles: ReadonlyArray<Role>) =>
-        cirrus.mutation.use(rlsWithRoles(roles)).mutation(async ({ ctx }) => ctx.db.insert("documents", { _id: "x" }));
+        lunora.mutation.use(rlsWithRoles(roles)).mutation(async ({ ctx }) => ctx.db.insert("documents", { _id: "x" }));
 
     it("allows the write when a request role grants the permission", async () => {
         expect.assertions(1);
@@ -1203,7 +1203,7 @@ describe("rls — permissions / can()", () => {
 
         const database = createFakeDatabase([]);
 
-        await expect(insertHandler([editor]).handler(makeContext(database, "u1", ["viewer"]), {})).rejects.toThrow(CirrusError);
+        await expect(insertHandler([editor]).handler(makeContext(database, "u1", ["viewer"]), {})).rejects.toThrow(LunoraError);
     });
 
     it("fails closed for a granting role the middleware wasn't told about", async () => {
@@ -1213,7 +1213,7 @@ describe("rls — permissions / can()", () => {
 
         // The request carries "editor", but `rls()` got no roles — `can()` can't
         // resolve the grant, so the permission check is false and the write denies.
-        await expect(insertHandler([]).handler(makeContext(database, "u1", ["editor"]), {})).rejects.toThrow(CirrusError);
+        await expect(insertHandler([]).handler(makeContext(database, "u1", ["editor"]), {})).rejects.toThrow(LunoraError);
     });
 
     it("accepts a permission checked by its bare name", async () => {
@@ -1225,7 +1225,7 @@ describe("rls — permissions / can()", () => {
             when: ({ auth }) => auth.can("posts:delete"),
         });
         const database = createFakeDatabase([]);
-        const handler = cirrus.mutation
+        const handler = lunora.mutation
             .use(
                 (rls as unknown as (p: ReadonlyArray<Policy<TestContext>>, options: { roles: ReadonlyArray<Role> }) => Middleware<any, any>)([namedPolicy], {
                     roles: [editor],

@@ -22,7 +22,7 @@ const ADDRESS_PATTERN = /^([^<]*)<([^>]*)>\s*$/;
  */
 const assertSafeAddressField = (field: "email" | "name", value: string): void => {
     if (value.includes("\r") || value.includes("\n") || value.includes(",")) {
-        throw new Error(`@cirrus/mail: address ${field} must not contain CR, LF, or comma`);
+        throw new Error(`@lunora/mail: address ${field} must not contain CR, LF, or comma`);
     }
 };
 
@@ -34,18 +34,18 @@ const assertSafeAddressField = (field: "email" | "name", value: string): void =>
  */
 const assertSafeHeaderValue = (label: string, value: string): void => {
     if (value.includes("\r") || value.includes("\n")) {
-        throw new Error(`@cirrus/mail: ${label} must not contain CR or LF`);
+        throw new Error(`@lunora/mail: ${label} must not contain CR or LF`);
     }
 };
 
 /** Validate the bracketed `name &lt;email>` form captured by `ADDRESS_PATTERN`. */
 const toBracketedAddress = (name: string, email: string): { email: string; name?: string } => {
     if (name.length > MAX_NAME_LENGTH) {
-        throw new Error(`@cirrus/mail: address name must be <= ${String(MAX_NAME_LENGTH)} characters`);
+        throw new Error(`@lunora/mail: address name must be <= ${String(MAX_NAME_LENGTH)} characters`);
     }
 
     if (email.length > MAX_EMAIL_LENGTH) {
-        throw new Error(`@cirrus/mail: address email must be <= ${String(MAX_EMAIL_LENGTH)} characters`);
+        throw new Error(`@lunora/mail: address email must be <= ${String(MAX_EMAIL_LENGTH)} characters`);
     }
 
     if (name) {
@@ -62,7 +62,7 @@ const toBareAddress = (input: string): { email: string } => {
     const email = input.trim();
 
     if (email.length > MAX_EMAIL_LENGTH) {
-        throw new Error(`@cirrus/mail: address email must be <= ${String(MAX_EMAIL_LENGTH)} characters`);
+        throw new Error(`@lunora/mail: address email must be <= ${String(MAX_EMAIL_LENGTH)} characters`);
     }
 
     assertSafeAddressField("email", email);

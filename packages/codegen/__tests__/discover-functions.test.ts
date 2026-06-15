@@ -14,7 +14,7 @@ let workdir: string;
 
 describe("discoverFunctions", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-disco-"));
+        workdir = mkdtempSync(join(tmpdir(), "lunora-disco-"));
     });
 
     afterEach(() => {
@@ -29,12 +29,12 @@ describe("discoverFunctions", () => {
     };
 
     const tinyQuery = `
-    import { query } from "@cirrus/server";
+    import { query } from "@lunora/server";
     export const list = query({ args: {}, handler: () => null });
 `;
 
     describe("discoverFunctions namespace collision", () => {
-        it("throws CirrusError when two distinct paths sanitize to the same namespace", () => {
+        it("throws LunoraError when two distinct paths sanitize to the same namespace", () => {
             expect.assertions(3);
 
             // `foo/bar.ts` and `foo-bar.ts` both → `foo_bar`. Without the guard
@@ -54,7 +54,7 @@ describe("discoverFunctions", () => {
                 caught = error;
             }
 
-            expect(caught).toMatchObject({ code: "NAMESPACE_COLLISION", name: "CirrusError", status: 500 });
+            expect(caught).toMatchObject({ code: "NAMESPACE_COLLISION", name: "LunoraError", status: 500 });
             expect((caught as { paths: string[] }).paths).toEqual(expect.arrayContaining(["foo-bar", "foo/bar"]));
         });
 
@@ -78,7 +78,7 @@ describe("discoverFunctions", () => {
             writeFunction(
                 "messages.ts",
                 `
-            import { query as q, mutation as m } from "@cirrus/server";
+            import { query as q, mutation as m } from "@lunora/server";
             export const list = q({ args: {}, handler: () => null });
             export const send = m({ args: {}, handler: () => null });
         `,
@@ -98,7 +98,7 @@ describe("discoverFunctions", () => {
 
             // The Convex idiom: user code imports `query`/`mutation` from
             // `./_generated/server` (so `v.id(...)` is table-name typed) rather
-            // than straight from `@cirrus/server`. Discovery must treat those as
+            // than straight from `@lunora/server`. Discovery must treat those as
             // real registrations, otherwise every function silently vanishes
             // from the generated `api.ts`.
             writeFunction(
@@ -119,7 +119,7 @@ describe("discoverFunctions", () => {
             expect(byName.get("send")?.kind).toBe("mutation");
         });
 
-        it("ignores a local `const query` shadowing the @cirrus/server import", () => {
+        it("ignores a local `const query` shadowing the @lunora/server import", () => {
             expect.assertions(1);
 
             // A local `query` is NOT the framework helper, even if the name matches.
@@ -141,11 +141,11 @@ describe("discoverFunctions", () => {
             expect.hasAssertions();
 
             // Handler returns a literal object whose type is inferrable from the
-            // body alone — no need for `@cirrus/server`/`@cirrus/values` resolution.
+            // body alone — no need for `@lunora/server`/`@lunora/values` resolution.
             writeFunction(
                 "messages.ts",
                 `
-            import { query, mutation } from "@cirrus/server";
+            import { query, mutation } from "@lunora/server";
             export const greet = query({
                 args: {},
                 handler: (): { hello: "world" } => ({ hello: "world" }),
@@ -176,7 +176,7 @@ describe("discoverFunctions", () => {
             writeFunction(
                 "messages.ts",
                 `
-            import { query } from "@cirrus/server";
+            import { query } from "@lunora/server";
             export const list = query({
                 args: {},
                 handler: async (_context, args) => ({ ok: true, args }),
@@ -202,7 +202,7 @@ describe("discoverFunctions", () => {
             writeFunction(
                 "cursors.ts",
                 `
-            import { query } from "@cirrus/server";
+            import { query } from "@lunora/server";
 
             interface CursorDoc {
                 id: string;
@@ -232,8 +232,8 @@ describe("discoverFunctions", () => {
             writeFunction(
                 "cursors.ts",
                 `
-            import type { Id } from "@cirrus/server";
-            import { query } from "@cirrus/server";
+            import type { Id } from "@lunora/server";
+            import { query } from "@lunora/server";
 
             interface CursorDoc {
                 _id: Id<"cursors">;
@@ -263,7 +263,7 @@ describe("discoverFunctions", () => {
             writeFunction(
                 "cursors.ts",
                 `
-            import { query } from "@cirrus/server";
+            import { query } from "@lunora/server";
 
             export interface CursorDoc {
                 id: string;
@@ -288,7 +288,7 @@ describe("discoverFunctions", () => {
             writeFunction(
                 "admin.ts",
                 `
-            import { internalQuery, internalMutation, internalAction, query } from "@cirrus/server";
+            import { internalQuery, internalMutation, internalAction, query } from "@lunora/server";
             export const stats = internalQuery({ args: {}, handler: () => null });
             export const purge = internalMutation({ args: {}, handler: () => null });
             export const sync = internalAction({ args: {}, handler: () => null });
@@ -315,7 +315,7 @@ describe("discoverFunctions", () => {
             writeFunction(
                 "messages.ts",
                 `
-            import { query, mutation } from "@cirrus/server";
+            import { query, mutation } from "@lunora/server";
             export const list = query({ args: {}, handler: () => null });
             export const send = mutation({ args: {}, handler: () => null });
         `,
@@ -330,8 +330,8 @@ describe("discoverFunctions", () => {
     });
 
     // A self-contained branded builder. The discovery brand-guard resolves the
-    // `__cirrusProcedure` property off the receiver's *type*, so the builder is
-    // declared inline here rather than imported from `@cirrus/server` (the isolated
+    // `__lunoraProcedure` property off the receiver's *type*, so the builder is
+    // declared inline here rather than imported from `@lunora/server` (the isolated
     // test project has no module resolution for workspace packages).
     // eslint-disable-next-line no-secrets/no-secrets -- inline TS builder fixture (MutationBuilder<Args>, etc.), not a credential
     const BUILDER_PREAMBLE = `
@@ -342,21 +342,21 @@ describe("discoverFunctions", () => {
     };
 
     interface QueryBuilder<Args> {
-        readonly __cirrusProcedure: "query";
+        readonly __lunoraProcedure: "query";
         input: <X extends Record<string, unknown>>(validators: X) => QueryBuilder<Args & X>;
         use: <C>(middleware: (options: { ctx: unknown }) => C) => QueryBuilder<Args>;
         query: <R>(handler: (options: { args: Args; ctx: unknown }) => R) => { args: Args; handler: (ctx: unknown, args: Args) => R; kind: "query" };
     }
 
     interface MutationBuilder<Args> {
-        readonly __cirrusProcedure: "mutation";
+        readonly __lunoraProcedure: "mutation";
         input: <X extends Record<string, unknown>>(validators: X) => MutationBuilder<Args & X>;
         mutation: <R>(handler: (options: { args: Args; ctx: unknown }) => R) => { args: Args; handler: (ctx: unknown, args: Args) => R; kind: "mutation" };
     }
 
     interface InternalQueryBuilder<Args> {
-        readonly __cirrusProcedure: "query";
-        readonly __cirrusVisibility: "internal";
+        readonly __lunoraProcedure: "query";
+        readonly __lunoraVisibility: "internal";
         input: <X extends Record<string, unknown>>(validators: X) => InternalQueryBuilder<Args & X>;
         query: <R>(handler: (options: { args: Args; ctx: unknown }) => R) => { args: Args; handler: (ctx: unknown, args: Args) => R; kind: "query"; visibility: "internal" };
     }
@@ -381,7 +381,7 @@ describe("discoverFunctions", () => {
     };
 
     interface QueryBuilder<Args, Output = undefined> {
-        readonly __cirrusProcedure: "query";
+        readonly __lunoraProcedure: "query";
         input: <X extends Record<string, unknown>>(validators: X) => QueryBuilder<Args & X, Output>;
         output: <V extends { __t: unknown }>(validator: V) => QueryBuilder<Args, V["__t"]>;
         query: [Output] extends [undefined]
@@ -472,7 +472,7 @@ describe("discoverFunctions", () => {
             expect(result[0]?.kind).toBe("mutation");
         });
 
-        it("ignores a `.query()` method on an object lacking the __cirrusProcedure brand", () => {
+        it("ignores a `.query()` method on an object lacking the __lunoraProcedure brand", () => {
             expect.assertions(1);
 
             writeFunction(
@@ -489,7 +489,7 @@ describe("discoverFunctions", () => {
             expect(result).toHaveLength(0);
         });
 
-        it("marks a builder carrying the __cirrusVisibility brand as internal, across a chain", () => {
+        it("marks a builder carrying the __lunoraVisibility brand as internal, across a chain", () => {
             expect.assertions(3);
 
             writeFunction(
@@ -589,7 +589,7 @@ describe("discoverFunctions", () => {
         // namespace. These cover the resolver that chases a re-export back to its
         // originating `query/mutation/action({...})` call.
         const componentModule = `
-            import { mutation, query } from "@cirrus/server";
+            import { mutation, query } from "@lunora/server";
             declare const v: { string: () => { __k: "string"; __t: string } };
             const bundle = {
                 check: query({ args: { key: v.string() }, handler: () => ({ allowed: true }) }),

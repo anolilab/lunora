@@ -1,18 +1,18 @@
-import type { ArgsOf, CirrusClient, FunctionReference, ReturnOf } from "@cirrus/client";
-import type { ServerClientOptions } from "@cirrus/client/ssr";
-import { createServerClient } from "@cirrus/client/ssr";
+import type { ArgsOf, LunoraClient, FunctionReference, ReturnOf } from "@lunora/client";
+import type { ServerClientOptions } from "@lunora/client/ssr";
+import { createServerClient } from "@lunora/client/ssr";
 import type { QueryClient } from "@tanstack/react-query";
 
-import { cirrusQueryKey } from "./query-key";
+import { lunoraQueryKey } from "./query-key";
 
 /**
  * Server-side data-loading helpers for React Server Components.
  *
- * This module is the server half of `@cirrus/react`: it carries no
+ * This module is the server half of `@lunora/react`: it carries no
  * `"use client"` directive, opens no WebSocket, and touches no browser globals,
  * so it is safe to import from an RSC / Next.js Server Component. The browser
  * hooks (`useQuery`, `usePreloadedQuery`, …) live in the package root,
- * `@cirrus/react`, which is a client boundary.
+ * `@lunora/react`, which is a client boundary.
  *
  * Two flows are supported, mirroring the two common RSC patterns. First,
  * hydrating the TanStack cache: `prefetchQuery` runs the query on the server and
@@ -24,13 +24,13 @@ import { cirrusQueryKey } from "./query-key";
  */
 
 // The TanStack options factory is transport-free, so it works server-side too:
-// `await queryClient.ensureQueryData(cirrusQueryOptions(serverClient, fn, args))`.
-export type { CirrusQueryOptions } from "./query-options";
-export { cirrusQueryOptions } from "./query-options";
+// `await queryClient.ensureQueryData(lunoraQueryOptions(serverClient, fn, args))`.
+export type { LunoraQueryOptions } from "./query-options";
+export { lunoraQueryOptions } from "./query-options";
 
 /**
  * Run a query on the server and seed `queryClient` with the result under the
- * same key the client hooks use (see `cirrusQueryKey`), so a later
+ * same key the client hooks use (see `lunoraQueryKey`), so a later
  * `useQuery(fn, args)` reads it straight from the hydrated cache — no loading
  * flash, no duplicate fetch on the client.
  *
@@ -43,7 +43,7 @@ export { cirrusQueryOptions } from "./query-options";
  */
 export const prefetchQuery = async <F extends FunctionReference>(
     queryClient: QueryClient,
-    client: CirrusClient,
+    client: LunoraClient,
     function_: F,
     args: ArgsOf<F>,
     options: { shardKey?: string } = {},
@@ -53,8 +53,8 @@ export const prefetchQuery = async <F extends FunctionReference>(
     // eslint-disable-next-line @tanstack/query/exhaustive-deps -- not a React hook: prefetchQuery runs once server-side and the queryKey intentionally excludes the non-serializable, request-stable client.
     await queryClient.prefetchQuery({
         queryFn: () => client.query<F>(function_, argsRecord as ArgsOf<F>, { shardKey: options.shardKey }),
-        queryKey: cirrusQueryKey(function_, argsRecord, options.shardKey),
-        // Match the client hooks: Cirrus is push-driven, so the seeded value is
+        queryKey: lunoraQueryKey(function_, argsRecord, options.shardKey),
+        // Match the client hooks: Lunora is push-driven, so the seeded value is
         // never considered stale by TanStack — the WS subscription that attaches
         // on mount is the only freshness signal.
         staleTime: Number.POSITIVE_INFINITY,
@@ -107,20 +107,20 @@ export const fetchAction = async <F extends FunctionReference>(
     callOptions: ServerCallOptions = {},
 ): Promise<ReturnOf<F>> => createServerClient(options).action<F>(function_, args, { shardKey: callOptions.shardKey });
 
-export type { ArgsOf, FunctionReference, Preloaded, ReturnOf } from "@cirrus/client";
+export type { ArgsOf, FunctionReference, Preloaded, ReturnOf } from "@lunora/client";
 // Re-exported so callers can do all server-side data loading from one import.
 // `preloadQuery`/`preloadedQueryResult` are the explicit-token flow; `dehydrate`
 // is a pure serializer (server-safe); `HydrationBoundary` carries its own client
 // boundary from TanStack, so re-exporting it here is just a convenience pass-through.
-export { preloadedQueryResult, preloadQuery } from "@cirrus/client";
-// `createServerClient`/`ServerClientOptions` are sourced from `@cirrus/client/ssr`, the
+export { preloadedQueryResult, preloadQuery } from "@lunora/client";
+// `createServerClient`/`ServerClientOptions` are sourced from `@lunora/client/ssr`, the
 // framework-neutral home of the server contract, so there is one implementation
 // shared across every adapter. They are re-exported (not re-implemented) here so
-// existing `import { createServerClient } from "@cirrus/react/server"` keeps
+// existing `import { createServerClient } from "@lunora/react/server"` keeps
 // working unchanged — same name, same signature. `getServerSession`, the
 // `serializePreloaded`/`deserializePreloaded` dehydrate helpers, and
 // `preloadQuery` are re-exported too so a React SSR loader can get everything it
 // needs from this one entry.
-export type { AuthLike, HeadersSource, ServerClientOptions, ServerSession } from "@cirrus/client/ssr";
-export { createServerClient, deserializePreloaded, getServerSession, serializePreloaded } from "@cirrus/client/ssr";
+export type { AuthLike, HeadersSource, ServerClientOptions, ServerSession } from "@lunora/client/ssr";
+export { createServerClient, deserializePreloaded, getServerSession, serializePreloaded } from "@lunora/client/ssr";
 export { dehydrate, HydrationBoundary } from "@tanstack/react-query";

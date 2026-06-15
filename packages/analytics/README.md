@@ -6,7 +6,7 @@
 
 </a>
 
-<h3 align="center">Cloudflare Analytics Engine for Cirrus: typed writeDataPoint helper and SQL-API read client</h3>
+<h3 align="center">Cloudflare Analytics Engine for Lunora: typed writeDataPoint helper and SQL-API read client</h3>
 
 <!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
@@ -34,29 +34,29 @@
 
 ---
 
-Cloudflare Analytics Engine telemetry for Cirrus. The **write** side wraps an `AnalyticsEngineDataset` binding (`env.ANALYTICS`) in a typed, fire-and-forget `writeDataPoint` helper bound to `ctx.analytics` — plus an ergonomic `track(name, { dimensions, metrics, index })` that maps named fields onto AE's positional `blob`/`double`/`index` columns. The **read** side wraps the Analytics Engine SQL API so Cirrus Studio (and `@cirrus/advisor` runtime lints) can render real usage/latency panels.
+Cloudflare Analytics Engine telemetry for Lunora. The **write** side wraps an `AnalyticsEngineDataset` binding (`env.ANALYTICS`) in a typed, fire-and-forget `writeDataPoint` helper bound to `ctx.analytics` — plus an ergonomic `track(name, { dimensions, metrics, index })` that maps named fields onto AE's positional `blob`/`double`/`index` columns. The **read** side wraps the Analytics Engine SQL API so Lunora Studio (and `@lunora/advisor` runtime lints) can render real usage/latency panels.
 
-Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
+Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
 ## Install
 
 ```sh
-npm install @cirrus/analytics
+npm install @lunora/analytics
 ```
 
 ```sh
-yarn add @cirrus/analytics
+yarn add @lunora/analytics
 ```
 
 ```sh
-pnpm add @cirrus/analytics
+pnpm add @lunora/analytics
 ```
 
 ## Usage
 
 ### Write side (`ctx.analytics`)
 
-Importing `@cirrus/analytics` in a `cirrus/` source auto-reconciles the self-describing `analytics_engine_datasets` binding (`{ binding: "ANALYTICS", dataset: "ANALYTICS" }`) and wires `ctx.analytics` onto every context. The write is a side-effect-only telemetry emit — sampled and fire-and-forget, never read back in-handler.
+Importing `@lunora/analytics` in a `lunora/` source auto-reconciles the self-describing `analytics_engine_datasets` binding (`{ binding: "ANALYTICS", dataset: "ANALYTICS" }`) and wires `ctx.analytics` onto every context. The write is a side-effect-only telemetry emit — sampled and fire-and-forget, never read back in-handler.
 
 ```ts
 export const send = mutation({
@@ -77,7 +77,7 @@ AE caps a data point at **20 blobs, 20 doubles, and 1 index**; `writeDataPoint` 
 ### Read side (SQL API)
 
 ```ts
-import { createAnalyticsSqlClient } from "@cirrus/analytics";
+import { createAnalyticsSqlClient } from "@lunora/analytics";
 
 const sql = createAnalyticsSqlClient({
     accountId: env.CLOUDFLARE_ACCOUNT_ID,
@@ -89,13 +89,13 @@ const result = await sql.query("SELECT blob1 AS fn, count() AS calls FROM ANALYT
 
 The API token is an account-scoped secret you provision in `.dev.vars`/env — it is **never** auto-scaffolded with a real value.
 
-> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/addons/analytics)**.
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/addons/analytics)**.
 
 ## Related
 
-- [`@cirrus/server`](https://www.npmjs.com/package/@cirrus/server) — emit telemetry from queries, mutations, and actions.
-- [`@cirrus/studio`](https://www.npmjs.com/package/@cirrus/studio) — renders the Analytics usage panel backed by the SQL API.
-- [`@cirrus/advisor`](https://www.npmjs.com/package/@cirrus/advisor) — runtime lints that can consume AE scan-attribution metrics.
+- [`@lunora/server`](https://www.npmjs.com/package/@lunora/server) — emit telemetry from queries, mutations, and actions.
+- [`@lunora/studio`](https://www.npmjs.com/package/@lunora/studio) — renders the Analytics usage panel backed by the SQL API.
+- [`@lunora/advisor`](https://www.npmjs.com/package/@lunora/advisor) — runtime lints that can consume AE scan-attribution metrics.
 
 ## Supported Node.js Versions
 
@@ -104,14 +104,14 @@ Here's [a post on why we think this is important](https://medium.com/the-node-js
 
 ## Contributing
 
-If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/lunora/issues) and check our [Contributing](https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
 > **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
 ## Credits
 
 - [Daniel Bannert](https://github.com/prisis)
-- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
+- [All Contributors](https://github.com/anolilab/lunora/graphs/contributors)
 
 ## Made with ❤️ at Anolilab
 
@@ -119,17 +119,17 @@ This is an open source project and will always remain free to use. If you think 
 
 ## License
 
-The Cirrus analytics package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The Lunora analytics package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
 
 <!-- badges -->
 
 [license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
-[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
-[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/analytics?style=for-the-badge
-[npm-version]: https://www.npmjs.com/package/@cirrus/analytics
-[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/analytics?style=for-the-badge
-[npm-downloads]: https://www.npmjs.com/package/@cirrus/analytics
+[license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@lunora/analytics?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@lunora/analytics
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@lunora/analytics?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@lunora/analytics
 [prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
-[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[prs-welcome]: https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md
 [typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
 [typescript-url]: https://www.typescriptlang.org/

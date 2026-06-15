@@ -1,4 +1,4 @@
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
@@ -116,9 +116,9 @@ const createClient = (metrics: ShardMetrics, stats: FunctionStatsResult, advisor
     });
 
 const renderPanel = (mock: MockClientHooks) => (
-    <CirrusProvider client={mock.asClient}>
+    <LunoraProvider client={mock.asClient}>
         <InsightsPanel />
-    </CirrusProvider>
+    </LunoraProvider>
 );
 
 describe("insightsPanel", () => {
@@ -128,10 +128,10 @@ describe("insightsPanel", () => {
         render(renderPanel(createClient(HEALTHY, SLOW_STATS)));
 
         // slow-function is info-severity — it lives under the Info tab.
-        fireEvent.click(await screen.findByTestId("cirrus-insights-tab-info"));
+        fireEvent.click(await screen.findByTestId("lunora-insights-tab-info"));
         await screen.findByText("Slow function");
 
-        const view = screen.getByTestId("cirrus-insights");
+        const view = screen.getByTestId("lunora-insights");
 
         expect(view.textContent).toContain("Slow function");
         expect(view.textContent).toContain("reports:build");
@@ -143,10 +143,10 @@ describe("insightsPanel", () => {
         render(renderPanel(createClient(HEALTHY, SCAN_STATS)));
 
         // missing-index is a warning — open the Warnings tab.
-        fireEvent.click(await screen.findByTestId("cirrus-insights-tab-warning"));
+        fireEvent.click(await screen.findByTestId("lunora-insights-tab-warning"));
         await screen.findByText("Missing index");
 
-        const view = screen.getByTestId("cirrus-insights");
+        const view = screen.getByTestId("lunora-insights");
 
         expect(view.textContent).toContain("Missing index");
         // The function and the table it full-scanned.
@@ -165,10 +165,10 @@ describe("insightsPanel", () => {
         render(renderPanel(createClient(HEALTHY, EMPTY_STATS, [FK_ADVISORY])));
 
         // unindexed_foreign_key is INFO-severity → the Info tab.
-        fireEvent.click(await screen.findByTestId("cirrus-insights-tab-info"));
+        fireEvent.click(await screen.findByTestId("lunora-insights-tab-info"));
         await screen.findByText("Unindexed foreign key");
 
-        const view = screen.getByTestId("cirrus-insights");
+        const view = screen.getByTestId("lunora-insights");
 
         expect(view.textContent).toContain("Unindexed foreign key");
         // The advisory names the offending table.
@@ -215,10 +215,10 @@ describe("insightsPanel", () => {
         render(renderPanel(mock));
 
         // index_utilization (dead index) is INFO-severity → the Info tab.
-        fireEvent.click(await screen.findByTestId("cirrus-insights-tab-info"));
+        fireEvent.click(await screen.findByTestId("lunora-insights-tab-info"));
         await screen.findByText("Index utilization");
 
-        const view = screen.getByTestId("cirrus-insights");
+        const view = screen.getByTestId("lunora-insights");
 
         expect(view.textContent).toContain("Index utilization");
         expect(view.textContent).toContain('Index "byTitle" on table "posts" has recorded no reads');
@@ -249,7 +249,7 @@ describe("insightsPanel", () => {
         render(renderPanel(mock));
 
         // Nothing initially.
-        fireEvent.click(await screen.findByTestId("cirrus-insights-tab-info"));
+        fireEvent.click(await screen.findByTestId("lunora-insights-tab-info"));
 
         expect(screen.queryByText("Unindexed foreign key")).toBeNull();
 
@@ -259,7 +259,7 @@ describe("insightsPanel", () => {
 
         await screen.findByText("Unindexed foreign key");
 
-        expect(screen.getByTestId("cirrus-insights").textContent).toContain("Unindexed foreign key");
+        expect(screen.getByTestId("lunora-insights").textContent).toContain("Unindexed foreign key");
     });
 
     it("shows the per-tab empty state when nothing is wrong", async () => {
@@ -267,7 +267,7 @@ describe("insightsPanel", () => {
 
         render(renderPanel(createClient(HEALTHY, EMPTY_STATS)));
 
-        const empty = await screen.findByTestId("cirrus-insights-empty");
+        const empty = await screen.findByTestId("lunora-insights-empty");
 
         expect(empty.textContent).toContain("No errors detected");
     });
@@ -289,7 +289,7 @@ describe("insightsPanel", () => {
 
         render(renderPanel(mock));
 
-        fireEvent.click(await screen.findByTestId("cirrus-insights-tab-info"));
+        fireEvent.click(await screen.findByTestId("lunora-insights-tab-info"));
 
         const cell = await screen.findByText("reports:build");
 
@@ -307,7 +307,7 @@ describe("insightsPanel", () => {
 
         render(renderPanel(mock));
 
-        const error = await screen.findByTestId("cirrus-insights-error");
+        const error = await screen.findByTestId("lunora-insights-error");
 
         expect(error.textContent).toBe("ADMIN_FORBIDDEN");
     });
@@ -344,16 +344,16 @@ describe("insightsPanel", () => {
         });
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <InsightsPanel loadShardTraffic={loadSkewedTraffic} />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         // hot_shard is WARN-severity → the Warnings tab.
-        fireEvent.click(await screen.findByTestId("cirrus-insights-tab-warning"));
+        fireEvent.click(await screen.findByTestId("lunora-insights-tab-warning"));
         await screen.findByText("Hot shard");
 
-        const view = screen.getByTestId("cirrus-insights");
+        const view = screen.getByTestId("lunora-insights");
 
         expect(view.textContent).toContain("Hot shard");
         expect(view.textContent).toContain('shard "tenant_busy"');
@@ -389,13 +389,13 @@ describe("insightsPanel", () => {
         });
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <InsightsPanel loadShardTraffic={loadEvenTraffic} />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         // The empty-state lands once the (only) tab has no rows.
-        const empty = await screen.findByTestId("cirrus-insights-empty");
+        const empty = await screen.findByTestId("lunora-insights-empty");
 
         expect(empty.textContent).toContain("No errors detected");
     });

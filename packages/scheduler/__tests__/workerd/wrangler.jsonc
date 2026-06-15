@@ -1,6 +1,6 @@
 {
     "$schema": "../../../../node_modules/wrangler/config-schema.json",
-    "name": "cirrus-scheduler-test-worker",
+    "name": "lunora-scheduler-test-worker",
     "main": "test-worker.ts",
     "compatibility_date": "2026-04-07",
     "compatibility_flags": ["nodejs_compat"],

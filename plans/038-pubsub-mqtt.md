@@ -15,23 +15,23 @@
 
 ## Verdict
 
-**Defer until GA. Document as a non-goal with a concrete revisit trigger.** Cloudflare Pub/Sub is an **MQTT broker** still in beta/limited availability — onboarding is gated, the API surface can change, and there is no Worker binding (you talk MQTT over TLS, or use the HTTP/on-publish Worker hook). It also overlaps heavily with what Cirrus already delivers: realtime fan-out is handled by DO-hibernated WebSocket subscriptions in `@cirrus/do` (`ShardDO`), which is type-safe, integrated, and needs no external broker. The only thing Pub/Sub adds is **MQTT-protocol device ingest** (IoT clients that speak MQTT natively) — a real but narrow niche. Until it is GA and someone needs MQTT device ingestion specifically, the right move is to write it down as a non-goal and revisit on the trigger below.
+**Defer until GA. Document as a non-goal with a concrete revisit trigger.** Cloudflare Pub/Sub is an **MQTT broker** still in beta/limited availability — onboarding is gated, the API surface can change, and there is no Worker binding (you talk MQTT over TLS, or use the HTTP/on-publish Worker hook). It also overlaps heavily with what Lunora already delivers: realtime fan-out is handled by DO-hibernated WebSocket subscriptions in `@lunora/do` (`ShardDO`), which is type-safe, integrated, and needs no external broker. The only thing Pub/Sub adds is **MQTT-protocol device ingest** (IoT clients that speak MQTT natively) — a real but narrow niche. Until it is GA and someone needs MQTT device ingestion specifically, the right move is to write it down as a non-goal and revisit on the trigger below.
 
 ## Current state
 
 - No Pub/Sub / MQTT code anywhere: `grep -ri "mqtt\|pub.?sub\|pubsub" packages/` returns nothing in scope.
-- Cirrus's realtime fan-out is the DO-hibernated WebSocket subscription path in `@cirrus/do` (`ShardDO`) plus the query coordinator in `packages/runtime/src/query-coordinator.ts`. This covers browser/server realtime data without any broker.
+- Lunora's realtime fan-out is the DO-hibernated WebSocket subscription path in `@lunora/do` (`ShardDO`) plus the query coordinator in `packages/runtime/src/query-coordinator.ts`. This covers browser/server realtime data without any broker.
 - `packages/config/src/wrangler-validator.ts` knows nothing about Pub/Sub, and correctly so — Pub/Sub has **no `wrangler.jsonc` binding** (brokers are provisioned via the dashboard/API, not declared in worker config), so there is nothing to add to the validator today.
-- The on-publish Worker hook (a Worker invoked per message for auth/transform) is the only integration seam, and it's a normal `fetch` handler — not something Cirrus needs to abstract.
+- The on-publish Worker hook (a Worker invoked per message for auth/transform) is the only integration seam, and it's a normal `fetch` handler — not something Lunora needs to abstract.
 
 What's missing: nothing. This is a deliberate "do not build yet" decision.
 
 ## Item breakdown
 
 - [x] **Item 1: Record the non-goal + revisit trigger (the whole plan).**
-    - Add a short "Why no MQTT/Pub/Sub" note where realtime is documented (the `cirrus-realtime` skill, or a docs page): realtime fan-out is DO-WebSocket-based; MQTT broker ingest is out of scope while Pub/Sub is beta.
-    - State the **revisit trigger** explicitly: (a) Cloudflare Pub/Sub reaches GA (general availability, ungated onboarding, stable API), **and** (b) a user needs to ingest from native-MQTT devices into Cirrus. Both must hold.
-    - If/when revisited, the likely shape is a tiny on-publish Worker-hook helper in `@cirrus/runtime` that authenticates a message and routes it to a mutation — _not_ a new broker abstraction. Do not pre-build it.
+    - Add a short "Why no MQTT/Pub/Sub" note where realtime is documented (the `lunora-realtime` skill, or a docs page): realtime fan-out is DO-WebSocket-based; MQTT broker ingest is out of scope while Pub/Sub is beta.
+    - State the **revisit trigger** explicitly: (a) Cloudflare Pub/Sub reaches GA (general availability, ungated onboarding, stable API), **and** (b) a user needs to ingest from native-MQTT devices into Lunora. Both must hold.
+    - If/when revisited, the likely shape is a tiny on-publish Worker-hook helper in `@lunora/runtime` that authenticates a message and routes it to a mutation — _not_ a new broker abstraction. Do not pre-build it.
     - No code; docs only.
 
 ## Verification
@@ -41,5 +41,5 @@ What's missing: nothing. This is a deliberate "do not build yet" decision.
 ## STOP conditions
 
 - If Cloudflare Pub/Sub is still beta/limited-availability at execution time, STOP after Item 1 — do not build any integration.
-- If you start designing an MQTT client, broker provisioning, or a topic abstraction inside Cirrus, STOP — that is explicitly out of scope for this plan.
+- If you start designing an MQTT client, broker provisioning, or a topic abstraction inside Lunora, STOP — that is explicitly out of scope for this plan.
 - If a request implies replacing the DO-WebSocket realtime path with MQTT, STOP and escalate — that is a topology change, not this plan.

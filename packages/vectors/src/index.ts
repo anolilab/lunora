@@ -24,8 +24,8 @@ export type {
 } from "./create-admin-introspector";
 export { default as createVectors } from "./create-vectors";
 export type {
-    CirrusVectors,
-    CirrusVectorsOptions,
+    LunoraVectors,
+    LunoraVectorsOptions,
     EmbedFunction,
     QueryInput,
     UpsertInput,

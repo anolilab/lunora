@@ -7,7 +7,7 @@
  * does **not** go through the FSM guard — the provider is authoritative here, so it repairs even
  * states a missed webhook left stale.
  *
- * The caller decides *which* ids to sweep (typically a `@cirrus/scheduler` job querying the store
+ * The caller decides *which* ids to sweep (typically a `@lunora/scheduler` job querying the store
  * for non-terminal rows), keeping this function pure and testable.
  */
 import type { PaymentAdapter } from "./adapter";

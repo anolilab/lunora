@@ -1,5 +1,5 @@
-import type { SchedulerDOState, SchedulerEnv } from "@cirrus/scheduler";
-import { SchedulerDO as SchedulerDOBase } from "@cirrus/scheduler";
+import type { SchedulerDOState, SchedulerEnv } from "@lunora/scheduler";
+import { SchedulerDO as SchedulerDOBase } from "@lunora/scheduler";
 
 /**
  * Concrete SchedulerDO subclass. The base class implements alarm-driven

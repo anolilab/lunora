@@ -18,7 +18,7 @@
  * (and the typed facade emitted by codegen) accept a `RestrictableQueryOptions`
  * arg whose `baseWhere` is AND-merged into the predicate before the
  * indexed/scan decision, and whose `restrictsCounts: true` flag flips
- * `count()` into a thrown `COUNT_RLS_UNSUPPORTED` `CirrusError`.
+ * `count()` into a thrown `COUNT_RLS_UNSUPPORTED` `LunoraError`.
  *
  * This is a seam, not an implementation. The aggregates module owns the
  * types and the merge/throw; the RLS module owns the policy logic.
@@ -35,8 +35,8 @@ import type { WhereInput } from "./where-clause-compiler";
 type AggregateOp = "avg" | "count" | "max" | "min" | "sum";
 
 /**
- * Structural mirror of `@cirrus/server`'s `AggregateIndexDefinition` — kept
- * local so this package doesn't depend on `@cirrus/server` (which would create
+ * Structural mirror of `@lunora/server`'s `AggregateIndexDefinition` — kept
+ * local so this package doesn't depend on `@lunora/server` (which would create
  * a cycle).
  */
 interface AggregateIndexDefinitionLike {
@@ -94,16 +94,16 @@ interface GroupByEntry {
 
 /**
  * Thrown when `count` runs in an RLS-restricted ctx. The structural shape
- * (`name: "CirrusError"`, `code`, `status`) lets the runtime's error mapper
- * route it without an `instanceof` check, so `@cirrus/do` stays free of a
- * runtime dependency on `@cirrus/server`. Status mirrors the
- * `COUNT_RLS_UNSUPPORTED` entry in the `CirrusErrorCode` taxonomy (422):
+ * (`name: "LunoraError"`, `code`, `status`) lets the runtime's error mapper
+ * route it without an `instanceof` check, so `@lunora/do` stays free of a
+ * runtime dependency on `@lunora/server`. Status mirrors the
+ * `COUNT_RLS_UNSUPPORTED` entry in the `LunoraErrorCode` taxonomy (422):
  * the operation is invalid in this context, not malformed.
  */
 class CountRlsUnsupportedError extends Error {
     public readonly code: string = "COUNT_RLS_UNSUPPORTED";
 
-    public override readonly name = "CirrusError";
+    public override readonly name = "LunoraError";
 
     public readonly status: number = 422;
 

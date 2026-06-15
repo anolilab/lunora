@@ -11,7 +11,7 @@ const callDO = async <T>(options: WorkpoolOptions, path: string, body: unknown):
     if (!response.ok) {
         const text = await response.text();
 
-        throw new Error(`@cirrus/scheduler: SchedulerDO ${path} failed (${String(response.status)}): ${text}`);
+        throw new Error(`@lunora/scheduler: SchedulerDO ${path} failed (${String(response.status)}): ${text}`);
     }
 
     return await response.json();
@@ -24,14 +24,14 @@ const getDO = async <T>(options: WorkpoolOptions, path: string): Promise<T> => {
     if (!response.ok) {
         const text = await response.text();
 
-        throw new Error(`@cirrus/scheduler: SchedulerDO ${path} failed (${String(response.status)}): ${text}`);
+        throw new Error(`@lunora/scheduler: SchedulerDO ${path} failed (${String(response.status)}): ${text}`);
     }
 
     return await response.json();
 };
 
 /**
- * Bounded-concurrency action queue — the Cirrus equivalent of
+ * Bounded-concurrency action queue — the Lunora equivalent of
  * `@convex-dev/workpool`. Mirrors `createScheduler`'s `namespace` /
  * `originUrl` / `instanceName` options and is built on the SAME `SchedulerDO`:
  * a workpool is just a NAMED logical pool inside that DO (concurrency counter
@@ -64,15 +64,15 @@ const createWorkpool = (options: WorkpoolOptions): Workpool => {
     // Defensive runtime guards: required by the type, but JS callers can omit them.
     // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untrusted JS callers despite the required type
     if (!options.namespace) {
-        throw new Error("@cirrus/scheduler: `namespace` (SchedulerDO binding) is required");
+        throw new Error("@lunora/scheduler: `namespace` (SchedulerDO binding) is required");
     }
 
     if (!options.originUrl) {
-        throw new Error("@cirrus/scheduler: `originUrl` is required so the DO can dispatch back to the Worker");
+        throw new Error("@lunora/scheduler: `originUrl` is required so the DO can dispatch back to the Worker");
     }
 
     if (!Number.isInteger(options.maxConcurrency) || options.maxConcurrency <= 0) {
-        throw new Error("@cirrus/scheduler: `maxConcurrency` must be a positive integer");
+        throw new Error("@lunora/scheduler: `maxConcurrency` must be a positive integer");
     }
 
     const name = typeof options.name === "string" && options.name.length > 0 ? options.name : "default";
@@ -85,12 +85,12 @@ const createWorkpool = (options: WorkpoolOptions): Workpool => {
         const delayMs = options_.delayMs ?? 0;
 
         if (!Number.isFinite(delayMs) || delayMs < 0) {
-            throw new Error("@cirrus/scheduler: `delayMs` must be a non-negative finite number");
+            throw new Error("@lunora/scheduler: `delayMs` must be a non-negative finite number");
         }
 
         return callDO<{ id: string; scheduledFor: number }>(options, "/schedule", {
             args,
-            functionPath: function_.__cirrusRef,
+            functionPath: function_.__lunoraRef,
             instanceName: options.instanceName ?? "default",
             maxConcurrency: options.maxConcurrency,
             originUrl: options.originUrl,

@@ -1,35 +1,35 @@
 ---
-title: "@cirrus/db"
+title: "@lunora/db"
 description: Optimistic, offline-first client data layer on TanStack DB.
 ---
 
-`@cirrus/db` turns your Cirrus queries and mutations into a [TanStack DB](https://tanstack.com/db)
+`@lunora/db` turns your Lunora queries and mutations into a [TanStack DB](https://tanstack.com/db)
 data layer: live, indexed client collections for reads, and a durable, retried
 **offline outbox** for writes. A sent message renders instantly, survives a
 reload or an offline window, is superseded by the real server row on
 acknowledgement, and rolls back if the server rejects it — without you
 hand-writing any sync glue.
 
-It sits on top of `@cirrus/client`'s transport (the same WebSocket subscriptions
+It sits on top of `@lunora/client`'s transport (the same WebSocket subscriptions
 and RPC the React hooks use). You keep your schema and functions exactly as they
-are; `@cirrus/db` binds them to collections.
+are; `@lunora/db` binds them to collections.
 
 ## Install
 
-`@cirrus/db` peer-depends on the TanStack packages, so install them alongside it:
+`@lunora/db` peer-depends on the TanStack packages, so install them alongside it:
 
 ```bash
-pnpm add @cirrus/db @tanstack/db @tanstack/react-db @tanstack/offline-transactions
+pnpm add @lunora/db @tanstack/db @tanstack/react-db @tanstack/offline-transactions
 ```
 
 ## Quick start (generated)
 
 You don't have to write the binding by hand. With a schema and functions in
-`cirrus/`, generate it from them:
+`lunora/`, generate it from them:
 
 ```bash
-cirrus codegen                    # ensure _generated/ is up to date
-vis generate cirrus-collections   # writes cirrus/collections.ts
+lunora codegen                    # ensure _generated/ is up to date
+vis generate lunora-collections   # writes lunora/collections.ts
 ```
 
 The generator reads `schema.ts` and `_generated/api.ts` and wires each table:
@@ -41,14 +41,14 @@ The generator reads `schema.ts` and `_generated/api.ts` and wires each table:
 
 The result is a ready-to-use `createCollections(client)`:
 
-```ts title="cirrus/collections.ts (generated)"
-import { defineCollections } from "@cirrus/db";
-import type { CirrusClient } from "@cirrus/react";
+```ts title="lunora/collections.ts (generated)"
+import { defineCollections } from "@lunora/db";
+import type { LunoraClient } from "@lunora/react";
 
 import { api } from "./_generated/api.js";
 import type { Doc, Id } from "./_generated/dataModel.js";
 
-export const createCollections = (client: CirrusClient) =>
+export const createCollections = (client: LunoraClient) =>
     defineCollections(client, {
         channels: {
             list: api.channels.list,
@@ -85,9 +85,9 @@ components:
 ```tsx
 import { useLiveQuery } from "@tanstack/react-db";
 
-import { createCollections } from "../cirrus/collections";
+import { createCollections } from "../lunora/collections";
 
-const db = createCollections(client); // `client` from <CirrusProvider>
+const db = createCollections(client); // `client` from <LunoraProvider>
 
 function Chat({ channelId }: { channelId: Id<"channels"> }) {
     // Point the sharded `messages` collection at the active channel.
@@ -129,7 +129,7 @@ Each `insert` binding produces an action under `db.actions.<table>`. Calling it:
 
 1. **inserts the optimistic row immediately** (so the UI updates with no latency),
 2. **persists the write to a durable outbox** (IndexedDB) and sends it via your
-   Cirrus mutation, retrying with backoff until it succeeds — so a write made
+   Lunora mutation, retrying with backoff until it succeeds — so a write made
    offline is never lost and replays on reconnect,
 3. **supersedes the optimistic row** with the real server row on acknowledgement
    (matched by id — see [client ids](#client-generated-ids)),
@@ -163,7 +163,7 @@ client must choose the row id up front. The `insert` binding generates a UUID,
 hands it to `optimistic` (as the row's `_id`) and forwards it to the mutation via
 `toArgs` — your mutation persists it with the validated `clientId` option:
 
-```ts title="cirrus/messages.ts"
+```ts title="lunora/messages.ts"
 export const send = mutation({
     args: { channelId: v.id("channels"), id: v.optional(v.string()), text: v.string() },
     handler: (ctx, { channelId, id, text }) => ctx.db.insert("messages", { channelId, text, userId: ctx.auth.userId }, id ? { clientId: id } : undefined),
@@ -173,13 +173,13 @@ export const send = mutation({
 `ctx.db.insert(table, doc, { clientId })` honours a **UUID-shaped** client id and
 is validated for shape; uniqueness is still enforced by the primary key, so a
 client can't collide with, overwrite, or forge a peer row. Without `clientId`,
-Cirrus mints the id as usual. See [`ctx.db.insert`](/docs/api/server#client-supplied-ids).
+Lunora mints the id as usual. See [`ctx.db.insert`](/docs/api/server#client-supplied-ids).
 
 ## Manual binding
 
 `defineCollections(client, defs)` is the underlying API. Each entry is:
 
-- `list` — the Cirrus query that lists the rows (the sync source). **Required.**
+- `list` — the Lunora query that lists the rows (the sync source). **Required.**
 - `getKey?` — row key extractor; defaults to `row._id`.
 - `scopeBy?` — a field that scopes the list (a shard key); makes the collection
   re-pointable via `db.scope.<table>`.

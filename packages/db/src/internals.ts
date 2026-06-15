@@ -4,7 +4,7 @@ import { NonRetriableError } from "@tanstack/offline-transactions";
 /** How often the optimistic detector nudges the executor to drain the outbox. */
 const OUTBOX_DRAIN_INTERVAL_MS = 1000;
 
-/** A row carrying the Cirrus document id. */
+/** A row carrying the Lunora document id. */
 export type Row = Record<string, unknown> & { _id: string };
 
 /** The subset of a TanStack DB sync write channel that {@link makeDiffEmit} drives. */
@@ -66,10 +66,10 @@ export const makeDiffEmit =
     };
 
 /**
- * Run a Cirrus mutation under the outbox's retry policy.
+ * Run a Lunora mutation under the outbox's retry policy.
  *
  * The retryable/permanent split keys on whether the failure carries a server
- * application error `code` (set by `@cirrus/client`'s rpc when the server returns
+ * application error `code` (set by `@lunora/client`'s rpc when the server returns
  * a `{ error: { code, … } }` envelope — validation, conflict, etc.). A coded
  * error is a definite verdict: surface it as a `NonRetriableError` so the executor
  * stops and TanStack DB rolls the optimistic insert back. Everything without a

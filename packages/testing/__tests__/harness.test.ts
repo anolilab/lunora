@@ -1,7 +1,7 @@
-import { defineSchema, defineTable, internalMutation, mutation, query, v } from "@cirrus/server";
+import { defineSchema, defineTable, internalMutation, mutation, query, v } from "@lunora/server";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { cirrusTest } from "../src/index";
+import { lunoraTest } from "../src/index";
 
 const schema = defineSchema({
     messages: defineTable({
@@ -44,17 +44,17 @@ const sendViaInternal = mutation({
 
 // Track every harness so each test's in-memory SQLite handle is closed in
 // afterEach — exercising the harness `close()` API and leaking no native handles.
-const open: ReturnType<typeof cirrusTest>[] = [];
+const open: ReturnType<typeof lunoraTest>[] = [];
 
-const start = (): ReturnType<typeof cirrusTest> => {
-    const t = cirrusTest(schema);
+const start = (): ReturnType<typeof lunoraTest> => {
+    const t = lunoraTest(schema);
 
     open.push(t);
 
     return t;
 };
 
-describe("cirrusTest", () => {
+describe("lunoraTest", () => {
     afterEach(() => {
         while (open.length > 0) {
             open.pop()?.close();
@@ -128,7 +128,7 @@ describe("cirrusTest", () => {
 
         const t = start();
 
-        await expect(t.mutation(scheduleSomething, {})).rejects.toThrow("ctx.scheduler is not available in the in-memory @cirrus/testing harness (v1)");
+        await expect(t.mutation(scheduleSomething, {})).rejects.toThrow("ctx.scheduler is not available in the in-memory @lunora/testing harness (v1)");
     });
 
     it("rejects an internal function called on the external surface", async () => {

@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { formatCirrusEvent } from "../src/log-format";
+import { formatLunoraEvent } from "../src/log-format";
 
 /** Build a one-line JSON event string the runtime would emit to `console`. */
-const event = (fields: Record<string, unknown>): string => JSON.stringify({ source: "cirrus", ...fields });
+const event = (fields: Record<string, unknown>): string => JSON.stringify({ source: "lunora", ...fields });
 
-describe("formatCirrusEvent", () => {
-    describe("non-cirrus input", () => {
+describe("formatLunoraEvent", () => {
+    describe("non-lunora input", () => {
         it.each([
             ["plain log text", "listening on http://localhost:8787"],
             ["empty string", ""],
@@ -17,13 +17,13 @@ describe("formatCirrusEvent", () => {
         ])("returns undefined for %s", (_label, line) => {
             expect.assertions(1);
 
-            expect(formatCirrusEvent(line)).toBeUndefined();
+            expect(formatLunoraEvent(line)).toBeUndefined();
         });
 
         it("does not throw on malformed JSON that starts and ends with braces", () => {
             expect.assertions(1);
 
-            expect(formatCirrusEvent('{"source":"cirrus", oops}')).toBeUndefined();
+            expect(formatLunoraEvent('{"source":"lunora", oops}')).toBeUndefined();
         });
     });
 
@@ -31,7 +31,7 @@ describe("formatCirrusEvent", () => {
         it("formats a log line attributed to its function at info level", () => {
             expect.assertions(1);
 
-            expect(formatCirrusEvent(event({ function: "messages:list", level: "info", message: "loaded 3 rows", type: "log" }))).toStrictEqual({
+            expect(formatLunoraEvent(event({ function: "messages:list", level: "info", message: "loaded 3 rows", type: "log" }))).toStrictEqual({
                 kind: "log",
                 level: "info",
                 text: "messages:list  loaded 3 rows",
@@ -41,26 +41,26 @@ describe("formatCirrusEvent", () => {
         it("maps the bare `log` level onto info", () => {
             expect.assertions(1);
 
-            expect(formatCirrusEvent(event({ function: "a:b", level: "log", message: "hi", type: "log" }))?.level).toBe("info");
+            expect(formatLunoraEvent(event({ function: "a:b", level: "log", message: "hi", type: "log" }))?.level).toBe("info");
         });
 
         it("surfaces warn and error levels", () => {
             expect.assertions(2);
 
-            expect(formatCirrusEvent(event({ function: "a:b", level: "warn", message: "careful", type: "log" }))?.level).toBe("warn");
-            expect(formatCirrusEvent(event({ function: "a:b", level: "error", message: "boom", type: "log" }))?.level).toBe("error");
+            expect(formatLunoraEvent(event({ function: "a:b", level: "warn", message: "careful", type: "log" }))?.level).toBe("warn");
+            expect(formatLunoraEvent(event({ function: "a:b", level: "error", message: "boom", type: "log" }))?.level).toBe("error");
         });
 
         it("falls back to <unknown> when the function is missing", () => {
             expect.assertions(1);
 
-            expect(formatCirrusEvent(event({ level: "info", message: "orphan", type: "log" }))?.text).toBe("<unknown>  orphan");
+            expect(formatLunoraEvent(event({ level: "info", message: "orphan", type: "log" }))?.text).toBe("<unknown>  orphan");
         });
 
         it("appends the shard as function@shard when present", () => {
             expect.assertions(1);
 
-            expect(formatCirrusEvent(event({ function: "messages:list", level: "info", message: "hi", shard: "room-9", type: "log" }))?.text).toBe(
+            expect(formatLunoraEvent(event({ function: "messages:list", level: "info", message: "hi", shard: "room-9", type: "log" }))?.text).toBe(
                 "messages:list@room-9  hi",
             );
         });
@@ -68,7 +68,7 @@ describe("formatCirrusEvent", () => {
         it("omits the default single-DO root sentinel from the label", () => {
             expect.assertions(1);
 
-            expect(formatCirrusEvent(event({ function: "messages:list", level: "info", message: "hi", shard: "__root__", type: "log" }))?.text).toBe(
+            expect(formatLunoraEvent(event({ function: "messages:list", level: "info", message: "hi", shard: "__root__", type: "log" }))?.text).toBe(
                 "messages:list  hi",
             );
         });
@@ -78,7 +78,7 @@ describe("formatCirrusEvent", () => {
         it("formats a successful dispatch with duration and tables", () => {
             expect.assertions(1);
 
-            const formatted = formatCirrusEvent(
+            const formatted = formatLunoraEvent(
                 event({ durationMs: 3.4, function: "messages:list", outcome: "ok", tablesRead: ["messages"], type: "request" }),
             );
 
@@ -88,7 +88,7 @@ describe("formatCirrusEvent", () => {
         it("marks writes and cache hits", () => {
             expect.assertions(1);
 
-            const formatted = formatCirrusEvent(
+            const formatted = formatLunoraEvent(
                 event({ cacheHit: true, durationMs: 1, function: "m:send", outcome: "ok", tablesWritten: ["messages", "channels"], type: "request" }),
             );
 
@@ -98,7 +98,7 @@ describe("formatCirrusEvent", () => {
         it("renders an error dispatch at error level with the message", () => {
             expect.assertions(1);
 
-            const formatted = formatCirrusEvent(event({ durationMs: 9, error: "not authorized", function: "m:send", outcome: "error", type: "request" }));
+            const formatted = formatLunoraEvent(event({ durationMs: 9, error: "not authorized", function: "m:send", outcome: "error", type: "request" }));
 
             expect(formatted).toStrictEqual({ kind: "rpc", level: "error", text: "m:send  error  9ms  not authorized" });
         });
@@ -106,13 +106,13 @@ describe("formatCirrusEvent", () => {
         it("renders ?ms when the duration is absent", () => {
             expect.assertions(1);
 
-            expect(formatCirrusEvent(event({ function: "a:b", outcome: "ok", type: "request" }))?.text).toBe("a:b  ok  ?ms");
+            expect(formatLunoraEvent(event({ function: "a:b", outcome: "ok", type: "request" }))?.text).toBe("a:b  ok  ?ms");
         });
 
         it("attributes the dispatch to function@shard when sharded", () => {
             expect.assertions(1);
 
-            expect(formatCirrusEvent(event({ durationMs: 2, function: "m:send", outcome: "ok", shard: "tenant-7", type: "request" }))?.text).toBe(
+            expect(formatLunoraEvent(event({ durationMs: 2, function: "m:send", outcome: "ok", shard: "tenant-7", type: "request" }))?.text).toBe(
                 "m:send@tenant-7  ok  2ms",
             );
         });
@@ -120,7 +120,7 @@ describe("formatCirrusEvent", () => {
         it("omits the default single-DO root sentinel from the dispatch label", () => {
             expect.assertions(1);
 
-            expect(formatCirrusEvent(event({ durationMs: 2, function: "m:send", outcome: "ok", shard: "__root__", type: "request" }))?.text).toBe(
+            expect(formatLunoraEvent(event({ durationMs: 2, function: "m:send", outcome: "ok", shard: "__root__", type: "request" }))?.text).toBe(
                 "m:send  ok  2ms",
             );
         });
@@ -130,7 +130,7 @@ describe("formatCirrusEvent", () => {
         it("formats a start event with a truncated instance id", () => {
             expect.assertions(2);
 
-            const line = formatCirrusEvent(event({ container: "transcoder", event: "start", instance: "do-instance-0001", type: "container" }));
+            const line = formatLunoraEvent(event({ container: "transcoder", event: "start", instance: "do-instance-0001", type: "container" }));
 
             expect(line?.level).toBe("info");
             expect(line?.text).toBe("container:transcoder#do-insta  start");
@@ -139,7 +139,7 @@ describe("formatCirrusEvent", () => {
         it("surfaces an error event on the error channel with its message", () => {
             expect.assertions(2);
 
-            const line = formatCirrusEvent(
+            const line = formatLunoraEvent(
                 event({ container: "transcoder", event: "error", instance: "do-instance-0001", message: "boom", type: "container" }),
             );
 
@@ -150,15 +150,15 @@ describe("formatCirrusEvent", () => {
         it("omits the instance suffix when the id is unknown", () => {
             expect.assertions(1);
 
-            expect(formatCirrusEvent(event({ container: "transcoder", event: "stop", instance: "unknown", type: "container" }))?.text).toBe(
+            expect(formatLunoraEvent(event({ container: "transcoder", event: "stop", instance: "unknown", type: "container" }))?.text).toBe(
                 "container:transcoder  stop",
             );
         });
     });
 
-    it("returns undefined for a cirrus event of an unknown type", () => {
+    it("returns undefined for a lunora event of an unknown type", () => {
         expect.assertions(1);
 
-        expect(formatCirrusEvent(event({ type: "metric" }))).toBeUndefined();
+        expect(formatLunoraEvent(event({ type: "metric" }))).toBeUndefined();
     });
 });

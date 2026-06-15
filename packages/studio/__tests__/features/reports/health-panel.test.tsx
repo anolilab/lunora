@@ -1,4 +1,4 @@
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraProvider } from "@lunora/react";
 import { render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
@@ -27,9 +27,9 @@ const withConnection = (mock: MockClientHooks): MockClientHooks => {
 };
 
 const renderPanel = (mock: MockClientHooks): ReactElement => (
-    <CirrusProvider client={mock.asClient}>
+    <LunoraProvider client={mock.asClient}>
         <HealthPanel />
-    </CirrusProvider>
+    </LunoraProvider>
 );
 
 const clientWith = (entries: LogEntry[]): MockClientHooks =>

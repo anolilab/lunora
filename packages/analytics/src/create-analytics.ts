@@ -12,7 +12,7 @@ const MAX_INDEXES = 1;
 /** Guard one positional array against AE's per-data-point cap; throws on overflow. */
 const assertWithin = (kind: string, length: number, max: number): void => {
     if (length > max) {
-        throw new RangeError(`@cirrus/analytics: a data point may carry at most ${String(max)} ${kind} (got ${String(length)}).`);
+        throw new RangeError(`@lunora/analytics: a data point may carry at most ${String(max)} ${kind} (got ${String(length)}).`);
     }
 };
 

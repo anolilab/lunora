@@ -1,4 +1,4 @@
-import type { Schema } from "@cirrus/server";
+import type { Schema } from "@lunora/server";
 
 import { copycat, setHashKey } from "./copycat";
 import { generateValue } from "./generate-value";

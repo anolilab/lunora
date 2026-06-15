@@ -6,7 +6,7 @@
 
 </a>
 
-<h3 align="center">Cloudflare Browser Rendering for Cirrus: ctx.browser screenshots, PDF, and scraping in actions</h3>
+<h3 align="center">Cloudflare Browser Rendering for Lunora: ctx.browser screenshots, PDF, and scraping in actions</h3>
 
 <!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
@@ -34,29 +34,29 @@
 
 ---
 
-Cloudflare [Browser Rendering](https://developers.cloudflare.com/browser-rendering/) for Cirrus. Wraps the `env.BROWSER` binding — driven through [`@cloudflare/playwright`](https://github.com/cloudflare/playwright) (`launch(env.BROWSER)`) — with a small typed `ctx.browser` API: `screenshot`, `pdf`, `scrape`/`content`, plus a low-level `launch()` escape hatch. Every helper opens a context + page, navigates, performs the op, and **always closes the session in a `finally`** (a leaked Browser Rendering session is billed and rate-limited).
+Cloudflare [Browser Rendering](https://developers.cloudflare.com/browser-rendering/) for Lunora. Wraps the `env.BROWSER` binding — driven through [`@cloudflare/playwright`](https://github.com/cloudflare/playwright) (`launch(env.BROWSER)`) — with a small typed `ctx.browser` API: `screenshot`, `pdf`, `scrape`/`content`, plus a low-level `launch()` escape hatch. Every helper opens a context + page, navigates, performs the op, and **always closes the session in a `finally`** (a leaked Browser Rendering session is billed and rate-limited).
 
-Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
+Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
 ## Action-only — and why
 
-`ctx.browser` is wired onto the **action context only** — never `QueryCtx`/`MutationCtx`. Driving a real headless browser to a URL is **non-deterministic network I/O** (the same class as `fetch`), and Cirrus queries/mutations must be deterministic so they can be re-run, cached, and replayed over the live channel. So codegen weaves `ctx.browser` into `ActionCtx` exclusively — exactly like `ctx.ai` / `ctx.fetch`.
+`ctx.browser` is wired onto the **action context only** — never `QueryCtx`/`MutationCtx`. Driving a real headless browser to a URL is **non-deterministic network I/O** (the same class as `fetch`), and Lunora queries/mutations must be deterministic so they can be re-run, cached, and replayed over the live channel. So codegen weaves `ctx.browser` into `ActionCtx` exclusively — exactly like `ctx.ai` / `ctx.fetch`.
 
-This isn't just convention: because the `browser` type is **not on** `QueryCtx`/`MutationCtx`, a `ctx.browser.*` call in a query or mutation is a type error and won't compile. It's the same mistake class the [`nondeterministic_query_mutation` advisor](https://github.com/anolilab/cirrus/blob/alpha/packages/advisor/src/lints/static/nondeterministic-query-mutation.ts) flags for `fetch`/`Date.now`/`Math.random` — here it's structurally impossible.
+This isn't just convention: because the `browser` type is **not on** `QueryCtx`/`MutationCtx`, a `ctx.browser.*` call in a query or mutation is a type error and won't compile. It's the same mistake class the [`nondeterministic_query_mutation` advisor](https://github.com/anolilab/lunora/blob/alpha/packages/advisor/src/lints/static/nondeterministic-query-mutation.ts) flags for `fetch`/`Date.now`/`Math.random` — here it's structurally impossible.
 
 ## Install
 
 `@cloudflare/playwright` is an **optional peer dependency** (it bundles a chromium-protocol shim — apps that never screenshot shouldn't pay for it). Install both:
 
 ```sh
-npm install @cirrus/browser @cloudflare/playwright
+npm install @lunora/browser @cloudflare/playwright
 ```
 
 ```sh
-pnpm add @cirrus/browser @cloudflare/playwright
+pnpm add @lunora/browser @cloudflare/playwright
 ```
 
-Add the binding to your `wrangler.jsonc` (the Cirrus Vite plugin / CLI infers and reconciles it for you when it sees a `@cirrus/browser` import):
+Add the binding to your `wrangler.jsonc` (the Lunora Vite plugin / CLI infers and reconciles it for you when it sees a `@lunora/browser` import):
 
 ```jsonc
 {
@@ -67,7 +67,7 @@ Add the binding to your `wrangler.jsonc` (the Cirrus Vite plugin / CLI infers an
 ## Usage
 
 ```ts
-import { action, v } from "@cirrus/server";
+import { action, v } from "@lunora/server";
 
 export const screenshotPage = action({
     args: { url: v.string() },
@@ -89,7 +89,7 @@ Outside an action — in the worker entry, a Durable Object, or a queue/schedule
 ```ts
 import { launch } from "@cloudflare/playwright";
 
-import { createBrowser } from "@cirrus/browser";
+import { createBrowser } from "@lunora/browser";
 
 const browser = createBrowser({ binding: env.BROWSER, launch });
 
@@ -110,13 +110,13 @@ const browser = createBrowser({ binding: env.BROWSER, launch, allowPrivateTarget
 
 Only set `allowPrivateTargets` when every URL is trusted — it re-opens the SSRF surface. The guard does not resolve DNS, so a public hostname that resolves to a private address (DNS rebinding) is out of scope; keep caller-supplied URLs trusted regardless.
 
-> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/addons/browser)**.
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/addons/browser)**.
 
 ## Related
 
-- [`@cirrus/server`](https://www.npmjs.com/package/@cirrus/server) — call `ctx.browser` from actions.
-- [`@cirrus/storage`](https://www.npmjs.com/package/@cirrus/storage) — persist the screenshots/PDFs you render.
-- [`@cirrus/advisor`](https://www.npmjs.com/package/@cirrus/advisor) — the determinism lint that keeps non-deterministic I/O out of queries/mutations.
+- [`@lunora/server`](https://www.npmjs.com/package/@lunora/server) — call `ctx.browser` from actions.
+- [`@lunora/storage`](https://www.npmjs.com/package/@lunora/storage) — persist the screenshots/PDFs you render.
+- [`@lunora/advisor`](https://www.npmjs.com/package/@lunora/advisor) — the determinism lint that keeps non-deterministic I/O out of queries/mutations.
 
 ## Supported Node.js Versions
 
@@ -125,14 +125,14 @@ Here's [a post on why we think this is important](https://medium.com/the-node-js
 
 ## Contributing
 
-If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/lunora/issues) and check our [Contributing](https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
 > **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
 ## Credits
 
 - [Daniel Bannert](https://github.com/prisis)
-- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
+- [All Contributors](https://github.com/anolilab/lunora/graphs/contributors)
 
 ## Made with ❤️ at Anolilab
 
@@ -140,17 +140,17 @@ This is an open source project and will always remain free to use. If you think 
 
 ## License
 
-The Cirrus browser package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The Lunora browser package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
 
 <!-- badges -->
 
 [license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
-[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
-[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/browser?style=for-the-badge
-[npm-version]: https://www.npmjs.com/package/@cirrus/browser
-[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/browser?style=for-the-badge
-[npm-downloads]: https://www.npmjs.com/package/@cirrus/browser
+[license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@lunora/browser?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@lunora/browser
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@lunora/browser?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@lunora/browser
 [prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
-[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[prs-welcome]: https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md
 [typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
 [typescript-url]: https://www.typescriptlang.org/

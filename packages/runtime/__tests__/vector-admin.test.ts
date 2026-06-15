@@ -39,7 +39,7 @@ describe("createWorker — vector admin endpoints", () => {
 
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, vectorIntrospector: introspector() });
 
-        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/vector/indexes", { method: "GET" }), {}, fakeContext);
+        const response = await worker.fetch(new Request("https://app.example/_lunora/admin/vector/indexes", { method: "GET" }), {}, fakeContext);
 
         expect(response.status).toBe(403);
     });
@@ -49,7 +49,7 @@ describe("createWorker — vector admin endpoints", () => {
 
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace });
 
-        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/vector/indexes", { headers: AUTH, method: "GET" }), {}, fakeContext);
+        const response = await worker.fetch(new Request("https://app.example/_lunora/admin/vector/indexes", { headers: AUTH, method: "GET" }), {}, fakeContext);
 
         expect(response.status).toBe(400);
 
@@ -63,7 +63,7 @@ describe("createWorker — vector admin endpoints", () => {
 
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, vectorIntrospector: introspector() });
 
-        const response = await worker.fetch(new Request("https://app.example/_cirrus/admin/vector/indexes", { headers: AUTH, method: "GET" }), {}, fakeContext);
+        const response = await worker.fetch(new Request("https://app.example/_lunora/admin/vector/indexes", { headers: AUTH, method: "GET" }), {}, fakeContext);
 
         expect(response.status).toBe(200);
 
@@ -81,7 +81,7 @@ describe("createWorker — vector admin endpoints", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, vectorIntrospector: introspector({ queryIndex }) });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/vector/query", {
+            new Request("https://app.example/_lunora/admin/vector/query", {
                 body: JSON.stringify({ name: "by_body", text: "hello", topK: 5 }),
                 headers: { ...AUTH, "content-type": "application/json" },
                 method: "POST",
@@ -100,7 +100,7 @@ describe("createWorker — vector admin endpoints", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, vectorIntrospector: introspector() });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/vector/query", {
+            new Request("https://app.example/_lunora/admin/vector/query", {
                 body: JSON.stringify({ name: "by_body" }),
                 headers: { ...AUTH, "content-type": "application/json" },
                 method: "POST",
@@ -122,7 +122,7 @@ describe("createWorker — vector admin endpoints", () => {
         });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/vector/query", {
+            new Request("https://app.example/_lunora/admin/vector/query", {
                 body: JSON.stringify({ name: "by_body", text: "hello" }),
                 headers: { ...AUTH, "content-type": "application/json" },
                 method: "POST",
@@ -144,7 +144,7 @@ describe("createWorker — vector admin endpoints", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, vectorIntrospector: introspector() });
 
         const response = await worker.fetch(
-            new Request("https://app.example/_cirrus/admin/vector/indexes", { headers: AUTH, method: "POST" }),
+            new Request("https://app.example/_lunora/admin/vector/indexes", { headers: AUTH, method: "POST" }),
             {},
             fakeContext,
         );

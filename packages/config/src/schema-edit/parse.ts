@@ -1,5 +1,5 @@
 /**
- * Validator-aware reader for a `cirrus/schema.ts` source string, used by the
+ * Validator-aware reader for a `lunora/schema.ts` source string, used by the
  * visual schema editor (plan 024). Extends `.vis/templates/_helpers/parse-schema.ts`
  * (which only reads column names) to also carry each column's validator
  * expression text (e.g. `v.string()`, `v.optional(v.number())`) and the
@@ -168,7 +168,7 @@ const parseColumns = (initializer: PropertyAssignment): SchemaColumn[] => {
 };
 
 /**
- * Parse the tables (with typed columns + indexes) out of a `cirrus/schema.ts`
+ * Parse the tables (with typed columns + indexes) out of a `lunora/schema.ts`
  * source string. Returns a tagged result so callers can render a helpful
  * message per failure mode without throwing.
  */

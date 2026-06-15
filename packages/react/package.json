@@ -1,15 +1,15 @@
 {
-    "name": "@cirrus/react",
+    "name": "@lunora/react",
     "version": "0.0.0",
     "license": "FSL-1.1-Apache-2.0",
-    "description": "React hooks for Cirrus: useQuery, useMutation, useSubscription, and useAuth",
-    "homepage": "https://cirrus.dev",
+    "description": "React hooks for Lunora: useQuery, useMutation, useSubscription, and useAuth",
+    "homepage": "https://lunora.sh",
     "bugs": {
-        "url": "https://github.com/anolilab/cirrus/issues"
+        "url": "https://github.com/anolilab/lunora/issues"
     },
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/anolilab/cirrus.git",
+        "url": "git+https://github.com/anolilab/lunora.git",
         "directory": "packages/react"
     },
     "author": {
@@ -17,7 +17,7 @@
         "email": "d.bannert@anolilab.de"
     },
     "keywords": [
-        "cirrus",
+        "lunora",
         "cloudflare",
         "workers",
         "durable-objects",
@@ -61,8 +61,8 @@
         "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
-        "@cirrus/client": "workspace:*",
-        "@cirrus/ratelimit": "workspace:*"
+        "@lunora/client": "workspace:*",
+        "@lunora/ratelimit": "workspace:*"
     },
     "devDependencies": {
         "@babel/core": "catalog:build",

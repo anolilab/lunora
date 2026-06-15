@@ -4,23 +4,23 @@
     "private": true,
     "type": "module",
     "scripts": {
-        "dev": "cirrus dev",
+        "dev": "lunora dev",
         "build": "vite build",
         "preview": "vite preview",
-        "codegen": "cirrus codegen",
-        "deploy": "vite build && cirrus deploy",
+        "codegen": "lunora codegen",
+        "deploy": "vite build && lunora deploy",
         "prepare": "svelte-kit sync"
     },
     "dependencies": {
-        "@cirrus/client": "^0.0.0",
-        "@cirrus/do": "^0.0.0",
-        "@cirrus/runtime": "^0.0.0",
-        "@cirrus/server": "^0.0.0",
-        "@cirrus/svelte": "^0.0.0"
+        "@lunora/client": "^0.0.0",
+        "@lunora/do": "^0.0.0",
+        "@lunora/runtime": "^0.0.0",
+        "@lunora/server": "^0.0.0",
+        "@lunora/svelte": "^0.0.0"
     },
     "devDependencies": {
-        "@cirrus/cli": "^0.0.0",
-        "@cirrus/vite": "^0.0.0",
+        "@lunora/cli": "^0.0.0",
+        "@lunora/vite": "^0.0.0",
         "@sveltejs/adapter-cloudflare": "^7.2.8",
         "@sveltejs/kit": "^2.65.0",
         "@sveltejs/vite-plugin-svelte": "^7.1.2",

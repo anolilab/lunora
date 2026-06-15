@@ -1,4 +1,4 @@
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraProvider } from "@lunora/react";
 import { render, screen } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
@@ -40,9 +40,9 @@ const createClient = (subscriptions: Row[] = SUBSCRIPTIONS, events: Row[] = EVEN
     });
 
 const renderPanel = (mock: MockClientHooks): ReactElement => (
-    <CirrusProvider client={mock.asClient}>
+    <LunoraProvider client={mock.asClient}>
         <PaymentsPanel />
-    </CirrusProvider>
+    </LunoraProvider>
 );
 
 describe("paymentsPanel", () => {

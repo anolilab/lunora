@@ -1,12 +1,12 @@
-import { CirrusClient } from "@cirrus/client";
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraClient } from "@lunora/client";
+import { LunoraProvider } from "@lunora/react";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import { App } from "./App.js";
 
-const url = (import.meta.env.VITE_CIRRUS_URL as string | undefined) ?? globalThis.location.origin;
-const client = new CirrusClient({ url });
+const url = (import.meta.env.VITE_LUNORA_URL as string | undefined) ?? globalThis.location.origin;
+const client = new LunoraClient({ url });
 
 const root = document.querySelector("#root");
 
@@ -16,8 +16,8 @@ if (!root) {
 
 createRoot(root).render(
     <StrictMode>
-        <CirrusProvider client={client}>
+        <LunoraProvider client={client}>
             <App />
-        </CirrusProvider>
+        </LunoraProvider>
     </StrictMode>,
 );

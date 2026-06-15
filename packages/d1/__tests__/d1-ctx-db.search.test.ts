@@ -1,4 +1,4 @@
-import type { DatabaseWriterLike, SchemaLike, ValidatorLike } from "@cirrus/do";
+import type { DatabaseWriterLike, SchemaLike, ValidatorLike } from "@lunora/do";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createD1CtxDb as createD1ContextDatabase, runD1SearchMigrations } from "../src/d1-ctx-db";
@@ -9,7 +9,7 @@ import createD1Exec from "./_helpers/node-sqlite-d1";
  * dialect. `node:sqlite` ships *without* FTS5, so this exercises the portable
  * LIKE-scan fallback end to end: AND semantics, prefix on the final token,
  * `.eq()` filter narrowing, term-frequency ranking, and the builder guards —
- * the D1 twin of `@cirrus/do`'s `ctx-db.search.test.ts`. The FTS5 production
+ * the D1 twin of `@lunora/do`'s `ctx-db.search.test.ts`. The FTS5 production
  * path (DDL + sync + MATCH SQL) is asserted separately in
  * `d1-ctx-db.search.fts.test.ts` via a recording double.
  */

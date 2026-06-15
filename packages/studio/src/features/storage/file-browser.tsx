@@ -73,7 +73,7 @@ const Breadcrumbs = ({ onNavigate, prefix, t }: BreadcrumbsProps): ReactElement 
 /**
  * Browse — and mutate — objects in the storage (R2) bucket. Lists keys under an
  * optional prefix via the client's `listStorageObjects`, which hits the worker's
- * admin-gated `GET /_cirrus/admin/storage` endpoint — so the worker must be built
+ * admin-gated `GET /_lunora/admin/storage` endpoint — so the worker must be built
  * with a `storageList` function and `adminToken`. Paginates forward by cursor.
  *
  * Each row offers a "Copy URL" (signed/public URL via `signedStorageUrl`) and a
@@ -120,7 +120,7 @@ export const FileBrowser = ({ initialPrefix, pageSize = DEFAULT_PAGE_SIZE }: Fil
     const empty = vm.loaded && !vm.hasObjects;
 
     return (
-        <div className="flex flex-col gap-3" data-testid="cirrus-file-browser">
+        <div className="flex flex-col gap-3" data-testid="lunora-file-browser">
             <FileBrowserToolbar
                 bucket={vm.bucket}
                 buckets={vm.buckets}

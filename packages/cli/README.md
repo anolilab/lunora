@@ -6,7 +6,7 @@
 
 </a>
 
-<h3 align="center">The Cirrus CLI: init, dev, deploy, codegen, run, reset, and migrate commands</h3>
+<h3 align="center">The Lunora CLI: init, dev, deploy, codegen, run, reset, and migrate commands</h3>
 
 <!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 
@@ -34,51 +34,51 @@
 
 ---
 
-The `cirrus` command-line interface. Scaffolds new projects, runs the dev server, regenerates the typed API, validates `wrangler.jsonc`, deploys to Cloudflare, and dispatches one-shot RPC calls against a running Worker — plus `reset` and `migrate`.
+The `lunora` command-line interface. Scaffolds new projects, runs the dev server, regenerates the typed API, validates `wrangler.jsonc`, deploys to Cloudflare, and dispatches one-shot RPC calls against a running Worker — plus `reset` and `migrate`.
 
-Part of the [Cirrus](https://github.com/anolilab/cirrus) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
+Part of the [Lunora](https://github.com/anolilab/lunora) framework — a type-safe, real-time backend on Cloudflare Workers + Durable Objects with a Vite-first DX.
 
 ## Install
 
 ```sh
-npm install @cirrus/cli
+npm install @lunora/cli
 ```
 
 ```sh
-yarn add @cirrus/cli
+yarn add @lunora/cli
 ```
 
 ```sh
-pnpm add @cirrus/cli
+pnpm add @lunora/cli
 ```
 
 ## Usage
 
 ```sh
 # Scaffold a new project, then work inside it
-cirrus init my-app
+lunora init my-app
 cd my-app
 
-cirrus dev        # run the dev server (Vite + wrangler)
-cirrus codegen    # re-emit _generated/{api,server,dataModel}.ts
-cirrus deploy     # codegen + validate wrangler.jsonc + wrangler deploy
+lunora dev        # run the dev server (Vite + wrangler)
+lunora codegen    # re-emit _generated/{api,server,dataModel}.ts
+lunora deploy     # codegen + validate wrangler.jsonc + wrangler deploy
 ```
 
 The CLI also exposes a programmatic entry point:
 
 ```ts
-import { runCli } from "@cirrus/cli";
+import { runCli } from "@lunora/cli";
 
 const exitCode = await runCli({ argv: ["dev", "--no-vite"], cwd: process.cwd() });
 ```
 
-> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://cirrus.dev/docs/api/cli)**.
+> This README covers the basics. For the full API, options, and guides, see the **[documentation](https://lunora.sh/docs/api/cli)**.
 
 ## Related
 
-- [`@cirrus/codegen`](https://www.npmjs.com/package/@cirrus/codegen) — the code generator the `codegen`/`deploy` commands call.
-- [`@cirrus/config`](https://www.npmjs.com/package/@cirrus/config) — shared `wrangler.jsonc` validation and `.dev.vars` scaffolding.
-- [`@cirrus/vite`](https://www.npmjs.com/package/@cirrus/vite) — the Vite plugin powering `cirrus dev`.
+- [`@lunora/codegen`](https://www.npmjs.com/package/@lunora/codegen) — the code generator the `codegen`/`deploy` commands call.
+- [`@lunora/config`](https://www.npmjs.com/package/@lunora/config) — shared `wrangler.jsonc` validation and `.dev.vars` scaffolding.
+- [`@lunora/vite`](https://www.npmjs.com/package/@lunora/vite) — the Vite plugin powering `lunora dev`.
 
 ## Supported Node.js Versions
 
@@ -87,14 +87,14 @@ Here's [a post on why we think this is important](https://medium.com/the-node-js
 
 ## Contributing
 
-If you would like to help take a look at the [list of issues](https://github.com/anolilab/cirrus/issues) and check our [Contributing](https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md) guidelines.
+If you would like to help take a look at the [list of issues](https://github.com/anolilab/lunora/issues) and check our [Contributing](https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md) guidelines.
 
 > **Note:** please note that this project is released with a Contributor Code of Conduct. By participating in this project you agree to abide by its terms.
 
 ## Credits
 
 - [Daniel Bannert](https://github.com/prisis)
-- [All Contributors](https://github.com/anolilab/cirrus/graphs/contributors)
+- [All Contributors](https://github.com/anolilab/lunora/graphs/contributors)
 
 ## Made with ❤️ at Anolilab
 
@@ -102,17 +102,17 @@ This is an open source project and will always remain free to use. If you think 
 
 ## License
 
-The Cirrus cli package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
+The Lunora cli package is open-sourced software licensed under the [FSL-1.1-Apache-2.0][license].
 
 <!-- badges -->
 
 [license-badge]: https://img.shields.io/badge/license-FSL--1.1--Apache--2.0-blue.svg?style=for-the-badge
-[license]: https://github.com/anolilab/cirrus/blob/alpha/LICENSE.md
-[npm-version-badge]: https://img.shields.io/npm/v/@cirrus/cli?style=for-the-badge
-[npm-version]: https://www.npmjs.com/package/@cirrus/cli
-[npm-downloads-badge]: https://img.shields.io/npm/dm/@cirrus/cli?style=for-the-badge
-[npm-downloads]: https://www.npmjs.com/package/@cirrus/cli
+[license]: https://github.com/anolilab/lunora/blob/alpha/LICENSE.md
+[npm-version-badge]: https://img.shields.io/npm/v/@lunora/cli?style=for-the-badge
+[npm-version]: https://www.npmjs.com/package/@lunora/cli
+[npm-downloads-badge]: https://img.shields.io/npm/dm/@lunora/cli?style=for-the-badge
+[npm-downloads]: https://www.npmjs.com/package/@lunora/cli
 [prs-welcome-badge]: https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=for-the-badge
-[prs-welcome]: https://github.com/anolilab/cirrus/blob/alpha/.github/CONTRIBUTING.md
+[prs-welcome]: https://github.com/anolilab/lunora/blob/alpha/.github/CONTRIBUTING.md
 [typescript-badge]: https://img.shields.io/badge/Typescript-294E80.svg?style=for-the-badge&logo=typescript
 [typescript-url]: https://www.typescriptlang.org/

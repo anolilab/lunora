@@ -1,11 +1,11 @@
-import type { AggregateIndexDefinitionLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@cirrus/do";
+import type { AggregateIndexDefinitionLike, DatabaseWriterLike, SchemaLike, ValidatorLike } from "@lunora/do";
 import { bench, describe } from "vitest";
 
 import createD1Exec from "../__tests__/_helpers/node-sqlite-d1";
 import { createD1CtxDb as createD1ContextDatabase, runD1AggregateMigrations } from "../src/d1-ctx-db";
 
 /**
- * D1 column-dialect mirror of `@cirrus/do/count-indexed-vs-scan`. The
+ * D1 column-dialect mirror of `@lunora/do/count-indexed-vs-scan`. The
  * win shape should be the same — an aggregateIndex companion lookup is O(1)
  * vs SQL `SELECT COUNT(*)` walking the table — but the column-dialect
  * physical schema (real columns, not `json_extract`) gives the scan path a

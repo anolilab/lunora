@@ -1,7 +1,7 @@
 import type { CSSProperties, ReactElement } from "react";
 
 /**
- * The two storage tiers a Cirrus table can live in. The whole point of this
+ * The two storage tiers a Lunora table can live in. The whole point of this
  * module is to make the distinction legible in the studio so an operator
  * never has to guess where a given table's rows actually are. `shard` tables are
  * per-shard-key SQLite inside a Durable Object (`.shardBy(...)`), browsed one

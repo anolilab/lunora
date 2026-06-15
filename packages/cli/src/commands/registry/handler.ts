@@ -4,7 +4,7 @@ import type { RegistryOptions } from "./command";
 import { runAddCommand, runBuildIndexCommand, runRegistryViewCommand } from "./index";
 
 /**
- * `cirrus registry` handler — dispatches `add | list | view | build` to the
+ * `lunora registry` handler — dispatches `add | list | view | build` to the
  * orchestrators in `./index`. The remaining positionals after the subcommand are
  * item names.
  */
@@ -47,7 +47,7 @@ const execute: CommandHandler<RegistryOptions> = defineHandler<RegistryOptions>(
         return runBuildIndexCommand({ check: options.check === true, cwd, from: options.from, logger, names: [], out: options.out });
     }
 
-    logger.error("registry: unknown subcommand. Usage: cirrus registry <add|list|view|build> [names…]");
+    logger.error("registry: unknown subcommand. Usage: lunora registry <add|list|view|build> [names…]");
 
     return { code: 1 };
 });

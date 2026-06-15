@@ -1,9 +1,9 @@
-import { useMutation, useQuery } from "@cirrus/react";
+import { useMutation, useQuery } from "@lunora/react";
 import type { FormEvent, ReactElement } from "react";
 import { useState } from "react";
 
-import { api } from "../../cirrus/_generated/api.js";
-import type { Doc, Id } from "../../cirrus/_generated/dataModel.js";
+import { api } from "../../lunora/_generated/api.js";
+import type { Doc, Id } from "../../lunora/_generated/dataModel.js";
 
 /**
  * Tiny CRUD demo: list + create + toggle + delete, with optimistic updates.

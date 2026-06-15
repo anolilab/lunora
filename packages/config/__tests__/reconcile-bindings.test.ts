@@ -36,7 +36,7 @@ const baseInferred = (overrides: Partial<InferredBindings> = {}): InferredBindin
 
 const MINIMAL_WRANGLER = `{
     // a hand-written comment that must survive reconciliation
-    "name": "cirrus-app",
+    "name": "lunora-app",
     "main": "src/index.ts",
     "compatibility_date": "2026-04-07",
     "durable_objects": {
@@ -50,7 +50,7 @@ describe("reconcileWranglerBindings", () => {
     let root: string;
 
     beforeEach(() => {
-        root = mkdtempSync(join(tmpdir(), "cirrus-reconcile-"));
+        root = mkdtempSync(join(tmpdir(), "lunora-reconcile-"));
         writeFileSync(join(root, "wrangler.jsonc"), MINIMAL_WRANGLER, "utf8");
     });
 
@@ -93,7 +93,7 @@ describe("reconcileWranglerBindings", () => {
         expect(result.warnings.join(" ")).toMatch(/placeholder database_id/u);
     });
 
-    it("adds the parameterless ai binding when @cirrus/ai is inferred", () => {
+    it("adds the parameterless ai binding when @lunora/ai is inferred", () => {
         expect.assertions(2);
 
         const result = reconcileWranglerBindings(root, baseInferred({ usesAi: true }));
@@ -108,7 +108,7 @@ describe("reconcileWranglerBindings", () => {
         writeFileSync(
             join(root, "wrangler.jsonc"),
             `{
-    "name": "cirrus-app",
+    "name": "lunora-app",
     "compatibility_date": "2026-04-07",
     "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
@@ -129,7 +129,7 @@ describe("reconcileWranglerBindings", () => {
         writeFileSync(
             join(root, "wrangler.jsonc"),
             `{
-    "name": "cirrus-app",
+    "name": "lunora-app",
     "compatibility_date": "2026-04-07",
     "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
@@ -166,7 +166,7 @@ describe("reconcileWranglerBindings", () => {
         expect(second.changed).toBe(false);
     });
 
-    it("warns rather than guesses when @cirrus/storage is used", () => {
+    it("warns rather than guesses when @lunora/storage is used", () => {
         expect.assertions(2);
 
         const result = reconcileWranglerBindings(root, baseInferred({ usesStorage: true }));
@@ -175,7 +175,7 @@ describe("reconcileWranglerBindings", () => {
         expect(readConfig().r2_buckets).toBeUndefined();
     });
 
-    it("warns to set the provider secrets when @cirrus/payment is used, without adding any binding", () => {
+    it("warns to set the provider secrets when @lunora/payment is used, without adding any binding", () => {
         expect.assertions(3);
 
         const result = reconcileWranglerBindings(root, baseInferred({ usesPayment: true }));
@@ -201,7 +201,7 @@ describe("reconcileWranglerBindings", () => {
         writeFileSync(
             join(root, "wrangler.jsonc"),
             `{
-    "name": "cirrus-app",
+    "name": "lunora-app",
     "compatibility_date": "2026-04-07",
     "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
@@ -222,7 +222,7 @@ describe("reconcileWranglerBindings", () => {
         writeFileSync(
             join(root, "wrangler.jsonc"),
             `{
-    "name": "cirrus-app",
+    "name": "lunora-app",
     "compatibility_date": "2026-04-07",
     "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
@@ -248,7 +248,7 @@ describe("reconcileWranglerBindings", () => {
         expect(result.reason).toContain("not found");
     });
 
-    it("auto-writes the self-describing browser binding when @cirrus/browser is inferred, idempotently", () => {
+    it("auto-writes the self-describing browser binding when @lunora/browser is inferred, idempotently", () => {
         expect.assertions(3);
 
         const first = reconcileWranglerBindings(root, baseInferred({ usesBrowser: true }));
@@ -261,7 +261,7 @@ describe("reconcileWranglerBindings", () => {
         expect(second.changed).toBe(false);
     });
 
-    it("auto-writes the self-describing analytics dataset when @cirrus/analytics is inferred, idempotently", () => {
+    it("auto-writes the self-describing analytics dataset when @lunora/analytics is inferred, idempotently", () => {
         expect.assertions(3);
 
         const first = reconcileWranglerBindings(root, baseInferred({ usesAnalytics: true }));
@@ -274,7 +274,7 @@ describe("reconcileWranglerBindings", () => {
         expect(second.changed).toBe(false);
     });
 
-    it("warns rather than writes a kv_namespaces binding when @cirrus/kv is used (the namespace id can't be minted)", () => {
+    it("warns rather than writes a kv_namespaces binding when @lunora/kv is used (the namespace id can't be minted)", () => {
         expect.assertions(2);
 
         const result = reconcileWranglerBindings(root, baseInferred({ usesKv: true }));
@@ -289,7 +289,7 @@ describe("reconcileWranglerBindings", () => {
         writeFileSync(
             join(root, "wrangler.jsonc"),
             `{
-    "name": "cirrus-app",
+    "name": "lunora-app",
     "compatibility_date": "2026-04-07",
     "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
@@ -304,7 +304,7 @@ describe("reconcileWranglerBindings", () => {
         expect(result.warnings.join(" ")).not.toMatch(/kv_namespaces/u);
     });
 
-    it("warns rather than writes a hyperdrive binding when @cirrus/hyperdrive is used (the id can't be minted)", () => {
+    it("warns rather than writes a hyperdrive binding when @lunora/hyperdrive is used (the id can't be minted)", () => {
         expect.assertions(2);
 
         const result = reconcileWranglerBindings(root, baseInferred({ usesHyperdrive: true }));
@@ -319,7 +319,7 @@ describe("reconcileWranglerBindings", () => {
         writeFileSync(
             join(root, "wrangler.jsonc"),
             `{
-    "name": "cirrus-app",
+    "name": "lunora-app",
     "compatibility_date": "2026-04-07",
     "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
@@ -400,7 +400,7 @@ describe("reconcileWranglerBindings", () => {
             writeFileSync(
                 join(root, "wrangler.jsonc"),
                 `{
-    "name": "cirrus-app",
+    "name": "lunora-app",
     "compatibility_date": "2026-04-07",
     "observability": { "enabled": false },
     "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
@@ -425,7 +425,7 @@ describe("reconcileWranglerBindings", () => {
 
             const config = readConfig();
 
-            expect(config.containers[0].image).toBe("cirrus-transcoder:build");
+            expect(config.containers[0].image).toBe("lunora-transcoder:build");
             // A build source has no Dockerfile, so no image_build_context is written.
             expect(config.containers[0].image_build_context).toBeUndefined();
         });

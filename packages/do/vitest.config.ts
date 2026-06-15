@@ -34,16 +34,16 @@ const coverage = {
  *               WebSocket Hibernation API, real `state.acceptWebSocket()`,
  *               `serializeAttachment` round-trip, and SQLite-in-DO storage.
  *
- *               Gated by `CIRRUS_WORKERD_TESTS=1` because the pool-workers
+ *               Gated by `LUNORA_WORKERD_TESTS=1` because the pool-workers
  *               integration requires unrestricted localhost-loopback access
  *               between workerd and the test host. Sandboxed CI environments
  *               (including the harness this PR was authored in) block that
  *               connection and the runtime can't boot. On a developer
  *               workstation set the env variable to run the suite:
  *
- *                   CIRRUS_WORKERD_TESTS=1 pnpm --filter @cirrus/do test
+ *                   LUNORA_WORKERD_TESTS=1 pnpm --filter @lunora/do test
  */
-const runWorkerd = process.env.CIRRUS_WORKERD_TESTS === "1";
+const runWorkerd = process.env.LUNORA_WORKERD_TESTS === "1";
 
 export default defineConfig({
     test: {

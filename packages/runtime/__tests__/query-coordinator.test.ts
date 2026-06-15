@@ -347,7 +347,7 @@ describe("orchestrateMigration", () => {
     const migrationRequest = (overrides: Partial<MigrationFanOutRequest> = {}): MigrationFanOutRequest => {
         return {
             args: { id: "backfill" },
-            functionPath: "__cirrus_admin__:runMigration",
+            functionPath: "__lunora_admin__:runMigration",
             headers: { authorization: "Bearer admin" },
             table: "messages",
             ...overrides,
@@ -368,7 +368,7 @@ describe("orchestrateMigration", () => {
         await coordinator.orchestrateMigration(spy.namespace, migrationRequest({ args: { dryRun: true, id: "backfill" } }));
 
         expect(spy.calls).toHaveLength(2);
-        expect(spy.calls.every((c) => c.body.functionPath === "__cirrus_admin__:runMigration")).toBe(true);
+        expect(spy.calls.every((c) => c.body.functionPath === "__lunora_admin__:runMigration")).toBe(true);
         expect(spy.calls.every((c) => c.headers.authorization === "Bearer admin")).toBe(true);
         expect(spy.calls.every((c) => c.body.args.dryRun === true)).toBe(true);
     });
@@ -470,7 +470,7 @@ describe("orchestrateMigration", () => {
             json({ result: { migrations: [{ changed: 9, id: "backfill", processed: 9, shardKey, status: "completed" }] } }),
         );
 
-        const result = await coordinator.orchestrateMigration(spy.namespace, migrationRequest({ functionPath: "__cirrus_admin__:migrationStatus" }));
+        const result = await coordinator.orchestrateMigration(spy.namespace, migrationRequest({ functionPath: "__lunora_admin__:migrationStatus" }));
 
         expect(result.ok).toBe(2);
         // Top-level counts are 0 — status payloads carry counts per row, not at the top.
@@ -506,7 +506,7 @@ describe("orchestrateRank", () => {
         await coordinator.orchestrateRank(spy.namespace, rankRequest());
 
         expect(spy.calls).toHaveLength(2);
-        expect(spy.calls.every((c) => c.body.functionPath === "__cirrus_admin__:rankBefore")).toBe(true);
+        expect(spy.calls.every((c) => c.body.functionPath === "__lunora_admin__:rankBefore")).toBe(true);
         expect(spy.calls.every((c) => c.headers.authorization === "Bearer admin")).toBe(true);
         expect(spy.calls.every((c) => c.body.args.rowId === "u1")).toBe(true);
         expect(spy.calls.every((c) => Array.isArray(c.body.args.sortValues) && (c.body.args.sortValues as number[])[0] === 100)).toBe(true);

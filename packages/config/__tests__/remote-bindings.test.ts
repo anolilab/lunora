@@ -20,7 +20,7 @@ import {
 // that must survive the jsonc edits.
 const FULL_WRANGLER = `{
     // a hand-written comment that must survive remote-flag injection
-    "name": "cirrus-app",
+    "name": "lunora-app",
     "main": "src/index.ts",
     "compatibility_date": "2026-04-07",
     "durable_objects": {
@@ -171,7 +171,7 @@ describe("materializeRemoteWranglerConfig", () => {
     let generated: string | undefined;
 
     beforeEach(() => {
-        root = mkdtempSync(join(tmpdir(), "cirrus-remote-test-"));
+        root = mkdtempSync(join(tmpdir(), "lunora-remote-test-"));
         generated = undefined;
     });
 
@@ -305,13 +305,13 @@ describe("resolveRemoteEnabled", () => {
         expect(resolveRemoteEnabled({ configPreference: false, envValue: "0", flag: true })).toBe(true);
     });
 
-    it("returns true when CIRRUS_REMOTE is truthy and the flag is absent", () => {
+    it("returns true when LUNORA_REMOTE is truthy and the flag is absent", () => {
         expect.assertions(1);
 
         expect(resolveRemoteEnabled({ configPreference: false, envValue: "1" })).toBe(true);
     });
 
-    it("falls back to the cirrus.json preference when neither flag nor env is set", () => {
+    it("falls back to the lunora.json preference when neither flag nor env is set", () => {
         expect.assertions(2);
 
         expect(resolveRemoteEnabled({ configPreference: true })).toBe(true);
@@ -324,7 +324,7 @@ describe("resolveRemoteEnabled", () => {
         expect(resolveRemoteEnabled({})).toBe(false);
     });
 
-    it("lets --remote and CIRRUS_REMOTE override a cirrus.json `remote: false`", () => {
+    it("lets --remote and LUNORA_REMOTE override a lunora.json `remote: false`", () => {
         expect.assertions(2);
 
         expect(resolveRemoteEnabled({ configPreference: false, flag: true })).toBe(true);

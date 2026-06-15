@@ -1,4 +1,4 @@
-import { useCirrus } from "@cirrus/react";
+import { useLunora } from "@lunora/react";
 import type { MouseEvent, ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -88,8 +88,8 @@ const SORTERS: Record<SortKey, (a: FunctionCallStat, b: FunctionCallStat) => num
 /**
  * Per-function execution metrics for one shard: call count, error count/rate,
  * mean and slowest handler latency, last-run time, and the most recent error
- * message. Reads via the `__cirrus_admin__:getFunctionStats` RPC over the
- * {@link useCirrus} client; gated by the server's `CIRRUS_ADMIN_TOKEN`.
+ * message. Reads via the `__lunora_admin__:getFunctionStats` RPC over the
+ * {@link useLunora} client; gated by the server's `LUNORA_ADMIN_TOKEN`.
  *
  * Counters are per-DO-instance and reset on hibernation/restart — this is a
  * "since this instance woke" readout, mirroring the metrics panel. The panel is
@@ -97,7 +97,7 @@ const SORTERS: Record<SortKey, (a: FunctionCallStat, b: FunctionCallStat) => num
  * re-pushes on every server write-flush so the table updates as mutations land.
  */
 export const FunctionStatsPanel = ({ functions, initialShardKey }: FunctionStatsPanelProps): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const t = useT();
 
     const [shardKey, setShardKey] = useState<string>(initialShardKey ?? "");
@@ -191,7 +191,7 @@ export const FunctionStatsPanel = ({ functions, initialShardKey }: FunctionStats
     ];
 
     return (
-        <div className="flex flex-col gap-4" data-testid="cirrus-function-stats">
+        <div className="flex flex-col gap-4" data-testid="lunora-function-stats">
             <div className="flex flex-wrap items-center gap-2">
                 <ShardInput onChange={setShardKey} testId="fs-shard-input" value={shardKey} />
                 <LiveError message={liveError} prefix="fs" />

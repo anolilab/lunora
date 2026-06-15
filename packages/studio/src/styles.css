@@ -15,5 +15,5 @@
    compiled into the shipped stylesheet. The library ships as JS, which
    Tailwind's source detection would otherwise skip — `@source "./"` makes the
    precompiled `dist/styles.css` self-sufficient for any host that just links
-   it (e.g. the `@cirrus/vite` dev route), with no Tailwind in the host app. */
+   it (e.g. the `@lunora/vite` dev route), with no Tailwind in the host app. */
 @source "./";

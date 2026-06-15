@@ -2,11 +2,11 @@
     "$schema": "../schema/registry-item.schema.json",
     "name": "auth-clerk",
     "title": "Auth — Clerk",
-    "description": "Sign in with Clerk for Cirrus auth. Wires Clerk as an OIDC provider via better-auth's genericOAuth plugin, on top of the base `auth` item.",
-    "docs": "Add `clerk` to your auth instance's `plugins` array in cirrus/auth/index.ts: `import { clerk } from \"./clerk.js\"` then `plugins: [clerk(env)]`. Create the OAuth app in the Clerk dashboard, set the redirect/callback URL to `<BETTER_AUTH_URL>/api/auth/oauth2/callback/clerk`, and fill in CLERK_CLIENT_ID / CLERK_CLIENT_SECRET / CLERK_ISSUER_URL.",
+    "description": "Sign in with Clerk for Lunora auth. Wires Clerk as an OIDC provider via better-auth's genericOAuth plugin, on top of the base `auth` item.",
+    "docs": "Add `clerk` to your auth instance's `plugins` array in lunora/auth/index.ts: `import { clerk } from \"./clerk.js\"` then `plugins: [clerk(env)]`. Create the OAuth app in the Clerk dashboard, set the redirect/callback URL to `<BETTER_AUTH_URL>/api/auth/oauth2/callback/clerk`, and fill in CLERK_CLIENT_ID / CLERK_CLIENT_SECRET / CLERK_ISSUER_URL.",
     "requires": ["auth"],
     "deps": {
-        "@cirrus/auth": "workspace:*",
+        "@lunora/auth": "workspace:*",
         "better-auth": "^1.6.14"
     },
     "envVars": [
@@ -27,5 +27,5 @@
             "secret": false
         }
     ],
-    "files": [{ "from": "clerk.ts", "to": "cirrus/auth/clerk.ts", "merge": "create-or-skip" }]
+    "files": [{ "from": "clerk.ts", "to": "lunora/auth/clerk.ts", "merge": "create-or-skip" }]
 }

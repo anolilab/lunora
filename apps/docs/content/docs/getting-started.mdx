@@ -1,9 +1,9 @@
 ---
 title: Getting started
-description: Scaffold a Cirrus app and run the dev loop in under a minute.
+description: Scaffold a Lunora app and run the dev loop in under a minute.
 ---
 
-The fastest way to start a Cirrus project is the official template. It wires
+The fastest way to start a Lunora project is the official template. It wires
 up Vite, the codegen plugin, a starter schema and a working Worker entrypoint
 pointing at a `wrangler.jsonc` you can deploy straight to your own account.
 
@@ -16,7 +16,7 @@ pointing at a `wrangler.jsonc` you can deploy straight to your own account.
 ## Scaffold
 
 ```bash
-pnpm create cirrus@latest my-app
+pnpm create lunora@latest my-app
 cd my-app
 pnpm install
 pnpm dev
@@ -26,27 +26,27 @@ The CLI lays down the standard layout:
 
 ```text
 my-app/
-├── cirrus/
+├── lunora/
 │   ├── schema.ts          # defineSchema / defineTable
 │   ├── messages.ts        # query / mutation / action
 │   └── _generated/        # codegen output (don't edit)
 ├── src/
 │   ├── server/index.ts    # createWorker + ShardDO subclass
-│   └── client/main.tsx    # CirrusProvider + your React app
+│   └── client/main.tsx    # LunoraProvider + your React app
 ├── wrangler.jsonc         # DO + D1 + R2 bindings
-└── vite.config.ts         # cirrus() Vite plugin
+└── vite.config.ts         # lunora() Vite plugin
 ```
 
 ## Run
 
-`pnpm dev` boots Vite + Wrangler in one terminal. Edits to `cirrus/schema.ts`
+`pnpm dev` boots Vite + Wrangler in one terminal. Edits to `lunora/schema.ts`
 trigger codegen and a typed-API HMR within ~200 ms. Throw inside a handler
 and the `@visulima/vite-overlay` integration shows a mapped source frame.
 
 ## Deploy
 
 ```bash
-pnpm cirrus deploy
+pnpm lunora deploy
 ```
 
 Under the hood this calls `wrangler deploy`, runs pending D1 migrations and

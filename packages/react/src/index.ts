@@ -5,19 +5,19 @@
 // each source module here declares `"use client"` and is meant to run only in
 // Client Components. In a Next.js / RSC app, import these from your own
 // `"use client"` files (see the provider/hook examples in the docs); server-side
-// data loading lives in the socket-free `@cirrus/react/server` entry.
+// data loading lives in the socket-free `@lunora/react/server` entry.
 export { Authenticated, AuthLoading, Unauthenticated } from "./auth-gates";
 export type { AuthState } from "./auth-state";
 export { useAuthState } from "./auth-state";
-export type { CirrusProviderProps } from "./cirrus-provider";
-export { CirrusProvider, useCirrus } from "./cirrus-provider";
+export type { LunoraProviderProps } from "./lunora-provider";
+export { LunoraProvider, useLunora } from "./lunora-provider";
 export type { CheckoutButtonProps, CustomerPortalButtonProps, RedirectTarget, RedirectTrigger, Subscription, UseCheckoutResult } from "./payment";
 export { CheckoutButton, CustomerPortalButton, useCheckout } from "./payment";
-export type { CirrusQueryOptions } from "./query-options";
-export { cirrusQueryOptions } from "./query-options";
+export type { LunoraQueryOptions } from "./query-options";
+export { lunoraQueryOptions } from "./query-options";
 export type {
     ArgsOf,
-    CirrusClient,
+    LunoraClient,
     FunctionReference,
     OptimisticLocalStore,
     OptimisticUpdate,

@@ -1,6 +1,6 @@
 # {{name}}
 
-A Cirrus app scaffolded by `cirrus init`.
+A Lunora app scaffolded by `lunora init`.
 
 ## Develop
 

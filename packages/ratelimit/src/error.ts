@@ -10,8 +10,8 @@ const describe = (status: RateLimitStatus): string => {
 
 /**
  * Thrown by `RateLimiter.limit` when called with `{ throws: true }`. The
- * `@cirrus/ratelimit` middleware does not use this — it throws a structural
- * `CirrusError` instead — so this is for direct callers that prefer exceptions.
+ * `@lunora/ratelimit` middleware does not use this — it throws a structural
+ * `LunoraError` instead — so this is for direct callers that prefer exceptions.
  */
 export default class RateLimitError extends Error {
     public override readonly name = "RateLimitError";

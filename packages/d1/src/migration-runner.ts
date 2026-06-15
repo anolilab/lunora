@@ -46,12 +46,12 @@ interface MigrationRunnerResult {
  * with a small set of mutually-exclusive mode flags. Its branching IS the
  * grammar, so splitting it across helpers (each needing the same closured
  * cursor state) reads worse than the flat machine below — hence the inline
- * complexity allowance, matching `@cirrus/do`'s `data-migration.ts` twin.
+ * complexity allowance, matching `@lunora/do`'s `data-migration.ts` twin.
  *
  * Callers wanting multiple statements per migration should split them into
  * separate `Migration` entries — `batch()` runs them atomically anyway.
  */
-// eslint-disable-next-line sonarjs/cognitive-complexity -- hand-written single-pass SQL lexer; the mode branching is the grammar and inlines more clearly than split helpers sharing cursor state (see @cirrus/do data-migration.ts)
+// eslint-disable-next-line sonarjs/cognitive-complexity -- hand-written single-pass SQL lexer; the mode branching is the grammar and inlines more clearly than split helpers sharing cursor state (see @lunora/do data-migration.ts)
 const assertSingleStatement = (migration: Migration): void => {
     const text = migration.sql;
     let inSingle = false;
@@ -169,7 +169,7 @@ class MigrationRunner {
     /**
      * Accepts either a {@link D1Client} (preferred — gets typed batches +
      * drizzle handle for free) or a raw `D1DatabaseLike` binding (wrapped on
-     * the caller's behalf so existing `@cirrus/cli` callers keep working).
+     * the caller's behalf so existing `@lunora/cli` callers keep working).
      */
     public constructor(database: D1Client | D1DatabaseLike, migrations: Migration[]) {
         this.client = database instanceof D1Client ? database : new D1Client(database);

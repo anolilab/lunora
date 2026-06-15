@@ -1,18 +1,18 @@
 /**
  * Tiny client for the studio's local schema-edit endpoint (plan 024). This is
- * NOT a worker admin RPC: it talks to the dev host (the `@cirrus/vite`
- * middleware or the `cirrus dev` studio server) over a same-origin `fetch`, and
- * the host mutates `cirrus/schema.ts` + reruns codegen on disk. It is reachable
+ * NOT a worker admin RPC: it talks to the dev host (the `@lunora/vite`
+ * middleware or the `lunora dev` studio server) over a same-origin `fetch`, and
+ * the host mutates `lunora/schema.ts` + reruns codegen on disk. It is reachable
  * only in local dev (the host 403s the route on a non-loopback bind), so it
  * carries no admin token.
  *
  * Both hosts mount the handler at the absolute path below — independent of the
  * studio's `basePath` — so the client targets it directly. Keep this in sync
- * with `SCHEMA_EDIT_ENDPOINT` in `@cirrus/config/studio-host`.
+ * with `SCHEMA_EDIT_ENDPOINT` in `@lunora/config/studio-host`.
  */
 
 /** Endpoint both dev hosts mount the schema-edit handler at. */
-const SCHEMA_EDIT_ENDPOINT = "/__cirrus/schema-edit";
+const SCHEMA_EDIT_ENDPOINT = "/__lunora/schema-edit";
 
 /** An additive edit the overlay can apply directly. */
 type AdditiveEdit =

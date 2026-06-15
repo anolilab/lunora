@@ -60,7 +60,7 @@ describe("orchestrateExport", () => {
         const allRows = result.shards.flatMap((s) => s.rows ?? []);
 
         expect(allRows).toHaveLength(3);
-        expect(spy.calls.every((c) => c.body.functionPath === "__cirrus_admin__:exportShard")).toBe(true);
+        expect(spy.calls.every((c) => c.body.functionPath === "__lunora_admin__:exportShard")).toBe(true);
     });
 
     it("rolls up errors per shard without throwing", async () => {
@@ -187,7 +187,7 @@ describe("orchestrateCdcSync", () => {
         // c1 resumes from its supplied cursor (10 → 11); c2 defaults to 0 → 1.
         expect(result.shards.find((shard) => shard.shardKey === "c1")?.cursor).toBe(11);
         expect(result.shards.find((shard) => shard.shardKey === "c2")?.cursor).toBe(1);
-        expect(spy.calls.every((call) => call.body.functionPath === "__cirrus_admin__:cdcSync")).toBe(true);
+        expect(spy.calls.every((call) => call.body.functionPath === "__lunora_admin__:cdcSync")).toBe(true);
     });
 
     it("echoes the prior cursor when a shard errors", async () => {
@@ -221,7 +221,7 @@ describe("orchestrateApplyCdc", () => {
 
         expect(result.ok).toBe(2);
         expect(result.applied).toBe(3);
-        expect(spy.calls.every((call) => call.body.functionPath === "__cirrus_admin__:applyCdc")).toBe(true);
+        expect(spy.calls.every((call) => call.body.functionPath === "__lunora_admin__:applyCdc")).toBe(true);
     });
 
     it("counts a shard error as failed without throwing", async () => {

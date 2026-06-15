@@ -10,7 +10,7 @@ import { COMMANDS, runCli, VERSION } from "../src/cli";
 const testDirectory = dirname(fileURLToPath(import.meta.url));
 const templatesRoot = resolve(testDirectory, "..", "..", "..", "templates");
 
-describe("cirrus CLI entry", () => {
+describe("lunora CLI entry", () => {
     let stdout: string;
     let stderr: string;
     let writeStdoutSpy: ReturnType<typeof vi.spyOn>;
@@ -50,7 +50,7 @@ describe("cirrus CLI entry", () => {
         return { lines, logger: { debug: push, error: push, info: push, log: push, raw: push, trace: push, warn: push } as unknown as Console };
     };
 
-    it("`cirrus --help` lists every command and exits 0", async () => {
+    it("`lunora --help` lists every command and exits 0", async () => {
         expect.hasAssertions();
 
         const { lines, logger } = captureLogger();
@@ -72,7 +72,7 @@ describe("cirrus CLI entry", () => {
         const code = await runCli({ argv: [], logger });
 
         expect(code).toBe(0);
-        expect(`${lines.join("\n")}\n${stdout}`).toMatch(/Usage|cirrus <command>/u);
+        expect(`${lines.join("\n")}\n${stdout}`).toMatch(/Usage|lunora <command>/u);
     });
 
     it("`--version` prints a version and exits 0", async () => {
@@ -134,7 +134,7 @@ describe("cirrus CLI entry", () => {
         it("the top-level `add` is a feature command — `add presence` (a registry item, not a feature) is rejected", async () => {
             expect.assertions(1);
 
-            // `cirrus add` adds FEATURES (auth/email); a component like
+            // `lunora add` adds FEATURES (auth/email); a component like
             // `presence` is still added via `registry add`.
             const code = await runCli({ argv: ["add", "presence"] });
 
@@ -150,7 +150,7 @@ describe("cirrus CLI entry", () => {
         let workdir: string;
 
         beforeEach(() => {
-            workdir = mkdtempSync(join(tmpdir(), "cirrus-cli-argv-"));
+            workdir = mkdtempSync(join(tmpdir(), "lunora-cli-argv-"));
         });
 
         afterEach(() => {

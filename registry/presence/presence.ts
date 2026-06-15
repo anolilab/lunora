@@ -1,8 +1,8 @@
 /**
- * Presence functions — added by `cirrus add presence`.
+ * Presence functions — added by `lunora add presence`.
  *
- * This file is YOURS: it's a normal Cirrus module, copied into your project so
- * you own and edit it. Re-export these from your `cirrus/` entry (or rely on
+ * This file is YOURS: it's a normal Lunora module, copied into your project so
+ * you own and edit it. Re-export these from your `lunora/` entry (or rely on
  * file-based discovery) so codegen picks them up — they surface in the generated
  * `api` as `presence/heartbeat`, `presence/listPresent`, `presence/sweep`.
  *
@@ -19,10 +19,10 @@
  *     only reclaims storage. It's *internal* (server-only) so a client can't
  *     trigger bulk deletes — wire it to a cron / `runAfter` if you want it.
  *
- * The client half is `usePresence` in `@cirrus/react`, which calls `heartbeat`
+ * The client half is `usePresence` in `@lunora/react`, which calls `heartbeat`
  * on an interval and subscribes to `listPresent`.
  */
-import { internalMutation, mutation, query, v } from "@cirrus/server";
+import { internalMutation, mutation, query, v } from "@lunora/server";
 
 import { PRESENCE_TABLE, PRESENCE_TTL_MS } from "./schema.js";
 

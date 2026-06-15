@@ -1,5 +1,5 @@
-import type { StorageObject } from "@cirrus/client";
-import { useCirrus } from "@cirrus/react";
+import type { StorageObject } from "@lunora/client";
+import { useLunora } from "@lunora/react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useAutoRefresh } from "../../../hooks/use-auto-refresh";
@@ -155,7 +155,7 @@ const copyToClipboard = async (text: string): Promise<void> => {
  * stay presentational.
  */
 const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): FileBrowserModel => {
-    const client = useCirrus();
+    const client = useLunora();
 
     // The loaded prefix (drives deriveEntries + name-slicing) vs. the draft the
     // input edits live — kept apart so typing never garbles the loaded rows.

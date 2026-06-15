@@ -1,9 +1,9 @@
 /**
- * Pure-logic diffing for `cirrus migrate generate`.
+ * Pure-logic diffing for `lunora migrate generate`.
  *
  * Given two `SchemaSnapshot`s (the previous one persisted at
- * `cirrus/migrations/.snapshot.json`, and the current one parsed live from
- * `cirrus/schema.ts`), compute the SQL needed to bring D1 from the previous
+ * `lunora/migrations/.snapshot.json`, and the current one parsed live from
+ * `lunora/schema.ts`), compute the SQL needed to bring D1 from the previous
  * shape to the new one.
  *
  * Only **global** tables go through here — sharded / root tables live in
@@ -23,11 +23,11 @@
  *
  * The physical D1 dialect (column affinities, framework columns, index naming,
  * identifier quoting) is NOT re-derived here — it's imported from the canonical
- * `@cirrus/d1/dialect`, the same source the runtime's `runD1GlobalTableMigrations`
+ * `@lunora/d1/dialect`, the same source the runtime's `runD1GlobalTableMigrations`
  * uses, so a generated migration is byte-identical to what the runtime would
  * auto-provision.
  */
-import { columnRef, frameworkColumnDdl, physicalIndexName, quoteIdentifier, sqlAffinityForKind } from "@cirrus/d1/dialect";
+import { columnRef, frameworkColumnDdl, physicalIndexName, quoteIdentifier, sqlAffinityForKind } from "@lunora/d1/dialect";
 
 /** Compact snapshot of a single global table — what we persist + diff. */
 interface TableSnapshot {
@@ -77,8 +77,8 @@ interface SchemaDiff {
 }
 
 /**
- * Map a Cirrus validator kind to a SQLite type affinity — the canonical
- * `@cirrus/d1/dialect` mapping. Re-exported under this name because
+ * Map a Lunora validator kind to a SQLite type affinity — the canonical
+ * `@lunora/d1/dialect` mapping. Re-exported under this name because
  * `schema-snapshot.ts` builds the persisted snapshot from it.
  */
 const validatorKindToSqlType = (kind: string): ColumnSnapshot["sqlType"] => sqlAffinityForKind(kind);
@@ -279,9 +279,9 @@ const diffSnapshots = (previous: SchemaSnapshot | undefined, next: SchemaSnapsho
  */
 const renderMigrationFile = (name: string, diff: SchemaDiff, generatedAt: string): string => {
     const lines: string[] = [
-        `-- Cirrus migration: ${name}`,
+        `-- Lunora migration: ${name}`,
         `-- Generated at ${generatedAt}`,
-        "-- This file was produced by `cirrus migrate generate`. Review carefully before applying.",
+        "-- This file was produced by `lunora migrate generate`. Review carefully before applying.",
         "",
     ];
 
@@ -305,7 +305,7 @@ const renderMigrationFile = (name: string, diff: SchemaDiff, generatedAt: string
     }
 
     if (diff.empty) {
-        lines.push("-- No changes detected. Re-running `cirrus migrate generate` will overwrite this file.", "");
+        lines.push("-- No changes detected. Re-running `lunora migrate generate` will overwrite this file.", "");
     }
 
     return lines.join("\n");

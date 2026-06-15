@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { CirrusClient } from "../../src/cirrus-client";
+import type { LunoraClient } from "../../src/lunora-client";
 import { createQuerySubscription, SKIP, toSubscriptionError } from "../../src/query/query-subscription";
 import type { SubscriptionError, SubscriptionErrorCallback } from "../../src/subscription";
 import type { FunctionReference, Unsubscribe } from "../../src/types";
@@ -14,7 +14,7 @@ interface SubEntry {
 interface MockClient {
     /** Number of currently-attached subscriptions. */
     readonly activeCount: () => number;
-    asClient: CirrusClient;
+    asClient: LunoraClient;
     /** Push a subscription-scoped error to active subscribers of `ref`. */
     emitError: (ref: string, error: SubscriptionError) => void;
     /** Push a value to active subscribers of `ref`. */
@@ -23,7 +23,7 @@ interface MockClient {
 }
 
 const makeRef = (ref: string): FunctionReference => {
-    return { __cirrusRef: ref };
+    return { __lunoraRef: ref };
 };
 
 const createMockClient = (subscribeImpl?: () => Unsubscribe): MockClient => {
@@ -35,7 +35,7 @@ const createMockClient = (subscribeImpl?: () => Unsubscribe): MockClient => {
                 return subscribeImpl();
             }
 
-            const entry: SubEntry = { callback, onError: options?.onError, ref: reference.__cirrusRef };
+            const entry: SubEntry = { callback, onError: options?.onError, ref: reference.__lunoraRef };
 
             subs.add(entry);
 
@@ -47,7 +47,7 @@ const createMockClient = (subscribeImpl?: () => Unsubscribe): MockClient => {
 
     return {
         activeCount: () => subs.size,
-        asClient: { subscribe } as unknown as CirrusClient,
+        asClient: { subscribe } as unknown as LunoraClient,
         emitError: (ref, error) => {
             for (const entry of subs) {
                 if (entry.ref === ref) {
@@ -210,7 +210,7 @@ describe("createQuerySubscription", () => {
         const unsubscribe = createQuerySubscription(mock.asClient, makeRef("messages:list"), {}, { onData: vi.fn() }, { shardKey: "room-1" });
 
         expect(mock.subscribe).toHaveBeenCalledWith(
-            expect.objectContaining({ __cirrusRef: "messages:list" }),
+            expect.objectContaining({ __lunoraRef: "messages:list" }),
             {},
             expect.any(Function),
             expect.objectContaining({ shardKey: "room-1" }),

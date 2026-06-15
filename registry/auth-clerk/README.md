@@ -1,19 +1,19 @@
 # auth-clerk
 
-Sign in with [Clerk](https://clerk.com) for Cirrus auth. Wires Clerk as an OIDC provider through [better-auth](https://www.better-auth.com)'s [`genericOAuth`](https://www.better-auth.com/docs/plugins/generic-oauth) plugin (also re-exported by [`@cirrus/auth/plugins`](../../packages/auth)), on top of the base [`auth`](../auth) item.
+Sign in with [Clerk](https://clerk.com) for Lunora auth. Wires Clerk as an OIDC provider through [better-auth](https://www.better-auth.com)'s [`genericOAuth`](https://www.better-auth.com/docs/plugins/generic-oauth) plugin (also re-exported by [`@lunora/auth/plugins`](../../packages/auth)), on top of the base [`auth`](../auth) item.
 
 This closes the Convex-parity gap for Clerk-style hosted auth (CONVEX-PARITY #15) as a registry item you own and edit — no managed service lock-in beyond Clerk itself.
 
 ## Install
 
 ```bash
-cirrus registry add auth-clerk
+lunora registry add auth-clerk
 ```
 
-Because this item declares `requires: ["auth"]`, the registry resolves and installs the base **auth** item first (deps before dependents), then this one. The base item brings `@cirrus/auth` + `@cirrus/server` and scaffolds `cirrus/auth/index.ts`; this item adds:
+Because this item declares `requires: ["auth"]`, the registry resolves and installs the base **auth** item first (deps before dependents), then this one. The base item brings `@lunora/auth` + `@lunora/server` and scaffolds `lunora/auth/index.ts`; this item adds:
 
-1. `@cirrus/auth` (already present from the base item) and `better-auth` to `package.json` — run `pnpm install` once.
-2. `cirrus/auth/clerk.ts` — the Clerk OIDC provider plugin (`clerk(env)`). It's **yours** to edit.
+1. `@lunora/auth` (already present from the base item) and `better-auth` to `package.json` — run `pnpm install` once.
+2. `lunora/auth/clerk.ts` — the Clerk OIDC provider plugin (`clerk(env)`). It's **yours** to edit.
 3. `CLERK_CLIENT_ID`, `CLERK_CLIENT_SECRET`, `CLERK_ISSUER_URL` into your `.dev.vars`.
 
 ## Env vars
@@ -46,13 +46,13 @@ wrangler secret put CLERK_CLIENT_SECRET
 
 ## Merge the provider into your auth instance
 
-Add the `clerk` plugin to the `plugins` array in `cirrus/auth/index.ts` (scaffolded by the base item):
+Add the `clerk` plugin to the `plugins` array in `lunora/auth/index.ts` (scaffolded by the base item):
 
 ```ts
-// cirrus/auth/index.ts
+// lunora/auth/index.ts
 import { clerk } from "./clerk.js";
 
-export const buildAuth = (env: AuthEnv): CirrusAuth =>
+export const buildAuth = (env: AuthEnv): LunoraAuth =>
     createAuth({
         baseURL: env.BETTER_AUTH_URL,
         database: env.DB as never,
@@ -77,4 +77,4 @@ await authClient.signIn.oauth2({
 
 ## What you own
 
-`cirrus/auth/clerk.ts` is copied into your repo — change scopes, switch from discovery to explicit `authorizationUrl` / `tokenUrl`, add `mapProfileToUser`, or wire additional providers however you like. `@cirrus/auth` provides the wrapper + the re-exported better-auth plugin; this item is the idiomatic Cirrus glue.
+`lunora/auth/clerk.ts` is copied into your repo — change scopes, switch from discovery to explicit `authorizationUrl` / `tokenUrl`, add `mapProfileToUser`, or wire additional providers however you like. `@lunora/auth` provides the wrapper + the re-exported better-auth plugin; this item is the idiomatic Lunora glue.

@@ -5,7 +5,7 @@
  * this remembers the ones the operator actually visited instead. Guarded so a
  * missing/throwing storage (SSR, privacy mode) degrades to "no history".
  */
-const STORAGE_KEY = "cirrus-studio-recent-shards";
+const STORAGE_KEY = "lunora-studio-recent-shards";
 
 /** Cap the list so it stays a short, useful menu rather than an unbounded log. */
 const MAX_RECENTS = 10;

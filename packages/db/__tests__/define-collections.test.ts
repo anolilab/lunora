@@ -1,11 +1,11 @@
-/* eslint-disable no-underscore-dangle -- `_id`/`_creationTime` are Cirrus document fields the fixtures mirror */
+/* eslint-disable no-underscore-dangle -- `_id`/`_creationTime` are Lunora document fields the fixtures mirror */
 import type { OfflineExecutor } from "@tanstack/offline-transactions";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollections } from "../src";
 
 /** A fake `FunctionReference` — `defineCollections` only forwards it to the client. */
-const ref = (name: string) => ({ __cirrusRef: name }) as never;
+const ref = (name: string) => ({ __lunoraRef: name }) as never;
 
 const usersList = ref("users:list");
 const messagesList = ref("messages:list");
@@ -18,7 +18,7 @@ interface SubscribeCall {
     unsubscribe: ReturnType<typeof vi.fn>;
 }
 
-/** A mock `CirrusClient` recording every `subscribe`, with a configurable `mutation`. */
+/** A mock `LunoraClient` recording every `subscribe`, with a configurable `mutation`. */
 const makeClient = (mutation: () => Promise<unknown> = async () => "server-id") => {
     const subscribes: SubscribeCall[] = [];
     const client = {

@@ -3,11 +3,11 @@ import { relative, sep } from "node:path";
 import type { CallExpression, Identifier, ObjectLiteralExpression, Project, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { listCirrusSourceFiles } from "./discover-functions";
+import { listLunoraSourceFiles } from "./discover-functions";
 import type { MigrationIR } from "./ir";
 
 /**
- * Decide whether a callee identifier refers to `@cirrus/server`'s
+ * Decide whether a callee identifier refers to `@lunora/server`'s
  * `defineMigration`. Mirrors `resolveCalleeKind`: trust the import declaration
  * when the type checker has one (so `import { defineMigration as dm }` still
  * resolves), and fall back to the surface text when no symbol is available
@@ -28,7 +28,7 @@ const isDefineMigration = (identifier: Identifier): boolean => {
             continue;
         }
 
-        if (declaration.getImportDeclaration().getModuleSpecifierValue() !== "@cirrus/server") {
+        if (declaration.getImportDeclaration().getModuleSpecifierValue() !== "@lunora/server") {
             return false;
         }
 
@@ -81,7 +81,7 @@ const migrationFromDeclaration = (declaration: VariableDeclaration, relativePath
     if (id === undefined || id.trim() === "") {
         throw Object.assign(
             new Error(`Migration "${exportName}" in "${relativePath}" must declare \`id\` as a non-empty string literal so codegen can key the registry.`),
-            { code: "MIGRATION_ID_NOT_STATIC", name: "CirrusError", status: 500 },
+            { code: "MIGRATION_ID_NOT_STATIC", name: "LunoraError", status: 500 },
         );
     }
 
@@ -100,7 +100,7 @@ const assertUniqueIds = (migrations: ReadonlyArray<MigrationIR>): void => {
                 new Error(
                     `Duplicate migration id "${migration.id}": declared in both "${prior}" and "${migration.filePath}". Migration ids must be unique across the project.`,
                 ),
-                { code: "DUPLICATE_MIGRATION_ID", id: migration.id, name: "CirrusError", paths: [prior, migration.filePath], status: 500 },
+                { code: "DUPLICATE_MIGRATION_ID", id: migration.id, name: "LunoraError", paths: [prior, migration.filePath], status: 500 },
             );
         }
 
@@ -109,20 +109,20 @@ const assertUniqueIds = (migrations: ReadonlyArray<MigrationIR>): void => {
 };
 
 /**
- * Scan all `.ts` files under `cirrusDir` for top-level
+ * Scan all `.ts` files under `lunoraDir` for top-level
  * `export const x = defineMigration({...})` declarations and lift them into
  * {@link MigrationIR}. `id` must be a static string literal (it's the registry
  * key); `table` is best-effort and left `""` when not a literal.
  */
-const discoverMigrations = (project: Project, cirrusDirectory: string): MigrationIR[] => {
-    const filePaths = listCirrusSourceFiles(cirrusDirectory);
+const discoverMigrations = (project: Project, lunoraDirectory: string): MigrationIR[] => {
+    const filePaths = listLunoraSourceFiles(lunoraDirectory);
     const migrations: MigrationIR[] = [];
 
     for (const filePath of filePaths) {
         // discoverFunctions may have already added these files to the project;
         // reuse the existing SourceFile rather than re-adding (which throws).
         const source: SourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-        const relativePath = relative(cirrusDirectory, filePath).split(sep).join("/").replace(TS_EXTENSION_RE, "");
+        const relativePath = relative(lunoraDirectory, filePath).split(sep).join("/").replace(TS_EXTENSION_RE, "");
 
         for (const statement of source.getVariableStatements()) {
             if (!statement.isExported()) {

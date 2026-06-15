@@ -1,7 +1,7 @@
-import { v } from "@cirrus/values";
+import { v } from "@lunora/values";
 import { describe, expect, expectTypeOf, it } from "vitest";
 
-import { initCirrus } from "../src/builder/index";
+import { initLunora } from "../src/builder/index";
 import { mutation, query } from "../src/functions";
 import { composePluginMiddleware, defineComponent, definePlugin, defineSchemaExtension, installPlugins, mergeSchemaExtension } from "../src/plugin";
 import { defineSchema, defineTable, defineVectorIndex } from "../src/schema";
@@ -443,7 +443,7 @@ describe("composePluginMiddleware", () => {
             },
         });
 
-        const c = initCirrus.dataModel<Record<string, never>>().create();
+        const c = initLunora.dataModel<Record<string, never>>().create();
         const procedure = c.query
             .use(async ({ next }) => next({ ctx: { order } }))
             .use(composePluginMiddleware([first, second]))
@@ -468,7 +468,7 @@ describe("composePluginMiddleware", () => {
             middleware: ({ next }) => next({ ctx: { tagged: true } }),
         });
 
-        const c = initCirrus.dataModel<Record<string, never>>().create();
+        const c = initLunora.dataModel<Record<string, never>>().create();
         const procedure = c.query
             .use(async ({ next }) => next({ ctx: { base: 1 } }))
             .use(composePluginMiddleware([passthrough, tagging]))
@@ -492,7 +492,7 @@ describe("composePluginMiddleware", () => {
             },
         });
 
-        const c = initCirrus.dataModel<Record<string, never>>().create();
+        const c = initLunora.dataModel<Record<string, never>>().create();
         const procedure = c.query.use(composePluginMiddleware([doubleNext])).query(() => "ok");
 
         await expect(procedure.handler({}, {})).rejects.toThrow(/next\(\) called multiple times/u);
@@ -520,7 +520,7 @@ describe("composePluginMiddleware", () => {
             },
         });
 
-        const c = initCirrus.dataModel<Record<string, never>>().create();
+        const c = initLunora.dataModel<Record<string, never>>().create();
         const procedure = c.query.use(composePluginMiddleware([stop, after])).query(() => "ok");
 
         await procedure.handler({}, {});
@@ -550,7 +550,7 @@ describe("plugin.middleware integration with the builder", () => {
                 }),
         });
 
-        const c = initCirrus.dataModel<Record<string, never>>().create();
+        const c = initLunora.dataModel<Record<string, never>>().create();
 
         // The builder middleware sees a ctx with `hits`; plugin middleware adds `ratelimit`.
         const procedure = c.query

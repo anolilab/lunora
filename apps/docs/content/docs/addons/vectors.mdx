@@ -1,21 +1,21 @@
 ---
-title: "@cirrus/vectors"
+title: "@lunora/vectors"
 description: Cloudflare Vectorize adapter — typed vector indexes and similarity search.
 ---
 
-`@cirrus/vectors` is the Cloudflare [Vectorize](https://developers.cloudflare.com/vectorize/)
-adapter for Cirrus. Declare typed vector indexes alongside your regular tables,
+`@lunora/vectors` is the Cloudflare [Vectorize](https://developers.cloudflare.com/vectorize/)
+adapter for Lunora. Declare typed vector indexes alongside your regular tables,
 keep them automatically in sync on every write, and run similarity search from
 any function handler via `ctx.vectors`. You bring your own embedder; the adapter
 handles the Vectorize binding plumbing, batching, concurrency limits, and delete
 propagation.
 
 ```sh
-pnpm add @cirrus/vectors
+pnpm add @lunora/vectors
 ```
 
 When your schema declares at least one vector index, codegen imports
-`@cirrus/vectors` into the generated server and wires a typed `ctx.vectors` onto
+`@lunora/vectors` into the generated server and wires a typed `ctx.vectors` onto
 your query, mutation, and action contexts.
 
 ## Declaring an index
@@ -30,8 +30,8 @@ The common case: embed a single string column. Chain `.vectorize` off
 binding in `wrangler.jsonc`); `embed` is your own embedder.
 
 ```ts
-// cirrus/schema.ts
-import { defineSchema, defineTable, v } from "@cirrus/server";
+// lunora/schema.ts
+import { defineSchema, defineTable, v } from "@lunora/server";
 import { embed } from "../app/embed"; // your own embedder
 
 export default defineSchema({
@@ -70,7 +70,7 @@ the standalone form and pass it to `defineSchema`'s second argument, keyed by
 index name.
 
 ```ts
-import { defineSchema, defineTable, defineVectorIndex, v } from "@cirrus/server";
+import { defineSchema, defineTable, defineVectorIndex, v } from "@lunora/server";
 import { embed } from "../app/embed";
 
 const tables = {
@@ -135,8 +135,8 @@ function to embed it. `topK` is capped at 100; `filter` and `namespace` scope
 the search.
 
 ```ts
-// cirrus/searchDocs.ts
-import { query, v } from "@cirrus/server";
+// lunora/searchDocs.ts
+import { query, v } from "@lunora/server";
 import { embed } from "../app/embed";
 
 export const searchDocs = query({
@@ -172,7 +172,7 @@ You must pass either `vector` or both `input` and `embed`.
 ## Binding & config wiring
 
 Each declared index needs a matching `vectorize` binding in `wrangler.jsonc`,
-where `index_name` equals the index name from your schema. `@cirrus/vite`
+where `index_name` equals the index name from your schema. `@lunora/vite`
 validates this — a declared index with no matching binding fails the build.
 
 ```jsonc
@@ -199,15 +199,15 @@ export const ShardDO = createShardDO({
 Omit the thunk and `ctx.vectors` throws a descriptive "no vectors configured"
 error on first use.
 
-## RAG with `@cirrus/ai`
+## RAG with `@lunora/ai`
 
-Pair the adapter with [`@cirrus/ai`](/docs/addons/ai) for embeddings: embed with
+Pair the adapter with [`@lunora/ai`](/docs/addons/ai) for embeddings: embed with
 the AI SDK, store and search with `ctx.vectors`. Embedding is a non-deterministic
 external call, so it lives on **action** contexts.
 
 ```ts
-import { action, v } from "@cirrus/server";
-import { embed as aiEmbed } from "@cirrus/ai";
+import { action, v } from "@lunora/server";
+import { embed as aiEmbed } from "@lunora/ai";
 
 export const semanticSearch = action({
     args: { q: v.string(), workspaceId: v.id("workspaces") },
@@ -232,24 +232,24 @@ export const semanticSearch = action({
 
 Outside a generated context — in a Durable Object, queue, or scheduled handler —
 build the search surface from raw bindings. `createVectors` returns the full
-`CirrusVectors` client (including `upsertMany` and `describe`);
+`LunoraVectors` client (including `upsertMany` and `describe`);
 `createContextVectors` bridges it to the `ctx.vectors` shape; `createVectorSyncHook`
 builds the write-sync hook from your schema.
 
 ```ts
-import { createContextVectors, createVectors } from "@cirrus/vectors";
+import { createContextVectors, createVectors } from "@lunora/vectors";
 
-const cirrus = createVectors({ indexes: { "docs-body": env.DOCS_BODY } });
-const vectors = createContextVectors(cirrus);
+const lunora = createVectors({ indexes: { "docs-body": env.DOCS_BODY } });
+const vectors = createContextVectors(lunora);
 ```
 
 ## Studio
 
-The [Cirrus Studio](/docs/addons/studio#database) has a **Vectors** panel under
+The [Lunora Studio](/docs/addons/studio#database) has a **Vectors** panel under
 Database to browse Vectorize indexes and run similarity searches against them.
 
 ## See also
 
-- [@cirrus/ai](/docs/addons/ai) — embeddings and RAG.
-- [Cirrus Studio](/docs/addons/studio#database) — the Vectors panel.
-- [@cirrus/server](/docs/api/server)
+- [@lunora/ai](/docs/addons/ai) — embeddings and RAG.
+- [Lunora Studio](/docs/addons/studio#database) — the Vectors panel.
+- [@lunora/server](/docs/api/server)

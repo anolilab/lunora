@@ -1,14 +1,14 @@
-import type { JsonSchema } from "@cirrus/values";
+import type { JsonSchema } from "@lunora/values";
 
 import { GENERATED_HEADER } from "./emit";
 import type { FunctionIR, HttpRouteIR, ValidatorIR } from "./ir";
 import sanitizeNamespace from "./paths";
-import { argsObjectSchema, CIRRUS_ERROR_CODES, objectSchema, validatorIrToJsonSchema } from "./schema-ir";
+import { argsObjectSchema, LUNORA_ERROR_CODES, objectSchema, validatorIrToJsonSchema } from "./schema-ir";
 
 // ─── OpenAPI document assembly ───────────────────────────────────────────────
 
 /** The reusable error-response component every operation references via `$ref`. */
-const ERROR_COMPONENT_REF = "#/components/responses/CirrusError";
+const ERROR_COMPONENT_REF = "#/components/responses/LunoraError";
 
 /** Path params named in a route template (`/users/:id` → `["id"]`), in declaration order. */
 const ROUTE_PARAM_RE = /:([A-Za-z_$][\w$]*)/gu;
@@ -111,7 +111,7 @@ const httpRouteOperation = (route: HttpRouteIR): Record<string, unknown> => {
 
     if (route.stream) {
         // Document the SSE content type alongside the JSON success schema.
-        operation["x-cirrus-stream"] = "text/event-stream";
+        operation["x-lunora-stream"] = "text/event-stream";
     }
 
     return operation;
@@ -119,10 +119,10 @@ const httpRouteOperation = (route: HttpRouteIR): Record<string, unknown> => {
 
 /**
  * Build the single RPC operation for one query/mutation/action. Every RPC call
- * is `POST /_cirrus/rpc`; to list each function individually in Swagger UI (oRPC
+ * is `POST /_lunora/rpc`; to list each function individually in Swagger UI (oRPC
  * pattern: one operation per procedure) we synthesise a distinct path suffix
- * `/_cirrus/rpc#&lt;functionPath>` — the `#`-fragment is ignored by the transport
- * (all still POST to `/_cirrus/rpc`) but gives each operation a unique path key
+ * `/_lunora/rpc#&lt;functionPath>` — the `#`-fragment is ignored by the transport
+ * (all still POST to `/_lunora/rpc`) but gives each operation a unique path key
  * so they render as separate entries. The requestBody pins `functionPath` to a
  * `const`, types `args` from the function's validators, and allows an optional
  * `shardKey`.
@@ -143,7 +143,7 @@ const rpcOperation = (definition: FunctionIR): { operation: Record<string, unkno
     };
 
     const operation: Record<string, unknown> = {
-        description: `Invoke the \`${definition.kind}\` \`${functionPath}\` over the Cirrus RPC envelope (POST /_cirrus/rpc).`,
+        description: `Invoke the \`${definition.kind}\` \`${functionPath}\` over the Lunora RPC envelope (POST /_lunora/rpc).`,
         operationId: functionPath,
         requestBody: {
             content: { "application/json": { schema: requestSchema } },
@@ -162,10 +162,10 @@ const rpcOperation = (definition: FunctionIR): { operation: Record<string, unkno
         },
         summary: `${definition.kind}: ${functionPath}`,
         tags: [tag],
-        "x-cirrus-function-kind": definition.kind,
+        "x-lunora-function-kind": definition.kind,
     };
 
-    return { operation, pathKey: `/_cirrus/rpc#${functionPath}` };
+    return { operation, pathKey: `/_lunora/rpc#${functionPath}` };
 };
 
 /** Inputs the OpenAPI emitter needs from a codegen run. */
@@ -177,21 +177,21 @@ interface OpenApiEmitInput {
 }
 
 /**
- * Emit an OpenAPI 3.1.0 document covering both Cirrus function surfaces.
+ * Emit an OpenAPI 3.1.0 document covering both Lunora function surfaces.
  *
  * `httpRouter()` typed REST routes become real `paths` keyed by their method +
  * URL, with query/path parameters and JSON request bodies derived from their
  * `v.*` validators, and a response schema from `.output()` when declared.
  *
  * RPC `query`/`mutation`/`action` functions become one operation each on
- * `POST /_cirrus/rpc` (disambiguated by a `#functionPath` path fragment), with a
+ * `POST /_lunora/rpc` (disambiguated by a `#functionPath` path fragment), with a
  * requestBody pinning `functionPath` + typed `args`. `internal`/`stream`
  * functions are excluded (unreachable / not invocable on the external RPC path).
  *
  * Operations are grouped into `tags` by file namespace, and every operation
- * references a reusable `CirrusError` error-response component enumerating the
+ * references a reusable `LunoraError` error-response component enumerating the
  * standard error codes. Borrows oRPC's per-procedure-operation + tag-grouping +
- * internal-filtering structure; the JSON Schema dialect matches `@cirrus/values`
+ * internal-filtering structure; the JSON Schema dialect matches `@lunora/values`
  * (Draft 2020-12). Returns the document as a plain object (the single source of
  * truth `emitOpenApi` stringifies and `emitOpenApiModule` inlines, so the
  * `.json` and `.ts` artifacts can never drift).
@@ -212,7 +212,7 @@ const buildOpenApiDocument = (input: OpenApiEmitInput): Record<string, unknown> 
         tagNames.add(sanitizeNamespace(route.filePath));
     }
 
-    // RPC functions: one POST operation each on a synthetic `/_cirrus/rpc#<path>`.
+    // RPC functions: one POST operation each on a synthetic `/_lunora/rpc#<path>`.
     // `internal` (off the external RPC path) and `stream` (not invocable via the
     // RPC envelope) are excluded — the oRPC `filter` idiom.
     const rpcFunctions = input.functions.filter((definition) => definition.visibility !== "internal" && definition.kind !== "stream");
@@ -227,25 +227,25 @@ const buildOpenApiDocument = (input: OpenApiEmitInput): Record<string, unknown> 
     const tags = [...tagNames]
         .toSorted((a, b) => a.localeCompare(b))
         .map((name) => {
-            return { description: `Operations declared in \`cirrus/${name}\`.`, name };
+            return { description: `Operations declared in \`lunora/${name}\`.`, name };
         });
 
     const document = {
         components: {
             responses: {
-                CirrusError: {
+                LunoraError: {
                     content: {
                         "application/json": {
                             schema: {
                                 additionalProperties: false,
-                                description: "Standard Cirrus error envelope.",
+                                description: "Standard Lunora error envelope.",
                                 properties: {
                                     error: {
                                         additionalProperties: false,
                                         properties: {
                                             code: {
                                                 description: "Machine-readable error code. Clients switch on this value.",
-                                                enum: CIRRUS_ERROR_CODES,
+                                                enum: LUNORA_ERROR_CODES,
                                                 type: "string",
                                             },
                                             message: { description: "Human-readable error message (never echoes internal details).", type: "string" },
@@ -260,13 +260,13 @@ const buildOpenApiDocument = (input: OpenApiEmitInput): Record<string, unknown> 
                         },
                     },
                     description:
-                        "A Cirrus error response. The HTTP status reflects the error code (e.g. BAD_REQUEST→400, UNAUTHORIZED→401, FORBIDDEN→403, NOT_FOUND→404).",
+                        "A Lunora error response. The HTTP status reflects the error code (e.g. BAD_REQUEST→400, UNAUTHORIZED→401, FORBIDDEN→403, NOT_FOUND→404).",
                 },
             },
         },
         info: {
-            description: "Auto-generated from @cirrus/values-typed functions by @cirrus/codegen. Do not edit — run `cirrus codegen` to regenerate.",
-            title: "Cirrus API",
+            description: "Auto-generated from @lunora/values-typed functions by @lunora/codegen. Do not edit — run `lunora codegen` to regenerate.",
+            title: "Lunora API",
             // TODO: thread the project/app package version through here when available.
             version,
         },

@@ -12,14 +12,14 @@ const here = dirname(fileURLToPath(import.meta.url));
 const fixtureRoot = join(here, "..", "..", "..", "codegen", "__tests__", "fixtures", "simple");
 
 const VALID_WRANGLER = `{
-    "name": "cirrus-app",
+    "name": "lunora-app",
     "main": "src/index.ts",
     "compatibility_date": "2026-04-07",
     "compatibility_flags": ["nodejs_compat"],
     "durable_objects": {
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }]
     },
-    "d1_databases": [{ "binding": "DB", "database_name": "cirrus-app", "database_id": "real-db-id-abc123" }]
+    "d1_databases": [{ "binding": "DB", "database_name": "lunora-app", "database_id": "real-db-id-abc123" }]
 }
 `;
 
@@ -43,10 +43,10 @@ const silentLogger = (): { errors: string[]; infos: string[]; logger: Logger; wa
 
 let workdir: string;
 
-describe("cirrus prepare", () => {
+describe("lunora prepare", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-cli-prepare-"));
-        cpSync(join(fixtureRoot, "cirrus"), join(workdir, "cirrus"), { recursive: true });
+        workdir = mkdtempSync(join(tmpdir(), "lunora-cli-prepare-"));
+        cpSync(join(fixtureRoot, "lunora"), join(workdir, "lunora"), { recursive: true });
     });
 
     afterEach(() => {
@@ -146,9 +146,9 @@ describe("cirrus prepare", () => {
         // care that a genuine codegen error propagates as code 1.
         //
         // The simple fixture's schema.ts uses `.global()` tables, which codegen
-        // requires to exist at `cirrus/schema.ts`. Removing it makes codegen
+        // requires to exist at `lunora/schema.ts`. Removing it makes codegen
         // throw "schema not found" (or similar).
-        rmSync(join(workdir, "cirrus", "schema.ts"), { force: true });
+        rmSync(join(workdir, "lunora", "schema.ts"), { force: true });
 
         writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
 

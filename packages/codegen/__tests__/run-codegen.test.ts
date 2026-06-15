@@ -41,8 +41,8 @@ let workdir: string;
 
 describe("run-codegen", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-codegen-"));
-        cpSync(join(fixtureRoot, "cirrus"), join(workdir, "cirrus"), { recursive: true });
+        workdir = mkdtempSync(join(tmpdir(), "lunora-codegen-"));
+        cpSync(join(fixtureRoot, "lunora"), join(workdir, "lunora"), { recursive: true });
     });
 
     afterEach(() => {
@@ -63,21 +63,21 @@ describe("run-codegen", () => {
             expect(result.generated.dataModel).toContain("text: string;");
         });
 
-        it("does not wire @cirrus/ai for a project that doesn't use it", () => {
+        it("does not wire @lunora/ai for a project that doesn't use it", () => {
             expect.assertions(2);
 
             const result = runCodegen({ projectRoot: workdir });
 
-            expect(result.generated.shard).not.toContain("@cirrus/ai");
-            expect(result.generated.server).not.toContain("@cirrus/ai");
+            expect(result.generated.shard).not.toContain("@lunora/ai");
+            expect(result.generated.server).not.toContain("@lunora/ai");
         });
 
         it("wires ctx.ai end-to-end when a function reads ctx.ai", () => {
             expect.assertions(3);
 
             writeFileSync(
-                join(workdir, "cirrus", "summarize.ts"),
-                `import { action, v } from "@cirrus/server";
+                join(workdir, "lunora", "summarize.ts"),
+                `import { action, v } from "@lunora/server";
 export const summarize = action({ args: { text: v.string() }, handler: async (ctx, { text }) => ctx.ai.model("@cf/meta/llama-3.1-8b-instruct") });
 `,
                 "utf8",
@@ -85,26 +85,26 @@ export const summarize = action({ args: { text: v.string() }, handler: async (ct
 
             const result = runCodegen({ projectRoot: workdir });
 
-            expect(result.generated.shard).toContain('import { createAi } from "@cirrus/ai"');
+            expect(result.generated.shard).toContain('import { createAi } from "@lunora/ai"');
             expect(result.generated.shard).toContain("ai,");
-            expect(result.generated.server).toContain("readonly ai: CirrusAi;");
+            expect(result.generated.server).toContain("readonly ai: LunoraAi;");
         });
 
-        it("does not wire @cirrus/payment for a project that doesn't use it", () => {
+        it("does not wire @lunora/payment for a project that doesn't use it", () => {
             expect.assertions(2);
 
             const result = runCodegen({ projectRoot: workdir });
 
-            expect(result.generated.shard).not.toContain("@cirrus/payment");
-            expect(result.generated.server).not.toContain("@cirrus/payment");
+            expect(result.generated.shard).not.toContain("@lunora/payment");
+            expect(result.generated.server).not.toContain("@lunora/payment");
         });
 
         it("wires ctx.payments end-to-end when a function reads ctx.payments", () => {
             expect.assertions(4);
 
             writeFileSync(
-                join(workdir, "cirrus", "billing.ts"),
-                `import { action, v } from "@cirrus/server";
+                join(workdir, "lunora", "billing.ts"),
+                `import { action, v } from "@lunora/server";
 export const mySubs = action({ args: { reference: v.string() }, handler: async (ctx, { reference }) => ctx.payments.listSubscriptions(reference) });
 `,
                 "utf8",
@@ -112,18 +112,18 @@ export const mySubs = action({ args: { reference: v.string() }, handler: async (
 
             const result = runCodegen({ projectRoot: workdir });
 
-            expect(result.generated.shard).toContain('import { paymentsFromContext } from "@cirrus/payment"');
+            expect(result.generated.shard).toContain('import { paymentsFromContext } from "@lunora/payment"');
             expect(result.generated.shard).toContain("payments,");
             expect(result.generated.shard).toContain("paymentStub");
-            expect(result.generated.server).toContain("readonly payments: CirrusPayment;");
+            expect(result.generated.server).toContain("readonly payments: LunoraPayment;");
         });
 
         it("wires ctx.kv end-to-end (every ctx) when a query reads ctx.kv", () => {
             expect.assertions(4);
 
             writeFileSync(
-                join(workdir, "cirrus", "cache.ts"),
-                `import { query, v } from "@cirrus/server";
+                join(workdir, "lunora", "cache.ts"),
+                `import { query, v } from "@lunora/server";
 export const cached = query({ args: { key: v.string() }, handler: async (ctx, { key }) => ctx.kv.get(key) });
 `,
                 "utf8",
@@ -131,19 +131,19 @@ export const cached = query({ args: { key: v.string() }, handler: async (ctx, { 
 
             const result = runCodegen({ lint: false, projectRoot: workdir });
 
-            expect(result.generated.shard).toContain('import { createKv } from "@cirrus/kv"');
+            expect(result.generated.shard).toContain('import { createKv } from "@lunora/kv"');
             expect(result.generated.shard).toContain("\n                kv,");
             // KV rides every ctx, so it must NOT be gated behind the action-only block.
             expect(result.generated.shard).not.toContain("ctx.kv = kv;");
-            expect(result.generated.server).toContain('readonly kv: import("@cirrus/kv").Kv;');
+            expect(result.generated.server).toContain('readonly kv: import("@lunora/kv").Kv;');
         });
 
         it("wires ctx.sql (Hyperdrive) end-to-end onto the ActionCtx ONLY (value-level) when an action reads ctx.sql", () => {
             expect.assertions(4);
 
             writeFileSync(
-                join(workdir, "cirrus", "external.ts"),
-                `import { action, v } from "@cirrus/server";
+                join(workdir, "lunora", "external.ts"),
+                `import { action, v } from "@lunora/server";
 export const ext = action({ args: { id: v.string() }, handler: async (ctx, { id }) => ctx.sql.query("select 1") });
 `,
                 "utf8",
@@ -151,29 +151,29 @@ export const ext = action({ args: { id: v.string() }, handler: async (ctx, { id 
 
             const result = runCodegen({ lint: false, projectRoot: workdir });
 
-            expect(result.generated.shard).toContain('import type { SqlClient } from "@cirrus/hyperdrive";');
+            expect(result.generated.shard).toContain('import type { SqlClient } from "@lunora/hyperdrive";');
             // Attached only inside the `if (isAction)` block — never spliced into the shared ctx literal.
             expect(result.generated.shard).toContain("ctx.sql = sql;");
 
             const baseCtxBody = result.generated.shard.slice(0, result.generated.shard.indexOf("const isAction ="));
 
             expect(baseCtxBody).not.toContain("\n                sql,");
-            expect(result.generated.server).toContain('readonly sql: import("@cirrus/hyperdrive").SqlClient;');
+            expect(result.generated.server).toContain('readonly sql: import("@lunora/hyperdrive").SqlClient;');
         });
 
         it("gates studioFeatures end-to-end: payments on (ctx read), crons drive scheduler, storage column drives storage, mail/vectors off", () => {
             expect.assertions(5);
 
             writeFileSync(
-                join(workdir, "cirrus", "billing.ts"),
-                `import { action, v } from "@cirrus/server";
+                join(workdir, "lunora", "billing.ts"),
+                `import { action, v } from "@lunora/server";
 export const mySubs = action({ args: { reference: v.string() }, handler: async (ctx, { reference }) => ctx.payments.listSubscriptions(reference) });
 `,
                 "utf8",
             );
             writeFileSync(
-                join(workdir, "cirrus", "crons.ts"),
-                `import { cronJobs } from "@cirrus/scheduler";
+                join(workdir, "lunora", "crons.ts"),
+                `import { cronJobs } from "@lunora/scheduler";
 import { internal } from "./_generated/api.js";
 const crons = cronJobs();
 crons.cron("ping", "0 * * * *", internal.messages.list, {});
@@ -184,7 +184,7 @@ export default crons;
 
             const result = runCodegen({ lint: false, projectRoot: workdir });
 
-            // payments via ctx read; scheduler via a declared cron (no @cirrus/scheduler ctx use needed);
+            // payments via ctx read; scheduler via a declared cron (no @lunora/scheduler ctx use needed);
             // storage via the fixture's `attachments.fileKey: v.storage()` column (no ctx.storage use needed).
             expect(result.generated.shard).toContain('"payments": true');
             expect(result.generated.shard).toContain('"scheduler": true');
@@ -194,7 +194,7 @@ export default crons;
             expect(result.generated.shard).toContain('"vectors": false');
         });
 
-        it("does not emit a seed client for a project that doesn't depend on @cirrus/seed", () => {
+        it("does not emit a seed client for a project that doesn't depend on @lunora/seed", () => {
             expect.assertions(1);
 
             const result = runCodegen({ lint: false, projectRoot: workdir });
@@ -202,15 +202,15 @@ export default crons;
             expect(result.generated.seed).toBe("");
         });
 
-        it("emits a project-bound seed client when @cirrus/seed is a declared dependency", () => {
+        it("emits a project-bound seed client when @lunora/seed is a declared dependency", () => {
             expect.assertions(5);
 
-            writeFileSync(join(workdir, "package.json"), JSON.stringify({ devDependencies: { "@cirrus/seed": "workspace:*" }, name: "demo" }), "utf8");
+            writeFileSync(join(workdir, "package.json"), JSON.stringify({ devDependencies: { "@lunora/seed": "workspace:*" }, name: "demo" }), "utf8");
 
             const result = runCodegen({ lint: false, projectRoot: workdir });
 
-            expect(result.generated.seed).toContain('import { createSeedClient as createSeedClientBase } from "@cirrus/seed";');
-            // The runtime schema is the default export of cirrus/schema.ts (same import the ShardDO uses).
+            expect(result.generated.seed).toContain('import { createSeedClient as createSeedClientBase } from "@lunora/seed";');
+            // The runtime schema is the default export of lunora/schema.ts (same import the ShardDO uses).
             expect(result.generated.seed).toContain('import schema from "../schema.js";');
             expect(result.generated.seed).toContain('import type { InsertModel } from "./dataModel.js";');
             // InsertModel is pre-bound and the schema pre-applied, so callers pass only options.
@@ -253,7 +253,7 @@ export default crons;
 
             // The dispatch table still registers it (so `ctx.runMutation` can reach it),
             // and the external paths gate on `visibility`.
-            expect(result.generated.functions).toContain('"messages:purge": cirrus_messages_0.purge');
+            expect(result.generated.functions).toContain('"messages:purge": lunora_messages_0.purge');
             expect(result.generated.functions).toContain('visibility?: "internal" | "public";');
             expect(result.generated.shard).toContain('registered.visibility === "internal"');
         });
@@ -305,7 +305,7 @@ export default crons;
             expect(result.generated.server).toContain("action as actionBase,");
             expect(result.generated.server).toContain("mutation as mutationBase,");
             expect(result.generated.server).toContain("query as queryBase,");
-            expect(result.generated.server).toContain('} from "@cirrus/server";');
+            expect(result.generated.server).toContain('} from "@lunora/server";');
             expect(result.generated.server).toContain("export const query = queryBase as unknown as");
             expect(result.generated.server).toContain("export const mutation = mutationBase as unknown as");
             expect(result.generated.server).toContain("export const action = actionBase as unknown as");
@@ -324,7 +324,7 @@ export default crons;
             // server.ts is the builder file user code imports, so it must NOT import
             // the user function modules (that cycle lives in functions.ts). `Id as
             // IdOfTable` + `TableName` back the typed `v.id(...)`.
-            expect(result.generated.server).not.toContain("import * as cirrus_");
+            expect(result.generated.server).not.toContain("import * as lunora_");
             expect(result.generated.server).toContain(
                 'import type { DatabaseReaderFacade, DatabaseWriterFacade, Id as IdOfTable, OrmReader, OrmWriter, TableName } from "./dataModel.js"',
             );
@@ -390,10 +390,10 @@ export default crons;
             expect(result.generated.dataModel).toContain("export type Insert<T extends keyof DataModel>");
 
             // The typed `where` DSL is re-exported from the shipped
-            // `@cirrus/server/data-model` module; the per-table reader/writer
+            // `@lunora/server/data-model` module; the per-table reader/writer
             // facades are bound to this project's maps.
 
-            expect(result.generated.dataModel).toContain('from "@cirrus/server/data-model";');
+            expect(result.generated.dataModel).toContain('from "@lunora/server/data-model";');
             expect(result.generated.dataModel).toContain("    Where,\n    WhereOperators,");
             expect(result.generated.dataModel).toContain("export type TableReaderFacade<T extends keyof DataModel> = TableReaderFacadeOf<");
             expect(result.generated.dataModel).toContain("export type TableWriterFacade<T extends keyof DataModel> = TableWriterFacadeOf<");
@@ -425,10 +425,10 @@ export default crons;
             expect(result.generated.server).toContain("readonly orm: OrmReader;");
             expect(result.generated.server).toContain("readonly orm: OrmWriter;");
 
-            // Runtime: the facade binding is the shared `@cirrus/server` helper
+            // Runtime: the facade binding is the shared `@lunora/server` helper
             // (one source of truth with the RLS middleware), and `ctx.orm` is
             // built from it via `bindOrm`.
-            expect(result.generated.shard).toContain('import { bindOrm, bindTableFacade } from "@cirrus/server";');
+            expect(result.generated.shard).toContain('import { bindOrm, bindTableFacade } from "@lunora/server";');
             expect(result.generated.shard).toContain("= bindTableFacade(");
             expect(result.generated.shard).toContain("orm: bindOrm(facade),");
         });
@@ -439,12 +439,12 @@ export default crons;
             const result = runCodegen({ projectRoot: workdir });
 
             // The namespace must match the sanitized form `emitApi` uses so the
-            // client-side `__cirrusRef` and the server-side dispatch key agree.
-            expect(result.generated.functions).toContain('import * as cirrus_messages_0 from "../messages.js"');
-            expect(result.generated.functions).toContain("export const CIRRUS_FUNCTIONS:");
-            expect(result.generated.functions).toContain('"messages:list": cirrus_messages_0.list');
-            expect(result.generated.functions).toContain('"messages:send": cirrus_messages_0.send');
-            expect(result.generated.functions).toContain("export const dispatchCirrusFunction =");
+            // client-side `__lunoraRef` and the server-side dispatch key agree.
+            expect(result.generated.functions).toContain('import * as lunora_messages_0 from "../messages.js"');
+            expect(result.generated.functions).toContain("export const LUNORA_FUNCTIONS:");
+            expect(result.generated.functions).toContain('"messages:list": lunora_messages_0.list');
+            expect(result.generated.functions).toContain('"messages:send": lunora_messages_0.send');
+            expect(result.generated.functions).toContain("export const dispatchLunoraFunction =");
             expect(result.generated.functions).toContain("FUNCTION_NOT_FOUND");
         });
 
@@ -453,7 +453,7 @@ export default crons;
 
             runCodegen({ projectRoot: workdir });
 
-            const generatedDirectory = join(workdir, "cirrus", "_generated");
+            const generatedDirectory = join(workdir, "lunora", "_generated");
 
             expect(existsSync(join(generatedDirectory, "api.ts"))).toBe(true);
             expect(existsSync(join(generatedDirectory, "server.ts"))).toBe(true);
@@ -476,25 +476,25 @@ export default crons;
 
             const paths = document.paths as Record<string, Record<string, { operationId: string }>>;
 
-            // The typed REST routes from cirrus/http.ts → real paths (with `:param`
+            // The typed REST routes from lunora/http.ts → real paths (with `:param`
             // rewritten to the OpenAPI `{param}` template form).
             expect(document.openapi).toBe("3.1.0");
             expect(paths["/api/messages"]?.get?.operationId).toBe("get__api_messages");
             expect(paths["/api/messages/{channelId}"]?.post).toBeDefined();
 
-            // RPC functions → one POST operation each on /_cirrus/rpc, disambiguated
+            // RPC functions → one POST operation each on /_lunora/rpc, disambiguated
             // by a #functionPath fragment; the internalMutation `purge` is excluded.
-            expect(paths["/_cirrus/rpc#messages:list"]?.post?.operationId).toBe("messages:list");
-            expect(paths["/_cirrus/rpc#messages:send"]?.post?.operationId).toBe("messages:send");
-            expect(paths["/_cirrus/rpc#messages:purge"]).toBeUndefined();
+            expect(paths["/_lunora/rpc#messages:list"]?.post?.operationId).toBe("messages:list");
+            expect(paths["/_lunora/rpc#messages:send"]?.post?.operationId).toBe("messages:send");
+            expect(paths["/_lunora/rpc#messages:purge"]).toBeUndefined();
 
             // The reusable error component is referenced by operations.
             const components = document.components as {
-                responses: { CirrusError: { content: Record<string, { schema: { properties: { error: { properties: { code: { enum: string[] } } } } } }> } };
+                responses: { LunoraError: { content: Record<string, { schema: { properties: { error: { properties: { code: { enum: string[] } } } } } }> } };
             };
 
-            expect(components.responses.CirrusError).toBeDefined();
-            expect(components.responses.CirrusError.content["application/json"]?.schema.properties.error.properties.code.enum).toContain("UNAUTHORIZED");
+            expect(components.responses.LunoraError).toBeDefined();
+            expect(components.responses.LunoraError.content["application/json"]?.schema.properties.error.properties.code.enum).toContain("UNAUTHORIZED");
 
             // Pretty-printed JSON ends with a trailing newline.
             expect(result.generated.openApi.endsWith("}\n")).toBe(true);
@@ -505,7 +505,7 @@ export default crons;
 
             runCodegen({ projectRoot: workdir });
 
-            const generatedDirectory = join(workdir, "cirrus", "_generated");
+            const generatedDirectory = join(workdir, "lunora", "_generated");
 
             // The `.ts` module is gated on the SAME apiSpec choice as the `.json`,
             // so both regenerate together and never drift.
@@ -520,7 +520,7 @@ export default crons;
 
             const result = runCodegen({ apiSpec: "openrpc", projectRoot: workdir });
 
-            const generatedDirectory = join(workdir, "cirrus", "_generated");
+            const generatedDirectory = join(workdir, "lunora", "_generated");
 
             expect(existsSync(join(generatedDirectory, "openrpc.json"))).toBe(true);
             expect(existsSync(join(generatedDirectory, "openrpc.ts"))).toBe(true);
@@ -537,7 +537,7 @@ export default crons;
 
             runCodegen({ apiSpec: "both", projectRoot: workdir });
 
-            const generatedDirectory = join(workdir, "cirrus", "_generated");
+            const generatedDirectory = join(workdir, "lunora", "_generated");
 
             expect(existsSync(join(generatedDirectory, "openapi.json"))).toBe(true);
             expect(existsSync(join(generatedDirectory, "openapi.ts"))).toBe(true);
@@ -550,7 +550,7 @@ export default crons;
 
             runCodegen({ apiSpec: "none", projectRoot: workdir });
 
-            const generatedDirectory = join(workdir, "cirrus", "_generated");
+            const generatedDirectory = join(workdir, "lunora", "_generated");
 
             expect(existsSync(join(generatedDirectory, "openapi.json"))).toBe(false);
             expect(existsSync(join(generatedDirectory, "openapi.ts"))).toBe(false);
@@ -631,7 +631,7 @@ export default crons;
         it("output matches committed expected/ files (snapshot)", () => {
             expect.assertions(11);
 
-            // `lint: false` keeps the emitted `CIRRUS_ADVISORIES` empty so the
+            // `lint: false` keeps the emitted `LUNORA_ADVISORIES` empty so the
             // snapshot stays decoupled from advisor behaviour (a lint change
             // would otherwise churn the fixture). The advisory data path is
             // covered separately below.
@@ -668,22 +668,22 @@ export default crons;
             const result = runCodegen({ projectRoot: workdir });
 
             expect(result.generated.shard).toContain("export const createShardDO");
-            expect(result.generated.shard).toContain('import { CIRRUS_FUNCTIONS, CIRRUS_MIGRATIONS } from "./functions.js"');
+            expect(result.generated.shard).toContain('import { LUNORA_FUNCTIONS, LUNORA_MIGRATIONS } from "./functions.js"');
             expect(result.generated.shard).toContain('import schema from "../schema.js"');
             expect(result.generated.shard).toContain("class extends ShardDOBase");
             expect(result.generated.shard).toContain("runShardMigrations");
             expect(result.generated.shard).toContain("createShardCtxDb");
 
             // The fixture schema declares no vector indexes, so the shard must stay
-            // dependency-light and never reach for @cirrus/vectors.
-            expect(result.generated.shard).not.toContain("@cirrus/vectors");
+            // dependency-light and never reach for @lunora/vectors.
+            expect(result.generated.shard).not.toContain("@lunora/vectors");
             expect(result.generated.shard).not.toContain("createVectorSyncHook");
         });
 
         it("throws when schema.ts is missing", () => {
             expect.assertions(1);
 
-            const empty = mkdtempSync(join(tmpdir(), "cirrus-empty-"));
+            const empty = mkdtempSync(join(tmpdir(), "lunora-empty-"));
 
             try {
                 expect(() => runCodegen({ projectRoot: empty })).toThrow(SCHEMA_NOT_FOUND_RE);
@@ -694,7 +694,7 @@ export default crons;
     });
 
     describe("project reuse", () => {
-        const cirrusDirectory = (): string => join(workdir, "cirrus");
+        const lunoraDirectory = (): string => join(workdir, "lunora");
 
         it("produces output identical to a fresh Project when the shared Project is reused unchanged", () => {
             expect.assertions(7);
@@ -704,9 +704,9 @@ export default crons;
             // A second run over the same files through one shared, refreshed Project
             // must emit byte-identical content — reuse must never drift from the
             // fresh-Project baseline the first run captured.
-            const project = createCodegenProject(cirrusDirectory());
+            const project = createCodegenProject(lunoraDirectory());
 
-            refreshCodegenProject(project, cirrusDirectory());
+            refreshCodegenProject(project, lunoraDirectory());
 
             const reused = runCodegen({ lint: false, project, projectRoot: workdir });
 
@@ -719,7 +719,7 @@ export default crons;
 
             // Re-running the SAME shared Project a third time (refreshed again, no
             // disk change) stays stable too.
-            refreshCodegenProject(project, cirrusDirectory());
+            refreshCodegenProject(project, lunoraDirectory());
 
             const reusedAgain = runCodegen({ lint: false, project, projectRoot: workdir });
 
@@ -729,9 +729,9 @@ export default crons;
         it("reflects an edit to a function file on disk after refreshing the shared Project", () => {
             expect.assertions(4);
 
-            const project = createCodegenProject(cirrusDirectory());
+            const project = createCodegenProject(lunoraDirectory());
 
-            refreshCodegenProject(project, cirrusDirectory());
+            refreshCodegenProject(project, lunoraDirectory());
 
             const before = runCodegen({ lint: false, project, projectRoot: workdir });
 
@@ -740,11 +740,11 @@ export default crons;
 
             // Rename the `send` mutation to `publish` on disk, then refresh the
             // SHARED Project (what the plugin does) and re-run.
-            const messagesPath = join(cirrusDirectory(), "messages.ts");
+            const messagesPath = join(lunoraDirectory(), "messages.ts");
             const edited = readFileSync(messagesPath, "utf8").replace("export const send = mutation(", "export const publish = mutation(");
 
             writeFileSync(messagesPath, edited, "utf8");
-            refreshCodegenProject(project, cirrusDirectory());
+            refreshCodegenProject(project, lunoraDirectory());
 
             const after = runCodegen({ lint: false, project, projectRoot: workdir });
 
@@ -755,9 +755,9 @@ export default crons;
         it("reflects an added file and drops a deleted one after refreshing the shared Project", () => {
             expect.assertions(4);
 
-            const project = createCodegenProject(cirrusDirectory());
+            const project = createCodegenProject(lunoraDirectory());
 
-            refreshCodegenProject(project, cirrusDirectory());
+            refreshCodegenProject(project, lunoraDirectory());
 
             const before = runCodegen({ lint: false, project, projectRoot: workdir });
 
@@ -767,14 +767,14 @@ export default crons;
             // Add a brand-new function file and delete the existing one, then
             // refresh the shared Project and re-run.
             writeFileSync(
-                join(cirrusDirectory(), "notifications.ts"),
-                `import { query, v } from "@cirrus/server";
+                join(lunoraDirectory(), "notifications.ts"),
+                `import { query, v } from "@lunora/server";
 export const ping = query({ args: { id: v.string() }, handler: async (_context, args) => ({ id: args.id }) });
 `,
                 "utf8",
             );
-            rmSync(join(cirrusDirectory(), "messages.ts"), { force: true });
-            refreshCodegenProject(project, cirrusDirectory());
+            rmSync(join(lunoraDirectory(), "messages.ts"), { force: true });
+            refreshCodegenProject(project, lunoraDirectory());
 
             const after = runCodegen({ lint: false, project, projectRoot: workdir });
 
@@ -834,7 +834,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
     });
 
     describe("emitVectors", () => {
-        it("emits a sorted CIRRUS_VECTOR_INDEXES registry from the schema's vector indexes", () => {
+        it("emits a sorted LUNORA_VECTOR_INDEXES registry from the schema's vector indexes", () => {
             expect.assertions(4);
 
             const output = emitVectors([
@@ -843,7 +843,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             ]);
 
             // eslint-disable-next-line no-secrets/no-secrets -- generated type annotation, not a secret
-            expect(output).toContain("export const CIRRUS_VECTOR_INDEXES: ReadonlyArray<CirrusVectorIndex> = [");
+            expect(output).toContain("export const LUNORA_VECTOR_INDEXES: ReadonlyArray<LunoraVectorIndex> = [");
             // Sorted by name: `abstracts` precedes `by_body`.
             expect(output.indexOf('name: "abstracts"')).toBeLessThan(output.indexOf('name: "by_body"'));
             // Shape A entry carries field + metadata; the metric/dimensions ride along.
@@ -858,8 +858,8 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             const output = emitVectors([]);
 
             // eslint-disable-next-line no-secrets/no-secrets -- generated type annotation, not a secret
-            expect(output).toContain("export const CIRRUS_VECTOR_INDEXES: ReadonlyArray<CirrusVectorIndex> = [];");
-            expect(output).toContain("export interface CirrusVectorIndex");
+            expect(output).toContain("export const LUNORA_VECTOR_INDEXES: ReadonlyArray<LunoraVectorIndex> = [];");
+            expect(output).toContain("export interface LunoraVectorIndex");
         });
     });
 
@@ -885,7 +885,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const output = emitShard({ schema: { tables: [], vectorIndexes: [] } });
 
-            expect(output).toContain("const CIRRUS_STORAGE_RULES: StorageRulesResult = {");
+            expect(output).toContain("const LUNORA_STORAGE_RULES: StorageRulesResult = {");
         });
     });
 
@@ -915,7 +915,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const output = emitShard({ schema: { tables: [], vectorIndexes: [] } });
 
-            expect(output).toContain("const CIRRUS_STUDIO_FEATURES: StudioFeaturesResult = {");
+            expect(output).toContain("const LUNORA_STUDIO_FEATURES: StudioFeaturesResult = {");
             expect(output).not.toContain('"payments": true');
         });
     });
@@ -932,7 +932,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             });
 
             expect(output).toContain("protected override workflowsMetadata(): WorkflowsResult {");
-            expect(output).toContain("const CIRRUS_WORKFLOWS_INFO: WorkflowsResult = {");
+            expect(output).toContain("const LUNORA_WORKFLOWS_INFO: WorkflowsResult = {");
             expect(output).toContain('"binding": "WORKFLOW_ORDER_PIPELINE"');
             expect(output).toContain('"name": "order-pipeline"');
         });
@@ -942,9 +942,9 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const output = emitShard({ schema: { tables: [], vectorIndexes: [] } });
 
-            expect(output).not.toContain("CIRRUS_WORKFLOWS_INFO");
+            expect(output).not.toContain("LUNORA_WORKFLOWS_INFO");
             expect(output).not.toContain("workflowsMetadata()");
-            // Its `@cirrus/do` type import is gated too, so a workflow-free shard never names it.
+            // Its `@lunora/do` type import is gated too, so a workflow-free shard never names it.
             expect(output).not.toContain("WorkflowsResult");
         });
     });
@@ -1102,20 +1102,20 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain('"isStorage": true');
         });
 
-        it("emits the CIRRUS_TABLE_COLUMNS constant even for an empty schema", () => {
+        it("emits the LUNORA_TABLE_COLUMNS constant even for an empty schema", () => {
             expect.assertions(2);
 
             const output = emitShard({ schema: { tables: [], vectorIndexes: [] } });
 
-            expect(output).toContain("const CIRRUS_TABLE_COLUMNS");
+            expect(output).toContain("const LUNORA_TABLE_COLUMNS");
             expect(output).toContain(
-                "CIRRUS_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: string; optional: boolean; pk?: boolean; ref?: string; type: string }>> = {}",
+                "LUNORA_TABLE_COLUMNS: Record<string, Array<{ isStorage?: boolean; name: string; optional: boolean; pk?: boolean; ref?: string; type: string }>> = {}",
             );
         });
     });
 
     describe("emitShard", () => {
-        it("wires @cirrus/vectors auto-sync when the schema declares vector indexes", () => {
+        it("wires @lunora/vectors auto-sync when the schema declares vector indexes", () => {
             expect.assertions(7);
 
             const schema: SchemaIR = {
@@ -1137,7 +1137,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             const output = emitShard({ schema });
 
             // Vectors variant: pull the adapters + the Vectorize binding type.
-            expect(output).toContain('import { createContextVectors, createVectors, createVectorSyncHook } from "@cirrus/vectors"');
+            expect(output).toContain('import { createContextVectors, createVectors, createVectorSyncHook } from "@lunora/vectors"');
             expect(output).toContain("VectorizeIndexLike");
             expect(output).toContain("WriteHook");
 
@@ -1148,7 +1148,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain("vectors,");
         });
 
-        it("omits @cirrus/vectors entirely when the schema declares no vectors", () => {
+        it("omits @lunora/vectors entirely when the schema declares no vectors", () => {
             expect.assertions(4);
 
             const schema: SchemaIR = {
@@ -1169,7 +1169,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const output = emitShard({ schema });
 
-            expect(output).not.toContain("@cirrus/vectors");
+            expect(output).not.toContain("@lunora/vectors");
             expect(output).not.toContain("createVectorSyncHook");
             expect(output).not.toContain("onWrite");
             expect(output).toContain("export const createShardDO");
@@ -1184,22 +1184,22 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             // Pull the AI helper + binding type, expose the override config field,
             // and assemble ctx.ai (built from env.AI, with a throwing stub fallback).
-            expect(output).toContain('import { createAi } from "@cirrus/ai"');
+            expect(output).toContain('import { createAi } from "@lunora/ai"');
             expect(output).toContain("AiBindingLike");
             expect(output).toContain("ai?: (env: Record<string, unknown>) => AiBindingLike;");
-            expect(output).toContain("const aiStub: CirrusAi");
+            expect(output).toContain("const aiStub: LunoraAi");
             expect(output).toContain("createAi({ binding: aiBinding as AiBindingLike })");
             expect(output).toContain("ai,");
         });
 
-        it("omits @cirrus/ai entirely when AI is not used", () => {
+        it("omits @lunora/ai entirely when AI is not used", () => {
             expect.assertions(3);
 
             const schema: SchemaIR = { tables: [], vectorIndexes: [] };
 
             const output = emitShard({ schema });
 
-            expect(output).not.toContain("@cirrus/ai");
+            expect(output).not.toContain("@lunora/ai");
             expect(output).not.toContain("createAi");
             expect(output).not.toContain("aiStub");
         });
@@ -1211,7 +1211,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const output = emitShard({ hasKv: true, schema });
 
-            expect(output).toContain('import { createKv } from "@cirrus/kv"');
+            expect(output).toContain('import { createKv } from "@lunora/kv"');
             expect(output).toContain("kv?: (env: Record<string, unknown>) => KVNamespaceLike;");
             expect(output).toContain("const kvStub: Kv");
             expect(output).toContain("createKv({ namespace: kvBinding as KVNamespaceLike })");
@@ -1227,7 +1227,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const output = emitShard({ hasAnalytics: true, schema });
 
-            expect(output).toContain('import { createAnalytics } from "@cirrus/analytics"');
+            expect(output).toContain('import { createAnalytics } from "@lunora/analytics"');
             expect(output).toContain("analytics?: (env: Record<string, unknown>) => AnalyticsEngineDatasetLike;");
             expect(output).toContain("const analyticsStub: AnalyticsClient");
             // Positional binding arg — NOT an options object.
@@ -1243,14 +1243,14 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const output = emitShard({ hasImages: true, schema });
 
-            expect(output).toContain('import { createImages } from "@cirrus/images"');
+            expect(output).toContain('import { createImages } from "@lunora/images"');
             expect(output).toContain("images?: (env: Record<string, unknown>) => ImagesBindingLike;");
             expect(output).toContain("const imagesStub: Images");
             expect(output).toContain("createImages({ binding: imagesBinding as ImagesBindingLike })");
             // Attached only inside the `isAction` block, never spliced into the base ctx literal.
             expect(output).toContain("ctx.images = images;");
             // eslint-disable-next-line no-secrets/no-secrets -- asserting on a generated ctx-builder line, not a credential
-            expect(output).toContain('const isAction = CIRRUS_FUNCTIONS[options.functionPath ?? ""]?.kind === "action";');
+            expect(output).toContain('const isAction = LUNORA_FUNCTIONS[options.functionPath ?? ""]?.kind === "action";');
         });
 
         it("wires ctx.sql (Hyperdrive) onto the ACTION ctx ONLY via a REQUIRED config thunk when hyperdrive is used", () => {
@@ -1260,7 +1260,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const output = emitShard({ hasHyperdrive: true, schema });
 
-            expect(output).toContain('import type { SqlClient } from "@cirrus/hyperdrive";');
+            expect(output).toContain('import type { SqlClient } from "@lunora/hyperdrive";');
             expect(output).toContain("sql?: (env: Record<string, unknown>) => SqlClient;");
             expect(output).toContain("const sqlStub: SqlClient");
             // No auto-construct: the build is config-thunk-first (createHyperdrive returns connection info, not a SqlClient).
@@ -1276,7 +1276,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const output = emitShard({ hasBrowser: true, schema });
 
-            expect(output).toContain('import type { Browser } from "@cirrus/browser";');
+            expect(output).toContain('import type { Browser } from "@lunora/browser";');
             expect(output).toContain("browser?: (env: Record<string, unknown>) => Browser;");
             expect(output).toContain("const browserStub: Browser");
             expect(output).toContain("const browser: Browser = config.browser ? config.browser(env) : browserStub;");
@@ -1292,11 +1292,11 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const output = emitShard({ schema });
 
-            expect(output).not.toContain("@cirrus/kv");
-            expect(output).not.toContain("@cirrus/analytics");
-            expect(output).not.toContain("@cirrus/images");
-            expect(output).not.toContain("@cirrus/hyperdrive");
-            expect(output).not.toContain("@cirrus/browser");
+            expect(output).not.toContain("@lunora/kv");
+            expect(output).not.toContain("@lunora/analytics");
+            expect(output).not.toContain("@lunora/images");
+            expect(output).not.toContain("@lunora/hyperdrive");
+            expect(output).not.toContain("@lunora/browser");
             expect(output).not.toContain("isAction");
             expect(output).not.toContain("ctx.images = images;");
             expect(output).not.toContain("kvStub");
@@ -1327,21 +1327,21 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const output = emitShard({ schema, hasPayments: true });
 
-            expect(output).toContain('import { paymentsFromContext } from "@cirrus/payment"');
+            expect(output).toContain('import { paymentsFromContext } from "@lunora/payment"');
             expect(output).toContain("payment?: (env: Record<string, unknown>) => PaymentsFromContextOptions;");
-            expect(output).toContain("const paymentStub: CirrusPayment");
+            expect(output).toContain("const paymentStub: LunoraPayment");
             expect(output).toContain("config.payment");
             expect(output).toContain("payments,");
         });
 
-        it("omits @cirrus/payment entirely when payments are not used", () => {
+        it("omits @lunora/payment entirely when payments are not used", () => {
             expect.assertions(3);
 
             const schema: SchemaIR = { tables: [], vectorIndexes: [] };
 
             const output = emitShard({ schema });
 
-            expect(output).not.toContain("@cirrus/payment");
+            expect(output).not.toContain("@lunora/payment");
             expect(output).not.toContain("paymentsFromContext");
             expect(output).not.toContain("paymentStub");
         });
@@ -1351,12 +1351,12 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const withPayments = emitServer({ hasPayments: true });
 
-            expect(withPayments).toContain('import type { CirrusPayment } from "@cirrus/payment";');
-            expect(withPayments).toContain("readonly payments: CirrusPayment;");
+            expect(withPayments).toContain('import type { LunoraPayment } from "@lunora/payment";');
+            expect(withPayments).toContain("readonly payments: LunoraPayment;");
 
             const withoutPayments = emitServer({});
 
-            expect(withoutPayments).not.toContain("@cirrus/payment");
+            expect(withoutPayments).not.toContain("@lunora/payment");
             expect(withoutPayments).not.toContain("readonly payments:");
         });
 
@@ -1365,12 +1365,12 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const withAi = emitServer({ hasAi: true });
 
-            expect(withAi).toContain('import type { CirrusAi } from "@cirrus/ai";');
-            expect(withAi).toContain("readonly ai: CirrusAi;");
+            expect(withAi).toContain('import type { LunoraAi } from "@lunora/ai";');
+            expect(withAi).toContain("readonly ai: LunoraAi;");
 
             const withoutAi = emitServer({});
 
-            expect(withoutAi).not.toContain("@cirrus/ai");
+            expect(withoutAi).not.toContain("@lunora/ai");
             expect(withoutAi).not.toContain("readonly ai:");
         });
 
@@ -1413,10 +1413,10 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             const mutationCtx = ctxInterface(withKv, "MutationCtx");
             const actionCtx = ctxInterface(withKv, "ActionCtx");
 
-            expect(queryCtx).toContain('readonly kv: import("@cirrus/kv").Kv;');
-            expect(mutationCtx).toContain('readonly kv: import("@cirrus/kv").Kv;');
-            expect(actionCtx).toContain('readonly kv: import("@cirrus/kv").Kv;');
-            expect(emitServer({})).not.toContain("@cirrus/kv");
+            expect(queryCtx).toContain('readonly kv: import("@lunora/kv").Kv;');
+            expect(mutationCtx).toContain('readonly kv: import("@lunora/kv").Kv;');
+            expect(actionCtx).toContain('readonly kv: import("@lunora/kv").Kv;');
+            expect(emitServer({})).not.toContain("@lunora/kv");
         });
 
         it("wires ctx.analytics onto EVERY ctx (write-only fire-and-forget side effect)", () => {
@@ -1424,10 +1424,10 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const withAnalytics = emitServer({ hasAnalytics: true });
 
-            expect(ctxInterface(withAnalytics, "QueryCtx")).toContain('readonly analytics: import("@cirrus/analytics").AnalyticsClient;');
-            expect(ctxInterface(withAnalytics, "MutationCtx")).toContain('readonly analytics: import("@cirrus/analytics").AnalyticsClient;');
-            expect(ctxInterface(withAnalytics, "ActionCtx")).toContain('readonly analytics: import("@cirrus/analytics").AnalyticsClient;');
-            expect(emitServer({})).not.toContain("@cirrus/analytics");
+            expect(ctxInterface(withAnalytics, "QueryCtx")).toContain('readonly analytics: import("@lunora/analytics").AnalyticsClient;');
+            expect(ctxInterface(withAnalytics, "MutationCtx")).toContain('readonly analytics: import("@lunora/analytics").AnalyticsClient;');
+            expect(ctxInterface(withAnalytics, "ActionCtx")).toContain('readonly analytics: import("@lunora/analytics").AnalyticsClient;');
+            expect(emitServer({})).not.toContain("@lunora/analytics");
         });
 
         it("wires ctx.sql (Hyperdrive) onto ActionCtx ONLY — never query/mutation (determinism)", () => {
@@ -1435,10 +1435,10 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const withSql = emitServer({ hasHyperdrive: true });
 
-            expect(ctxInterface(withSql, "ActionCtx")).toContain('readonly sql: import("@cirrus/hyperdrive").SqlClient;');
+            expect(ctxInterface(withSql, "ActionCtx")).toContain('readonly sql: import("@lunora/hyperdrive").SqlClient;');
             expect(ctxInterface(withSql, "QueryCtx")).not.toContain("readonly sql:");
             expect(ctxInterface(withSql, "MutationCtx")).not.toContain("readonly sql:");
-            expect(emitServer({})).not.toContain("@cirrus/hyperdrive");
+            expect(emitServer({})).not.toContain("@lunora/hyperdrive");
         });
 
         it("wires ctx.browser onto ActionCtx ONLY — never query/mutation (determinism)", () => {
@@ -1446,10 +1446,10 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const withBrowser = emitServer({ hasBrowser: true });
 
-            expect(ctxInterface(withBrowser, "ActionCtx")).toContain('readonly browser: import("@cirrus/browser").Browser;');
+            expect(ctxInterface(withBrowser, "ActionCtx")).toContain('readonly browser: import("@lunora/browser").Browser;');
             expect(ctxInterface(withBrowser, "QueryCtx")).not.toContain("readonly browser:");
             expect(ctxInterface(withBrowser, "MutationCtx")).not.toContain("readonly browser:");
-            expect(emitServer({})).not.toContain("@cirrus/browser");
+            expect(emitServer({})).not.toContain("@lunora/browser");
         });
 
         it("wires ctx.images onto ActionCtx ONLY — never query/mutation (determinism)", () => {
@@ -1457,10 +1457,10 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const withImages = emitServer({ hasImages: true });
 
-            expect(ctxInterface(withImages, "ActionCtx")).toContain('readonly images: import("@cirrus/images").Images;');
+            expect(ctxInterface(withImages, "ActionCtx")).toContain('readonly images: import("@lunora/images").Images;');
             expect(ctxInterface(withImages, "QueryCtx")).not.toContain("readonly images:");
             expect(ctxInterface(withImages, "MutationCtx")).not.toContain("readonly images:");
-            expect(emitServer({})).not.toContain("@cirrus/images");
+            expect(emitServer({})).not.toContain("@lunora/images");
         });
 
         it("wires ctx.pipelines onto ActionCtx ONLY — never query/mutation", () => {
@@ -1468,10 +1468,10 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
 
             const withPipelines = emitServer({ hasPipelines: true });
 
-            expect(ctxInterface(withPipelines, "ActionCtx")).toContain('readonly pipelines: import("@cirrus/pipelines").PipelineClient;');
+            expect(ctxInterface(withPipelines, "ActionCtx")).toContain('readonly pipelines: import("@lunora/pipelines").PipelineClient;');
             expect(ctxInterface(withPipelines, "QueryCtx")).not.toContain("readonly pipelines:");
             expect(ctxInterface(withPipelines, "MutationCtx")).not.toContain("readonly pipelines:");
-            expect(emitServer({})).not.toContain("@cirrus/pipelines");
+            expect(emitServer({})).not.toContain("@lunora/pipelines");
         });
 
         it("binds every table facade through the shard ctx-db (which routes `.global()` ops to D1)", () => {
@@ -1528,10 +1528,10 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             // Reverse cross-backend relations: the `runRelationFanoutRead` override
             // is emitted only when a `.global()` table exists (a reverse relation
             // needs a global parent). It builds the schema-aware ctx-db and delegates
-            // to the canonical `@cirrus/do` `serveRelationFanout` helper (a one-line
+            // to the canonical `@lunora/do` `serveRelationFanout` helper (a one-line
             // body — the guards + read/count dispatch live in that helper, not here).
             expect(output).toContain("protected override async runRelationFanoutRead(functionPath: string, args: Record<string, unknown>): Promise<unknown>");
-            expect(output).toContain('serveRelationFanout, ShardDO as ShardDOBase } from "@cirrus/do";');
+            expect(output).toContain('serveRelationFanout, ShardDO as ShardDOBase } from "@lunora/do";');
             expect(output).toContain("return serveRelationFanout(schema as unknown as SchemaLike, db, functionPath, args);");
         });
 
@@ -1603,8 +1603,8 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             // server.ts is the file user code imports for `v`/`query`/`mutation`.
             // It must never import the user function modules — otherwise the
             // module-init cycle that crashes dev (`v` reads as undefined) returns.
-            expect(output).not.toContain("import * as cirrus_");
-            expect(output).not.toContain("CIRRUS_FUNCTIONS");
+            expect(output).not.toContain("import * as lunora_");
+            expect(output).not.toContain("LUNORA_FUNCTIONS");
             expect(output).toContain("export const v = vBase as unknown as");
             expect(output).toContain("export const mutation = mutationBase as unknown as");
             // The facade import stays minimal (ORM types are always pulled in).
@@ -1634,7 +1634,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             // functions.ts imports the user modules, so its edge back to server.ts
             // must be type-only — otherwise the two form a runtime cycle again.
             expect(output).toContain('import type { ActionCtx, MutationCtx, QueryCtx } from "./server.js";');
-            expect(output).toContain('import * as cirrus_posts_0 from "../posts.js";');
+            expect(output).toContain('import * as lunora_posts_0 from "../posts.js";');
         });
 
         it("renders the caller arg as optional only when the function takes none", () => {

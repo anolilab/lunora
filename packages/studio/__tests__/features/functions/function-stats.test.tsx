@@ -1,4 +1,4 @@
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
@@ -45,9 +45,9 @@ const createClient = (stats: FunctionStatsResult = STATS): MockClientHooks =>
     });
 
 const renderPanel = (mock: MockClientHooks) => (
-    <CirrusProvider client={mock.asClient}>
+    <LunoraProvider client={mock.asClient}>
         <FunctionStatsPanel functions={DESCRIPTORS} />
-    </CirrusProvider>
+    </LunoraProvider>
 );
 
 /** Ordered list of function paths as currently rendered — the first cell of each body row (after the header). */
@@ -129,9 +129,9 @@ describe("functionStatsPanel", () => {
         });
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <FunctionStatsPanel functions={DESCRIPTORS} />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         const error = await screen.findByTestId("fs-error");
@@ -150,15 +150,15 @@ describe("functionStatsPanel", () => {
 
         // No Live toggle: the subscription opens once the mount seed commits a shard.
         await waitFor(() => {
-            const ref = mock.subscribe.mock.calls.at(-1)?.[0] as { __cirrusRef: string } | undefined;
+            const ref = mock.subscribe.mock.calls.at(-1)?.[0] as { __lunoraRef: string } | undefined;
 
-            if (ref?.__cirrusRef !== ADMIN_FUNCTIONS.getFunctionStats) {
+            if (ref?.__lunoraRef !== ADMIN_FUNCTIONS.getFunctionStats) {
                 throw new Error("not subscribed yet");
             }
         });
 
-        const ref = mock.subscribe.mock.calls.at(-1)?.[0] as { __cirrusRef: string } | undefined;
+        const ref = mock.subscribe.mock.calls.at(-1)?.[0] as { __lunoraRef: string } | undefined;
 
-        expect(ref?.__cirrusRef).toBe(ADMIN_FUNCTIONS.getFunctionStats);
+        expect(ref?.__lunoraRef).toBe(ADMIN_FUNCTIONS.getFunctionStats);
     });
 });

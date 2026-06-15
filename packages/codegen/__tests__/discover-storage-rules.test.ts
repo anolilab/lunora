@@ -17,7 +17,7 @@ const PREAMBLE = `
     declare const action: <R>(config: { args: Record<string, unknown>; handler: (ctx: unknown) => R }) => { kind: "action" };
 
     interface ActionBuilder<Args> {
-        readonly __cirrusProcedure: "action";
+        readonly __lunoraProcedure: "action";
         use: <C>(middleware: (options: { ctx: unknown }) => C) => ActionBuilder<Args>;
         action: <R>(handler: (options: { args: Args; ctx: unknown }) => R) => { kind: "action" };
     }
@@ -45,9 +45,9 @@ let project: Project;
 
 describe("discoverStorageRulesMetadata", () => {
     beforeEach(() => {
-        workdir = mkdtempSync(join(tmpdir(), "cirrus-storage-rules-"));
-        mkdirSync(join(workdir, "cirrus"), { recursive: true });
-        writeFileSync(join(workdir, "cirrus", "avatars.ts"), AVATARS, "utf8");
+        workdir = mkdtempSync(join(tmpdir(), "lunora-storage-rules-"));
+        mkdirSync(join(workdir, "lunora"), { recursive: true });
+        writeFileSync(join(workdir, "lunora", "avatars.ts"), AVATARS, "utf8");
         project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
     });
 
@@ -58,7 +58,7 @@ describe("discoverStorageRulesMetadata", () => {
     it("extracts each rule's bucket + operation + prefix and the declaring procedure", () => {
         expect.assertions(3);
 
-        const { rules } = discoverStorageRulesMetadata(project, join(workdir, "cirrus"));
+        const { rules } = discoverStorageRulesMetadata(project, join(workdir, "lunora"));
 
         expect(rules).toContainEqual({ bucket: "avatars", file: "avatars", on: "read", prefix: "user/", procedure: "upload" });
         expect(rules).toContainEqual({ bucket: "avatars", file: "avatars", on: "write", prefix: "user/", procedure: "upload" });
@@ -69,7 +69,7 @@ describe("discoverStorageRulesMetadata", () => {
     it("ignores bare-factory procedures and non-storageRules chains", () => {
         expect.assertions(1);
 
-        const { rules } = discoverStorageRulesMetadata(project, join(workdir, "cirrus"));
+        const { rules } = discoverStorageRulesMetadata(project, join(workdir, "lunora"));
 
         expect(rules.some((rule) => rule.procedure === "peek")).toBe(false);
     });

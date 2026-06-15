@@ -1,16 +1,16 @@
 ---
-title: "@cirrus/values"
+title: "@lunora/values"
 description: The validator runtime — v.*, Validator, Infer, Id, ValidationError.
 ---
 
-`@cirrus/values` is the **single source of truth** for runtime validation and
-the corresponding TypeScript type inference. `@cirrus/server` re-exports the
-`v` namespace, so you almost always import these from `@cirrus/server` in
+`@lunora/values` is the **single source of truth** for runtime validation and
+the corresponding TypeScript type inference. `@lunora/server` re-exports the
+`v` namespace, so you almost always import these from `@lunora/server` in
 application code. You import this package directly only when writing a
 shared validators library or testing validation in isolation.
 
 ```ts
-import { type Infer, v, ValidationError } from "@cirrus/values";
+import { type Infer, v, ValidationError } from "@lunora/values";
 
 const message = v.object({
     channelId: v.id("channels"),
@@ -46,11 +46,11 @@ Each call returns a `Validator` whose `.validate(value)` throws
 
 ## `Id<TableName>`
 
-A nominally-typed string brand. The `cirrus/_generated/dataModel.ts` file
+A nominally-typed string brand. The `lunora/_generated/dataModel.ts` file
 re-exports `Id` so consumers can type their own helpers:
 
 ```ts
-import type { Id } from "@/cirrus/_generated/dataModel";
+import type { Id } from "@/lunora/_generated/dataModel";
 
 const acl = (userId: Id<"users">) => {
     /* ... */
@@ -81,9 +81,9 @@ when the input shape doesn't match the declared args. Carries:
 ## `ValidatorKind`
 
 String union of every supported kind — useful for switch-based reflection
-(`@cirrus/codegen` uses it to map validators → SQL types).
+(`@lunora/codegen` uses it to map validators → SQL types).
 
 ## See also
 
-- [@cirrus/server](/docs/api/server)
+- [@lunora/server](/docs/api/server)
 - [Concepts: schema](/docs/concepts/schema)

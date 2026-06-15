@@ -1,4 +1,4 @@
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -62,7 +62,7 @@ describe("policyScaffolder", () => {
 
         await screen.findByTestId("policy-scaffolder-ok");
 
-        expect(fetchMock).toHaveBeenCalledWith("/__cirrus/policy-scaffold", expect.objectContaining({ method: "POST" }));
+        expect(fetchMock).toHaveBeenCalledWith("/__lunora/policy-scaffold", expect.objectContaining({ method: "POST" }));
 
         const [, init] = fetchMock.mock.calls[0] as [string, { body: string }];
 
@@ -74,9 +74,9 @@ describe("policyScaffolder", () => {
         expect.assertions(2);
 
         const { rerender } = render(
-            <CirrusProvider client={createPanelClient().asClient}>
+            <LunoraProvider client={createPanelClient().asClient}>
                 <PermissionsPanel functions={NO_FUNCTIONS} schemaEditable={false} />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         await waitFor(() => {
@@ -84,9 +84,9 @@ describe("policyScaffolder", () => {
         });
 
         rerender(
-            <CirrusProvider client={createPanelClient().asClient}>
+            <LunoraProvider client={createPanelClient().asClient}>
                 <PermissionsPanel functions={NO_FUNCTIONS} schemaEditable />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         await waitFor(() => {

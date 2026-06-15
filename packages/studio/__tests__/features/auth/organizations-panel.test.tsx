@@ -1,4 +1,4 @@
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
@@ -8,9 +8,9 @@ import type { MockClientHooks } from "../../mock-client";
 import { createMockClient } from "../../mock-client";
 
 const renderPanel = (mock: MockClientHooks): ReactElement => (
-    <CirrusProvider client={mock.asClient}>
+    <LunoraProvider client={mock.asClient}>
         <OrganizationsPanel />
-    </CirrusProvider>
+    </LunoraProvider>
 );
 
 describe("organizationsPanel", () => {

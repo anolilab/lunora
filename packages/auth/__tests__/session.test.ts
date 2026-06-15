@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { sessionPresets, validateSessionPolicy } from "../src/session";
 
 /**
- * `sessionPresets` and `validateSessionPolicy` are the Cirrus-friendly surface
+ * `sessionPresets` and `validateSessionPolicy` are the Lunora-friendly surface
  * over better-auth's `session` option. These tests pin the preset shapes and
  * the validation guards; the actual rotation behavior is better-auth's domain
  * and is covered end-to-end in the playground suite.

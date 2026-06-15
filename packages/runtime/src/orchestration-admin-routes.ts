@@ -14,28 +14,28 @@
  * resolve-shard types.
  */
 import { readBodyTextWithLimit, readJsonBodyWithLimit } from "./body-readers";
-import { CirrusError } from "./errors";
+import { LunoraError } from "./errors";
 import type { QueryCoordinator, RankPageFanOutRequest } from "./query-coordinator";
 import type { ShardNamespaceLike } from "./resolve-shard";
 
-const MIGRATE_PATH = "/_cirrus/migrate";
-const PITR_PATH = "/_cirrus/admin/pitr";
-const RANK_PATH = "/_cirrus/admin/rank";
-const RANKPAGE_PATH = "/_cirrus/admin/rankpage";
-const SHARD_TRAFFIC_PATH = "/_cirrus/admin/shard-traffic";
+const MIGRATE_PATH = "/_lunora/migrate";
+const PITR_PATH = "/_lunora/admin/pitr";
+const RANK_PATH = "/_lunora/admin/rank";
+const RANKPAGE_PATH = "/_lunora/admin/rankpage";
+const SHARD_TRAFFIC_PATH = "/_lunora/admin/shard-traffic";
 
 /**
  * Admin RPCs the migration endpoint is allowed to orchestrate. Spelled out
- * inline (rather than importing `@cirrus/do`) to keep the runtime free of a
+ * inline (rather than importing `@lunora/do`) to keep the runtime free of a
  * hard dependency on the DO package.
  */
-const MIGRATION_ADMIN_OPS = new Set<string>(["__cirrus_admin__:migrationStatus", "__cirrus_admin__:runMigration"]);
+const MIGRATION_ADMIN_OPS = new Set<string>(["__lunora_admin__:migrationStatus", "__lunora_admin__:runMigration"]);
 
 /**
  * Admin RPCs the PITR endpoint is allowed to forward. Like {@link MIGRATION_ADMIN_OPS},
  * spelled out inline to keep the runtime free of a hard dependency on the DO package.
  */
-const PITR_ADMIN_OPS = new Set<string>(["__cirrus_admin__:getPitrBookmark", "__cirrus_admin__:pitrRestore"]);
+const PITR_ADMIN_OPS = new Set<string>(["__lunora_admin__:getPitrBookmark", "__lunora_admin__:pitrRestore"]);
 
 interface MigrateRequest {
     args: Record<string, unknown>;
@@ -44,7 +44,7 @@ interface MigrateRequest {
 }
 
 /**
- * Parse and validate a `POST /_cirrus/migrate` body. `functionPath` is
+ * Parse and validate a `POST /_lunora/migrate` body. `functionPath` is
  * restricted to the migration admin ops so the endpoint can't be used to
  * fan arbitrary RPCs across every shard.
  */
@@ -56,21 +56,21 @@ const parseMigrateRequest = async (request: Request): Promise<MigrateRequest> =>
 
         body = text === "" ? {} : JSON.parse(text);
     } catch (error) {
-        if (error instanceof CirrusError) {
+        if (error instanceof LunoraError) {
             throw error;
         }
 
-        throw new CirrusError("Migration body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
+        throw new LunoraError("Migration body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
     }
 
     const candidate = (body ?? {}) as { args?: unknown; functionPath?: unknown; table?: unknown };
 
     if (typeof candidate.table !== "string" || candidate.table.length === 0) {
-        throw new CirrusError("Migration request is missing `table`", { code: "BAD_REQUEST", status: 400 });
+        throw new LunoraError("Migration request is missing `table`", { code: "BAD_REQUEST", status: 400 });
     }
 
     if (typeof candidate.functionPath !== "string" || !MIGRATION_ADMIN_OPS.has(candidate.functionPath)) {
-        throw new CirrusError("Migration request `functionPath` must be a migration admin op", { code: "BAD_REQUEST", status: 400 });
+        throw new LunoraError("Migration request `functionPath` must be a migration admin op", { code: "BAD_REQUEST", status: 400 });
     }
 
     return {
@@ -89,9 +89,9 @@ interface RankRequestBody {
 }
 
 /**
- * Parse and validate a `POST /_cirrus/admin/rank` body. The caller supplies the
+ * Parse and validate a `POST /_lunora/admin/rank` body. The caller supplies the
  * EXPLICIT key tuple — `table`, `index`, `partitionKey`, `sortValues`, `rowId`
- * — already built off the row doc via `@cirrus/do`'s `rankKeyFromDoc(index,
+ * — already built off the row doc via `@lunora/do`'s `rankKeyFromDoc(index,
  * doc)` (the worker carries no schema, so it can't derive the tuple itself).
  * `partitionKey` may legitimately be `""` (a rankIndex with no `partitionBy`),
  * so only its type is enforced. Mirrors the shard's own `parseRankBeforeArgs`.
@@ -104,33 +104,33 @@ const parseRankRequest = async (request: Request): Promise<RankRequestBody> => {
 
         body = text === "" ? {} : JSON.parse(text);
     } catch (error) {
-        if (error instanceof CirrusError) {
+        if (error instanceof LunoraError) {
             throw error;
         }
 
-        throw new CirrusError("Rank body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
+        throw new LunoraError("Rank body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
     }
 
     const candidate = (body ?? {}) as { index?: unknown; partitionKey?: unknown; rowId?: unknown; sortValues?: unknown; table?: unknown };
 
     if (typeof candidate.table !== "string" || candidate.table.length === 0) {
-        throw new CirrusError("Rank request is missing `table`", { code: "BAD_REQUEST", status: 400 });
+        throw new LunoraError("Rank request is missing `table`", { code: "BAD_REQUEST", status: 400 });
     }
 
     if (typeof candidate.index !== "string" || candidate.index.length === 0) {
-        throw new CirrusError("Rank request is missing `index`", { code: "BAD_REQUEST", status: 400 });
+        throw new LunoraError("Rank request is missing `index`", { code: "BAD_REQUEST", status: 400 });
     }
 
     if (typeof candidate.partitionKey !== "string") {
-        throw new CirrusError("Rank request `partitionKey` must be a string", { code: "BAD_REQUEST", status: 400 });
+        throw new LunoraError("Rank request `partitionKey` must be a string", { code: "BAD_REQUEST", status: 400 });
     }
 
     if (typeof candidate.rowId !== "string" || candidate.rowId.length === 0) {
-        throw new CirrusError("Rank request is missing `rowId`", { code: "BAD_REQUEST", status: 400 });
+        throw new LunoraError("Rank request is missing `rowId`", { code: "BAD_REQUEST", status: 400 });
     }
 
     if (!Array.isArray(candidate.sortValues)) {
-        throw new CirrusError("Rank request `sortValues` must be an array", { code: "BAD_REQUEST", status: 400 });
+        throw new LunoraError("Rank request `sortValues` must be an array", { code: "BAD_REQUEST", status: 400 });
     }
 
     return {
@@ -158,7 +158,7 @@ const parseRankPageDirections = (raw: unknown): ReadonlyArray<"asc" | "desc"> | 
     }
 
     if (!Array.isArray(raw) || raw.some((d) => d !== "asc" && d !== "desc")) {
-        throw new CirrusError('Rank page request `directions` must be an array of "asc"|"desc"', { code: "BAD_REQUEST", status: 400 });
+        throw new LunoraError('Rank page request `directions` must be an array of "asc"|"desc"', { code: "BAD_REQUEST", status: 400 });
     }
 
     return raw as ReadonlyArray<"asc" | "desc">;
@@ -167,28 +167,28 @@ const parseRankPageDirections = (raw: unknown): ReadonlyArray<"asc" | "desc"> | 
 /** Validate the required `table`/`index` plus the optional `partitionKey`/`take`/`cursor` scalars. */
 const validateRankPageScalars = (candidate: RankPageCandidate): void => {
     if (typeof candidate.table !== "string" || candidate.table.length === 0) {
-        throw new CirrusError("Rank page request is missing `table`", { code: "BAD_REQUEST", status: 400 });
+        throw new LunoraError("Rank page request is missing `table`", { code: "BAD_REQUEST", status: 400 });
     }
 
     if (typeof candidate.index !== "string" || candidate.index.length === 0) {
-        throw new CirrusError("Rank page request is missing `index`", { code: "BAD_REQUEST", status: 400 });
+        throw new LunoraError("Rank page request is missing `index`", { code: "BAD_REQUEST", status: 400 });
     }
 
     if (candidate.partitionKey !== undefined && typeof candidate.partitionKey !== "string") {
-        throw new CirrusError("Rank page request `partitionKey` must be a string", { code: "BAD_REQUEST", status: 400 });
+        throw new LunoraError("Rank page request `partitionKey` must be a string", { code: "BAD_REQUEST", status: 400 });
     }
 
     if (candidate.take !== undefined && (typeof candidate.take !== "number" || !Number.isFinite(candidate.take))) {
-        throw new CirrusError("Rank page request `take` must be a number", { code: "BAD_REQUEST", status: 400 });
+        throw new LunoraError("Rank page request `take` must be a number", { code: "BAD_REQUEST", status: 400 });
     }
 
     if (candidate.cursor !== undefined && candidate.cursor !== null && typeof candidate.cursor !== "string") {
-        throw new CirrusError("Rank page request `cursor` must be a string or null", { code: "BAD_REQUEST", status: 400 });
+        throw new LunoraError("Rank page request `cursor` must be a string or null", { code: "BAD_REQUEST", status: 400 });
     }
 };
 
 /**
- * Parse and validate a `POST /_cirrus/admin/rankpage` body. Unlike the
+ * Parse and validate a `POST /_lunora/admin/rankpage` body. Unlike the
  * single-row rank endpoint, the caller doesn't supply a key tuple — only the
  * `table`/`index` to page, an optional `partitionKey` pin, an optional `take`
  * page size, an optional per-sort-key `directions` list (so the coordinator's
@@ -208,11 +208,11 @@ const parseRankPageRequest = async (request: Request): Promise<Omit<RankPageFanO
 
         body = text === "" ? {} : JSON.parse(text);
     } catch (error) {
-        if (error instanceof CirrusError) {
+        if (error instanceof LunoraError) {
             throw error;
         }
 
-        throw new CirrusError("Rank page body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
+        throw new LunoraError("Rank page body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
     }
 
     const candidate = (body ?? {}) as RankPageCandidate;
@@ -237,7 +237,7 @@ interface ShardTrafficRequestBody {
 }
 
 /**
- * Parse and validate a `POST /_cirrus/admin/shard-traffic` body. The caller
+ * Parse and validate a `POST /_lunora/admin/shard-traffic` body. The caller
  * supplies only the `table` whose live shards the traffic fan-out runs across;
  * the worker carries no schema, so the table name is the whole request. The
  * fanned `getMetrics` op is fixed, so nothing else is accepted.
@@ -250,17 +250,17 @@ const parseShardTrafficRequest = async (request: Request): Promise<ShardTrafficR
 
         body = text === "" ? {} : JSON.parse(text);
     } catch (error) {
-        if (error instanceof CirrusError) {
+        if (error instanceof LunoraError) {
             throw error;
         }
 
-        throw new CirrusError("Shard-traffic body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
+        throw new LunoraError("Shard-traffic body must be valid JSON", { code: "BAD_REQUEST", status: 400 });
     }
 
     const candidate = (body ?? {}) as { table?: unknown };
 
     if (typeof candidate.table !== "string" || candidate.table.length === 0) {
-        throw new CirrusError("Shard-traffic request is missing `table`", { code: "BAD_REQUEST", status: 400 });
+        throw new LunoraError("Shard-traffic request is missing `table`", { code: "BAD_REQUEST", status: 400 });
     }
 
     return { table: candidate.table };
@@ -274,7 +274,7 @@ interface PitrRequest {
 }
 
 /**
- * Parse and validate a `POST /_cirrus/admin/pitr` body. `functionPath` is
+ * Parse and validate a `POST /_lunora/admin/pitr` body. `functionPath` is
  * restricted to the PITR admin ops so the endpoint can't be turned into a
  * general per-shard RPC bypass of the user-facing authorization callbacks.
  */
@@ -283,11 +283,11 @@ const parsePitrRequest = async (request: Request): Promise<PitrRequest> => {
     const candidate = body as { args?: unknown; functionPath?: unknown; shardKey?: unknown };
 
     if (typeof candidate.functionPath !== "string" || !PITR_ADMIN_OPS.has(candidate.functionPath)) {
-        throw new CirrusError("PITR request `functionPath` must be a PITR admin op", { code: "BAD_REQUEST", status: 400 });
+        throw new LunoraError("PITR request `functionPath` must be a PITR admin op", { code: "BAD_REQUEST", status: 400 });
     }
 
     if (candidate.shardKey !== undefined && typeof candidate.shardKey !== "string") {
-        throw new CirrusError("PITR `shardKey` must be a string", { code: "BAD_REQUEST", status: 400 });
+        throw new LunoraError("PITR `shardKey` must be a string", { code: "BAD_REQUEST", status: 400 });
     }
 
     return {
@@ -319,15 +319,15 @@ const buildOrchestrationAdminRoutes = (deps: OrchestrationAdminRouteDeps): Recor
 
     const handleMigrate = async (request: Request, env: unknown): Promise<Response> => {
         if (request.method !== "POST") {
-            throw new CirrusError("Migration endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+            throw new LunoraError("Migration endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
         if (!isAdmin(request)) {
-            throw new CirrusError("Admin auth required", { code: "FORBIDDEN", status: 403 });
+            throw new LunoraError("Admin auth required", { code: "FORBIDDEN", status: 403 });
         }
 
         if (!queryCoordinator) {
-            throw new CirrusError("Migration endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
+            throw new LunoraError("Migration endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
         }
 
         const migrate = await parseMigrateRequest(request);
@@ -350,11 +350,11 @@ const buildOrchestrationAdminRoutes = (deps: OrchestrationAdminRouteDeps): Recor
     };
 
     /**
-     * `POST /_cirrus/admin/rank` — roll a cross-shard rank up across every live
+     * `POST /_lunora/admin/rank` — roll a cross-shard rank up across every live
      * shard of a table. The shard-local per-table `rank()` refuses an index
      * whose partition spans shards (it would return a per-shard slice); this is
      * the path that produces the correct global `{position, total}` by fanning
-     * the `__cirrus_admin__:rankBefore` primitive out via the coordinator and
+     * the `__lunora_admin__:rankBefore` primitive out via the coordinator and
      * summing `Σbefore + 1` / `Σtotal`.
      *
      * Admin-gated like the other orchestrators, since the per-shard `rankBefore`
@@ -364,15 +364,15 @@ const buildOrchestrationAdminRoutes = (deps: OrchestrationAdminRouteDeps): Recor
      */
     const handleRank = async (request: Request, env: unknown): Promise<Response> => {
         if (request.method !== "POST") {
-            throw new CirrusError("Rank endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+            throw new LunoraError("Rank endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
         if (!isAdmin(request)) {
-            throw new CirrusError("Admin auth required", { code: "FORBIDDEN", status: 403 });
+            throw new LunoraError("Admin auth required", { code: "FORBIDDEN", status: 403 });
         }
 
         if (!queryCoordinator) {
-            throw new CirrusError("Rank endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
+            throw new LunoraError("Rank endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
         }
 
         const rank = await parseRankRequest(request);
@@ -395,11 +395,11 @@ const buildOrchestrationAdminRoutes = (deps: OrchestrationAdminRouteDeps): Recor
     };
 
     /**
-     * `POST /_cirrus/admin/rankpage` — page a ranked query across every live
+     * `POST /_lunora/admin/rankpage` — page a ranked query across every live
      * shard of a `.shardBy(...)` table. The shard-local per-table `rankPage()`
      * refuses an index whose partition spans shards (it would return a per-shard
      * slice, not the global order); this is the path that produces the correct
-     * globally-ranked page by fanning `__cirrus_admin__:rankPage` out via the
+     * globally-ranked page by fanning `__lunora_admin__:rankPage` out via the
      * coordinator and k-way merging the per-shard slices by the rank-key tuple.
      *
      * Admin-gated like the other orchestrators, since the per-shard `rankPage`
@@ -408,15 +408,15 @@ const buildOrchestrationAdminRoutes = (deps: OrchestrationAdminRouteDeps): Recor
      */
     const handleRankPage = async (request: Request, env: unknown): Promise<Response> => {
         if (request.method !== "POST") {
-            throw new CirrusError("Rank page endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+            throw new LunoraError("Rank page endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
         if (!isAdmin(request)) {
-            throw new CirrusError("Admin auth required", { code: "FORBIDDEN", status: 403 });
+            throw new LunoraError("Admin auth required", { code: "FORBIDDEN", status: 403 });
         }
 
         if (!queryCoordinator) {
-            throw new CirrusError("Rank page endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
+            throw new LunoraError("Rank page endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
         }
 
         const rankPage = await parseRankPageRequest(request);
@@ -435,7 +435,7 @@ const buildOrchestrationAdminRoutes = (deps: OrchestrationAdminRouteDeps): Recor
     };
 
     /**
-     * `POST /_cirrus/admin/shard-traffic` — collect the per-shard request volume
+     * `POST /_lunora/admin/shard-traffic` — collect the per-shard request volume
      * across every live shard of a `.shardBy(...)` table, the feed the studio's
      * `hot_shard` advisor lint needs. A single shard's `getMetrics` snapshot
      * can't reveal cross-shard skew, so this fans the cheap metrics read out via
@@ -448,15 +448,15 @@ const buildOrchestrationAdminRoutes = (deps: OrchestrationAdminRouteDeps): Recor
      */
     const handleShardTraffic = async (request: Request, env: unknown): Promise<Response> => {
         if (request.method !== "POST") {
-            throw new CirrusError("Shard-traffic endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+            throw new LunoraError("Shard-traffic endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
         if (!isAdmin(request)) {
-            throw new CirrusError("Admin auth required", { code: "FORBIDDEN", status: 403 });
+            throw new LunoraError("Admin auth required", { code: "FORBIDDEN", status: 403 });
         }
 
         if (!queryCoordinator) {
-            throw new CirrusError("Shard-traffic endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
+            throw new LunoraError("Shard-traffic endpoint requires a `queryCoordinator` on the worker", { code: "BAD_REQUEST", status: 400 });
         }
 
         const trafficRequest = await parseShardTrafficRequest(request);
@@ -475,7 +475,7 @@ const buildOrchestrationAdminRoutes = (deps: OrchestrationAdminRouteDeps): Recor
     };
 
     /**
-     * `POST /_cirrus/admin/pitr` — drive native Durable-Object point-in-time
+     * `POST /_lunora/admin/pitr` — drive native Durable-Object point-in-time
      * recovery on a single shard. Admin-gated (its own bearer check), so it is
      * NOT subject to the user-facing `authorizeShard`/`authorizeFunction`
      * callbacks the public RPC path enforces; the forwarded `Authorization`
@@ -485,17 +485,17 @@ const buildOrchestrationAdminRoutes = (deps: OrchestrationAdminRouteDeps): Recor
      */
     const handlePitr = async (request: Request, env: unknown): Promise<Response> => {
         if (request.method !== "POST") {
-            throw new CirrusError("PITR endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+            throw new LunoraError("PITR endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
         if (!isAdmin(request)) {
-            throw new CirrusError("admin PITR endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
+            throw new LunoraError("admin PITR endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
         }
 
         const pitr = await parsePitrRequest(request);
 
         // Forward the inbound admin bearer so the shard's `handleAdminRpc` gate
-        // accepts the `__cirrus_admin__:*` op.
+        // accepts the `__lunora_admin__:*` op.
         const { headers: forwardedHeaders } = await resolveForwardContext(request, env);
 
         const forwarded = new Request("https://shard.internal/rpc", {

@@ -1,5 +1,5 @@
 {
-    "name": "cirrus",
+    "name": "lunora",
     "version": "0.0.0",
     "private": true,
     "license": "FSL-1.1-Apache-2.0",
@@ -9,7 +9,7 @@
     },
     "repository": {
         "type": "git",
-        "url": "https://github.com/anolilab/cirrus.git"
+        "url": "https://github.com/anolilab/lunora.git"
     },
     "workspaces": [
         "packages/*",
@@ -23,9 +23,9 @@
         "build:packages": "vis run build --query \"tag=type:package\"",
         "clean": "vis clean --empty-packages",
         "commit": "git-cz",
-        "e2e": "pnpm --filter @cirrus/e2e e2e",
-        "e2e:headed": "pnpm --filter @cirrus/e2e e2e:headed",
-        "e2e:ui": "pnpm --filter @cirrus/e2e e2e:ui",
+        "e2e": "pnpm --filter @lunora/e2e e2e",
+        "e2e:headed": "pnpm --filter @lunora/e2e e2e:headed",
+        "e2e:ui": "pnpm --filter @lunora/e2e e2e:ui",
         "generate:og": "node scripts/generate-package-og-images.js",
         "lint:affected:eslint": "vis affected lint:eslint --fail-fast",
         "lint:affected:types": "vis affected lint:types --fail-fast",
@@ -38,10 +38,10 @@
         "multi-semantic-release": "multi-semantic-release",
         "postinstall": "node scripts/generate-package-og-images.js",
         "prepare": "vis hook install",
-        "test": "vis run test --query \"project!=@cirrus/e2e\"",
-        "test:affected": "vis affected test --fail-fast --query \"project!=@cirrus/e2e\"",
+        "test": "vis run test --query \"project!=@lunora/e2e\"",
+        "test:affected": "vis affected test --fail-fast --query \"project!=@lunora/e2e\"",
         "test:clean-machine": "./scripts/clean-machine-smoke.sh",
-        "test:coverage": "vis run test:coverage --query \"project!=@cirrus/e2e\"",
+        "test:coverage": "vis run test:coverage --query \"project!=@lunora/e2e\"",
         "test:templates": "./scripts/template-build-smoke.sh"
     },
     "devDependencies": {
@@ -51,7 +51,7 @@
         "@anolilab/prettier-config": "catalog:lint",
         "@anolilab/semantic-release-preset": "catalog:dev",
         "@babel/core": "catalog:build",
-        "@cirrus/codegen": "workspace:*",
+        "@lunora/codegen": "workspace:*",
         "@commitlint/cli": "catalog:prod",
         "@commitlint/config-conventional": "catalog:prod",
         "@eslint-react/eslint-plugin": "catalog:lint",

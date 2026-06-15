@@ -1,19 +1,19 @@
-import { extractLink, waitForMail } from "@cirrus/mail/testing";
+import { extractLink, waitForMail } from "@lunora/mail/testing";
 
-import { expect, test } from "../fixtures/cirrus.js";
+import { expect, test } from "../fixtures/lunora.js";
 
 /**
  * Forgot-password E2E through the dev mail catcher.
  *
- * The playground routes better-auth's `sendResetPassword` through `@cirrus/mail`
- * (`createMailerFromEnv`). Under the E2E run `CIRRUS_MAIL_CAPTURE=1` (see
+ * The playground routes better-auth's `sendResetPassword` through `@lunora/mail`
+ * (`createMailerFromEnv`). Under the E2E run `LUNORA_MAIL_CAPTURE=1` (see
  * `globalSetup.ts`), so the reset email is captured into the studio's root-shard
  * inbox instead of being delivered. This test drives the real flow: request a
- * reset → read the captured mail over the admin RPC (`@cirrus/mail/testing`) →
+ * reset → read the captured mail over the admin RPC (`@lunora/mail/testing`) →
  * follow the link's token → set a new password → sign in with it.
  */
-const WORKER_URL = process.env.CIRRUS_E2E_WORKER_URL ?? "http://localhost:5173";
-/** Must match `CIRRUS_ADMIN_TOKEN` written into the E2E `.dev.vars` by `globalSetup.ts`. */
+const WORKER_URL = process.env.LUNORA_E2E_WORKER_URL ?? "http://localhost:5173";
+/** Must match `LUNORA_ADMIN_TOKEN` written into the E2E `.dev.vars` by `globalSetup.ts`. */
 const ADMIN_TOKEN = "e2e-deterministic-admin-token";
 
 test.beforeEach(async ({ resetServer }) => {
@@ -21,7 +21,7 @@ test.beforeEach(async ({ resetServer }) => {
 });
 
 test("forgot-password email is captured and its reset link sets a new password", async ({ page }) => {
-    const email = `reset-${Date.now()}@cirrus.test`;
+    const email = `reset-${Date.now()}@lunora.test`;
     const password = "test-password-1234"; // gitleaks:allow
 
     // Create the account.
@@ -33,7 +33,7 @@ test("forgot-password email is captured and its reset link sets a new password",
     expect(signup.status()).toBe(200);
 
     // Request a password reset — better-auth fires `sendResetPassword`, which the
-    // playground sends via @cirrus/mail. In the E2E run that's captured, not sent.
+    // playground sends via @lunora/mail. In the E2E run that's captured, not sent.
     const forgot = await page.request.post(`${WORKER_URL}/api/auth/forget-password`, {
         data: { email, redirectTo: `${WORKER_URL}/reset` },
         headers: { Origin: WORKER_URL },

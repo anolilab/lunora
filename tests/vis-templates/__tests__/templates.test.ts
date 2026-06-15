@@ -8,18 +8,18 @@ import { describe, expect, test } from "vitest";
  * Static validation of the whole-project scaffolds under `templates/*`.
  *
  * These templates are NOT workspace members (their `package.json` `name` is the
- * `{{name}}` placeholder and their `@cirrus/*` deps are the `^0.0.0` registry
+ * `{{name}}` placeholder and their `@lunora/*` deps are the `^0.0.0` registry
  * contract, not `workspace:*`), so pnpm never installs or type-checks them
  * in-repo. This suite is the guardrail that replaces that: it reads every
  * `templates/<framework>/package.json` and asserts the invariants that would
  * otherwise silently drift —
  *
  *  1. the `{{name}}` placeholder + `private: true` contract,
- *  2. every `@cirrus/*` dependency names a package that actually exists under
+ *  2. every `@lunora/*` dependency names a package that actually exists under
  *     `packages/` (catches a renamed/dropped package or a typo'd scope),
- *  3. `@cirrus/*` deps use the `^0.0.0` contract (never `workspace:*` — a
+ *  3. `@lunora/*` deps use the `^0.0.0` contract (never `workspace:*` — a
  *     rendered template is a standalone app that installs from the registry),
- *  4. each template depends on the Cirrus client adapter its framework needs,
+ *  4. each template depends on the Lunora client adapter its framework needs,
  *  5. external framework deps track the latest supported MAJOR (the manifest
  *     below) — so a template can't quietly fall a major behind the ecosystem.
  *
@@ -45,11 +45,11 @@ const listDirectories = (parent: string): string[] =>
         .filter((entry) => !entry.startsWith("."))
         .filter((entry) => statSync(join(parent, entry)).isDirectory());
 
-/** Real `@cirrus/*` package names discovered from `packages/<dir>/package.json`. */
-const realCirrusPackages = new Set(
+/** Real `@lunora/*` package names discovered from `packages/<dir>/package.json`. */
+const realLunoraPackages = new Set(
     listDirectories(PACKAGES_DIR)
         .map((dir) => readJson(join(PACKAGES_DIR, dir, "package.json")).name)
-        .filter((name): name is string => typeof name === "string" && name.startsWith("@cirrus/")),
+        .filter((name): name is string => typeof name === "string" && name.startsWith("@lunora/")),
 );
 
 const templateNames = listDirectories(TEMPLATES_DIR);
@@ -121,17 +121,17 @@ const LATEST_MAJORS: Record<string, number> = {
 };
 
 /**
- * The Cirrus client adapter each template's UI must depend on. `standalone` has
+ * The Lunora client adapter each template's UI must depend on. `standalone` has
  * no UI (server-only), so it's exempt.
  */
 const REQUIRED_ADAPTER: Record<string, string | null> = {
-    astro: "@cirrus/react",
-    nuxt: "@cirrus/vue",
+    astro: "@lunora/react",
+    nuxt: "@lunora/vue",
     standalone: null,
-    sveltekit: "@cirrus/svelte",
-    "tanstack-start-react": "@cirrus/react",
-    "tanstack-start-solid": "@cirrus/solid",
-    vite: "@cirrus/react",
+    sveltekit: "@lunora/svelte",
+    "tanstack-start-react": "@lunora/react",
+    "tanstack-start-solid": "@lunora/solid",
+    vite: "@lunora/react",
 };
 
 describe("templates/* package.json validation", () => {
@@ -148,21 +148,21 @@ describe("templates/* package.json validation", () => {
             expect(pkg.private).toBe(true);
         });
 
-        test("every @cirrus/* dependency names a real package", () => {
-            const cirrusDeps = Object.keys(deps).filter((name) => name.startsWith("@cirrus/"));
+        test("every @lunora/* dependency names a real package", () => {
+            const lunoraDeps = Object.keys(deps).filter((name) => name.startsWith("@lunora/"));
 
-            // Every template wires at least @cirrus/runtime + @cirrus/server.
-            expect(cirrusDeps).toContain("@cirrus/runtime");
-            expect(cirrusDeps).toContain("@cirrus/server");
+            // Every template wires at least @lunora/runtime + @lunora/server.
+            expect(lunoraDeps).toContain("@lunora/runtime");
+            expect(lunoraDeps).toContain("@lunora/server");
 
-            for (const name of cirrusDeps) {
-                expect(realCirrusPackages, `${templateName} references unknown package ${name}`).toContain(name);
+            for (const name of lunoraDeps) {
+                expect(realLunoraPackages, `${templateName} references unknown package ${name}`).toContain(name);
             }
         });
 
-        test("@cirrus/* deps use the ^0.0.0 registry contract, never workspace:*", () => {
+        test("@lunora/* deps use the ^0.0.0 registry contract, never workspace:*", () => {
             for (const [name, range] of Object.entries(deps)) {
-                if (!name.startsWith("@cirrus/")) {
+                if (!name.startsWith("@lunora/")) {
                     continue;
                 }
 
@@ -170,7 +170,7 @@ describe("templates/* package.json validation", () => {
             }
         });
 
-        test("depends on the framework's Cirrus client adapter", () => {
+        test("depends on the framework's Lunora client adapter", () => {
             const adapter = REQUIRED_ADAPTER[templateName];
 
             // A new template must be added to REQUIRED_ADAPTER (even as null) so
@@ -184,7 +184,7 @@ describe("templates/* package.json validation", () => {
 
         test("external framework deps are on the latest supported major", () => {
             for (const [name, range] of Object.entries(deps)) {
-                if (name.startsWith("@cirrus/")) {
+                if (name.startsWith("@lunora/")) {
                     continue;
                 }
 

@@ -8,15 +8,15 @@
  */
 import type { CronJobDispatch, CronJobInfo, FunctionDescriptor, FunctionRegistryLike, GlobalFilterClause, GlobalIntrospector } from "./create-worker";
 import { describeArguments } from "./describe-args";
-import { CirrusError } from "./errors";
+import { LunoraError } from "./errors";
 
-const FUNCTIONS_PATH = "/_cirrus/admin/functions";
-const CRON_JOBS_PATH = "/_cirrus/admin/cron-jobs";
-const OPENAPI_PATH = "/_cirrus/admin/openapi";
-const OPENRPC_PATH = "/_cirrus/admin/openrpc";
-const GLOBAL_TABLES_PATH = "/_cirrus/admin/global/tables";
-const GLOBAL_TABLE_PATH = "/_cirrus/admin/global/table";
-const GLOBAL_FACET_PATH = "/_cirrus/admin/global/facet";
+const FUNCTIONS_PATH = "/_lunora/admin/functions";
+const CRON_JOBS_PATH = "/_lunora/admin/cron-jobs";
+const OPENAPI_PATH = "/_lunora/admin/openapi";
+const OPENRPC_PATH = "/_lunora/admin/openrpc";
+const GLOBAL_TABLES_PATH = "/_lunora/admin/global/tables";
+const GLOBAL_TABLE_PATH = "/_lunora/admin/global/table";
+const GLOBAL_FACET_PATH = "/_lunora/admin/global/facet";
 
 /**
  * Decode the global browser's `filters` query param: a JSON array of eq
@@ -56,7 +56,7 @@ const parseGlobalFilters = (raw: string | undefined): GlobalFilterClause[] | und
 };
 
 /**
- * Empty-but-valid OpenAPI 3.1 document served by `GET /_cirrus/admin/openapi`
+ * Empty-but-valid OpenAPI 3.1 document served by `GET /_lunora/admin/openapi`
  * when no `openApiSpec` is injected. A spec-less worker still answers 200 with a
  * well-formed document (no paths), so the studio's API-reference view renders a
  * clean "not configured" state. Frozen so the shared instance can't be mutated.
@@ -64,8 +64,8 @@ const parseGlobalFilters = (raw: string | undefined): GlobalFilterClause[] | und
 const EMPTY_OPENAPI_DOCUMENT = Object.freeze({
     info: {
         description:
-            'No OpenAPI spec is configured on this worker. Run `cirrus codegen`, then wire the generated module to `createWorker`: `import { openApiSpec } from "./cirrus/_generated/openapi"`.',
-        title: "Cirrus API",
+            'No OpenAPI spec is configured on this worker. Run `lunora codegen`, then wire the generated module to `createWorker`: `import { openApiSpec } from "./lunora/_generated/openapi"`.',
+        title: "Lunora API",
         version: "0.0.0",
     },
     openapi: "3.1.0",
@@ -76,8 +76,8 @@ const EMPTY_OPENAPI_DOCUMENT = Object.freeze({
 const EMPTY_OPENRPC_DOCUMENT = Object.freeze({
     info: {
         description:
-            'No OpenRPC spec is configured on this worker. Run `cirrus codegen --api-spec openrpc` (or `both`), then wire the generated module to `createWorker`: `import { openRpcSpec } from "./cirrus/_generated/openrpc"`.',
-        title: "Cirrus RPC",
+            'No OpenRPC spec is configured on this worker. Run `lunora codegen --api-spec openrpc` (or `both`), then wire the generated module to `createWorker`: `import { openRpcSpec } from "./lunora/_generated/openrpc"`.',
+        title: "Lunora RPC",
         version: "0.0.0",
     },
     methods: [],
@@ -106,7 +106,7 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
 
     const handleFunctionsList = (request: Request): Response => {
         if (request.method !== "GET") {
-            throw new CirrusError("Functions endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+            throw new LunoraError("Functions endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
         const registry = requireAdminOption(request, options.functions, {
@@ -132,7 +132,7 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
 
     const handleCronJobs = (request: Request): Response => {
         if (request.method !== "GET") {
-            throw new CirrusError("Cron-jobs endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+            throw new LunoraError("Cron-jobs endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
         const registry = requireAdminOption(request, options.cronJobs, {
@@ -162,7 +162,7 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
 
     const handleOpenApi = (request: Request): Response => {
         if (request.method !== "GET") {
-            throw new CirrusError("OpenAPI endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+            throw new LunoraError("OpenAPI endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
         assertAdmin(request);
@@ -174,7 +174,7 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
 
     const handleOpenRpc = (request: Request): Response => {
         if (request.method !== "GET") {
-            throw new CirrusError("OpenRPC endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+            throw new LunoraError("OpenRPC endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
         assertAdmin(request);
@@ -184,7 +184,7 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
 
     const handleGlobalTables = async (request: Request): Promise<Response> => {
         if (request.method !== "GET") {
-            throw new CirrusError("Global-tables endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+            throw new LunoraError("Global-tables endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
         const introspector = requireAdminOption(request, options.globalIntrospector, {
@@ -197,7 +197,7 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
 
     const handleGlobalTablePage = async (request: Request): Promise<Response> => {
         if (request.method !== "GET") {
-            throw new CirrusError("Global-table endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+            throw new LunoraError("Global-table endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
         const introspector = requireAdminOption(request, options.globalIntrospector, {
@@ -209,7 +209,7 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
         const table = queryParameter(url, "table");
 
         if (table === undefined) {
-            throw new CirrusError("Global-table endpoint requires a `table` query param", { code: "BAD_REQUEST", status: 400 });
+            throw new LunoraError("Global-table endpoint requires a `table` query param", { code: "BAD_REQUEST", status: 400 });
         }
 
         const page = await introspector.readTablePage({ ...parsePaging(request), filters: parseGlobalFilters(queryParameter(url, "filters")), table });
@@ -219,7 +219,7 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
 
     const handleGlobalFacet = async (request: Request): Promise<Response> => {
         if (request.method !== "GET") {
-            throw new CirrusError("Global-facet endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
+            throw new LunoraError("Global-facet endpoint requires GET", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
 
         const introspector = requireAdminOption(request, options.globalIntrospector, {
@@ -232,7 +232,7 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
         const column = queryParameter(url, "column");
 
         if (table === undefined || column === undefined) {
-            throw new CirrusError("Global-facet endpoint requires `table` and `column` query params", { code: "BAD_REQUEST", status: 400 });
+            throw new LunoraError("Global-facet endpoint requires `table` and `column` query params", { code: "BAD_REQUEST", status: 400 });
         }
 
         const limitParameter = queryParameter(url, "limit");

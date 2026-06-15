@@ -145,9 +145,9 @@ describe("createPayment", () => {
     it("returns the error status when webhook verification fails", async () => {
         const adapter = fakeAdapter({
             parseWebhook: async () => {
-                const { CirrusPaymentError } = await import("../src/errors");
+                const { LunoraPaymentError } = await import("../src/errors");
 
-                throw new CirrusPaymentError("WEBHOOK_SIGNATURE_INVALID", "bad signature");
+                throw new LunoraPaymentError("WEBHOOK_SIGNATURE_INVALID", "bad signature");
             },
         });
         const payment = createPayment({ adapter, store: new MemoryPaymentStore() });

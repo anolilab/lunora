@@ -11,7 +11,7 @@
  *
  * Why ctx-threaded instead of `AsyncLocalStorage`? Two reasons:
  *
- * 1. `workerd` only enables ALS under the `nodejs_compat` flag, and Cirrus
+ * 1. `workerd` only enables ALS under the `nodejs_compat` flag, and Lunora
  * shard DOs run under the slimmer `sqlite_compat` profile. Threading the
  * tracker explicitly avoids dragging in `nodejs_compat` just for the
  * reactive-cache wiring.

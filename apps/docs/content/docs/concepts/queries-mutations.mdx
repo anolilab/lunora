@@ -3,7 +3,7 @@ title: Queries & mutations
 description: query / mutation / action — what each is for and how ctx is shaped.
 ---
 
-Cirrus exposes three function kinds. Picking the right one is a function of
+Lunora exposes three function kinds. Picking the right one is a function of
 **what side-effects you need** and **what reactivity guarantees the client
 gets back**.
 
@@ -14,7 +14,7 @@ gets back**.
 | `action`   | anything, including `fetch()` | no                           | calling external APIs, queues, sending email |
 
 ```ts
-import { mutation, query, v } from "@cirrus/server";
+import { mutation, query, v } from "@lunora/server";
 
 export const list = query({
     args: { channelId: v.id("channels"), limit: v.optional(v.number()) },
@@ -45,7 +45,7 @@ compile time if the shape is wrong.
 
 ## `ctx.auth`
 
-Populated by `@cirrus/auth` when an authenticated session cookie is present.
+Populated by `@lunora/auth` when an authenticated session cookie is present.
 `ctx.auth.authenticated` narrows `ctx.auth.user` from `User | null` to `User`.
 
 ## `ctx.scheduler`
@@ -56,4 +56,4 @@ enqueues a deferred call against the SchedulerDO.
 ## See also
 
 - [Real-time](/docs/concepts/realtime)
-- [API: @cirrus/server](/docs/api/server)
+- [API: @lunora/server](/docs/api/server)

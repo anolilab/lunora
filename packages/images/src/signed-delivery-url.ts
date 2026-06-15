@@ -1,9 +1,9 @@
 /**
  * Worker-signed image delivery URLs (HMAC-SHA256).
  *
- * Same model as `@cirrus/storage`'s `buildSignedUrl`: rather than a Cloudflare-
+ * Same model as `@lunora/storage`'s `buildSignedUrl`: rather than a Cloudflare-
  * Images native signed-URL token (a self-contained bearer that reaches the
- * delivery edge directly), Cirrus signs a URL that resolves back through your
+ * delivery edge directly), Lunora signs a URL that resolves back through your
  * own Worker route, so the request still passes your app's gates — auth/session,
  * per-image policy, rate limits, audit — before {@link verifySignedImageUrl}
  * validates the signature + expiry and the Worker serves the (optionally
@@ -15,7 +15,7 @@ import type { TransformOptions } from "./types";
 
 const textEncoder = new TextEncoder();
 
-/** Upper bound on a signed-URL TTL — 7 days, matching `@cirrus/storage` and common CDN ceilings. */
+/** Upper bound on a signed-URL TTL — 7 days, matching `@lunora/storage` and common CDN ceilings. */
 const MAX_EXPIRES_IN_SECONDS = 7 * 24 * 60 * 60;
 
 const SCHEME_PREFIX_RE = /^[a-z][a-z\d+\-.]*:\/\//i;
@@ -128,11 +128,11 @@ export const buildSignedImageUrl = async (options: SignedImageUrlOptions): Promi
     const expiresInSeconds = options.expiresInSeconds ?? 60 * 60;
 
     if (!Number.isFinite(expiresInSeconds) || expiresInSeconds <= 0) {
-        throw new Error("@cirrus/images: expiresInSeconds must be a positive finite number");
+        throw new Error("@lunora/images: expiresInSeconds must be a positive finite number");
     }
 
     if (expiresInSeconds > MAX_EXPIRES_IN_SECONDS) {
-        throw new Error(`@cirrus/images: expiresInSeconds must not exceed ${String(MAX_EXPIRES_IN_SECONDS)} (7 days)`);
+        throw new Error(`@lunora/images: expiresInSeconds must not exceed ${String(MAX_EXPIRES_IN_SECONDS)} (7 days)`);
     }
 
     const exp = Math.floor(Date.now() / 1000) + expiresInSeconds;

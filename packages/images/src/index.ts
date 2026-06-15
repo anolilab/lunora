@@ -4,7 +4,7 @@ export { buildImageDeliveryUrl } from "./delivery-url";
 export type { SignedImageUrlOptions, VerifyImageResult } from "./signed-delivery-url";
 export { buildSignedImageUrl, verifySignedImageUrl } from "./signed-delivery-url";
 export type {
-    CirrusImagesOptions,
+    LunoraImagesOptions,
     ImageInfoLike,
     ImageInput,
     ImageOutputFormat,

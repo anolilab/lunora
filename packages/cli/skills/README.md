@@ -1,8 +1,8 @@
-# Cirrus Agent Skills
+# Lunora Agent Skills
 
 First-party [Agent Skills](https://tanstack.com/intent/latest/docs/registry) for
-Cirrus — portable instructions that teach AI coding agents how to use the
-framework correctly. They ship inside `@cirrus/cli` and are discovered by the
+Lunora — portable instructions that teach AI coding agents how to use the
+framework correctly. They ship inside `@lunora/cli` and are discovered by the
 [TanStack Intent registry](https://tanstack.com/intent/registry) via the
 `tanstack-intent` package keyword.
 
@@ -11,19 +11,19 @@ own directory:
 
 | Skill                      | Use for                                                                     |
 | -------------------------- | --------------------------------------------------------------------------- |
-| `cirrus`                   | Router — start here, then switch to the matching skill below.               |
-| `cirrus-quickstart`        | `cirrus init` / adding Cirrus to an app + first round-trip.                 |
-| `cirrus-functions`         | Core authoring rules — schema, validators, query/mutation/action, `ctx.db`. |
-| `cirrus-realtime`          | Client reactivity — live hooks, optimistic updates, `@cirrus/db`.           |
-| `cirrus-setup-auth`        | Authentication via `cirrus registry add auth` (+ providers).                |
-| `cirrus-setup-mail`        | Transactional email via `cirrus registry add mail` — `sendEmail` actions.   |
-| `cirrus-setup-storage`     | R2 file storage via `cirrus registry add storage` — signed upload/download. |
-| `cirrus-setup-scheduler`   | Deferred (`ctx.scheduler`) + cron jobs (`cirrus registry add crons`).       |
-| `cirrus-create-package`    | Building a reusable registry item or `@cirrus/*` package.                   |
-| `cirrus-migration-helper`  | Schema/data migrations, `.global()` D1 flow, the drift gate.                |
-| `cirrus-deploy`            | Deploying to Cloudflare — wrangler bindings, secrets, the gate.             |
-| `cirrus-performance-audit` | Scans, indexes, OCC write conflicts, sharding/`.global()`.                  |
+| `lunora`                   | Router — start here, then switch to the matching skill below.               |
+| `lunora-quickstart`        | `lunora init` / adding Lunora to an app + first round-trip.                 |
+| `lunora-functions`         | Core authoring rules — schema, validators, query/mutation/action, `ctx.db`. |
+| `lunora-realtime`          | Client reactivity — live hooks, optimistic updates, `@lunora/db`.           |
+| `lunora-setup-auth`        | Authentication via `lunora registry add auth` (+ providers).                |
+| `lunora-setup-mail`        | Transactional email via `lunora registry add mail` — `sendEmail` actions.   |
+| `lunora-setup-storage`     | R2 file storage via `lunora registry add storage` — signed upload/download. |
+| `lunora-setup-scheduler`   | Deferred (`ctx.scheduler`) + cron jobs (`lunora registry add crons`).       |
+| `lunora-create-package`    | Building a reusable registry item or `@lunora/*` package.                   |
+| `lunora-migration-helper`  | Schema/data migrations, `.global()` D1 flow, the drift gate.                |
+| `lunora-deploy`            | Deploying to Cloudflare — wrangler bindings, secrets, the gate.             |
+| `lunora-performance-audit` | Scans, indexes, OCC write conflicts, sharding/`.global()`.                  |
 
 These are mirrored into `.agents/skills/` and `.claude/skills/` (via symlinks)
 so agents working inside this repo pick them up directly. The source of truth
-lives here so the published `@cirrus/cli` tarball carries them.
+lives here so the published `@lunora/cli` tarball carries them.

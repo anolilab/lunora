@@ -1,7 +1,7 @@
 /**
  * Per-shard durable request log — one structured row per `/rpc` dispatch.
  *
- * A reserved, append-only table that records every cirrus-function dispatch
+ * A reserved, append-only table that records every lunora-function dispatch
  * with the app-level context Cloudflare structurally cannot attribute: the
  * `&lt;file>:&lt;function>` path, the shard key (the DO id name), the acting user /
  * identity, the (redacted) call args, the outcome + error message, the handler
@@ -25,14 +25,14 @@ import { redact, standardRules } from "@visulima/redact";
 
 import type { SqlCursor, SqlExec } from "./ctx-db";
 
-/** Reserved append-only table backing the studio Logs tab. Auto-hidden from the data browser by the `__cirrus` prefix. */
-const REQUEST_LOG_TABLE = "__cirrus_reqlog__";
+/** Reserved append-only table backing the studio Logs tab. Auto-hidden from the data browser by the `__lunora` prefix. */
+const REQUEST_LOG_TABLE = "__lunora_reqlog__";
 
 /** Most recent entries kept; older rows are trimmed after each append so the log stays bounded. */
 const REQUEST_LOG_RETENTION = 1000;
 
-/** Stable tag on every console-emitted event so a Logpush/SIEM consumer can filter cirrus request events out of the raw Workers-trace firehose. */
-const REQUEST_LOG_EVENT_SOURCE = "cirrus";
+/** Stable tag on every console-emitted event so a Logpush/SIEM consumer can filter lunora request events out of the raw Workers-trace firehose. */
+const REQUEST_LOG_EVENT_SOURCE = "lunora";
 
 /** Outcome of one dispatch — `ok` for a returned result, `error` for a thrown handler. */
 type RequestOutcome = "error" | "ok";
@@ -90,7 +90,7 @@ interface AppendRequestLogEntry {
 interface RequestLogWriteOptions {
     /** When `true` (development only), skip args/identity redaction so a developer sees raw values. Defaults to `false` (production-safe). */
     captureRaw?: boolean;
-    /** Rows to keep after the append-time trim; defaults to {@link REQUEST_LOG_RETENTION}. The operator's `CIRRUS_REQUEST_LOG_RETENTION` override. */
+    /** Rows to keep after the append-time trim; defaults to {@link REQUEST_LOG_RETENTION}. The operator's `LUNORA_REQUEST_LOG_RETENTION` override. */
     retention?: number;
 }
 
@@ -112,7 +112,7 @@ interface ReadRequestLogOptions {
     userId?: string;
 }
 
-/** Payload of a `__cirrus_admin__:getRequestLog` call: the recorded entries, newest first. */
+/** Payload of a `__lunora_admin__:getRequestLog` call: the recorded entries, newest first. */
 interface RequestLogResult {
     entries: RequestLogEntry[];
 }
@@ -148,7 +148,7 @@ const redactArgs = (value: unknown, captureRaw = false): unknown => {
 };
 
 /**
- * Create the `__cirrus_reqlog__` table. `seq` is an `AUTOINCREMENT` primary
+ * Create the `__lunora_reqlog__` table. `seq` is an `AUTOINCREMENT` primary
  * key, giving each shard a monotonic cursor the Logs tab pages through; the
  * `args`/`identity`/`tables_read`/`tables_written` columns hold JSON and are
  * `NULL`/empty when none was recorded. Idempotent, so read and write paths can
@@ -195,7 +195,7 @@ const cacheHitColumn = (cacheHit: boolean | undefined): null | number => {
  * table first so callers needn't. Args/identity are redacted here so a raw value
  * never reaches the durable table — callers pass the unredacted entry and rely on
  * this, unless `captureRaw` (dev only) is set. `retention` is the operator's
- * `CIRRUS_REQUEST_LOG_RETENTION` override, threaded in by the dispatch site.
+ * `LUNORA_REQUEST_LOG_RETENTION` override, threaded in by the dispatch site.
  */
 const appendRequestLogEntry = (sql: SqlExec, entry: AppendRequestLogEntry, options: RequestLogWriteOptions = {}): void => {
     ensureRequestLogTable(sql);
@@ -241,15 +241,15 @@ const appendRequestLogEntry = (sql: SqlExec, entry: AppendRequestLogEntry, optio
 /**
  * Emit one structured request event to `console` so Cloudflare's Workers Logs /
  * Logpush pipeline carries it to external sinks (SIEMs) — PLAN3 §3.3. This does
- * NOT reimplement a transport: it produces a richer, cirrus-attributed event and
+ * NOT reimplement a transport: it produces a richer, lunora-attributed event and
  * lets CF's existing trace-log pipe ship it. The event mirrors the durable
- * `__cirrus_reqlog__` row (function path, shard, user, outcome, duration, tables
+ * `__lunora_reqlog__` row (function path, shard, user, outcome, duration, tables
  * read/written, cache hit), with `args` AND `identity` redacted exactly like the
  * durable write so no raw PII/secret reaches the log pipeline.
  *
  * An `error` outcome goes to `console.error` (surfacing at error level in the
  * trace so a SIEM can alert on it); everything else to `console.log`. The
- * `source: "cirrus"` / `type: "request"` envelope lets a consumer filter these
+ * `source: "lunora"` / `type: "request"` envelope lets a consumer filter these
  * events out of the raw Workers-trace firehose. `captureRaw` (dev only) skips
  * redaction, mirroring the durable write. Best-effort by contract — the caller
  * wraps it so a serialization hiccup can never fail the served request.
@@ -287,7 +287,7 @@ const emitRequestLogEvent = (entry: AppendRequestLogEntry, options: RequestLogWr
 /** Severity of a `ctx.log.*` call, mirroring the console method names (`log` is the default level, distinct from `info`). */
 type ContextLogLevel = "debug" | "error" | "info" | "log" | "warn";
 
-/** Stable `type` tag distinguishing a per-call application-log event from the per-dispatch `"request"` event; both share `source: "cirrus"`. */
+/** Stable `type` tag distinguishing a per-call application-log event from the per-dispatch `"request"` event; both share `source: "lunora"`. */
 const LOG_EVENT_TYPE = "log";
 
 /** The fields {@link emitLogEvent} ships for one `ctx.log.*` call. */
@@ -337,13 +337,13 @@ const renderLogMessage = (args: unknown[]): string =>
 
 /**
  * Emit one application-log event from a `ctx.log.*` call to `console`, tagged
- * `{ source: "cirrus", type: "log" }` so the CLI / Vite formatter can pretty-print
+ * `{ source: "lunora", type: "log" }` so the CLI / Vite formatter can pretty-print
  * it in the dev terminal and a Logpush/SIEM consumer can filter it out of the
  * raw Workers-trace firehose.
  *
  * Only the rendered `message` is emitted here, NOT the structured `args` array:
  * the console event rides CF Workers Logs / Logpush to prod, and shipping raw,
- * un-redacted arg objects on a `source: "cirrus"` line a SIEM is told to trust
+ * un-redacted arg objects on a `source: "lunora"` line a SIEM is told to trust
  * would be a surprising PII/secret surface. The raw `args` stay on the in-process
  * `sink.onLog` path (`recordUserLog`), which the operator opts into and controls.
  * `message` already carries the developer's rendered values, exactly like a raw

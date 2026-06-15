@@ -4,7 +4,7 @@ import { createSolidPreset } from "@visulima/packem/config/preset/solid";
 import transformer from "@visulima/packem/transformer/esbuild";
 
 // The Solid preset wires `babel-preset-solid` to compile the adapter's JSX
-// (`cirrus-provider.tsx`) ahead of esbuild, externalises `solid-js` (a peer
+// (`lunora-provider.tsx`) ahead of esbuild, externalises `solid-js` (a peer
 // dependency — the host app must supply the single Solid runtime so signals
 // share identity), and resolves the `solid` export condition. Without it the
 // raw JSX can't be parsed once the library splits into multiple entry chunks.

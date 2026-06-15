@@ -1,4 +1,4 @@
-import { CirrusProvider } from "@cirrus/react";
+import { LunoraProvider } from "@lunora/react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it } from "vitest";
@@ -28,9 +28,9 @@ const FUNCTIONS_WITH_ARGS: FunctionDescriptor[] = [
 ];
 
 const renderRunner = (mock: MockClientHooks): ReactElement => (
-    <CirrusProvider client={mock.asClient}>
+    <LunoraProvider client={mock.asClient}>
         <FunctionRunner functions={functions} />
-    </CirrusProvider>
+    </LunoraProvider>
 );
 
 describe("functionRunner", () => {
@@ -51,9 +51,9 @@ describe("functionRunner", () => {
         expect.assertions(3);
 
         render(
-            <CirrusProvider client={createMockClient().asClient}>
+            <LunoraProvider client={createMockClient().asClient}>
                 <FunctionRunner functions={FUNCTIONS_WITH_ARGS} />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         expect(screen.getByTestId("function-signature").textContent).toBe("(channelId: id<channels>, text: string, limit?: number)");
@@ -85,9 +85,9 @@ describe("functionRunner", () => {
 
         expect(mock.query).toHaveBeenCalledTimes(1);
 
-        const [reference, args, options] = mock.query.mock.calls[0] as [{ __cirrusRef: string }, unknown, unknown];
+        const [reference, args, options] = mock.query.mock.calls[0] as [{ __lunoraRef: string }, unknown, unknown];
 
-        expect(reference.__cirrusRef).toBe("messages:list");
+        expect(reference.__lunoraRef).toBe("messages:list");
         expect(args).toEqual({ limit: 2 });
         expect(options).toEqual({});
         expect(screen.getByTestId("result").textContent).toBe(JSON.stringify({ rows: [1, 2] }, null, 2));
@@ -114,9 +114,9 @@ describe("functionRunner", () => {
             }
         });
 
-        const [reference] = mock.mutation.mock.calls[0] as [{ __cirrusRef: string }];
+        const [reference] = mock.mutation.mock.calls[0] as [{ __lunoraRef: string }];
 
-        expect(reference.__cirrusRef).toBe("messages:send");
+        expect(reference.__lunoraRef).toBe("messages:send");
         expect(mock.query).not.toHaveBeenCalled();
     });
 
@@ -180,9 +180,9 @@ describe("functionRunner", () => {
         const mock = createMockClient({ listFunctions: () => functions });
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <FunctionRunner />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         await waitFor(() => {
@@ -203,9 +203,9 @@ describe("functionRunner", () => {
         mock.listFunctions.mockRejectedValueOnce(new Error("ADMIN_FORBIDDEN"));
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <FunctionRunner />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         const discoverError = await screen.findByTestId("function-discover-error");
@@ -335,7 +335,7 @@ describe("functionRunner", () => {
     });
 });
 
-const ADMIN_RUN_AS = "__cirrus_admin__:runAs";
+const ADMIN_RUN_AS = "__lunora_admin__:runAs";
 
 describe("functionRunner run-as identity", () => {
     it("hides the run-as control by default (off / not dev-gated)", () => {
@@ -351,9 +351,9 @@ describe("functionRunner run-as identity", () => {
         expect.assertions(1);
 
         render(
-            <CirrusProvider client={createMockClient().asClient}>
+            <LunoraProvider client={createMockClient().asClient}>
                 <FunctionRunner functions={functions} runAsIdentity />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         // `getByTestId` throws when the element is absent, so reaching the
@@ -371,9 +371,9 @@ describe("functionRunner run-as identity", () => {
         });
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <FunctionRunner functions={functions} runAsIdentity />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         // Gate on, but no userId entered → the normal query path runs, never runAs.
@@ -381,10 +381,10 @@ describe("functionRunner run-as identity", () => {
 
         await screen.findByTestId("result");
 
-        const [reference] = mock.query.mock.calls[0] as [{ __cirrusRef: string }];
+        const [reference] = mock.query.mock.calls[0] as [{ __lunoraRef: string }];
 
-        expect(reference.__cirrusRef).toBe("messages:list");
-        expect(mock.query.mock.calls.every(([ref]) => (ref as { __cirrusRef: string }).__cirrusRef !== ADMIN_RUN_AS)).toBe(true);
+        expect(reference.__lunoraRef).toBe("messages:list");
+        expect(mock.query.mock.calls.every(([ref]) => (ref as { __lunoraRef: string }).__lunoraRef !== ADMIN_RUN_AS)).toBe(true);
     });
 
     it("forwards the chosen identity through the runAs admin RPC", async () => {
@@ -397,9 +397,9 @@ describe("functionRunner run-as identity", () => {
         });
 
         render(
-            <CirrusProvider client={mock.asClient}>
+            <LunoraProvider client={mock.asClient}>
                 <FunctionRunner functions={functions} runAsIdentity />
-            </CirrusProvider>,
+            </LunoraProvider>,
         );
 
         fireEvent.change(screen.getByTestId("args-input"), { target: { value: '{ "limit": 5 }' } });
@@ -408,11 +408,11 @@ describe("functionRunner run-as identity", () => {
 
         await screen.findByTestId("result");
 
-        const [reference, args] = mock.query.mock.calls[0] as [{ __cirrusRef: string }, { args: unknown; functionPath: string; userId: string }];
+        const [reference, args] = mock.query.mock.calls[0] as [{ __lunoraRef: string }, { args: unknown; functionPath: string; userId: string }];
 
         // The call is routed through the admin runAs RPC, carrying the target
         // function path, its args, and the forged userId.
-        expect(reference.__cirrusRef).toBe(ADMIN_RUN_AS);
+        expect(reference.__lunoraRef).toBe(ADMIN_RUN_AS);
         expect(args.functionPath).toBe("messages:list");
         expect(args.userId).toBe("user_42");
         expect(args.args).toEqual({ limit: 5 });

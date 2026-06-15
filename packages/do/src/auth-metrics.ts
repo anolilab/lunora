@@ -1,8 +1,8 @@
 /**
  * Per-app durable auth-attempt metrics.
  *
- * `@cirrus/auth` wraps better-auth and runs as a top-level worker route
- * (`/api/auth/*`), NOT through cirrus functions — so the per-function metrics in
+ * `@lunora/auth` wraps better-auth and runs as a top-level worker route
+ * (`/api/auth/*`), NOT through lunora functions — so the per-function metrics in
  * `function-metrics.ts` never see a sign-in/sign-up/callback. This module is the
  * parallel signal for auth: a durable counter of auth ATTEMPTS and FAILURES the
  * studio reads to chart an app-level auth-failure rate (and a sparkline of it
@@ -13,28 +13,28 @@
  * reserved tables, the same `runSql` indirection, the same bounded-trim idiom on
  * the bucket table.
  *
- * `__cirrus_auth_metrics` holds the lifetime accumulators in a single row
+ * `__lunora_auth_metrics` holds the lifetime accumulators in a single row
  * (`attempts` + `failures`, plus a `since_ms` first-seen marker). An auth event
  * is one cheap `INSERT … ON CONFLICT … DO UPDATE` upsert against that row, off
  * the auth response's critical path.
  *
- * `__cirrus_auth_metrics_buckets` holds coarse time-bucketed counters keyed by
+ * `__lunora_auth_metrics_buckets` holds coarse time-bucketed counters keyed by
  * `bucketMs` (60s windows), giving the minute-resolution time series the
  * studio sparkline plots. Bucketing keeps the row count bounded (one row per
  * window) and older rows are trimmed after each write, mirroring
- * `__cirrus_metrics_buckets`.
+ * `__lunora_metrics_buckets`.
  *
- * Both tables carry the reserved `__cirrus` prefix, so the data browser hides
+ * Both tables carry the reserved `__lunora` prefix, so the data browser hides
  * them automatically.
  */
 
 import type { SqlCursor, SqlExec } from "./ctx-db";
 
-/** Reserved single-row auth accumulator table. Auto-hidden from the data browser by the `__cirrus` prefix. */
-const AUTH_METRICS_TABLE = "__cirrus_auth_metrics";
+/** Reserved single-row auth accumulator table. Auto-hidden from the data browser by the `__lunora` prefix. */
+const AUTH_METRICS_TABLE = "__lunora_auth_metrics";
 
 /** Reserved coarse time-series table: app-wide auth attempt/failure counts bucketed by a fixed window. */
-const AUTH_METRICS_BUCKETS_TABLE = "__cirrus_auth_metrics_buckets";
+const AUTH_METRICS_BUCKETS_TABLE = "__lunora_auth_metrics_buckets";
 
 /**
  * Fixed primary key of the single accumulator row. The table is logically a
@@ -68,7 +68,7 @@ interface AuthMetricsBucket {
 }
 
 /**
- * Lifetime auth health for the app, served by `__cirrus_admin__:getAuthMetrics`
+ * Lifetime auth health for the app, served by `__lunora_admin__:getAuthMetrics`
  * and consumed by the studio SLO panel. `failureRate` is the derived
  * `failures / attempts` (0 when there have been no attempts), surfaced so the
  * panel needn't recompute it; `sinceMs` is the epoch-ms the first attempt was

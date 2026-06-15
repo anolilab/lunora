@@ -1,20 +1,20 @@
 ---
-title: "@cirrus/vite"
+title: "@lunora/vite"
 description: The recommended dev-time experience — codegen, HMR, overlay.
 ---
 
-`@cirrus/vite` is a Vite plugin factory. A single `cirrus()` call wires up
+`@lunora/vite` is a Vite plugin factory. A single `lunora()` call wires up
 codegen, wrangler validation, the error overlay, and the Cloudflare Vite
 plugin so `vite dev` runs your Worker locally with full HMR.
 
 ```ts
 // vite.config.ts
-import { cirrus } from "@cirrus/vite";
+import { lunora } from "@lunora/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
 
 export default defineConfig({
-    plugins: [react(), cirrus()],
+    plugins: [react(), lunora()],
 });
 ```
 
@@ -22,8 +22,8 @@ export default defineConfig({
 
 | Option             | Default               | Purpose                                                       |
 | ------------------ | --------------------- | ------------------------------------------------------------- |
-| `schemaDir`        | `"cirrus"`            | Directory containing `schema.ts` + function files             |
-| `generatedDir`     | `"cirrus/_generated"` | Where to emit `api.ts`, `server.ts`, `dataModel.ts`           |
+| `schemaDir`        | `"lunora"`            | Directory containing `schema.ts` + function files             |
+| `generatedDir`     | `"lunora/_generated"` | Where to emit `api.ts`, `server.ts`, `dataModel.ts`           |
 | `cloudflare`       | `true`                | Pass options to `@cloudflare/vite-plugin`, or `false` to skip |
 | `overlay`          | `true`                | Inject `@visulima/vite-overlay` for runtime errors            |
 | `validateWrangler` | `true`                | Cross-check `wrangler.jsonc` bindings against the schema      |
@@ -44,5 +44,5 @@ bindings as Vite errors before they explode at deploy.
 
 ## See also
 
-- [@cirrus/cli](/docs/api/cli)
+- [@lunora/cli](/docs/api/cli)
 - [Getting started](/docs/getting-started)

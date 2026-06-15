@@ -1,4 +1,4 @@
-import { useCirrus } from "@cirrus/react";
+import { useLunora } from "@lunora/react";
 import type { ChangeEvent, MouseEvent, ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -25,9 +25,9 @@ const SEND_TEST_MAIL = adminRef(ADMIN_FUNCTIONS.sendTestMail);
 
 /**
  * Matches the first `http(s)` URL in a body, stopping at whitespace, quotes, or
- * angle/closing brackets. Intentionally mirrors `@cirrus/mail`'s `extractLink`
+ * angle/closing brackets. Intentionally mirrors `@lunora/mail`'s `extractLink`
  * pattern (same char class) but is duplicated here rather than imported: the
- * studio bundle stays decoupled from the `@cirrus/mail` runtime (it shares only
+ * studio bundle stays decoupled from the `@lunora/mail` runtime (it shares only
  * plain strings/types with the server, never the package). Non-global because
  * the panel only needs the first link.
  */
@@ -78,12 +78,12 @@ const recipientText = (value: string | string[] | undefined): string => {
 };
 
 /**
- * Dev mail catcher — a unified inbox of every email the app sent. `@cirrus/mail`'s
+ * Dev mail catcher — a unified inbox of every email the app sent. `@lunora/mail`'s
  * capture transport (wired in dev) intercepts each send and persists it to the
  * root-shard mailbox instead of delivering, so verification / forgot-password and
  * any app mail show up here with nothing leaving the machine. Reads the
- * `__cirrus_admin__:getCapturedMail` RPC over the {@link useCirrus} client;
- * gated by the server's `CIRRUS_ADMIN_TOKEN`.
+ * `__lunora_admin__:getCapturedMail` RPC over the {@link useLunora} client;
+ * gated by the server's `LUNORA_ADMIN_TOKEN`.
  *
  * The inbox is a single root-shard table with no write-flush to subscribe to, so
  * it polls on a fixed interval (paused while the tab is hidden) — new captured
@@ -91,7 +91,7 @@ const recipientText = (value: string | string[] | undefined): string => {
  * sandboxed iframe (no script execution) so captured markup can't run in the studio.
  */
 const MailPanel = ({ limit = 100 }: MailPanelProps): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const t = useT();
 
     const [entries, setEntries] = useState<CapturedMail[]>([]);

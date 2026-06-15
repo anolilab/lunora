@@ -17,7 +17,7 @@
 "jobs":
     "semantic-release":
         "name": "Semantic Release"
-        "if": "github.repository == 'anolilab/cirrus'"
+        "if": "github.repository == 'anolilab/lunora'"
         "runs-on": "ubuntu-latest"
         "timeout-minutes": 30
         # Gate npm publishing behind a GitHub Environment so secrets are scoped and

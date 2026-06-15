@@ -35,9 +35,9 @@ export const App = (): ReactElement => {
 
     return (
         <main style={{ maxWidth: 720, margin: "3rem auto", fontFamily: "system-ui", padding: 24 }}>
-            <h1>Cirrus Auth Playground</h1>
+            <h1>Lunora Auth Playground</h1>
             <p>
-                Demo of the <code>@cirrus/auth</code> wrapper around better-auth's
+                Demo of the <code>@lunora/auth</code> wrapper around better-auth's
                 <code> organization</code> and <code>admin</code> plugins.
             </p>
             {isSignedIn ? <SignedInView /> : <SignedOutView />}

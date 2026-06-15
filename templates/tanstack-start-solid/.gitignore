@@ -9,7 +9,7 @@ dist-ssr
 .wrangler
 .output
 .vinxi
-.cirrus-cache
+.lunora-cache
 __unconfig*
-cirrus/_generated
+lunora/_generated
 src/routeTree.gen.ts

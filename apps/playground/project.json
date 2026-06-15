@@ -1,5 +1,5 @@
 {
-    "name": "cirrus-playground",
+    "name": "lunora-playground",
     "tags": ["type:app", "category:playground"],
     "targets": {
         "lint:eslint": {

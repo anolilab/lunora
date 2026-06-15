@@ -6,7 +6,7 @@ import type { ShardNamespaceLike } from "../src/resolve-shard";
 /**
  * Minimal in-process implementation of the ShardRegistryDO surface — same
  * routes, same JSON wire format. Lets us exercise the client without
- * importing `@cirrus/do` (which would create a hard dep).
+ * importing `@lunora/do` (which would create a hard dep).
  */
 const createFakeRegistryDO = (initial: Record<string, string[]> = {}) => {
     const tables = new Map<string, Set<string>>();

@@ -5,7 +5,7 @@ import { hashInput } from "./hash";
 /**
  * The internal, deterministic fake-data generator — a rebuilt
  * [`copycat`](https://github.com/supabase-community/copycat) on top of
- * `@faker-js/faker`. **Private to `@cirrus/seed`**: it is not re-exported from
+ * `@faker-js/faker`. **Private to `@lunora/seed`**: it is not re-exported from
  * the package root.
  *
  * Every method takes an `input` (any JSON-serializable value), hashes it to a

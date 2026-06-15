@@ -1,11 +1,11 @@
 /**
- * Convert a {@link SchemaIR} from `@cirrus/codegen` into a {@link SchemaSnapshot}
+ * Convert a {@link SchemaIR} from `@lunora/codegen` into a {@link SchemaSnapshot}
  * suitable for diffing against the persisted `.snapshot.json`.
  *
  * Only **global** (`.global()`-marked) tables are persisted — shard-local and
  * root-DO tables live in per-DO SQLite and do not need D1 migrations.
  */
-import type { SchemaIR, ValidatorIR } from "@cirrus/codegen";
+import type { SchemaIR, ValidatorIR } from "@lunora/codegen";
 
 import type { ColumnSnapshot, IndexSnapshot, SchemaSnapshot, TableSnapshot } from "./migration-diff";
 import { validatorKindToSqlType } from "./migration-diff";

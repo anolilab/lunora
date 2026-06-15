@@ -19,7 +19,7 @@ describe("createWorker (workerd)", () => {
     it("forwards authorization, cookie, and x-d1-bookmark to the shard", async () => {
         expect.assertions(5);
 
-        const response = await SELF.fetch("https://app.test/_cirrus/rpc", {
+        const response = await SELF.fetch("https://app.test/_lunora/rpc", {
             body: JSON.stringify({ args: { limit: 5 }, functionPath: "messages:list" }),
             headers: {
                 authorization: "Bearer test-token",
@@ -48,7 +48,7 @@ describe("createWorker (workerd)", () => {
     it("does NOT forward unrelated headers like user-agent or x-secret", async () => {
         expect.assertions(3);
 
-        const response = await SELF.fetch("https://app.test/_cirrus/rpc", {
+        const response = await SELF.fetch("https://app.test/_lunora/rpc", {
             body: JSON.stringify({ args: {}, functionPath: "x:y" }),
             headers: {
                 "content-type": "application/json",
@@ -111,13 +111,13 @@ describe("createWorker (workerd)", () => {
         expect(echoed).toEqual({ method: "POST", path: "/echo-method" });
     });
 
-    it("cirrusError surfaces its code+status; generic errors are sanitized to INTERNAL 500", async () => {
+    it("lunoraError surfaces its code+status; generic errors are sanitized to INTERNAL 500", async () => {
         expect.assertions(6);
 
-        const cirrus = await SELF.fetch("https://app.test/boom-cirrus");
+        const lunora = await SELF.fetch("https://app.test/boom-lunora");
 
-        expect(cirrus.status).toBe(403);
-        await expect(cirrus.json()).resolves.toEqual({ error: { code: "FORBIDDEN", message: "nope" } });
+        expect(lunora.status).toBe(403);
+        await expect(lunora.json()).resolves.toEqual({ error: { code: "FORBIDDEN", message: "nope" } });
 
         const generic = await SELF.fetch("https://app.test/boom-generic");
 
@@ -142,7 +142,7 @@ describe("createWorker (workerd)", () => {
         await worker.scheduled(controller, env, context);
         await waitOnExecutionContext(context);
 
-        const ndjsonKey = "backups/cirrus-backup-2026-06-03T12-00-00-000Z.ndjson";
+        const ndjsonKey = "backups/lunora-backup-2026-06-03T12-00-00-000Z.ndjson";
         const manifestKey = `${ndjsonKey}.manifest.json`;
 
         const ndjsonObject = await env.BACKUPS.get(ndjsonKey);

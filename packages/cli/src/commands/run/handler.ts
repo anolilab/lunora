@@ -47,7 +47,7 @@ const TRAILING_SLASH = /\/$/u;
 
 const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResult> => {
     const baseUrl = (options.url ?? "http://localhost:8787").replace(TRAILING_SLASH, "");
-    const requestUrl = `${baseUrl}/_cirrus/rpc`;
+    const requestUrl = `${baseUrl}/_lunora/rpc`;
 
     const fetchImpl: FetchLike = options.fetchImpl ?? (globalThis as unknown as { fetch: FetchLike }).fetch;
 
@@ -103,12 +103,12 @@ const runRpcCommand = async (options: RunCommandOptions): Promise<RunCommandResu
     };
 };
 
-/** `cirrus run &lt;functionPath>` handler (lazy-loaded via the command's `loader`). */
+/** `lunora run &lt;functionPath>` handler (lazy-loaded via the command's `loader`). */
 const execute: CommandHandler<RunRpcOptions> = defineHandler<RunRpcOptions>(({ argument, cwd, logger, options }) => {
     const functionPath = argument[0];
 
     if (!functionPath) {
-        logger.error("missing function path. Usage: cirrus run <functionPath> [--args <json>]");
+        logger.error("missing function path. Usage: lunora run <functionPath> [--args <json>]");
 
         return { code: 1 };
     }

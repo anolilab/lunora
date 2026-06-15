@@ -1,7 +1,7 @@
 import type { CallExpression, Node as TsNode, Project, SourceFile } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { cirrusRelativePath, classifyProcedureCall, listCirrusSourceFiles } from "./discover-functions";
+import { lunoraRelativePath, classifyProcedureCall, listLunoraSourceFiles } from "./discover-functions";
 import type { RlsMetadataIR, RlsPolicyIR, RlsProcedureIR, RlsRoleIR } from "./ir";
 
 // ---------------------------------------------------------------------------
@@ -201,7 +201,7 @@ const tablesAccessedIn = (declaration: TsNode): { tablesRead: string[]; tablesWr
 // ---------------------------------------------------------------------------
 
 /**
- * Discover RLS usage for every exported Cirrus procedure under the cirrus source
+ * Discover RLS usage for every exported Lunora procedure under the lunora source
  * directory. For each procedure, records whether its builder chain includes
  * `.use(rls(...))`, which tables the `rls(policies)` argument names, and which
  * tables the procedure reads/writes through `ctx.db`.
@@ -247,12 +247,12 @@ const procedureIrFromDeclaration = (declaration: TsNode, relativePath: string): 
     };
 };
 
-const discoverRlsProcedures = (project: Project, cirrusDirectory: string): RlsProcedureIR[] => {
+const discoverRlsProcedures = (project: Project, lunoraDirectory: string): RlsProcedureIR[] => {
     const procedures: RlsProcedureIR[] = [];
 
-    for (const filePath of listCirrusSourceFiles(cirrusDirectory)) {
+    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-        const relativePath = cirrusRelativePath(cirrusDirectory, filePath);
+        const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
 
         for (const statement of sourceFile.getVariableStatements()) {
             if (!statement.isExported()) {
@@ -493,13 +493,13 @@ const exportedProcedureChains = (sourceFile: SourceFile): { name: string; receiv
  * Roles are deduped by name (first declaration wins) so a role registered on
  * several procedures lists once.
  */
-const discoverRlsMetadata = (project: Project, cirrusDirectory: string): RlsMetadataIR => {
+const discoverRlsMetadata = (project: Project, lunoraDirectory: string): RlsMetadataIR => {
     const policies: RlsPolicyIR[] = [];
     const rolesByName = new Map<string, RlsRoleIR>();
 
-    for (const filePath of listCirrusSourceFiles(cirrusDirectory)) {
+    for (const filePath of listLunoraSourceFiles(lunoraDirectory)) {
         const sourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
-        const relativePath = cirrusRelativePath(cirrusDirectory, filePath);
+        const relativePath = lunoraRelativePath(lunoraDirectory, filePath);
 
         for (const { name, receiver } of exportedProcedureChains(sourceFile)) {
             const metadata = rlsMetadataFromChain(receiver, relativePath, name);

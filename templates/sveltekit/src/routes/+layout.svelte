@@ -1,18 +1,18 @@
 <script lang="ts">
-    import { CirrusClient } from "@cirrus/client";
-    import { setCirrusClient } from "@cirrus/svelte";
+    import { LunoraClient } from "@lunora/client";
+    import { setLunoraClient } from "@lunora/svelte";
 
-    // Publish one CirrusClient on Svelte context for the whole app. The live
+    // Publish one LunoraClient on Svelte context for the whole app. The live
     // `query`/`mutation`/`hydratePreloaded` stores resolve it via getContext.
     // `setContext` must run during component init — exactly here, at the root.
     //
-    // SAME-ORIGIN: Cirrus realtime is mounted under `/_cirrus/*` in SvelteKit's
-    // own worker (see `src/worker.ts`'s `withCirrus`), so the client talks to the
+    // SAME-ORIGIN: Lunora realtime is mounted under `/_lunora/*` in SvelteKit's
+    // own worker (see `src/worker.ts`'s `withLunora`), so the client talks to the
     // page origin — no second worker, no CORS, and the WebSocket resumes the same
-    // cookie-based session. `VITE_CIRRUS_URL` overrides only for a split deploy.
-    const url = import.meta.env.VITE_CIRRUS_URL ?? (typeof window === "undefined" ? "" : window.location.origin);
+    // cookie-based session. `VITE_LUNORA_URL` overrides only for a split deploy.
+    const url = import.meta.env.VITE_LUNORA_URL ?? (typeof window === "undefined" ? "" : window.location.origin);
 
-    setCirrusClient(new CirrusClient({ url }));
+    setLunoraClient(new LunoraClient({ url }));
 </script>
 
 <slot />

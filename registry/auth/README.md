@@ -1,25 +1,25 @@
 # auth
 
-Cookie-session authentication for Cirrus — email/password sign-up and sign-in on top of [`@cirrus/auth`](../../packages/auth), a thin wrapper over [better-auth](https://www.better-auth.com). `createAuth(options)` is `betterAuth(options)` with a clearer error when `secret` is missing; every better-auth option (`socialProviders`, `plugins`, `session`, …) passes straight through.
+Cookie-session authentication for Lunora — email/password sign-up and sign-in on top of [`@lunora/auth`](../../packages/auth), a thin wrapper over [better-auth](https://www.better-auth.com). `createAuth(options)` is `betterAuth(options)` with a clearer error when `secret` is missing; every better-auth option (`socialProviders`, `plugins`, `session`, …) passes straight through.
 
 This is the base item. The [`auth-clerk`](../auth-clerk) and [`auth-auth0`](../auth-auth0) items build on it (`requires: ["auth"]`) to wire those identity providers.
 
 ## Install
 
 ```bash
-cirrus registry add auth
+lunora registry add auth
 ```
 
 This:
 
-1. Adds `@cirrus/auth`, `@cirrus/mail`, and `@cirrus/server` to your `package.json` (run `pnpm install` afterwards).
-2. Copies `cirrus/auth/index.ts` — the auth instance (`buildAuth` / `getAuth`) and the `/api/auth/*` request handler (`mountAuth`) — into your project. It's **yours** to edit.
+1. Adds `@lunora/auth`, `@lunora/mail`, and `@lunora/server` to your `package.json` (run `pnpm install` afterwards).
+2. Copies `lunora/auth/index.ts` — the auth instance (`buildAuth` / `getAuth`) and the `/api/auth/*` request handler (`mountAuth`) — into your project. It's **yours** to edit.
 3. Adds a D1 `DB` binding to your `wrangler.jsonc` (better-auth persists users/sessions there — run `wrangler d1 create <name>` and put the id in the binding).
 4. Scaffolds `BETTER_AUTH_SECRET`, `BETTER_AUTH_URL`, and `MAIL_FROM` into your `.dev.vars`.
 
 ## Verification & password-reset email
 
-The scaffold wires better-auth's `sendVerificationEmail` and `sendResetPassword` through [`@cirrus/mail`](../mail) (`createMailerFromEnv`). In dev these are **captured into the studio's Mail tab** — you can build and test the forgot-password flow with zero email setup. For real delivery in production, run [`cirrus add email`](../mail) (adds the `SEND_EMAIL` Cloudflare binding) or set `RESEND_API_KEY`. Until mail is configured (no `MAIL_FROM`), the link is logged to the console so dev flows still work. Edit the subjects/bodies — or swap to a React template via `@cirrus/mail`'s `renderEmail` — in `cirrus/auth/index.ts`.
+The scaffold wires better-auth's `sendVerificationEmail` and `sendResetPassword` through [`@lunora/mail`](../mail) (`createMailerFromEnv`). In dev these are **captured into the studio's Mail tab** — you can build and test the forgot-password flow with zero email setup. For real delivery in production, run [`lunora add email`](../mail) (adds the `SEND_EMAIL` Cloudflare binding) or set `RESEND_API_KEY`. Until mail is configured (no `MAIL_FROM`), the link is logged to the console so dev flows still work. Edit the subjects/bodies — or swap to a React template via `@lunora/mail`'s `renderEmail` — in `lunora/auth/index.ts`.
 
 ## Configure env vars
 
@@ -43,22 +43,22 @@ Mount the auth routes **first** in your Worker's `fetch`, before your app dispat
 
 ```ts
 // src/server/index.ts
-import { mountAuth } from "../../cirrus/auth/index.js";
+import { mountAuth } from "../../lunora/auth/index.js";
 
 export default {
     async fetch(request: Request, env: Env, ctx: ExecutionContext) {
         const authResponse = await mountAuth(env, request);
         if (authResponse) return authResponse;
 
-        // …your existing Cirrus worker dispatch…
+        // …your existing Lunora worker dispatch…
     },
 };
 ```
 
-To resolve the signed-in user inside Cirrus procedures, pass `resolveIdentity` to `createWorker` and call the auth API there:
+To resolve the signed-in user inside Lunora procedures, pass `resolveIdentity` to `createWorker` and call the auth API there:
 
 ```ts
-import { getAuth } from "../../cirrus/auth/index.js";
+import { getAuth } from "../../lunora/auth/index.js";
 
 createWorker({
     d1: env.DB,
@@ -80,9 +80,9 @@ better-auth needs its tables (`user`, `session`, `account`, `verification`) in y
 
 ```ts
 // scripts/auth-migrate.ts
-import { compileMigrationsSql } from "@cirrus/auth";
+import { compileMigrationsSql } from "@lunora/auth";
 
-import { buildAuth } from "../cirrus/auth/index.js";
+import { buildAuth } from "../lunora/auth/index.js";
 
 const sql = await compileMigrationsSql(buildAuth(process.env as never).options);
 process.stdout.write(sql);
@@ -113,10 +113,10 @@ export const authClient = createAuthClient({ baseURL: import.meta.env.VITE_BETTE
 `createAuth` forwards `socialProviders` and `plugins` to better-auth. For first-class providers (Google, GitHub, …) add a `socialProviders` block in `buildAuth`. For Clerk / Auth0 (OIDC), add the dedicated registry items:
 
 ```bash
-cirrus registry add auth-clerk
-cirrus registry add auth-auth0
+lunora registry add auth-clerk
+lunora registry add auth-auth0
 ```
 
 ## What you own
 
-Everything under `cirrus/auth/` is copied into your repo — change the providers, session policy, plugins, or the handler wiring however you like. `@cirrus/auth` provides the wrapper + helpers; this item is the idiomatic Cirrus glue around them.
+Everything under `lunora/auth/` is copied into your repo — change the providers, session policy, plugins, or the handler wiring however you like. `@lunora/auth` provides the wrapper + helpers; this item is the idiomatic Lunora glue around them.

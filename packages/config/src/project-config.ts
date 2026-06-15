@@ -1,14 +1,14 @@
 /**
- * `cirrus.json` — the optional project config file at the repo root.
+ * `lunora.json` — the optional project config file at the repo root.
  *
  * It is distinct from `wrangler.jsonc` (the Cloudflare worker config): this is
- * Cirrus-level project settings the CLI + Vite plugin read. Today it carries one
+ * Lunora-level project settings the CLI + Vite plugin read. Today it carries one
  * key, `remote`, which opts the project into remote-binding dev (PLAN5 §5.3)
- * without needing the `--remote` flag or `CIRRUS_REMOTE` env on every run.
+ * without needing the `--remote` flag or `LUNORA_REMOTE` env on every run.
  *
  * The file is entirely optional and best-effort: a missing file, malformed
  * JSONC, or an unexpected `remote` value all degrade to "no project preference"
- * rather than throwing, so a typo never breaks `cirrus dev`.
+ * rather than throwing, so a typo never breaks `lunora dev`.
  */
 import { existsSync, readFileSync } from "node:fs";
 
@@ -18,10 +18,10 @@ import { parse as parseJsonc } from "jsonc-parser";
 import join from "./path";
 
 /** The canonical project-config filename probed at the project root. */
-const CIRRUS_CONFIG_FILE = "cirrus.json";
+const LUNORA_CONFIG_FILE = "lunora.json";
 
 /**
- * The parsed `remote` preference from `cirrus.json`:
+ * The parsed `remote` preference from `lunora.json`:
  *
  * - `true` / `false` — the boolean form: enable or explicitly disable remote dev.
  * - `undefined` — no usable preference (file absent, key absent, or malformed).
@@ -32,8 +32,8 @@ const CIRRUS_CONFIG_FILE = "cirrus.json";
  */
 type RemotePreference = boolean | undefined;
 
-/** The structural slice of `cirrus.json` Cirrus reads. */
-interface CirrusProjectConfig {
+/** The structural slice of `lunora.json` Lunora reads. */
+interface LunoraProjectConfig {
     remote?: unknown;
 }
 
@@ -57,13 +57,13 @@ const interpretRemote = (value: unknown): RemotePreference => {
 };
 
 /**
- * Read the project's `remote` preference from `cirrus.json`, or `undefined` when
+ * Read the project's `remote` preference from `lunora.json`, or `undefined` when
  * there's no usable preference. Best-effort: never throws — a missing file,
  * parse error, or unexpected shape all collapse to `undefined` so the caller
  * falls through to the env/flag layers.
  */
 const readProjectRemotePreference = (projectRoot: string): RemotePreference => {
-    const configPath = join(projectRoot, CIRRUS_CONFIG_FILE);
+    const configPath = join(projectRoot, LUNORA_CONFIG_FILE);
 
     if (!existsSync(configPath)) {
         return undefined;
@@ -84,8 +84,8 @@ const readProjectRemotePreference = (projectRoot: string): RemotePreference => {
         return undefined;
     }
 
-    return interpretRemote((parsed as CirrusProjectConfig).remote);
+    return interpretRemote((parsed as LunoraProjectConfig).remote);
 };
 
-export type { CirrusProjectConfig, RemotePreference };
-export { CIRRUS_CONFIG_FILE, interpretRemote, readProjectRemotePreference };
+export type { LunoraProjectConfig, RemotePreference };
+export { LUNORA_CONFIG_FILE, interpretRemote, readProjectRemotePreference };

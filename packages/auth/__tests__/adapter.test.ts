@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { cirrusAuthAdapter, cirrusD1Adapter } from "../src/adapter";
+import { lunoraAuthAdapter, lunoraD1Adapter } from "../src/adapter";
 import { createAuth } from "../src/create-auth";
 import type { AuthWhereClause } from "../src/store";
 import { createMemoryAuthStore, matchesWhere } from "../src/store";
@@ -36,11 +36,11 @@ const clause = (
     };
 };
 
-describe("cirrusD1Adapter", () => {
+describe("lunoraD1Adapter", () => {
     it("wires a D1 binding into a usable better-auth database (no hang-prone raw D1)", () => {
         expect.assertions(2);
 
-        const adapter = cirrusD1Adapter(fakeD1);
+        const adapter = lunoraD1Adapter(fakeD1);
         const auth = createAuth({ database: adapter, secret: "s".repeat(32) });
 
         expect(adapter).toBeDefined();
@@ -122,7 +122,7 @@ describe("createMemoryAuthStore", () => {
     });
 });
 
-describe("cirrusAuthAdapter — better-auth end to end", () => {
+describe("lunoraAuthAdapter — better-auth end to end", () => {
     const email = "ada@example.com";
     // test-only credential for an in-memory better-auth instance — never a real secret
     const password = "correct-horse-battery-staple"; // secret-scanner:allow
@@ -132,15 +132,15 @@ describe("cirrusAuthAdapter — better-auth end to end", () => {
         const store = createMemoryAuthStore();
         const auth = createAuth({
             baseURL: "http://localhost:3000",
-            database: cirrusAuthAdapter(store),
+            database: lunoraAuthAdapter(store),
             emailAndPassword: { enabled: true },
-            secret: "cirrus-test-secret-cirrus-test-secret-xx",
+            secret: "lunora-test-secret-lunora-test-secret-xx",
         });
 
         return { auth, store };
     };
 
-    it("routes sign-up writes through the store (user + account land in Cirrus tables)", async () => {
+    it("routes sign-up writes through the store (user + account land in Lunora tables)", async () => {
         expect.hasAssertions();
 
         const { auth, store } = build();

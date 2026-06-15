@@ -1,5 +1,5 @@
-import type { GlobalTableInfo } from "@cirrus/client";
-import { useCirrus } from "@cirrus/react";
+import type { GlobalTableInfo } from "@lunora/client";
+import { useLunora } from "@lunora/react";
 import type { ChangeEvent, ReactElement, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -153,7 +153,7 @@ const IndexList = ({
  * Schema overview that shows both storage tiers so the distinction is never a
  * mystery. The shard section lists every user table in the selected Durable
  * Object with row counts, and probes a table's columns on expand via a one-row
- * `__cirrus_admin__:readTablePage` (`PRAGMA table_info`). The global section
+ * `__lunora_admin__:readTablePage` (`PRAGMA table_info`). The global section
  * lists every `.global()` table — including the auth tables (`user`, `session`,
  * …) — via the client's `listGlobalTables()`, reading columns from a one-row
  * `readGlobalTablePage` on expand.
@@ -163,13 +163,13 @@ const IndexList = ({
  * on one canvas, with cross-tier FK edges and its own in-canvas find-table box,
  * tier filter, and legend.
  *
- * Read-only and gated by the server's `CIRRUS_ADMIN_TOKEN`, like the rest of the
+ * Read-only and gated by the server's `LUNORA_ADMIN_TOKEN`, like the rest of the
  * studio's admin surface. Global discovery is best-effort: if D1 isn't
  * configured the global section simply reports it, and the shard section still
  * works.
  */
 export const SchemaViewer = ({ initialShardKey, initialTable, schemaEditable }: SchemaViewerProps): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const t = useT();
 
     const [view, setView] = useState<SchemaView>("list");
@@ -463,7 +463,7 @@ export const SchemaViewer = ({ initialShardKey, initialTable, schemaEditable }: 
         setTableFilter(event.target.value);
     }, []);
 
-    // After the overlay applies an additive edit (cirrus/schema.ts + codegen),
+    // After the overlay applies an additive edit (lunora/schema.ts + codegen),
     // re-list the shard so the new table/column/index shows. The schema-edit
     // endpoint's returned tables describe the SOURCE schema; the studio reads the
     // live DO via `refresh`, which now reflects the regenerated shape.
@@ -478,7 +478,7 @@ export const SchemaViewer = ({ initialShardKey, initialTable, schemaEditable }: 
     const shardTableNames = useMemo<string[]>(() => (tables ?? []).map((table) => table.name), [tables]);
 
     return (
-        <div className="flex flex-col gap-4" data-testid="cirrus-schema">
+        <div className="flex flex-col gap-4" data-testid="lunora-schema">
             <div className="flex flex-wrap items-center gap-3">
                 <ShardInput onChange={setShardKey} testId="sc-shard-input" value={shardKey} />
 

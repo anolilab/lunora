@@ -1,6 +1,6 @@
 /**
  * Shared aggregate-SQL helpers used by both the DO ctx-db (`ctx-db.ts`) and
- * the D1 ctx-db twin (`@cirrus/d1`'s `d1-ctx-db.ts`).
+ * the D1 ctx-db twin (`@lunora/d1`'s `d1-ctx-db.ts`).
  *
  * These four pure helpers were previously duplicated in both files and are
  * now consolidated here to ensure that a bug fix or a tightening of the SQL

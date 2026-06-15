@@ -1,5 +1,5 @@
 /**
- * `@cirrus/client/ssr` — the framework-neutral server contract that every Cirrus
+ * `@lunora/client/ssr` — the framework-neutral server contract that every Lunora
  * meta-framework adapter (React, Solid, Svelte, Vue) depends on. It owns the
  * server-side seam: a request-scoped HTTP RPC client, session resolution from
  * the inbound request, query preloading, and the dehydrate/serialize helpers
@@ -15,7 +15,7 @@ export { preloadedQueryResult, preloadQuery } from "../index";
 export type { ArgsOf, FunctionReference, Preloaded, ReturnOf } from "../index";
 
 // Resolve `{ user, session } | null` from the inbound request + a better-auth
-// instance (structurally typed, no hard `@cirrus/auth` dependency).
+// instance (structurally typed, no hard `@lunora/auth` dependency).
 export type { AuthLike, HeadersSource, ServerSession } from "./get-server-session";
 export { getServerSession } from "./get-server-session";
 // Dehydrate helpers: embed a `Preloaded` token in HTML and read it back.

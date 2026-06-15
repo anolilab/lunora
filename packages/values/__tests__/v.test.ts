@@ -491,13 +491,13 @@ describe(".check() refinement", () => {
 });
 
 describe("standard schema (~standard)", () => {
-    it("exposes the v1 props with the cirrus vendor", () => {
+    it("exposes the v1 props with the lunora vendor", () => {
         expect.assertions(3);
 
         const schema = v.string();
 
         expect(schema["~standard"].version).toBe(1);
-        expect(schema["~standard"].vendor).toBe("cirrus");
+        expect(schema["~standard"].vendor).toBe("lunora");
         expect(typeof schema["~standard"].validate).toBe("function");
     });
 
@@ -523,7 +523,7 @@ describe("standard schema (~standard)", () => {
         expect(result).toStrictEqual({ value: 7 });
     });
 
-    it("validate maps a ValidationError to { issues } with the cirrus path", () => {
+    it("validate maps a ValidationError to { issues } with the lunora path", () => {
         expect.hasAssertions();
 
         const nested = v.object({ user: v.object({ tags: v.array(v.string()) }) });
@@ -533,7 +533,7 @@ describe("standard schema (~standard)", () => {
         assertOk(result.issues !== undefined, "expected issues");
 
         expect(result.issues).toHaveLength(1);
-        // Cirrus paths are (string | number)[] — Standard-Schema-compatible verbatim.
+        // Lunora paths are (string | number)[] — Standard-Schema-compatible verbatim.
         expect(result.issues[0]?.path).toStrictEqual(["user", "tags", 1]);
         expect(typeof result.issues[0]?.message).toBe("string");
     });
@@ -541,9 +541,9 @@ describe("standard schema (~standard)", () => {
     it("attaches ~standard to derived validators (.check/.nullable/.default)", () => {
         expect.assertions(3);
 
-        expect(v.string().check((s) => s.length > 0)["~standard"].vendor).toBe("cirrus");
-        expect(v.string().nullable()["~standard"].vendor).toBe("cirrus");
-        expect(v.string().default("x")["~standard"].vendor).toBe("cirrus");
+        expect(v.string().check((s) => s.length > 0)["~standard"].vendor).toBe("lunora");
+        expect(v.string().nullable()["~standard"].vendor).toBe("lunora");
+        expect(v.string().default("x")["~standard"].vendor).toBe("lunora");
     });
 });
 

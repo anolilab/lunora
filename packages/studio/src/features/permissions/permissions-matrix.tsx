@@ -1,4 +1,4 @@
-import { useCirrus } from "@cirrus/react";
+import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -129,7 +129,7 @@ interface PermissionsMatrixProps {
  * configuration for auditing.
  */
 export const PermissionsMatrix = ({ onProbe }: PermissionsMatrixProps = {}): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const t = useT();
 
     const [policies, setPolicies] = useState<RlsPolicyMetadata[] | null>(null);
@@ -192,7 +192,7 @@ export const PermissionsMatrix = ({ onProbe }: PermissionsMatrixProps = {}): Rea
     );
 
     return (
-        <div className="flex flex-col gap-3" data-testid="cirrus-permissions-matrix">
+        <div className="flex flex-col gap-3" data-testid="lunora-permissions-matrix">
             <div className="flex items-center justify-end">
                 <LiveError message={liveError} prefix="pm" />
             </div>

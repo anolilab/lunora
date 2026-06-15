@@ -6,9 +6,9 @@
 import { describe, expect, it } from "vitest";
 
 import type { Middleware, StorageRule } from "../src/index";
-import { CirrusError, defineStorageRule, defineStorageRules, initCirrus, storageRules } from "../src/index";
+import { LunoraError, defineStorageRule, defineStorageRules, initLunora, storageRules } from "../src/index";
 
-const cirrus = initCirrus.dataModel<Record<string, never>>().create();
+const lunora = initLunora.dataModel<Record<string, never>>().create();
 
 interface FakeStorage {
     calls: { key: string; method: string }[];
@@ -93,7 +93,7 @@ describe("storageRules — read path", () => {
         });
 
         const fake = createFakeStorage();
-        const handler = cirrus.action.use(rulesForTest<TestContext>([rule])).action(async ({ ctx }) => ctx.storage.download("user/u1/a.png"));
+        const handler = lunora.action.use(rulesForTest<TestContext>([rule])).action(async ({ ctx }) => ctx.storage.download("user/u1/a.png"));
 
         await handler.handler(makeContext(fake, "u1"), {});
 
@@ -110,9 +110,9 @@ describe("storageRules — read path", () => {
         });
 
         const fake = createFakeStorage();
-        const handler = cirrus.action.use(rulesForTest<TestContext>([rule])).action(async ({ ctx }) => ctx.storage.download("user/u2/secret.png"));
+        const handler = lunora.action.use(rulesForTest<TestContext>([rule])).action(async ({ ctx }) => ctx.storage.download("user/u2/secret.png"));
 
-        await expect(handler.handler(makeContext(fake, "u1"), {})).rejects.toThrow(CirrusError);
+        await expect(handler.handler(makeContext(fake, "u1"), {})).rejects.toThrow(LunoraError);
         expect(fake.calls).toEqual([]);
     });
 
@@ -123,7 +123,7 @@ describe("storageRules — read path", () => {
         const rule = defineStorageRule<TestContext>({ bucket: "avatars", on: "read", when: () => false });
 
         const fake = createFakeStorage();
-        const handler = cirrus.action.use(rulesForTest<TestContext>([rule])).action(async ({ ctx }) => ctx.storage.delete("anything"));
+        const handler = lunora.action.use(rulesForTest<TestContext>([rule])).action(async ({ ctx }) => ctx.storage.delete("anything"));
 
         await handler.handler(makeContext(fake, "u1"), {});
 
@@ -138,7 +138,7 @@ describe("storageRules — prefix scoping + default-deny", () => {
         const rule = defineStorageRule<TestContext>({ bucket: "avatars", on: "read", prefix: "user/", when: () => true });
 
         const fake = createFakeStorage();
-        const handler = cirrus.action.use(rulesForTest<TestContext>([rule])).action(async ({ ctx }) => ctx.storage.getUrl("public/logo.png"));
+        const handler = lunora.action.use(rulesForTest<TestContext>([rule])).action(async ({ ctx }) => ctx.storage.getUrl("public/logo.png"));
 
         await expect(handler.handler(makeContext(fake, "u1"), {})).rejects.toThrow(/denied by access rule/);
     });
@@ -155,7 +155,7 @@ describe("storageRules — prefix scoping + default-deny", () => {
         const shared = defineStorageRule<TestContext>({ bucket: "avatars", on: "read", prefix: "public/", when: () => true });
 
         const fake = createFakeStorage();
-        const handler = cirrus.action.use(rulesForTest<TestContext>([own, shared])).action(async ({ ctx }) => ctx.storage.getUrl("public/logo.png"));
+        const handler = lunora.action.use(rulesForTest<TestContext>([own, shared])).action(async ({ ctx }) => ctx.storage.getUrl("public/logo.png"));
 
         const url = await handler.handler(makeContext(fake, "u1"), {});
 
@@ -170,7 +170,7 @@ describe("storageRules — write/delete path", () => {
         const rule = defineStorageRule<TestContext>({ bucket: "avatars", on: "write", when: ({ auth, key }) => key.startsWith(`user/${auth.userId ?? ""}/`) });
 
         const fake = createFakeStorage();
-        const handler = cirrus.action.use(rulesForTest<TestContext>([rule])).action(async ({ ctx }) => ctx.storage.store("user/u2/x.png", new ArrayBuffer(1)));
+        const handler = lunora.action.use(rulesForTest<TestContext>([rule])).action(async ({ ctx }) => ctx.storage.store("user/u2/x.png", new ArrayBuffer(1)));
 
         await expect(handler.handler(makeContext(fake, "u1"), {})).rejects.toThrow(/storage write/);
     });
@@ -181,7 +181,7 @@ describe("storageRules — write/delete path", () => {
         const rule = defineStorageRule<TestContext>({ bucket: "avatars", on: "delete", when: ({ auth, key }) => key.startsWith(`user/${auth.userId ?? ""}/`) });
 
         const fake = createFakeStorage();
-        const handler = cirrus.action.use(rulesForTest<TestContext>([rule])).action(async ({ ctx }) => ctx.storage.delete("user/u1/old.png"));
+        const handler = lunora.action.use(rulesForTest<TestContext>([rule])).action(async ({ ctx }) => ctx.storage.delete("user/u1/old.png"));
 
         await handler.handler(makeContext(fake, "u1"), {});
 
@@ -246,7 +246,7 @@ describe("storageRules — bucket scoping", () => {
         });
 
         const fake = createBucketedFakeStorage();
-        const handler = cirrus.action.use(rulesForTest<BucketedContext>([rule])).action(async ({ ctx }) => {
+        const handler = lunora.action.use(rulesForTest<BucketedContext>([rule])).action(async ({ ctx }) => {
             // default bucket is ungoverned → allowed even though the key wouldn't match the avatars rule
             await ctx.storage.download("anything/x.png");
             // avatars bucket is governed → this owner-scoped key is allowed
@@ -269,7 +269,7 @@ describe("storageRules — bucket scoping", () => {
         });
 
         const fake = createBucketedFakeStorage();
-        const handler = cirrus.action
+        const handler = lunora.action
             .use(rulesForTest<BucketedContext>([rule]))
             .action(async ({ ctx }) => ctx.storage.bucket("avatars").download("user/u2/secret.png"));
 
@@ -307,7 +307,7 @@ describe("storageRules — allowlist (privileged methods dropped)", () => {
 
         let exposed: Record<string, unknown> = {};
         const context = { auth: { roles: [], userId: "u1" }, storage: backing };
-        const handler = cirrus.action.use(rulesForTest([rule])).action(async ({ ctx }) => {
+        const handler = lunora.action.use(rulesForTest([rule])).action(async ({ ctx }) => {
             exposed = ctx.storage;
         });
 

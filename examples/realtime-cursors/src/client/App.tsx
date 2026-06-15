@@ -1,9 +1,9 @@
-import { useMutation, useQuery } from "@cirrus/react";
+import { useMutation, useQuery } from "@lunora/react";
 import type { PointerEvent as ReactPointerEvent, ReactElement } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { api } from "../../cirrus/_generated/api.js";
-import type { Doc } from "../../cirrus/_generated/dataModel.js";
+import { api } from "../../lunora/_generated/api.js";
+import type { Doc } from "../../lunora/_generated/dataModel.js";
 
 const COLORS = ["#e63946", "#1d3557", "#2a9d8f", "#f4a261", "#9d4edd", "#0096c7"] as const;
 const FRAME_INTERVAL_MS = 1000 / 30; // throttle pointer events to ~30fps

@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { StudioApp } from "../../src/app/app";
 
-const TOKEN_KEY = "cirrus-studio-admin-token";
+const TOKEN_KEY = "lunora-studio-admin-token";
 
 describe("studioApp", () => {
     afterEach(() => {
@@ -27,7 +27,7 @@ describe("studioApp", () => {
 
         // The shell renders inside the router's root route, which resolves its
         // first match a tick after mount — await it rather than querying sync.
-        await expect(screen.findByTestId("cirrus-studio")).resolves.toBeDefined();
+        await expect(screen.findByTestId("lunora-studio")).resolves.toBeDefined();
     });
 
     it("shows the connection badge (idle without a live socket)", () => {

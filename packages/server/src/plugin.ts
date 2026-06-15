@@ -32,7 +32,7 @@
  * export const schema = defineSchema({ todos: ... }).extend(ratelimit.extension);
  *
  * // procedure that uses the plugin:
- * const c = initCirrus.dataModel&lt;DataModel>().create();
+ * const c = initLunora.dataModel&lt;DataModel>().create();
  * export const rateLimitedQuery = c.query.use(ratelimit.middleware);
  * ```
  *
@@ -262,10 +262,10 @@ export const definePlugin = <TExtension extends Record<string, TableDefinition>,
  * function's local name (e.g. `check`, `reset`); the registered function
  * value carries its own kind / args / handler.
  *
- * Users re-export from their own cirrus module so codegen picks them up:
+ * Users re-export from their own lunora module so codegen picks them up:
  *
  * ```ts
- * // cirrus/ratelimit.ts
+ * // lunora/ratelimit.ts
  * import { ratelimit } from "@vendor/ratelimit-component";
  * export const { check, reset } = ratelimit.functions;
  * // Emits as `ratelimit:check` / `ratelimit:reset` in the generated `api`.

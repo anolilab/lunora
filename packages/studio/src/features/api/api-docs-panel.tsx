@@ -1,5 +1,5 @@
 /* eslint-disable unicorn/prevent-abbreviations -- "API", "Fn", and "Docs" are the domain terms for this API-docs panel; the file name and default-export name are fixed by the studio's tab wiring. */
-import { useCirrus } from "@cirrus/react";
+import { useLunora } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -41,7 +41,7 @@ interface SnippetInput {
 }
 
 /**
- * `@cirrus/react` ships `useQuery`/`useMutation`/`useSubscription` but no
+ * `@lunora/react` ships `useQuery`/`useMutation`/`useSubscription` but no
  * `useAction` — actions have no hook, so the React tab falls back to the client
  * snippet for them (and the panel notes why). Exposed so the panel and its tests
  * read the same fact; flip to `true` and add a `useAction` branch below if a hook
@@ -96,7 +96,7 @@ const buildReactSnippet = (input: SnippetInput): string => {
 };
 
 /** CLI usage for a function. */
-const buildCliSnippet = ({ file, fn }: SnippetInput): string => `cirrus run ${file}:${fn} --args '{ }'`;
+const buildCliSnippet = ({ file, fn }: SnippetInput): string => `lunora run ${file}:${fn} --args '{ }'`;
 
 /** The typed data-model usage for one table: query/insert plus the generated row/id types. */
 const buildTableSnippet = (table: string): string =>
@@ -290,7 +290,7 @@ interface FunctionGroup {
  */
 const ApiDocsPanel = ({ functions, initialShardKey }: ApiDocsPanelProps): ReactElement => {
     const t = useT();
-    const client = useCirrus();
+    const client = useLunora();
 
     const [tables, setTables] = useState<TableInfo[] | null>(null);
     const [selected, setSelected] = useState<Selection | null>(null);
@@ -361,7 +361,7 @@ const ApiDocsPanel = ({ functions, initialShardKey }: ApiDocsPanelProps): ReactE
     const selectedSplit = selectedFunction === undefined ? undefined : splitPath(selectedFunction.path);
 
     return (
-        <div className="grid min-h-0 gap-6 md:grid-cols-[16rem_minmax(0,1fr)]" data-testid="cirrus-api-docs">
+        <div className="grid min-h-0 gap-6 md:grid-cols-[16rem_minmax(0,1fr)]" data-testid="lunora-api-docs">
             <nav aria-label={t("API resources")} className="flex flex-col gap-4 overflow-y-auto" data-testid="api-rail">
                 {grouped.map((group) => (
                     <div className="flex flex-col gap-1" key={group.file}>

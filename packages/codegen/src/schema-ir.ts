@@ -1,5 +1,5 @@
-import type { JsonSchema, SchemaNodeReader } from "@cirrus/values";
-import { jsonSchemaFromNode, objectSchemaFromNodes } from "@cirrus/values";
+import type { JsonSchema, SchemaNodeReader } from "@lunora/values";
+import { jsonSchemaFromNode, objectSchemaFromNodes } from "@lunora/values";
 
 import type { ValidatorIR } from "./ir";
 
@@ -49,7 +49,7 @@ const literalConst = (literalValue: string | undefined): JsonSchema => {
  * is parsed from the verbatim source text the IR records (see {@link literalConst}),
  * not a live value. Plugging this reader into the shared {@link jsonSchemaFromNode}
  * core keeps the dialect (Draft 2020-12 / OpenAPI 3.1) identical to
- * `@cirrus/values`' `toJsonSchema` by construction.
+ * `@lunora/values`' `toJsonSchema` by construction.
  */
 const irReader: SchemaNodeReader<ValidatorIR> = {
     constraints: () => undefined,
@@ -68,28 +68,28 @@ const irReader: SchemaNodeReader<ValidatorIR> = {
 
 /**
  * Convert a codegen {@link ValidatorIR} into a JSON Schema node. A thin wrapper
- * over the shared {@link jsonSchemaFromNode} core (from `@cirrus/values`) with the
+ * over the shared {@link jsonSchemaFromNode} core (from `@lunora/values`) with the
  * IR-backed {@link irReader}, so the kind→schema mapping is the *same* algorithm
- * `@cirrus/values`' `toJsonSchema` runs — codegen never instantiates the runtime
+ * `@lunora/values`' `toJsonSchema` runs — codegen never instantiates the runtime
  * `v.*` objects, it only holds the reflected IR. Shared by the OpenAPI and
  * OpenRPC emitters so both surfaces speak one JSON Schema dialect.
  */
 const validatorIrToJsonSchema = (validator: ValidatorIR): JsonSchema => jsonSchemaFromNode(validator, irReader);
 
-/** Build `{ type: "object", properties, required }` from an IR shape (mirrors `@cirrus/values`' object mapping). */
+/** Build `{ type: "object", properties, required }` from an IR shape (mirrors `@lunora/values`' object mapping). */
 const objectSchema = (shape: Record<string, ValidatorIR>): JsonSchema => objectSchemaFromNodes(shape, irReader);
 
 /** Build the args object schema for an RPC function (mirrors `argsToJsonSchema`). */
 const argsObjectSchema = (args: Record<string, ValidatorIR>): JsonSchema => objectSchema(args);
 
 /**
- * The machine-readable `CirrusError` codes Cirrus emits on the RPC + REST
- * surfaces, enumerated from `@cirrus/server`'s `CODE_STATUS` map plus the
+ * The machine-readable `LunoraError` codes Lunora emits on the RPC + REST
+ * surfaces, enumerated from `@lunora/server`'s `CODE_STATUS` map plus the
  * runtime/DO dispatch codes (`FUNCTION_NOT_FOUND`, `PAYLOAD_TOO_LARGE`,
  * `METHOD_NOT_ALLOWED`, the `*_NOT_CONFIGURED` admin gates, …). The list documents
  * the contract; clients switch on `error.code`. Kept sorted for stable output.
  */
-const CIRRUS_ERROR_CODES: ReadonlyArray<string> = [
+const LUNORA_ERROR_CODES: ReadonlyArray<string> = [
     "BAD_REQUEST",
     "CONFLICT",
     "COUNT_RLS_UNSUPPORTED",
@@ -107,4 +107,4 @@ const CIRRUS_ERROR_CODES: ReadonlyArray<string> = [
     "VALIDATION_ERROR",
 ];
 
-export { argsObjectSchema, CIRRUS_ERROR_CODES, literalConst, objectSchema, validatorIrToJsonSchema };
+export { argsObjectSchema, LUNORA_ERROR_CODES, literalConst, objectSchema, validatorIrToJsonSchema };

@@ -1,5 +1,5 @@
 <!--
-Thank you for contributing to Cirrus!
+Thank you for contributing to Lunora!
 
 Please fill out the sections below so reviewers can land your change quickly.
 Keep the title in conventional-commit form (e.g. `feat(cli): add migrate flag`).
@@ -9,7 +9,7 @@ Keep the title in conventional-commit form (e.g. `feat(cli): add migrate flag`).
 
 <!--
 Explain *why* this change is needed and *what* it does at a high level.
-Link to the relevant package(s) (e.g. `@cirrus/d1`, `@cirrus/codegen`) so
+Link to the relevant package(s) (e.g. `@lunora/d1`, `@lunora/codegen`) so
 reviewers know which Wave / area is touched.
 -->
 
@@ -28,7 +28,7 @@ Bulleted checklist of what you ran locally and what reviewers should re-run:
 - [ ] `pnpm lint:types` passes
 - [ ] `pnpm lint:eslint` passes
 - [ ] `pnpm test` passes (234+ tests)
-- [ ] If schema changed: `pnpm --filter @cirrus/cli run codegen` regenerated cleanly
+- [ ] If schema changed: `pnpm --filter @lunora/cli run codegen` regenerated cleanly
 - [ ] If Durable Object / D1 code changed: workerd-based Vitest pool tests still pass
 - [ ] Manual smoke test in `apps/playground` (if user-facing)
 -->
