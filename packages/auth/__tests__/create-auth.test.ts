@@ -1,4 +1,4 @@
-import { describe, expect, expectTypeOf, it } from "vitest";
+import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import { createAuth } from "../src/create-auth";
 import { DEFAULT_AUTH_BASE_PATH, handleAuthRequest } from "../src/handler";
@@ -83,6 +83,82 @@ describe("createAuth", () => {
         expect.assertions(1);
 
         expect(() => createAuth({ secret: "s".repeat(32), session: { updateAge: Number.POSITIVE_INFINITY } })).toThrow(/finite/i);
+    });
+});
+
+describe("createAuth — secure-by-default hardening", () => {
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it("hardens session cookies (httpOnly, sameSite lax, path) by default", () => {
+        expect.assertions(3);
+
+        const auth = createAuth({ secret: "s".repeat(32) });
+
+        expect(auth.options.advanced?.defaultCookieAttributes?.httpOnly).toBe(true);
+        expect(auth.options.advanced?.defaultCookieAttributes?.sameSite).toBe("lax");
+        expect(auth.options.advanced?.defaultCookieAttributes?.path).toBe("/");
+    });
+
+    it("does not override caller-provided cookie attributes", () => {
+        expect.assertions(1);
+
+        const auth = createAuth({
+            advanced: { defaultCookieAttributes: { sameSite: "strict" } },
+            secret: "s".repeat(32),
+        });
+
+        expect(auth.options.advanced?.defaultCookieAttributes?.sameSite).toBe("strict");
+    });
+
+    it("forces useSecureCookies on for an https baseURL", () => {
+        expect.assertions(1);
+
+        const auth = createAuth({ baseURL: "https://app.example.com", secret: "s".repeat(32) });
+
+        expect(auth.options.advanced?.useSecureCookies).toBe(true);
+    });
+
+    it("leaves useSecureCookies unset for an http (dev) baseURL", () => {
+        expect.assertions(1);
+
+        const auth = createAuth({ baseURL: "http://localhost:8787", secret: "s".repeat(32) });
+
+        expect(auth.options.advanced?.useSecureCookies).toBeUndefined();
+    });
+
+    it("honours an explicit useSecureCookies even on https", () => {
+        expect.assertions(1);
+
+        const auth = createAuth({
+            advanced: { useSecureCookies: false },
+            baseURL: "https://app.example.com",
+            secret: "s".repeat(32),
+        });
+
+        expect(auth.options.advanced?.useSecureCookies).toBe(false);
+    });
+
+    it("warns when AUTH_SECRET is shorter than 32 characters", () => {
+        expect.assertions(2);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        createAuth({ secret: "short-secret" });
+
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn.mock.calls[0]?.[0]).toMatch(/AUTH_SECRET/);
+    });
+
+    it("does not warn for a 32+ character secret", () => {
+        expect.assertions(1);
+
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+        createAuth({ secret: "s".repeat(32) });
+
+        expect(warn).not.toHaveBeenCalled();
     });
 });
 

@@ -4,6 +4,82 @@ import { betterAuth } from "better-auth";
 import { validateSessionPolicy } from "./session";
 
 /**
+ * A `secret` shorter than this is brute-forceable; better-auth itself accepts
+ * any non-empty string, so we warn (not throw, to avoid breaking a quick local
+ * spike) and point at `openssl rand -hex 32` (32 bytes hex = 64 chars).
+ */
+const MIN_SECRET_LENGTH = 32;
+
+/** True only for a non-empty secret below the recommended strength floor. */
+const isWeakSecret = (secret: string | undefined): boolean => typeof secret === "string" && secret.trim().length > 0 && secret.length < MIN_SECRET_LENGTH;
+
+/**
+ * Whether the deployment's `baseURL` is confidently HTTPS — used to force
+ * `Secure` cookies. Returns a plain boolean (no union) so it stays clear of
+ * `sonarjs/function-return-type`: anything we can't positively prove is HTTPS
+ * (a bare `http://`, an `"auto"`/missing protocol with no https fallback, or no
+ * baseURL at all) is treated as not-secure, leaving the dev default untouched.
+ */
+const isHttpsBaseUrl = (baseURL: BetterAuthOptions["baseURL"]): boolean => {
+    if (typeof baseURL === "string") {
+        return baseURL.startsWith("https://");
+    }
+
+    if (baseURL && typeof baseURL === "object") {
+        if (baseURL.protocol === "https") {
+            return true;
+        }
+
+        if (baseURL.protocol === "http") {
+            return false;
+        }
+
+        return typeof baseURL.fallback === "string" && baseURL.fallback.startsWith("https://");
+    }
+
+    return false;
+};
+
+/**
+ * Apply Lunora's secure-by-default auth posture on top of the caller's options
+ * without ever overriding an explicit choice.
+ *
+ * Cookie attributes: fill `httpOnly`, `sameSite: "lax"`, and `path: "/"` when
+ * the caller hasn't supplied `advanced.defaultCookieAttributes`, so the hardened
+ * posture is explicit and self-reportable rather than relying on better-auth
+ * internals. `secure` is intentionally left to `useSecureCookies`.
+ *
+ * Secure cookies: force `useSecureCookies` on for an HTTPS `baseURL`.
+ * better-auth's own default is "secure in production", but it detects production
+ * via `process.env.NODE_ENV`, which is unreliable on Workers (the same reason
+ * rate limiting is force-enabled below), so an HTTPS deploy could otherwise ship
+ * session cookies without the `Secure` flag.
+ *
+ * CSRF/origin validation and `baseURL`-trusted-origins are already on by default
+ * in better-auth, so we don't re-implement them here.
+ */
+const hardenAuthOptions = (options: BetterAuthOptions): BetterAuthOptions => {
+    if (isWeakSecret(options.secret)) {
+        // eslint-disable-next-line no-console
+        console.warn(
+            `@lunora/auth: AUTH_SECRET is only ${String(options.secret?.length)} characters. Use at least ${String(MIN_SECRET_LENGTH)} ` +
+                "for a brute-force-resistant secret — generate one with `openssl rand -hex 32`.",
+        );
+    }
+
+    const advanced = options.advanced ?? {};
+
+    return {
+        ...options,
+        advanced: {
+            ...advanced,
+            defaultCookieAttributes: advanced.defaultCookieAttributes ?? { httpOnly: true, path: "/", sameSite: "lax" },
+            ...(advanced.useSecureCookies === undefined && isHttpsBaseUrl(options.baseURL) ? { useSecureCookies: true } : {}),
+        },
+    };
+};
+
+/**
  * Lunora's options pass straight through to better-auth — the only thing we add
  * is requiring `secret` up front so a misconfigured deployment fails loudly
  * instead of at the first sign-in.
@@ -57,6 +133,10 @@ export const createAuth = (options: LunoraAuthOptions): LunoraAuth => {
         validateSessionPolicy(options.session);
     }
 
+    // Secure-by-default cookies + secret-strength warning, applied before the
+    // rate-limit default so all hardening composes onto one options object.
+    const hardened = hardenAuthOptions(options);
+
     // Rate limiting is ON by default for `/api/auth/*`.
     //
     // better-auth's own default is `rateLimit.enabled ?? isProduction`, and its
@@ -74,7 +154,7 @@ export const createAuth = (options: LunoraAuthOptions): LunoraAuth => {
     // want it off can pass `rateLimit: { enabled: false }` (e.g. when fronting
     // auth with their own limiter), and any explicit `enabled` value wins.
     const resolvedOptions: LunoraAuthOptions =
-        options.rateLimit?.enabled === undefined ? { ...options, rateLimit: { ...options.rateLimit, enabled: true } } : options;
+        hardened.rateLimit?.enabled === undefined ? { ...hardened, rateLimit: { ...hardened.rateLimit, enabled: true } } : hardened;
 
     return betterAuth(resolvedOptions);
 };
