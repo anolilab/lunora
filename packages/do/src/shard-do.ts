@@ -8,7 +8,7 @@ import { appendAuditEntry, ensureAuditTable, readAuditLog } from "./audit-log";
 import type { AuthMetrics } from "./auth-metrics";
 import { readAuthMetrics, recordAuthEvent } from "./auth-metrics";
 import type { CdcChange, SqlExec } from "./ctx-db";
-import { CDC_LOG_TABLE, readCdcChanges, readIdempotent, trimIdempotent, writeIdempotent } from "./ctx-db";
+import { CDC_LOG_TABLE, minCdcSeq, readCdcChanges, readCdcCursor, readIdempotent, trimIdempotent, writeIdempotent } from "./ctx-db";
 import type { MigrationDirection, MigrationRunResult } from "./data-migration";
 import { DATA_MIGRATION_STATE_TABLE, readMigrationStatus } from "./data-migration";
 import type { DependencyTracker } from "./dependency-tracker";
@@ -534,6 +534,29 @@ const subscriptionListDeltas = (previousJson: string, nextResult: unknown, table
  * to plan a `.shardBy()` migration before the wall hits.
  */
 const ROOT_DO_SIZE_WARN_BYTES = 1_073_741_824;
+
+/**
+ * Upper bound on CDC rows `evaluateResume` scans to decide whether a
+ * reconnecting subscription can resume. Mirrors `readCdcChanges`'s own
+ * hard clamp (10 000): once this many changes have accumulated since the
+ * client's `sinceSeq`, a touching change may sit beyond the scanned page, so
+ * the server can't prove the read-set is untouched and re-snapshots instead.
+ */
+const CDC_RESUME_SCAN_LIMIT = 10_000;
+
+/**
+ * Retention window for mutation-replay dedup rows. A `(identity, mutationId)`
+ * older than this is past any realistic offline-replay window, so pruning it
+ * can only ever re-run a mutation the client long since saw acked.
+ */
+const IDEMPOTENCY_RETENTION_MS = 86_400_000;
+
+/**
+ * Minimum spacing between throttled, in-line GC sweeps of the dedup table —
+ * at most one sweep an hour per warm instance, amortized onto a mutation
+ * dispatch rather than a timer.
+ */
+const IDEMPOTENCY_GC_INTERVAL_MS = 3_600_000;
 
 /**
  * Reserved shard name for the fallback Durable Object that hosts every
@@ -1558,9 +1581,10 @@ abstract class ShardDO {
      * Client-issued idempotency key for the in-flight mutation, forwarded via the
      * `x-lunora-mutation-id` header. When set, the dispatch path dedups the call
      * by `(currentRequestUserId, mutationId)`: a replay short-circuits to the
-     * cached result, and `runInTransaction` records the result alongside the
-     * writes so the dedup row is durable iff the writes are. Absent on queries
-     * and legacy clients. Cleared in the `fetch` `finally` block.
+     * cached result, and `persistIdempotentResult` records the result right
+     * after the handler's writes commit so the dedup row is durable iff the
+     * writes are. Absent on queries and legacy clients. Cleared in the `fetch`
+     * `finally` block.
      */
     private currentRequestMutationId: string | undefined;
 
@@ -1811,8 +1835,8 @@ abstract class ShardDO {
             // handler (so a client that replays an unacked write — same id —
             // sees exactly-once semantics). The id rides the
             // `x-lunora-mutation-id` header (stashed into `currentRequestMutationId`
-            // above), the same source the write side reads inside
-            // `runInTransaction`, so the dedup row is durable iff the writes are.
+            // above), the same source `persistIdempotentResult` reads when it
+            // records the row after the handler commits.
             const cached = this.readIdempotentResult(this.currentRequestMutationId);
 
             if (cached !== undefined) {
@@ -1822,6 +1846,14 @@ abstract class ShardDO {
             }
 
             const result = await this.handleRpc(payload.functionPath, payload.args ?? {});
+
+            // Mutation-replay dedup WRITE: now that the handler's writes have
+            // auto-committed, record the result against this request's
+            // `(identity, mutationId)` so a replay of the same id short-circuits
+            // through the cached-read check above. No-op for queries / legacy
+            // clients (no `x-lunora-mutation-id` header).
+            this.persistIdempotentResult(result);
+
             const durationMs = Date.now() - dispatchStartedAt;
 
             // Record the handler's own latency (before the subscription
@@ -1975,14 +2007,7 @@ abstract class ShardDO {
             // subclass doesn't support re-execution (base default), this is a
             // no-op and the subscriber relies on its initial HTTP query.
             if (functionPath) {
-                const seedArgs = envelope.query.args ?? {};
-                const outcome = isAdmin
-                    ? this.executeAdminSubscription(functionPath, seedArgs)
-                    : await this.withAnonymousIdentity(() => this.executeSubscription(functionPath, seedArgs));
-
-                if (outcome) {
-                    this.pushSubscriptionData(ws, envelope.id, outcome);
-                }
+                await this.seedSubscription(ws, envelope.id, envelope.query, functionPath, isAdmin);
             }
 
             return;
@@ -2351,34 +2376,6 @@ abstract class ShardDO {
 
             try {
                 const value = await handler();
-
-                // Record the mutation-replay dedup row as the last write before
-                // COMMIT, through the same `storage.sql` handle, so it commits in
-                // the same transaction as the handler's writes — durable iff they
-                // are. Only set on the client mutation path; `INSERT OR IGNORE`
-                // keeps a re-entrant transaction a no-op. The codegen mutation
-                // handler is `runInTransaction(() => userHandler(ctx))`, so
-                // `value` is the result the dispatch path returns.
-                if (this.currentRequestMutationId !== undefined) {
-                    const now = Date.now();
-
-                    // `JSON.stringify(undefined)` is `undefined`, not a string — a
-                    // void mutation must still cache a non-null `result_json`, so
-                    // fall back to the literal `"null"`. (`JSON.stringify` is typed
-                    // `=> string`, hence the disable: the `??` is load-bearing at
-                    // runtime despite the type claiming it can't be.)
-                    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- JSON.stringify(undefined) returns undefined at runtime
-                    writeIdempotent(this.sql as SqlExec, this.currentRequestUserId ?? "", this.currentRequestMutationId, JSON.stringify(value) ?? "null", now);
-
-                    // Throttled, in-transaction GC: drop dedup rows older than 24h
-                    // at most once an hour per warm instance. Past any realistic
-                    // offline-replay window, so a pruned id can only ever re-run a
-                    // mutation the client long since saw acked.
-                    if (now - this.lastIdempotencyTrimAt > 3_600_000) {
-                        trimIdempotent(this.sql as SqlExec, now - 86_400_000);
-                        this.lastIdempotencyTrimAt = now;
-                    }
-                }
 
                 sqlExec("COMMIT");
 
@@ -2806,6 +2803,95 @@ abstract class ShardDO {
     }
 
     /**
+     * The `__cdc_log` high-watermark stamped on outbound `data`/`delta` frames
+     * as their `cursor`, letting a client persist its resume position (Pillar
+     * 1b). Returns `undefined` when CDC was never enabled on this shard — there
+     * is no monotonic cursor to advertise, and the frame omits the field so the
+     * wire stays byte-identical to the pre-cursor format for non-CDC apps.
+     */
+    protected currentCdcCursor(): number | undefined {
+        try {
+            const sql = this.sql as SqlExec;
+            const present = sql.exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, CDC_LOG_TABLE).toArray().length > 0;
+
+            return present ? readCdcCursor(sql) : undefined;
+        } catch {
+            // Stub `sql` handle (test double) or a pre-CDC shard — no cursor to
+            // advertise; the frame simply omits it.
+            return undefined;
+        }
+    }
+
+    /**
+     * Decide whether a reconnecting subscription can resume from `sinceSeq`
+     * without a full snapshot. Returns the current high-watermark `cursor` plus
+     * a `resumable` verdict.
+     *
+     * `resumable: true` means `sinceSeq` is within the CDC retention window and
+     * no table in the query's `readSet` changed in `(sinceSeq, cursor]` — the
+     * client's cached value is still current, so the caller emits a lightweight
+     * `resume` frame instead of re-shipping the snapshot.
+     *
+     * `resumable: false` means either the log was compacted past `sinceSeq` (a
+     * retention gap), a read table changed (the client needs the fresh value),
+     * or CDC is off — the caller falls back to the full-snapshot seed.
+     */
+    protected evaluateResume(sinceSeq: number, readSet: Set<string>): { cursor: number | undefined; resumable: boolean } {
+        const sql = this.sql as SqlExec;
+        let present: boolean;
+
+        try {
+            present = sql.exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`, CDC_LOG_TABLE).toArray().length > 0;
+        } catch {
+            // Stub `sql` handle (test double): can't prove the client is current,
+            // so fall back to a full snapshot.
+            return { cursor: undefined, resumable: false };
+        }
+
+        if (!present) {
+            return { cursor: undefined, resumable: false };
+        }
+
+        const cursor = readCdcCursor(sql);
+
+        // Client already at (or somehow past) the high-watermark: nothing newer
+        // exists, so it is trivially current regardless of the read-set.
+        if (sinceSeq >= cursor) {
+            return { cursor, resumable: true };
+        }
+
+        // Retention gap: the log no longer covers `(sinceSeq, cursor]`, so we
+        // can't prove what the client missed and must re-snapshot. Two cases:
+        //   - `floor === undefined`: the log was fully compacted yet
+        //     `sinceSeq < cursor` (the watermark lives on past a total trim via
+        //     `sqlite_sequence`), so every missed change is gone.
+        //   - `floor > sinceSeq + 1`: the oldest retained change is newer than
+        //     the client's next-expected seq, so `(sinceSeq, floor)` was
+        //     compacted away.
+        const floor = minCdcSeq(sql);
+
+        if (floor === undefined || floor > sinceSeq + 1) {
+            return { cursor, resumable: false };
+        }
+
+        // Resumable iff no table the query reads changed since `sinceSeq`. We
+        // read the missed changes (bounded) and test intersection with the
+        // read-set; an empty read-set (unknown deps) never resumes.
+        const { changes } = readCdcChanges(sql, { limit: CDC_RESUME_SCAN_LIMIT, sinceSeq });
+
+        // Cap hit: more than `CDC_RESUME_SCAN_LIMIT` changes accumulated since
+        // `sinceSeq`, so a touching change may sit beyond the page we scanned.
+        // We can't prove the read-set is untouched — force a full snapshot.
+        if (changes.length >= CDC_RESUME_SCAN_LIMIT) {
+            return { cursor, resumable: false };
+        }
+
+        const touchedReadSet = changes.some((change) => readSet.has(change.table));
+
+        return { cursor, resumable: !touchedReadSet };
+    }
+
+    /**
      * Look up a previously-committed mutation for the in-flight request's
      * `(identity, mutationId)`. Returns `{ value }` (the cached, JSON-decoded
      * handler result) on a hit so the dispatch path can short-circuit, or
@@ -2826,6 +2912,50 @@ abstract class ShardDO {
             // Missing table (pre-migration shard / test stub) or a malformed
             // cached payload — treat as a miss and let the handler run.
             return undefined;
+        }
+    }
+
+    /**
+     * Record the in-flight mutation's result against its `(identity, mutationId)`
+     * so a later replay of the same id short-circuits through
+     * {@link readIdempotentResult} instead of re-running the handler. A no-op
+     * unless the request carried an `x-lunora-mutation-id` header (queries and
+     * legacy clients leave `currentRequestMutationId` undefined).
+     *
+     * Called on the live dispatch path right after the handler's writes have
+     * auto-committed, through the same `this.sql` handle, so the dedup row is
+     * durable iff those writes are. (The DO has no ambient BEGIN/COMMIT around a
+     * mutation — `handleRpc` invokes the user handler directly — so this can't
+     * piggyback on a surrounding transaction; it commits as its own statement
+     * immediately after.) `INSERT OR IGNORE` keeps a concurrent double-dispatch
+     * of the same id idempotent. Also runs the throttled dedup-table GC.
+     */
+    protected persistIdempotentResult(result: unknown): void {
+        if (this.currentRequestMutationId === undefined) {
+            return;
+        }
+
+        const now = Date.now();
+
+        try {
+            // `JSON.stringify(undefined)` is `undefined`, not a string — a void
+            // mutation must still cache a non-null `result_json`, so fall back to
+            // the literal `"null"`. (`JSON.stringify` is typed `=> string`, hence
+            // the disable: the `??` is load-bearing at runtime despite the type.)
+            // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- JSON.stringify(undefined) returns undefined at runtime
+            writeIdempotent(this.sql as SqlExec, this.currentRequestUserId ?? "", this.currentRequestMutationId, JSON.stringify(result) ?? "null", now);
+
+            // Throttled GC: drop dedup rows past the retention window at most once
+            // per interval per warm instance.
+            if (now - this.lastIdempotencyTrimAt > IDEMPOTENCY_GC_INTERVAL_MS) {
+                trimIdempotent(this.sql as SqlExec, now - IDEMPOTENCY_RETENTION_MS);
+                this.lastIdempotencyTrimAt = now;
+            }
+        } catch {
+            // Missing dedup table (pre-migration shard / test stub) or a stub
+            // `sql` handle — best-effort bookkeeping must never fail a mutation
+            // whose writes already committed. The replay just re-runs (the read
+            // side also treats a missing row as a miss).
         }
     }
 
@@ -4823,6 +4953,11 @@ abstract class ShardDO {
     private async refreshSubscriptions(changed: Set<string>): Promise<void> {
         const sockets = [...this.state.getWebSockets()];
 
+        // The post-write high-watermark is the same for every sub flushed in
+        // this pass (they all observe the committed state), so resolve it once
+        // and stamp it on every frame as the cursor each subscriber advances to.
+        const frameCursor = this.currentCdcCursor();
+
         const refreshOne = async (ws: WebSocket): Promise<void> => {
             const attachment = this.readAttachment(ws);
 
@@ -4854,7 +4989,7 @@ abstract class ShardDO {
                         continue;
                     }
 
-                    this.pushSubscriptionData(ws, subId, outcome);
+                    this.pushSubscriptionData(ws, subId, outcome, frameCursor);
                 } catch {
                     // A throwing subscription must not abort the refresh of its
                     // siblings, nor fail the mutation that triggered it. The memo
@@ -4888,6 +5023,70 @@ abstract class ShardDO {
     }
 
     /**
+     * Seed a freshly-registered subscription with its first value. Runs the
+     * query once, then takes one of two paths.
+     *
+     * The default path ships the full snapshot via {@link pushSubscriptionData}
+     * — a first-time subscribe, an admin sub, or a reconnect whose read-set
+     * changed (or fell outside the CDC retention window) since its cursor.
+     *
+     * The resume path sends a lightweight `resume` frame — a reconnecting client
+     * that supplied `sinceSeq` and is still current keeps its cached value and
+     * only advances its cursor, saving the full-snapshot round-trip.
+     *
+     * Either way the fresh result memoises this socket's diff baseline so later
+     * write-flushes ({@link refreshSubscriptions}) can emit incremental deltas.
+     */
+    private async seedSubscription(ws: WebSocket, subId: string, query: SubscriptionQuery, functionPath: string, isAdmin: boolean): Promise<void> {
+        const seedArgs = query.args ?? {};
+        const outcome = isAdmin
+            ? this.executeAdminSubscription(functionPath, seedArgs)
+            : await this.withAnonymousIdentity(() => this.executeSubscription(functionPath, seedArgs));
+
+        if (!outcome) {
+            return;
+        }
+
+        const { sinceSeq } = query;
+        const resume = isAdmin || sinceSeq === undefined ? undefined : this.evaluateResume(sinceSeq, outcome.tables);
+
+        if (resume?.resumable) {
+            // Keep the per-socket baseline current (so the next change diffs
+            // cleanly) but send only the cursor — the client already holds an
+            // equivalent value at `sinceSeq`.
+            this.seedSubscriptionMemo(ws, subId, outcome);
+
+            try {
+                ws.send(`{"type":"resume","id":${JSON.stringify(subId)},"cursor":${String(resume.cursor ?? 0)}}`);
+            } catch {
+                /* socket may have closed between the ack and this seed */
+            }
+
+            return;
+        }
+
+        this.pushSubscriptionData(ws, subId, outcome, resume?.cursor ?? this.currentCdcCursor());
+    }
+
+    /**
+     * Record `outcome` as this socket's diff baseline for `subId` without
+     * sending a frame. Used by the resume fast-path, where the client keeps its
+     * cached value but the server still needs a baseline so the next
+     * write-flush can diff against it.
+     */
+    private seedSubscriptionMemo(ws: WebSocket, subId: string, outcome: SubscriptionOutcome): void {
+        let memos = this.subMemos.get(ws);
+
+        if (!memos) {
+            memos = new Map<string, SubscriptionMemo>();
+            this.subMemos.set(ws, memos);
+        }
+
+        // eslint-disable-next-line unicorn/no-null -- mirrors pushSubscriptionData: an undefined result serializes to JSON null so the baseline matches the wire form
+        memos.set(subId, { lastJson: JSON.stringify(outcome.result ?? null), tables: outcome.tables });
+    }
+
+    /**
      * Memoise `outcome` for `(ws, subId)` and push it to the socket, unless an
      * identical result was already sent. Always refreshes the memo's table set
      * so dependency tracking stays current even when the value is unchanged.
@@ -4898,14 +5097,22 @@ abstract class ShardDO {
      * five conditions under which deltas are safe. The first send (and any
      * non-list / large-change result) falls back to the snapshot. The memo is
      * always advanced to the new `lastJson`/`tables` regardless of path.
+     *
+     * `cursor` (when supplied) is the `__cdc_log` high-watermark this frame
+     * covers; it is appended to the emitted `data`/`delta` JSON so a client can
+     * persist its resume position and replay it as `sinceSeq` on reconnect
+     * (Pillar 1b). Omitted on shards without CDC, keeping the wire byte-identical
+     * to the pre-cursor format.
      */
-    private pushSubscriptionData(ws: WebSocket, subId: string, outcome: SubscriptionOutcome): void {
+    private pushSubscriptionData(ws: WebSocket, subId: string, outcome: SubscriptionOutcome, cursor?: number): void {
         let memos = this.subMemos.get(ws);
 
         if (!memos) {
             memos = new Map<string, SubscriptionMemo>();
             this.subMemos.set(ws, memos);
         }
+
+        const cursorSuffix = cursor === undefined ? "" : `,"cursor":${String(cursor)}`;
 
         // eslint-disable-next-line unicorn/no-null -- WS frame payload: an undefined result serializes to JSON null so the delta frame carries an explicit value
         const json = JSON.stringify(outcome.result ?? null);
@@ -4935,7 +5142,7 @@ abstract class ShardDO {
 
             for (const deltaBody of deltaFrames) {
                 try {
-                    ws.send(`{"type":"delta","id":${idJson},"delta":${deltaBody}}`);
+                    ws.send(`{"type":"delta","id":${idJson},"delta":${deltaBody}${cursorSuffix}}`);
                 } catch {
                     /* socket may have been closed mid-flush */
                 }
@@ -4945,7 +5152,7 @@ abstract class ShardDO {
         }
 
         try {
-            ws.send(`{"type":"data","id":${JSON.stringify(subId)},"data":${json}}`);
+            ws.send(`{"type":"data","id":${JSON.stringify(subId)},"data":${json}${cursorSuffix}}`);
         } catch {
             /* socket may have been closed between checks */
         }

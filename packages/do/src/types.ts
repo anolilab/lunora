@@ -10,6 +10,18 @@ export interface SubscriptionQuery {
     functionPath?: string;
 
     /**
+     * Resume cursor: the `__cdc_log.seq` high-watermark the client last observed
+     * for this shard (the `cursor` it persisted from an earlier `data`/`delta`
+     * frame). Present only on a reconnecting subscription that opts into
+     * incremental resume. When supplied and the client is still within the CDC
+     * retention window, the server skips re-sending a full snapshot if no table
+     * the query reads changed since `sinceSeq` (it sends a lightweight `resume`
+     * frame instead). Absent on a first-time subscribe, which always seeds with
+     * a full snapshot.
+     */
+    sinceSeq?: number;
+
+    /**
      * Table name the legacy raw-delta fan-out path matches against. Kept for
      * `broadcastDelta`; the server re-execution path keys off
      * `functionPath` instead.

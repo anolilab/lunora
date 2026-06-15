@@ -340,6 +340,8 @@ interface TableReaderLike {
     withSearchIndex: (indexName: string, search: (q: SearchFilterBuilderLike) => SearchFilterBuilderLike) => TableReaderLike;
 }
 
+/* eslint-disable no-secrets/no-secrets -- JSDoc names a stable error-kind constant, not a secret */
+
 /**
  * Options accepted by `count()`. Alias of {@link RestrictableQueryOptions} so
  * the RLS middleware (`@lunora/server` §3.2) and the aggregate reader (§3.1)
@@ -347,6 +349,7 @@ interface TableReaderLike {
  * throws `LunoraError("COUNT_RLS_UNSUPPORTED")` (422) rather than scanning,
  * matching kitcn's documented behavior for counts in an RLS-restricted context.
  */
+/* eslint-enable no-secrets/no-secrets */
 type CountArgs = RestrictableQueryOptions;
 
 interface DatabaseWriterLike {
@@ -1460,6 +1463,117 @@ const readCdcChanges = (sql: SqlExec, options: { limit?: number; sinceSeq?: numb
  */
 const trimCdcChanges = (sql: SqlExec, throughSeq: number): void => {
     runSql(sql, `DELETE FROM ${quoteIdentifier(CDC_LOG_TABLE)} WHERE seq <= ?`, throughSeq);
+};
+
+/**
+ * Current high-watermark of this shard's changelog — the largest `seq` ever
+ * written, or `0` when the log is empty. This is the cursor a `data`/`delta`
+ * frame advertises so a reconnecting subscriber can resume from it. Because
+ * `seq` is `AUTOINCREMENT`, `MAX(seq)` survives a `trimCdcChanges` that deletes
+ * the row carrying the high-watermark, so the cursor never goes backwards.
+ */
+const readCdcCursor = (sql: SqlExec): number => {
+    // `seq_autoincrement` in sqlite_sequence holds the last allocated rowid for
+    // an AUTOINCREMENT column and is NOT reset by DELETE, so it keeps the true
+    // high-watermark even after the newest row is trimmed. Fall back to
+    // MAX(seq) when the sequence row is absent (no insert yet).
+    const seqRow = runSql<{ seq: null | number }>(sql, `SELECT seq FROM sqlite_sequence WHERE name = ?`, CDC_LOG_TABLE).toArray();
+    const fromSequence = seqRow[0]?.seq;
+
+    if (typeof fromSequence === "number") {
+        return fromSequence;
+    }
+
+    const rows = runSql<{ seq: null | number }>(sql, `SELECT MAX(seq) AS seq FROM ${quoteIdentifier(CDC_LOG_TABLE)}`).toArray();
+
+    return rows[0]?.seq ?? 0;
+};
+
+/**
+ * Oldest `seq` still retained in the changelog, or `undefined` when the log is
+ * empty. A reconnecting subscriber whose `sinceSeq` is below `floor - 1` has
+ * missed changes that `trimCdcChanges` already compacted away, so it must take a
+ * full snapshot instead of a delta resume.
+ */
+const minCdcSeq = (sql: SqlExec): number | undefined => {
+    const rows = runSql<{ seq: null | number }>(sql, `SELECT MIN(seq) AS seq FROM ${quoteIdentifier(CDC_LOG_TABLE)}`).toArray();
+
+    return rows[0]?.seq ?? undefined;
+};
+
+const IDEMPOTENCY_TABLE = "__idempotency";
+
+/** A previously-committed mutation, keyed by its client-issued id, so a replay returns the cached result instead of re-executing. */
+interface IdempotentRecord {
+    /** The mutation handler's return value, JSON-stringified (`null` for a void mutation). */
+    resultJson: string;
+    /** Wall-clock millis when the original mutation committed — drives 24h GC. */
+    ts: number;
+}
+
+/**
+ * Create the `__idempotency` table. Rows are keyed by `(identity, mutation_id)`
+ * so a replayed mutation — same client-issued id under the same identity — is
+ * recognised and short-circuited to its cached result instead of re-executing.
+ * `result_json` is the original handler return value; `ts` drives time-based GC.
+ * Created on every shard (cheap, empty until the first id-bearing mutation).
+ */
+const migrateIdempotency = (sql: SqlExec): void => {
+    runSql(
+        sql,
+        `CREATE TABLE IF NOT EXISTS ${quoteIdentifier(IDEMPOTENCY_TABLE)} (
+            identity TEXT NOT NULL,
+            mutation_id TEXT NOT NULL,
+            result_json TEXT NOT NULL,
+            ts REAL NOT NULL,
+            PRIMARY KEY (identity, mutation_id)
+        )`,
+    );
+};
+
+/**
+ * Look up a committed mutation by `(identity, mutationId)`. Returns the cached
+ * record when the mutation has already run (so the dispatch path can return the
+ * stored result without re-executing), or `undefined` on first sight.
+ */
+const readIdempotent = (sql: SqlExec, identity: string, mutationId: string): IdempotentRecord | undefined => {
+    const rows = runSql<{ result_json: string; ts: number }>(
+        sql,
+        `SELECT result_json, ts FROM ${quoteIdentifier(IDEMPOTENCY_TABLE)} WHERE identity = ? AND mutation_id = ? LIMIT 1`,
+        identity,
+        mutationId,
+    ).toArray();
+
+    const row = rows[0];
+
+    return row === undefined ? undefined : { resultJson: row.result_json, ts: row.ts };
+};
+
+/**
+ * Record a committed mutation's result. Called inside the same DO transaction as
+ * the row writes, so the dedup record is durable iff the writes are — closing the
+ * crash window where a write commits but its replay-guard does not. `INSERT OR
+ * IGNORE` keeps it a no-op if the key somehow already exists (the dispatch path
+ * already read-guarded, so this is belt-and-suspenders).
+ */
+const writeIdempotent = (sql: SqlExec, identity: string, mutationId: string, resultJson: string, ts: number): void => {
+    runSql(
+        sql,
+        `INSERT OR IGNORE INTO ${quoteIdentifier(IDEMPOTENCY_TABLE)} (identity, mutation_id, result_json, ts) VALUES (?, ?, ?, ?)`,
+        identity,
+        mutationId,
+        resultJson,
+        ts,
+    );
+};
+
+/**
+ * Drop idempotency records older than `olderThanTs` (millis). Run on a scheduler
+ * tick with a 24h cutoff — past any realistic offline-replay window — so the
+ * table can't grow unbounded.
+ */
+const trimIdempotent = (sql: SqlExec, olderThanTs: number): void => {
+    runSql(sql, `DELETE FROM ${quoteIdentifier(IDEMPOTENCY_TABLE)} WHERE ts < ?`, olderThanTs);
 };
 
 /**
@@ -3313,6 +3427,10 @@ const runShardMigrations = (sql: SqlExec, schema: SchemaLike, options: { cdc?: b
     if (options.cdc) {
         migrateCdcLog(sql);
     }
+
+    // Always present: the mutation-replay dedup table is independent of CDC and
+    // costs nothing until the first id-bearing mutation writes to it.
+    migrateIdempotency(sql);
 };
 
 /**
@@ -3426,12 +3544,19 @@ export {
     backfillRankIndexes,
     CDC_LOG_TABLE,
     createShardCtxDb,
+    IDEMPOTENCY_TABLE,
     migrateCdcLog,
+    migrateIdempotency,
+    minCdcSeq,
     normalizeIdStructurally,
     NotUniqueError,
     readCdcChanges,
+    readCdcCursor,
+    readIdempotent,
     runShardMigrations,
     trimCdcChanges,
+    trimIdempotent,
+    writeIdempotent,
 };
 export type { SchedulerLike, TriggerContextLike, TriggerDefinitionLike, TriggerEventLike, TriggerOpLike, TriggerTimingLike } from "./triggers";
 export type {
