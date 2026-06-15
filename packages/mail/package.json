@@ -42,6 +42,10 @@
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
         },
+        "./inbound": {
+            "types": "./dist/inbound/index.d.ts",
+            "import": "./dist/inbound/index.mjs"
+        },
         "./testing": {
             "types": "./dist/testing.d.ts",
             "import": "./dist/testing.mjs"
@@ -62,7 +66,8 @@
     },
     "dependencies": {
         "@react-email/render": "catalog:mail",
-        "@visulima/email": "catalog:mail"
+        "@visulima/email": "catalog:mail",
+        "postal-mime": "catalog:mail"
     },
     "devDependencies": {
         "@cloudflare/workers-types": "catalog:cloudflare",

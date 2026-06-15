@@ -31,17 +31,19 @@ describe("createCaptureSink", () => {
     it("posts the captured mail to the root shard with the admin bearer", async () => {
         expect.assertions(4);
 
-        const fetch = vi.fn(async (_input: string, _init?: { body?: string; headers?: Record<string, string>; method?: string }) => {
+        const fetch = vi.fn<
+            (input: string, init?: { body?: string; headers?: Record<string, string>; method?: string }) => Promise<{ json: () => Promise<unknown> }>
+        >(async (_input: string, _init?: { body?: string; headers?: Record<string, string>; method?: string }) => {
             return {
                 json: async () => {
                     return { result: { id: "row-1" } };
                 },
             };
         });
-        const get = vi.fn(() => {
+        const get = vi.fn<() => { fetch: typeof fetch }>(() => {
             return { fetch };
         });
-        const idFromName = vi.fn((name: string) => `id:${name}`);
+        const idFromName = vi.fn<(name: string) => string>((name: string) => `id:${name}`);
         const env = { CIRRUS_ADMIN_TOKEN: "secret", SHARD: { get, idFromName } };
 
         const sink = createCaptureSink(env);
@@ -62,7 +64,7 @@ describe("createCaptureSink", () => {
         const sink = createCaptureSink({
             SHARD: {
                 get: () => {
-                    return { fetch: vi.fn() };
+                    return { fetch: vi.fn<() => Promise<unknown>>() };
                 },
                 idFromName: () => 0,
             },
@@ -76,7 +78,7 @@ describe("createMailerFromEnv", () => {
     it("captures in dev (no provider creds needed) and routes the send to the inbox", async () => {
         expect.assertions(2);
 
-        const fetch = vi.fn(async () => {
+        const fetch = vi.fn<() => Promise<{ json: () => Promise<unknown> }>>(async () => {
             return {
                 json: async () => {
                     return { result: { id: "captured-1" } };

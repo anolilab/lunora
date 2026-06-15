@@ -6,7 +6,7 @@ import transformer from "@visulima/packem/transformer/esbuild";
 export default defineConfig({
     runtime: "node",
     failOnWarn: false,
-    externals: [/^react($|\/)/, /^react-dom($|\/)/, /^@react-email\//, /^@visulima\//],
+    externals: [/^react($|\/)/, /^react-dom($|\/)/, /^@react-email\//, /^@visulima\//, /^postal-mime($|\/)/],
     rollup: {
         dts: {
             oxc: true,
