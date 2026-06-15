@@ -1,6 +1,8 @@
 import { IDBFactory } from "fake-indexeddb";
 import { describe, expect, it } from "vitest";
 
+import type { AsyncStorageLike } from "../src/async-storage-persistence";
+import { createAsyncStoragePersistence } from "../src/async-storage-persistence";
 import { createIndexedDbPersistence as createIndexedDatabasePersistence, createInMemoryPersistence } from "../src/persistence";
 import type { PersistedMutation, PersistenceAdapter } from "../src/types";
 
@@ -13,6 +15,26 @@ const mutation = (id: string, overrides: Partial<PersistedMutation> = {}): Persi
     };
 };
 
+/** A `Map`-backed stand-in for React Native's async key/value store. */
+const createFakeAsyncStorage = (): AsyncStorageLike & { size: () => number } => {
+    const store = new Map<string, string>();
+
+    return {
+        getItem: (key) => Promise.resolve(store.get(key) ?? null),
+        removeItem: (key) => {
+            store.delete(key);
+
+            return Promise.resolve();
+        },
+        setItem: (key, value) => {
+            store.set(key, value);
+
+            return Promise.resolve();
+        },
+        size: () => store.size,
+    };
+};
+
 /**
  * Both adapters must satisfy the same contract, so the behavioural suite is
  * written once and run against each factory. The IndexedDB factory gets a fresh
@@ -21,6 +43,7 @@ const mutation = (id: string, overrides: Partial<PersistedMutation> = {}): Persi
 const adapters: [string, () => PersistenceAdapter][] = [
     ["createInMemoryPersistence", () => createInMemoryPersistence()],
     ["createIndexedDbPersistence (fake-indexeddb)", () => createIndexedDatabasePersistence({ indexedDB: new IDBFactory() })],
+    ["createAsyncStoragePersistence (fake AsyncStorage)", () => createAsyncStoragePersistence({ storage: createFakeAsyncStorage() })],
 ];
 
 describe.each(adapters)("%s", (_name, makeAdapter) => {
@@ -143,5 +166,78 @@ describe("createIndexedDbPersistence — durability across handles", () => {
         expect.assertions(1);
 
         expect(() => createIndexedDatabasePersistence({ indexedDB: undefined as unknown as IDBFactory })).toThrow(/no IndexedDB available/);
+    });
+});
+
+describe("createAsyncStoragePersistence", () => {
+    it("a fresh adapter over the same storage restores previously appended mutations", async () => {
+        expect.assertions(1);
+
+        const storage = createFakeAsyncStorage();
+        const first = createAsyncStoragePersistence({ storage });
+
+        await first.append(mutation("a"));
+        await first.append(mutation("b"));
+
+        // A new adapter (e.g. after an app relaunch) over the same backing store.
+        const second = createAsyncStoragePersistence({ storage });
+        const loaded = await second.load();
+
+        expect(loaded.map((m) => m.id)).toEqual(["a", "b"]);
+    });
+
+    it("does not retain references to caller-supplied args", async () => {
+        expect.assertions(1);
+
+        const adapter = createAsyncStoragePersistence({ storage: createFakeAsyncStorage() });
+        const args: Record<string, unknown> = { title: "before" };
+
+        await adapter.append(mutation("a", { args }));
+        args.title = "after";
+
+        const [loaded] = await adapter.load();
+
+        expect(loaded?.args.title).toBe("before");
+    });
+
+    it("serializes concurrent appends so none clobber each other", async () => {
+        expect.assertions(1);
+
+        const adapter = createAsyncStoragePersistence({ storage: createFakeAsyncStorage() });
+
+        // Fire appends without awaiting in between — the internal chain must
+        // funnel the read-modify-writes so every record survives.
+        await Promise.all([adapter.append(mutation("a")), adapter.append(mutation("b")), adapter.append(mutation("c"))]);
+
+        const loaded = await adapter.load();
+
+        expect([...loaded.map((m) => m.id)].toSorted((x, y) => x.localeCompare(y))).toEqual(["a", "b", "c"]);
+    });
+
+    it("clear() removes the backing key entirely", async () => {
+        expect.assertions(2);
+
+        const storage = createFakeAsyncStorage();
+        const adapter = createAsyncStoragePersistence({ storage });
+
+        await adapter.append(mutation("a"));
+
+        expect(storage.size()).toBe(1);
+
+        await adapter.clear();
+
+        expect(storage.size()).toBe(0);
+    });
+
+    it("recovers from a corrupt payload by loading empty", async () => {
+        expect.assertions(1);
+
+        const storage = createFakeAsyncStorage();
+
+        await storage.setItem("lunora:offline-mutations", "{not json");
+
+        const adapter = createAsyncStoragePersistence({ storage });
+
+        await expect(adapter.load()).resolves.toEqual([]);
     });
 });

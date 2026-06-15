@@ -1,3 +1,5 @@
+export type { AsyncStorageLike, AsyncStoragePersistenceOptions } from "./async-storage-persistence";
+export { createAsyncStoragePersistence } from "./async-storage-persistence";
 export { default as createInMemoryBookmarkStorage } from "./bookmark";
 export type { MutationDelta } from "./delta-merge";
 export { applyDelta, isMutationDelta } from "./delta-merge";

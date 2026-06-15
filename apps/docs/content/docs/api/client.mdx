@@ -34,8 +34,21 @@ consistency across replicas.
 
 Mutations issued while disconnected land in `OfflineQueue`. They are
 **deduped by `mutationKey`** (default: `functionPath + args hash`) and
-flushed on reconnect. The queue lives in memory by default; in production
-swap in IndexedDB or AsyncStorage via the `offlineQueue.storage` option.
+flushed on reconnect. The queue lives in memory by default; for durability
+across a reload pass a `persistence` adapter:
+
+```ts
+import { LunoraClient, createIndexedDbPersistence, createAsyncStoragePersistence } from "@lunora/client";
+
+// Browser:
+new LunoraClient({ url, persistence: createIndexedDbPersistence() });
+
+// React Native / Expo (any async key/value store):
+import AsyncStorage from "@react-native-async-storage/async-storage";
+new LunoraClient({ url, persistence: createAsyncStoragePersistence({ storage: AsyncStorage }) });
+```
+
+See [Offline-first](/docs/concepts/offline-first) for the full reads + writes story.
 
 ## Optimistic updates
 
