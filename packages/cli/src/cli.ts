@@ -23,6 +23,7 @@ import { registryCommand } from "./commands/registry/command";
 import { resetCommand } from "./commands/reset";
 import { rulesCommand } from "./commands/rules";
 import { runCommand } from "./commands/run";
+import { seedCommand } from "./commands/seed";
 import { verifyCommand } from "./commands/verify";
 import { viewCommand } from "./commands/view";
 import { createLogger } from "./util/logger";
@@ -42,6 +43,7 @@ const COMMANDS = [
     "migrate",
     "export",
     "import",
+    "seed",
     "backup",
     "verify",
     "info",
@@ -73,6 +75,7 @@ const CLI_COMMANDS = [
     migrateCommand,
     exportCommand,
     importCommand,
+    seedCommand,
     backupCommand,
     verifyCommand,
     infoCommand,

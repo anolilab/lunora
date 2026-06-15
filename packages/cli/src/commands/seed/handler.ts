@@ -1,0 +1,246 @@
+import { existsSync } from "node:fs";
+import { unlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+
+import { discoverSchema, schemaFromIr } from "@cirrus/codegen";
+import { seedPlan } from "@cirrus/seed";
+import { join } from "@visulima/path";
+import { Project } from "ts-morph";
+
+import type { CommandHandler } from "../../util/command";
+import { defineHandler } from "../../util/command";
+import type { Logger } from "../../util/logger";
+import type { StreamingFetchLike } from "../data-transfer";
+import { runImportCommand } from "../data-transfer";
+import { runResetCommand } from "../reset/handler";
+import type { SeedOptions } from "./index";
+
+interface SeedCommandOptions {
+    batchSize?: number;
+    /** Rows per table (default 10). */
+    count?: number;
+    cwd?: string;
+    /** Print the NDJSON instead of inserting. */
+    dryRun?: boolean;
+    fetchImpl?: StreamingFetchLike;
+    logger: Logger;
+    prod?: boolean;
+    /** Wipe local `.wrangler/state` before seeding (local dev only). */
+    reset?: boolean;
+    /** Deterministic seed — same value yields identical rows (default 0). */
+    seed?: number;
+    /** Seed only this table; its FK-parent tables are seeded automatically so foreign keys resolve. */
+    table?: string;
+    token?: string;
+    url?: string;
+}
+
+/** True when `url` targets the local dev worker (or is unset). `--reset` is local-state only. */
+const isLocalUrl = (url: string | undefined): boolean => {
+    if (url === undefined) {
+        return true;
+    }
+
+    try {
+        const { hostname } = new URL(url);
+
+        return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]" || hostname === "::1";
+    } catch {
+        return false;
+    }
+};
+
+interface SeedCommandResult {
+    code: number;
+    /** Rows the import step skipped because their `_id` already existed (re-run collisions). */
+    conflicts: number;
+    /** Total rows generated across every seeded table. */
+    generated: number;
+    /** Rows inserted by the import step; `0` on `--dry-run` or failure. */
+    inserted: number;
+    /** The generated NDJSON (always populated; printed verbatim on `--dry-run`). */
+    ndjson: string;
+}
+
+/**
+ * JSON replacer that keeps seeded `v.bigint` / `v.bytes` values serializable:
+ * a bigint becomes a number (the generator's range is small and safe) and an
+ * `ArrayBuffer` becomes a byte array. Every other generated value is already
+ * JSON-native (string / number / boolean / null / nested object / array).
+ */
+const ndjsonReplacer = (_key: string, value: unknown): unknown => {
+    if (typeof value === "bigint") {
+        return Number(value);
+    }
+
+    if (value instanceof ArrayBuffer) {
+        return [...new Uint8Array(value)];
+    }
+
+    return value;
+};
+
+/** A non-inserting failure result (no rows generated). */
+const seedFailure = (code: number): SeedCommandResult => {
+    return { code, conflicts: 0, generated: 0, inserted: 0, ndjson: "" };
+};
+
+/**
+ * Validate the seed preconditions that don't need the parsed schema: the schema
+ * file must exist, and `--reset` (local `.wrangler/state` only) is incompatible
+ * with a remote/production target. Returns a failure result to short-circuit on,
+ * or `undefined` when the run may proceed.
+ */
+const guardSeedTargets = (options: SeedCommandOptions, schemaPath: string): SeedCommandResult | undefined => {
+    if (!existsSync(schemaPath)) {
+        options.logger.error(`schema not found: ${schemaPath} — run \`vis generate cirrus-table --name=<name>\` to create one`);
+
+        return seedFailure(1);
+    }
+
+    // `--reset` clears local `.wrangler/state` only; it cannot touch a remote
+    // deployment, so refuse it the moment a remote target is in play.
+    if (options.reset === true && (options.prod === true || !isLocalUrl(options.url))) {
+        options.logger.error("--reset only clears local .wrangler/state and cannot be combined with --prod or a remote --url");
+
+        return seedFailure(1);
+    }
+
+    return undefined;
+};
+
+/**
+ * Write the generated NDJSON to a temp file, stream it through the existing
+ * `runImportCommand` (whose `{table, doc}` envelopes pass straight through),
+ * surface any skipped rows as conflicts, then clean up regardless of outcome.
+ */
+const insertSeedRows = async (ndjson: string, generated: number, cwd: string, options: SeedCommandOptions): Promise<SeedCommandResult> => {
+    const temporaryFile = join(tmpdir(), `cirrus-seed-${String(process.pid)}-${String(Date.now())}.ndjson`);
+
+    await writeFile(temporaryFile, ndjson, "utf8");
+
+    try {
+        const result = await runImportCommand({
+            batchSize: options.batchSize,
+            cwd,
+            fetchImpl: options.fetchImpl,
+            file: temporaryFile,
+            logger: options.logger,
+            prod: options.prod,
+            token: options.token,
+            url: options.url,
+        });
+
+        const conflicts = (result.body as { conflicts?: number } | undefined)?.conflicts ?? 0;
+
+        if (conflicts > 0) {
+            // Seeding is deterministic: a re-run with the same `--seed` regenerates
+            // the same `_id`s, which the import path skips as conflicts. Point the
+            // user at the two ways to get a clean insert.
+            options.logger.warn(
+                `${String(conflicts)} row(s) skipped — their _id already exists. Seeding is deterministic; re-run with --reset to wipe local state first, or a different --seed for fresh ids.`,
+            );
+        }
+
+        return { code: result.code, conflicts, generated, inserted: result.inserted, ndjson };
+    } finally {
+        await unlink(temporaryFile).catch(() => {});
+    }
+};
+
+/**
+ * Generate deterministic seed data from `cirrus/schema.ts` and either print it
+ * (`--dry-run`) or bulk-insert it through the existing import pipeline.
+ *
+ * The CLI never executes the user's schema module; it lifts the schema
+ * statically via `@cirrus/codegen`'s `discoverSchema` and bridges the IR into
+ * the runtime shape `@cirrus/seed` introspects ({@link schemaFromIr}). The plan
+ * is pure and deterministic — the same `--seed` always yields identical rows.
+ */
+const runSeedCommand = async (options: SeedCommandOptions): Promise<SeedCommandResult> => {
+    const cwd = options.cwd ?? process.cwd();
+    const schemaPath = join(cwd, "cirrus", "schema.ts");
+
+    const guard = guardSeedTargets(options, schemaPath);
+
+    if (guard !== undefined) {
+        return guard;
+    }
+
+    const project = new Project({ skipAddingFilesFromTsConfig: true });
+    const ir = discoverSchema(project, schemaPath);
+
+    if (options.table !== undefined && !ir.tables.some((table) => table.name === options.table)) {
+        const available = ir.tables.map((table) => table.name).join(", ");
+
+        options.logger.error(`unknown table "${options.table}" — schema defines: ${available || "(no tables)"}`);
+
+        return seedFailure(1);
+    }
+
+    const schema = schemaFromIr(ir);
+    const plan = seedPlan(schema, {
+        defaultCount: options.count ?? 10,
+        only: options.table === undefined ? undefined : [options.table],
+        seed: options.seed ?? 0,
+    });
+
+    const lines: string[] = [];
+
+    for (const { rows, table } of plan) {
+        for (const row of rows) {
+            lines.push(JSON.stringify({ doc: row, table }, ndjsonReplacer));
+        }
+    }
+
+    const ndjson = lines.length > 0 ? `${lines.join("\n")}\n` : "";
+    const generated = lines.length;
+
+    if (options.dryRun === true) {
+        if (ndjson.length > 0) {
+            process.stdout.write(ndjson);
+        }
+
+        options.logger.info(`generated ${String(generated)} row(s) across ${String(plan.length)} table(s) — dry run, nothing inserted`);
+
+        return { code: 0, conflicts: 0, generated, inserted: 0, ndjson };
+    }
+
+    if (options.reset === true) {
+        const reset = await runResetCommand({ cwd, logger: options.logger, yes: true });
+
+        if (reset.code !== 0) {
+            return { code: reset.code, conflicts: 0, generated, inserted: 0, ndjson };
+        }
+    }
+
+    if (generated === 0) {
+        options.logger.warn("no rows generated — nothing to insert");
+
+        return { code: 0, conflicts: 0, generated: 0, inserted: 0, ndjson };
+    }
+
+    return insertSeedRows(ndjson, generated, cwd, options);
+};
+
+/** `cirrus seed` handler (lazy-loaded via the command's `loader`). */
+const execute: CommandHandler<SeedOptions> = defineHandler<SeedOptions>(async ({ cwd, logger, options }) => {
+    const result = await runSeedCommand({
+        batchSize: options.batchSize,
+        count: options.count,
+        cwd,
+        dryRun: options.dryRun === true,
+        logger,
+        prod: options.prod === true,
+        reset: options.reset === true,
+        seed: options.seed,
+        table: options.table,
+        token: options.token,
+        url: options.url,
+    });
+
+    return { code: result.code };
+});
+
+export { execute, runSeedCommand };
+export type { SeedCommandOptions, SeedCommandResult };

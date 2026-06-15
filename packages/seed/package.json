@@ -1,8 +1,8 @@
 {
-    "name": "@cirrus/cli",
+    "name": "@cirrus/seed",
     "version": "0.0.0",
     "license": "FSL-1.1-Apache-2.0",
-    "description": "The Cirrus CLI: init, dev, deploy, codegen, run, reset, and migrate commands",
+    "description": "Schema-driven, deterministic database seeding for Cirrus: realistic fake data from defineSchema",
     "homepage": "https://cirrus.dev",
     "bugs": {
         "url": "https://github.com/anolilab/cirrus/issues"
@@ -10,7 +10,7 @@
     "repository": {
         "type": "git",
         "url": "git+https://github.com/anolilab/cirrus.git",
-        "directory": "packages/cli"
+        "directory": "packages/seed"
     },
     "author": {
         "name": "Daniel Bannert",
@@ -19,33 +19,28 @@
     "keywords": [
         "cirrus",
         "cloudflare",
-        "workers",
-        "durable-objects",
-        "cli",
-        "codegen",
-        "deploy",
-        "vite",
-        "tanstack-intent",
-        "agent-skills"
+        "seed",
+        "faker",
+        "fixtures"
     ],
-    "bin": {
-        "cirrus": "./dist/bin.mjs"
-    },
     "files": [
         "dist",
-        "__assets__",
-        "skills",
         "README.md",
         "LICENSE.md"
     ],
     "type": "module",
     "sideEffects": false,
+    "main": "./dist/index.mjs",
     "module": "./dist/index.mjs",
     "types": "./dist/index.d.ts",
     "exports": {
         ".": {
             "types": "./dist/index.d.ts",
             "import": "./dist/index.mjs"
+        },
+        "./testing": {
+            "types": "./dist/testing.d.ts",
+            "import": "./dist/testing.mjs"
         },
         "./package.json": "./package.json"
     },
@@ -57,31 +52,21 @@
         "lint:prettier": "prettier --check .",
         "lint:prettier:fix": "prettier --write .",
         "lint:types": "tsc --noEmit",
-        "bench": "vitest bench --run",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage"
     },
     "dependencies": {
-        "@bomb.sh/tab": "0.0.16",
-        "@cirrus/codegen": "workspace:*",
-        "@cirrus/config": "workspace:*",
-        "@cirrus/container": "workspace:*",
-        "@cirrus/d1": "workspace:*",
-        "@cirrus/seed": "workspace:*",
+        "@faker-js/faker": "catalog:data"
+    },
+    "peerDependencies": {
         "@cirrus/server": "workspace:*",
-        "@cirrus/studio": "workspace:*",
-        "@cirrus/values": "workspace:*",
-        "@visulima/cerebro": "3.0.0-alpha.31",
-        "@visulima/fs": "5.0.0-alpha.31",
-        "@visulima/pail": "4.0.0-alpha.21",
-        "@visulima/path": "3.0.0-alpha.12",
-        "@visulima/spinner": "1.0.0-alpha.3",
-        "giget": "3.3.0",
-        "jsonc-parser": "catalog:vite",
-        "magic-string": "^0.30.21",
-        "ts-morph": "catalog:tooling"
+        "@cirrus/values": "workspace:*"
     },
     "devDependencies": {
+        "@cirrus/do": "workspace:*",
+        "@cirrus/server": "workspace:*",
+        "@cirrus/testing": "workspace:*",
+        "@cirrus/values": "workspace:*",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
         "@vitest/coverage-v8": "catalog:test",
