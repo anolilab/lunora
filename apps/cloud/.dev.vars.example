@@ -1,6 +1,6 @@
 # Bearer token gating the control plane's admin endpoints (studio + platform
 # tools). Generate with: openssl rand -hex 32
-CIRRUS_ADMIN_TOKEN=replace-with-openssl-rand-hex-32
+LUNORA_ADMIN_TOKEN=replace-with-openssl-rand-hex-32
 
 # Secret backing the hosted studio's better-auth email/password sessions.
 # Generate with: openssl rand -hex 32
@@ -27,9 +27,9 @@ STRIPE_WEBHOOK_SECRET=whsec_replace-me
 # ── Email (§3) — @lunora/mail ────────────────────────────────────────────────
 # In dev, mail is captured into the studio Mail tab (no transport needed). For
 # real delivery set a sender + a Resend key (or bind a SEND_EMAIL transport).
-MAIL_FROM=Cirrus Cloud <noreply@example.com>
+MAIL_FROM=Lunora Cloud <noreply@example.com>
 # RESEND_API_KEY=re_replace-me
-# Force-capture mail even outside dev: CIRRUS_MAIL_CAPTURE=true
+# Force-capture mail even outside dev: LUNORA_MAIL_CAPTURE=true
 
 # ── Tenant secrets (§7) — AES-256-GCM envelope encryption ────────────────────
 # 32-byte master key (64 hex chars) for encrypting tenant env secrets at rest.
@@ -40,7 +40,7 @@ SECRET_ENCRYPTION_KEY=replace-with-openssl-rand-hex-32
 # The dispatcher resolves per-tenant plan limits via the control plane and emits
 # per-request usage to an Analytics Engine dataset. Set these on the dispatcher:
 #   CONTROL_PLANE_URL   = https://<control-plane-host>   (enables per-plan limits)
-#   CONTROL_PLANE_TOKEN = <CIRRUS_ADMIN_TOKEN>           (bearer for the lookup)
+#   CONTROL_PLANE_TOKEN = <LUNORA_ADMIN_TOKEN>           (bearer for the lookup)
 #   USAGE_ANALYTICS     = an Analytics Engine dataset binding (metering source)
 
 # ── Studio social sign-in (optional) — enabled only when both halves are set ──
