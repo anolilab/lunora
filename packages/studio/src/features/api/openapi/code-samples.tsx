@@ -78,12 +78,18 @@ const CodeSamples = ({ operation, server }: CodeSamplesProps): ReactElement => {
     const t = useT();
     const [sample, setSample] = useState<Sample>("curl");
 
+    // Studio is bundled with esbuild and no React Compiler (see packem.config.ts),
+    // so these memoizations are load-bearing, not redundant — removing them would
+    // re-run sampleSource and re-create the callbacks on every render.
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization
     const source = useMemo(() => sampleSource(sample, operation, server), [sample, operation, server]);
 
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization
     const onCopy = useCallback((): void => {
         copyToClipboard(source);
     }, [source]);
 
+    // react-doctor-disable-next-line react-doctor/react-compiler-no-manual-memoization
     const onSelect = useCallback((event: React.MouseEvent<HTMLButtonElement>): void => {
         setSample(event.currentTarget.dataset.sample as Sample);
     }, []);
