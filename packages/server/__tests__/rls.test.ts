@@ -227,6 +227,34 @@ describe("rls — read path", () => {
         });
     });
 
+    it("attaches a relationBaseWhere resolving a child table's read policy (relation RLS)", async () => {
+        expect.assertions(2);
+
+        // A read policy on the CHILD table (`messages`), loaded via `with`.
+        const policy = definePolicy<TestContext>({
+            on: "read",
+            table: "messages",
+            when: ({ auth }) => {
+                return { authorId: auth.userId };
+            },
+        });
+        const policies = definePolicies([policy]);
+        const database = createFakeDatabase([]);
+
+        const handler = lunora.query.use(rlsForTest<TestContext>(policies)).query(async ({ ctx }) => ctx.db.findMany("users", { with: { messages: true } }));
+
+        await handler.handler(makeContext(database, "u1"), {});
+
+        const findManyCall = database.calls.find((call) => call.method === "findMany");
+        const provider = (findManyCall?.args as { relationBaseWhere?: (table: string) => unknown }).relationBaseWhere;
+
+        // The wrapper forwards a provider that yields the child's read baseWhere
+        // (so @lunora/do filters the `messages` relation hop) and `undefined`
+        // for a table with no restricting policy.
+        expect(provider?.("messages")).toEqual({ authorId: "u1" });
+        expect(provider?.("users")).toBeUndefined();
+    });
+
     it("policy returning true skips the merge (unrestricted)", async () => {
         expect.assertions(1);
 

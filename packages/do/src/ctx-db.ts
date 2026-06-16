@@ -2252,10 +2252,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * Routing every writer through this helper collapses the lookup to a
      * single probe loop that returns the row when it hits.
      */
-    const lookupById = (
-        id: string,
-        expectedTable?: string,
-    ): { docJson: string; row: Record<string, unknown>; tableName: string } | undefined => {
+    const lookupById = (id: string, expectedTable?: string): { docJson: string; row: Record<string, unknown>; tableName: string } | undefined => {
         // Row ids are random UUIDs, so the owning table can't be derived from
         // the id. Rather than probing each table with its own SELECT (T
         // statements worst-case on a T-table schema, on the per-mutation hot
@@ -2659,7 +2656,15 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             if (limit === undefined) {
                 if (args.with) {
-                    await resolveWith({ counter: relationCounter, fetcher: relationFetcher, parents: docs, schema, tableName, with: args.with });
+                    await resolveWith({
+                        counter: relationCounter,
+                        fetcher: relationFetcher,
+                        parents: docs,
+                        relationBaseWhere: args.relationBaseWhere,
+                        schema,
+                        tableName,
+                        with: args.with,
+                    });
                 }
 
                 // eslint-disable-next-line unicorn/no-null -- QueryPage.continueCursor is `null | string`: null is the documented "no further page" cursor on the wire
@@ -2671,7 +2676,15 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const last = page.at(-1);
 
             if (args.with) {
-                await resolveWith({ counter: relationCounter, fetcher: relationFetcher, parents: page, schema, tableName, with: args.with });
+                await resolveWith({
+                    counter: relationCounter,
+                    fetcher: relationFetcher,
+                    parents: page,
+                    relationBaseWhere: args.relationBaseWhere,
+                    schema,
+                    tableName,
+                    with: args.with,
+                });
             }
 
             return {

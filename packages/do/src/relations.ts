@@ -74,6 +74,13 @@ interface ResolveWithOptions {
     counter: (tableName: string, where?: WhereInput) => Promise<number>;
     fetcher: (tableName: string, args: QueryArgs) => Promise<QueryPage>;
     parents: Record<string, unknown>[];
+
+    /**
+     * Per-target-table read filter (RLS) applied to each relation fetch/count and
+     * threaded into nested `with`. See `QueryArgs.relationBaseWhere`. Without
+     * it a child table's read policy is silently bypassed on the relation hop.
+     */
+    relationBaseWhere?: (table: string) => undefined | WhereInput;
     schema: { readonly tables: Record<string, TableDefinitionLike> };
     tableName: string;
     with: WithInput;
@@ -100,7 +107,7 @@ const distinctValues = (rows: Record<string, unknown>[], field: string): unknown
  * `Doc[]`, `_count` → merged into `parent._count`.
  */
 const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
-    const { counter, fetcher, parents, schema, tableName, with: withInput } = options;
+    const { counter, fetcher, parents, relationBaseWhere, schema, tableName, with: withInput } = options;
 
     if (parents.length === 0) {
         return;
@@ -144,7 +151,15 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
             return;
         }
 
-        const { page } = await fetcher(relation.table, { where: { [relation.references]: { in: fkValues } }, with: nested.with });
+        // Apply the child table's read policy on the relation hop (RLS): the
+        // policy filter rides `baseWhere` exactly as a top-level read would, and
+        // `relationBaseWhere` is threaded on so nested `with` levels inherit it.
+        const { page } = await fetcher(relation.table, {
+            baseWhere: relationBaseWhere?.(relation.table),
+            relationBaseWhere,
+            where: { [relation.references]: { in: fkValues } },
+            with: nested.with,
+        });
         const byReference = new Map<unknown, Record<string, unknown>>();
 
         for (const child of page) {
@@ -170,7 +185,15 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
 
         const fkFilter: WhereInput = { [relation.field]: { in: referenceValues } };
         const where: WhereInput = nested.where ? { AND: [nested.where, fkFilter] } : fkFilter;
-        const { page } = await fetcher(relation.table, { orderBy: nested.orderBy, where, with: nested.with });
+        // RLS: the child table's read policy rides `baseWhere` (same as a
+        // top-level read); `relationBaseWhere` threads on for nested `with`.
+        const { page } = await fetcher(relation.table, {
+            baseWhere: relationBaseWhere?.(relation.table),
+            orderBy: nested.orderBy,
+            relationBaseWhere,
+            where,
+            with: nested.with,
+        });
 
         const groups = new Map<unknown, Record<string, unknown>[]>();
 
@@ -205,9 +228,15 @@ const resolveWith = async (options: ResolveWithOptions): Promise<void> => {
             // across the page collapse to a single aggregate query each.
             const countByValue = new Map<unknown, number>();
 
+            // RLS: AND the child table's read policy into the count so a
+            // `_count` can't reveal rows the caller couldn't read.
+            const policyWhere = relationBaseWhere?.(relation.table);
+
             for (const value of distinctValues(parents, parentField)) {
+                const countWhere: WhereInput = policyWhere ? { AND: [{ [whereField]: value }, policyWhere] } : { [whereField]: value };
+
                 // eslint-disable-next-line no-await-in-loop -- one aggregate query per distinct FK value; sequential keeps the count fan-out bounded
-                countByValue.set(value, await counter(relation.table, { [whereField]: value }));
+                countByValue.set(value, await counter(relation.table, countWhere));
             }
 
             for (const parent of parents) {

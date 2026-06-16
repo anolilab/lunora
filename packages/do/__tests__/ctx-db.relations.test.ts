@@ -107,6 +107,47 @@ describe("ctx-db relations", () => {
             expect(ids(linus["messages"] as Record<string, unknown>[])).toEqual(["m3"]);
         });
 
+        it("applies relationBaseWhere to a many relation (RLS filter on the hop)", async () => {
+            expect.assertions(2);
+
+            const writer = makeWriter(schema);
+
+            await seed(writer);
+
+            // The child read policy: only messages with body "hi" are visible.
+            const { page } = await writer.findMany("users", {
+                relationBaseWhere: (table) => (table === "messages" ? { body: "hi" } : undefined),
+                with: { messages: true },
+            });
+            const ada = page.find((row) => row["_id"] === "u1")!;
+            const linus = page.find((row) => row["_id"] === "u2")!;
+
+            // m1 (body "hi") survives; m2 ("yo") and m3 ("hey") are filtered out.
+            expect(ids(ada["messages"] as Record<string, unknown>[])).toEqual(["m1"]);
+            expect(linus["messages"]).toEqual([]);
+        });
+
+        it("threads relationBaseWhere into nested with + _count", async () => {
+            expect.assertions(2);
+
+            const writer = makeWriter(schema);
+
+            await seed(writer);
+
+            // Filter reactions to "👍" (only r1, on m1). messages aren't filtered.
+            const { page } = await writer.findMany("users", {
+                relationBaseWhere: (table) => (table === "reactions" ? { emoji: "👍" } : undefined),
+                where: { _id: "u1" },
+                with: { messages: { with: { _count: { reactions: true }, reactions: true } } },
+            });
+            const messages = page[0]!["messages"] as Record<string, unknown>[];
+            const m1 = messages.find((row) => row["_id"] === "m1")!;
+
+            // Nested relation load + the _count both honour the reactions filter.
+            expect(ids(m1["reactions"] as Record<string, unknown>[])).toEqual(["r1"]);
+            expect((m1["_count"] as Record<string, number>)["reactions"]).toBe(1);
+        });
+
         it("many relation with no children attaches []", async () => {
             expect.assertions(1);
 

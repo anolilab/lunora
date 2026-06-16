@@ -60,6 +60,13 @@ interface QueryArgs {
     cursor?: null | string;
     limit?: number;
     orderBy?: ReadonlyArray<unknown>;
+
+    /**
+     * Per-target-table read filter the RLS wrapper attaches so a `with` relation
+     * is policy-filtered on its own hop (see `@lunora/do`'s `QueryArgs`). Mirrors
+     * the top-level read: `(table) => readBase(table).baseWhere`.
+     */
+    relationBaseWhere?: (table: string) => undefined | WhereInput;
     restrictsCounts?: boolean;
     where?: WhereInput;
     with?: Record<string, unknown>;
@@ -631,6 +638,17 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
     };
 
     /**
+     * The read filter for a TARGET table, attached to every read so `@lunora/do`'s
+     * `resolveWith` can enforce a child table's read policy when it's loaded as a
+     * `with` relation (or `_count`). It returns the SAME `baseWhere` a top-level
+     * read of that table would get — so a relation read matches a direct read,
+     * closing the RLS bypass where `findMany({ with: { child: true } })` would
+     * otherwise return the child's rows unfiltered. `undefined` for tables with
+     * no restricting policy.
+     */
+    const relationReadFilter = (table: string): undefined | WhereInput => readBase(table).baseWhere;
+
+    /**
      * Resolve the raw row for `id` and which policy-gated table (if any) owns
      * it. The single source of truth shared by `get()` and the write gate.
      * Two paths:
@@ -649,10 +667,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
      * the row exists but isn't in any policy-gated table (no policy applies →
      * callers fall through unrestricted).
      */
-    const locateRow = async (
-        id: string,
-        expectedTable?: string,
-    ): Promise<{ row: null | Record<string, unknown>; tableName: string | undefined }> => {
+    const locateRow = async (id: string, expectedTable?: string): Promise<{ row: null | Record<string, unknown>; tableName: string | undefined }> => {
         if (base.getWithTable) {
             // Pin the lookup to the bound table when the by-id facade forwards
             // one, so a foreign id resolves to "absent" rather than another
@@ -679,7 +694,8 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
         // them in parallel and pick the hit instead of serializing the
         // round-trips. When the facade pinned a table, only that table's policy
         // can apply — restrict the probe set to it.
-        const probeTables = expectedTable === undefined ? [...perTable.keys()] : perTable.has(expectedTable) ? [expectedTable] : [];
+        const pinnedProbe = expectedTable !== undefined && perTable.has(expectedTable) ? [expectedTable] : [];
+        const probeTables = expectedTable === undefined ? [...perTable.keys()] : pinnedProbe;
         const probes = await Promise.all(
             probeTables.map(async (tableName) => {
                 const probe = await base.findFirst(tableName, { limit: 1, where: { _id: id } });
@@ -696,10 +712,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
      * wrapper over {@link locateRow} that drops the unguarded-row case — a write
      * to a row in no policy-gated table needs no policy check.
      */
-    const findRowTable = async (
-        id: string,
-        expectedTable?: string,
-    ): Promise<undefined | { row: Record<string, unknown>; tableName: string }> => {
+    const findRowTable = async (id: string, expectedTable?: string): Promise<undefined | { row: Record<string, unknown>; tableName: string }> => {
         const located = await locateRow(id, expectedTable);
 
         return located.row && located.tableName !== undefined ? { row: located.row, tableName: located.tableName } : undefined;
@@ -792,19 +805,31 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
         async findFirst(tableName, args) {
             const { baseWhere } = readBase(tableName);
 
-            return base.findFirst(tableName, { ...intoQueryArgs(args), baseWhere: mergeBaseWhere(args?.baseWhere, baseWhere) });
+            return base.findFirst(tableName, {
+                ...intoQueryArgs(args),
+                baseWhere: mergeBaseWhere(args?.baseWhere, baseWhere),
+                relationBaseWhere: relationReadFilter,
+            });
         },
 
         async findFirstOrThrow(tableName, args) {
             const { baseWhere } = readBase(tableName);
 
-            return base.findFirstOrThrow(tableName, { ...intoQueryArgs(args), baseWhere: mergeBaseWhere(args?.baseWhere, baseWhere) });
+            return base.findFirstOrThrow(tableName, {
+                ...intoQueryArgs(args),
+                baseWhere: mergeBaseWhere(args?.baseWhere, baseWhere),
+                relationBaseWhere: relationReadFilter,
+            });
         },
 
         async findMany(tableName, args) {
             const { baseWhere } = readBase(tableName);
 
-            return base.findMany(tableName, { ...intoQueryArgs(args), baseWhere: mergeBaseWhere(args?.baseWhere, baseWhere) });
+            return base.findMany(tableName, {
+                ...intoQueryArgs(args),
+                baseWhere: mergeBaseWhere(args?.baseWhere, baseWhere),
+                relationBaseWhere: relationReadFilter,
+            });
         },
 
         async get(id, expectedTable) {

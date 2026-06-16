@@ -39,6 +39,17 @@ interface QueryArgs {
     orderBy?: OrderByInput[];
 
     /**
+     * Per-table read filter for relations loaded via `with`. Like `baseWhere`
+     * but resolved by TARGET TABLE: when a `with` relation is fetched (or counted),
+     * `resolveWith` AND-merges `relationBaseWhere(relation.table)` into that fetch,
+     * and threads the provider into nested `with` levels. Set by `@lunora/server`'s
+     * RLS middleware so a child table's read policy is enforced on the relation
+     * hop too — without it, `findMany({ with: { child: true } })` would return the
+     * child's rows unfiltered (RLS bypass). `undefined` ⇒ no per-relation filter.
+     */
+    relationBaseWhere?: (table: string) => undefined | WhereInput;
+
+    /**
      * When `true`, `count()` invocations on the same table are rejected with
      * `LunoraError("COUNT_RLS_UNSUPPORTED")`. Set alongside `baseWhere` by RLS
      * to mirror kitcn's documented constraint that count is unsupported in an
