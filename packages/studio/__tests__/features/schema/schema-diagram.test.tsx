@@ -280,7 +280,7 @@ describe("schemaDiagram (viewer integration)", () => {
 // ---------------------------------------------------------------------------
 
 describe("exportDiagramAsJson (JSON serialiser)", () => {
-    it("triggers a download link and revokes the object URL", () => {
+    it("triggers a download link and revokes the object URL", async () => {
         expect.assertions(3);
 
         // Stub URL.createObjectURL / URL.revokeObjectURL so no real Blob API is needed.
@@ -297,9 +297,15 @@ describe("exportDiagramAsJson (JSON serialiser)", () => {
 
             // Verify that a Blob was created and a download link was triggered.
             expect(createObjectURL).toHaveBeenCalledTimes(1);
-            expect(revokeObjectURL).toHaveBeenCalledWith(fakeUrl);
             // Verify the download link was attached: document.body should have a child added.
             expect(createObjectURL.mock.calls[0]?.[0]).toBeInstanceOf(globalThis.Blob);
+
+            // Revocation is deferred to a macrotask so the browser's async fetch
+            // of the blob URL isn't aborted — flush it before asserting.
+            await new Promise((resolve) => {
+                setTimeout(resolve, 0);
+            });
+            expect(revokeObjectURL).toHaveBeenCalledWith(fakeUrl);
         } finally {
             createObjectURL.mockRestore();
             revokeObjectURL.mockRestore();

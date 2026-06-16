@@ -54,7 +54,10 @@ describe("webhook verification", () => {
     });
 
     it("fails closed on an empty signing secret (no forgeable zero-length-key MAC)", async () => {
-        const signatureHeader = await sign("", payload, timestamp);
+        // An attacker can't sign with the empty key anyway (WebCrypto rejects a
+        // zero-length HMAC key), but the verifier must reject the empty secret
+        // up front regardless of the supplied header — so any header shape does.
+        const signatureHeader = `t=${String(timestamp)},v1=deadbeef`;
 
         await expect(verifyStripeSignature({ now, payload, secret: "", signatureHeader })).rejects.toMatchObject({ code: "CONFIG_INVALID" });
 
