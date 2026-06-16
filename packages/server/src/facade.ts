@@ -25,18 +25,18 @@
 export interface FacadeWriterLike {
     aggregate(tableName: string, options: unknown): Promise<unknown>;
     count(tableName: string, where?: unknown): Promise<number>;
-    delete(id: string): Promise<void>;
+    delete(id: string, expectedTable?: string): Promise<void>;
     findFirst(tableName: string, args?: unknown): Promise<unknown>;
     findFirstOrThrow(tableName: string, args?: unknown): Promise<unknown>;
     findMany(tableName: string, args?: unknown): Promise<unknown>;
-    get(id: string): Promise<unknown>;
+    get(id: string, expectedTable?: string): Promise<unknown>;
     groupBy(tableName: string, options: unknown): Promise<unknown>;
     insert(tableName: string, document: Record<string, unknown>): Promise<string>;
-    patch(id: string, patch: Record<string, unknown>): Promise<void>;
+    patch(id: string, patch: Record<string, unknown>, expectedTable?: string): Promise<void>;
     query(tableName: string): { withSearchIndex(indexName: string, search: (q: unknown) => unknown): unknown };
     rank(tableName: string, indexName: string, options: unknown): Promise<unknown>;
     rankPage(tableName: string, indexName: string, options?: unknown): Promise<unknown>;
-    replace(id: string, document: Record<string, unknown>): Promise<void>;
+    replace(id: string, document: Record<string, unknown>, expectedTable?: string): Promise<void>;
 }
 /* eslint-enable @typescript-eslint/method-signature-style */
 
@@ -58,22 +58,33 @@ export interface FacadeEntry {
     withSearchIndex: (indexName: string, search: (q: unknown) => unknown) => unknown;
 }
 
-/** Bind a structural writer to one table, producing its `ctx.db` table accessor. */
+/**
+ * Bind a structural writer to one table, producing its `ctx.db` table accessor.
+ *
+ * The by-id accessors (`get`/`delete`/`patch`/`replace`) forward the bound
+ * `tableName` as `expectedTable` so the underlying writer scopes its id lookup
+ * to this table. Without it, a branded `Id<"posts">` carrying another table's
+ * id would resolve cross-table (the writer probes every table by id), letting
+ * `ctx.db.posts.get(foreignId)` read — or `.delete`/`.patch`/`.replace`
+ * mutate — a row in an unrelated table (IDOR). Writers that ignore the second
+ * argument keep their previous global behaviour; the scoping is opt-in via this
+ * forwarded name.
+ */
 export const bindTableFacade = (writer: FacadeWriterLike, tableName: string): FacadeEntry => {
     return {
         aggregate: (options) => writer.aggregate(tableName, options),
         count: (where) => writer.count(tableName, where),
-        delete: (id) => writer.delete(id),
+        delete: (id) => writer.delete(id, tableName),
         findFirst: (args) => writer.findFirst(tableName, args),
         findFirstOrThrow: (args) => writer.findFirstOrThrow(tableName, args),
         findMany: (args) => writer.findMany(tableName, args),
-        get: (id) => writer.get(id),
+        get: (id) => writer.get(id, tableName),
         groupBy: (options) => writer.groupBy(tableName, options),
         insert: (document) => writer.insert(tableName, document),
-        patch: (id, patch) => writer.patch(id, patch),
+        patch: (id, patch) => writer.patch(id, patch, tableName),
         rank: (indexName, options) => writer.rank(tableName, indexName, options),
         rankPage: (indexName, options) => writer.rankPage(tableName, indexName, options),
-        replace: (id, document) => writer.replace(id, document),
+        replace: (id, document) => writer.replace(id, document, tableName),
         withSearchIndex: (indexName, search) => writer.query(tableName).withSearchIndex(indexName, search),
     };
 };

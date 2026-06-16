@@ -145,11 +145,11 @@ interface DatabaseWriterLike {
      */
     aggregate: (tableName: string, options: AggregateArgs) => Promise<null | number>;
     count: (tableName: string, whereOrArgs?: CountArgs | WhereInput) => Promise<number>;
-    delete: (id: string) => Promise<void>;
+    delete: (id: string, expectedTable?: string) => Promise<void>;
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
-    get: (id: string) => Promise<Record<string, unknown> | null>;
+    get: (id: string, expectedTable?: string) => Promise<Record<string, unknown> | null>;
 
     /**
      * Optional table-aware lookup. The underlying writer (e.g. `@lunora/do`)
@@ -159,7 +159,7 @@ interface DatabaseWriterLike {
      * (1 `get` + N `findFirst` across every policy table) down to one lookup.
      * Writers that don't implement it fall back to the probe path.
      */
-    getWithTable?: (id: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
+    getWithTable?: (id: string, expectedTable?: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
 
     /**
      * Group + reduce. Same `baseWhere` injection as `aggregate`: the per-group
@@ -168,7 +168,7 @@ interface DatabaseWriterLike {
      */
     groupBy: (tableName: string, options: GroupByArgs) => Promise<ReadonlyArray<{ key: Record<string, unknown>; value: null | number }>>;
     insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
-    patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
+    patch: (id: string, patch: Record<string, unknown>, expectedTable?: string) => Promise<void>;
     query: (tableName: string) => TableReaderLike;
 
     /**
@@ -190,7 +190,7 @@ interface DatabaseWriterLike {
      * Required for the same reason as `aggregate`.
      */
     rankPage: (tableName: string, indexName: string, options?: RankPageArgs) => Promise<QueryPage>;
-    replace: (id: string, document: Record<string, unknown>) => Promise<void>;
+    replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
 }
 
 /**
@@ -649,9 +649,15 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
      * the row exists but isn't in any policy-gated table (no policy applies →
      * callers fall through unrestricted).
      */
-    const locateRow = async (id: string): Promise<{ row: null | Record<string, unknown>; tableName: string | undefined }> => {
+    const locateRow = async (
+        id: string,
+        expectedTable?: string,
+    ): Promise<{ row: null | Record<string, unknown>; tableName: string | undefined }> => {
         if (base.getWithTable) {
-            const located = await base.getWithTable(id);
+            // Pin the lookup to the bound table when the by-id facade forwards
+            // one, so a foreign id resolves to "absent" rather than another
+            // table's row (IDOR).
+            const located = await base.getWithTable(id, expectedTable);
 
             if (!located) {
                 // eslint-disable-next-line unicorn/no-null -- absent row mirrors @lunora/do's writer null sentinel
@@ -662,7 +668,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
             return { row: located.row, tableName: perTable.has(located.tableName) ? located.tableName : undefined };
         }
 
-        const row = await base.get(id);
+        const row = await base.get(id, expectedTable);
 
         if (!row) {
             // eslint-disable-next-line unicorn/no-null -- absent row mirrors @lunora/do's writer null sentinel
@@ -671,9 +677,11 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
 
         // Ids are globally unique, so at most one probe hits; settle all of
         // them in parallel and pick the hit instead of serializing the
-        // round-trips.
+        // round-trips. When the facade pinned a table, only that table's policy
+        // can apply — restrict the probe set to it.
+        const probeTables = expectedTable === undefined ? [...perTable.keys()] : perTable.has(expectedTable) ? [expectedTable] : [];
         const probes = await Promise.all(
-            [...perTable.keys()].map(async (tableName) => {
+            probeTables.map(async (tableName) => {
                 const probe = await base.findFirst(tableName, { limit: 1, where: { _id: id } });
 
                 return probe?.["_id"] === id ? tableName : undefined;
@@ -688,8 +696,11 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
      * wrapper over {@link locateRow} that drops the unguarded-row case — a write
      * to a row in no policy-gated table needs no policy check.
      */
-    const findRowTable = async (id: string): Promise<undefined | { row: Record<string, unknown>; tableName: string }> => {
-        const located = await locateRow(id);
+    const findRowTable = async (
+        id: string,
+        expectedTable?: string,
+    ): Promise<undefined | { row: Record<string, unknown>; tableName: string }> => {
+        const located = await locateRow(id, expectedTable);
 
         return located.row && located.tableName !== undefined ? { row: located.row, tableName: located.tableName } : undefined;
     };
@@ -718,8 +729,9 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
         op: Exclude<Policy["on"], "insert" | "read">,
         perform: () => Promise<R>,
         computeNextRow?: (preRow: Record<string, unknown>) => Record<string, unknown>,
+        expectedTable?: string,
     ): Promise<R> => {
-        const located = await findRowTable(id);
+        const located = await findRowTable(id, expectedTable);
 
         if (!located) {
             return perform();
@@ -775,7 +787,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
             });
         },
 
-        delete: (id) => gateById(id, "delete", () => base.delete(id)),
+        delete: (id, expectedTable) => gateById(id, "delete", () => base.delete(id, expectedTable), undefined, expectedTable),
 
         async findFirst(tableName, args) {
             const { baseWhere } = readBase(tableName);
@@ -795,12 +807,14 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
             return base.findMany(tableName, { ...intoQueryArgs(args), baseWhere: mergeBaseWhere(args?.baseWhere, baseWhere) });
         },
 
-        async get(id) {
+        async get(id, expectedTable) {
             // Step 1 — **membership + raw fetch in one pass**. `locateRow`
             // returns the raw row (so an absent row is `null` and a row in no
             // policy-gated table falls through unrestricted) plus the owning
-            // policy-gated `tableName` when one exists.
-            const located = await locateRow(id);
+            // policy-gated `tableName` when one exists. `expectedTable` (when
+            // the by-id facade forwards it) pins the lookup to the bound table
+            // so a foreign id can't read another table's row.
+            const located = await locateRow(id, expectedTable);
 
             if (!located.row) {
                 // eslint-disable-next-line unicorn/no-null -- RlsDatabase.get structurally mirrors @lunora/do's writer, which returns `null` for an absent row
@@ -844,14 +858,15 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
             return base.insert(tableName, document);
         },
 
-        patch: (id, patch) =>
+        patch: (id, patch, expectedTable) =>
             gateById(
                 id,
                 "update",
-                () => base.patch(id, patch),
+                () => base.patch(id, patch, expectedTable),
                 (preRow) => {
                     return { ...preRow, ...patch };
                 },
+                expectedTable,
             ),
 
         query(tableName) {
@@ -872,11 +887,11 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
             return reader.filter((document) => matchesWhere(document, baseWhere));
         },
 
-        replace: (id, document) =>
+        replace: (id, document, expectedTable) =>
             gateById(
                 id,
                 "update",
-                () => base.replace(id, document),
+                () => base.replace(id, document, expectedTable),
                 // Mirror the writer's post-image: `_id` always comes from the
                 // existing row; `_creationTime` honors a caller-supplied value
                 // (the writer keeps `document._creationTime` when present) and
@@ -888,6 +903,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
                         _id: preRow["_id"],
                     };
                 },
+                expectedTable,
             ),
 
         // Analytical reads — plain methods (the writer always implements them;

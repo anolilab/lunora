@@ -99,20 +99,20 @@ interface TableReaderLike {
 interface MaskDatabase {
     aggregate: (tableName: string, options: AggregateArgs) => Promise<null | number>;
     count: (tableName: string, whereOrArgs?: unknown) => Promise<number>;
-    delete: (id: string) => Promise<void>;
+    delete: (id: string, expectedTable?: string) => Promise<void>;
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
-    get: (id: string) => Promise<Record<string, unknown> | null>;
-    getWithTable?: (id: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
+    get: (id: string, expectedTable?: string) => Promise<Record<string, unknown> | null>;
+    getWithTable?: (id: string, expectedTable?: string) => Promise<null | { row: Record<string, unknown>; tableName: string }>;
     groupBy: (tableName: string, options: GroupByArgs) => Promise<ReadonlyArray<{ key: Record<string, unknown>; value: null | number }>>;
     insert: (tableName: string, document: Record<string, unknown>) => Promise<string>;
-    patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
+    patch: (id: string, patch: Record<string, unknown>, expectedTable?: string) => Promise<void>;
     query: (tableName: string) => TableReaderLike;
     rank: (tableName: string, indexName: string, options: unknown) => Promise<null | { position: number; total: number }>;
     rankBefore?: (tableName: string, indexName: string, options: unknown) => Promise<{ before: number; total: number }>;
     rankPage: (tableName: string, indexName: string, options?: unknown) => Promise<QueryPage>;
-    replace: (id: string, document: Record<string, unknown>) => Promise<void>;
+    replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
 }
 
 /** Roles list source on the context. Tolerant of older auth states (mirrors RLS's `AuthLike`). */
@@ -287,9 +287,15 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
      * probed: a row in no masked table needs no masking. The unwrapped `base.*`
      * is used so the probe itself isn't masked.
      */
-    const locate = async (id: string): Promise<{ row: null | Record<string, unknown>; tableName: string | undefined }> => {
+    const locate = async (
+        id: string,
+        expectedTable?: string,
+    ): Promise<{ row: null | Record<string, unknown>; tableName: string | undefined }> => {
         if (base.getWithTable) {
-            const located = await base.getWithTable(id);
+            // Pin the lookup to the bound table when the by-id facade forwards
+            // one, so a foreign id can't read another table's row around the
+            // mask (IDOR).
+            const located = await base.getWithTable(id, expectedTable);
 
             if (!located) {
                 // eslint-disable-next-line unicorn/no-null -- absent row mirrors @lunora/do's writer null sentinel
@@ -299,15 +305,16 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
             return { row: located.row, tableName: perTable.has(located.tableName) ? located.tableName : undefined };
         }
 
-        const row = await base.get(id);
+        const row = await base.get(id, expectedTable);
 
         if (!row) {
             // eslint-disable-next-line unicorn/no-null -- absent row mirrors @lunora/do's writer null sentinel
             return { row: null, tableName: undefined };
         }
 
+        const probeTables = expectedTable === undefined ? [...perTable.keys()] : perTable.has(expectedTable) ? [expectedTable] : [];
         const probes = await Promise.all(
-            [...perTable.keys()].map(async (tableName) => {
+            probeTables.map(async (tableName) => {
                 const probe = await base.findFirst(tableName, { limit: 1, where: { _id: id } });
 
                 return probe?.["_id"] === id ? tableName : undefined;
@@ -362,8 +369,8 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
             return columns ? maskPage(page, columns, context) : page;
         },
 
-        async get(id) {
-            const { row, tableName } = await locate(id);
+        async get(id, expectedTable) {
+            const { row, tableName } = await locate(id, expectedTable);
             const columns = tableName === undefined ? undefined : perTable.get(tableName);
 
             if (!row || !columns) {

@@ -369,11 +369,11 @@ interface DatabaseWriterLike {
      * RLS-aware ctx seam from §3.2).
      */
     count: (tableName: string, where?: RestrictableQueryOptions | WhereInput) => Promise<number>;
-    delete: (id: string) => Promise<void>;
+    delete: (id: string, expectedTable?: string) => Promise<void>;
     findFirst: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown> | null>;
     findFirstOrThrow: (tableName: string, args?: QueryArgs) => Promise<Record<string, unknown>>;
     findMany: (tableName: string, args?: QueryArgs) => Promise<QueryPage>;
-    get: (id: string) => Promise<Record<string, unknown> | null>;
+    get: (id: string, expectedTable?: string) => Promise<Record<string, unknown> | null>;
 
     /**
      * Group rows in `tableName` by the named keys and apply `options.agg` per
@@ -408,7 +408,7 @@ interface DatabaseWriterLike {
      * the id), matching Convex's `db.normalizeId`. Throws on an unknown table.
      */
     normalizeId: (tableName: string, id: string) => null | string;
-    patch: (id: string, patch: Record<string, unknown>) => Promise<void>;
+    patch: (id: string, patch: Record<string, unknown>, expectedTable?: string) => Promise<void>;
     query: (tableName: string) => TableReaderLike;
 
     /**
@@ -463,7 +463,7 @@ interface DatabaseWriterLike {
      * since a global table has no shard boundaries to merge across.
      */
     rankPageRows?: (tableName: string, indexName: string, options?: RankPageOptions) => Promise<ShardRankPageResult>;
-    replace: (id: string, document: Record<string, unknown>) => Promise<void>;
+    replace: (id: string, document: Record<string, unknown>, expectedTable?: string) => Promise<void>;
 
     /**
      * Best-effort, read-only reader over Lunora's system tables
@@ -2252,7 +2252,10 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * Routing every writer through this helper collapses the lookup to a
      * single probe loop that returns the row when it hits.
      */
-    const lookupById = (id: string): { docJson: string; row: Record<string, unknown>; tableName: string } | undefined => {
+    const lookupById = (
+        id: string,
+        expectedTable?: string,
+    ): { docJson: string; row: Record<string, unknown>; tableName: string } | undefined => {
         // Row ids are random UUIDs, so the owning table can't be derived from
         // the id. Rather than probing each table with its own SELECT (T
         // statements worst-case on a T-table schema, on the per-mutation hot
@@ -2260,9 +2263,17 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         // tags each branch with its source table — a single round-trip
         // regardless of table count. `LIMIT 1` short-circuits once a branch
         // hits; ids are unique across tables so at most one branch matches.
+        //
+        // When `expectedTable` is supplied (the `ctx.db.<table>.get/delete/...`
+        // by-id facade pins it), the probe is scoped to that one table so a
+        // foreign id can never resolve cross-table — closing an IDOR where a
+        // branded `Id<"posts">` carrying another table's id would otherwise
+        // read/mutate that other table. An unknown/global `expectedTable`
+        // narrows the probe to nothing, so the global fallback handles it.
         const nonGlobalTables = Object.entries(schema.tables)
             .filter(([, definition]) => definition.shardMode?.kind !== "global")
-            .map(([tableName]) => tableName);
+            .map(([tableName]) => tableName)
+            .filter((tableName) => expectedTable === undefined || tableName === expectedTable);
 
         if (nonGlobalTables.length === 0) {
             return undefined;
@@ -2468,15 +2479,18 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             return row.count;
         },
 
-        async delete(id) {
+        async delete(id, expectedTable) {
             // Single probe — get the table + row in one pass instead of
             // probing twice (`tableNameFromId` + `writer.get`).
-            const located = lookupById(id);
+            const located = lookupById(id, expectedTable);
 
             if (!located) {
                 // A global row's id never lives in this DO; fall back to D1
-                // (both backends are silent on a genuinely-absent id).
-                const global = globalFallback();
+                // (both backends are silent on a genuinely-absent id). But when
+                // the by-id facade pinned a (non-global) table, a global row is
+                // by definition a different table — skip the fallback so a
+                // non-global facade can't reach a `.global()` row (IDOR).
+                const global = expectedTable === undefined ? globalFallback() : undefined;
 
                 if (global) {
                     await global.delete(id);
@@ -2668,12 +2682,14 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             };
         },
 
-        async get(id) {
-            const located = lookupById(id);
+        async get(id, expectedTable) {
+            const located = lookupById(id, expectedTable);
 
             if (!located) {
-                // A global row's id never lives in this DO; fall back to D1.
-                const global = globalFallback();
+                // A global row's id never lives in this DO; fall back to D1 —
+                // but only when no table is pinned: a (non-global) by-id facade
+                // must never reach a `.global()` row (IDOR).
+                const global = expectedTable === undefined ? globalFallback() : undefined;
 
                 if (global) {
                     return global.get(id);
@@ -2915,15 +2931,17 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             return normalizeIdStructurally(schema, tableName, id);
         },
 
-        async patch(id, patch) {
+        async patch(id, patch, expectedTable) {
             // Single probe — eliminates the redundant `tableNameFromId` +
             // `writer.get` chain that doubled the SQL round-trips per patch
             // on the prior code path.
-            const located = lookupById(id);
+            const located = lookupById(id, expectedTable);
 
             if (!located) {
-                // A global row's id never lives in this DO; fall back to D1.
-                const global = globalFallback();
+                // A global row's id never lives in this DO; fall back to D1 —
+                // but only when no table is pinned: a (non-global) by-id facade
+                // must never reach a `.global()` row (IDOR).
+                const global = expectedTable === undefined ? globalFallback() : undefined;
 
                 if (global) {
                     await global.patch(id, patch);
@@ -3193,18 +3211,20 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             return { directions, hasMore, rows };
         },
 
-        async replace(id, document) {
+        async replace(id, document, expectedTable) {
             // Single probe that also captures the read-time `__doc__` blob.
             // The before-update trigger below spans an `await`, so the write
             // must compare-and-swap on this snapshot (see `runGuardedWrite`)
             // — the same OCC contract `patch`/`delete` honor. Reusing the
             // decoded row as `previous` also keeps the aggregate/rank -prev
             // steps consistent with what was actually on disk at read time.
-            const located = lookupById(id);
+            const located = lookupById(id, expectedTable);
 
             if (!located) {
-                // A global row's id never lives in this DO; fall back to D1.
-                const global = globalFallback();
+                // A global row's id never lives in this DO; fall back to D1 —
+                // but only when no table is pinned: a (non-global) by-id facade
+                // must never reach a `.global()` row (IDOR).
+                const global = expectedTable === undefined ? globalFallback() : undefined;
 
                 if (global) {
                     await global.replace(id, document);

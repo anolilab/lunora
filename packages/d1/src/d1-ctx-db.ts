@@ -1251,10 +1251,20 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
      * tables are a hard precondition, not a maybe, which is why `tableNameFromId`
      * needs no missing-table handling.
      */
-    const resolveTableName = async (id: string): Promise<string | undefined> => {
+    const resolveTableName = async (id: string, expectedTable?: string): Promise<string | undefined> => {
         await ensureMigrated();
 
-        return tableNameFromId(exec, schema, id, tableNameCache);
+        const tableName = await tableNameFromId(exec, schema, id, tableNameCache);
+
+        // When the caller pins a table (the `ctx.db.<table>.get/delete/...`
+        // by-id facade forwards its bound name), an id that resolves to a
+        // different table is treated as absent — a foreign id can never read or
+        // mutate cross-table through a branded `Id<"posts">` (IDOR).
+        if (expectedTable !== undefined && tableName !== expectedTable) {
+            return undefined;
+        }
+
+        return tableName;
     };
 
     // Per-(table, index) backfill state. The map records the outcome of the
@@ -2122,8 +2132,8 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             return Number(rows[0]?.["count"] ?? 0);
         },
 
-        async delete(id) {
-            const tableName = await resolveTableName(id);
+        async delete(id, expectedTable) {
+            const tableName = await resolveTableName(id, expectedTable);
 
             if (!tableName) {
                 return;
@@ -2303,8 +2313,8 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             };
         },
 
-        async get(id) {
-            const tableName = await resolveTableName(id);
+        async get(id, expectedTable) {
+            const tableName = await resolveTableName(id, expectedTable);
 
             if (!tableName) {
                 // eslint-disable-next-line unicorn/no-null -- writer.get's public return is `doc | null`; an unresolved id returns null.
@@ -2475,8 +2485,8 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             return normalizeIdStructurally(schema, tableName, id);
         },
 
-        async patch(id, patch) {
-            const tableName = await resolveTableName(id);
+        async patch(id, patch, expectedTable) {
+            const tableName = await resolveTableName(id, expectedTable);
 
             if (!tableName) {
                 throw new Error(`document not found: ${id}`);
@@ -2809,8 +2819,8 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             return { continueCursor, isDone: !hasMore, page: documents };
         },
 
-        async replace(id, document) {
-            const tableName = await resolveTableName(id);
+        async replace(id, document, expectedTable) {
+            const tableName = await resolveTableName(id, expectedTable);
 
             if (!tableName) {
                 throw new Error(`document not found: ${id}`);
