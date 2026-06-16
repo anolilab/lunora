@@ -545,6 +545,115 @@ export interface HttpRouteIR {
     stream: boolean;
 }
 
+/**
+ * Per-procedure protective-middleware snapshot, produced by
+ * `discoverProcedureMiddleware` for the security lints
+ * (`public_mutation_without_ratelimit`, `user_creating_mutation_without_captcha`).
+ * Records which `.use(...)` guards a procedure's builder chain carries plus the
+ * behavioural facts that decide whether a guard is *expected* (does it write a
+ * user/session table, does it send mail). `protectPublic({ rateLimit, captcha })`
+ * is unwrapped: the bundle's object-literal keys set `usesRateLimit`/`usesCaptcha`
+ * exactly as the individual `.use(rateLimit(...))` / `.use(verifyTurnstile(...))`
+ * steps would. Structurally identical to `AdvisorProcedureProtection` so values
+ * pass straight through to the advisor without conversion.
+ */
+export interface ProcedureMiddlewareIR {
+    /** `true` when the handler (or a helper inside it) references `ctx.mail` / `ctx.email`. */
+    callsMail: boolean;
+    /** Export binding name of the procedure (e.g. `signUp`). */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** Registration kind — only `mutation`/`action` are write-shaped; `query` is read-only. */
+    kind: "action" | "mutation" | "query";
+    /** `true` when the chain carries `.use(verifyTurnstile(...))` or a `protectPublic({ captcha })` bundle. */
+    usesCaptcha: boolean;
+    /** `true` when the chain carries `.use(mask(...))`. */
+    usesMask: boolean;
+    /** `true` when the chain carries `.use(rateLimit(...))` or a `protectPublic({ rateLimit })` bundle. */
+    usesRateLimit: boolean;
+    /** `true` when the chain carries `.use(rls(...))`. */
+    usesRls: boolean;
+    /** `"internal"` for `internalQuery` / `internalMutation` / `internalAction`. */
+    visibility: "internal" | "public";
+    /** `true` when the handler inserts into a user/session/account-shaped table. */
+    writesUserTable: boolean;
+}
+
+/**
+ * Per-procedure argument-validator snapshot, produced by the
+ * argument-validator discoverer for the input-hardening lints
+ * (`public_arg_uses_any`, `unbounded_string_arg`). Only public procedures are
+ * recorded — internal functions take server-trusted input. Structurally identical
+ * to `AdvisorArgumentValidator` so it passes straight through to the advisor
+ * without conversion.
+ */
+export interface ArgumentValidatorIR {
+    /** Arg names declared as `v.any()` (unvalidated, untyped input). */
+    anyArgs: string[];
+    /** Export binding name of the procedure (e.g. `updateProfile`). */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the registration call, or `0` when unknown. */
+    line: number;
+    /** Arg names declared as `v.string()` with no statically-visible max-length bound. */
+    unboundedStringArgs: string[];
+}
+
+/**
+ * One secret-shaped string literal discovered in `lunora/` source — the
+ * `hardcoded_secret` lint input. Complements the pre-commit `vis secrets` scan by
+ * surfacing the same class of finding in-IDE via the studio Advisors table.
+ * Structurally identical to `AdvisorSecretLiteral`.
+ */
+export interface SecretLiteralIR {
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** Heuristic that matched, e.g. `stripe_live_key` / `aws_access_key` / `pem_private_key` / `high_entropy`. */
+    kind: string;
+    /** 1-based line of the literal, or `0` when unknown. */
+    line: number;
+    /** Redacted preview of the literal (first few chars + length) for the finding detail — never the full secret. */
+    preview: string;
+}
+
+/**
+ * One `ctx.sql` tagged-template interpolation of a non-binding expression — the
+ * `sql_injection_risk` lint input. Tagged-template `${…}` placeholders that are
+ * bare identifiers/parameters are safe (the Hyperdrive driver binds them); a
+ * placeholder that splices a string concatenation, template literal, or member
+ * call is an injection vector. Structurally identical to
+ * `AdvisorSqlInterpolation`.
+ */
+export interface SqlInterpolationIR {
+    /** Export binding name of the procedure performing the `ctx.sql` call. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** 1-based line of the interpolation, or `0` when unknown. */
+    line: number;
+}
+
+/**
+ * One discovered `httpRoute.&lt;verb>("/admin/…")` route on an admin/privileged-looking
+ * path, with whether its builder chain references an auth/admin guard — the
+ * `admin_route_without_guard` lint input. Structurally identical to
+ * `AdvisorAdminRoute`.
+ */
+export interface AdminRouteIR {
+    /** Export binding name of the route handler. */
+    exportName: string;
+    /** Source file relative to `&lt;projectRoot>/lunora/`, without extension. */
+    file: string;
+    /** HTTP verb the route binds to (uppercased), e.g. `"POST"`. */
+    method: string;
+    /** The route path, e.g. `/admin/users`. */
+    path: string;
+    /** `true` when the handler body references an auth/session/admin guard (`ctx.auth`, `getSession`, `requireAdmin`, …). */
+    usesGuard: boolean;
+}
+
 export interface ProjectIR {
     crons: ReadonlyArray<CronJobIR>;
     functions: ReadonlyArray<FunctionIR>;

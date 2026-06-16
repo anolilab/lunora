@@ -5,6 +5,8 @@ import type { Finding } from "@lunora/advisor";
 import { Project } from "ts-morph";
 
 import { lintSchema } from "./advisor";
+import discoverAdminRoutes from "./discover-admin-routes";
+import discoverArgumentValidators from "./discover-argument-validators";
 import discoverAuthApiCalls from "./discover-authapi-calls";
 import { discoverContainers } from "./discover-containers";
 import discoverCrons from "./discover-crons";
@@ -16,9 +18,12 @@ import discoverMaskProcedures, { discoverMaskMetadata } from "./discover-mask-pr
 import discoverMigrations from "./discover-migrations";
 import discoverNondeterministicCalls from "./discover-nondeterministic-calls";
 import discoverPackageDependencies from "./discover-package-dependencies";
+import discoverProcedureMiddleware from "./discover-procedure-middleware";
 import discoverQueries from "./discover-queries";
 import discoverRlsProcedures, { discoverRlsMetadata } from "./discover-rls-procedures";
 import discoverSchema from "./discover-schema";
+import discoverSecrets from "./discover-secrets";
+import discoverSqlInterpolation from "./discover-sql-interpolation";
 import discoverStorageRulesMetadata from "./discover-storage-rules";
 import discoverWorkflowCalls from "./discover-workflow-calls";
 import { discoverWorkflows } from "./discover-workflows";
@@ -235,6 +240,11 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
                   discoverWorkflowCalls(project, lunoraDirectory),
                   discoverMaskProcedures(project, lunoraDirectory),
                   discoverNondeterministicCalls(project, lunoraDirectory),
+                  discoverProcedureMiddleware(project, lunoraDirectory),
+                  discoverArgumentValidators(project, lunoraDirectory),
+                  discoverSecrets(project, lunoraDirectory),
+                  discoverSqlInterpolation(project, lunoraDirectory),
+                  discoverAdminRoutes(project, lunoraDirectory),
               );
 
     // Read-only RLS metadata (policies + roles) the studio's RLS inspector lists,
@@ -460,9 +470,6 @@ export interface CodegenOptions {
      */
     apiSpec?: "both" | "none" | "openapi" | "openrpc";
 
-    /** Override the lunora subdirectory name. Defaults to `"lunora"`. */
-    lunoraDirectory?: string;
-
     /**
      * When true, run discovery + emit (so any schema/function parse error
      * surfaces) but skip writing files to `_generated/`. The returned
@@ -477,6 +484,9 @@ export interface CodegenOptions {
      * {@link CodegenResult.advisories}.
      */
     lint?: boolean;
+
+    /** Override the lunora subdirectory name. Defaults to `"lunora"`. */
+    lunoraDirectory?: string;
 
     /**
      * Reuse a previously-constructed ts-morph {@link Project} instead of building
