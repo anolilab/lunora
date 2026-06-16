@@ -294,6 +294,13 @@ const MESSAGE_IDS = [
     "Save widget",
     "Saved",
     "schedule",
+    // Cron triggers panel — target column + "Run now" action.
+    "target",
+    "workflow",
+    "Run now",
+    "Run now?",
+    "Running…",
+    "ran",
     "Schedule view",
     "Scheduled",
     "scheduled for",

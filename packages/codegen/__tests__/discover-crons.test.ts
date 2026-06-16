@@ -6,6 +6,7 @@ import { Project } from "ts-morph";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import discoverCrons from "../src/discover-crons";
+import { discoverWorkflows } from "../src/discover-workflows";
 import { emitCrons, emitWranglerCronTriggers } from "../src/emit";
 
 let workdir: string;
@@ -206,6 +207,86 @@ describe("discover-crons", () => {
 
         expect(() => discoverCrons(newProject(), workdir)).toThrow(/non-empty string-literal name/u);
     });
+
+    it("resolves the generated `workflows.<name>` reference into a workflow target", () => {
+        expect.assertions(1);
+
+        writeSource(
+            "workflows.ts",
+            `
+            import { defineWorkflow } from "@lunora/workflow";
+            export const digestPipeline = defineWorkflow({ handler: async () => undefined });
+        `,
+        );
+        writeSource(
+            "crons.ts",
+            `
+            import { cronJobs } from "@lunora/scheduler";
+            import { workflows } from "./_generated/api.js";
+            const crons = cronJobs();
+            crons.daily("nightly digest", { hourUTC: 9, minuteUTC: 0 }, workflows.digestPipeline, { region: "eu" });
+            export default crons;
+        `,
+        );
+
+        const project = newProject();
+        const workflows = discoverWorkflows(project, workdir);
+
+        expect(discoverCrons(project, workdir, workflows)).toEqual([
+            {
+                args: { region: "eu" },
+                cron: "0 9 * * *",
+                name: "nightly digest",
+                workflow: { binding: "WORKFLOW_DIGEST_PIPELINE", exportName: "digestPipeline" },
+            },
+        ]);
+    });
+
+    it("also resolves a bare identifier naming a declared workflow (direct import)", () => {
+        expect.assertions(1);
+
+        writeSource(
+            "workflows.ts",
+            `
+            import { defineWorkflow } from "@lunora/workflow";
+            export const digestPipeline = defineWorkflow({ handler: async () => undefined });
+        `,
+        );
+        writeSource(
+            "crons.ts",
+            `
+            import { cronJobs } from "@lunora/scheduler";
+            import { digestPipeline } from "./workflows.js";
+            const crons = cronJobs();
+            crons.daily("nightly digest", { hourUTC: 9, minuteUTC: 0 }, digestPipeline, {});
+            export default crons;
+        `,
+        );
+
+        const project = newProject();
+        const workflows = discoverWorkflows(project, workdir);
+
+        expect(discoverCrons(project, workdir, workflows)).toEqual([
+            { args: {}, cron: "0 9 * * *", name: "nightly digest", workflow: { binding: "WORKFLOW_DIGEST_PIPELINE", exportName: "digestPipeline" } },
+        ]);
+    });
+
+    it("throws when `workflows.<name>` names a workflow that isn't declared", () => {
+        expect.assertions(1);
+
+        writeSource(
+            "crons.ts",
+            `
+            import { cronJobs } from "@lunora/scheduler";
+            import { workflows } from "./_generated/api.js";
+            const crons = cronJobs();
+            crons.daily("oops", { hourUTC: 9, minuteUTC: 0 }, workflows.missingFlow, {});
+            export default crons;
+        `,
+        );
+
+        expect(() => discoverCrons(newProject(), workdir, [])).toThrow(/no such workflow is declared/u);
+    });
 });
 
 describe("emitCrons", () => {
@@ -228,6 +309,22 @@ describe("emitCrons", () => {
 
         // …and the distinct expression has its own list.
         expect(output).toContain('"*/5 * * * *": [');
+    });
+
+    it("emits a workflow binding target instead of a functionPath for a workflow cron", () => {
+        expect.assertions(3);
+
+        const output = emitCrons([
+            { args: { region: "eu" }, cron: "0 9 * * *", name: "nightly digest", workflow: { binding: "WORKFLOW_DIGEST", exportName: "digest" } },
+            { args: {}, cron: "0 9 * * *", functionPath: "email:report", name: "report" },
+        ]);
+
+        // The workflow job carries `workflow: "<binding>"` and no functionPath…
+        expect(output).toContain('{ name: "nightly digest", workflow: "WORKFLOW_DIGEST", args: {"region":"eu"} },');
+        // …while the function job is unchanged.
+        expect(output).toContain('{ name: "report", functionPath: "email:report", args: {} },');
+        // The emitted interface allows either target.
+        expect(output).toContain("workflow?: string;");
     });
 
     it("emits empty structures when there are no crons", () => {

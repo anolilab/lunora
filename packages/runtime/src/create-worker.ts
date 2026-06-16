@@ -343,9 +343,27 @@ type CronHandler = (controller: ScheduledControllerLike, env: unknown, context: 
  */
 interface CronJobDispatch {
     args?: Record<string, unknown>;
-    functionPath: string;
+    functionPath?: string;
     name: string;
     shardKey?: string;
+
+    /**
+     * Set when the job targets a durable workflow instead of a function: the
+     * `WORKFLOW_*` binding name on `env`. On a firing trigger the worker starts a
+     * NEW workflow instance (the {@link CronJobDispatch.args} become its
+     * `params`) rather than dispatching {@link CronJobDispatch.functionPath} to a
+     * shard. Mutually exclusive with `functionPath`.
+     */
+    workflow?: string;
+}
+
+/**
+ * Structural view of a Cloudflare `Workflow` binding — just the `create` the
+ * cron dispatcher needs to start an instance. Kept structural so the runtime
+ * stays free of a hard dependency on `@lunora/workflow` / workers-types.
+ */
+interface WorkflowBindingLike {
+    create: (options?: { id?: string; params?: Record<string, unknown> }) => Promise<unknown>;
 }
 
 /**
@@ -358,9 +376,11 @@ interface CronJobInfo {
     args?: Record<string, unknown>;
     /** The compiled cron expression, e.g. `"0 9 * * *"`. */
     cron: string;
-    functionPath: string;
+    functionPath?: string;
     name: string;
     shardKey?: string;
+    /** The `WORKFLOW_*` binding name when the job starts a durable workflow instead of a function. */
+    workflow?: string;
 }
 
 /**
@@ -803,6 +823,8 @@ const NDJSON_ENCODER = new TextEncoder();
 const RPC_PATH = "/_lunora/rpc";
 const WS_PATH = "/_lunora/ws";
 const SCHEDULER_DISPATCH_PATH = "/_lunora/scheduler/dispatch";
+/** Admin-gated POST that manually fires one code-defined cron job by name (studio "Run now"). */
+const CRON_JOBS_RUN_PATH = "/_lunora/admin/cron-jobs/run";
 // The cross-shard orchestration (`migrate` / `rank` / `rankpage` / `shard-traffic`)
 // + `pitr`, data-movement (`export` / `import` / `sync` / `connector/sync` /
 // `apply`), static-introspection (`functions` / `cron-jobs` / `openapi` /
@@ -1243,11 +1265,63 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     };
 
     /**
+     * Start the durable workflow a cron job targets: resolve its `WORKFLOW_*`
+     * binding off `env` and `create()` a fresh instance with the job's `args` as
+     * `params`. A missing/malformed binding is a hard failure (the job can't run)
+     * — surfaced like a function-dispatch failure so the cron invocation fails.
+     */
+    const startCronWorkflow = async (binding: string, job: CronJobDispatch, env: unknown): Promise<void> => {
+        const candidate = (env as Record<string, unknown> | null | undefined)?.[binding];
+
+        if (!candidate || typeof (candidate as { create?: unknown }).create !== "function") {
+            throw new LunoraError(`cron job "${job.name}" targets workflow binding "${binding}", which is not bound on env`, {
+                code: "CRON_JOB_FAILED",
+                status: 500,
+            });
+        }
+
+        await (candidate as WorkflowBindingLike).create({ params: job.args ?? {} });
+    };
+
+    /**
+     * Run one code-defined cron job: start its durable workflow instance, or
+     * dispatch its function to the shard (a non-2xx response is a failure).
+     * Throws a {@link LunoraError} on failure so both the scheduled-fire loop and
+     * the manual `/cron-jobs/run` trigger surface the same error shape.
+     */
+    const runOneCronJob = async (job: CronJobDispatch, env: unknown): Promise<void> => {
+        if (job.workflow) {
+            await startCronWorkflow(job.workflow, job, env);
+
+            return;
+        }
+
+        if (job.functionPath === undefined) {
+            throw new LunoraError(`cron job "${job.name}" has neither a function target nor a workflow target`, {
+                code: "CRON_JOB_FAILED",
+                status: 500,
+            });
+        }
+
+        const response = await dispatchToShard(job.functionPath, job.args ?? {}, job.shardKey ?? defaultShard);
+
+        if (!response.ok) {
+            // A failed background job is operationally a 500-class "didn't run",
+            // not a client error — keep the shard's transport status in the
+            // message rather than overloading the error `status`.
+            throw new LunoraError(`cron job "${job.name}" (${job.functionPath}) failed with shard status ${String(response.status)}`, {
+                code: "CRON_JOB_FAILED",
+                status: 500,
+            });
+        }
+    };
+
+    /**
      * Dispatch every code-defined cron job declared under the firing expression,
      * collecting per-job failures into `errors` so one failing job neither aborts
-     * the others nor is swallowed. A non-2xx shard response is itself a failure.
+     * the others nor is swallowed.
      */
-    const runCronJobs = async (cron: string, errors: Error[], toError: (error: unknown) => Error): Promise<void> => {
+    const runCronJobs = async (cron: string, env: unknown, errors: Error[], toError: (error: unknown) => Error): Promise<void> => {
         const cronJobs = options.cronJobs?.[cron];
 
         if (!cronJobs) {
@@ -1256,22 +1330,52 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
         for (const job of cronJobs) {
             try {
-                // eslint-disable-next-line no-await-in-loop -- intentional: jobs on one expression dispatch sequentially for deterministic order and to avoid a concurrent-RPC herd against a single shard
-                const response = await dispatchToShard(job.functionPath, job.args ?? {}, job.shardKey ?? defaultShard);
-
-                if (!response.ok) {
-                    // A failed background job is operationally a 500-class "didn't
-                    // run", not a client error — keep the shard's transport status
-                    // in the message rather than overloading the error `status`.
-                    throw new LunoraError(`cron job "${job.name}" (${job.functionPath}) failed with shard status ${String(response.status)}`, {
-                        code: "CRON_JOB_FAILED",
-                        status: 500,
-                    });
-                }
+                // eslint-disable-next-line no-await-in-loop -- intentional: jobs on one expression run sequentially for deterministic order and to avoid a concurrent-RPC herd against a single shard
+                await runOneCronJob(job, env);
             } catch (error: unknown) {
                 errors.push(toError(error));
             }
         }
+    };
+
+    /**
+     * Manually trigger one code-defined cron job by name — the same dispatch the
+     * scheduled fire uses, on demand from the studio's "Run now" action. Looks the
+     * job up across every cron expression (names are unique project-wide), runs it
+     * once, and reports success or the dispatch error. Admin-gated like the other
+     * `/_lunora/admin/*` mutations.
+     */
+    const handleRunCronJob = async (request: Request, env: unknown): Promise<Response> => {
+        if (!checkAdminAuth(request, options.adminToken)) {
+            throw new LunoraError("admin endpoint requires a valid admin bearer", { code: "ADMIN_FORBIDDEN", status: 403 });
+        }
+
+        if (request.method !== "POST") {
+            throw new LunoraError("cron-jobs run endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
+        }
+
+        if (!options.cronJobs) {
+            throw new LunoraError("cron-jobs run endpoint requires a `cronJobs` map on the worker", { code: "CRON_JOBS_NOT_CONFIGURED", status: 400 });
+        }
+
+        const body = (await readJsonBodyWithLimit(request)) as { name?: unknown };
+        const name = typeof body.name === "string" ? body.name : "";
+
+        if (name === "") {
+            throw new LunoraError("cron-jobs run endpoint requires a job `name`", { code: "BAD_REQUEST", status: 400 });
+        }
+
+        const job = Object.values(options.cronJobs)
+            .flat()
+            .find((candidate) => candidate.name === name);
+
+        if (!job) {
+            throw new LunoraError(`no cron job named "${name}" is registered`, { code: "CRON_JOB_NOT_FOUND", status: 404 });
+        }
+
+        await runOneCronJob(job, env);
+
+        return Response.json({ name, ran: true }, { status: 200 });
     };
 
     /**
@@ -2110,8 +2214,9 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         }
 
         // Code-defined crons: run every job declared under the firing expression.
-        // Failures join `errors` for the combined rethrow below.
-        await runCronJobs(controller.cron, errors, toError);
+        // Failures join `errors` for the combined rethrow below. `env` carries the
+        // `WORKFLOW_*` bindings a workflow-targeting job starts an instance on.
+        await runCronJobs(controller.cron, env, errors, toError);
 
         if (options.backupStore && options.backupCron !== undefined && options.backupCron === controller.cron) {
             try {
@@ -2206,6 +2311,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         [WS_PATH]: (request, env, url) => handleWebSocketUpgrade(request, env, url),
         [RPC_PATH]: (request, env) => handleRpc(request, env),
         [SCHEDULER_DISPATCH_PATH]: (request, env) => handleSchedulerDispatch(request, env),
+        [CRON_JOBS_RUN_PATH]: (request, env) => handleRunCronJob(request, env),
         // Extracted handler clusters built above, merged in (mirroring the auth
         // plane below): orchestration (migrate / rank / rankpage / shard-traffic /
         // pitr), data-movement (export / import / sync / connector-sync / apply),

@@ -92,6 +92,7 @@ const STORAGE_URL_PATH = "/_lunora/admin/storage/url";
 const STORAGE_BUCKETS_PATH = "/_lunora/admin/storage/buckets";
 const FUNCTIONS_PATH = "/_lunora/admin/functions";
 const CRON_JOBS_PATH = "/_lunora/admin/cron-jobs";
+const CRON_JOBS_RUN_PATH = "/_lunora/admin/cron-jobs/run";
 const OPENAPI_PATH = "/_lunora/admin/openapi";
 const OPENRPC_PATH = "/_lunora/admin/openrpc";
 const GLOBAL_TABLES_PATH = "/_lunora/admin/global/tables";
@@ -1015,6 +1016,25 @@ class LunoraClient {
         const body = (await this.adminFetch(CRON_JOBS_PATH, "GET")) as { jobs?: CronJobInfo[] };
 
         return body.jobs ?? [];
+    }
+
+    /**
+     * Manually fire one code-defined cron job by name — the same dispatch the
+     * scheduled trigger runs (dispatch the function, or start the durable
+     * workflow), on demand. Hits the admin-gated `POST /_lunora/admin/cron-jobs/run`
+     * endpoint; the worker must be built with a `cronJobs` map and `adminToken`,
+     * and this client's auth token must match. Resolves when the job has run (a
+     * function job's shard response is 2xx, or the workflow instance was created)
+     * and rejects with the dispatch error otherwise.
+     */
+    public async runCronJob(name: string): Promise<{ name: string; ran: boolean }> {
+        if (this.closed) {
+            throw new Error("LunoraClient is closed");
+        }
+
+        const body = (await this.adminFetch(CRON_JOBS_RUN_PATH, "POST", { name })) as { name?: string; ran?: boolean };
+
+        return { name: body.name ?? name, ran: body.ran === true };
     }
 
     /**

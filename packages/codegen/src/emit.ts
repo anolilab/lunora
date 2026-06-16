@@ -515,13 +515,68 @@ const renderApiBody = (functions: ReadonlyArray<FunctionIR>): string => {
 };
 
 /**
- * Emit `_generated/api.ts` — the typed `api.*` registry (public functions) plus
- * the `internal.*` registry. Both are the same `anyApi` proxy at runtime (the
- * `__lunoraRef` is identical); visibility is enforced server-side at dispatch,
- * not in the reference. Splitting the *types* keeps internal functions off the
- * client-facing `api` surface.
+ * Render the `workflows.*` typed-reference block for `_generated/api.ts` (its
+ * import line + the type/value). Each `lunora/workflows.ts` export becomes a
+ * `workflows.&lt;name>` reference carrying its `WORKFLOW_*` binding and — via the
+ * definition's phantom `__params` — its `params` type, so a `cronJobs()`
+ * registration that targets it infers the args. Returns empty strings when the
+ * project declares no workflows. The reference shape is defined locally (not
+ * imported from `@lunora/scheduler`) so a workflow-only project needs no
+ * scheduler dependency; it matches `@lunora/scheduler`'s `WorkflowReference`
+ * structurally at the cron call site.
  */
-const emitApi = (functions: ReadonlyArray<FunctionIR>): string => {
+/* eslint-disable no-secrets/no-secrets -- the emitted `WorkflowReference`/`WorkflowParamsOf` generic strings are dense generated TS, not credentials */
+const renderWorkflowsRef = (workflows: ReadonlyArray<WorkflowIR>): { block: string; importLine: string } => {
+    if (workflows.length === 0) {
+        return { block: "", importLine: "" };
+    }
+
+    const sorted = [...workflows].toSorted((a, b) => a.exportName.localeCompare(b.exportName));
+    const refMembers = sorted
+        .map((workflow) => `    ${workflow.exportName}: WorkflowReference<WorkflowParamsOf<typeof lunoraWorkflowDefinitions.${workflow.exportName}>>;`)
+        .join("\n");
+    const objectMembers = sorted
+        .map(
+            (workflow) =>
+                `    ${workflow.exportName}: { isLunoraWorkflow: true, binding: ${JSON.stringify(workflow.bindingName)}, name: ${JSON.stringify(workflow.exportName)} },`,
+        )
+        .join("\n");
+
+    const block = `
+/** Params type carried by a \`defineWorkflow\` definition (its phantom \`__params\`). */
+type WorkflowParamsOf<Definition> = Definition extends { __params?: infer Params } ? (unknown extends Params ? Record<string, unknown> : Params) : Record<string, unknown>;
+
+/** A typed reference to a durable workflow, addressable for \`cronJobs()\` targets. Mirrors \`@lunora/scheduler\`'s \`WorkflowReference\` structurally. */
+export interface WorkflowReference<Params = Record<string, unknown>> {
+    readonly isLunoraWorkflow: true;
+    readonly __params?: Params;
+    readonly binding: string;
+    readonly name: string;
+}
+
+/** This project's durable workflows, addressable as typed references (e.g. \`crons.daily("digest", …, workflows.digestPipeline, params)\`). */
+export interface WorkflowsRef {
+${refMembers}
+}
+
+export const workflows: WorkflowsRef = {
+${objectMembers}
+};
+`;
+
+    return { block, importLine: `import type * as lunoraWorkflowDefinitions from "../workflows.js";\n` };
+};
+/* eslint-enable no-secrets/no-secrets -- re-enable after the workflows-ref emitter */
+
+/**
+ * Emit `_generated/api.ts` — the typed `api.*` registry (public functions), the
+ * `internal.*` registry, and (when the project declares workflows) the typed
+ * `workflows.*` reference object. `api`/`internal` are the same `anyApi` proxy
+ * at runtime (the `__lunoraRef` is identical); visibility is enforced
+ * server-side at dispatch, not in the reference. Splitting the *types* keeps
+ * internal functions off the client-facing `api` surface.
+ */
+const emitApi = (functions: ReadonlyArray<FunctionIR>, workflows: ReadonlyArray<WorkflowIR> = []): string => {
     const publicFunctions = functions.filter((definition) => definition.visibility !== "internal");
     const internalFunctions = functions.filter((definition) => definition.visibility === "internal");
 
@@ -538,9 +593,11 @@ const emitApi = (functions: ReadonlyArray<FunctionIR>): string => {
     const apiBlock = publicBody ? `\n${publicBody}\n` : "";
     const internalBlock = internalBody ? `\n${internalBody}\n` : "";
 
+    const workflowsRef = renderWorkflowsRef(workflows);
+
     return `${GENERATED_HEADER}import { anyApi } from "@lunora/server/types";
 import type { FunctionReference } from "@lunora/client";
-${dataModelImportLine}
+${workflowsRef.importLine}${dataModelImportLine}
 export interface ApiTypes {${apiBlock}}
 
 export const api = anyApi as unknown as ApiTypes;
@@ -549,7 +606,7 @@ export const api = anyApi as unknown as ApiTypes;
 export interface InternalApiTypes {${internalBlock}}
 
 export const internal = anyApi as unknown as InternalApiTypes;
-`;
+${workflowsRef.block}`;
 };
 
 /**
@@ -3105,10 +3162,16 @@ const emitCrons = (crons: ReadonlyArray<CronJobIR>): string => {
     const mapEntries = [...byExpression.entries()]
         .map(([expression, jobs]) => {
             const jobEntries = jobs
-                .map(
-                    (job) =>
-                        `        { name: ${JSON.stringify(job.name)}, functionPath: ${JSON.stringify(job.functionPath)}, args: ${JSON.stringify(job.args)} },`,
-                )
+                .map((job) => {
+                    // A workflow target starts a durable instance per fire (args ⇒
+                    // its `params`); a function target dispatches `namespace:fn` to
+                    // the shard. The two are mutually exclusive in the emitted entry.
+                    const targetField = job.workflow
+                        ? `workflow: ${JSON.stringify(job.workflow.binding)}`
+                        : `functionPath: ${JSON.stringify(job.functionPath)}`;
+
+                    return `        { name: ${JSON.stringify(job.name)}, ${targetField}, args: ${JSON.stringify(job.args)} },`;
+                })
                 .join("\n");
 
             return `    ${JSON.stringify(expression)}: [\n${jobEntries}\n    ],`;
@@ -3118,13 +3181,17 @@ const emitCrons = (crons: ReadonlyArray<CronJobIR>): string => {
     const mapBody = mapEntries.length > 0 ? `\n${mapEntries}\n` : "";
 
     return `${GENERATED_HEADER}/**
- * One scheduled cron invocation. \`functionPath\` is the \`namespace:fn\`
- * dispatch ref (matches \`__lunoraRef\`); \`args\` are forwarded verbatim.
+ * One scheduled cron invocation. Exactly one target is set: \`functionPath\` is
+ * the \`namespace:fn\` dispatch ref (matches \`__lunoraRef\`), invoked on the
+ * shard; \`workflow\` is a \`WORKFLOW_*\` binding name whose durable workflow is
+ * started fresh per fire. \`args\` are forwarded verbatim (a workflow's become
+ * its \`params\`).
  */
 export interface LunoraCronJob {
     args: Record<string, unknown>;
-    functionPath: string;
+    functionPath?: string;
     name: string;
+    workflow?: string;
 }
 
 /**

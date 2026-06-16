@@ -106,6 +106,46 @@ describe("createWorker — code-defined cron jobs", () => {
         await expect(worker.scheduled({ cron: CRON, scheduledTime: 0 }, {}, fakeContext)).rejects.toThrow(/clear presence/u);
     });
 
+    it("starts a workflow instance for a workflow-targeting cron job", async () => {
+        expect.assertions(3);
+
+        const shard = createShardSpy();
+        const created: { params?: unknown }[] = [];
+        const env = {
+            WORKFLOW_DIGEST: {
+                create: async (options?: { params?: unknown }) => {
+                    created.push(options ?? {});
+
+                    return { id: "wf-1" };
+                },
+            },
+        };
+
+        const worker = createWorker({
+            cronJobs: { [CRON]: [{ args: { region: "eu" }, name: "nightly digest", workflow: "WORKFLOW_DIGEST" }] },
+            shardDO: shard.namespace,
+        });
+
+        await worker.scheduled({ cron: CRON, scheduledTime: 0 }, env, fakeContext);
+
+        // The workflow binding's create() is called with args as params; no shard dispatch.
+        expect(created).toStrictEqual([{ params: { region: "eu" } }]);
+        expect(shard.calls).toHaveLength(0);
+        expect(created).toHaveLength(1);
+    });
+
+    it("fails the cron invocation when a workflow-targeting job's binding is missing", async () => {
+        expect.assertions(1);
+
+        const shard = createShardSpy();
+        const worker = createWorker({
+            cronJobs: { [CRON]: [{ args: {}, name: "nightly digest", workflow: "WORKFLOW_MISSING" }] },
+            shardDO: shard.namespace,
+        });
+
+        await expect(worker.scheduled({ cron: CRON, scheduledTime: 0 }, {}, fakeContext)).rejects.toThrow(/WORKFLOW_MISSING/u);
+    });
+
     it("denies dispatch when authorizeShard rejects the system identity", async () => {
         expect.assertions(2);
 

@@ -1,44 +1,37 @@
 /**
- * Shared cron-expression validation + ergonomic-form compilation used by both
- * the imperative `createCronTrigger` (see `./cron.ts`) and the code-first
- * `cronJobs()` builder (see `./jobs.ts`). Keeping the regexes in one place
- * means the two surfaces can never drift apart on what counts as a valid
- * expression.
+ * Shared cron-expression validation used by both the imperative
+ * `createCronTrigger` (see `./cron.ts`) and the code-first `cronJobs()` builder
+ * (see `./jobs.ts`). Keeping the check in one place means the two surfaces can
+ * never drift apart on what counts as a valid expression.
+ *
+ * Validation is delegated to `cron-parser`, so the full standard cron grammar is
+ * accepted — wildcards, lists, ranges, steps, the 3-letter month/weekday names,
+ * the Quartz-style `L`/`W`/`#`/`?` operators, the `@hourly`/`@daily`/… macros,
+ * and both 5-field (minute…dow) and 6-field (seconds-leading) forms. We only
+ * decide *well-formedness* here; out-of-platform values (Cloudflare caps the
+ * number of triggers, doesn't run seconds, etc.) are still rejected downstream
+ * by wrangler/Cloudflare at deploy time.
+ *
+ * `cron-parser` is a Node/codegen-time dependency: this module is pulled in by
+ * the `cronJobs()` builder (authoring) and `@lunora/codegen` (build), never by
+ * the `SchedulerDO` runtime path — so with `sideEffects: false` it tree-shakes
+ * out of the Worker bundle.
  */
+import { CronExpressionParser } from "cron-parser";
 
-// Single cron-piece: `*`, `*` followed by a step, a digit, a range, or a
-// range with a step. Also accepts the standard 3-letter named tokens for
-// months (JAN..DEC) and weekdays (SUN..SAT), case-insensitively and in
-// ranges/lists (e.g. `MON`, `MON-FRI`, `JAN-MAR`), which both standard cron
-// and Cloudflare's parser support. Intentionally permissive on numeric values
-// (we don't enforce minute < 60 etc.) — wrangler/Cloudflare will reject
-// out-of-range values — but strict enough to refuse free-form prose like
-// "every minute" that would otherwise silently no-op.
-// `*` optionally followed by a step (`*/5`).
-const CRON_WILDCARD = /^\*(?:\/\d+)?$/u;
-
-// A numeric value or range, optionally followed by a step (`5`, `1-3`, `1-3/2`).
-const CRON_NUMERIC = /^\d+(?:-\d+)?(?:\/\d+)?$/u;
-
-// A 3-letter named token (month/weekday), optionally as a range, with a step
-// (`MON`, `MON-FRI`, `JAN-MAR/2`).
-const CRON_NAMED = /^[A-Za-z]{3}(?:-[A-Za-z]{3})?(?:\/\d+)?$/u;
-
-const CRON_FIELD_SEPARATOR = /\s+/u;
-
-const isValidCronPiece = (piece: string): boolean => CRON_WILDCARD.test(piece) || CRON_NUMERIC.test(piece) || CRON_NAMED.test(piece);
-
-const isValidCronField = (field: string): boolean => field.split(",").every((piece) => isValidCronPiece(piece));
-
-/** Standard 5-field (minute hour day month dow) or 6-field (with seconds) cron. */
+/** Standard cron expression (5- or 6-field) or a supported `@macro`, per `cron-parser`. */
 const isValidCronExpression = (schedule: string): boolean => {
-    const tokens = schedule.trim().split(CRON_FIELD_SEPARATOR);
-
-    if (tokens.length !== 5 && tokens.length !== 6) {
+    if (typeof schedule !== "string" || schedule.trim() === "") {
         return false;
     }
 
-    return tokens.every((token) => isValidCronField(token));
+    try {
+        CronExpressionParser.parse(schedule.trim());
+
+        return true;
+    } catch {
+        return false;
+    }
 };
 
 /**
@@ -48,7 +41,7 @@ const isValidCronExpression = (schedule: string): boolean => {
  */
 const assertValidCronExpression = (schedule: string, context = "cron expression"): void => {
     if (!isValidCronExpression(schedule)) {
-        throw new Error(`@lunora/scheduler: invalid ${context} "${schedule}" — expected 5 or 6 space-separated fields (e.g. "0 * * * *")`);
+        throw new Error(`@lunora/scheduler: invalid ${context} "${schedule}" — expected a standard 5- or 6-field cron expression (e.g. "0 * * * *")`);
     }
 };
 

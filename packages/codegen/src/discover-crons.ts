@@ -3,7 +3,7 @@ import type { CallExpression, Identifier, ObjectLiteralExpression, Project, Prop
 import { Node, SyntaxKind } from "ts-morph";
 
 import { listLunoraSourceFiles } from "./discover-functions";
-import type { CronJobIR } from "./ir";
+import type { CronJobIR, WorkflowIR } from "./ir";
 import sanitizeNamespace from "./paths";
 
 /** All builder method names — the structured schedules plus the raw `.cron`. */
@@ -189,8 +189,90 @@ const functionPathFromArgument = (call: CallExpression, index: number, jobName: 
     return `${sanitizeNamespace(namespace)}:${functionName}`;
 };
 
+/** Build a workflow target IR from a resolved {@link WorkflowIR}. */
+const workflowTarget = (workflow: WorkflowIR): Pick<CronJobIR, "workflow"> => {
+    return { workflow: { binding: workflow.bindingName, exportName: workflow.exportName } };
+};
+
+/**
+ * Resolve the cron's target argument into either a function dispatch
+ * (`{ functionPath }`) or a durable-workflow start
+ * (`{ workflow: { binding, exportName } }`).
+ *
+ * Targets mirror the generated reference objects in `_generated/api.ts`: a
+ * `workflows.NAME` access is the canonical generated workflow reference; a bare
+ * `NAME` identifier is a `defineWorkflow` export imported directly; and an
+ * `internal.file.fn` / `api.file.fn` access is a function dispatch.
+ *
+ * A `workflows.NAME` / bare identifier that doesn't name a declared workflow, or
+ * anything else, is a static-resolution error.
+ */
+const resolveTarget = (
+    call: CallExpression,
+    index: number,
+    jobName: string,
+    workflowsByName: ReadonlyMap<string, WorkflowIR>,
+): Pick<CronJobIR, "functionPath" | "workflow"> => {
+    const argument = call.getArguments()[index];
+
+    // Canonical workflow target: `workflows.<name>` — the generated reference
+    // object. The receiver is the bare `workflows` identifier (a single property
+    // access), which distinguishes it from a `internal.file.fn` function ref (a
+    // double access whose receiver is itself a property access).
+    if (argument && Node.isPropertyAccessExpression(argument)) {
+        const receiver = argument.getExpression();
+
+        if (Node.isIdentifier(receiver) && receiver.getText() === "workflows") {
+            const workflow = workflowsByName.get(argument.getName());
+
+            if (workflow) {
+                return workflowTarget(workflow);
+            }
+
+            throw Object.assign(
+                new Error(`Cron job "${jobName}" targets workflows.${argument.getName()}, but no such workflow is declared in lunora/workflows.ts.`),
+                {
+                    code: "CRON_NON_STATIC_FN",
+                    name: "LunoraError",
+                    status: 500,
+                },
+            );
+        }
+
+        return { functionPath: functionPathFromArgument(call, index, jobName) };
+    }
+
+    // Workflow target via a bare identifier referencing a `defineWorkflow` export
+    // (e.g. `digestPipeline` imported from `./workflows`).
+    if (argument && Node.isIdentifier(argument)) {
+        const workflow = workflowsByName.get(argument.getText());
+
+        if (workflow) {
+            return workflowTarget(workflow);
+        }
+
+        throw Object.assign(
+            new Error(
+                `Cron job "${jobName}" references "${argument.getText()}", which is neither a function (internal.file.fn / api.file.fn) nor a declared workflow in lunora/workflows.ts.`,
+            ),
+            {
+                code: "CRON_NON_STATIC_FN",
+                name: "LunoraError",
+                status: 500,
+            },
+        );
+    }
+
+    return { functionPath: functionPathFromArgument(call, index, jobName) };
+};
+
 /** Lift one `crons.method(name, schedule, fnRef, args?)` call into {@link CronJobIR}. */
-const cronFromCall = (call: CallExpression, callee: PropertyAccessExpression, builderNames: Set<string>): CronJobIR | undefined => {
+const cronFromCall = (
+    call: CallExpression,
+    callee: PropertyAccessExpression,
+    builderNames: Set<string>,
+    workflowsByName: ReadonlyMap<string, WorkflowIR>,
+): CronJobIR | undefined => {
     const method = callee.getName();
 
     if (!CRON_METHODS.has(method)) {
@@ -247,11 +329,11 @@ const cronFromCall = (call: CallExpression, callee: PropertyAccessExpression, bu
         cron = compileCronSchedule(method as "daily" | "interval" | "monthly" | "weekly", objectLiteralValue(scheduleArgument, name));
     }
 
-    const functionPath = functionPathFromArgument(call, 2, name);
+    const target = resolveTarget(call, 2, name, workflowsByName);
     const argumentsNode = call.getArguments()[3];
     const args = argumentsNode && Node.isObjectLiteralExpression(argumentsNode) ? objectLiteralValue(argumentsNode, name) : {};
 
-    return { args, cron, functionPath, name };
+    return { args, cron, name, ...target };
 };
 
 /** Reject duplicate cron job names — runtime keys the dispatcher by name. */
@@ -283,12 +365,14 @@ const assertUniqueNames = (crons: ReadonlyArray<CronJobIR>): void => {
  * Scan every `.ts` file under `lunoraDir` for `cronJobs()` builder registrations
  * (`crons.interval(...)`, `crons.daily(...)`, `crons.cron(...)`, …) and lift them
  * into {@link CronJobIR}. Schedules are compiled to standard cron expressions;
- * function references are resolved to their `namespace:fn` dispatch path. Names
- * must be unique across the project.
+ * function references are resolved to their `namespace:fn` dispatch path, while a
+ * bare identifier naming a declared workflow (`workflows`) resolves to a durable
+ * workflow start. Names must be unique across the project.
  */
-const discoverCrons = (project: Project, lunoraDirectory: string): CronJobIR[] => {
+const discoverCrons = (project: Project, lunoraDirectory: string, workflows: ReadonlyArray<WorkflowIR> = []): CronJobIR[] => {
     const filePaths = listLunoraSourceFiles(lunoraDirectory);
     const crons: CronJobIR[] = [];
+    const workflowsByName = new Map<string, WorkflowIR>(workflows.map((workflow) => [workflow.exportName, workflow]));
 
     for (const filePath of filePaths) {
         const source: SourceFile = project.getSourceFile(filePath) ?? project.addSourceFileAtPath(filePath);
@@ -305,7 +389,7 @@ const discoverCrons = (project: Project, lunoraDirectory: string): CronJobIR[] =
                 continue;
             }
 
-            const cron = cronFromCall(call, callee, builderNames);
+            const cron = cronFromCall(call, callee, builderNames, workflowsByName);
 
             if (cron) {
                 crons.push(cron);

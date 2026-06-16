@@ -9,13 +9,14 @@ export type { SchedulerDOState, SchedulerEnv, SchedulerPoolStatus, SchedulerStat
 export { SchedulerDO } from "./scheduler-do";
 export type {
     ArgsOf,
-    LunoraSchedulerOptions,
+    CronTarget,
     DurableObjectIdLike,
     DurableObjectNamespaceLike,
     DurableObjectStubLike,
     EnqueueOptions,
     FunctionReference,
     HttpDispatcherOptions,
+    LunoraSchedulerOptions,
     MessageBatchLike,
     QueueConsumerOptions,
     QueueDispatch,
@@ -31,7 +32,9 @@ export type {
     RunOptions,
     Scheduler,
     ScheduleRecord,
+    WorkflowReference,
     Workpool,
     WorkpoolOptions,
 } from "./types";
+export { isWorkflowReference } from "./types";
 export { assertValidCronExpression, isValidCronExpression } from "./validate-cron";
