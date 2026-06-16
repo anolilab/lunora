@@ -62,6 +62,16 @@ export const heartbeat = mutation({
             .withIndex("byRoomSession", (q) => q.eq("roomId", roomId).eq("sessionId", sessionId))
             .first();
 
+        // Ownership guard. `sessionId` is client-supplied and `listPresent`
+        // exposes it to every room subscriber, so without this a participant
+        // could reuse another visible `sessionId` and overwrite that member's
+        // presence row. Reject a heartbeat that targets a row owned by a
+        // *different* authenticated user; an anonymous caller (no `userId`)
+        // likewise may not patch a row that belongs to an authenticated user.
+        if (existing && existing["userId"] !== undefined && existing["userId"] !== userId) {
+            throw new Error("presence/heartbeat: sessionId belongs to a different user — refusing to overwrite another participant's presence.");
+        }
+
         const row: Record<string, unknown> = {
             lastSeen,
             roomId,

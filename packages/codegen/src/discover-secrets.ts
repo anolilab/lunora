@@ -11,6 +11,15 @@ const LOWER_RE = /[a-z]/u;
 const UPPER_RE = /[A-Z]/u;
 const DIGIT_RE = /\d/u;
 
+/**
+ * A long, contiguous single-case hex run (32+ chars) — a raw hex-encoded key /
+ * HMAC secret. The mixed-charset {@link isHighEntropy} rule misses these because
+ * an all-lowercase (or all-uppercase) hex token has no second character class.
+ * The `{32,}` floor (128-bit hex and up) keeps UUIDs-without-dashes and short
+ * digests out of scope while still catching 64-char (256-bit) keys.
+ */
+const HEX_SECRET_RE = /\b(?:[\da-f]{32,}|[\dA-F]{32,})\b/u;
+
 /** Charset-diversity floor for the generic high-entropy rule — must mix lower, upper, and digit. */
 const isHighEntropy = (value: string): boolean => {
     // A long, contiguous base64/hex run with at least three character classes is
@@ -23,6 +32,9 @@ const isHighEntropy = (value: string): boolean => {
 
     return LOWER_RE.test(token) && UPPER_RE.test(token) && DIGIT_RE.test(token);
 };
+
+/** A long single-case hex token — catches lowercase/uppercase-only keys the mixed-charset rule skips. */
+const isHexSecret = (value: string): boolean => HEX_SECRET_RE.test(value);
 
 /** Provider-specific secret-literal matchers, hoisted to module scope (no per-call recompilation). */
 const STRIPE_LIVE_KEY_RE = /\b(?:sk|rk)_live_[\dA-Za-z]{20,}/u;
@@ -46,6 +58,7 @@ const SECRET_RULES: ReadonlyArray<{ kind: string; test: (value: string) => boole
     { kind: "slack_token", test: (value) => SLACK_TOKEN_RE.test(value) },
     { kind: "private_key", test: (value) => PRIVATE_KEY_RE.test(value) },
     { kind: "high_entropy", test: isHighEntropy },
+    { kind: "hex_secret", test: isHexSecret },
 ];
 
 /** The matching secret rule's `kind` for a string value, or `undefined` when none matches. */
@@ -54,23 +67,53 @@ const secretKindOf = (value: string): string | undefined => SECRET_RULES.find((r
 /** A redacted preview of a secret literal — first 4 chars plus its length, never the full value. */
 const redact = (value: string): string => `${value.slice(0, 4)}…(${String(value.length)} chars)`;
 
-/** The string value of a string-literal / no-substitution template node, or `undefined` for other nodes. */
+/**
+ * The constant string value of a node, folding `+` concatenations of string
+ * literals (`"a" + "b" + "c"` → `"abc"`) so a secret split across adjacent
+ * literals is scanned as one token. Returns `undefined` for non-string nodes or a
+ * concatenation that mixes in a non-literal operand (the dynamic part defeats a
+ * static value). String-literal and no-substitution-template leaves resolve to
+ * their text; a `+` binary expression resolves to the join of its two sides.
+ */
 const literalValueOf = (node: TsNode): string | undefined => {
     if (Node.isStringLiteral(node) || Node.isNoSubstitutionTemplateLiteral(node)) {
         return node.getLiteralText();
     }
 
+    if (Node.isBinaryExpression(node) && node.getOperatorToken().getKind() === SyntaxKind.PlusToken) {
+        const left = literalValueOf(node.getLeft());
+        const right = literalValueOf(node.getRight());
+
+        return left !== undefined && right !== undefined ? left + right : undefined;
+    }
+
     return undefined;
 };
 
-/** Secret-shaped string literals in one source file. */
+/** True when `node` is an operand of an enclosing `+` string-concatenation — folded by its root, so skip here. */
+const isConcatenationOperand = (node: TsNode): boolean => {
+    const parent = node.getParent();
+
+    return parent !== undefined && Node.isBinaryExpression(parent) && parent.getOperatorToken().getKind() === SyntaxKind.PlusToken;
+};
+
+/** Secret-shaped string literals (and `+`-folded concatenations) in one source file. */
 const secretsInSourceFile = (sourceFile: SourceFile, relativePath: string): SecretLiteralIR[] => {
     const found: SecretLiteralIR[] = [];
 
-    for (const node of [
+    const nodes: TsNode[] = [
+        // Top-level `+` concatenations are folded; their string-literal operands are
+        // skipped below so a secret split across literals is reported once, at the root.
+        ...sourceFile.getDescendantsOfKind(SyntaxKind.BinaryExpression),
         ...sourceFile.getDescendantsOfKind(SyntaxKind.StringLiteral),
         ...sourceFile.getDescendantsOfKind(SyntaxKind.NoSubstitutionTemplateLiteral),
-    ]) {
+    ];
+
+    for (const node of nodes) {
+        if (isConcatenationOperand(node)) {
+            continue;
+        }
+
         const value = literalValueOf(node);
 
         if (value === undefined) {
@@ -89,8 +132,10 @@ const secretsInSourceFile = (sourceFile: SourceFile, relativePath: string): Secr
 
 /**
  * Discover secret-shaped string literals (`sk_live_…`, `AKIA…`, `ghp_…`, PEM
- * private-key headers, and high-entropy base64/hex runs) in every `.ts` file
- * under the lunora source directory — the `hardcoded_secret` lint input. A secret
+ * private-key headers, mixed-charset high-entropy runs, and long single-case hex
+ * keys) in every `.ts` file under the lunora source directory — the
+ * `hardcoded_secret` lint input. Adjacent `+`-concatenated string literals are
+ * folded so a secret split across pieces is still scanned as one token. A secret
  * checked into source belongs in `.dev.vars` / `wrangler secret put`, never the
  * codebase. Complements the pre-commit `vis secrets` gate by surfacing the same
  * class of finding in the studio Advisors table at codegen time.

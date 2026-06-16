@@ -363,7 +363,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             return serveRelationFanout(schema as unknown as SchemaLike, db, functionPath, args);
         }
 
-        protected override async executeSubscription(functionPath: string, args: Record<string, unknown>): Promise<{ result: unknown; tables: Set<string> } | null> {
+        protected override async executeSubscription(functionPath: string, args: Record<string, unknown>, identity?: { identity?: Record<string, unknown>; userId?: string }): Promise<{ result: unknown; tables: Set<string> } | null> {
             const registered = LUNORA_FUNCTIONS[functionPath];
 
             if (!registered || registered.kind !== "query" || registered.visibility === "internal") {
@@ -373,7 +373,10 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             this.ensureMigrated();
 
             const tables = new Set<string>();
-            const ctx = this.buildCtx({ functionPath, onRead: (table) => tables.add(table) });
+            // Identity is threaded EXPLICITLY from the (deferred/interleaved)
+            // subscription caller — never read from the shared per-request field
+            // here — so a concurrent RPC can't leak its identity into this re-run.
+            const ctx = this.buildCtx({ functionPath, identity, onRead: (table) => tables.add(table) });
             const result = await registered.handler(ctx, args);
 
             return { result, tables };
@@ -653,10 +656,15 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             this.migrated = true;
         }
 
-        private buildCtx(options: { functionPath?: string; onRead?: (table: string) => void } = {}): unknown {
+        private buildCtx(options: { functionPath?: string; identity?: { identity?: Record<string, unknown>; userId?: string }; onRead?: (table: string) => void } = {}): unknown {
             const env = (this.env ?? {}) as Record<string, unknown>;
-            const userId = this.getCurrentUserId();
-            const identity = this.getCurrentIdentity();
+            // When the caller threads an explicit identity (subscription seed /
+            // refresh — both run in deferred/interleaved contexts), use it by
+            // value and NEVER read the shared per-request identity field, which a
+            // concurrent RPC may have re-set. Otherwise (the synchronous RPC
+            // dispatch path) fall back to the per-request fields as before.
+            const userId = options.identity ? options.identity.userId : this.getCurrentUserId();
+            const identity = options.identity ? options.identity.identity : this.getCurrentIdentity();
 
             const scheduler = (config.scheduler?.(env) ?? schedulerStub) as SchedulerLike;
             // Build the storage adapter once and share it between `ctx.storage`

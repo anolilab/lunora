@@ -37,6 +37,7 @@ interface FakeReader {
     order: (direction: "asc" | "desc") => FakeReader;
     paginate: () => Promise<{ continueCursor: null | string; isDone: boolean; page: Record<string, unknown>[] }>;
     take: (limit: number) => Promise<Record<string, unknown>[]>;
+    unique: () => Promise<Record<string, unknown> | null>;
     withIndex: (indexName?: string) => FakeReader;
     withSearchIndex: () => FakeReader;
 }
@@ -185,6 +186,7 @@ const enableQueryReader = (database: FakeDatabase, rows: (Record<string, unknown
                 return { continueCursor: null, isDone: true, page: list };
             },
             take: async (limit) => list.slice(0, limit),
+            unique: async () => list[0] ?? null,
             withIndex: () => makeReader(list),
             withSearchIndex: () => makeReader(list),
         };
@@ -262,6 +264,25 @@ describe("mask — read path", () => {
         expect(rows).toHaveLength(2);
         expect(rows[0]?.["email"]).toBeNull();
         expect(rows[1]?.["email"]).toBeNull();
+    });
+
+    it("masks (and does not throw on) the row returned by query().withIndex().unique()", async () => {
+        expect.assertions(2);
+
+        const seed = [{ _id: "u1", email: "a@x.com", name: "Ann", table: "users" }];
+        const database = createFakeDatabase(seed);
+
+        enableQueryReader(database, seed);
+
+        const handler = lunora.query
+            .use(maskForTest({ users: { email: "redact" } }))
+            // `.unique()` is a core terminal — it must resolve through the mask wrapper, not be `undefined`.
+            .query(async ({ ctx }) => (ctx as unknown as TestContext).db.query("users").withIndex("by_email").unique());
+
+        const row = await handler.handler(makeContext(database, "u1"), {});
+
+        expect(row?.["email"]).toBeNull();
+        expect(row?.["name"]).toBe("Ann");
     });
 
     it("masks the row returned by findFirst", async () => {

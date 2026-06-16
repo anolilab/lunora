@@ -1,4 +1,4 @@
-import type { CallExpression, Node as TsNode, Project, SourceFile, VariableDeclaration } from "ts-morph";
+import type { CallExpression, NewExpression, Node as TsNode, Project, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
 import { classifyProcedureCall, listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
@@ -21,16 +21,45 @@ const PROPERTY_CALLS: Record<string, string> = {
 /** Global receiver names whose `.fetch(...)` is the same global `fetch`. */
 const FETCH_GLOBAL_RECEIVERS = new Set(["globalThis", "self"]);
 
+/** Global wrapper receivers (`globalThis` / `self` / `window`) whose member is the same ambient global. */
+const GLOBAL_THIS_RECEIVERS = new Set(["globalThis", "self", "window"]);
+
+/**
+ * The rightmost receiver name to match against {@link PROPERTY_CALLS}. A bare
+ * identifier (`crypto`, `Date`, `Math`) yields its text; a property access yields
+ * its member name *peeled past* a `globalThis`/`self`/`window` wrapper, so
+ * `globalThis.crypto.randomUUID()` and `self.crypto.getRandomValues()` resolve to
+ * the same `crypto` receiver as the single-identifier form. Returns `undefined`
+ * for any other shape (e.g. an indexed/computed receiver).
+ */
+const receiverNameOf = (receiver: TsNode): string | undefined => {
+    if (Node.isIdentifier(receiver)) {
+        return receiver.getText();
+    }
+
+    if (Node.isPropertyAccessExpression(receiver)) {
+        const inner = receiver.getExpression();
+
+        // `globalThis.crypto` / `self.crypto` / `window.crypto` → `crypto`.
+        if (Node.isIdentifier(inner) && GLOBAL_THIS_RECEIVERS.has(inner.getText())) {
+            return receiver.getName();
+        }
+    }
+
+    return undefined;
+};
+
 /**
  * The non-deterministic callee label for `call`, or `undefined` when the call is
  * not one of the disallowed APIs. Recognises:
  *
  * - `Date.now()` / `Math.random()` / `crypto.randomUUID()` /
  * `crypto.getRandomValues(...)` — a `PropertyAccessExpression` whose
- * `receiver.method` pair is in {@link PROPERTY_CALLS};
- * - bare `fetch(...)` — an identifier callee named `fetch`;
- * - `globalThis.fetch(...)` / `self.fetch(...)` — a property access of `fetch`
- * on a global receiver.
+ * `receiver.method` pair is in {@link PROPERTY_CALLS}, including a
+ * `globalThis`/`self`/`window`-prefixed receiver (`globalThis.crypto.randomUUID()`);
+ * - bare `Date()` / `fetch(...)` — an identifier callee;
+ * - `globalThis.fetch(...)` / `self.fetch(...)` / `window.fetch(...)` — a property
+ * access of `fetch` on a global receiver.
  *
  * Receivers are matched by surface text (no import resolution): these are
  * ambient globals, never imported, so there is no binding to follow.
@@ -38,9 +67,11 @@ const FETCH_GLOBAL_RECEIVERS = new Set(["globalThis", "self"]);
 const nondeterministicCalleeOf = (call: CallExpression): string | undefined => {
     const callee = call.getExpression();
 
-    // Bare `fetch(...)`.
+    // Bare `fetch(...)` / `Date(...)`.
     if (Node.isIdentifier(callee)) {
-        return callee.getText() === "fetch" ? "fetch" : undefined;
+        const name = callee.getText();
+
+        return name === "fetch" || name === "Date" ? name : undefined;
     }
 
     if (!Node.isPropertyAccessExpression(callee)) {
@@ -48,20 +79,43 @@ const nondeterministicCalleeOf = (call: CallExpression): string | undefined => {
     }
 
     const method = callee.getName();
-    const receiver = callee.getExpression();
+    const receiverName = receiverNameOf(callee.getExpression());
 
-    if (!Node.isIdentifier(receiver)) {
+    if (receiverName === undefined) {
         return undefined;
     }
 
-    const receiverName = receiver.getText();
-
-    // `globalThis.fetch(...)` / `self.fetch(...)` — the same global `fetch`.
+    // `globalThis.fetch(...)` / `self.fetch(...)` / `window.fetch(...)` — global `fetch`.
     if (method === "fetch" && FETCH_GLOBAL_RECEIVERS.has(receiverName)) {
         return "fetch";
     }
 
     return PROPERTY_CALLS[`${receiverName}.${method}`];
+};
+
+/**
+ * The non-deterministic label for a `new …()` expression, or `undefined`. Only
+ * `new Date()` (no argument, or a non-literal argument that isn't a fixed epoch)
+ * reads the wall clock; `new Date(2020, 0, 1)` / `new Date("…")` with literal
+ * arguments is deterministic, so it is not flagged. `new Date()` is as
+ * non-deterministic as `Date.now()`, which the call path already flags.
+ */
+const nondeterministicNewOf = (expression: NewExpression): string | undefined => {
+    const callee = expression.getExpression();
+
+    if (!Node.isIdentifier(callee) || callee.getText() !== "Date") {
+        return undefined;
+    }
+
+    const arguments_ = expression.getArguments();
+
+    // `new Date(<literal…>)` pins a fixed instant — deterministic. A zero-arg or
+    // dynamically-argumented `new Date()` reads the clock.
+    const allLiteral = arguments_.every(
+        (argument) => Node.isNumericLiteral(argument) || Node.isStringLiteral(argument) || Node.isNoSubstitutionTemplateLiteral(argument),
+    );
+
+    return arguments_.length > 0 && allLiteral ? undefined : "new Date";
 };
 
 /**
@@ -146,6 +200,16 @@ const callsInHandler = (procedure: ResolvedProcedure, file: string): Nondetermin
         }
     }
 
+    // `new Date()` is a NewExpression, not a CallExpression — traverse it too so
+    // wall-clock reads via the constructor are caught alongside `Date.now()`.
+    for (const newNode of procedure.handler.getDescendantsOfKind(SyntaxKind.NewExpression)) {
+        const callee = nondeterministicNewOf(newNode);
+
+        if (callee !== undefined) {
+            found.push({ callee, exportName: procedure.exportName, file, kind: procedure.kind, line: newNode.getStartLineNumber() });
+        }
+    }
+
     return found;
 };
 
@@ -171,9 +235,10 @@ const callsInSourceFile = (sourceFile: SourceFile, relativePath: string): Nondet
 };
 
 /**
- * Discover non-deterministic API calls (`Date.now`, `Math.random`,
- * `crypto.randomUUID`, `crypto.getRandomValues`, `fetch`) lexically inside the
- * handler body of every exported `query(...)` / `mutation(...)` registration
+ * Discover non-deterministic API calls (`Date.now`, `new Date()`, `Date()`,
+ * `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues` — including
+ * `globalThis`/`self`/`window`-prefixed receivers — and `fetch`) lexically inside
+ * the handler body of every exported `query(...)` / `mutation(...)` registration
  * under the lunora source directory — the `nondeterministic_query_mutation` lint
  * input. `action(...)` (and `stream(...)`) registrations are intentionally
  * skipped: actions run exactly once and may use ambient APIs freely.

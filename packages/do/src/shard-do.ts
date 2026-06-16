@@ -188,6 +188,34 @@ interface SubscriptionOutcome {
 }
 
 /**
+ * Identity a subscription query is executed under, threaded EXPLICITLY into
+ * `executeSubscription` → `buildCtx` rather than read from the shared,
+ * per-request `currentRequestUserId`/`currentRequestIdentity` instance fields.
+ *
+ * Subscriptions are established over the WS handshake, which does not resolve
+ * identity, so the default is fully anonymous (both fields `undefined`).
+ * Passing identity by value — never by reading a mutable instance field from a
+ * deferred (`waitUntil`) or concurrently-interleaved context — is what prevents
+ * a cross-user leak: a subscription re-run can never observe an in-flight RPC's
+ * identity, and a subscription re-run can never clobber that RPC's identity.
+ *
+ * Developer-facing consequence: a query that authorizes or filters on the
+ * caller's identity — via `.use(rls(...))` or by reading `ctx.auth.userId`
+ * directly — evaluates as ANONYMOUS over the live channel. Its one-shot `fetch`
+ * RPC carries identity and returns the user's rows, but the WS subscription
+ * (seed + every write-driven refresh) runs anonymous, so it fails CLOSED: an
+ * empty/denied result rather than another user's data (no leak), but a silent
+ * correctness mismatch between the initial fetch and the live updates. For
+ * per-user live data, scope it by shard (`.shardBy(...)`) or pass the identifier
+ * as an explicit query arg instead of relying on `ctx.auth` inside a subscribed
+ * query. See the lunora-realtime skill ("Authorization & live queries").
+ */
+interface SubscriptionIdentity {
+    identity?: Record<string, unknown>;
+    userId?: string;
+}
+
+/**
  * Optional shard-level configuration passed through `super(state, env, …)`.
  * Reserved as a bag rather than positional args so subclasses don't break
  * when new knobs land. Today the only knob is the reactive cache; future
@@ -1896,7 +1924,19 @@ abstract class ShardDO {
             // would mis-fire the write-contention advisor.
             const conflicted = error instanceof ConflictError && error.kind === "occ";
 
-            this.recordFunctionCall(payload.functionPath, durationMs, message, this.currentScannedTables, this.currentIndexHits, conflicted);
+            // Do NOT record per-function metrics for an unregistered/`FUNCTION_NOT_FOUND`
+            // dispatch: `functionPath` is caller-controlled and the runtime forwards it
+            // without checking it against the registry, so recording here would let a
+            // flood of random paths grow both the durable `__lunora_metrics` table and the
+            // in-memory `functionStats` map without bound (the Map's "bounded by the app's
+            // finite registered-function set" assumption only holds for real functions).
+            // The request log + error buffer below still capture the failure, and both are
+            // bounded (retention / fixed buffer).
+            const code = (error as { code?: unknown } | null)?.code;
+
+            if (code !== "FUNCTION_NOT_FOUND") {
+                this.recordFunctionCall(payload.functionPath, durationMs, message, this.currentScannedTables, this.currentIndexHits, conflicted);
+            }
             // Flush statement samples even on error paths — partial sampling
             // is better than losing the timing signal entirely.
             this.flushStmtSamples();
@@ -3125,9 +3165,16 @@ abstract class ShardDO {
      * run the handler from the project's function registry. Returning `null`
      * disables server re-execution and leaves the legacy `broadcastDelta`
      * path as the only live-update mechanism.
+     *
+     * `identity` is the EXPLICIT subscriber identity the query runs under. It
+     * is passed by value (anonymous by default — see {@link SubscriptionIdentity})
+     * and forwarded straight into the codegen subclass's `buildCtx`, so a
+     * subscription re-run never reads or mutates the shared, per-request
+     * `currentRequestUserId`/`currentRequestIdentity` instance fields from a
+     * deferred (`waitUntil`) or concurrently-interleaved context.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to dispatch via the generated function map
-    protected executeSubscription(_functionPath: string, _args: Record<string, unknown>): Promise<SubscriptionOutcome | null> {
+    protected executeSubscription(_functionPath: string, _args: Record<string, unknown>, _identity?: SubscriptionIdentity): Promise<SubscriptionOutcome | null> {
         // eslint-disable-next-line unicorn/no-null -- base default: `null` = "no such subscription"; the codegen subclass overrides and also returns null
         return Promise.resolve(null);
     }
@@ -3366,37 +3413,6 @@ abstract class ShardDO {
         } finally {
             this.currentRequestSystem = previous;
         }
-    }
-
-    /**
-     * Run a subscription query body with the per-request identity forced to
-     * anonymous, then restore the prior values.
-     *
-     * Subscriptions are established over the WS handshake, which does NOT
-     * resolve identity, so a subscription query must never observe a
-     * `currentRequestUserId` left behind by — or interleaved with — an
-     * authenticated `fetch` RPC. Reading the shared identity field from a
-     * deferred/cross-request context (subscribe SEED + write-driven REFRESH)
-     * would otherwise leak one user's identity-scoped view to every
-     * subscriber. The generated `buildCtx` reads identity via
-     * `getCurrentUserId`, so we pin it to anonymous around the call
-     * rather than threading it through the generated signature.
-     *
-     * Developer-facing consequence: a query that authorizes or filters on
-     * the caller's identity — via `.use(rls(...))` or by reading
-     * `ctx.auth.userId` directly — evaluates as ANONYMOUS over the live
-     * channel. Its one-shot `fetch` RPC carries identity and returns the
-     * user's rows, but the WS subscription (seed + every write-driven
-     * refresh) runs here under anonymous identity, so it fails CLOSED: an
-     * empty/denied result rather than another user's data (no leak), but a
-     * silent correctness mismatch between the initial fetch and the live
-     * updates. For per-user live data, scope it by shard (`.shardBy(...)`)
-     * or pass the identifier as an explicit query arg instead of relying on
-     * `ctx.auth` inside a subscribed query. See the lunora-realtime skill
-     * ("Authorization & live queries").
-     */
-    private async withAnonymousIdentity<R>(run: () => Promise<R> | R): Promise<R> {
-        return this.withRequestIdentity(undefined, undefined, run);
     }
 
     /**
@@ -4085,10 +4101,12 @@ abstract class ShardDO {
      * so pinning the fields around the call makes the dispatched function observe the
      * chosen identity without threading it through the generated signature.
      *
-     * This is the single save/restore primitive for the two callers:
-     * {@link withAnonymousIdentity} (pins both to `undefined` — anonymous subscription
-     * seeds) and {@link handleRunAs} (pins a forged user — the dev "Run as identity"
-     * tool). The security-load-bearing invariant lives here, in one place.
+     * The single caller is {@link handleRunAs} (pins a forged user — the dev
+     * "Run as identity" tool), which runs synchronously on the request thread
+     * with no intervening concurrent dispatch. Subscriptions deliberately do NOT
+     * use this primitive: they run in deferred/interleaved contexts where
+     * mutating the shared field would race a concurrent RPC, so they thread an
+     * explicit {@link SubscriptionIdentity} into `executeSubscription` instead.
      */
     private async withRequestIdentity<R>(userId: string | undefined, identity: Record<string, unknown> | undefined, run: () => Promise<R> | R): Promise<R> {
         const previousUserId = this.currentRequestUserId;
@@ -4895,12 +4913,12 @@ abstract class ShardDO {
             return;
         }
 
-        // Subscription re-execution runs anonymously (see
-        // `withAnonymousIdentity`, applied around every executeSubscription
-        // call below). The shared identity field is no longer cleared here —
-        // clobbering it without restore could disturb an interleaved fetch RPC;
-        // the per-call wrapper pins anonymous identity for exactly the
-        // subscription body instead.
+        // Subscription re-execution runs anonymously: `refreshSubscriptions`
+        // threads an explicit empty `SubscriptionIdentity` into every
+        // `executeSubscription` call, so the deferred re-run below neither reads
+        // nor mutates the shared per-request identity field. Crucial here because
+        // this refresh is dispatched via `waitUntil` (a LATER macrotask), where a
+        // concurrent in-flight RPC owns `currentRequestUserId`.
 
         if (typeof this.state.waitUntil === "function") {
             this.state.waitUntil(this.refreshSubscriptions(changed));
@@ -4957,8 +4975,8 @@ abstract class ShardDO {
      * the "leave memo untouched ⇒ re-run next flush" contract.
      *
      * The framework's INTENDED answer to this fan-out already exists: the opt-in
-     * {@link ReactiveCache} (`ShardDOOptions.reactiveCache`). Refreshes run under
-     * {@link ShardDO.withAnonymousIdentity}, so the cache key
+     * {@link ReactiveCache} (`ShardDOOptions.reactiveCache`). Refreshes run with
+     * an explicit anonymous {@link SubscriptionIdentity}, so the cache key
      * `reactiveCacheKey(functionPath, args, null)` is identical across all
      * sockets — N identical subscriptions collapse to ONE handler run plus N
      * cache hits, with every per-run side effect honored exactly once by design.
@@ -4999,7 +5017,10 @@ abstract class ShardDO {
                     const outcome = isAdmin
                         ? this.executeAdminSubscription(functionPath, query.args ?? {})
                         : // eslint-disable-next-line no-await-in-loop -- subscriptions on a socket re-run sequentially; each shares the single SQLite handle
-                          await this.withAnonymousIdentity(() => this.executeSubscription(functionPath, query.args ?? {}));
+                          // Anonymous identity is threaded EXPLICITLY (empty object), so this
+                          // deferred re-run (it runs under `waitUntil`, off the response path)
+                          // never reads or mutates the shared per-request identity fields.
+                          await this.executeSubscription(functionPath, query.args ?? {}, {});
 
                     if (!outcome) {
                         continue;
@@ -5055,9 +5076,14 @@ abstract class ShardDO {
      */
     private async seedSubscription(ws: WebSocket, subId: string, query: SubscriptionQuery, functionPath: string, isAdmin: boolean): Promise<void> {
         const seedArgs = query.args ?? {};
+        // Anonymous identity is threaded EXPLICITLY (empty object) into the seed
+        // run: a subscribe envelope can arrive interleaved with an in-flight RPC
+        // (the seed parks at the handler's first non-storage await), so reading
+        // the shared per-request identity field here would race that RPC. Passing
+        // it by value keeps the seed anonymous regardless of what else is running.
         const outcome = isAdmin
             ? this.executeAdminSubscription(functionPath, seedArgs)
-            : await this.withAnonymousIdentity(() => this.executeSubscription(functionPath, seedArgs));
+            : await this.executeSubscription(functionPath, seedArgs, {});
 
         if (!outcome) {
             return;

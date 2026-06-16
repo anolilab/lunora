@@ -10,10 +10,11 @@
  * What this scaffolds:
  *   - `buildAuth(env)` — constructs the better-auth instance, with
  *     email/password sign-up/sign-in enabled, backed by your D1 binding (`DB`).
- *   - `getAuth(env)` — memoizes the instance per isolate so the migration diff
- *     (see `ensureMigrated` below) and config setup don't re-run every request.
+ *   - `getAuth(env)` — memoizes the instance per isolate so better-auth and its
+ *     adapter aren't rebuilt on every request.
  *   - `mountAuth(env, request)` — routes `/api/auth/*` requests to better-auth.
- *     Call it FIRST in your Worker's `fetch` and return its response when set.
+ *     Call it FIRST in your Worker's `fetch` and return its response when set;
+ *     it returns `undefined` for non-auth routes without doing any auth work.
  *
  * Wiring (in your Worker entry, e.g. `src/server/index.ts`):
  *
@@ -34,8 +35,25 @@
  * headers: request.headers })` inside it.
  */
 import type { LunoraAuth } from "@lunora/auth";
-import { createAuth, ensureMigrated, handleAuthRequest } from "@lunora/auth";
+import { createAuth, DEFAULT_AUTH_BASE_PATH, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
 import { createMailerFromEnv } from "@lunora/mail";
+
+/**
+ * Env-name values that mark a development deployment, and the vars they live in.
+ * `lunora dev` sets `WORKER_ENV=development`; a real deploy that sets none of
+ * these stays production (fail closed). Used to gate dev-only behaviour below —
+ * console-logging auth links and running schema migrations on cold start.
+ */
+const DEV_ENVIRONMENT_PATTERN = /^(?:dev(?:elopment)?|local(?:host)?|test)$/iu;
+const ENVIRONMENT_VARS = ["CF_ENV", "ENVIRONMENT", "NODE_ENV", "WORKER_ENV"] as const;
+
+/**
+ * Whether the Worker is running in development. Defaults to FALSE so a real
+ * deploy that sets none of {@link ENVIRONMENT_VARS} is treated as production —
+ * dev-only conveniences (logging links, auto-migrating) never leak there.
+ */
+const isDevEnvironment = (env: Record<string, unknown>): boolean =>
+    ENVIRONMENT_VARS.some((key) => typeof env[key] === "string" && DEV_ENVIRONMENT_PATTERN.test(env[key] as string));
 
 /**
  * The Worker env bindings this module needs. Lunora generates a richer `Env`
@@ -60,15 +78,24 @@ export interface AuthEnv {
  * so auth mail behaves exactly like `api.mail.sendEmail`.
  *
  * If mail isn't set up yet (`MAIL_FROM` unset — you haven't run `lunora add
- * email`), the link is logged to the console instead so sign-up / reset still
- * work in dev. Cast through the full `env` since the mailer reads bindings
- * (`SHARD`, `SEND_EMAIL`) and vars (`MAIL_FROM`) outside {@link AuthEnv}'s slice.
+ * email`), the link is logged to the console **in development only** so sign-up
+ * / reset still work before you wire mail. In production this fails closed: auth
+ * links are bearer credentials, so we throw rather than write them to Worker
+ * logs where anyone with log access could use them to take over the account.
+ * Cast through the full `env` since the mailer reads bindings (`SHARD`,
+ * `SEND_EMAIL`) and vars (`MAIL_FROM`) outside {@link AuthEnv}'s slice.
  */
 const sendAuthEmail = async (env: AuthEnv, message: { subject: string; text: string; to: string }): Promise<void> => {
     const fullEnv = env as unknown as Record<string, unknown>;
 
     if (typeof fullEnv["MAIL_FROM"] !== "string") {
-        // Mail not configured — log the link so the flow still works in dev. Run `lunora add email`.
+        if (!isDevEnvironment(fullEnv)) {
+            // Production with no mailer configured — never log the link (it's a
+            // bearer credential). Fail loudly so the deploy gets mail wired up.
+            throw new Error("auth: mail is not configured (`MAIL_FROM` unset) — run `lunora add email` before deploying. Refusing to log auth links in production.");
+        }
+
+        // Dev only — surface the link so the flow still works. Run `lunora add email`.
         // eslint-disable-next-line no-console -- dev fallback: surface the auth link when no mailer is set up
         console.log(`[auth] email → ${message.to}: ${message.subject}\n${message.text}`);
 
@@ -103,9 +130,13 @@ const sendAuthEmail = async (env: AuthEnv, message: { subject: string; text: str
 export const buildAuth = (env: AuthEnv): LunoraAuth =>
     createAuth({
         baseURL: env.BETTER_AUTH_URL,
-        // better-auth accepts a D1Database directly; cast since AuthEnv keeps
-        // `DB` opaque (your generated `Env` types it precisely).
-        database: env.DB as never,
+        // Use `lunoraD1Adapter` rather than passing raw `env.DB`: better-auth
+        // accepts a D1Database directly, but then resolves its Kysely adapter via
+        // a runtime `await import(...)` that never settles under the Cloudflare
+        // Vite worker runner — hanging every auth request in `lunora dev`. The
+        // explicit adapter skips that, so dev and prod behave the same. Cast
+        // since AuthEnv keeps `DB` opaque (your generated `Env` types it precisely).
+        database: lunoraD1Adapter(env.DB as never),
         emailAndPassword: {
             enabled: true,
             sendResetPassword: async ({ url, user }) => {
@@ -121,9 +152,25 @@ export const buildAuth = (env: AuthEnv): LunoraAuth =>
     });
 
 /**
+ * A migration-only auth instance backed by *raw* `env.DB`. `ensureMigrated`
+ * runs better-auth's own Kysely-based migration runner, which needs the raw D1
+ * database (not {@link lunoraD1Adapter}, whose custom store the migrator can't
+ * drive). This instance is used solely to apply the schema in dev — request
+ * handling always goes through {@link buildAuth}'s adapter-backed instance.
+ */
+const buildMigrationAuth = (env: AuthEnv): LunoraAuth =>
+    createAuth({
+        baseURL: env.BETTER_AUTH_URL,
+        // Raw D1 on purpose — the migration runner resolves Kysely itself.
+        database: env.DB as never,
+        emailAndPassword: { enabled: true },
+        secret: env.BETTER_AUTH_SECRET,
+    });
+
+/**
  * Per-isolate memoized auth instance. Cloudflare reuses the same `env` bindings
- * across invocations within an isolate, so building once keeps the migration
- * single-flight cache warm (see `ensureMigrated`).
+ * across invocations within an isolate, so building once avoids reconstructing
+ * better-auth (and its adapter) on every request.
  */
 let cached: LunoraAuth | undefined;
 
@@ -135,18 +182,41 @@ export const getAuth = (env: AuthEnv): LunoraAuth => {
 };
 
 /**
+ * Per-isolate single-flight guard so the dev migration runs at most once per
+ * isolate even though `mountAuth` is called on every auth request.
+ */
+let migrated: Promise<void> | undefined;
+
+/**
  * Route `/api/auth/*` to better-auth. Returns the auth `Response` when the
  * request is an auth route, or `undefined` so your Worker keeps dispatching.
  *
- * In dev this also applies better-auth's schema to D1 on first hit via
- * `ensureMigrated` (idempotent, single-flight). For production, pre-apply the
- * schema at deploy time instead — see the README — and drop the
- * `ensureMigrated` call to avoid the per-cold-start diff.
+ * The auth-route check happens BEFORE any migration work, so non-auth traffic
+ * (your app's own routes) never pays the schema diff and stays independent of
+ * auth/D1 health — an auth migration problem can't take the whole site down.
+ *
+ * Migrations run only in development (idempotent, single-flight). For
+ * production, pre-apply the schema at deploy time instead — see the README
+ * (`compileMigrationsSql` + `wrangler d1 execute`) — so request paths never
+ * trigger DDL. Migrations use a separate raw-D1 instance ({@link
+ * buildMigrationAuth}) because better-auth's migration runner needs the raw
+ * Kysely database, while request handling uses the adapter-backed instance.
  */
 export const mountAuth = async (env: AuthEnv, request: Request): Promise<Response | undefined> => {
+    const url = new URL(request.url);
+
+    // Match the auth path first — never touch auth/migrations for other routes.
+    if (url.pathname !== DEFAULT_AUTH_BASE_PATH && !url.pathname.startsWith(`${DEFAULT_AUTH_BASE_PATH}/`)) {
+        return undefined;
+    }
+
     const auth = getAuth(env);
 
-    await ensureMigrated(auth);
+    // Dev-only auto-migrate. In production, pre-apply the schema at deploy time.
+    if (isDevEnvironment(env as unknown as Record<string, unknown>)) {
+        migrated ??= ensureMigrated(buildMigrationAuth(env));
+        await migrated;
+    }
 
     return handleAuthRequest(auth, request);
 };

@@ -1,7 +1,8 @@
 import { existsSync } from "node:fs";
-import { unlink, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 
+import { promptYesNo } from "@lunora/config";
 import { discoverSchema, schemaFromIr } from "@lunora/codegen";
 import { seedPlan } from "@lunora/seed";
 import { join } from "@visulima/path";
@@ -17,6 +18,8 @@ import type { SeedOptions } from "./index";
 
 interface SeedCommandOptions {
     batchSize?: number;
+    /** Inject a custom confirmer (tests, non-TTY callers). Returns `true` on confirmation. */
+    confirm?: (prompt: string) => Promise<boolean>;
     /** Rows per table (default 10). */
     count?: number;
     cwd?: string;
@@ -33,6 +36,8 @@ interface SeedCommandOptions {
     table?: string;
     token?: string;
     url?: string;
+    /** Skip the production-insert confirmation prompt. Required when stdin is not a TTY. */
+    yes?: boolean;
 }
 
 /** True when `url` targets the local dev worker (or is unset). `--reset` is local-state only. */
@@ -115,7 +120,12 @@ const guardSeedTargets = (options: SeedCommandOptions, schemaPath: string): Seed
  * surface any skipped rows as conflicts, then clean up regardless of outcome.
  */
 const insertSeedRows = async (ndjson: string, generated: number, cwd: string, options: SeedCommandOptions): Promise<SeedCommandResult> => {
-    const temporaryFile = join(tmpdir(), `lunora-seed-${String(process.pid)}-${String(Date.now())}.ndjson`);
+    // Create the scratch file inside a freshly-minted private dir (0700, random
+    // suffix) rather than a predictable PID+timestamp name in the shared tmpdir —
+    // that pattern (CWE-377) lets a local attacker pre-create the path as a
+    // symlink and clobber/capture the write.
+    const scratchDirectory = await mkdtemp(join(tmpdir(), "lunora-seed-"));
+    const temporaryFile = join(scratchDirectory, "rows.ndjson");
 
     await writeFile(temporaryFile, ndjson, "utf8");
 
@@ -144,7 +154,7 @@ const insertSeedRows = async (ndjson: string, generated: number, cwd: string, op
 
         return { code: result.code, conflicts, generated, inserted: result.inserted, ndjson };
     } finally {
-        await unlink(temporaryFile).catch(() => {});
+        await rm(scratchDirectory, { force: true, recursive: true }).catch(() => {});
     }
 };
 
@@ -220,6 +230,30 @@ const runSeedCommand = async (options: SeedCommandOptions): Promise<SeedCommandR
         return { code: 0, conflicts: 0, generated: 0, inserted: 0, ndjson };
     }
 
+    // Seeding fake rows into a non-local deployment pollutes real data — gate it
+    // behind the same explicit confirmation the repo applies to reset/migrate
+    // --prod (an explicit --yes, or an interactive TTY confirmation).
+    const targetsRemote = options.prod === true || !isLocalUrl(options.url);
+
+    if (targetsRemote && options.yes !== true) {
+        const isTty = process.stdin.isTTY;
+
+        if (!isTty && options.confirm === undefined) {
+            options.logger.error("seed: refusing to insert into a non-local target without confirmation — re-run with --yes");
+
+            return seedFailure(1);
+        }
+
+        const confirmer = options.confirm ?? promptYesNo;
+        const confirmed = await confirmer(`This will insert ${String(generated)} generated row(s) into ${options.url ?? "the production worker"}. Continue? [y/N] `);
+
+        if (!confirmed) {
+            options.logger.info("seed: aborted");
+
+            return seedFailure(1);
+        }
+    }
+
     return insertSeedRows(ndjson, generated, cwd, options);
 };
 
@@ -237,6 +271,7 @@ const execute: CommandHandler<SeedOptions> = defineHandler<SeedOptions>(async ({
         table: options.table,
         token: options.token,
         url: options.url,
+        yes: options.yes === true,
     });
 
     return { code: result.code };

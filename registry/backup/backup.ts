@@ -111,16 +111,20 @@ export const snapshot = internalAction({
         }
 
         const body = `${chunks.filter((chunk) => chunk.length > 0).join("\n")}\n`;
+        // Encode once so the reported `bytes` matches the bytes actually stored:
+        // `body.length` is UTF-16 code units, but the object written to R2 is the
+        // UTF-8 encoding, which differs for any non-ASCII content.
+        const encoded = new TextEncoder().encode(body);
         // Colons/periods are awkward in object keys across tooling; flatten them,
         // mirroring how the `lunora backup` CLI names its files.
         const stamp = new Date().toISOString().replaceAll(/[.:]/gu, "-");
         const key = `${BACKUP_PREFIX}/lunora-backup-${stamp}.ndjson`;
 
-        await storage.store(key, new TextEncoder().encode(body).buffer as ArrayBuffer, {
+        await storage.store(key, encoded.buffer as ArrayBuffer, {
             contentType: "application/x-ndjson",
         });
 
-        return { bytes: body.length, key, rows: total, tables: perTable };
+        return { bytes: encoded.byteLength, key, rows: total, tables: perTable };
     },
 });
 

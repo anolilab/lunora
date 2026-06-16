@@ -91,6 +91,14 @@ const isManifestEntry = (value: unknown): value is BackupManifestEntry =>
     typeof (value as BackupManifestEntry).id === "string" &&
     typeof (value as BackupManifestEntry).file === "string";
 
+/**
+ * Read the backup index. A *missing* manifest is fine — start fresh with `[]`.
+ * But a manifest that exists yet fails to parse (or isn't an array) is the
+ * recovery index the feature exists to protect: throw rather than silently
+ * treating it as empty, so the next `backup create` can't overwrite it and
+ * destroy the historical index. (`isManifestEntry` still drops malformed
+ * entries from an otherwise-valid array — those carry no recoverable id/file.)
+ */
 const readManifest = async (directory: string): Promise<BackupManifestEntry[]> => {
     const path = join(directory, MANIFEST_FILE);
 
@@ -98,13 +106,21 @@ const readManifest = async (directory: string): Promise<BackupManifestEntry[]> =
         return [];
     }
 
-    try {
-        const parsed: unknown = JSON.parse(await readFile(path, "utf8"));
+    let parsed: unknown;
 
-        return Array.isArray(parsed) ? parsed.filter(isManifestEntry) : [];
-    } catch {
-        return [];
+    try {
+        parsed = JSON.parse(await readFile(path, "utf8"));
+    } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+
+        throw new Error(`backup: ${path} exists but is not valid JSON (${message}) — refusing to overwrite it; fix or remove it manually`, { cause: error });
     }
+
+    if (!Array.isArray(parsed)) {
+        throw new Error(`backup: ${path} exists but is not a JSON array — refusing to overwrite it; fix or remove it manually`);
+    }
+
+    return parsed.filter(isManifestEntry);
 };
 
 const writeManifest = async (directory: string, entries: ReadonlyArray<BackupManifestEntry>): Promise<void> => {
@@ -312,19 +328,27 @@ const runBackupCommand = async (options: BackupCommandOptions): Promise<BackupCo
     const cwd = options.cwd ?? process.cwd();
     const directory = join(cwd, options.dir ?? DEFAULT_BACKUP_DIR);
 
-    if (options.subcommand === "create") {
-        return runBackupCreate(options, directory);
-    }
+    try {
+        if (options.subcommand === "create") {
+            return await runBackupCreate(options, directory);
+        }
 
-    if (options.subcommand === "list") {
-        return runBackupList(options, directory);
-    }
+        if (options.subcommand === "list") {
+            return await runBackupList(options, directory);
+        }
 
-    if (options.subcommand === "pitr") {
-        return runBackupPitr(options);
-    }
+        if (options.subcommand === "pitr") {
+            return await runBackupPitr(options);
+        }
 
-    return runBackupRestore(options, directory);
+        return await runBackupRestore(options, directory);
+    } catch (error: unknown) {
+        // Surface a corrupt-manifest (or other) failure as a clean non-zero exit
+        // instead of an unhandled rejection — and never clobber an unreadable index.
+        options.logger.error(error instanceof Error ? error.message : String(error));
+
+        return { code: 1 };
+    }
 };
 
 /** Narrow a raw argument to a known {@link BackupSubcommand}. */

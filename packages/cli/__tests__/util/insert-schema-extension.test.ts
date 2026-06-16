@@ -78,4 +78,12 @@ describe("insertSchemaExtension", () => {
 
         expect(result).toStrictEqual({ ok: false, reason: "no-define-schema" });
     });
+
+    it.each(["2fa", "rate-limit", "with space"])("rejects %s as an invalid JS identifier (would emit uncompilable schema.ts)", (key) => {
+        expect.assertions(1);
+
+        const result = insertSchemaExtension(BASE_SCHEMA, key);
+
+        expect(result).toStrictEqual({ ok: false, reason: "invalid-identifier" });
+    });
 });

@@ -46,12 +46,12 @@ The R2 binding `lunora registry add` writes:
 
 ## How it works
 
-- **generateUploadUrl** (action) mints a short-lived signed `PUT` URL (`@lunora/storage`'s `generateUploadUrl`, built on `buildSignedUrl` with `method: "PUT"`). The browser `PUT`s the file straight to R2 — the bytes never touch your Worker. Pass `contentType` to pin the request `Content-Type` into the signature.
+- **generateUploadUrl** (action) mints a short-lived signed `PUT` URL (`@lunora/storage`'s `generateUploadUrl`, built on `buildSignedUrl` with `method: "PUT"`). The browser `PUT`s the file straight to R2 — the bytes never touch your Worker. `contentType` is **required** and checked against an allowlist (`ALLOWED_UPLOAD_CONTENT_TYPES` in the copied file): because the browser pins that `Content-Type` into the signed PUT, R2 never sees the server-side `upload()` allowlist, so this is the only place to reject renderable types (`text/html`, `image/svg+xml`) that would otherwise become stored XSS if served same-origin. Widen the set as needed, and when you serve objects set `X-Content-Type-Options: nosniff` + `Content-Disposition: attachment` (or use a cookieless object host).
 - **getDownloadUrl** (action) mints a short-lived signed `GET` URL (`getSignedUrl` with `method: "GET"`). Your Worker's `GET /storage/:key` route must verify it before streaming (see below).
 - **deleteObject** (mutation) deletes an object by key.
 - **listObjects** (query) lists the caller's objects under an optional prefix, returning the R2 page `cursor` + `truncated` flag for pagination.
 
-All four scope the key with `scopeKey(tenantPrefix(ctx.auth.userId), key)`, namespacing every object under the caller. Unauthenticated callers fall back to a shared `public/` prefix — tighten or remove that branch in `lunora/storage/index.ts` to require auth.
+All four scope the key with `scopeKey(requireOwner(ctx.auth.userId), key)`, namespacing every object under the caller. They **require an authenticated identity** and fail closed otherwise (`requireOwner` throws) — these are public-by-default RPC, so a shared anonymous `public/` namespace would let any anonymous caller read, overwrite, or delete every other anonymous caller's objects. Wire `resolveIdentity` into `createWorker` (see the `auth` registry item) so `ctx.auth.userId` is populated. If you genuinely want a public namespace, add a separate **read-only** public path — never point `deleteObject` / `generateUploadUrl` at a shared anonymous prefix.
 
 ## Verify downloads in your Worker
 

@@ -16,6 +16,7 @@ interface FakeStorage {
         bucketName: string;
         delete: (key: string) => Promise<void>;
         download: (key: string) => Promise<undefined>;
+        getSignedUrl: (key: string, options?: { method?: string }) => Promise<string>;
         getUrl: (key: string) => string;
         store: (key: string, body: unknown) => Promise<{ etag: string; key: string }>;
     };
@@ -35,6 +36,11 @@ const createFakeStorage = (): FakeStorage => {
                 calls.push({ key, method: "download" });
 
                 return undefined;
+            },
+            getSignedUrl: async (key: string, options?: { method?: string }): Promise<string> => {
+                calls.push({ key, method: `getSignedUrl:${options?.method ?? "GET"}` });
+
+                return `https://signed.example/${key}`;
             },
             getUrl: (key: string): string => {
                 calls.push({ key, method: "getUrl" });
@@ -186,6 +192,54 @@ describe("storageRules — write/delete path", () => {
         await handler.handler(makeContext(fake, "u1"), {});
 
         expect(fake.calls).toEqual([{ key: "user/u1/old.png", method: "delete" }]);
+    });
+
+    it("gates getSignedUrl({ method: 'PUT' }) as a write — a write rule denial blocks it", async () => {
+        expect.assertions(2);
+
+        // Only a WRITE rule is declared (the lockdown-uploads case). A PUT signed
+        // URL must be checked as `write`, not `read`, or it bypasses the lockdown.
+        const rule = defineStorageRule<TestContext>({ bucket: "avatars", on: "write", when: ({ auth, key }) => key.startsWith(`user/${auth.userId ?? ""}/`) });
+
+        const fake = createFakeStorage();
+        const handler = lunora.action
+            .use(rulesForTest<TestContext>([rule]))
+            .action(async ({ ctx }) => ctx.storage.getSignedUrl("user/u2/x.png", { method: "PUT" }));
+
+        await expect(handler.handler(makeContext(fake, "u1"), {})).rejects.toThrow(/storage write/);
+        // The underlying signer is never reached.
+        expect(fake.calls).toEqual([]);
+    });
+
+    it("gates getSignedUrl({ method: 'PUT' }) as a write — broad read rules do not grant it", async () => {
+        expect.assertions(2);
+
+        // A broad read rule (reads are world-open) plus a narrow write rule. A PUT
+        // signed URL for another tenant's key must be denied by the write rule,
+        // not allowed by the permissive read rule.
+        const readAll = defineStorageRule<TestContext>({ bucket: "avatars", on: "read", when: () => true });
+        const ownWrites = defineStorageRule<TestContext>({ bucket: "avatars", on: "write", when: ({ auth, key }) => key.startsWith(`user/${auth.userId ?? ""}/`) });
+
+        const fake = createFakeStorage();
+        const handler = lunora.action
+            .use(rulesForTest<TestContext>([readAll, ownWrites]))
+            .action(async ({ ctx }) => ctx.storage.getSignedUrl("user/u2/x.png", { method: "PUT" }));
+
+        await expect(handler.handler(makeContext(fake, "u1"), {})).rejects.toThrow(/storage write/);
+        expect(fake.calls).toEqual([]);
+    });
+
+    it("still gates getSignedUrl (GET) as a read", async () => {
+        expect.assertions(1);
+
+        // A read rule that denies; a GET signed URL is a read capability and must
+        // be blocked. (A PUT would be a write — see the tests above.)
+        const rule = defineStorageRule<TestContext>({ bucket: "avatars", on: "read", when: () => false });
+
+        const fake = createFakeStorage();
+        const handler = lunora.action.use(rulesForTest<TestContext>([rule])).action(async ({ ctx }) => ctx.storage.getSignedUrl("user/u1/a.png"));
+
+        await expect(handler.handler(makeContext(fake, "u1"), {})).rejects.toThrow(/storage read/);
     });
 });
 

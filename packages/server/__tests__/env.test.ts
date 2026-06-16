@@ -242,9 +242,28 @@ describe("redactSecrets", () => {
     });
 
     it("leaves ordinary text and short values untouched", () => {
-        expect.assertions(2);
+        expect.assertions(4);
 
         expect(redactSecrets("PORT=8080 is fine")).toBe("PORT=8080 is fine");
         expect(redactSecrets('expected number, received string "hello"')).toBe('expected number, received string "hello"');
+        // Ordinary words that merely contain sk/pk/rk must not be clobbered.
+        expect(redactSecrets("the task ran at work on my desktop")).toBe("the task ran at work on my desktop");
+        expect(redactSecrets("riskier networks")).toBe("riskier networks");
+    });
+
+    it("redacts the password segment of a scheme://user:pass@host URL credential", () => {
+        expect.assertions(2);
+
+        const out = redactSecrets("DATABASE_URL=postgres://appuser:s3cr3t@db.internal/app failed");
+
+        expect(out).not.toContain("s3cr3t");
+        expect(out).toContain("postgres://appuser");
+    });
+
+    it("redacts a known-prefix token embedded in free-form text (no entropy floor)", () => {
+        expect.assertions(1);
+
+        // A short, embedded `sk_` token that is neither quoted nor a >=24-char run.
+        expect(redactSecrets("call failed using sk_live_abc123 oops")).toBe("call failed using [redacted] oops");
     });
 });

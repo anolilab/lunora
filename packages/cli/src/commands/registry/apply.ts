@@ -118,6 +118,32 @@ const applyEnvVariables = (envVariables: ReadonlyArray<RegistryEnvVariable>, pro
     return appended;
 };
 
+/**
+ * The wrangler.jsonc top-level keys a registry binding is allowed to write. These
+ * are pure resource/config bindings — none of them runs code on `wrangler dev`/
+ * `deploy`. Exec-or-entrypoint keys (`build`, `main`, `node_compat`, …) are NOT
+ * here, so a hostile manifest can't repoint the worker entry or smuggle a
+ * `build.command` that runs arbitrary code on the next dev/deploy.
+ */
+const ALLOWED_BINDING_ROOTS = new Set([
+    "ai",
+    "analytics_engine_datasets",
+    "browser",
+    "d1_databases",
+    "durable_objects",
+    "hyperdrive",
+    "kv_namespaces",
+    "mtls_certificates",
+    "queues",
+    "r2_buckets",
+    "send_email",
+    "services",
+    "vars",
+    "vectorize",
+    "version_metadata",
+    "workflows",
+]);
+
 /** Apply wrangler.jsonc bindings (structural jsonc edits preserving comments). Returns applied paths. */
 const applyBindings = (bindings: ReadonlyArray<RegistryBinding>, projectRoot: string, logger: Logger): ReadonlyArray<string> => {
     if (bindings.length === 0) {
@@ -155,6 +181,17 @@ const applyBindings = (bindings: ReadonlyArray<RegistryBinding>, projectRoot: st
     };
 
     for (const binding of bindings) {
+        // Refuse to write any key outside the safe resource-binding allowlist. A
+        // remote/attacker-influenceable manifest could otherwise set
+        // `build.command`/`main`/`node_compat` to run code on the next dev/deploy.
+        const root = binding.path[0];
+
+        if (root === undefined || !ALLOWED_BINDING_ROOTS.has(root)) {
+            logger.warn(`skipping binding "${binding.path.join(".")}" — only resource bindings (${[...ALLOWED_BINDING_ROOTS].join(", ")}) may be written, not exec/entrypoint keys`);
+
+            continue;
+        }
+
         // `RegistryBinding.value` is `unknown`; destructure then narrow below.
         let { value } = binding;
 
@@ -217,24 +254,47 @@ const applyItemResources = (manifest: RegistryManifest, cwd: string, logger: Log
 };
 
 /**
- * Gate the package.json mutation behind a confirmation when any item adds deps.
- * Returns `true` to proceed, `false` to abort (after logging the reason).
+ * Gate the privileged project mutations behind a confirmation when any item adds
+ * dependencies OR wrangler.jsonc bindings, or when the items came from a
+ * non-default `--source` (an attacker-influenceable origin can ship binding/file
+ * writes that fire on `wrangler dev`/`deploy` without the victim importing
+ * anything). Returns `true` to proceed, `false` to abort (after logging).
  */
 const confirmDepMutation = async (items: ReadonlyArray<{ manifest: RegistryManifest }>, options: AddCommandOptions): Promise<boolean> => {
     const hasDeps = items.some(({ manifest }) => Object.keys(manifest.deps ?? {}).length > 0 || Object.keys(manifest.devDependencies ?? {}).length > 0);
+    const hasBindings = items.some(({ manifest }) => (manifest.bindings ?? []).length > 0);
+    // A non-default `--source` is untrusted: require a conscious confirmation even
+    // for a files-only item, so attacker-controlled source files aren't written silently.
+    const nonDefaultSource = options.source !== undefined && options.source.length > 0;
 
-    if (!hasDeps || options.yes) {
+    if ((!hasDeps && !hasBindings && !nonDefaultSource) || options.yes) {
         return true;
     }
 
+    const reasons: string[] = [];
+
+    if (hasDeps) {
+        reasons.push("add dependencies to package.json");
+    }
+
+    if (hasBindings) {
+        reasons.push("write wrangler.jsonc bindings");
+    }
+
+    if (nonDefaultSource) {
+        reasons.push(`come from a non-default source (${String(options.source)})`);
+    }
+
+    const reasonText = reasons.join(", ");
+
     if (!process.stdin.isTTY && options.confirm === undefined) {
-        options.logger.error("add: stdin is not a TTY and items add dependencies — re-run with --yes to confirm editing package.json");
+        options.logger.error(`add: stdin is not a TTY and the requested items ${reasonText} — re-run with --yes to confirm`);
 
         return false;
     }
 
     const confirmer = options.confirm ?? promptYesNo;
-    const confirmed = await confirmer("Some items add dependencies to package.json. Continue? [y/N] ");
+    const confirmed = await confirmer(`The requested items ${reasonText}. Continue? [y/N] `);
 
     if (!confirmed) {
         options.logger.info("add: aborted");

@@ -80,6 +80,30 @@ const FUNCTION_METRICS_BUCKET_MS = 60_000;
  */
 const FUNCTION_METRICS_BUCKET_RETENTION = 1440;
 
+/**
+ * Maximum distinct function `path`s tracked in the accumulator table. Mirrors
+ * `query-metrics.ts`'s `QUERY_METRICS_MAX_STATEMENTS` cap (and exists for the
+ * same reason): the `path` is attacker-reachable — an unregistered/`FUNCTION_NOT_FOUND`
+ * dispatch still records a row keyed by the caller-supplied `functionPath` — so
+ * without a cap a flood of distinct random paths would grow `__lunora_metrics`
+ * (and its bucket/scan satellites) without bound, eventually filling the shard's
+ * SQLite store shared with the app's real data. A few thousand registered
+ * functions is already far beyond any real app, so a new path past this cap is
+ * dropped while already-tracked paths keep accumulating.
+ */
+const FUNCTION_METRICS_MAX_PATHS = 5000;
+
+/**
+ * Upper bound on rows the admin reads materialize into DO memory at once. Even
+ * with the write-side `FUNCTION_METRICS_MAX_PATHS` cap in place, an existing
+ * shard could already hold a bloated accumulator (rows written before the cap
+ * landed), so the read path also clamps — a `SELECT *` with no LIMIT would
+ * otherwise load every row via `.toArray()` and risk OOMing the ~128MB DO when
+ * the studio Function Stats panel opens. Ordered reads keep the busiest/most
+ * recent rows; the tail past this limit is simply not returned to the panel.
+ */
+const FUNCTION_METRICS_READ_LIMIT = 1000;
+
 /** One coarse time-series sample for a function: call/error counts within `[bucketMs, bucketMs + FUNCTION_METRICS_BUCKET_MS)`. */
 interface FunctionMetricBucket {
     /** Epoch-ms floor of the bucket window. */
@@ -260,6 +284,21 @@ const ensureFunctionMetricsTables = (sql: SqlExec): void => {
 const recordFunctionMetric = (sql: SqlExec, input: RecordFunctionMetricInput): void => {
     ensureFunctionMetricsTables(sql);
 
+    // Distinct-path cap (mirrors `query-metrics.ts`): when the accumulator is at
+    // the limit and this `path` isn't tracked yet, skip the write entirely so a
+    // flood of unregistered/random paths can't grow the metrics tables without
+    // bound. The check is a single cheap PK `COUNT(*)`; an already-tracked path
+    // (the normal registered-function case) still records past the cap.
+    const pathCountRow = runSql<{ n: number }>(sql, `SELECT COUNT(*) AS n FROM "${FUNCTION_METRICS_TABLE}"`).one();
+
+    if (pathCountRow.n >= FUNCTION_METRICS_MAX_PATHS) {
+        const tracked = runSql<{ c: number }>(sql, `SELECT COUNT(*) AS c FROM "${FUNCTION_METRICS_TABLE}" WHERE path = ?`, input.path).one();
+
+        if (tracked.c === 0) {
+            return;
+        }
+    }
+
     // Dedupe defensively: a handler can stamp the same table's SCAN_DEP more
     // than once in a request, but we attribute one scan per distinct table.
     const scannedTables = input.scannedTables ? [...new Set(input.scannedTables)] : [];
@@ -378,7 +417,10 @@ const readFunctionMetricScans = (sql: SqlExec): Map<string, FunctionScanAttribut
 
     const rows = runSql<{ path: string; scans: number; table_name: string }>(
         sql,
-        `SELECT path, table_name, scans FROM "${FUNCTION_METRICS_SCANS_TABLE}" ORDER BY path ASC, scans DESC, table_name ASC`,
+        // Bounded read: cap the materialized rows so a bloated attribution table
+        // can't blow up DO memory. Highest-scan rows lead so the dominant
+        // attributions survive the cut.
+        `SELECT path, table_name, scans FROM "${FUNCTION_METRICS_SCANS_TABLE}" ORDER BY scans DESC, path ASC, table_name ASC LIMIT ${FUNCTION_METRICS_READ_LIMIT}`,
     ).toArray();
 
     const byPath = new Map<string, FunctionScanAttribution[]>();
@@ -456,6 +498,9 @@ const readFunctionMetrics = (sql: SqlExec): FunctionCallStat[] => {
 
     const scansByPath = readFunctionMetricScans(sql);
 
+    // Bounded read: cap the materialized rows (newest-called first) so a bloated
+    // accumulator table can't load millions of rows into the DO's ~128MB isolate
+    // when the studio Function Stats panel opens.
     const rows = runSql<{
         calls: number;
         conflicts: number;
@@ -467,7 +512,7 @@ const readFunctionMetrics = (sql: SqlExec): FunctionCallStat[] => {
         path: string;
         scans: number;
         total_duration_ms: number;
-    }>(sql, `SELECT * FROM "${FUNCTION_METRICS_TABLE}" ORDER BY last_called_at DESC`).toArray();
+    }>(sql, `SELECT * FROM "${FUNCTION_METRICS_TABLE}" ORDER BY last_called_at DESC LIMIT ${FUNCTION_METRICS_READ_LIMIT}`).toArray();
 
     return rows.map((row): FunctionCallStat => {
         return {
@@ -534,6 +579,8 @@ export {
     FUNCTION_METRICS_BUCKET_RETENTION,
     FUNCTION_METRICS_BUCKETS_TABLE,
     FUNCTION_METRICS_INDEX_TABLE,
+    FUNCTION_METRICS_MAX_PATHS,
+    FUNCTION_METRICS_READ_LIMIT,
     FUNCTION_METRICS_SCANS_TABLE,
     FUNCTION_METRICS_TABLE,
     mergeScanAttribution,

@@ -34,11 +34,18 @@ const printPlan = (logger: Logger, manifest: RegistryManifest): void => {
     }
 
     for (const binding of manifest.bindings ?? []) {
-        logger.info(`  bind  ${binding.path.join(".")}`);
+        // Render the concrete value so a reviewer can audit what gets written into
+        // wrangler.jsonc (e.g. an attempt to set an exec/entrypoint key) before it
+        // is applied — a bare key path hides the payload.
+        logger.info(`  bind  ${binding.path.join(".")} = ${JSON.stringify(binding.value)}`);
     }
 
     for (const variable of manifest.envVars ?? []) {
-        logger.info(`  env   ${variable.name}${variable.secret ? " (secret)" : ""}`);
+        // Show non-secret values; secrets are scaffolded as empty placeholders so
+        // there is nothing to leak.
+        const valueSuffix = variable.secret ? " (secret)" : ` = ${JSON.stringify(variable.value ?? "")}`;
+
+        logger.info(`  env   ${variable.name}${valueSuffix}`);
     }
 };
 
@@ -46,10 +53,16 @@ const printPlan = (logger: Logger, manifest: RegistryManifest): void => {
 const printJsonPlan = (items: ReadonlyArray<{ manifest: RegistryManifest }>): void => {
     const planSnapshot = items.map(({ manifest }) => {
         return {
-            bindings: (manifest.bindings ?? []).map((binding) => binding.path.join(".")),
+            // Include the concrete value so a JSON-plan consumer can audit the
+            // mutation (not just the key path) before it is applied.
+            bindings: (manifest.bindings ?? []).map((binding) => {
+                return { path: binding.path.join("."), value: binding.value };
+            }),
             deps: Object.keys(manifest.deps ?? {}),
             devDependencies: Object.keys(manifest.devDependencies ?? {}),
-            envVars: (manifest.envVars ?? []).map((variable) => variable.name),
+            envVars: (manifest.envVars ?? []).map((variable) => {
+                return { name: variable.name, ...(variable.secret ? { secret: true } : { value: variable.value ?? "" }) };
+            }),
             files: manifest.files.map((file) => {
                 return { merge: file.merge, to: file.to };
             }),

@@ -1,5 +1,5 @@
 import type { CallExpression, Node as TsNode, Project, SourceFile, VariableDeclaration } from "ts-morph";
-import { Node } from "ts-morph";
+import { Node, SyntaxKind } from "ts-morph";
 
 import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
 import type { AdminRouteIR } from "./ir";
@@ -14,12 +14,27 @@ const TERMINAL_STEPS = new Set(["handler", "stream"]);
 const ADMIN_PATH_RE = /\/(?:_|admin|internal|superuser|sudo|root|debug)/iu;
 
 /**
- * Identifiers / member names whose presence in a handler body counts as an
- * auth/admin guard. Deliberately broad — a route that references *any* of these
- * is treated as guarded, so the lint only fires on routes with no visible check.
+ * Guard names whose reference inside the handler *body* counts as an auth/admin
+ * check. Matched against real AST references — a property-access member name
+ * (`ctx.auth`, `ctx.identity`, `session.isAdmin`) or a call callee
+ * (`getSession(...)`, `requireAdmin(...)`) — never a substring over the route's
+ * source text, so the path literal and comments can't false-clear a route.
  */
-const GUARD_RE =
-    /\b(?:adminToken|ADMIN_TOKEN|assertAdmin|assertAuth|auth|Authorization|getSession|identity|isAdmin|requireAdmin|requireAuth|requireRole|verifyAdmin)\b/u;
+const GUARD_NAMES = new Set([
+    "ADMIN_TOKEN",
+    "adminToken",
+    "assertAdmin",
+    "assertAuth",
+    "auth",
+    "Authorization",
+    "getSession",
+    "identity",
+    "isAdmin",
+    "requireAdmin",
+    "requireAuth",
+    "requireRole",
+    "verifyAdmin",
+]);
 
 /** Resolve a builder chain's root `httpRoute.&lt;verb&gt;("/path")`, returning `{ method, path }` or `undefined`. */
 const readRootVerb = (node: TsNode): { method: string; path: string } | undefined => {
@@ -75,6 +90,31 @@ const rootOfChain = (terminalCall: CallExpression): { method: string; path: stri
     return readRootVerb(node);
 };
 
+/**
+ * True when a guard reference is unambiguously present in `handlerBody` — a
+ * property-access member name (`ctx.auth`, `session.isAdmin`) or a call callee
+ * (`getSession(...)`, `requireAdmin(...)`) whose name is in {@link GUARD_NAMES}.
+ * Walks the real AST of the handler body only, so neither the route path literal
+ * nor comments can spuriously clear the route.
+ */
+const handlerReferencesGuard = (handlerBody: TsNode): boolean => {
+    for (const access of handlerBody.getDescendantsOfKind(SyntaxKind.PropertyAccessExpression)) {
+        if (GUARD_NAMES.has(access.getName())) {
+            return true;
+        }
+    }
+
+    for (const call of handlerBody.getDescendantsOfKind(SyntaxKind.CallExpression)) {
+        const callee = call.getExpression();
+
+        if (Node.isIdentifier(callee) && GUARD_NAMES.has(callee.getText())) {
+            return true;
+        }
+    }
+
+    return false;
+};
+
 /** Build the {@link AdminRouteIR} for one exported `httpRoute` declaration on an admin path, or `undefined`. */
 const adminRouteFromDeclaration = (declaration: VariableDeclaration, relativePath: string): AdminRouteIR | undefined => {
     const initializer = declaration.getInitializer();
@@ -95,9 +135,16 @@ const adminRouteFromDeclaration = (declaration: VariableDeclaration, relativePat
         return undefined;
     }
 
-    // Guard detection scans the whole declaration (handler + any helper closures
-    // inside it) for a reference to an auth/admin guard.
-    const usesGuard = GUARD_RE.test(declaration.getText());
+    // Guard detection is scoped to the terminal `.handler(...)` / `.stream(...)`
+    // callback and matched via the AST — never a substring over the whole
+    // declaration. A non-callback (or absent) handler argument is treated as
+    // unguarded so the security lint fails closed rather than auto-clearing on a
+    // token in the path or a comment.
+    const handlerArgument = initializer.getArguments()[0];
+    const usesGuard =
+        handlerArgument !== undefined &&
+        (Node.isArrowFunction(handlerArgument) || Node.isFunctionExpression(handlerArgument)) &&
+        handlerReferencesGuard(handlerArgument);
 
     return { exportName: declaration.getName(), file: relativePath, method: root.method, path: root.path, usesGuard };
 };

@@ -159,9 +159,14 @@ class ReexecShard extends ShardDO {
         );
     }
 
-    protected override executeSubscription(functionPath: string, _args: Record<string, unknown>): Promise<SubscriptionOutcome | null> {
+    protected override executeSubscription(functionPath: string, _args: Record<string, unknown>, identity?: { identity?: Record<string, unknown>; userId?: string }): Promise<SubscriptionOutcome | null> {
         this.execCount += 1;
-        this.userIdDuringExec = this.getCurrentUserId();
+        // Identity is now threaded EXPLICITLY by the caller (mirrors the codegen
+        // `buildCtx`, which reads `options.identity` for subscriptions instead of
+        // the shared per-request field). The subscription bridge always passes an
+        // anonymous identity, so a concurrent RPC's `currentRequestUserId` can
+        // never leak in.
+        this.userIdDuringExec = identity?.userId;
 
         const outcome = this.outcomes.get(functionPath);
 

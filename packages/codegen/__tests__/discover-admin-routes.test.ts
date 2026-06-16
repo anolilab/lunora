@@ -27,6 +27,16 @@ const GUARDED = `
     });
 `;
 
+/** An unguarded admin route whose PATH contains a guard token (`/admin/auth`) — must NOT be auto-cleared. */
+const PATH_TOKEN = `
+    declare const httpRoute: any;
+
+    export const login = httpRoute.post("/admin/auth").handler(async (ctx) => {
+        // TODO: add requireAdmin
+        return new Response("ok");
+    });
+`;
+
 /** A non-admin route — not on a privileged path, so never recorded. */
 const PUBLIC = `
     declare const httpRoute: any;
@@ -67,6 +77,16 @@ describe("discoverAdminRoutes", () => {
         const found = discoverAdminRoutes(project, join(workdir, "lunora"));
 
         expect(found[0]).toMatchObject({ exportName: "stats", usesGuard: true });
+    });
+
+    it("does NOT clear an admin route whose path or comments merely contain a guard token", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "login.ts"), PATH_TOKEN, "utf8");
+
+        const found = discoverAdminRoutes(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "login", path: "/admin/auth", usesGuard: false });
     });
 
     it("ignores routes that are not on an admin/privileged path", () => {

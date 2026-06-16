@@ -51,6 +51,20 @@ const QUERY_ALL_CALLEES = `
     });
 `;
 
+/** A mutation reading the clock via `new Date()` and crypto via a global-wrapped receiver. */
+const MUTATION_NEW_DATE = `
+    import { mutation } from "@lunora/server";
+
+    export const stamp = mutation({
+        args: {},
+        handler: async (ctx) => {
+            const now = new Date();
+            const id = globalThis.crypto.randomUUID();
+            await ctx.db.insert("messages", { id, now });
+        },
+    });
+`;
+
 /** A deterministic mutation — no non-deterministic calls to record. */
 const CLEAN_MUTATION = `
     import { mutation } from "@lunora/server";
@@ -115,6 +129,16 @@ describe("discoverNondeterministicCalls", () => {
             "Math.random",
         ]);
         expect(calls.every((call) => call.exportName === "listThings" && call.kind === "query")).toBe(true);
+    });
+
+    it("records new Date() and a global-wrapped crypto call inside a mutation handler", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "stamp.ts"), MUTATION_NEW_DATE, "utf8");
+
+        const calls = discoverNondeterministicCalls(project, join(workdir, "lunora"));
+
+        expect(calls.map((call) => call.callee).toSorted((a, b) => a.localeCompare(b))).toStrictEqual(["crypto.randomUUID", "new Date"]);
     });
 
     it("records nothing for a deterministic mutation", () => {

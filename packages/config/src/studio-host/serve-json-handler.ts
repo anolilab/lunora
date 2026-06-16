@@ -67,6 +67,80 @@ const respondJson = (response: ServerResponse, status: number, body: unknown): v
     response.end(JSON.stringify(body));
 };
 
+/** A single header value, lower-cased and trimmed; `undefined` when absent or array-valued. */
+const headerValue = (raw: string | string[] | undefined): string | undefined => {
+    const value = Array.isArray(raw) ? raw[0] : raw;
+
+    return typeof value === "string" ? value.trim().toLowerCase() : undefined;
+};
+
+/**
+ * Reject cross-origin / CSRF requests before any body is read or handler runs.
+ *
+ * These endpoints write the developer's source tree (schema.ts, policy stubs)
+ * and run codegen, so a cross-origin page must never drive them via the
+ * developer's browser. Returns a reason string when the request must be refused,
+ * or `undefined` when it is safe to proceed. `GET` (the schema read) is not
+ * state-changing and is exempt from the Content-Type requirement, but still gets
+ * the origin checks.
+ *
+ * Two layers, both must pass:
+ *
+ * 1. Origin: trust `Sec-Fetch-Site` when the browser sends it (reject anything
+ *    other than `same-origin`/`same-site`/`none`); otherwise fall back to
+ *    comparing the `Origin` header's host against the request `Host`.
+ * 2. Content-Type: every state-changing method must be `application/json`. This
+ *    closes the "simple request" CORS bypass — a cross-origin `fetch` can send
+ *    `text/plain`/`application/x-www-form-urlencoded` WITHOUT a preflight, but
+ *    cannot set `application/json` without one (which same-origin policy then
+ *    blocks). Combined with (1) this denies the browser-driven CSRF vector.
+ */
+const csrfRejectionReason = (request: IncomingMessage): string | undefined => {
+    const method = (request.method ?? "GET").toUpperCase();
+    const isStateChanging = method !== "GET" && method !== "HEAD";
+
+    // Layer 1 — Origin. Prefer the Fetch Metadata header the browser sets itself
+    // (unforgeable by page script); fall back to an Origin/Host comparison.
+    const secFetchSite = headerValue(request.headers["sec-fetch-site"]);
+
+    if (secFetchSite !== undefined) {
+        if (secFetchSite !== "same-origin" && secFetchSite !== "same-site" && secFetchSite !== "none") {
+            return "cross-origin request rejected";
+        }
+    } else {
+        const origin = headerValue(request.headers.origin);
+
+        if (origin !== undefined && origin !== "null") {
+            // Compare the Origin's host:port against the request Host. A mismatch
+            // (or an unparseable Origin) is cross-origin and refused.
+            const host = headerValue(request.headers.host);
+            let originHost: string | undefined;
+
+            try {
+                originHost = new URL(origin).host.toLowerCase();
+            } catch {
+                return "invalid origin header";
+            }
+
+            if (host === undefined || originHost !== host) {
+                return "cross-origin request rejected";
+            }
+        }
+    }
+
+    // Layer 2 — Content-Type. State-changing requests must use a non-simple
+    // Content-Type so a cross-origin form/text POST can't reach the handler.
+    if (isStateChanging) {
+        const contentType = headerValue(request.headers["content-type"]);
+
+        if (contentType === undefined || !contentType.startsWith("application/json")) {
+            return "content-type must be application/json";
+        }
+    }
+
+    return undefined;
+};
+
 /**
  * Adapt a `node:http` request/response pair to a transport-agnostic local-dev
  * handler. `GET` carries no body (the schema editor uses it to read the parsed
@@ -77,6 +151,16 @@ const respondJson = (response: ServerResponse, status: number, body: unknown): v
 const serveJsonHandler = (request: IncomingMessage, response: ServerResponse, handle: LocalEndpointHandler, projectRoot: string): void => {
     const run = async (): Promise<void> => {
         try {
+            // CSRF / cross-origin defense BEFORE the body is read or the handler
+            // runs — these endpoints write source files + run codegen.
+            const rejection = csrfRejectionReason(request);
+
+            if (rejection !== undefined) {
+                respondJson(response, 403, { error: rejection, ok: false });
+
+                return;
+            }
+
             const raw = request.method === "GET" ? "" : await readBody(request);
             let parsed: unknown;
 

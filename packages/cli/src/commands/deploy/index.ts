@@ -22,7 +22,8 @@ const deployCommand: Command = {
         { description: "Output format: pretty (default) or json", name: "format", type: String },
         { description: "After a successful deploy, run pending data migrations against the live worker", name: "migrate", type: Boolean },
         { description: "Admin bearer token for --migrate (falls back to LUNORA_ADMIN_TOKEN)", name: "migrate-token", type: String },
-        { description: "Worker URL for --migrate (defaults to the deploy target)", name: "migrate-url", type: String },
+        { description: "Worker URL for --migrate (REQUIRED with --migrate; the deploy target URL is not captured automatically)", name: "migrate-url", type: String },
+        { description: "Confirm running the production data migration triggered by --migrate (required with --migrate)", name: "migrate-yes", type: Boolean },
         {
             description: "Re-bless the committed schema baseline (lunora/.lunora-schema.json) with the current shape",
             name: "update-schema-baseline",
@@ -41,5 +42,6 @@ export type DeployOptions = CreateOptions<{
     migrate: boolean | undefined;
     "migrate-token": string | undefined;
     "migrate-url": string | undefined;
+    "migrate-yes": boolean | undefined;
     "update-schema-baseline": boolean | undefined;
 }>;

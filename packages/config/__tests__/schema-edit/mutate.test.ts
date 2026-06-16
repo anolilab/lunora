@@ -96,6 +96,46 @@ describe("applyAdditiveEdit", () => {
         expect(reasonOf(applyAdditiveEdit(SCHEMA, { column: "x", kind: "addOptionalColumn", table: "ghost", validator: "v.string()" }))).toBe("unknown-table");
     });
 
+    it("rejects a validator that is not a v.* expression (code injection)", () => {
+        expect.assertions(3);
+
+        // The classic CSRF payload: a comma expression that runs arbitrary code
+        // before yielding a real validator.
+        expect(
+            reasonOf(
+                applyAdditiveEdit(SCHEMA, {
+                    column: "x",
+                    kind: "addOptionalColumn",
+                    table: "todos",
+                    validator: "(globalThis.__p=process,v.string())",
+                }),
+            ),
+        ).toBe("invalid-validator");
+        expect(reasonOf(applyAdditiveEdit(SCHEMA, { column: "x", kind: "addOptionalColumn", table: "todos", validator: "evil()" }))).toBe("invalid-validator");
+        // A smuggled second statement must not slip past on the structural check.
+        expect(reasonOf(applyAdditiveEdit(SCHEMA, { column: "x", kind: "addOptionalColumn", table: "todos", validator: "v.string()); evil((" }))).toBe(
+            "invalid-validator",
+        );
+    });
+
+    it("accepts nested v.* validators (array / object / union)", () => {
+        expect.assertions(1);
+
+        expect(applyAdditiveEdit(SCHEMA, { column: "meta", kind: "addOptionalColumn", table: "todos", validator: "v.object({ a: v.string() })" }).ok).toBe(
+            true,
+        );
+    });
+
+    it("rejects non-identifier table / column / index names", () => {
+        expect.assertions(3);
+
+        expect(reasonOf(applyAdditiveEdit(SCHEMA, { kind: "addTable", table: "bad-name" }))).toBe("invalid-identifier");
+        expect(reasonOf(applyAdditiveEdit(SCHEMA, { column: "a b", kind: "addOptionalColumn", table: "todos", validator: "v.string()" }))).toBe(
+            "invalid-identifier",
+        );
+        expect(reasonOf(applyAdditiveEdit(SCHEMA, { fields: ["text"], kind: "addIndex", name: "by text", table: "todos" }))).toBe("invalid-identifier");
+    });
+
     it("reports aliased-define-schema rather than rewriting an aliased import", () => {
         expect.assertions(1);
 

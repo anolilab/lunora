@@ -338,6 +338,16 @@ export const schema = defineSchema({
             expect(errors.join("\n")).toContain("invalid migration name");
         });
 
+        it.each(["123 backfill", "999", "class", "default"])("rejects %s whose export identifier would be uncompilable", (name) => {
+            expect.assertions(2);
+
+            const errors: string[] = [];
+            const result = runMigrateCreateCommand({ cwd: workdir, logger: { ...silentLogger(), error: (m) => errors.push(m) }, name, table: "messages" });
+
+            expect(result.code).toBe(1);
+            expect(errors.join("\n")).toContain("invalid migration name");
+        });
+
         it("warns and writes a TODO placeholder when --table is omitted", () => {
             expect.assertions(3);
 

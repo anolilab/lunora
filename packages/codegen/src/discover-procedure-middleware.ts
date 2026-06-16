@@ -49,14 +49,19 @@ const calleeNameOf = (call: CallExpression): string | undefined => {
  * it sets by reading which keys its object-literal argument declares — the bundle
  * composes `rateLimit` + `captcha`, so a present (non-`undefined`) key counts
  * exactly as the standalone `.use(rateLimit(...))` / `.use(verifyTurnstile(...))`
- * step would. A non-literal argument is assumed to carry both common guards rather
- * than false-flag a protected procedure.
+ * step would.
+ *
+ * A non-object-literal argument (e.g. a spread variable `protectPublic(cfg)`) is
+ * statically opaque — we can't see which guards it carries. The abuse lints this
+ * feeds are fail-CLOSED, so we assume NEITHER guard is present rather than clear a
+ * possibly-unprotected public procedure; a developer who genuinely guards via a
+ * variable can suppress the resulting advisory.
  */
 const protectPublicFlags = (call: CallExpression): { usesCaptcha: boolean; usesRateLimit: boolean } => {
     const argument = call.getArguments()[0];
 
     if (!argument || !Node.isObjectLiteralExpression(argument)) {
-        return { usesCaptcha: true, usesRateLimit: true };
+        return { usesCaptcha: false, usesRateLimit: false };
     }
 
     return { usesCaptcha: Boolean(argument.getProperty("captcha")), usesRateLimit: Boolean(argument.getProperty("rateLimit")) };
@@ -212,6 +217,13 @@ const middlewareInSourceFile = (sourceFile: SourceFile, relativePath: string): P
  * `public_mutation_without_ratelimit` and `user_creating_mutation_without_captcha`
  * lints. The bare-factory form (`mutation({ handler })`) has no builder chain, so
  * those procedures carry no protections — exactly what the lints flag.
+ *
+ * Best-effort: middleware is matched by callee NAME (not import origin), so a local
+ * no-op `rateLimit`/`rls`/`verifyTurnstile` shadowing the real `@lunora` factory
+ * would be counted as protection. The trade-off favours recall under degraded type
+ * info; a `protectPublic()` call with a non-literal (statically opaque) config is
+ * treated as carrying NEITHER guard so the abuse lints fail closed rather than
+ * clear a possibly-unprotected public procedure.
  */
 const discoverProcedureMiddleware = (project: Project, lunoraDirectory: string): ProcedureMiddlewareIR[] => {
     const procedures: ProcedureMiddlewareIR[] = [];

@@ -261,7 +261,10 @@ const atomicCreateDevVariables = (path: string, content: string): void => {
     const temporaryPath = `${path}.tmp-${String(process.pid)}`;
 
     try {
-        writeFileSync(temporaryPath, content, { encoding: "utf8", flag: "wx" });
+        // `mode: 0o600` so the freshly generated secrets are owner-only, not
+        // world-readable on a shared host (Node otherwise defaults to 0o666 →
+        // 0o644 under the usual umask). `rename` preserves the temp file's mode.
+        writeFileSync(temporaryPath, content, { encoding: "utf8", flag: "wx", mode: 0o600 });
         renameSync(temporaryPath, path);
     } catch (error) {
         rmSync(temporaryPath, { force: true });
@@ -270,12 +273,31 @@ const atomicCreateDevVariables = (path: string, content: string): void => {
     }
 };
 
-/** Append lines to an existing `.dev.vars`, inserting a separating newline only if needed. */
+/**
+ * Append lines to an existing `.dev.vars`, atomically and owner-only.
+ *
+ * Mirrors {@link atomicCreateDevVariables}: build the full new content, write it
+ * to a sibling temp file (`mode: 0o600`), then `rename` over the target. The
+ * read happens immediately before the write so a concurrent peer's appends are
+ * picked up rather than clobbered — a plain read-modify-write would race two
+ * `lunora dev` / Vite processes into last-writer-wins (the exact scenario the
+ * create path defends against). A trailing newline is inserted only if needed.
+ */
 const appendDevVariables = (path: string, additions: string[]): void => {
     const existing = readFileSync(path, "utf8");
     const separator = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
+    const content = `${existing}${separator}${additions.join("\n")}\n`;
 
-    writeFileSync(path, `${existing}${separator}${additions.join("\n")}\n`, "utf8");
+    const temporaryPath = `${path}.tmp-${String(process.pid)}`;
+
+    try {
+        writeFileSync(temporaryPath, content, { encoding: "utf8", mode: 0o600 });
+        renameSync(temporaryPath, path);
+    } catch (error) {
+        rmSync(temporaryPath, { force: true });
+
+        throw error;
+    }
 };
 
 /**

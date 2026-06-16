@@ -18,9 +18,12 @@
  * re-sends only the changed row to subscribers, not the whole list.
  * - **TTL by read-time filter**: `listPresent` filters `lastSeen > now - ttl`,
  * so a client that stops heart-beating silently disappears from the list
- * without any reaper. An optional scheduled sweep
- * ({@link PresenceFunctions.sweep}) hard-deletes the stale rows so the table
- * doesn't grow unbounded — wire it to a cron or `runAfter` if you want it.
+ * without any reaper. The read filter only HIDES stale rows; it never deletes
+ * them, so to keep the table from growing unbounded you SHOULD schedule the
+ * sweep ({@link PresenceFunctions.sweep}) on a cron / `runAfter`. The heartbeat
+ * also bounds its `data` blob and refuses to write under another identity's
+ * session, but a reaper is still required to reclaim aged-out rows. For
+ * high-traffic rooms, wrap the presence functions with `@lunora/ratelimit`.
  *
  * # Wiring
  *
@@ -44,6 +47,7 @@
 
 import { v } from "@lunora/values";
 
+import { LunoraError } from "./error";
 import { mutation, query } from "./functions";
 import { onDisconnect } from "./lifecycle";
 import type { Component, SchemaExtension } from "./plugin";
@@ -53,6 +57,15 @@ import type { MutationCtx as MutationContext, QueryCtx as QueryContext, Register
 
 /** Default time-to-live for a presence row: a heartbeat keeps a member "present" for this long. */
 const DEFAULT_TTL_MS = 30_000;
+
+/**
+ * Cap on the serialized size (bytes) of a heartbeat `data` blob. The awareness
+ * payload (cursor, selection, name, color…) is small by nature; bounding it
+ * stops a client from inflating presence rows — and the per-row delta echoed to
+ * every room subscriber — into a storage / bandwidth amplification vector. An
+ * over-limit `data` is rejected with `BAD_REQUEST`.
+ */
+const MAX_DATA_BYTES = 4096;
 
 /** The bare extension key and table name. Prefixing makes the merged table `presence_present`. */
 const PRESENCE_KEY = "presence";
@@ -64,7 +77,15 @@ const PRESENCE_BARE_TABLE = "present";
  */
 const PRESENCE_TABLE: "presence_present" = `${PRESENCE_KEY}_${PRESENCE_BARE_TABLE}`;
 
-/** A single present member as returned by `listPresent`. */
+/**
+ * A single present member as returned by `listPresent`.
+ *
+ * Note: the raw client-chosen `sessionId` is deliberately NOT surfaced. It is a
+ * connection secret — disclosing every member's `sessionId` would let any
+ * subscriber enumerate them and target the heartbeat / disconnect write paths.
+ * A "who's here" UI needs only `userId` + awareness `data`; the caller already
+ * knows its own session id locally (the `usePresence` hook returns it).
+ */
 interface PresenceMember {
     /** Opaque awareness blob (selection, cursor, name, color…). */
     data?: Record<string, unknown>;
@@ -72,8 +93,6 @@ interface PresenceMember {
     lastSeen: number;
     /** The room / channel / document this presence is scoped to. */
     roomId: string;
-    /** Stable per-tab / per-connection id. */
-    sessionId: string;
     /** Authenticated user id, when known. */
     userId?: string;
 }
@@ -93,15 +112,20 @@ interface PresenceFunctions {
      * Connection-lifecycle hook: the instant a client's WebSocket drops, hard-
      * delete its presence row so it disappears from `listPresent` with no TTL
      * lag. Targets the row by the `{ roomId, sessionId }` the client passed as
-     * the connection `context`. The TTL filter + `sweep` remain the fallback for
-     * ungraceful drops where no `context` was recorded.
+     * the connection `context`, and only deletes it when the disconnecting
+     * VERIFIED identity owns the row (so a forged context can't evict another
+     * member). The TTL filter + `sweep` remain the fallback for ungraceful drops
+     * where no `context` was recorded.
      */
     disconnect: RegisteredLifecycleHook;
 
     /**
      * Upsert the caller's presence row for `roomId` and stamp `lastSeen = now`.
      * Keyed by `(roomId, sessionId)` — re-heartbeats patch the existing row so
-     * subscribers receive a single-row delta, not a churn of insert/delete.
+     * subscribers receive a single-row delta, not a churn of insert/delete. A
+     * heartbeat may only patch a row owned by the same identity (an existing row
+     * held by a different `userId` is refused with `FORBIDDEN`), so a client
+     * can't overwrite another member's awareness data via a guessed `sessionId`.
      */
     heartbeat: RegisteredMutation<
         {
@@ -180,10 +204,27 @@ const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent 
             const lastSeen = Date.now();
             const userId = context.auth.userId ?? undefined;
 
+            // Bound the arbitrary awareness blob so a client can't grow the
+            // presence table (and the subscriber delta) without limit.
+            if (args.data !== undefined && JSON.stringify(args.data).length > MAX_DATA_BYTES) {
+                throw new LunoraError("BAD_REQUEST", `presence data exceeds the ${String(MAX_DATA_BYTES)}-byte limit`);
+            }
+
             const existing = await context.db
                 .query(PRESENCE_TABLE)
                 .withIndex("byRoomSession", (q) => q.eq("roomId", args.roomId).eq("sessionId", args.sessionId))
                 .first();
+
+            // Ownership gate: `sessionId` is client-chosen and every member's
+            // sessionId is observable, so a caller could heartbeat under a
+            // victim's `(roomId, sessionId)` to overwrite their awareness data or
+            // relabel `userId`. Only the identity that owns the row may patch it;
+            // an anonymous-owned row (no `userId`) may only be patched by another
+            // anonymous caller. A mismatch is refused rather than silently
+            // hijacking the row.
+            if (existing && (existing["userId"] ?? undefined) !== userId) {
+                throw new LunoraError("FORBIDDEN", "presence heartbeat denied: this (roomId, sessionId) is held by another identity");
+            }
 
             const row: Record<string, unknown> = {
                 lastSeen,
@@ -214,10 +255,12 @@ const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent 
             return rows
                 .filter((row) => (row["lastSeen"] as number) > cutoff)
                 .map((row) => {
+                    // `sessionId` is intentionally omitted from the public payload
+                    // (see {@link PresenceMember}) so a subscriber can't enumerate
+                    // other members' connection ids and target their rows.
                     const member: PresenceMember = {
                         lastSeen: row["lastSeen"] as number,
                         roomId: row["roomId"] as string,
-                        sessionId: row["sessionId"] as string,
                     };
 
                     if (row["userId"] !== undefined) {
@@ -275,7 +318,19 @@ const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent 
             .withIndex("byRoomSession", (q) => q.eq("roomId", roomId).eq("sessionId", sessionId))
             .first();
 
-        if (existing) {
+        if (!existing) {
+            return;
+        }
+
+        // Ownership gate: `roomId`/`sessionId` come from the client connection
+        // context and are observable on every member, so a socket could close
+        // with a victim's `(roomId, sessionId)` to evict them. Only delete the
+        // row when the disconnecting verified identity owns it (an anonymous-
+        // owned row may only be reaped by an anonymous socket). Mismatches fall
+        // back to the TTL filter + `sweep` for the real owner.
+        const verifiedUserId = event.userId ?? undefined;
+
+        if ((existing["userId"] ?? undefined) === verifiedUserId) {
             await context.db.delete(existing["_id"] as never);
         }
     });

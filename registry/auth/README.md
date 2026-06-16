@@ -74,17 +74,21 @@ createWorker({
 
 better-auth needs its tables (`user`, `session`, `account`, `verification`) in your D1 database.
 
-**Dev** — `mountAuth` calls `ensureMigrated(auth)` on the first auth request, which diffs the live schema and applies only the missing DDL (idempotent, single-flight). Nothing else to do.
+**Dev** — `mountAuth` auto-migrates on the first `/api/auth/*` request **in development only** (`WORKER_ENV=development`), diffing the live schema and applying only the missing DDL (idempotent, single-flight). Non-auth routes never trigger it, and it never runs in production. Nothing else to do in dev.
 
-**Production** — prefer pre-applying the schema at deploy time rather than diffing on every cold start. Compile the SQL and pipe it to Wrangler:
+**Production** — the auto-migrate is disabled, so you pre-apply the schema at deploy time rather than diffing on a request path. Compile the SQL and pipe it to Wrangler. better-auth's migration runner needs the **raw** D1 database (it resolves Kysely itself), so build a raw-D1 auth instance here rather than the adapter-backed runtime one:
 
 ```ts
 // scripts/auth-migrate.ts
-import { compileMigrationsSql } from "@lunora/auth";
+import { compileMigrationsSql, createAuth } from "@lunora/auth";
 
-import { buildAuth } from "../lunora/auth/index.js";
-
-const sql = await compileMigrationsSql(buildAuth(process.env as never).options);
+const sql = await compileMigrationsSql(
+    createAuth({
+        database: (process.env as never).DB,
+        emailAndPassword: { enabled: true },
+        secret: process.env.BETTER_AUTH_SECRET,
+    }).options,
+);
 process.stdout.write(sql);
 ```
 
@@ -92,7 +96,7 @@ process.stdout.write(sql);
 tsx scripts/auth-migrate.ts | wrangler d1 execute <DB_NAME> --remote --file -
 ```
 
-Then drop the `ensureMigrated` call from `mountAuth` so production doesn't pay the per-cold-start diff.
+Production needs no further change — `mountAuth` already skips the migrate outside development.
 
 > Re-run the migration whenever you add a better-auth plugin that contributes new tables (e.g. `organization`, `twoFactor`) — `ensureMigrated` / `compileMigrationsSql` pick the new DDL up automatically.
 

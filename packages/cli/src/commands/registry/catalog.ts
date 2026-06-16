@@ -20,6 +20,17 @@ interface IndexItem extends CatalogItem {
     title?: string;
 }
 
+/**
+ * Strip C0/C1 control bytes (incl. ESC, the lead-in for ANSI/OSC sequences) from
+ * a remote catalog string before it is printed to the terminal. A hostile
+ * `--source` registry could otherwise embed escape sequences in a `name`/
+ * `description` to spoof output, hide text, or trigger dangerous OSC operations.
+ */
+// eslint-disable-next-line no-control-regex -- intentionally matches the C0/C1 control range we strip
+const CONTROL_CHARS = /[\u0000-\u001F\u007F-\u009F]/gu;
+
+const stripControlChars = (value: string | undefined): string | undefined => (value === undefined ? undefined : value.replaceAll(CONTROL_CHARS, ""));
+
 /** Names of the subdirectories under `root` that ship a `registry.json`. */
 const listItemDirectories = (root: string): string[] =>
     readdirSync(root).filter((entry) => {
@@ -44,7 +55,9 @@ const collectCatalog = (root: string): CatalogItem[] => {
             return parsed.items
                 .filter((entry): entry is CatalogItem => typeof entry === "object" && entry !== null && typeof (entry as CatalogItem).name === "string")
                 .map((entry) => {
-                    return { description: entry.description, name: entry.name };
+                    // Strip control bytes from the untrusted remote strings before they
+                    // can reach the terminal (ANSI/OSC escape-injection hardening).
+                    return { description: stripControlChars(entry.description), name: stripControlChars(entry.name) ?? entry.name };
                 });
         }
     }
@@ -52,7 +65,7 @@ const collectCatalog = (root: string): CatalogItem[] => {
     return listItemDirectories(root).map((name) => {
         const raw = JSON.parse(readFileSync(join(root, name, "registry.json"), "utf8")) as { description?: string };
 
-        return { description: raw.description, name };
+        return { description: stripControlChars(raw.description), name };
     });
 };
 

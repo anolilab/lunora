@@ -50,6 +50,30 @@ const HIGH_ENTROPY_TOKEN = /[\w./+-]{24,}/gu;
 /** The whole (trimmed) value is one unbroken run of token characters. */
 const STANDALONE_TOKEN = /^[\w./+-]+$/u;
 
+/**
+ * A credential token recognised by its KNOWN PREFIX, matched anywhere in the
+ * text (not just at value-start) and at ANY length. Unlike {@link HIGH_ENTROPY_TOKEN}
+ * this has no ≥24-char floor — a known prefix is a strong signal on its own, so a
+ * short `sk_…` embedded in a URL or a free-form sentence is still scrubbed. A
+ * `_`/`-` separator is REQUIRED after the short Stripe-style prefixes (`sk_`,
+ * `xoxb-`, …) so ordinary words containing `sk`/`pk`/`rk` (e.g. "task", "work")
+ * aren't clobbered; the longer fixed prefixes (`AKIA`, `AIza`, `github_pat`,
+ * `Bearer `) are distinctive enough to match directly. A leading word boundary
+ * (`\b`) keeps the prefix at the start of a token.
+ */
+const EMBEDDED_PREFIXED_TOKEN =
+    /\b(?:(?:sk|pk|rk|ghp|gho|ghs|ghr)_[\w./+-]*|github_pat_[\w./+-]*|xox[baprs]-[\w./+-]*|AKIA[\w./+-]+|AIza[\w./+-]+)|Bearer\s+[\w./+-]+/gu;
+
+/**
+ * A `scheme://user:password@host` credential — the password between `:` and `@`
+ * (e.g. `postgres://user:pass@host/db`). The `:`/`@` break the token run so
+ * neither the standalone nor the high-entropy heuristic catches the password,
+ * and `DATABASE_URL` is not a secret-named key, so without this the password
+ * leaks verbatim. We redact only the password segment, keeping scheme/user/host
+ * for diagnostics.
+ */
+const URL_CREDENTIAL = /([a-zA-Z][\w+.-]*:\/\/[^\s:/@]+):[^\s:/@]+@/gu;
+
 /** The fixed placeholder substituted for any redacted secret. */
 const REDACTED = "[redacted]";
 
@@ -87,9 +111,17 @@ const KEYED_VALUE = /\b(?<key>[A-Za-z_]\w*)\s*[=:]\s*\S+/gu;
 /**
  * Redact secrets from a free-form message. Masks, in order: any quoted value
  * whose contents look like a credential (so a value surfaced as `received string
- * "sk_live_…"` is masked even though the surrounding text is not a token); any
- * value following a secret-named key in `KEY=value` / `KEY: value` form; and any
+ * "sk_live_…"` is masked even though the surrounding text is not a token); a
+ * `scheme://user:password@host` URL credential (the password segment); any
+ * known-prefix credential token wherever it appears, at any length; any value
+ * following a secret-named key in `KEY=value` / `KEY: value` form; and any
  * remaining bare high-entropy ≥24-char token run anywhere in the message.
+ *
+ * This is BEST-EFFORT defense-in-depth, NOT a guarantee: a short, prefix-less
+ * secret under a non-secret-named key (and embedded credentials in shapes not
+ * enumerated here) can still slip through. Treat it as a backstop — prefer
+ * structured logging that never serializes raw env/secret fields in the first
+ * place over relying on post-hoc scrubbing of untrusted data.
  *
  * Exported because it is independently useful — call it before logging anything
  * derived from `env`, request bodies, or thrown errors.
@@ -102,6 +134,12 @@ const redactSecrets = (message: string): string => {
 
         return named?.inner !== undefined && looksLikeSecretValue(named.inner) ? REDACTED : match;
     });
+
+    // `scheme://user:pass@host` → keep `scheme://user`, redact the password.
+    out = out.replaceAll(URL_CREDENTIAL, (_match, prefix: string) => `${prefix}:${REDACTED}@`);
+
+    // Known-prefix credential tokens anywhere, any length (no entropy floor).
+    out = out.replaceAll(EMBEDDED_PREFIXED_TOKEN, REDACTED);
 
     out = out.replaceAll(KEYED_VALUE, (match: string, ...groups: unknown[]) => {
         const named = groups.at(-1) as { key?: string } | undefined;

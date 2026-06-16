@@ -1,4 +1,4 @@
-import { readdirSync, statSync } from "node:fs";
+import { lstatSync, readdirSync } from "node:fs";
 import { extname, join, relative, sep } from "node:path";
 
 import type { CallExpression, Identifier, Project, SourceFile, Symbol as TsSymbol, Type, VariableDeclaration } from "ts-morph";
@@ -12,6 +12,17 @@ const FUNCTION_KINDS = new Set(["action", "mutation", "query", "stream"]);
 
 /** Detects a standalone `any` token in a rendered type (degraded type-checker mode). */
 const ANY_TOKEN_RE = /\bany\b/u;
+
+/** JS identifier allowlist — mirrors `emit.ts`'s `IDENTIFIER_RE`, gating raw splice of a property name. */
+const IDENTIFIER_RE = /^[A-Za-z_$][\w$]*$/u;
+
+/**
+ * Render an expanded object-type property key for splicing into generated TS:
+ * bare when it's a JS identifier, otherwise JSON-quoted (a valid TS member name).
+ * Mirrors `emit.ts`'s `renderPropertyKey` so this expansion path can't inject a
+ * non-identifier property name (e.g. `"a; b"`) verbatim into `_generated/*`.
+ */
+const renderExpandedPropertyKey = (propertyName: string): string => (IDENTIFIER_RE.test(propertyName) ? propertyName : JSON.stringify(propertyName));
 
 /** Strips a trailing `.ts` extension from a relative source path. */
 const TS_EXTENSION_RE = /\.ts$/u;
@@ -305,7 +316,7 @@ const expandObjectType = (type: Type, node: Node, handlerFilePath: string, depth
             rendered.push(text);
         }
 
-        parts.push(`${property.getName()}${optional ? "?" : ""}: ${rendered.join(" | ")}`);
+        parts.push(`${renderExpandedPropertyKey(property.getName())}${optional ? "?" : ""}: ${rendered.join(" | ")}`);
     }
 
     return parts.length > 0 ? `{ ${parts.join("; ")} }` : "{}";
@@ -567,6 +578,11 @@ const classifyProcedureCall = (call: CallExpression): ProcedureClassification | 
  * Recursively collect `.ts` files under a lunora source directory, skipping
  * `_generated/`, `node_modules/`, and `schema.ts`. Shared by function and
  * migration discovery so both walk the same file set.
+ *
+ * Uses `lstatSync` (never `statSync`) so symlinked entries are classified by the
+ * link itself, not its target: a directory symlink pointing at an ancestor (e.g.
+ * `lunora/loop -> ..`) is therefore not descended into, breaking the symlink-cycle
+ * infinite-recursion / build-hang that `statSync` (which follows links) would hit.
  */
 const listLunoraSourceFiles = (directory: string, accumulator: string[] = []): string[] => {
     let entries: string[];
@@ -579,7 +595,7 @@ const listLunoraSourceFiles = (directory: string, accumulator: string[] = []): s
 
     for (const entry of entries) {
         const full = join(directory, entry);
-        const info = statSync(full);
+        const info = lstatSync(full);
 
         if (info.isDirectory()) {
             if (entry === "_generated" || entry === "node_modules") {

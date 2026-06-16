@@ -628,12 +628,13 @@ export interface SecretLiteralIR {
 }
 
 /**
- * One `ctx.sql` tagged-template interpolation of a non-binding expression — the
- * `sql_injection_risk` lint input. Tagged-template `${…}` placeholders that are
- * bare identifiers/parameters are safe (the Hyperdrive driver binds them); a
- * placeholder that splices a string concatenation, template literal, or member
- * call is an injection vector. Structurally identical to
- * `AdvisorSqlInterpolation`.
+ * One `ctx.sql.query(text, …)` / `ctx.sql.unsafe(text, …)` call whose `text`
+ * argument is built in place rather than passed as a fixed statement — the
+ * `sql_injection_risk` lint input. The Hyperdrive driver binds ONLY the `params`
+ * array; the `text` string is spliced verbatim into the SQL, so a `text` assembled
+ * from a string concatenation or a substitution template literal is an injection
+ * vector. A fixed string literal / no-substitution template is safe. Structurally
+ * identical to `AdvisorSqlInterpolation`.
  */
 export interface SqlInterpolationIR {
     /** Export binding name of the procedure performing the `ctx.sql` call. */

@@ -65,6 +65,12 @@ const reconcileSchemaExtension = (
         return { kind: "skipped", path: schemaPath };
     }
 
+    if (result.reason === "invalid-identifier") {
+        throw new Error(
+            `schema-extension item "${itemKey}" is not a valid JS identifier — it is spliced into lunora/schema.ts as \`import { ${itemKey} }\` / \`.extend(${itemKey}.extension)\`. Rename the item to a valid identifier (no leading digit, no "-").`,
+        );
+    }
+
     throw new Error(`schema-extension merge failed for "${itemKey}": ${result.reason}`);
 };
 

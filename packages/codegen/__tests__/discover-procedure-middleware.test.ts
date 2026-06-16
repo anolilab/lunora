@@ -59,6 +59,17 @@ const PROTECTED = `${PREAMBLE}
         });
 `;
 
+/** A builder-form mutation calling `protectPublic(cfg)` with a non-literal config — fail closed. */
+const OPAQUE_CONFIG = `${PREAMBLE}
+    declare const cfg: { rateLimit?: unknown; captcha?: unknown };
+
+    export const opaque = c.mutation
+        .use(protectPublic(cfg))
+        .mutation(async ({ ctx }) => {
+            await ctx.db.insert("users", {});
+        });
+`;
+
 let workdir: string;
 let project: Project;
 
@@ -100,6 +111,16 @@ describe("discoverProcedureMiddleware", () => {
         const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
 
         expect(found[0]).toMatchObject({ exportName: "send", usesCaptcha: false, usesRateLimit: true });
+    });
+
+    it("does NOT assume protection from a non-literal `protectPublic(cfg)` config", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "opaque.ts"), OPAQUE_CONFIG, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "opaque", usesCaptcha: false, usesRateLimit: false });
     });
 
     it("unwraps a `protectPublic({ rateLimit, captcha })` bundle into both flags and detects the mail send", () => {

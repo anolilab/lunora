@@ -53,11 +53,17 @@ export type MaskFn<Context = unknown> = (value: unknown, context: MaskContext<Co
 /**
  * How a column is masked:
  *
- * - `"redact"` — drop the value to `null`. The simplest, safest strategy.
- * - `"hash"` — replace with a stable, non-reversible token (FNV-1a hex) so the
- * same input always yields the same token (joinable/groupable client-side)
- * without revealing the value. **Not** a cryptographic hash — it's a masking
- * token, not a security primitive.
+ * - `"redact"` — drop the value to `null`. The simplest, safest strategy, and
+ * the right choice for any value that must actually be kept secret.
+ * - `"hash"` — replace with a stable token (unsalted 32-bit FNV-1a hex) so the
+ * same input always yields the same token (joinable/groupable client-side).
+ * **This is NOT a confidentiality control.** It is a non-cryptographic,
+ * unsalted, deterministic, narrow (~2^32) digest: low-entropy values (emails,
+ * phone numbers, SSNs) are brute-force-recoverable by the very caller you are
+ * masking from, and identical values always produce identical tokens across
+ * rows/columns/tenants (enabling correlation). Use `"hash"` ONLY when you want a
+ * stable pseudonym for grouping/joining and leaking the value is acceptable —
+ * never to hide sensitive PII. For PII that must stay hidden, use `"redact"`.
  * - a {@link MaskFn} — author-defined transform (partial mask, role-aware reveal).
  */
 export type MaskStrategy<Context = unknown> = "hash" | "redact" | MaskFn<Context>;

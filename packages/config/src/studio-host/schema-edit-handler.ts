@@ -65,6 +65,12 @@ const statusForFailure = (reason: ApplyFailureReason): number => {
         return 404;
     }
 
+    // invalid-identifier / invalid-validator: the request itself is malformed
+    // (a non-identifier name, or validator text outside the `v.*` allow-list).
+    if (reason === "invalid-identifier" || reason === "invalid-validator") {
+        return 400;
+    }
+
     // aliased-define-schema / no-define-schema / non-object-argument: the source
     // shape is unsupported, not the request itself.
     return 422;

@@ -4,14 +4,27 @@
  * This file is YOURS: it's a normal Lunora module, copied into your project so
  * you own and edit it. Re-export these from your `lunora/` entry (or rely on
  * file-based discovery) so codegen picks them up — they surface in the generated
- * `api` as `mail/sendEmail` and `mail/queueEmail`, i.e. `api.mail.sendEmail`.
+ * `internal` (server-only) namespace as `mail/sendEmail` and `mail/queueEmail`,
+ * i.e. `internal.mail.sendEmail` (reachable from server handlers, never the client).
  *
- *   - **sendEmail** (action) — render + deliver an email *now*. Awaits the
- *     transport and returns the message `id`. Use it for low-volume,
+ *   - **sendEmail** (internalAction) — render + deliver an email *now*. Awaits
+ *     the transport and returns the message `id`. Use it for low-volume,
  *     latency-tolerant sends (a verification link, a receipt).
- *   - **queueEmail** (action) — hand the send off to a Cloudflare Queue and
- *     return immediately, so the request isn't blocked. Requires a Queue binding
- *     wired into `createMailer({ queue })` (see the README).
+ *   - **queueEmail** (internalAction) — hand the send off to a Cloudflare Queue
+ *     and return immediately, so the request isn't blocked. Requires a Queue
+ *     binding wired into `createMailer({ queue })` (see the README).
+ *
+ * **These are `internalAction`s, not public RPC, on purpose.** A general-purpose
+ * mailer that lets the caller pick recipients, subject, and body is an open
+ * relay if exposed to the client — anyone who can reach your RPC API could send
+ * phishing/spam through your verified domain and burn your provider quota. So
+ * these are *server-only*: call them from your own `mutation`/`action`
+ * handlers (`ctx.runAction(internal.mail.sendEmail, …)` / `ctx.scheduler`) AFTER
+ * you've authenticated the caller and decided the recipient — don't forward
+ * client-chosen `to`/`from`/`html` straight through. If you genuinely need a
+ * client-callable send, write a *purpose-specific* `action` that takes only safe
+ * business inputs (e.g. `{ orderId }`), checks `ctx.auth`/RBAC, derives the
+ * recipient server-side, and rate-limits it (`@lunora/ratelimit`).
  *
  * **Provider.** The default transport is **Cloudflare Email Workers** — it sends
  * a raw RFC 822 message through your Worker's `send_email` binding. Cloudflare's
@@ -35,7 +48,7 @@
  */
 import { createMailerFromEnv } from "@lunora/mail";
 import type { Mailer, SendOptions } from "@lunora/mail";
-import { action, v } from "@lunora/server";
+import { internalAction, v } from "@lunora/server";
 import { env } from "cloudflare:workers";
 
 /**
@@ -58,8 +71,15 @@ const cloudflareSend = async (from: string, to: string, raw: string): Promise<vo
  *
  * Pass a `queue` binding to `createMailer` (edit `@lunora/mail` usage) to enable
  * {@link queueEmail}.
+ *
+ * Only hand `createMailerFromEnv` the `cloudflareSend` callback when a
+ * `SEND_EMAIL` binding actually exists: that helper prefers `cloudflareSend`
+ * over `RESEND_API_KEY` whenever it's supplied, so passing it unconditionally
+ * would make a Resend-only deployment (no `SEND_EMAIL` binding) throw inside
+ * `cloudflareSend` instead of falling back to Resend.
  */
-const mailer = (): Mailer => createMailerFromEnv(env, { cloudflareSend });
+const mailer = (): Mailer =>
+    createMailerFromEnv(env, env["SEND_EMAIL"] === undefined ? {} : { cloudflareSend });
 
 /**
  * Validator for the email payload. Mirrors `@lunora/mail`'s `SendOptions` minus
@@ -113,7 +133,7 @@ const toSendOptions = (args: {
  * rejects (the raw provider error is logged server-side only). In dev the send
  * is captured into the studio Mail inbox instead of delivered.
  */
-export const sendEmail = action({
+export const sendEmail = internalAction({
     args: emailArgs,
     handler: async (_ctx, args): Promise<{ id: string }> => mailer().send(toSendOptions(args)),
 });
@@ -126,7 +146,7 @@ export const sendEmail = action({
  * Your queue consumer Worker should call `consumeQueuedSend(mailer, message.body)`
  * (from `@lunora/mail`) for each message — see the README.
  */
-export const queueEmail = action({
+export const queueEmail = internalAction({
     args: emailArgs,
     handler: async (_ctx, args): Promise<{ queued: true }> => mailer().queue(toSendOptions(args)),
 });

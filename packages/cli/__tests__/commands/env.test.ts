@@ -109,6 +109,47 @@ describe("lunora env", () => {
             }
         });
 
+        it.each([
+            ["backslash", "a\\b"],
+            ["double-quote", 'a"b'],
+            ["newline", "a\nb"],
+        ])("set rejects a value containing a %s rather than corrupting the round-trip", async (_label, value) => {
+            expect.assertions(2);
+
+            const { logger, recorded } = recordingLogger();
+
+            const result = await runEnvCommand({ cwd: workdir, key: "SECRET", logger, subcommand: "set", value });
+
+            expect(result.code).toBe(1);
+            // Nothing should have been written for a rejected value.
+            expect(existsSync(join(workdir, ".dev.vars"))).toBe(false);
+        });
+
+        it("set then get round-trips a value with shell-special (but representable) characters", async () => {
+            expect.assertions(2);
+
+            const { logger } = recordingLogger();
+            const value = "p@ss w0rd $with=lots&of#chars!";
+
+            await runEnvCommand({ cwd: workdir, key: "DB_PASS", logger, subcommand: "set", value });
+
+            const written: string[] = [];
+            const spy = vi.spyOn(process.stdout, "write").mockImplementation((chunk: unknown) => {
+                written.push(typeof chunk === "string" ? chunk : Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk));
+
+                return true;
+            });
+
+            try {
+                const result = await runEnvCommand({ cwd: workdir, key: "DB_PASS", logger, subcommand: "get" });
+
+                expect(result.code).toBe(0);
+                expect(written.join("")).toBe(`${value}\n`);
+            } finally {
+                spy.mockRestore();
+            }
+        });
+
         it("get on a missing key returns 1", async () => {
             expect.assertions(2);
 

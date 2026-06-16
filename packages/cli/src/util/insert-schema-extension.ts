@@ -19,7 +19,18 @@
 import type { CallExpression } from "ts-morph";
 import { Project, SyntaxKind } from "ts-morph";
 
-type InsertSchemaExtensionResult = { ok: true; text: string } | { ok: false; reason: "already-applied" | "no-define-schema" | "non-object-argument" };
+type InsertSchemaExtensionResult =
+    | { ok: true; text: string }
+    | { ok: false; reason: "already-applied" | "invalid-identifier" | "no-define-schema" | "non-object-argument" };
+
+/**
+ * A valid JavaScript identifier. The item key is spliced into `schema.ts` as a
+ * bare binding (`import { ${key} }`, `.extend(${key}.extension)`), so a leading
+ * digit or a hyphen — both permitted by the registry's path-oriented item-name
+ * regex — would emit uncompilable source (`import { 2fa }`, `.extend(rate-limit.extension)`).
+ * Reject those here as defense-in-depth, independent of the caller's validation.
+ */
+const VALID_JS_IDENTIFIER = /^[A-Za-z_$][\w$]*$/u;
 
 /** Marker that brackets the managed import + `.extend()` for a given item key. */
 const startMarker = (key: string): string => `// lunora:add:${key}:start`;
@@ -55,6 +66,13 @@ const findDefineSchemaCall = (callExpressions: ReadonlyArray<CallExpression>): C
  * @param key the registry item key (e.g. `"ratelimit"`)
  */
 const insertSchemaExtension = (source: string, key: string): InsertSchemaExtensionResult => {
+    // The key becomes a bare JS identifier in the emitted import + `.extend(...)`;
+    // reject anything that isn't a valid identifier so we never write source that
+    // can't compile (e.g. a hyphenated or digit-leading registry item name).
+    if (!VALID_JS_IDENTIFIER.test(key)) {
+        return { ok: false, reason: "invalid-identifier" };
+    }
+
     // Idempotency gate: if the managed block already exists, do nothing.
     if (source.includes(startMarker(key))) {
         return { ok: false, reason: "already-applied" };

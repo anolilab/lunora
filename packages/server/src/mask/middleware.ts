@@ -85,6 +85,7 @@ interface TableReaderLike {
     order: (direction: "asc" | "desc") => TableReaderLike;
     paginate: (options: { cursor?: null | string; numItems: number }) => Promise<QueryPage>;
     take: (limit: number) => Promise<Record<string, unknown>[]>;
+    unique: () => Promise<Record<string, unknown> | null>;
     withIndex: (indexName: string, range?: (q: unknown) => unknown) => TableReaderLike;
     withSearchIndex: (indexName: string, search: (q: unknown) => unknown) => TableReaderLike;
 }
@@ -142,10 +143,15 @@ const indexRolePermissions = (roles: ReadonlyArray<Role> | undefined): Map<strin
 /**
  * FNV-1a (32-bit) digest as 8-char hex — the `"hash"` strategy's token. A fast,
  * deterministic, NON-cryptographic hash: same input → same token, so a hashed
- * column stays joinable/groupable on the client without revealing the value.
- * Deliberately not Web Crypto's SHA-256 — that's async (awkward per-cell) and
- * overkill for masking, which only needs irreversibility-in-practice, not
- * collision resistance. `Math.imul` keeps the multiply in 32-bit space.
+ * column stays joinable/groupable on the client.
+ *
+ * SECURITY: this is NOT a confidentiality control. It is unsalted, deterministic
+ * and narrow (~2^32 outputs), so a low-entropy input (email / phone / SSN) is
+ * brute-force-recoverable by the same caller the mask is meant to blind, and
+ * equal values always yield equal tokens (cross-row/tenant correlation). The
+ * `"hash"` strategy exists for stable pseudonymous grouping/joining ONLY; PII
+ * that must stay hidden must use `"redact"`. See {@link MaskStrategy} docs.
+ * `Math.imul` keeps the multiply in 32-bit space.
  */
 const fnv1aHex = (input: string): string => {
     /* eslint-disable no-bitwise -- FNV-1a is defined over XOR and an unsigned shift; the bit ops ARE the algorithm */
@@ -233,9 +239,9 @@ const isFacadeEntry = (value: unknown): boolean => {
 const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskColumns<Context>>, context: MaskContext<Context>): MaskDatabase => {
     /**
      * Wrap a `query()` reader so every terminal read (`collect` / `first` /
-     * `take` / `paginate`) masks its rows, and every chainable refinement
-     * (`filter` / `withIndex` / `withSearchIndex`) returns a reader that is
-     * still masked.
+     * `unique` / `take` / `paginate`) masks its rows, and every chainable
+     * refinement (`filter` / `order` / `withIndex` / `withSearchIndex`) returns a
+     * reader that is still masked.
      */
     const wrapReader = (reader: TableReaderLike, columns: MaskColumns<Context>): TableReaderLike => {
         return {
@@ -261,6 +267,12 @@ const wrapDatabase = <Context>(base: MaskDatabase, perTable: Map<string, MaskCol
                 const rows = await reader.take(limit);
 
                 return rows.map((row) => maskRow(row, columns, context));
+            },
+            unique: async () => {
+                const row = await reader.unique();
+
+                // eslint-disable-next-line unicorn/no-null -- mirrors the reader's `null` empty sentinel
+                return row ? maskRow(row, columns, context) : null;
             },
             withIndex: (indexName, range) => wrapReader(reader.withIndex(indexName, range), columns),
             withSearchIndex: (indexName, search) => wrapReader(reader.withSearchIndex(indexName, search), columns),

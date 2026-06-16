@@ -33,6 +33,14 @@ interface EnvCommandResult {
 }
 
 const NEWLINE_PRESENT = /[\r\n]/u;
+/**
+ * `.dev.vars` values are wrapped in double quotes but the shared grammar's
+ * read path (`@lunora/config`'s `unquoteDevVariable`) only strips the outer
+ * quotes — it does NOT unescape. So any `"` or `\` we tried to escape on write
+ * would not round-trip (and would compound on every rewrite). Reject those
+ * characters at write time instead, the same way newlines are rejected.
+ */
+const UNREPRESENTABLE_PRESENT = /["\\]/u;
 
 interface ParsedLine {
     key: string;
@@ -53,12 +61,11 @@ const serializeDevVariables = (map: Map<string, ParsedLine>): string => {
     const lines: string[] = [];
 
     for (const entry of map.values()) {
-        // Always quote to preserve whitespace and special characters round-trip.
-        // Newlines are rejected at write time (env set), so single-line escaping
-        // of backslash + double-quote is sufficient here.
-        const escaped = entry.value.replaceAll("\\", "\\\\").replaceAll('"', String.raw`\"`);
-
-        lines.push(`${entry.key}="${escaped}"`);
+        // Always quote to preserve whitespace round-trip. Newlines, double-quotes
+        // and backslashes are rejected at write time (env set) because the shared
+        // grammar's read path does not unescape them, so we can quote verbatim
+        // here — any escaping we added would not survive the round-trip.
+        lines.push(`${entry.key}="${entry.value}"`);
     }
 
     return `${lines.join("\n")}\n`;
@@ -152,6 +159,16 @@ const runEnvSet = (context: EnvContext): EnvCommandResult => {
     // could inject spurious vars. Reject rather than silently mangle.
     if (NEWLINE_PRESENT.test(options.value)) {
         logger.error(`env: value for "${options.key}" contains a newline, which .dev.vars cannot represent`);
+
+        return { code: 1, descriptors: [] };
+    }
+
+    // A `"` or `\` would not round-trip: the shared grammar's read path strips
+    // the outer quotes but never unescapes, so a stored `a\"b`/`a\\b` reads back
+    // mangled and re-escapes (compounds) on every rewrite. Reject rather than
+    // silently corrupt the value (and later push the wrong secret to prod).
+    if (UNREPRESENTABLE_PRESENT.test(options.value)) {
+        logger.error(`env: value for "${options.key}" contains a double-quote or backslash, which .dev.vars cannot round-trip`);
 
         return { code: 1, descriptors: [] };
     }

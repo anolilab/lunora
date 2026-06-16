@@ -26,7 +26,7 @@ const backupCommand: Command = {
         { description: "Target production — requires an explicit --url", name: "prod", type: Boolean },
         { description: "Confirm a production pitr --restore (required with --prod)", name: "yes", type: Boolean },
         { description: "Worker URL (default http://localhost:8787)", name: "url", type: String },
-        { description: "Admin bearer token (or LUNORA_ADMIN_TOKEN)", name: "token", type: String },
+        { description: "Admin bearer token (prefer LUNORA_ADMIN_TOKEN; --token is visible to other local processes via the process table)", name: "token", type: String },
     ],
 };
 

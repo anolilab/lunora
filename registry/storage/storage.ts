@@ -20,6 +20,13 @@
  * can't address another user's data (IDOR). Edit the scope to match your tenancy
  * model (per-user shown here via `ctx.auth.userId`).
  *
+ * **Auth required by default.** Lunora queries/mutations/actions are public RPC,
+ * so every handler here fails closed for unauthenticated callers via
+ * {@link requireOwner} — otherwise an anonymous client could share a single
+ * `public/` namespace and read/overwrite/delete other anonymous users' objects.
+ * If you genuinely want a public namespace, do it deliberately and keep
+ * destructive/mutating ops (`deleteObject`, `generateUploadUrl`) authenticated.
+ *
  * Bindings + env used (declared in this item's registry.json, applied to
  * wrangler.jsonc / .dev.vars on add):
  *   - `env.UPLOADS`                 — the R2 bucket binding.
@@ -72,26 +79,62 @@ const makeStorage = (): Storage => {
 };
 
 /**
- * Per-tenant key prefix. Defaults to one folder per authenticated user so a
- * client-supplied `key` is always namespaced under the caller. Falls back to a
- * shared `public/` prefix for unauthenticated callers — tighten or remove that
- * branch to require auth.
+ * Per-tenant key prefix: one folder per authenticated user, so a client-supplied
+ * `key` is always namespaced under the caller (no cross-user IDOR).
+ *
+ * Fails closed for unauthenticated callers instead of bucketing them into a
+ * shared `public/` namespace. A shared anonymous prefix would let any anonymous
+ * client read, overwrite, or delete every other anonymous client's objects, so
+ * we require an authenticated identity. If you want a public namespace, add a
+ * separate, read-only public path — never wire `deleteObject` /
+ * `generateUploadUrl` to a shared anonymous prefix.
  */
-const tenantPrefix = (userId?: string): string => userId ?? "public";
+const requireOwner = (userId: string | null): string => {
+    if (userId === null || userId === undefined) {
+        throw new Error("@lunora/storage registry item: this endpoint requires an authenticated user. Pass `resolveIdentity` to `createWorker` (see the auth registry item), or add a deliberate public path.");
+    }
+
+    return userId;
+};
+
+/**
+ * Content-Types a client may request for a direct upload. The browser PUTs
+ * straight to R2 with the `Content-Type` pinned into the signed URL, so this
+ * allowlist is the only place to reject it — `@lunora/storage`'s server-side
+ * `upload()` allowlist is never in the path for direct uploads. Deliberately
+ * excludes types a browser may render inline (`text/html`, `image/svg+xml`, …)
+ * to avoid stored-XSS if you ever serve these objects same-origin. Edit to taste,
+ * and when serving objects set `X-Content-Type-Options: nosniff` +
+ * `Content-Disposition: attachment` (or serve from a cookieless object host).
+ */
+const ALLOWED_UPLOAD_CONTENT_TYPES: ReadonlySet<string> = new Set([
+    "application/pdf",
+    "image/gif",
+    "image/jpeg",
+    "image/png",
+    "image/webp",
+    "text/plain",
+]);
 
 /**
  * Mint a short-lived signed `PUT` URL the client uploads directly to. The key is
  * scoped to the caller, so two users uploading `"avatar.png"` never collide.
- * Optionally pins the request `Content-Type` into the signature.
+ * `contentType` is required and must be in {@link ALLOWED_UPLOAD_CONTENT_TYPES}
+ * — it's pinned into the signature, so an unconstrained value would let a caller
+ * store renderable HTML/SVG (stored-XSS risk when served same-origin).
  */
 export const generateUploadUrl = action({
     args: {
-        contentType: v.optional(v.string()),
+        contentType: v.string(),
         expiresInSeconds: v.optional(v.number()),
         key: v.string(),
     },
     handler: async (ctx, { contentType, expiresInSeconds, key }): Promise<{ key: string; url: string }> => {
-        const scoped = scopeKey(tenantPrefix(ctx.auth.userId ?? undefined), key);
+        if (!ALLOWED_UPLOAD_CONTENT_TYPES.has(contentType)) {
+            throw new Error(`@lunora/storage registry item: content type \`${contentType}\` is not allowed — permitted: ${[...ALLOWED_UPLOAD_CONTENT_TYPES].join(", ")}. Edit ALLOWED_UPLOAD_CONTENT_TYPES to widen.`);
+        }
+
+        const scoped = scopeKey(requireOwner(ctx.auth.userId), key);
         const url = await makeStorage().generateUploadUrl(scoped, { contentType, expiresInSeconds });
 
         return { key: scoped, url };
@@ -109,7 +152,7 @@ export const getDownloadUrl = action({
         key: v.string(),
     },
     handler: async (ctx, { expiresInSeconds, key }): Promise<{ key: string; url: string }> => {
-        const scoped = scopeKey(tenantPrefix(ctx.auth.userId ?? undefined), key);
+        const scoped = scopeKey(requireOwner(ctx.auth.userId), key);
         const url = await makeStorage().getSignedUrl(scoped, { expiresInSeconds, method: "GET" });
 
         return { key: scoped, url };
@@ -120,7 +163,7 @@ export const getDownloadUrl = action({
 export const deleteObject = mutation({
     args: { key: v.string() },
     handler: async (ctx, { key }): Promise<{ ok: true }> => {
-        const scoped = scopeKey(tenantPrefix(ctx.auth.userId ?? undefined), key);
+        const scoped = scopeKey(requireOwner(ctx.auth.userId), key);
         await makeStorage().delete(scoped);
 
         return { ok: true as const };
@@ -149,7 +192,7 @@ export const listObjects = query({
         prefix: v.optional(v.string()),
     },
     handler: async (ctx, { cursor, limit, prefix }): Promise<{ cursor?: string; objects: StorageObject[]; truncated?: boolean }> => {
-        const base = tenantPrefix(ctx.auth.userId ?? undefined);
+        const base = requireOwner(ctx.auth.userId);
         const scopedPrefix = prefix === undefined ? `${base}/` : `${scopeKey(base, prefix)}`;
         const stripLength = `${base}/`.length;
 

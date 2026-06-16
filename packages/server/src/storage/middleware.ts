@@ -6,10 +6,12 @@
  * What it does, at runtime:
  *
  * 1. Resolves the request identity/roles once (like `rls`), then wraps
- * `ctx.storage`. Each guarded method (`download` / `getMetadata` /
- * `getSignedUrl` / `getUrl` → `read`; `store` / `generateUploadUrl` → `write`;
- * `delete` → `delete`) checks the key it targets against the rules for that
- * operation before delegating to the underlying storage.
+ * `ctx.storage`. Each guarded method (`download` / `getMetadata` / `getUrl` →
+ * `read`; `store` / `generateUploadUrl` → `write`; `delete` → `delete`) checks
+ * the key it targets against the rules for that operation before delegating to
+ * the underlying storage. `getSignedUrl` is gated by the requested HTTP method:
+ * `{ method: "PUT" }` mints an upload URL and is checked as `write`, otherwise
+ * `read` — so a signed PUT URL can't bypass the bucket's write rules.
  *
  * 2. **Per-op default-deny**: if ANY rule governs an operation, that operation
  * is locked down — it is allowed only when a rule whose `prefix` matches the
@@ -84,18 +86,44 @@ const indexRolePermissions = (roles: ReadonlyArray<Role> = []): Map<string, Set<
 const prefixMatches = (prefix: string | undefined, key: string): boolean => prefix === undefined || key.startsWith(prefix);
 
 /**
+ * Resolve the operation a guarded call must satisfy. A static {@link StorageOperation}
+ * fixes the op for the whole method; a function derives it per call from the
+ * arguments — used for `getSignedUrl`, whose op depends on the requested HTTP
+ * method (see below).
+ */
+type OperationResolver = ((args: ReadonlyArray<unknown>) => StorageOperation) | StorageOperation;
+
+/**
+ * `getSignedUrl(key, { method })` mints either a download (GET, a `read`
+ * capability) or an upload (PUT, a `write` capability — it's the basis of the
+ * `generateUploadUrl` alias). A static `read` classification would let a caller
+ * mint a PUT/upload URL while only the bucket's `read` rules were consulted,
+ * bypassing every `write` rule. Derive the op from the method argument so a PUT
+ * URL is gated as a `write`. The default (no `method`, or any non-PUT) is `read`.
+ */
+const resolveSignedUrlOperation = (args: ReadonlyArray<unknown>): StorageOperation => {
+    const options = args[1];
+    const method = typeof options === "object" && options !== null ? (options as { method?: unknown }).method : undefined;
+
+    return typeof method === "string" && method.toUpperCase() === "PUT" ? "write" : "read";
+};
+
+/**
  * The gated `ctx.storage` surface — each method paired with the operation a rule
  * must allow. This is the *only* surface the wrapper re-exposes; every other
  * method on the backing object (`upload`, `createMultipartUpload`,
  * `resumeMultipartUpload`, `getPresignedUrl`, `list`) is dropped so it can't
  * bypass enforcement. `list` has no entry because `ctx.storage` exposes none.
+ *
+ * `getSignedUrl` is gated by a per-call resolver (not a static op) because a
+ * `{ method: "PUT" }` mints a write capability — see {@link resolveSignedUrlOperation}.
  */
-const GUARDED_METHODS: ReadonlyArray<[keyof WrappableStorage, StorageOperation]> = [
+const GUARDED_METHODS: ReadonlyArray<[keyof WrappableStorage, OperationResolver]> = [
     ["delete", "delete"],
     ["download", "read"],
     ["generateUploadUrl", "write"],
     ["getMetadata", "read"],
-    ["getSignedUrl", "read"],
+    ["getSignedUrl", resolveSignedUrlOperation],
     ["getUrl", "read"],
     ["store", "write"],
 ];
@@ -172,8 +200,11 @@ const storageRules = <Context extends StorageContextIn = StorageContextIn>(
                         // Coerce defensively so a malformed (keyless) call fails as a
                         // clean `FORBIDDEN`/no-match rather than `undefined.startsWith`.
                         const key = typeof args[0] === "string" ? args[0] : "";
+                        // A resolver derives the op from the call (e.g. `getSignedUrl`
+                        // → `write` for a PUT URL); a static op fixes it for the method.
+                        const operation = typeof op === "function" ? op(args) : op;
 
-                        assertAllowed(op, key, bucketName);
+                        assertAllowed(operation, key, bucketName);
 
                         return (original as (...callArgs: unknown[]) => unknown)(...args);
                     };

@@ -42,6 +42,31 @@ const pathnameOf = (url: string): string => {
     return queryIndex === -1 ? url : url.slice(0, queryIndex);
 };
 
+/** Loopback hostnames the studio server accepts in the `Host` header (sans port). */
+const LOOPBACK_HOST_NAMES = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+
+/**
+ * Anti-DNS-rebinding guard: the studio HTML embeds the worker admin token and the
+ * server reverse-proxies the worker's privileged `/_lunora/admin/*` surface, so a
+ * page served from `http://evil.example:<port>` that DNS-rebinds `evil.example`
+ * to 127.0.0.1 would become same-origin and could read the token + drive admin
+ * RPC. Browsers always send the *attacker's* original hostname in the `Host`
+ * header even after a rebind, so rejecting any non-loopback Host literal blocks
+ * the attack while leaving real loopback access (`localhost`/`127.0.0.1`/`[::1]`)
+ * untouched. Returns `true` when the request is from a trusted loopback host.
+ */
+const isLoopbackHost = (hostHeader: string | undefined): boolean => {
+    if (hostHeader === undefined || hostHeader === "") {
+        // A missing Host header can't be trusted as loopback — reject.
+        return false;
+    }
+
+    // Strip the optional `:port` suffix. IPv6 literals are bracketed (`[::1]:6173`).
+    const withoutPort = hostHeader.startsWith("[") ? hostHeader.slice(0, hostHeader.indexOf("]") + 1) : (hostHeader.split(":")[0] ?? hostHeader);
+
+    return LOOPBACK_HOST_NAMES.has(withoutPort);
+};
+
 /** Forward an HTTP request to the worker and pipe its response back. */
 const proxyHttp = (request: IncomingMessage, response: ServerResponse, worker: URL): void => {
     const upstream = httpRequest(
@@ -133,7 +158,10 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
     let assets = loadStudioAssets(options.logger, import.meta.url);
     let assetsStamp = studioAssetsStamp(import.meta.url);
     const html = renderStudioHtml({
-        adminToken: resolveAdminToken(options.cwd),
+        // The admin token grants full read/write over the local worker. Only embed
+        // it for a loopback bind: a non-loopback (LAN/0.0.0.0) bind would otherwise
+        // hand the token to any network client that GETs `/`.
+        adminToken: isLoopback ? resolveAdminToken(options.cwd) : undefined,
         basePath: "/",
         dataEditable: isLoopback,
         rulesInstalled: detectAgentRules(options.cwd).installed,
@@ -169,8 +197,29 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
     const server: Server = createServer((request, response) => {
         const pathname = pathnameOf(request.url ?? "/");
 
-        // Worker proxy first.
+        // Anti-DNS-rebinding: reject any request whose Host header isn't an exact
+        // loopback literal BEFORE serving the token-bearing HTML or proxying the
+        // worker admin surface. A rebound attacker page sends its own hostname here.
+        if (!isLoopbackHost(request.headers.host)) {
+            response.statusCode = 403;
+            response.setHeader("Content-Type", "text/plain");
+            response.end("Lunora studio: refusing a request whose Host is not a loopback literal (DNS-rebinding guard).");
+
+            return;
+        }
+
+        // Worker proxy first. On a non-loopback bind the proxied `/_lunora/admin/*`
+        // surface (runSql/export/import/…) is full read/write, so refuse to proxy
+        // it at all — the studio stays a read-only HTML shell off loopback.
         if (pathname.startsWith(PROXY_PREFIX)) {
+            if (!isLoopback) {
+                response.statusCode = 403;
+                response.setHeader("Content-Type", "text/plain");
+                response.end("Lunora studio: the worker admin proxy is only available on a loopback bind.");
+
+                return;
+            }
+
             proxyHttp(request, response, worker);
 
             return;
@@ -230,6 +279,13 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
     });
 
     server.on("upgrade", (request, socket, head) => {
+        // Mirror the HTTP anti-rebinding + loopback-only-proxy guards on the WS path.
+        if (!isLoopbackHost(request.headers.host) || !isLoopback) {
+            socket.destroy();
+
+            return;
+        }
+
         if (pathnameOf(request.url ?? "").startsWith(PROXY_PREFIX)) {
             proxyUpgrade(request, socket, head, worker);
         } else {

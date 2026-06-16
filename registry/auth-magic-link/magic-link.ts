@@ -47,19 +47,40 @@ export interface MagicLinkEnv {
 }
 
 /**
+ * Env-name values that mark a development deployment. `lunora dev` sets
+ * `WORKER_ENV=development`; a real deploy that sets none of these stays
+ * production (fail closed), so the dev-only console fallback below never leaks
+ * live sign-in links into production Worker logs.
+ */
+const DEV_ENVIRONMENT_PATTERN = /^(?:dev(?:elopment)?|local(?:host)?|test)$/iu;
+const ENVIRONMENT_VARS = ["CF_ENV", "ENVIRONMENT", "NODE_ENV", "WORKER_ENV"] as const;
+
+const isDevEnvironment = (env: Record<string, unknown>): boolean =>
+    ENVIRONMENT_VARS.some((key) => typeof env[key] === "string" && DEV_ENVIRONMENT_PATTERN.test(env[key] as string));
+
+/**
  * Deliver an auth email through `@lunora/mail` — the SAME transport selection as
  * the base `auth` item's `sendAuthEmail`, so magic-link mail behaves identically
  * to verification/reset mail: captured into the studio Mail tab in dev, delivered
- * via the `SEND_EMAIL` binding (or `RESEND_API_KEY`) in production, and logged to
- * the console when `MAIL_FROM` isn't set yet so the dev flow works before
- * `lunora add email`. The `cloudflareSend` callback (it needs `cloudflare:email`)
- * is what lets `createMailerFromEnv` reach the binding in production — omitting it
- * is why an unwired send would otherwise throw `no transport configured`.
+ * via the `SEND_EMAIL` binding (or `RESEND_API_KEY`) in production, and — in
+ * development only — logged to the console when `MAIL_FROM` isn't set yet so the
+ * dev flow works before `lunora add email`. In production a missing `MAIL_FROM`
+ * fails closed: a magic link is a bearer credential, so we throw rather than
+ * write live sign-in URLs to Worker logs where anyone with log access could use
+ * them. The `cloudflareSend` callback (it needs `cloudflare:email`) is what lets
+ * `createMailerFromEnv` reach the binding in production; it's passed only when a
+ * `SEND_EMAIL` binding exists, so a Resend-only deploy still falls back to
+ * `RESEND_API_KEY` instead of throwing inside `cloudflareSend`.
  */
 const sendPluginEmail = async (env: MagicLinkEnv, message: { subject: string; text: string; to: string }): Promise<void> => {
     const fullEnv = env as unknown as Record<string, unknown>;
 
     if (typeof fullEnv["MAIL_FROM"] !== "string") {
+        if (!isDevEnvironment(fullEnv)) {
+            throw new Error("auth: mail is not configured (`MAIL_FROM` unset) — run `lunora add email` before deploying. Refusing to log sign-in links in production.");
+        }
+
+        // Dev only — surface the link so the flow still works. Run `lunora add email`.
         // eslint-disable-next-line no-console -- dev fallback: surface the auth link when no mailer is set up
         console.log(`[auth] email → ${message.to}: ${message.subject}\n${message.text}`);
 
@@ -77,7 +98,10 @@ const sendPluginEmail = async (env: MagicLinkEnv, message: { subject: string; te
         await binding.send(new EmailMessage(from, to, raw));
     };
 
-    await createMailerFromEnv(fullEnv, { cloudflareSend }).send(message);
+    // Only hand over `cloudflareSend` when the binding exists: `createMailerFromEnv`
+    // prefers it over `RESEND_API_KEY`, so passing it unconditionally would break a
+    // Resend-only deployment.
+    await createMailerFromEnv(fullEnv, fullEnv["SEND_EMAIL"] === undefined ? {} : { cloudflareSend }).send(message);
 };
 
 /**

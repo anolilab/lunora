@@ -18,6 +18,11 @@
  *
  *   - `byRoomSession` — drives the heartbeat upsert lookup (one row per
  *     `(roomId, sessionId)`), so re-heartbeats patch instead of churning.
+ *     `sessionId` is client-supplied and `listPresent` exposes it to every room
+ *     subscriber, so it is NOT an ownership key on its own — the heartbeat
+ *     handler additionally rejects a patch whose existing row belongs to a
+ *     different `userId`, so a participant can't reuse another visible
+ *     `sessionId` to hijack their presence row.
  *   - `byRoom` — drives the `listPresent` / `sweep` per-room scans.
  */
 import { definePlugin, defineSchemaExtension, defineTable, v } from "@lunora/server";

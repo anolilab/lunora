@@ -71,8 +71,20 @@ interface DeployCommandOptions {
     /** Admin bearer token for `--migrate` (falls back to `LUNORA_ADMIN_TOKEN`). */
     migrateToken?: string;
 
-    /** Worker URL for `--migrate` (defaults to the wrangler deploy target). */
+    /**
+     * Worker URL for `--migrate`. REQUIRED when `--migrate` is set — the deploy
+     * handler never captures the URL `wrangler deploy` published to, so there is
+     * no safe default; omitting it would silently target `http://localhost:8787`
+     * (the dev worker), applying the migration to local state instead of prod.
+     */
     migrateUrl?: string;
+
+    /**
+     * Confirm a production data migration triggered via `--migrate` (the
+     * `migrate up --prod` confirmation the standalone command requires). Without
+     * it a `--migrate --migrate-url <prod>` deploy refuses to run the migration.
+     */
+    migrateYes?: boolean;
     /** Railpack-availability probe injected in tests. Defaults to a real `railpack --version` + `BUILDKIT_HOST` check. */
     railpackAvailable?: DockerProbe;
     skipCodegen?: boolean;
@@ -326,6 +338,17 @@ const warnDevVariablesNotPushed = (cwd: string, logger: Logger): void => {
  * auditable, and safe.
  */
 const runPostDeployMigrations = async (options: DeployCommandOptions, cwd: string): Promise<number> => {
+    // `wrangler deploy`'s published URL is never captured here, so without an
+    // explicit `--migrate-url` the downstream migration would default to
+    // `http://localhost:8787` (the dev worker) and apply against LOCAL state —
+    // and ship the production admin bearer to whatever listens on that port.
+    // Refuse rather than silently target localhost.
+    if (options.migrateUrl === undefined) {
+        options.logger.error("--migrate requires --migrate-url <https://your-worker> — the deploy target URL is not captured automatically, refusing to default to localhost");
+
+        return 1;
+    }
+
     const project = new Project({ skipAddingFilesFromTsConfig: true });
     const lunoraDirectory = join(cwd, "lunora");
     let migrations: ReadonlyArray<{ id: string; table: string }>;
@@ -356,11 +379,14 @@ const runPostDeployMigrations = async (options: DeployCommandOptions, cwd: strin
             fetchImpl: options.fetchImpl,
             id: migration.id,
             logger: options.logger,
-            prod: options.migrateUrl !== undefined,
+            // A `--migrate-url` is always set by this point (guarded above), so this
+            // is a production migration — gate it behind the operator's explicit
+            // `--migrate-yes`/`--yes` rather than auto-confirming.
+            prod: true,
             subcommand: "up",
             token: options.migrateToken,
             url: options.migrateUrl,
-            yes: options.migrateUrl !== undefined,
+            yes: options.migrateYes === true,
         };
 
         // eslint-disable-next-line no-await-in-loop -- sequential: each migration must finish before the next
@@ -655,6 +681,7 @@ const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions>(asyn
         migrate: options.migrate === true,
         migrateToken: options.migrateToken,
         migrateUrl: options.migrateUrl,
+        migrateYes: options.migrateYes === true,
         updateSchemaBaseline: options.updateSchemaBaseline === true,
     });
 

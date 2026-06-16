@@ -167,7 +167,9 @@ describe("definePresence", () => {
         const present = await presence.functions.listPresent.handler(makeQueryContext(db), { roomId: "room-1" });
 
         expect(present).toHaveLength(1);
-        expect(present[0]?.sessionId).toBe("fresh");
+        // `sessionId` is intentionally omitted from the public payload (it's a
+        // connection secret); the member is identified by `userId`.
+        expect(present[0]).not.toHaveProperty("sessionId");
         expect(present[0]?.userId).toBe("new");
     });
 
@@ -178,13 +180,13 @@ describe("definePresence", () => {
         const presence = definePresence({ ttlMs: 10_000 });
 
         vi.setSystemTime(1000);
-        await presence.functions.heartbeat.handler(makeMutationContext(db), { roomId: "room-1", sessionId: "a" });
-        await presence.functions.heartbeat.handler(makeMutationContext(db), { roomId: "room-2", sessionId: "b" });
+        await presence.functions.heartbeat.handler(makeMutationContext(db, "user-a"), { roomId: "room-1", sessionId: "a" });
+        await presence.functions.heartbeat.handler(makeMutationContext(db, "user-b"), { roomId: "room-2", sessionId: "b" });
 
         const present = await presence.functions.listPresent.handler(makeQueryContext(db), { roomId: "room-1" });
 
         expect(present).toHaveLength(1);
-        expect(present[0]?.sessionId).toBe("a");
+        expect(present[0]?.userId).toBe("user-a");
     });
 
     it("sweep hard-deletes only expired rows", async () => {
@@ -275,6 +277,64 @@ describe("definePresence", () => {
         await presence.functions.disconnect.handler(makeMutationContext(db, "user-1"), lifecycleEvent({ userId: "user-1" }));
 
         expect(deleteSpy).not.toHaveBeenCalled();
+    });
+
+    it("heartbeat refuses to overwrite a row owned by a different identity", async () => {
+        expect.assertions(2);
+
+        const db = createMemoryDb();
+        const presence = definePresence({ ttlMs: 10_000 });
+
+        vi.setSystemTime(1000);
+        await presence.functions.heartbeat.handler(makeMutationContext(db, "victim"), { data: { color: "blue" }, roomId: "room-1", sessionId: "sess-1" });
+
+        // Attacker heartbeats the victim's observable (roomId, sessionId).
+        await expect(
+            presence.functions.heartbeat.handler(makeMutationContext(db, "attacker"), { data: { color: "red" }, roomId: "room-1", sessionId: "sess-1" }),
+        ).rejects.toThrow(/denied/u);
+
+        // The victim's awareness data is untouched.
+        const present = await presence.functions.listPresent.handler(makeQueryContext(db), { roomId: "room-1" });
+
+        expect(present[0]?.data).toEqual({ color: "blue" });
+    });
+
+    it("heartbeat rejects an oversized data blob", async () => {
+        expect.assertions(1);
+
+        const db = createMemoryDb();
+        const presence = definePresence({ ttlMs: 10_000 });
+
+        vi.setSystemTime(1000);
+
+        await expect(
+            presence.functions.heartbeat.handler(makeMutationContext(db, "user-1"), {
+                data: { blob: "x".repeat(5000) },
+                roomId: "room-1",
+                sessionId: "sess-1",
+            }),
+        ).rejects.toThrow(/limit/u);
+    });
+
+    it("disconnect does not evict a row owned by a different identity", async () => {
+        expect.assertions(1);
+
+        const db = createMemoryDb();
+        const presence = definePresence({ ttlMs: 10_000 });
+
+        vi.setSystemTime(1000);
+        await presence.functions.heartbeat.handler(makeMutationContext(db, "victim"), { roomId: "room-1", sessionId: "sess-1" });
+
+        // Attacker closes a socket carrying the victim's (roomId, sessionId) but
+        // its own verified identity — the row must NOT be deleted.
+        await presence.functions.disconnect.handler(
+            makeMutationContext(db, "attacker"),
+            lifecycleEvent({ context: { roomId: "room-1", sessionId: "sess-1" }, userId: "attacker" }),
+        );
+
+        const present = await presence.functions.listPresent.handler(makeQueryContext(db), { roomId: "room-1" });
+
+        expect(present).toHaveLength(1);
     });
 });
 

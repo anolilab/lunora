@@ -5,6 +5,8 @@ import {
     FUNCTION_METRICS_BUCKET_MS,
     FUNCTION_METRICS_BUCKETS_TABLE,
     FUNCTION_METRICS_INDEX_TABLE,
+    FUNCTION_METRICS_MAX_PATHS,
+    FUNCTION_METRICS_READ_LIMIT,
     FUNCTION_METRICS_SCANS_TABLE,
     FUNCTION_METRICS_TABLE,
     readFunctionMetricBuckets,
@@ -321,6 +323,48 @@ describe("function-metrics module", () => {
             expect(readFunctionMetricScans(database.sql).size).toBe(0);
             expect(readFunctionMetricIndexHits(database.sql)).toEqual([]);
             expect(readFunctionMetricsTotals(database.sql)).toEqual({ errors: 0, requests: 0 });
+        } finally {
+            database.close();
+        }
+    });
+
+    it("caps distinct paths so an unregistered-path flood can't grow the table unbounded", () => {
+        expect.assertions(2);
+
+        const database = createSqliteExec();
+
+        try {
+            // Fill the accumulator to its distinct-path cap.
+            for (let index = 0; index < FUNCTION_METRICS_MAX_PATHS; index += 1) {
+                recordFunctionMetric(database.sql, { durationMs: 1, errored: false, path: `fn:${index}`, ts: 1000 });
+            }
+
+            // A brand-new path past the cap is dropped; an already-tracked path
+            // keeps accumulating.
+            recordFunctionMetric(database.sql, { durationMs: 1, errored: false, path: "fn:flood-1", ts: 2000 });
+            recordFunctionMetric(database.sql, { durationMs: 1, errored: false, path: "fn:0", ts: 2000 });
+
+            const total = database.raw(`SELECT COUNT(*) AS c FROM "${FUNCTION_METRICS_TABLE}"`)[0] as { c: number };
+            const tracked = database.raw(`SELECT calls AS c FROM "${FUNCTION_METRICS_TABLE}" WHERE path = 'fn:0'`)[0] as { c: number };
+
+            expect(total.c).toBe(FUNCTION_METRICS_MAX_PATHS);
+            expect(tracked.c).toBe(2);
+        } finally {
+            database.close();
+        }
+    });
+
+    it("bounds readFunctionMetrics with a LIMIT so a bloated table can't blow up DO memory", () => {
+        expect.assertions(1);
+
+        const database = createSqliteExec();
+
+        try {
+            for (let index = 0; index < FUNCTION_METRICS_READ_LIMIT + 50; index += 1) {
+                recordFunctionMetric(database.sql, { durationMs: 1, errored: false, path: `fn:${index}`, ts: 1000 + index });
+            }
+
+            expect(readFunctionMetrics(database.sql)).toHaveLength(FUNCTION_METRICS_READ_LIMIT);
         } finally {
             database.close();
         }

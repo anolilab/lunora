@@ -22,6 +22,18 @@ const CLEAN = `
     export const count = 42;
 `;
 
+/** An all-lowercase 64-char hex key — single-case, missed by the mixed-charset rule. */
+// eslint-disable-next-line no-secrets/no-secrets -- synthetic fixture, not a real credential
+const HEX_KEY = `
+    export const hmac = "a3f9c2e1b7d8049f5c6a1e2d3b4c5f6071829304a1b2c3d4e5f60718293a4b5c6";
+`;
+
+/** A secret split across `+`-concatenated string literals — folded into one token before matching. */
+// eslint-disable-next-line no-secrets/no-secrets -- synthetic fixture, not a real credential
+const CONCAT_SECRET = `
+    export const key = "a3f9c2e1b7d8049f5c6a1e2d3b" + "4c5f6071829304a1b2c3d4e5f60718293a4b5c6";
+`;
+
 let workdir: string;
 let project: Project;
 
@@ -47,6 +59,26 @@ describe("discoverSecrets", () => {
         expect(kinds).toStrictEqual(["aws_access_key", "stripe_live_key"]);
         expect(found.every((secret) => secret.preview.includes("chars)"))).toBe(true);
         expect(found.every((secret) => !secret.preview.includes("EXAMPLE"))).toBe(true);
+    });
+
+    it("flags an all-lowercase hex key the mixed-charset rule would miss", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "hmac.ts"), HEX_KEY, "utf8");
+
+        const found = discoverSecrets(project, join(workdir, "lunora"));
+
+        expect(found.map((secret) => secret.kind)).toStrictEqual(["hex_secret"]);
+    });
+
+    it("flags a secret split across +-concatenated string literals", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "concat.ts"), CONCAT_SECRET, "utf8");
+
+        const found = discoverSecrets(project, join(workdir, "lunora"));
+
+        expect(found).toHaveLength(1);
     });
 
     it("records nothing for a module with no secret-shaped literals", () => {

@@ -156,6 +156,19 @@ const runMigrateGenerateCommand = (options: MigrateGenerateCommandOptions): Migr
 
 const DATA_MIGRATIONS_FILENAME = "migrations.ts";
 const IDENTIFIER_PATTERN = /^[A-Za-z_]\w*$/u;
+
+/**
+ * JS reserved words that are syntactically invalid as a `const` binding name —
+ * `export const default = …` / `export const return = …` won't compile. The
+ * camelCase export identifier must not be one of these (nor digit-leading,
+ * which {@link IDENTIFIER_PATTERN} already rejects).
+ */
+const RESERVED_WORDS = new Set([
+    "await", "break", "case", "catch", "class", "const", "continue", "debugger", "default", "delete", "do", "else",
+    "enum", "export", "extends", "false", "finally", "for", "function", "if", "import", "in", "instanceof", "new",
+    "null", "return", "super", "switch", "this", "throw", "true", "try", "typeof", "var", "void", "while", "with",
+    "yield", "let", "static", "implements", "interface", "package", "private", "protected", "public",
+]);
 const DEFINE_MIGRATION_IMPORT = `import { defineMigration } from "@lunora/server";`;
 const RUN_MIGRATION_OP = "__lunora_admin__:runMigration";
 const MIGRATION_STATUS_OP = "__lunora_admin__:migrationStatus";
@@ -210,6 +223,17 @@ const runMigrateCreateCommand = (options: MigrateCreateCommandOptions): MigrateC
     }
 
     const exportName = camelCase(slug);
+
+    // `exportName` is written verbatim as `export const ${exportName} = …`. A slug
+    // that camelCases to a digit-leading value (e.g. `123-backfill` → `123Backfill`)
+    // or a reserved word (`class`, `default`, …) yields uncompilable source that
+    // breaks the whole lunora/migrations.ts module — reject before writing.
+    if (!IDENTIFIER_PATTERN.test(exportName) || RESERVED_WORDS.has(exportName)) {
+        options.logger.error(`invalid migration name: "${options.name}" derives the export \`${exportName}\`, which is not a valid identifier — pick a name that starts with a letter and isn't a reserved word`);
+
+        return { code: 1, file: "" };
+    }
+
     const table = options.table ?? "TODO_table";
 
     // `table` is written verbatim into generated TypeScript (`table: "..."`),
