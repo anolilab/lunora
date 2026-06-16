@@ -1,4 +1,4 @@
-import { resolveEntitlements } from "@cirrus/payment";
+import { resolveEntitlements } from "@lunora/payment";
 import { describe, expect, it } from "vitest";
 
 import { CIRRUS_CLOUD_PLANS, effectiveLimit, FREE_LIMITS, withinQuota } from "../src/billing/plans";
