@@ -32,6 +32,7 @@ import sqlInjectionRisk from "./lints/static/sql-injection-risk";
 import tableWithoutInsert from "./lints/static/table-without-insert";
 import unboundedStringArgument from "./lints/static/unbounded-string-argument";
 import unindexedForeignKey from "./lints/static/unindexed-foreign-key";
+import unindexedRelationTarget from "./lints/static/unindexed-relation-target";
 import userCreatingMutationWithoutCaptcha from "./lints/static/user-creating-mutation-without-captcha";
 import workflowUnknownTarget from "./lints/static/workflow-unknown-target";
 import workflowUnused from "./lints/static/workflow-unused";
@@ -71,6 +72,7 @@ export { default as sqlInjectionRisk } from "./lints/static/sql-injection-risk";
 export { default as tableWithoutInsert } from "./lints/static/table-without-insert";
 export { default as unboundedStringArgument } from "./lints/static/unbounded-string-argument";
 export { default as unindexedForeignKey } from "./lints/static/unindexed-foreign-key";
+export { default as unindexedRelationTarget } from "./lints/static/unindexed-relation-target";
 export { default as userCreatingMutationWithoutCaptcha } from "./lints/static/user-creating-mutation-without-captcha";
 export { default as workflowUnknownTarget } from "./lints/static/workflow-unknown-target";
 export { default as workflowUnused } from "./lints/static/workflow-unused";
@@ -102,6 +104,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     emptyIndex,
     circularFk,
     unindexedForeignKey,
+    unindexedRelationTarget,
     duplicateIndex,
     tableWithoutInsert,
     workflowUnused,

@@ -1,11 +1,6 @@
 import emit from "../../finding";
 import type { Lint } from "../../types";
-
-/** The implicit primary-key column; it is always indexed, so an FK onto it needs no extra index. */
-const PRIMARY_KEY = "_id";
-
-/** Convert an FK column into a conventional index name, e.g. `authorId` → `byAuthorId`. */
-const suggestIndexName = (field: string): string => `by${field.charAt(0).toUpperCase()}${field.slice(1)}`;
+import { leadingIndexedColumns, PRIMARY_KEY, suggestIndexName } from "./fk-index";
 
 /**
  * Lunora port of splinter's `0001_unindexed_foreign_keys`.
@@ -33,16 +28,8 @@ const unindexedForeignKey: Lint = {
         const findings = [];
 
         for (const table of context.schema.tables) {
-            // Columns that lead a btree secondary index are already covered. Only
-            // `kind: "index"` qualifies — a search (FTS) or vector (ANN) index
-            // does not serve an FK equality lookup, and a rank index's btree is
-            // keyed on its sort columns, not arbitrary leading columns.
-            const leadingIndexedColumns = new Set(
-                table.indexes
-                    .filter((index) => index.kind === "index")
-                    .map((index) => index.fields[0])
-                    .filter((field): field is string => field !== undefined),
-            );
+            // Columns that lead a btree secondary index are already covered.
+            const indexed = leadingIndexedColumns(table);
 
             for (const relation of table.relations) {
                 // Only `one` relations put the FK column on *this* table.
@@ -53,7 +40,7 @@ const unindexedForeignKey: Lint = {
                 const fkColumn = relation.field;
 
                 // The PK is always indexed; an FK onto it needs nothing extra.
-                if (fkColumn === PRIMARY_KEY || leadingIndexedColumns.has(fkColumn)) {
+                if (fkColumn === PRIMARY_KEY || indexed.has(fkColumn)) {
                     continue;
                 }
 

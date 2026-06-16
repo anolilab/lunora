@@ -331,15 +331,17 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
         // advisor lints (dead index / hot scan), then the derived insights. The
         // severity tabs in AdvisorView regroup them all by level.
         //
-        // For `unindexed_foreign_key` findings (and any other finding that carries
-        // `suggestedIndex` metadata), attach an "Apply index" action that composes
-        // the `CREATE INDEX` SQL and copies it to the operator's clipboard on
-        // confirm. This is the Item 5 "create all missing indexes" apply control —
-        // per-finding rather than bulk, guarded by ConfirmButton.
+        // For `unindexed_foreign_key` / `unindexed_relation_target` findings (and
+        // any other finding that carries `suggestedIndex` metadata), attach an
+        // "Apply index" action that composes the `CREATE INDEX` SQL and copies it
+        // to the operator's clipboard on confirm. This is the Item 5 "create all
+        // missing indexes" apply control — per-finding rather than bulk, guarded
+        // by ConfirmButton.
+        const indexAdvisoryLints = new Set(["unindexed_foreign_key", "unindexed_relation_target"]);
         const staticRows: AdvisorRow[] = (advisories ?? []).map((finding) => {
             const base = advisoryRow(finding);
 
-            if (finding.name === "unindexed_foreign_key" && hasIndexMetadata(finding.metadata)) {
+            if (indexAdvisoryLints.has(finding.name) && hasIndexMetadata(finding.metadata)) {
                 const { table, suggestedIndex } = finding.metadata;
                 const testId = `in-apply-index-${table}-${suggestedIndex.name}`;
 
