@@ -89,9 +89,12 @@ const readFlag = (value: unknown): string | undefined => (typeof value === "stri
  */
 const auditAuthSecret = (env: Record<string, unknown>): SecurityFinding[] => {
     const authSecret = env["AUTH_SECRET"] ?? env["BETTER_AUTH_SECRET"];
+    // Measure after trimming so surrounding whitespace never inflates the length
+    // — matches `@lunora/auth`'s own `isWeakSecret`, so audit and startup agree.
+    const length = typeof authSecret === "string" ? authSecret.trim().length : 0;
 
-    if (typeof authSecret === "string" && authSecret.length > 0 && authSecret.length < MIN_AUTH_SECRET_LENGTH) {
-        return [{ detail: { length: authSecret.length, min: MIN_AUTH_SECRET_LENGTH }, kind: "auth-secret-weak", level: "warning" }];
+    if (length > 0 && length < MIN_AUTH_SECRET_LENGTH) {
+        return [{ detail: { length, min: MIN_AUTH_SECRET_LENGTH }, kind: "auth-secret-weak", level: "warning" }];
     }
 
     return [];
@@ -99,8 +102,10 @@ const auditAuthSecret = (env: Record<string, unknown>): SecurityFinding[] => {
 
 /**
  * A wildcard CORS origin paired with credentials: browsers reject it and it
- * defeats the allowlist. The worker rejects this at construction when set in
- * code, but an env-driven allowlist can still reach a live deployment.
+ * defeats the allowlist. Set in code, the worker throws at construction; set via
+ * these env vars, the worker honors the allowlist but silently drops credentials
+ * to stay serving — so the operator's intent (credentialed cross-origin) is
+ * quietly not met. This finding surfaces that mismatch on the live deployment.
  */
 const auditCors = (env: Record<string, unknown>): SecurityFinding[] => {
     const allowedOrigins = readFlag(env["LUNORA_ALLOWED_ORIGINS"]);
