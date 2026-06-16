@@ -3,7 +3,7 @@ import { resolveEntitlements } from "@lunora/payment";
 import { LunoraError } from "@lunora/server";
 
 import type { QuotaResource } from "../src/billing/plans";
-import { CIRRUS_CLOUD_PLANS, effectiveLimit } from "../src/billing/plans";
+import { effectiveLimit, LUNORA_CLOUD_PLANS } from "../src/billing/plans";
 import type { Id } from "./_generated/dataModel.js";
 import type { QueryCtx as QueryContext } from "./_generated/server.js";
 
@@ -20,7 +20,7 @@ import type { QueryCtx as QueryContext } from "./_generated/server.js";
 export const orgEntitlements = async (context: QueryContext, organizationId: Id<"organizations">): Promise<Entitlements> => {
     const { page } = await context.db.subscriptions.findMany({ where: { referenceId: organizationId } });
 
-    return resolveEntitlements(CIRRUS_CLOUD_PLANS, page as unknown as Subscription[]);
+    return resolveEntitlements(LUNORA_CLOUD_PLANS, page as unknown as Subscription[]);
 };
 
 /** The effective per-resource limit for an org, resolved from its subscriptions. */

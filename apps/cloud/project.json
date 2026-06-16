@@ -1,5 +1,5 @@
 {
-    "name": "cirrus-cloud",
+    "name": "lunora-cloud",
     "tags": ["type:app", "category:cloud"],
     "targets": {
         "lint:eslint": {

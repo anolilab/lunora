@@ -13,7 +13,7 @@ import { handleDeployRequest } from "./handler";
 import { CellScheduler } from "./scheduler";
 import { cloudflareAccountBudget } from "./token-bucket";
 
-/** The Cirrus action context the worker injects on `env.__lunoraCtx`. */
+/** The Lunora action context the worker injects on `env.__lunoraCtx`. */
 interface LunoraActionContext {
     runAction: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     runMutation: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
@@ -22,13 +22,13 @@ interface LunoraActionContext {
 
 interface RouterEnv {
     __lunoraCtx?: LunoraActionContext;
-    /** Bearer gating the dispatcher's plan-lookup endpoint (`GET /v1/tenants/plan`). */
-    CIRRUS_ADMIN_TOKEN?: string;
-    CIRRUS_APP_DOMAIN?: string;
-    CIRRUS_CELL?: string;
     CLOUDFLARE_ACCOUNT_ID?: string;
     CLOUDFLARE_API_TOKEN?: string;
     GITHUB_WEBHOOK_SECRET?: string;
+    /** Bearer gating the dispatcher's plan-lookup endpoint (`GET /v1/tenants/plan`). */
+    LUNORA_ADMIN_TOKEN?: string;
+    LUNORA_APP_DOMAIN?: string;
+    LUNORA_CELL?: string;
     /** Sender address for invitation email; the mailer reads the rest of env too. */
     MAIL_FROM?: string;
     /** 32-byte hex master key for tenant-secret envelope encryption (§7). */
@@ -89,7 +89,7 @@ const handleWebhookRoute = (request: Request, environment: RouterEnv): Promise<R
     const context = environment.__lunoraCtx;
 
     if (!context) {
-        return Promise.resolve(jsonError(500, "cirrus context unavailable"));
+        return Promise.resolve(jsonError(500, "lunora context unavailable"));
     }
 
     return handleGitHubWebhook(request, {
@@ -103,7 +103,7 @@ const handleAdminRoute = async (request: Request, environment: RouterEnv): Promi
     const context = environment.__lunoraCtx;
 
     if (!context) {
-        return jsonError(500, "cirrus context unavailable");
+        return jsonError(500, "lunora context unavailable");
     }
 
     const adminBody = (await request.json().catch(() => null)) as AdminBody | null;
@@ -144,7 +144,7 @@ const handleBillingWebhookRoute = async (request: Request, environment: RouterEn
     const context = environment.__lunoraCtx;
 
     if (!context) {
-        return jsonError(500, "cirrus context unavailable");
+        return jsonError(500, "lunora context unavailable");
     }
 
     const body = await request.text();
@@ -163,7 +163,7 @@ const handleUsageRoute = async (request: Request, environment: RouterEnv): Promi
     const context = environment.__lunoraCtx;
 
     if (!context) {
-        return jsonError(500, "cirrus context unavailable");
+        return jsonError(500, "lunora context unavailable");
     }
 
     const usage = (await request.json().catch(() => null)) as UsageBody | null;
@@ -198,7 +198,7 @@ const handleInviteRoute = async (request: Request, environment: RouterEnv): Prom
     const context = environment.__lunoraCtx;
 
     if (!context) {
-        return jsonError(500, "cirrus context unavailable");
+        return jsonError(500, "lunora context unavailable");
     }
 
     const invite = (await request.json().catch(() => null)) as InviteBody | null;
@@ -232,7 +232,7 @@ const handleSecretRoute = async (request: Request, environment: RouterEnv): Prom
     const context = environment.__lunoraCtx;
 
     if (!context) {
-        return jsonError(500, "cirrus context unavailable");
+        return jsonError(500, "lunora context unavailable");
     }
 
     if (!environment.SECRET_ENCRYPTION_KEY) {
@@ -245,10 +245,10 @@ const handleSecretRoute = async (request: Request, environment: RouterEnv): Prom
         return jsonError(400, "organizationId, projectId, name and value are required");
     }
 
-    // CIRRUS_ADMIN_TOKEN is platform-owned and always wins at deploy time, so a
+    // LUNORA_ADMIN_TOKEN is platform-owned and always wins at deploy time, so a
     // tenant secret with that name would be a silent no-op — reject it up front.
-    if (secret.name === "CIRRUS_ADMIN_TOKEN") {
-        return jsonError(400, "CIRRUS_ADMIN_TOKEN is a reserved secret name");
+    if (secret.name === "LUNORA_ADMIN_TOKEN") {
+        return jsonError(400, "LUNORA_ADMIN_TOKEN is a reserved secret name");
     }
 
     // Encryption failure is a server misconfiguration (e.g. a malformed master
@@ -280,19 +280,19 @@ const handleSecretRoute = async (request: Request, environment: RouterEnv): Prom
 /**
  * `GET /v1/tenants/plan?script=&lt;id>` — resolve a tenant script's plan tier for
  * the dispatcher's per-plan runtime limits (§4). Bearer-gated with
- * `CIRRUS_ADMIN_TOKEN` (the dispatcher is a trusted account-level Worker).
+ * `LUNORA_ADMIN_TOKEN` (the dispatcher is a trusted account-level Worker).
  */
 const handleTenantPlanRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
     const context = environment.__lunoraCtx;
 
     if (!context) {
-        return jsonError(500, "cirrus context unavailable");
+        return jsonError(500, "lunora context unavailable");
     }
 
     const authorization = request.headers.get("authorization") ?? "";
     const token = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : "";
 
-    if (!environment.CIRRUS_ADMIN_TOKEN || token !== environment.CIRRUS_ADMIN_TOKEN) {
+    if (!environment.LUNORA_ADMIN_TOKEN || token !== environment.LUNORA_ADMIN_TOKEN) {
         return jsonError(401, "unauthorized");
     }
 
@@ -311,7 +311,7 @@ const handleTenantPlanRoute = async (request: Request, environment: RouterEnv): 
  * The control-plane HTTP API, mounted as the worker's `httpRouter` (lowest-
  * priority matcher). Routes `POST /v1/{deploy,github/webhook,admin,usage,
  * billing/webhook,invitations/send}` and 404s the rest. The worker injects the
- * per-request Cirrus action context on `env.__lunoraCtx`; handlers reach the
+ * per-request Lunora action context on `env.__lunoraCtx`; handlers reach the
  * control-plane functions through it. A per-instance, per-IP rate limiter caps
  * abuse on the `/v1/*` surface (§7).
  */
@@ -329,11 +329,11 @@ export const createDeployRouter = (): HttpRouterLike => {
         const context = environment.__lunoraCtx;
 
         if (!context) {
-            return Promise.resolve(jsonError(500, "cirrus context unavailable"));
+            return Promise.resolve(jsonError(500, "lunora context unavailable"));
         }
 
-        const cell = environment.CIRRUS_CELL ?? "default";
-        const appDomain = environment.CIRRUS_APP_DOMAIN ?? "cirrus.app";
+        const cell = environment.LUNORA_CELL ?? "default";
+        const appDomain = environment.LUNORA_APP_DOMAIN ?? "lunora.app";
         const cloudflareApi = createHttpCloudflareApi({ accountId: environment.CLOUDFLARE_ACCOUNT_ID ?? "", apiToken: environment.CLOUDFLARE_API_TOKEN ?? "" });
         const provisioner = createCloudflareProvisioner({ api: cloudflareApi, urlForScript: (scriptName) => `https://${scriptName}.${appDomain}` });
 
@@ -376,7 +376,7 @@ export const createDeployRouter = (): HttpRouterLike => {
             },
         };
 
-        return handleDeployRequest(request, { backend, cell, dispatchNamespace: (kind) => `cirrus-${kind}`, provisioner, scheduler });
+        return handleDeployRequest(request, { backend, cell, dispatchNamespace: (kind) => `lunora-${kind}`, provisioner, scheduler });
     };
 
     // POST route table — keeps the `fetch` dispatcher flat (one lookup, no

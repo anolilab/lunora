@@ -3,12 +3,12 @@ import { deployToCloud } from "../deploy/client";
 import type { CliConfig, ConfigStore } from "./config";
 
 /**
- * `cirrus` cloud CLI commands (CLOUD-PLAN.md §2.2). Pure logic over a
+ * `lunora` cloud CLI commands (CLOUD-PLAN.md §2.2). Pure logic over a
  * {@link ConfigStore} + the deploy client; the cerebro/CLI wiring in
  * `@lunora/cli` calls these.
  */
 
-/** `cirrus login` — persist the API endpoint + deploy key. */
+/** `lunora login` — persist the API endpoint + deploy key. */
 export const login = async (store: ConfigStore, input: { apiUrl: string; deployKey: string }): Promise<void> => {
     const config = await store.read();
 
@@ -17,7 +17,7 @@ export const login = async (store: ConfigStore, input: { apiUrl: string; deployK
 
 type LinkInput = { projectId: string }; // secret-scanner:allow -- domain field name
 
-/** `cirrus link` — bind the working directory to a project. */
+/** `lunora link` — bind the working directory to a project. */
 export const link = async (store: ConfigStore, input: LinkInput): Promise<void> => {
     const config = await store.read();
 
@@ -33,7 +33,7 @@ export const status = (config: CliConfig): { linked: boolean; loggedIn: boolean 
 };
 
 /**
- * `cirrus deploy` — push to the managed cloud and stream progress. Requires a
+ * `lunora deploy` — push to the managed cloud and stream progress. Requires a
  * prior `login` + `link`. `deployFn` is injected for testing.
  */
 export const deploy = async (
@@ -45,11 +45,11 @@ export const deploy = async (
     const config = await store.read();
 
     if (!config.apiUrl || !config.deployKey) {
-        throw new Error("not logged in — run `cirrus login` first");
+        throw new Error("not logged in — run `lunora login` first");
     }
 
     if (!config.projectId) {
-        throw new Error("no linked project — run `cirrus link` first");
+        throw new Error("no linked project — run `lunora link` first");
     }
 
     return deployFunction(
