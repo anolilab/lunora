@@ -134,7 +134,7 @@ export const signUp = mutation
             captcha: verifyTurnstileMiddleware({ secret: env.TURNSTILE_SECRET_KEY, token: (c) => c.args.captchaToken }),
         }),
     )
-    .handler(async (ctx, args) => {
+    .mutation(async ({ ctx, args }) => {
         /* ... */
     });
 ```

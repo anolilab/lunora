@@ -22,7 +22,7 @@ const limiter = new RateLimiter({
     },
 });
 
-export const send = mutation.use(rateLimit(limiter, "send", { key: (ctx) => ctx.auth.userId })).mutation(async (ctx) => {
+export const send = mutation.use(rateLimit(limiter, "send", { key: (ctx) => ctx.auth.userId })).mutation(async ({ ctx }) => {
     // …
 });
 ```
@@ -240,7 +240,7 @@ const limiter = new RateLimiter({
     config: { send: { kind: "token bucket", period: 60_000, rate: 5, capacity: 5 } },
 });
 
-export const send = mutation.use(ratelimitPlugin(limiter).middleware!).mutation(async (ctx) => {
+export const send = mutation.use(ratelimitPlugin(limiter).middleware!).mutation(async ({ ctx }) => {
     const status = await ctx.api.ratelimit.limit("send", { key: ctx.auth.userId });
 
     if (!status.ok) {
