@@ -74,6 +74,7 @@ interface QueryArgs {
 
 interface CountArgs {
     baseWhere?: WhereInput;
+    relationBaseWhere?: (table: string) => undefined | WhereInput;
     restrictsCounts?: boolean;
     where?: WhereInput;
 }
@@ -83,6 +84,7 @@ interface AggregateArgs {
     baseWhere?: WhereInput;
     field?: string;
     op: string;
+    relationBaseWhere?: (table: string) => undefined | WhereInput;
     restrictsCounts?: boolean;
     where?: WhereInput;
 }
@@ -92,6 +94,7 @@ interface GroupByArgs {
     agg?: { field?: string; op: string };
     baseWhere?: WhereInput;
     by: ReadonlyArray<string>;
+    relationBaseWhere?: (table: string) => undefined | WhereInput;
     restrictsCounts?: boolean;
     where?: WhereInput;
 }
@@ -840,6 +843,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
             return base.count(tableName, {
                 ...args,
                 baseWhere: mergeBaseWhere(args.baseWhere, baseWhere),
+                relationBaseWhere: relationReadFilter,
                 restrictsCounts: (args.restrictsCounts ?? false) || restricts,
             });
         },
@@ -984,13 +988,13 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
         aggregate(tableName, options) {
             const { baseWhere } = readBase(tableName);
 
-            return base.aggregate(tableName, { ...options, baseWhere: mergeBaseWhere(options.baseWhere, baseWhere) });
+            return base.aggregate(tableName, { ...options, baseWhere: mergeBaseWhere(options.baseWhere, baseWhere), relationBaseWhere: relationReadFilter });
         },
 
         groupBy(tableName, options) {
             const { baseWhere } = readBase(tableName);
 
-            return base.groupBy(tableName, { ...options, baseWhere: mergeBaseWhere(options.baseWhere, baseWhere) });
+            return base.groupBy(tableName, { ...options, baseWhere: mergeBaseWhere(options.baseWhere, baseWhere), relationBaseWhere: relationReadFilter });
         },
 
         rank(tableName, indexName, options) {

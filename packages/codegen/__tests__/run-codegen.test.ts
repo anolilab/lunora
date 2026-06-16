@@ -296,14 +296,16 @@ export default crons;
         });
 
         it("emits server.ts with project-typed query/mutation/action wrappers", () => {
-            expect.assertions(14);
+            expect.assertions(15);
 
             const result = runCodegen({ projectRoot: workdir });
 
             // The procedure builders come from `initLunora.dataModel<DataModel>().create()`
             // and are re-bound to the schema-typed contexts via the exported builder types.
-            expect(result.generated.server).toContain('import { initLunora, v as vBase } from "@lunora/server";');
+            expect(result.generated.server).toContain('import { createPolicyDsl, initLunora, v as vBase } from "@lunora/server";');
             expect(result.generated.server).toContain("const lunoraBuilders = initLunora.dataModel<DataModel>().create();");
+            // The relation-aware RLS authoring DSL is bound to this schema's maps.
+            expect(result.generated.server).toContain("export const definePolicy = createPolicyDsl<DataModel, Relations>();");
             expect(result.generated.server).toContain("export const query = lunoraBuilders.query as unknown as QueryBuilder<QueryCtx, EmptyArgs>;");
             expect(result.generated.server).toContain("export const mutation = lunoraBuilders.mutation as unknown as MutationBuilder<MutationCtx, EmptyArgs>;");
             expect(result.generated.server).toContain("export const action = lunoraBuilders.action as unknown as ActionBuilder<ActionCtx, EmptyArgs>;");
@@ -333,7 +335,7 @@ export default crons;
             // IdOfTable` + `TableName` back the typed `v.id(...)`.
             expect(result.generated.server).not.toContain("import * as lunora_");
             expect(result.generated.server).toContain(
-                'import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, Id as IdOfTable, OrmReader, OrmWriter, TableName } from "./dataModel.js"',
+                'import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, Id as IdOfTable, OrmReader, OrmWriter, Relations, TableName } from "./dataModel.js"',
             );
             // The typed `v` whose `id(...)` autocompletes the schema's tables.
             // eslint-disable-next-line no-secrets/no-secrets -- generated TS type signature, not a credential
@@ -401,7 +403,7 @@ export default crons;
             // facades are bound to this project's maps.
 
             expect(result.generated.dataModel).toContain('from "@lunora/server/data-model";');
-            expect(result.generated.dataModel).toContain("    Where,\n    WhereOperators,");
+            expect(result.generated.dataModel).toContain("    Where,\n    WhereOf,\n    WhereOperators,");
             expect(result.generated.dataModel).toContain("export type TableReaderFacade<T extends keyof DataModel> = TableReaderFacadeOf<");
             expect(result.generated.dataModel).toContain("export type TableWriterFacade<T extends keyof DataModel> = TableWriterFacadeOf<");
             expect(result.generated.dataModel).toContain("export type DatabaseReaderFacade = DatabaseReaderFacadeOf<");
@@ -1644,7 +1646,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain("export const mutation = lunoraBuilders.mutation as unknown as");
             // The facade import stays minimal (ORM types are always pulled in).
             expect(output).toContain(
-                'import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, Id as IdOfTable, OrmReader, OrmWriter, TableName } from "./dataModel.js";',
+                'import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, Id as IdOfTable, OrmReader, OrmWriter, Relations, TableName } from "./dataModel.js";',
             );
         });
     });

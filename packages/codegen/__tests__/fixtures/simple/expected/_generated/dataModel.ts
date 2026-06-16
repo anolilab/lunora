@@ -19,13 +19,17 @@ export type {
     RankPage,
     RankResult,
     RestrictableQueryOptions,
+    RestrictableQueryOptionsOf,
     SearchFilterBuilder,
     SearchReader,
     TableAggregateOptions,
+    TableAggregateOptionsOf,
     TableGroupByOptions,
+    TableGroupByOptionsOf,
     TableRankOptions,
     TableRankPageOptions,
     Where,
+    WhereOf,
     WhereOperators,
 } from "@lunora/server/data-model";
 

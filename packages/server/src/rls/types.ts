@@ -15,6 +15,8 @@
  * through that package's compiler unchanged.
  */
 
+import type { WhereOf } from "../data-model";
+
 /** Structural mirror of `@lunora/do`'s `WhereInput`. */
 export interface WhereInput {
     [field: string]: unknown;
@@ -45,6 +47,31 @@ export type PolicyOperation = "delete" | "insert" | "read" | "update";
  * branching on `ctx.auth.roles`).
  */
 export type PolicyDecision = WhereInput | boolean | undefined;
+
+/**
+ * Relation-aware twin of {@link PolicyDecision}, parameterized over the
+ * generated `DataModel` (`DM`) + `Relations` (`REL`) maps and a table `T`. A
+ * read policy may now return a Prisma-style relation predicate (the
+ * `@lunora/do` pre-resolver resolves it via a semijoin), so the typed
+ * authoring surface accepts `WhereOf&lt;DM, REL, T>` — column predicates **and**
+ * `is`/`isNot`/`some`/`none`/`every` over `T`'s declared relations — in
+ * addition to the `boolean`/`undefined` decisions. Used by the project-bound
+ * `definePolicy` from `createPolicyDsl`.
+ */
+export type PolicyDecisionOf<DM, REL extends Record<keyof DM, object>, T extends keyof DM> = WhereOf<DM, REL, T> | boolean | undefined;
+
+/**
+ * Relation-aware input for a project-bound `definePolicy` (see
+ * `createPolicyDsl`). `table` is constrained to a real table name and
+ * `when`'s return type is the table-specific {@link PolicyDecisionOf} — so an
+ * unknown table, a stray column, or a relation predicate naming a relation the
+ * table does not declare is a compile error rather than a silent runtime deny.
+ */
+export interface TypedDefinePolicyInput<DM, REL extends Record<keyof DM, object>, T extends keyof DM, Context = unknown> {
+    on: PolicyOperation;
+    table: T;
+    when: (context: PolicyContext<Context>) => PolicyDecisionOf<DM, REL, T>;
+}
 
 /**
  * Context handed to a policy. `auth.roles` is the per-request role list,

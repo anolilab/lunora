@@ -45,6 +45,18 @@
  * ```
  */
 /* eslint-enable no-secrets/no-secrets */
-export { definePermission, definePolicies, definePolicy, defineRole } from "./define";
+export { createPolicyDsl, definePermission, definePolicies, definePolicy, defineRole } from "./define";
 export { rls } from "./middleware";
-export type { DefinePolicyInput, Permission, Policy, PolicyContext, PolicyDecision, PolicyOperation, RlsOptions, Role, WhereInput } from "./types";
+export type {
+    DefinePolicyInput,
+    Permission,
+    Policy,
+    PolicyContext,
+    PolicyDecision,
+    PolicyDecisionOf,
+    PolicyOperation,
+    RlsOptions,
+    Role,
+    TypedDefinePolicyInput,
+    WhereInput,
+} from "./types";

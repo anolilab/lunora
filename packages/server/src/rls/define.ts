@@ -5,11 +5,28 @@
  * additionally validates the set (duplicate detection). The runtime work happens
  * in {@link ./middleware}.
  */
-import type { DefinePolicyInput, Permission, Policy, Role } from "./types";
+import type { DefinePolicyInput, Permission, Policy, Role, TypedDefinePolicyInput } from "./types";
 
 export const definePolicy = <Context = unknown>(input: DefinePolicyInput<Context>): Policy<Context> => {
     return { on: input.on, table: input.table, when: input.when };
 };
+
+/**
+ * Build a project-bound, relation-aware `definePolicy` typed against the
+ * generated `DataModel` (`DM`) + `Relations` (`REL`) maps. Codegen emits a
+ * `createPolicyDsl&lt;DataModel, Relations>()` binding into `_generated/server.ts`,
+ * so importing `definePolicy` from the generated module constrains `table` to a
+ * real table name and type-checks the `when` predicate — including Prisma-style
+ * relation predicates (`is`/`some`/…) the `@lunora/do` pre-resolver now resolves
+ * on reads. The runtime is byte-for-byte the untyped {@link definePolicy}; only
+ * the compile-time surface narrows, so a policy authored either way is
+ * discovered identically by the `rls()` chain.
+ */
+export const createPolicyDsl =
+    <DM, REL extends Record<keyof DM, object>>() =>
+    <T extends keyof DM, Context = unknown>(input: TypedDefinePolicyInput<DM, REL, T, Context>): Policy<Context> => {
+        return { on: input.on, table: input.table as string, when: input.when };
+    };
 
 /**
  * Declare a named permission a policy can check with `ctx.auth.can(...)`. Grant

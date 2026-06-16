@@ -178,9 +178,28 @@ export interface RestrictableQueryOptions<TDocument> {
     where?: Where<TDocument>;
 }
 
+/**
+ * Relation-aware twin of {@link RestrictableQueryOptions}. The `@lunora/do`
+ * pre-resolver now resolves relation predicates on the `count`/`aggregate`/
+ * `groupBy` paths too (semijoin), so the typed surface threads `REL` through
+ * `where`/`baseWhere` to match. `rank`/`rankPage` stay column-only — they use
+ * `where` solely to pin a partition and fail closed on a relation predicate.
+ */
+export interface RestrictableQueryOptionsOf<DM, REL extends Record<keyof DM, object>, T extends keyof DM> {
+    baseWhere?: WhereOf<DM, REL, T>;
+    restrictsCounts?: boolean;
+    where?: WhereOf<DM, REL, T>;
+}
+
 /** Args for `ctx.db.&lt;table>.aggregate({ op, field?, where? })`. */
 export interface TableAggregateOptions<TDocument> extends RestrictableQueryOptions<TDocument> {
     field?: keyof TDocument & string;
+    op: AggregateOp;
+}
+
+/** Relation-aware twin of {@link TableAggregateOptions} (see {@link RestrictableQueryOptionsOf}). */
+export interface TableAggregateOptionsOf<DM, REL extends Record<keyof DM, object>, T extends keyof DM> extends RestrictableQueryOptionsOf<DM, REL, T> {
+    field?: keyof DM[T] & string;
     op: AggregateOp;
 }
 
@@ -188,6 +207,12 @@ export interface TableAggregateOptions<TDocument> extends RestrictableQueryOptio
 export interface TableGroupByOptions<TDocument> extends RestrictableQueryOptions<TDocument> {
     agg?: { field?: keyof TDocument & string; op: AggregateOp };
     by: ReadonlyArray<keyof TDocument & string>;
+}
+
+/** Relation-aware twin of {@link TableGroupByOptions} (see {@link RestrictableQueryOptionsOf}). */
+export interface TableGroupByOptionsOf<DM, REL extends Record<keyof DM, object>, T extends keyof DM> extends RestrictableQueryOptionsOf<DM, REL, T> {
+    agg?: { field?: keyof DM[T] & string; op: AggregateOp };
+    by: ReadonlyArray<keyof DM[T] & string>;
 }
 
 /** One entry returned by `groupBy` — the group's by-tuple plus the reducer value. */
@@ -256,7 +281,7 @@ export interface TableReaderFacade<
      * lives on its own method). Routes through a declared `aggregateIndex` when
      * the planner can prove the request is answerable; otherwise scans.
      */
-    aggregate: (options: TableAggregateOptions<DM[T]>) => Promise<null | number>;
+    aggregate: (options: TableAggregateOptionsOf<DM, REL, T>) => Promise<null | number>;
 
     /**
      * Count rows. The planner routes `where` keys that match a declared
@@ -265,7 +290,7 @@ export interface TableReaderFacade<
      * `RestrictableQueryOptions` shape; the latter is the seam the RLS layer
      * uses to inject `baseWhere` and `restrictsCounts`.
      */
-    count: (where?: RestrictableQueryOptions<DM[T]> | Where<DM[T]>) => Promise<number>;
+    count: (where?: RestrictableQueryOptionsOf<DM, REL, T> | WhereOf<DM, REL, T>) => Promise<number>;
     findFirst: <W extends WithArg<DM, REL, T> = {}>(args?: QueryArgsOf<DM, REL, T> & { with?: W }) => Promise<LoadWith<DM, REL, T, W> | null>;
     findFirstOrThrow: <W extends WithArg<DM, REL, T> = {}>(args?: QueryArgsOf<DM, REL, T> & { with?: W }) => Promise<LoadWith<DM, REL, T, W>>;
     findMany: <W extends WithArg<DM, REL, T> = {}>(args?: QueryArgsOf<DM, REL, T> & { with?: W }) => Promise<QueryPage<LoadWith<DM, REL, T, W>>>;
@@ -276,7 +301,7 @@ export interface TableReaderFacade<
      * `count`). Answered from the counter table when an aggregate index's
      * `by` matches `options.by` exactly; otherwise scans.
      */
-    groupBy: (options: TableGroupByOptions<DM[T]>) => Promise<ReadonlyArray<GroupByEntry<DM[T]>>>;
+    groupBy: (options: TableGroupByOptionsOf<DM, REL, T>) => Promise<ReadonlyArray<GroupByEntry<DM[T]>>>;
 
     /**
      * Return the 1-based position of `options.row` within its partition

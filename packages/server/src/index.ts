@@ -47,8 +47,20 @@ export type { DefinePresenceOptions, PresenceComponent, PresenceFunctions, Prese
 export { definePresence, PRESENCE_DEFAULT_TTL_MS, PRESENCE_TABLE, presenceExtension } from "./presence";
 export type { ProtectPublicOptions } from "./protect-public";
 export { protectPublic } from "./protect-public";
-export type { DefinePolicyInput, Permission, Policy, PolicyContext, PolicyDecision, PolicyOperation, RlsOptions, Role, WhereInput } from "./rls/index";
-export { definePermission, definePolicies, definePolicy, defineRole, rls } from "./rls/index";
+export type {
+    DefinePolicyInput,
+    Permission,
+    Policy,
+    PolicyContext,
+    PolicyDecision,
+    PolicyDecisionOf,
+    PolicyOperation,
+    RlsOptions,
+    Role,
+    TypedDefinePolicyInput,
+    WhereInput,
+} from "./rls/index";
+export { createPolicyDsl, definePermission, definePolicies, definePolicy, defineRole, rls } from "./rls/index";
 export type {
     AggregateIndexOptions,
     ExtendableSchema,
