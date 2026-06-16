@@ -22,10 +22,13 @@ export const channelWelcome = defineWorkflow<{ channelId: Id<"channels"> }, { ch
         // `createdAt` is stamped inside the durable step (which runs once and
         // memoizes its result) — `messages.send` is a deterministic mutation that
         // takes the timestamp as an arg rather than calling `Date.now()` itself.
+        // The stable `id` (clientId) makes the send idempotent: `step.do` is
+        // at-least-once, so a retry after a partial success would otherwise
+        // double-post — keying the row by `welcome-greet:<channelId>` dedupes it.
         await context.step.do("greet", () =>
             context.run(
                 api.messages.send,
-                { channelId, createdAt: Date.now(), text: "👋 Welcome to the channel! Say hi to get started." },
+                { channelId, createdAt: Date.now(), id: `welcome-greet:${channelId}`, text: "👋 Welcome to the channel! Say hi to get started." },
                 { shardKey: channelId },
             ),
         );
@@ -36,7 +39,7 @@ export const channelWelcome = defineWorkflow<{ channelId: Id<"channels"> }, { ch
         await context.step.do("tips", () =>
             context.run(
                 api.messages.send,
-                { channelId, createdAt: Date.now(), text: "Tip: messages stream in real time over a WebSocket subscription." },
+                { channelId, createdAt: Date.now(), id: `welcome-tip:${channelId}`, text: "Tip: messages stream in real time over a WebSocket subscription." },
                 { shardKey: channelId },
             ),
         );

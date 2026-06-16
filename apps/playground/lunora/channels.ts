@@ -7,7 +7,7 @@ import type { Id } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
 
 // 10 channel creations per minute per user, durable via the DB-backed store.
-const limits: RateLimitConfigMap = { create: { kind: "token bucket", period: 60_000, rate: 10 } };
+const limits = { create: { kind: "token bucket", period: 60_000, rate: 10 } } satisfies RateLimitConfigMap;
 
 /**
  * List every channel — `.global()` so the read happens against D1, with

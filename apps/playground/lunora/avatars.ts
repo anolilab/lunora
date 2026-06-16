@@ -4,7 +4,7 @@ import { dbRateLimit } from "@lunora/ratelimit";
 import { action, query, v } from "./_generated/server.js";
 
 // 20 upload-URL mints per minute per user, durable via the DB-backed store.
-const limits: RateLimitConfigMap = { uploadAvatar: { kind: "token bucket", period: 60_000, rate: 20 } };
+const limits = { uploadAvatar: { kind: "token bucket", period: 60_000, rate: 20 } } satisfies RateLimitConfigMap;
 
 /**
  * Issue a short-lived PUT signed URL so the browser can upload an avatar

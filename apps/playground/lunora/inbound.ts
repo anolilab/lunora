@@ -7,7 +7,7 @@ import type { Id } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
 
 // A global cap (no per-key bucket) on inbound-email ingestion — 100/minute.
-const limits: RateLimitConfigMap = { onEmail: { kind: "fixed window", period: 60_000, rate: 100 } };
+const limits = { onEmail: { kind: "fixed window", period: 60_000, rate: 100 } } satisfies RateLimitConfigMap;
 
 /**
  * Persist an inbound email into the `inbox` table.
