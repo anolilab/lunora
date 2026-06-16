@@ -2,7 +2,7 @@ import type { Subscription } from "@lunora/payment";
 import { resolveEntitlements } from "@lunora/payment";
 
 import type { QuotaResource } from "../src/billing/plans";
-import { CIRRUS_CLOUD_PLANS, effectiveLimit } from "../src/billing/plans";
+import { effectiveLimit, LUNORA_CLOUD_PLANS } from "../src/billing/plans";
 import { action, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
 
@@ -69,7 +69,7 @@ export const portal = action({
 
 /**
  * Resolved entitlements for an org (members). Reads webhook-synced subscription
- * state and maps it through {@link CIRRUS_CLOUD_PLANS}: the active plan names,
+ * state and maps it through {@link LUNORA_CLOUD_PLANS}: the active plan names,
  * granted features, and the effective per-resource limits (free baseline when
  * there's no active subscription, so a non-subscriber is bounded, never
  * unlimited).
@@ -86,7 +86,7 @@ export const entitlements = query({
         await assertMember(context, organizationId);
 
         const { page } = await context.db.subscriptions.findMany({ where: { referenceId: organizationId } });
-        const resolved = resolveEntitlements(CIRRUS_CLOUD_PLANS, page as unknown as Subscription[]);
+        const resolved = resolveEntitlements(LUNORA_CLOUD_PLANS, page as unknown as Subscription[]);
 
         const limits = Object.fromEntries(QUOTA_RESOURCES.map((resource) => [resource, effectiveLimit(resolved, resource)])) as Record<QuotaResource, number>;
 

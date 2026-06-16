@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { createDeployRouter } from "../src/deploy/router";
 
-/** Minimal injected Cirrus action context (the worker normally provides this). */
+/** Minimal injected Lunora action context (the worker normally provides this). */
 const makeCtx = (overrides: Record<string, unknown> = {}) => {
     return {
         runAction: vi.fn().mockResolvedValue({ applied: true, status: 200 }),
@@ -12,7 +12,7 @@ const makeCtx = (overrides: Record<string, unknown> = {}) => {
 };
 
 const post = (path: string, body: unknown, ip = "client-a"): Request =>
-    new Request(`https://control.cirrus.app${path}`, {
+    new Request(`https://control.lunora.app${path}`, {
         body: JSON.stringify(body),
         headers: { "cf-connecting-ip": ip, "content-type": "application/json" },
         method: "POST",
@@ -21,7 +21,7 @@ const post = (path: string, body: unknown, ip = "client-a"): Request =>
 describe(createDeployRouter, () => {
     it("404s anything outside /v1", async () => {
         const router = createDeployRouter();
-        const response = await router.fetch(new Request("https://control.cirrus.app/healthz"), {});
+        const response = await router.fetch(new Request("https://control.lunora.app/healthz"), {});
 
         expect(response.status).toBe(404);
     });
@@ -62,7 +62,7 @@ describe(createDeployRouter, () => {
 
         for (let index = 0; index < 121; index += 1) {
             // eslint-disable-next-line no-await-in-loop -- sequential to drain one IP's bucket
-            last = await router.fetch(new Request("https://control.cirrus.app/v1/unknown", { headers: { "cf-connecting-ip": "client-b" } }), {});
+            last = await router.fetch(new Request("https://control.lunora.app/v1/unknown", { headers: { "cf-connecting-ip": "client-b" } }), {});
         }
 
         expect(last.status).toBe(429);

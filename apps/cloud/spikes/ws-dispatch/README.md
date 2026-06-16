@@ -1,6 +1,6 @@
 # Spike: WebSockets + dispatch (CLOUD-PLAN.md §6 risk #3)
 
-**Question.** Cirrus's hottest path is the hibernated-WebSocket subscription
+**Question.** Lunora's hottest path is the hibernated-WebSocket subscription
 (`/_lunora/ws` → `forwardToShard` → `ShardDO.acceptWebSocket`). The least-
 documented Workers-for-Platforms case is whether that path — and per-invocation
 CPU limits — behave correctly when the upgrade traverses
@@ -40,18 +40,18 @@ harness validates the half that only a live dispatch namespace can prove.
 cd apps/cloud/spikes/ws-dispatch
 
 # 1. Create the dispatch namespace once (if not already):
-wrangler dispatch-namespace create cirrus-production
+wrangler dispatch-namespace create lunora-production
 
 # 2. Deploy this tenant INTO the namespace as script "ws-spike":
 wrangler deploy -c tenant.wrangler.jsonc \
-  --dispatch-namespace cirrus-production --name ws-spike
+  --dispatch-namespace lunora-production --name ws-spike
 
 # 3. Deploy the cloud dispatcher (from apps/cloud), pointed at the same
 #    namespace + your zone (see ../../dispatcher.wrangler.jsonc):
 ( cd ../.. && wrangler deploy -c dispatcher.wrangler.jsonc )
 
-# 4. Probe it through the dispatcher (use your CIRRUS_APP_DOMAIN):
-node probe.mjs https://ws-spike.cirrus.app
+# 4. Probe it through the dispatcher (use your LUNORA_APP_DOMAIN):
+node probe.mjs https://ws-spike.lunora.app
 ```
 
 To force hibernation between steps, pause ~30s after the socket opens before

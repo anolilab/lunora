@@ -1,7 +1,7 @@
 import { resolveEntitlements } from "@lunora/payment";
 import { describe, expect, it } from "vitest";
 
-import { CIRRUS_CLOUD_PLANS, effectiveLimit, FREE_LIMITS, withinQuota } from "../src/billing/plans";
+import { effectiveLimit, FREE_LIMITS, LUNORA_CLOUD_PLANS, withinQuota } from "../src/billing/plans";
 
 /** Build a fake Entitlements that grants a fixed set of numeric limits. */
 const entitlementsWith = (limits: Record<string, number>): Parameters<typeof effectiveLimit>[0] => {
@@ -16,7 +16,7 @@ const entitlementsWith = (limits: Record<string, number>): Parameters<typeof eff
 describe("billing plans + quota", () => {
     it("falls back to the free baseline when there is no active subscription", () => {
         // resolveEntitlements with no subscriptions grants nothing → free fallback.
-        const entitlements = resolveEntitlements(CIRRUS_CLOUD_PLANS, []);
+        const entitlements = resolveEntitlements(LUNORA_CLOUD_PLANS, []);
 
         expect(effectiveLimit(entitlements, "projects")).toBe(FREE_LIMITS["projects"]);
         expect(withinQuota(entitlements, "projects", 0)).toBe(true);

@@ -1,7 +1,7 @@
-# Cirrus Cloud — Managed Platform Plan
+# Lunora Cloud — Managed Platform Plan
 
 > Direction doc, 2026-06-12. Synthesized from four research passes: (1) a repo-grounded
-> inventory of the control-plane primitives Cirrus already ships, (2) a teardown of
+> inventory of the control-plane primitives Lunora already ships, (2) a teardown of
 > Convex's managed cloud (the product model to copy), (3) a survey of Cloudflare
 > primitives + OSS prior art for building a deploy platform on Cloudflare (the
 > implementation substrate), and (4) a Supabase platform teardown (open-core
@@ -15,15 +15,15 @@
 
 Two prior docs marked the managed deploy plane as a deliberate **won't-do**:
 
-- `VOID-TEARDOWN.md` §0/§6 — "the managed plane is a business decision Cirrus skips."
+- `VOID-TEARDOWN.md` §0/§6 — "the managed plane is a business decision Lunora skips."
 - `CONVEX-PARITY.md` gap #23 — "Deployments / rollbacks / routes remain an explicit
   non-goal (PLAN3 §3.1–3.2) — CF's control plane, reached via deep-links, not
   half-reimplemented."
 
 **This plan reverses that decision** — with a crucial scoping nuance that keeps the old
 rationale intact: we still do not reimplement Cloudflare's control plane for users
-deploying to _their own_ Cloudflare accounts (that path stays as-is: `cirrus deploy` →
-wrangler → their account, studio self-hosted). What we add is a **managed tier**: Cirrus
+deploying to _their own_ Cloudflare accounts (that path stays as-is: `lunora deploy` →
+wrangler → their account, studio self-hosted). What we add is a **managed tier**: Lunora
 Cloud runs customer apps inside _our_ Cloudflare account via Workers for Platforms, and
 there a control plane is not "half-reimplementing CF" — it is the product. The
 app-observation philosophy (`STUDIO-VS-CLOUDFLARE.md`) carries over unchanged: the hosted
@@ -66,9 +66,9 @@ Why now:
 ## 2. Architecture
 
 ```
- developer machine                        Cirrus Cloud (our CF account)
+ developer machine                        Lunora Cloud (our CF account)
 ┌──────────────────────┐                ┌──────────────────────────────────────────────┐
-│ cirrus CLI / @cirrus │   deploy API   │  Control plane (Worker + D1 + Queues)        │
+│ lunora CLI / @lunora │   deploy API   │  Control plane (Worker + D1 + Queues)        │
 │ /vite plugin         ├───────────────▶│  orgs · projects · deployments · deploy keys │
 │                      │                │  secrets vault · usage metering · audit      │
 │  vite build ──▶ bundle                │  provisioning via Alchemy (D1-backed state)  │
@@ -77,10 +77,10 @@ Why now:
 │                      │                        ▼
 │  remote-bindings     │   wss/https    ┌──────────────────────────────────────────────┐
 │  proxy session ──────┼───────────────▶│  Dispatch namespaces (prod · preview · dev)  │
-└──────────────────────┘                │  per-project user Worker = Cirrus runtime    │
+└──────────────────────┘                │  per-project user Worker = Lunora runtime    │
                                         │  + per-tenant D1 / R2 / KV / DO bindings     │
  end users ────────────────────────────▶│  Dispatcher Worker: hostname→tenant routing, │
-  {project}.cirrus.app / custom domain  │  custom limits, tags, outbound worker        │
+  {project}.lunora.app / custom domain  │  custom limits, tags, outbound worker        │
   (Cloudflare for SaaS)                 └──────────────────────────────────────────────┘
 ```
 
@@ -88,12 +88,12 @@ Why now:
 
 - **One dispatch namespace per environment class** (`production`, `preview`, `dev`) —
   not per customer (WfP best practice). User Workers run untrusted-mode-isolated.
-- Each project's Worker is the standard Cirrus runtime (`createWorker(...)` — unchanged)
+- Each project's Worker is the standard Lunora runtime (`createWorker(...)` — unchanged)
   uploaded via the multipart script API with **per-tenant bindings in the metadata
   JSON**: its own D1 database (`.global()` tables), R2 bucket, DO classes with
-  migrations. `@cirrus/config`'s inference output maps 1:1 onto this metadata — the
+  migrations. `@lunora/config`'s inference output maps 1:1 onto this metadata — the
   reconciler that today edits `wrangler.jsonc` emits the upload metadata instead.
-- **Dispatcher Worker** resolves `{project}.cirrus.app` / custom hostname → tenant
+- **Dispatcher Worker** resolves `{project}.lunora.app` / custom hostname → tenant
   script, applies per-plan `limits: { cpuMs, subRequests }`, tags
   (`org:…`, `project:…`, `env:…`, `plan:…`) for lifecycle/bulk-delete, and an outbound
   worker for egress policy. WebSockets (our subscription path) pass through dispatch.
@@ -106,7 +106,7 @@ Why now:
 
 ### 2.2 Control plane
 
-A boring Cirrus-shaped service (we should dogfood: build it _on Cirrus_):
+A boring Lunora-shaped service (we should dogfood: build it _on Lunora_):
 
 - **Entities:** org → project → deployments (`prod` ×1, `dev` ×N per member,
   `preview` ×N TTL'd) — Convex's model verbatim, including auto-cleanup of previews
@@ -133,8 +133,8 @@ A boring Cirrus-shaped service (we should dogfood: build it _on Cirrus_):
   Alchemy is moving toward and skip a forced v1→v2 migration later — **no v1 fallback;
   v2 is the engine.** The accepted cost: v2 is a **beta**, so it ships breaking changes
   between betas and pulls **`effect`** into the control-plane dependency tree (it runs
-  in Workers; the `@cirrus/provision` adapter must not leak Effect types into the rest
-  of Cirrus). We absorb beta churn by pinning + tracking upstream and, where a gap
+  in Workers; the `@lunora/provision` adapter must not leak Effect types into the rest
+  of Lunora). We absorb beta churn by pinning + tracking upstream and, where a gap
   blocks us, contributing fixes upstream rather than retreating to v1.
 - **State store collapses the two-sources-of-truth concern.** Alchemy has pluggable
   state stores (v1 ships built-in `D1StateStore`/`DOStateStore`; **confirming the v2
@@ -154,7 +154,7 @@ A boring Cirrus-shaped service (we should dogfood: build it _on Cirrus_):
   **rollback** re-converges a scope to a prior bundle hash retained in R2.
 - **Risk management for a beta dependency on the revenue path:** pin the **exact** beta
   (`2.0.0-beta.55`) and bump deliberately, never floating `next`; put every Alchemy call
-  behind a thin `@cirrus/provision` adapter so a breaking beta (or the v2→stable jump) is
+  behind a thin `@lunora/provision` adapter so a breaking beta (or the v2→stable jump) is
   contained to one module and Effect stays quarantined behind it; keep one scope per
   tenant/deployment so concurrent deploys never collide in state. Engage Cloudflare early
   regardless (§2.5) —
@@ -162,8 +162,8 @@ A boring Cirrus-shaped service (we should dogfood: build it _on Cirrus_):
   partner story.
 - **Secrets:** per-deployment env vars/secrets stored in the control plane, applied via
   the WfP script-secrets API; the `.dev.vars` grammar + placeholder/secret detection in
-  `@cirrus/config` becomes the dashboard's guided setup.
-- **Tokens:** today's single static `CIRRUS_ADMIN_TOKEN` becomes platform-issued,
+  `@lunora/config` becomes the dashboard's guided setup.
+- **Tokens:** today's single static `LUNORA_ADMIN_TOKEN` becomes platform-issued,
   role-scoped (admin / viewer / ci), per-deployment, rotatable, audited.
 - **Public platform API (design for it, ship later).** Supabase's growth lesson: over
   60% of their new projects are now provisioned by third-party AI builders
@@ -171,8 +171,8 @@ A boring Cirrus-shaped service (we should dogfood: build it _on Cirrus_):
   including the Vercel-Marketplace billed-through-partner model; Convex exposes the
   same surface (OAuth apps + embeddable dashboard). The internal deploy API above
   should be designed with token scopes/PATs so it can later be published as
-  `api.cirrus.dev/v1` + OAuth apps without a rewrite — that is the channel through
-  which app-builder platforms would put Cirrus backends under _their_ users' apps.
+  `api.lunora.dev/v1` + OAuth apps without a rewrite — that is the channel through
+  which app-builder platforms would put Lunora backends under _their_ users' apps.
 
 ### 2.3 Cloud dev DX (the actual point of all this)
 
@@ -180,22 +180,22 @@ Three rungs, shipped in this order:
 
 1. **Remote-binding dev** (PLAN5 Phase 5, `VOID-TEARDOWN.md` §4.5) — works for BYO
    _and_ managed users. Wrangler ≥4.37 exposes the machinery programmatically
-   (`startRemoteProxySession` / `pickRemoteBindings`); `@cirrus/vite` can run local code
+   (`startRemoteProxySession` / `pickRemoteBindings`); `@lunora/vite` can run local code
    against real platform-provisioned D1/R2/KV. We do not need to build void's
    hand-rolled proxy — Cloudflare shipped it. Shard DOs keep running locally in v1
    (same pragmatic cut void made for its hard cases).
-2. **Per-developer cloud dev deployments** — `cirrus dev --cloud`: watch → bundle →
+2. **Per-developer cloud dev deployments** — `lunora dev --cloud`: watch → bundle →
    push to a personal deployment in the `dev` namespace → tail logs. Zero local
-   Miniflare/wrangler setup; the team-onboarding story becomes "clone, `cirrus dev`,
+   Miniflare/wrangler setup; the team-onboarding story becomes "clone, `lunora dev`,
    you have a backend." (Convex shipped cloud-dev-first then retrofitted local; we
    have the luxury of keeping local-first as the default and making cloud dev opt-in —
    local stays quota-free and offline-capable.)
-3. **Preview deployments** — `CIRRUS_DEPLOY_KEY=preview:…` plus
-   `cirrus deploy --cmd 'npm run build'` in Vercel/Netlify/GH Actions provisions a
+3. **Preview deployments** — `LUNORA_DEPLOY_KEY=preview:…` plus
+   `lunora deploy --cmd 'npm run build'` in Vercel/Netlify/GH Actions provisions a
    fresh TTL'd deployment named after the branch and injects the client URL env var
    into the frontend build. Borrow Supabase Branching's refinements: a GitHub app
    posting PR comments + check runs; a "backend changes only" filter (only branch when
-   `cirrus/` changes — their `supabase/`-dir filter); **persistent vs ephemeral**
+   `lunora/` changes — their `supabase/`-dir filter); **persistent vs ephemeral**
    branches (staging vs per-PR); auto-delete on PR merge/close; dashboard-created
    branches with no Git required (Branching 2.0's lesson for the AI-builder audience).
    And fix their two worst pain points, which our substrate makes cheap: (a) Supabase
@@ -207,7 +207,7 @@ Three rungs, shipped in this order:
 
 ### 2.4 Known WfP constraints to engineer around
 
-Found while checking the substrate against what Cirrus actually ships, then verified
+Found while checking the substrate against what Lunora actually ships, then verified
 against the Cloudflare docs (2026-06-12; WfP reference/limits page, KV/D1/R2 limits
 pages, WfP isolation + gotcha notes). These go into the Phase 1 spike checklist (§5):
 
@@ -216,13 +216,13 @@ pages, WfP isolation + gotcha notes). These go into the Phase 1 spike checklist 
   page does not document this; the evidence is the API surface (the schedules
   subresource only exists for account-level scripts) plus
   [workers-sdk#13840](https://github.com/cloudflare/workers-sdk/issues/13840).
-  Impact: `@cirrus/scheduler`'s cron entry point (`cronJobs()` → `scheduled()` handler).
+  Impact: `@lunora/scheduler`'s cron entry point (`cronJobs()` → `scheduled()` handler).
   Mitigation is cheap because the heavy lifting already lives in `SchedulerDO` on **DO
   alarms, which work fine in namespaced Workers** (`runAfter`/`runAt` unaffected): the
   platform runs one account-level cron ticker Worker that fans tick events out through
   the dispatcher to each tenant's `scheduled()` path (tenants' cron specs are known to
   the control plane from codegen output). _Built:_ the runtime exposes an admin-gated
-  `POST /_cirrus/scheduled` tick endpoint (`@cirrus/runtime`, reuses the native
+  `POST /_lunora/scheduled` tick endpoint (`@lunora/runtime`, reuses the native
   `scheduled()` dispatch); the control plane runs an every-minute trigger and fans due
   ticks out through `env.DISPATCHER.get(script).fetch(...)` (`src/fanout/cron.ts` —
   pure cron-expression matching + due computation; wired in `src/server.ts`'s
@@ -236,18 +236,18 @@ pages, WfP isolation + gotcha notes). These go into the Phase 1 spike checklist 
   lives in the dispatcher's routing logic, not in Cloudflare versions.
 - **Queue consumers (verify)** — namespaced Workers can hold producer bindings, but a
   queue _consumer_ is configured on an account-level Worker; assume tenant Workers
-  cannot be consumers until proven otherwise. Impact: `@cirrus/mail`'s queue-backed
+  cannot be consumers until proven otherwise. Impact: `@lunora/mail`'s queue-backed
   sends and the scheduler's queue-workpool variant. Mitigation mirrors crons: a
   platform-owned consumer Worker that dispatches batches back into the tenant Worker,
   or fall back to the DO-alarm workpool on the managed tier. _Built:_ the runtime
-  exposes an admin-gated `POST /_cirrus/queue` endpoint + a `queueHandler` option
-  (`@cirrus/runtime`); the control-plane Worker is the account-level consumer
-  (`queue()` in `src/server.ts`, bound to a shared `cirrus-tenant-queue`), grouping
+  exposes an admin-gated `POST /_lunora/queue` endpoint + a `queueHandler` option
+  (`@lunora/runtime`); the control-plane Worker is the account-level consumer
+  (`queue()` in `src/server.ts`, bound to a shared `lunora-tenant-queue`), grouping
   each batch by the producing tenant's script (envelope `{ script, body }`) and
-  forwarding via `env.DISPATCHER.get(script).fetch('/_cirrus/queue')` with the
+  forwarding via `env.DISPATCHER.get(script).fetch('/_lunora/queue')` with the
   per-deployment admin token (in-process); per-message retry follows the tenant's
   `{ retry: [...] }` reply (`src/fanout/queue.ts`). _Remaining:_ live validation, and
-  a producer-side helper that tags `@cirrus/mail`/scheduler messages with the script.
+  a producer-side helper that tags `@lunora/mail`/scheduler messages with the script.
 - **Per-tenant resource provisioning hits account limits unevenly** (verified
   numbers) — D1: 50,000 databases/account on paid, **raisable by request to
   millions** (explicitly supported for per-tenant patterns); R2: 1,000,000
@@ -260,8 +260,8 @@ pages, WfP isolation + gotcha notes). These go into the Phase 1 spike checklist 
   needs a queue with backoff — relevant once preview deployments multiply.
 - **Outbound Worker trade-offs** — it intercepts only `fetch()` (not DO or mTLS
   binding calls), and enabling it **disables TCP `connect()`** in user Workers.
-  Cirrus doesn't use raw TCP today; re-check before ever adopting a TCP-based driver.
-- **Email sending binding (verify)** — `@cirrus/mail`'s default transport (Cloudflare
+  Lunora doesn't use raw TCP today; re-check before ever adopting a TCP-based driver.
+- **Email sending binding (verify)** — `@lunora/mail`'s default transport (Cloudflare
   Email Workers `send_email` binding) has unknown support inside dispatch namespaces;
   Resend (HTTP) works regardless and is the safe managed-tier default.
 - **EU data residency** — Durable Objects support **jurisdiction restrictions**
@@ -278,7 +278,7 @@ How the platform scales with users without hitting account limits or risking a
 platform-wide block. Four principles, in priority order:
 
 1. **Keep tenant state inside the script, not in account-level resources.** This is
-   Cirrus's structural advantage: primary state is DO SQLite, and DO namespaces are
+   Lunora's structural advantage: primary state is DO SQLite, and DO namespaces are
    unlimited under WfP — a tenant's baseline footprint is _one script_, full stop.
    Account-level resources (D1, R2, queues) are provisioned **lazily and only when
    binding inference says the project actually uses that capability** (`.global()`
@@ -329,7 +329,7 @@ with a named contact is the real insurance against surprise enforcement.
 | D1 50k databases/acct     | lazy provisioning + raisable to millions + per-cell anyway   |
 | 1,000 scripts incl. (WfP) | cost not cap ($0.02/script); TTL cleanup of previews/dev     |
 | Queues 10k/acct           | platform-owned queues + consumers, tenant-enveloped messages |
-| Per-DO throughput         | already Cirrus's domain: `.shardBy()` fans tenants' load out |
+| Per-DO throughput         | already Lunora's domain: `.shardBy()` fans tenants' load out |
 
 ---
 
@@ -339,12 +339,12 @@ with a named contact is the real insurance against surprise enforcement.
 
 - **Deploy pipeline** — `packages/cli/src/commands/deploy/handler.ts` already does
   codegen → binding inference → reconcile → validate → deploy → `--migrate` via
-  `/_cirrus/migrate`. The managed path replaces only step "invoke wrangler" with
+  `/_lunora/migrate`. The managed path replaces only step "invoke wrangler" with
   "upload bundle to deploy API"; everything before it is target-agnostic.
-- **Binding inference + reconciliation** (`@cirrus/config`) — the inference result
+- **Binding inference + reconciliation** (`@lunora/config`) — the inference result
   becomes the script-upload binding metadata; the placeholder-D1 footgun disappears
   entirely on the managed path (the platform creates the database).
-- **Admin RPC layer** (`__cirrus_admin__:*`, ~28 functions; `packages/studio/src/admin.ts`,
+- **Admin RPC layer** (`__lunora_admin__:*`, ~28 functions; `packages/studio/src/admin.ts`,
   intercepted in `ShardDO.handleAdminRpc`) — this _is_ the per-deployment management
   API. The hosted dashboard talks to it through a control-plane proxy that adds org/
   project routing, ACLs, rate limits, and server-side audit.
@@ -355,7 +355,7 @@ with a named contact is the real insurance against surprise enforcement.
   dashboard and self-host Studio are literally the same app gated by an `IS_PLATFORM`
   flag (platform-only panels — orgs, branching, billing — simply don't render
   self-hosted). One studio, two skins; big trust signal, low maintenance.
-- **Advisors** (`@cirrus/advisor`) — already mirrors Supabase's splinter model (OSS
+- **Advisors** (`@lunora/advisor`) — already mirrors Supabase's splinter model (OSS
   rule pack rendered in the dashboard). Their gap worth closing from day one: expose
   advisor results via CLI/CI (and later the platform API/MCP) — Supabase users are
   still asking for this.
@@ -374,7 +374,7 @@ with a named contact is the real insurance against surprise enforcement.
 | -------------------------------------------------------------------- | ------ |
 | Control-plane service (orgs/projects/deployments/keys/audit)         | L      |
 | Dispatcher Worker + namespace setup + subdomain/custom-host routing  | M      |
-| `@cirrus/provision` adapter over Alchemy (D1StateStore, scopes)      | M      |
+| `@lunora/provision` adapter over Alchemy (D1StateStore, scopes)      | M      |
 | CLI verbs: `login/logout/whoami`, `link`, `deploy` (managed target), |        |
 | `logs`, `rollback`; device-flow auth (PartyKit model)                | M      |
 | Hosted-studio multi-tenant shell (org/project/deployment selector)   | M      |
@@ -394,12 +394,12 @@ with a named contact is the real insurance against surprise enforcement.
   plane) and it demonstrably converts. Decide the control-plane license deliberately
   (Convex uses FSL-1.1→Apache-2.0 to block competing hosts; our packages are currently
   permissive — the control plane likely lives in a separate repo).
-- **Two deploy targets, one CLI** (PartyKit's cleanest idea): `cirrus deploy` →
-  managed cloud when logged in / `CIRRUS_DEPLOY_KEY` present; → user's own CF account
+- **Two deploy targets, one CLI** (PartyKit's cleanest idea): `lunora deploy` →
+  managed cloud when logged in / `LUNORA_DEPLOY_KEY` present; → user's own CF account
   when `CLOUDFLARE_API_TOKEN`/wrangler auth is configured. BYO stays first-class and
   free forever — it is also the credible exit hatch that makes the managed tier easy
   to adopt.
-- **Make the exit hatch a feature: `cirrus eject`.** The pieces already exist —
+- **Make the exit hatch a feature: `lunora eject`.** The pieces already exist —
   `exportShard`/`importShard` admin RPCs + the studio Export/Import panel for data,
   and the BYO deploy path for code. One command that exports all shards + D1 + R2,
   scaffolds the `wrangler.jsonc` the project would have had on BYO, and imports into
@@ -414,7 +414,7 @@ with a named contact is the real insurance against surprise enforcement.
 - **Structural cost advantage over Supabase — market it.** Supabase's
   dedicated-VM-per-project isolation forces their most-hated behaviors: free projects
   **pause after 1 week** of inactivity, provisioning takes minutes, and every preview
-  branch burns $0.01344/h. A Cirrus project/preview is a script in a dispatch
+  branch burns $0.01344/h. A Lunora project/preview is a script in a dispatch
   namespace + DOs that scale to zero natively — near-zero idle cost, sub-second
   creation. "Free projects never pause; previews are free until used" is a direct,
   truthful jab at both Supabase (pausing) and Convex (dev usage burning plan quota).
@@ -429,22 +429,22 @@ Ordered so every phase ships standalone DX value even if we stop there.
 > **backend is feature-complete as code** in `apps/cloud` (83 unit tests; codegen
 > /eslint/tsc clean; the studio SPA compiles via `vite build`) across all phases,
 > with the **hosted studio React UI** (`src/client`, served with the Worker by
-> `@cirrus/vite`):
+> `@lunora/vite`):
 >
 > - **Phase 1:** control plane + deploy API (NDJSON) + deploy-key lifecycle + a
 >   **real provisioner** over the Cloudflare REST API (`src/cloudflare/api.ts`;
 >   creates D1/R2, uploads the dispatch-namespace script, applies secrets) + the
 >   **dispatcher Worker** (`src/dispatcher/`, per-plan runtime limits) + the
->   **`cirrus login/link/deploy`** CLI (`src/cli/`).
+>   **`lunora login/link/deploy`** CLI (`src/cli/`).
 > - **Phase 2:** preview TTL lifecycle + cleanup cron + GitHub webhook (HMAC +
 >   project resolution).
-> - **Phase 3:** team invitations (token **emailed** via `@cirrus/mail`) + the
+> - **Phase 3:** team invitations (token **emailed** via `@lunora/mail`) + the
 >   **admin-RPC proxy** at `POST /v1/admin`; the studio SPA; and **hardened
 >   better-auth** (mail-backed verification/reset, optional OAuth, 2FA/passkeys,
 >   rate limiting + a per-IP `/v1/*` cap).
-> - **Phase 4:** **billing on `@cirrus/payment`** (Stripe checkout/portal/webhook
+> - **Phase 4:** **billing on `@lunora/payment`** (Stripe checkout/portal/webhook
 >   keyed on the org id + entitlements from synced subscriptions); **quota
->   enforced against live subscription state** (`cirrus/entitlements.ts` — a Stripe
+>   enforced against live subscription state** (`lunora/entitlements.ts` — a Stripe
 >   upgrade raises limits with no column to sync); **metering source** (dispatcher
 >   emits per-request Analytics Engine data points) + `usage.ingest` ledger +
 >   hourly `usage.rollup` compaction + per-plan dispatch limits wired through a
@@ -462,25 +462,25 @@ Ordered so every phase ships standalone DX value even if we stop there.
 > bring-up IaC. The code seams for all of these exist.
 
 - **Phase 0 — Remote-binding dev (no cloud required). ✅ SHIPPED.** Implemented in the
-  framework, not the cloud app: `@cirrus/config/remote-bindings.ts` tags eligible
+  framework, not the cloud app: `@lunora/config/remote-bindings.ts` tags eligible
   bindings (`d1_databases`, `kv_namespaces`, `r2_buckets`, `queues.producers`,
   `vectorize`, `services`) with `"remote": true` and **deliberately excludes
   `durable_objects`** (Cloudflare has no remote-DO mode — shards stay local, risk #2),
-  wired into `@cirrus/vite` (`remote-bindings-plugin.ts`) and `cirrus dev`
-  (`resolveRemoteEnabled` / `CIRRUS_REMOTE`). 30 passing tests in
+  wired into `@lunora/vite` (`remote-bindings-plugin.ts`) and `lunora dev`
+  (`resolveRemoteEnabled` / `LUNORA_REMOTE`). 30 passing tests in
   `packages/config/__tests__/remote-bindings.test.ts`.
 - **Phase 1 — Control-plane MVP + managed deploy.** Starts with a **constraint
-  spike** that proves the substrate on a real Cirrus app before any control-plane
+  spike** that proves the substrate on a real Lunora app before any control-plane
   code: hibernated-WS subscriptions through `env.DISPATCHER.get()`, the cron
   fan-out workaround, queue-consumer behavior, the mail `send_email` binding, and an
   untrusted-mode audit (`request.cf`, cache isolation) — §2.4 + risks 2–4. The spike
-  also stands up the `@cirrus/provision` adapter against **Alchemy v2**
+  also stands up the `@lunora/provision` adapter against **Alchemy v2**
   (`alchemy@next`, pinned `2.0.0-beta.55`) on one cell — one `DispatchNamespace` deploy
   with per-tenant D1/R2 and control-plane-D1-backed state — confirming v2's resource +
   state-store surface (and, where missing, filling it with an owned shim or an upstream
   contribution) before building around it. Then: dispatcher Worker, deploy API + NDJSON
-  progress, `cirrus login/link/deploy`, `{project}.cirrus.app`, per-deployment
-  secrets + scoped tokens. Exit criterion: `cirrus init && cirrus deploy` → live URL
+  progress, `lunora login/link/deploy`, `{project}.lunora.app`, per-deployment
+  secrets + scoped tokens. Exit criterion: `lunora init && lunora deploy` → live URL
   in under a minute with zero Cloudflare account, zero wrangler config, zero D1
   placeholder editing.
 - **Phase 2 — Preview + cloud dev deployments.** _Built:_ deploy-key types
@@ -493,25 +493,25 @@ Ordered so every phase ships standalone DX value even if we stop there.
   branches, and the per-developer cloud-dev push-on-save + log-tail loop (CLI + live).
   Stretch (differentiator): fork-production-data previews via DO storage snapshot +
   D1 Time Travel — needs a spike; neither Supabase nor Convex offers it.
-- **Phase 3 — Hosted studio.** _Built:_ **team invitations** (`cirrus/invitations.ts` —
+- **Phase 3 — Hosted studio.** _Built:_ **team invitations** (`lunora/invitations.ts` —
   invite/list/revoke/accept, single-use SHA-256-hashed tokens, owner-admin gated,
-  accept-by-token adds the member; the token is **emailed** via `@cirrus/mail` from
+  accept-by-token adds the member; the token is **emailed** via `@lunora/mail` from
   the `POST /v1/invitations/send` edge route, never shown in the browser); the
   **admin-RPC proxy** (`src/admin/proxy.ts`, mounted at `POST /v1/admin` — ACL +
   per-deployment admin token + audit); the **hosted studio React SPA**
   (`src/client`): better-auth-gated, org picker + per-org dashboard tabs for
   projects, deployments, members, deploy keys, invitations, usage, and billing,
-  served on one origin with the Worker via `@cirrus/vite`; and **hardened auth**
-  (`@cirrus/auth`/better-auth: mail-backed email verification + password reset,
+  served on one origin with the Worker via `@lunora/vite`; and **hardened auth**
+  (`@lunora/auth`/better-auth: mail-backed email verification + password reset,
   optional GitHub/Google OAuth, `admin`/`twoFactor`/`passkey` plugins, built-in
-  auth rate limiting, plus a per-IP `@cirrus/ratelimit` cap on `/v1/*`).
+  auth rate limiting, plus a per-IP `@lunora/ratelimit` cap on `/v1/*`).
   _Remaining:_ browser/e2e validation against a live backend, deeper integration
   with `packages/studio` (schema/data/logs/advisors views), and guided secret
-  setup (reuses `@cirrus/config`).
-- **Phase 4 — Domains, billing, ops.** _Built:_ **billing on `@cirrus/payment`**
-  (`cirrus/billing.ts` + the `payment` hook in `src/server.ts`): Stripe
+  setup (reuses `@lunora/config`).
+- **Phase 4 — Domains, billing, ops.** _Built:_ **billing on `@lunora/payment`**
+  (`lunora/billing.ts` + the `payment` hook in `src/server.ts`): Stripe
   checkout/portal/webhook keyed on the org id, entitlements resolved from synced
-  subscription state through `CIRRUS_CLOUD_PLANS` (free/pro/enterprise limits +
+  subscription state through `LUNORA_CLOUD_PLANS` (free/pro/enterprise limits +
   features, free-tier fallback), and **plan/quota entitlements**
   (`src/billing/plans.ts`). **Metering**: `usage.ingest` (`POST /v1/usage`,
   deploy-key authenticated) writes the `platformUsage` ledger, `usage.summary`
@@ -519,7 +519,7 @@ Ordered so every phase ships standalone DX value even if we stop there.
   (`limitsForPlan` → `env.DISPATCHER.get(..., { limits })`). _Remaining:_ custom
   hostnames (CF for SaaS), the metering _source_ wiring (Analytics-Engine →
   ingest) and the provider _charge_ path against a real Stripe account, rollback
-  UI, log-stream egress (reuse `@cirrus/runtime` sinks), alerting, **managed
+  UI, log-stream egress (reuse `@lunora/runtime` sinks), alerting, **managed
   backups/PITR** (the self-managing PITR
   loop + D1 Time Travel already exist; the platform adds scheduling, retention, off-account
   copies), abuse controls (per-tenant dispatcher limits, egress policy, signup throttling).
@@ -551,7 +551,7 @@ Ordered so every phase ships standalone DX value even if we stop there.
 6. **Control-plane repo + license** — decide before Phase 1 code exists.
 7. **Alchemy v2-beta dependency on the revenue path** (committed, no v1 fallback —
    §2.2). Mitigations: pin the exact beta and bump deliberately (never float `next`);
-   isolate behind the `@cirrus/provision` adapter so breaking betas and the Effect
+   isolate behind the `@lunora/provision` adapter so breaking betas and the Effect
    dependency are quarantined; one state scope per tenant. Open items the Phase 1 spike
    **must** answer on the pinned beta — each resolved by an owned shim or an upstream
    contribution, not by leaving v2: (a) does v2 ship the `DispatchNamespace` resource
@@ -561,8 +561,8 @@ Ordered so every phase ships standalone DX value even if we stop there.
    (DO migrations, tags, custom limits, secrets); (d) orphan teardown of per-tenant
    D1/R2 on `destroy`. A hard "no" with no upstream path is the signal to escalate the
    engine decision, not to silently dual-track v1.
-8. **⭐ Fleet-wide runtime versioning — decide the tenant-worker shape NOW.** The Cirrus
-   runtime (`@cirrus/runtime`, `@cirrus/do`) is bundled _into_ each tenant's Worker, so
+8. **⭐ Fleet-wide runtime versioning — decide the tenant-worker shape NOW.** The Lunora
+   runtime (`@lunora/runtime`, `@lunora/do`) is bundled _into_ each tenant's Worker, so
    a security patch to the runtime today means **rebuild + redeploy every tenant** —
    the one thing Convex never faces (they run the backend centrally). This is the most
    consequential forgotten decision because it dictates whether the tenant Worker is
@@ -572,7 +572,7 @@ Ordered so every phase ships standalone DX value even if we stop there.
    platform-owned, centrally-patchable runtime Worker via a service binding / dynamic
    dispatch — one deploy patches everyone, but adds a hop and must be proven possible
    from a namespaced user Worker). Spike both in Phase 1; the answer changes the bundle
-   format, the deploy API, and `@cirrus/vite`'s emit. A pragmatic middle path is
+   format, the deploy API, and `@lunora/vite`'s emit. A pragmatic middle path is
    tenant-pinned runtime + an automated forced-upgrade pipeline with maintenance
    windows, but pick deliberately — retrofitting fat→thin after launch is a rewrite.
 
@@ -602,9 +602,9 @@ None are optional for launch; most are cheap to design now and expensive to retr
   Secrets Store is beta with a ~100-secret/account cap — **not** the per-tenant store;
   use WfP per-script secret bindings for delivery + envelope encryption in the
   control-plane DB for storage.
-- **Frontend hosting scope — an open product decision.** Does managed Cirrus host the
+- **Frontend hosting scope — an open product decision.** Does managed Lunora host the
   app's static frontend too (WfP static assets, one domain, the PLAN4 one-Worker
-  composition) or backend-only (frontend on Pages/Vercel, Cirrus on a subdomain)? This
+  composition) or backend-only (frontend on Pages/Vercel, Lunora on a subdomain)? This
   shapes custom-domain routing, the deploy API, and positioning — decide before Phase 1.
 
 **Trust / legal / billing (launch-blocking for a _paid_ service)**
@@ -625,7 +625,7 @@ None are optional for launch; most are cheap to design now and expensive to retr
 - **Account lifecycle / right-to-erasure.** Signup→verify is noted; the missing half is
   **offboarding**: delete-account must purge tenant data across DO + D1 + R2 (and the
   cross-cell backups), with a retention window and a self-serve data export — both a
-  GDPR obligation and the trust counterpart to `cirrus eject` (§4).
+  GDPR obligation and the trust counterpart to `lunora eject` (§4).
 
 **Platform operations**
 

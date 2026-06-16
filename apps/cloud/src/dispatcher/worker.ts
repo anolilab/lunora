@@ -4,7 +4,7 @@ import { recordRequestUsage } from "../metering/analytics";
 import { createPlanResolver, resolveTenant } from "./route";
 
 /**
- * The Cirrus Cloud dispatcher Worker (CLOUD-PLAN.md §2.1) — a SEPARATE,
+ * The Lunora Cloud dispatcher Worker (CLOUD-PLAN.md §2.1) — a SEPARATE,
  * account-level Worker (deployed via `dispatcher.wrangler.jsonc`) bound to the
  * Workers-for-Platforms dispatch namespaces. It resolves the request hostname to
  * a tenant script and forwards to it through `env.DISPATCHER.get`, applying
@@ -23,12 +23,12 @@ interface DispatchNamespace {
 }
 
 interface DispatcherEnv {
-    CIRRUS_APP_DOMAIN?: string;
     /** Bearer for the control-plane plan lookup. */
     CONTROL_PLANE_TOKEN?: string;
     /** Control-plane base URL; when set, runtime limits scale per the tenant's plan. */
     CONTROL_PLANE_URL?: string;
     DISPATCHER: DispatchNamespace;
+    LUNORA_APP_DOMAIN?: string;
     /** Analytics Engine dataset for per-request metering (§4). Optional. */
     USAGE_ANALYTICS?: AnalyticsEngineDatasetLike;
 }
@@ -57,7 +57,7 @@ const resolvePlanFor = (env: DispatcherEnv): ((scriptName: string) => Promise<st
 export default {
     async fetch(request: Request, env: DispatcherEnv): Promise<Response> {
         const route = await resolveTenant(new URL(request.url).hostname, {
-            appDomain: env.CIRRUS_APP_DOMAIN ?? "cirrus.app",
+            appDomain: env.LUNORA_APP_DOMAIN ?? "lunora.app",
             resolvePlan: resolvePlanFor(env),
         });
 
@@ -72,7 +72,7 @@ export default {
             const userWorker = env.DISPATCHER.get(route.scriptName, undefined, { limits });
             // A WebSocket upgrade returns a 101 response carrying `webSocket`;
             // returning it verbatim hands the hibernatable socket back to the
-            // eyeball (Cirrus's `/_lunora/ws` subscription path). Post-upgrade
+            // eyeball (Lunora's `/_lunora/ws` subscription path). Post-upgrade
             // message invocations run inside the tenant's DO, not back through
             // this dispatcher — see spikes/ws-dispatch for the live validation.
             const response = await userWorker.fetch(request);
