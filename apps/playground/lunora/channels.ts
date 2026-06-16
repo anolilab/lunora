@@ -35,8 +35,8 @@ export const list = query.query(async ({ ctx }): Promise<Doc<"channels">[]> => {
 export const create = mutation
     .input({
         createdAt: v.number(),
-        id: v.optional(v.string().meta({ schema: { maxLength: 64 } })),
-        name: v.string().meta({ schema: { maxLength: 128 } }),
+        id: v.optional(v.string().check((value) => value.length <= 64, { message: "must be at most 64 characters", schema: { maxLength: 64 } })),
+        name: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
     })
     .use(dbRateLimit(limits, "create", { key: (ctx) => ctx.auth.userId ?? "anonymous" }))
     .mutation(async ({ args, ctx }): Promise<Id<"channels">> => {

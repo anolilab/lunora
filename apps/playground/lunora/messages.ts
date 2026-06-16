@@ -43,8 +43,8 @@ export const send = mutation
     .input({
         channelId: v.id("channels"),
         createdAt: v.number(),
-        id: v.optional(v.string().meta({ schema: { maxLength: 64 } })),
-        text: v.string().meta({ schema: { maxLength: 4096 } }),
+        id: v.optional(v.string().check((value) => value.length <= 64, { message: "must be at most 64 characters", schema: { maxLength: 64 } })),
+        text: v.string().check((value) => value.length <= 4096, { message: "must be at most 4096 characters", schema: { maxLength: 4096 } }),
     })
     .use(dbRateLimit(limits, "send", { key: (ctx) => ctx.auth.userId ?? "anonymous" }))
     .mutation(async ({ args, ctx }): Promise<Id<"messages">> => {
