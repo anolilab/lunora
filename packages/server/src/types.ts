@@ -156,6 +156,14 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
     isExternallyManaged?: boolean;
 
     /**
+     * `true` when `.public()` was called — the table opts OUT of secure-by-default
+     * RLS. Under a schema marked `.rls("required")`, every table is protected (the
+     * DO/D1 write path denies raw, non-RLS `ctx.db` access) UNLESS it is `isPublic`.
+     * Has no effect when the schema does not require RLS.
+     */
+    isPublic?: boolean;
+
+    /**
      * Rank indexes declared via `.rankIndex(name, opts)`. The runtime maintains
      * a sorted companion table per declared rank with a btree on
      * `(partition, sortBy)` so `rank(row)` returns the row's 1-based position
@@ -200,6 +208,15 @@ interface VectorIndexDefinition {
 }
 
 interface Schema<T extends Record<string, TableDefinition> = Record<string, TableDefinition>> {
+    /**
+     * Secure-by-default RLS mode declared via `.rls("required")`. When
+     * `"required"`, every table is protected: the DO/D1 write path denies raw
+     * (non-RLS-wrapped) `ctx.db` access at runtime, so a procedure that forgets
+     * `.use(rls(...))` fails closed instead of silently exposing the table. A
+     * table opts out with `.public()` (→ {@link TableDefinition.isPublic}).
+     * Absent ⇒ legacy opt-in behavior (RLS only where a policy is applied).
+     */
+    readonly rlsMode?: "required";
     readonly tables: T;
     readonly vectorIndexes: Record<string, VectorIndexDefinition>;
 }

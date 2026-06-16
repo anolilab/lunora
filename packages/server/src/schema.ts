@@ -107,6 +107,15 @@ interface TableBuilder<Shape extends Record<string, Validator> = Record<string, 
     index: (name: string, fields: ReadonlyArray<string>, options?: { unique?: boolean }) => TableBuilder<Shape>;
 
     /**
+     * Opt this table OUT of secure-by-default RLS. Under a schema marked
+     * `.rls("required")`, every table is protected (the write path denies raw,
+     * non-RLS `ctx.db` access); calling `.public()` exempts this one table so a
+     * plain `query`/`mutation` may read/write it without an RLS policy. No effect
+     * when the schema does not require RLS.
+     */
+    public: () => TableBuilder<Shape>;
+
+    /**
      * Declare a rank index (sorted companion table, btree-backed) for
      * `rank(row)` / `rankPage()` reads in O(log n). See {@link RankIndexDefinition}.
      */
@@ -190,6 +199,7 @@ const defineTable = <Shape extends Record<string, Validator>>(shape: Shape): Tab
     const vectorIndexes: TableVectorIndex[] = [];
     let shardMode: ShardMode = { kind: "root" };
     let isExternallyManaged = false;
+    let isPublic = false;
 
     const builder: TableBuilder<Shape> = {
         aggregateIndex(name, options) {
@@ -229,6 +239,9 @@ const defineTable = <Shape extends Record<string, Validator>>(shape: Shape): Tab
         get isExternallyManaged() {
             return isExternallyManaged;
         },
+        get isPublic() {
+            return isPublic;
+        },
         index(name, fields, options) {
             indexes.push({ fields, name, unique: options?.unique ?? false });
 
@@ -236,6 +249,11 @@ const defineTable = <Shape extends Record<string, Validator>>(shape: Shape): Tab
         },
         get indexes() {
             return indexes;
+        },
+        public() {
+            isPublic = true;
+
+            return builder;
         },
         rankIndex(name, options) {
             // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- defensive: `sortBy` is typed required but untyped JS callers can omit it
@@ -419,11 +437,20 @@ const defineRankIndex = (name: string, options: RankIndexOptions): RankIndexDefi
  * `defineSchema(...).extend(a).extend(b)` is the typed equivalent of merging
  * `a`'s prefixed tables then `b`'s.
  */
-type ExtendableSchema<T extends Record<string, TableDefinition>> = Schema<T> & {
+type ExtendableSchema<T extends Record<string, TableDefinition>> = {
     extend: <X extends Record<string, TableDefinition>, Key extends string>(
         extension: SchemaExtension<X> & { readonly key: Key },
     ) => ExtendableSchema<PrefixedTables<X, Key> & T>;
-};
+
+    /**
+     * Turn on secure-by-default RLS for the whole schema. Every table is then
+     * protected — the DO/D1 write path denies raw, non-RLS `ctx.db` access, so a
+     * procedure that forgets `.use(rls(...))` fails closed. Opt a table out with
+     * `.public()`. Non-mutating: returns a fresh `ExtendableSchema` carrying the
+     * mode, so `.rls("required")` composes with `.extend(...)` either order.
+     */
+    rls: (mode: "required") => ExtendableSchema<T>;
+} & Schema<T>;
 
 const withExtend = <T extends Record<string, TableDefinition>>(schema: Schema<T>): ExtendableSchema<T> => {
     return {
@@ -432,6 +459,9 @@ const withExtend = <T extends Record<string, TableDefinition>>(schema: Schema<T>
             extension: SchemaExtension<X> & { readonly key: Key },
         ): ExtendableSchema<PrefixedTables<X, Key> & T> {
             return withExtend(mergeSchemaExtension(schema, extension));
+        },
+        rls(mode: "required"): ExtendableSchema<T> {
+            return withExtend({ ...schema, rlsMode: mode });
         },
     };
 };

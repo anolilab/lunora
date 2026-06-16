@@ -56,6 +56,7 @@ import type { RelationExistsMarker } from "./relation-predicates";
 import { assertFlatPredicate as assertFlatRelationPredicate, resolveRelationPredicates } from "./relation-predicates";
 import type { RelationDefinitionLike } from "./relations";
 import { applyOnDelete, resolveWith, runRowValidators } from "./relations";
+import { guardWriter } from "./rls-guard";
 import { buildFtsMatch, ftsTableName, scoreDocument, stringifySearchText, tokenizeSearch } from "./search-text";
 import serializeSqlValue from "./serialize-sql";
 import type { SystemDatabaseReader, SystemReaderSchedulerLike, SystemReaderStorageLike } from "./system-reader";
@@ -87,12 +88,29 @@ interface SqlCursor<Row> extends Iterable<Row> {
  * (which would create a dependency cycle — server consumes ShardDO types).
  */
 interface SchemaLike {
+    /**
+     * Secure-by-default RLS mode (mirror of `@lunora/server`'s `Schema.rlsMode`,
+     * set by `defineSchema(...).rls("required")`). When `"required"`, the write
+     * path returns a GUARDED `ctx.db`: a raw handler that never engaged RLS is
+     * denied on every non-`isPublic` table so a forgotten `.use(rls(...))` fails
+     * closed instead of silently exposing the table. The RLS middleware unwraps
+     * the guard (via the `RLS_UNWRAP_SYMBOL` seam) before applying policies.
+     */
+    readonly rlsMode?: "required";
     readonly tables: Record<string, TableDefinitionLike>;
 }
 
 interface TableDefinitionLike {
     readonly aggregateIndexes?: ReadonlyArray<AggregateIndexDefinitionLike>;
     readonly indexes: ReadonlyArray<IndexDefinitionLike>;
+
+    /**
+     * `true` when `.public()` opted this table OUT of secure-by-default RLS
+     * (mirror of `@lunora/server`'s `TableDefinition.isPublic`). Under a
+     * `.rls("required")` schema the write-path guard lets a public table through
+     * to a raw handler; every other table is denied. No effect otherwise.
+     */
+    readonly isPublic?: boolean;
     readonly rankIndexes?: ReadonlyArray<RankIndexDefinitionLike>;
     readonly relationMap?: Record<string, RelationDefinitionLike>;
     readonly searchIndexes?: ReadonlyArray<SearchIndexDefinitionLike>;
@@ -274,6 +292,20 @@ interface CtxDbOptions {
      */
     cdc?: boolean;
     clock?: Clock;
+
+    /**
+     * Opt into the secure-by-default write-path guard. When `true` AND the
+     * schema is `.rls("required")`, the returned `ctx.db` is wrapped so every
+     * read/write against a non-`isPublic` table throws `RlsRequiredError` —
+     * a procedure that forgot `.use(rls(policies))` fails CLOSED. The RLS
+     * middleware recovers the unguarded writer via the `RLS_UNWRAP_SYMBOL` seam.
+     *
+     * Only the generated USER-FACING ctx (codegen's `buildCtx`) passes this.
+     * Admin / migration / import / studio writers leave it undefined and stay
+     * unguarded — they are trusted system paths. No effect unless the schema
+     * opted into `.rls("required")`.
+     */
+    enforceRls?: boolean;
 
     /**
      * Optional writer for tables flagged `.global()`. When provided, an
@@ -3616,7 +3648,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     // after construction has initialized this binding.
     const triggerContext: TriggerContextLike = { db: writer, scheduler };
 
-    return writer;
+    // Secure-by-default: under a `.rls("required")` schema the user-facing ctx
+    // (codegen `buildCtx`, which sets `enforceRls`) gets a guarded writer that
+    // denies protected tables to any handler that never engaged RLS. Triggers
+    // keep the unguarded `writer` above (system path). `guardWriter` is a no-op
+    // for non-`required` schemas, so the common case pays nothing.
+    return options.enforceRls === true ? guardWriter(writer, schema, (id, expectedTable) => lookupById(id, expectedTable)?.tableName) : writer;
 };
 
 /**

@@ -230,6 +230,18 @@ interface RlsContextIn {
 const FALSE_PREDICATE: WhereInput = { OR: [] };
 
 /**
+ * Well-known key the secure-by-default guard (`@lunora/do`'s `guardWriter`)
+ * hangs the UNWRAPPED writer off of. Under a `.rls("required")` schema the
+ * generated `ctx.db` is GUARDED — every read/write against a non-`.public()`
+ * table throws unless RLS was engaged. This middleware recovers the raw writer
+ * through the same `Symbol.for` registry key (no `server → do` import) so it can
+ * read/write the policy tables it authorizes without tripping the guard.
+ * Non-guarded writers (non-`required` schemas) don't carry it, so the lookup
+ * falls back to the writer itself and behavior is unchanged.
+ */
+const RLS_UNWRAP_SYMBOL = Symbol.for("lunora.ctxdb.rls-unwrap");
+
+/**
  * Collect a per-table map from a flat policy list. Order within each table
  * is preserved so the merge below honors author-declared precedence.
  */
@@ -650,8 +662,30 @@ const isFacadeEntry = (value: unknown): value is Record<string, unknown> => {
  * underlying `DatabaseWriterLike`, applying the policy evaluator on every
  * call. The wrapper is a fresh closure per request so the evaluator sees the
  * current `ctx`.
+ *
+ * Two writers flow in to make secure-by-default airtight:
+ *
+ * - `base` — the writer the procedure was handed as `ctx.db`. Under a
+ * `.rls("required")` schema this is the GUARDED writer (denies any non-public
+ * table). Its per-table facade entries are glued on here, so the `...base`
+ * spread carries them. Every NON-policy table routes through `base`, so a
+ * protected table with no policy stays denied even inside an RLS procedure —
+ * you must declare a policy to reach it.
+ * - `raw` — the unwrapped writer (recovered via {@link RLS_UNWRAP_SYMBOL}, or
+ * `base` itself when unguarded). POLICY tables route through `raw` so the
+ * middleware's own policy-filtered reads/writes and membership probes don't
+ * trip the guard. For a non-guarded (non-`required`) schema `base === raw`, so
+ * the routing is a no-op and behavior is identical to before.
  */
-const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<Context>[]>, context: PolicyContext<Context>): RlsDatabase => {
+const wrapDatabase = <Context>(base: RlsDatabase, raw: RlsDatabase, perTable: Map<string, Policy<Context>[]>, context: PolicyContext<Context>): RlsDatabase => {
+    /**
+     * Route a table to the writer that should service it: `raw` for a policy
+     * table (already authorized here — must bypass the guard), `base` for any
+     * other table (so the secure-by-default guard denies a protected,
+     * policy-less table and passes a `.public()` one through).
+     */
+    const route = (tableName: string): RlsDatabase => (perTable.has(tableName) ? raw : base);
+
     /**
      * Cached effective read `baseWhere` per table. Cached for the lifetime
      * of one wrapped writer — i.e. one request — so a single procedure
@@ -715,11 +749,13 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
      * callers fall through unrestricted).
      */
     const locateRow = async (id: string, expectedTable?: string): Promise<{ row: null | Record<string, unknown>; tableName: string | undefined }> => {
-        if (base.getWithTable) {
+        if (raw.getWithTable) {
             // Pin the lookup to the bound table when the by-id facade forwards
             // one, so a foreign id resolves to "absent" rather than another
-            // table's row (IDOR).
-            const located = await base.getWithTable(id, expectedTable);
+            // table's row (IDOR). Read through the UNGUARDED `raw` writer: this
+            // is a policy-evaluation probe, not caller-visible data, so it must
+            // not be denied by the secure-by-default guard.
+            const located = await raw.getWithTable(id, expectedTable);
 
             if (!located) {
                 // eslint-disable-next-line unicorn/no-null -- absent row mirrors @lunora/do's writer null sentinel
@@ -730,7 +766,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
             return { row: located.row, tableName: perTable.has(located.tableName) ? located.tableName : undefined };
         }
 
-        const row = await base.get(id, expectedTable);
+        const row = await raw.get(id, expectedTable);
 
         if (!row) {
             // eslint-disable-next-line unicorn/no-null -- absent row mirrors @lunora/do's writer null sentinel
@@ -745,7 +781,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
         const probeTables = expectedTable === undefined ? [...perTable.keys()] : pinnedProbe;
         const probes = await Promise.all(
             probeTables.map(async (tableName) => {
-                const probe = await base.findFirst(tableName, { limit: 1, where: { _id: id } });
+                const probe = await raw.findFirst(tableName, { limit: 1, where: { _id: id } });
 
                 return probe?.["_id"] === id ? tableName : undefined;
             }),
@@ -787,14 +823,19 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
     const gateById = async <R>(
         id: string,
         op: Exclude<Policy["on"], "insert" | "read">,
-        perform: () => Promise<R>,
+        perform: (writer: RlsDatabase) => Promise<R>,
         computeNextRow?: (preRow: Record<string, unknown>) => Record<string, unknown>,
         expectedTable?: string,
     ): Promise<R> => {
         const located = await findRowTable(id, expectedTable);
 
         if (!located) {
-            return perform();
+            // The id is in no policy-gated table (a non-policy table or absent).
+            // Route through the GUARDED `base` so a protected, policy-less table
+            // is denied (secure-by-default) and a `.public()` / absent one passes
+            // through. For a non-guarded schema `base === raw`, so this is a
+            // plain write.
+            return perform(base);
         }
 
         const policies = perTable.get(located.tableName);
@@ -808,7 +849,9 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
             }
         }
 
-        return perform();
+        // Policy table, write authorized: perform on the UNGUARDED `raw` writer
+        // (the guard would otherwise deny this protected table).
+        return perform(raw);
     };
 
     /**
@@ -840,7 +883,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
             const { baseWhere, restricts } = readBase(tableName);
             const args = intoCountArgs(whereOrArgs);
 
-            return base.count(tableName, {
+            return route(tableName).count(tableName, {
                 ...args,
                 baseWhere: mergeBaseWhere(args.baseWhere, baseWhere),
                 relationBaseWhere: relationReadFilter,
@@ -848,12 +891,12 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
             });
         },
 
-        delete: (id, expectedTable) => gateById(id, "delete", () => base.delete(id, expectedTable), undefined, expectedTable),
+        delete: (id, expectedTable) => gateById(id, "delete", (writer) => writer.delete(id, expectedTable), undefined, expectedTable),
 
         async findFirst(tableName, args) {
             const { baseWhere } = readBase(tableName);
 
-            return base.findFirst(tableName, {
+            return route(tableName).findFirst(tableName, {
                 ...intoQueryArgs(args),
                 baseWhere: mergeBaseWhere(args?.baseWhere, baseWhere),
                 relationBaseWhere: relationReadFilter,
@@ -863,7 +906,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
         async findFirstOrThrow(tableName, args) {
             const { baseWhere } = readBase(tableName);
 
-            return base.findFirstOrThrow(tableName, {
+            return route(tableName).findFirstOrThrow(tableName, {
                 ...intoQueryArgs(args),
                 baseWhere: mergeBaseWhere(args?.baseWhere, baseWhere),
                 relationBaseWhere: relationReadFilter,
@@ -873,7 +916,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
         async findMany(tableName, args) {
             const { baseWhere } = readBase(tableName);
 
-            return base.findMany(tableName, {
+            return route(tableName).findMany(tableName, {
                 ...intoQueryArgs(args),
                 baseWhere: mergeBaseWhere(args?.baseWhere, baseWhere),
                 relationBaseWhere: relationReadFilter,
@@ -894,9 +937,14 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
                 return null;
             }
 
-            // Row exists but isn't in any policy-gated table → unrestricted.
+            // Row exists but isn't in any policy-gated table. Defer to the
+            // GUARDED `base.get` so a protected, policy-less table is denied
+            // (secure-by-default) and a `.public()` one returns the row.
+            // `locateRow` read through `raw`, so it can't itself be trusted to
+            // return a protected row to the caller. For a non-guarded schema
+            // `base === raw`, so this is the plain unrestricted read.
             if (located.tableName === undefined) {
-                return located.row;
+                return base.get(id, expectedTable);
             }
 
             const { baseWhere, restricts } = readBase(located.tableName);
@@ -908,10 +956,11 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
             }
 
             // Step 2 — **policy check**: re-fetch WITH `baseWhere` only on the
-            // owning table. `null` here is the policy verdict ("denied"), NOT a
-            // fall-through to the unguarded row — that distinction is what stops
-            // a hidden row from leaking.
-            const allowed = await base.findFirst(located.tableName, { baseWhere, limit: 1, where: { _id: id } });
+            // owning table, through the UNGUARDED `raw` writer (a policy table —
+            // the guard would deny it). `null` here is the policy verdict
+            // ("denied"), NOT a fall-through to the unguarded row — that
+            // distinction is what stops a hidden row from leaking.
+            const allowed = await raw.findFirst(located.tableName, { baseWhere, limit: 1, where: { _id: id } });
 
             // eslint-disable-next-line unicorn/no-null -- null is the deliberate "denied" verdict surfaced by get(), mirroring @lunora/do
             return allowed?.["_id"] === id ? allowed : null;
@@ -926,8 +975,14 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
                 if (!writeOk) {
                     throw new LunoraError("FORBIDDEN", `insert on "${tableName}" denied by policy`);
                 }
+
+                // Policy table, insert authorized: write through the UNGUARDED
+                // `raw` writer (the guard would deny this protected table).
+                return raw.insert(tableName, document);
             }
 
+            // Non-policy table → GUARDED `base` enforces secure-by-default: a
+            // protected, policy-less table is denied; a `.public()` one passes.
             return base.insert(tableName, document);
         },
 
@@ -935,7 +990,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
             gateById(
                 id,
                 "update",
-                () => base.patch(id, patch, expectedTable),
+                (writer) => writer.patch(id, patch, expectedTable),
                 (preRow) => {
                     return { ...preRow, ...patch };
                 },
@@ -945,7 +1000,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
         query(tableName) {
             const { baseWhere } = readBase(tableName);
 
-            const reader = base.query(tableName);
+            const reader = route(tableName).query(tableName);
 
             if (!baseWhere) {
                 return reader;
@@ -964,7 +1019,7 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
             gateById(
                 id,
                 "update",
-                () => base.replace(id, document, expectedTable),
+                (writer) => writer.replace(id, document, expectedTable),
                 // Mirror the writer's post-image: `_id` always comes from the
                 // existing row; `_creationTime` honors a caller-supplied value
                 // (the writer keeps `document._creationTime` when present) and
@@ -988,25 +1043,33 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
         aggregate(tableName, options) {
             const { baseWhere } = readBase(tableName);
 
-            return base.aggregate(tableName, { ...options, baseWhere: mergeBaseWhere(options.baseWhere, baseWhere), relationBaseWhere: relationReadFilter });
+            return route(tableName).aggregate(tableName, {
+                ...options,
+                baseWhere: mergeBaseWhere(options.baseWhere, baseWhere),
+                relationBaseWhere: relationReadFilter,
+            });
         },
 
         groupBy(tableName, options) {
             const { baseWhere } = readBase(tableName);
 
-            return base.groupBy(tableName, { ...options, baseWhere: mergeBaseWhere(options.baseWhere, baseWhere), relationBaseWhere: relationReadFilter });
+            return route(tableName).groupBy(tableName, {
+                ...options,
+                baseWhere: mergeBaseWhere(options.baseWhere, baseWhere),
+                relationBaseWhere: relationReadFilter,
+            });
         },
 
         rank(tableName, indexName, options) {
             const baseWhere = requireUnrestrictedReadBase(tableName, "rank");
 
-            return base.rank(tableName, indexName, { ...options, baseWhere: mergeBaseWhere(options.baseWhere, baseWhere) });
+            return route(tableName).rank(tableName, indexName, { ...options, baseWhere: mergeBaseWhere(options.baseWhere, baseWhere) });
         },
 
         rankPage(tableName, indexName, options) {
             const baseWhere = requireUnrestrictedReadBase(tableName, "rankPage");
 
-            return base.rankPage(tableName, indexName, { ...options, baseWhere: mergeBaseWhere(options?.baseWhere, baseWhere) });
+            return route(tableName).rankPage(tableName, indexName, { ...options, baseWhere: mergeBaseWhere(options?.baseWhere, baseWhere) });
         },
 
         // `rankBefore` is the one optional method (the D1 twin omits it).
@@ -1015,7 +1078,11 @@ const wrapDatabase = <Context>(base: RlsDatabase, perTable: Map<string, Policy<C
                   rankBefore: (tableName: string, indexName: string, options: RankBeforeArgs) => {
                       requireUnrestrictedReadBase(tableName, "rankBefore");
 
-                      return baseRankBefore(tableName, indexName, options);
+                      // Route to the policy/non-policy writer; both carry
+                      // `rankBefore` when `base` does (the guard spreads `raw`).
+                      const target = route(tableName);
+
+                      return (target.rankBefore ?? baseRankBefore)(tableName, indexName, options);
                   },
               }
             : {}),
@@ -1108,7 +1175,14 @@ const rls = <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArra
             ctx,
         };
 
-        const wrapped = wrapDatabase<Context>(ctx.db, perTable, policyContext);
+        // Under a `.rls("required")` schema `ctx.db` is the GUARDED writer;
+        // recover the unwrapped one so the middleware can read/write the policy
+        // tables it authorizes without tripping the guard. A non-guarded writer
+        // doesn't carry the symbol, so `raw` falls back to `ctx.db` and the
+        // wrapper behaves exactly as before (`base === raw`).
+        const guarded = ctx.db;
+        const raw = ((guarded as unknown as Record<PropertyKey, unknown>)[RLS_UNWRAP_SYMBOL] as RlsDatabase | undefined) ?? guarded;
+        const wrapped = wrapDatabase<Context>(guarded, raw, perTable, policyContext);
         // `next({ ctx: extension })` expects an extension shape. We replace
         // `db` (carrying the re-bound per-table facade), and — when present —
         // `orm`: it's a sibling ctx field (codegen's `bindOrm`) bound to the

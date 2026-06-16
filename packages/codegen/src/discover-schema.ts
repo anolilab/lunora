@@ -784,11 +784,15 @@ const extendCallsOf = (defineSchemaCall: CallExpression): CallExpression[] => {
     const calls: CallExpression[] = [];
     let current: TsNode = defineSchemaCall;
 
-    // Each `.extend(...)` is `CallExpression(PropertyAccessExpression(current, "extend"))`.
+    // Each chained call is `CallExpression(PropertyAccessExpression(current, name))`.
+    // Collect the `.extend(...)` links; transparently step over any other chained
+    // builder method (e.g. `.rls("required")`) so a `defineSchema(...).rls(...)
+    // .extend(...)` ordering still finds its extensions instead of stopping at
+    // the first non-`extend` link.
     for (;;) {
         const parent = current.getParent();
 
-        if (!parent || !Node.isPropertyAccessExpression(parent) || parent.getName() !== "extend") {
+        if (!parent || !Node.isPropertyAccessExpression(parent)) {
             break;
         }
 
@@ -798,7 +802,10 @@ const extendCallsOf = (defineSchemaCall: CallExpression): CallExpression[] => {
             break;
         }
 
-        calls.push(callParent);
+        if (parent.getName() === "extend") {
+            calls.push(callParent);
+        }
+
         current = callParent;
     }
 

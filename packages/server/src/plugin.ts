@@ -410,6 +410,9 @@ export const mergeSchemaExtension = <T extends Record<string, TableDefinition>, 
     }
 
     return {
+        // Preserve secure-by-default RLS across `.extend(...)` — a plugin's
+        // tables join an `.rls("required")` schema as protected-by-default too.
+        rlsMode: base.rlsMode,
         tables: merged as PrefixedTables<X, Key> & T,
         vectorIndexes: mergedVectorIndexes,
     };
