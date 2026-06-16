@@ -1,5 +1,7 @@
-import type { Id } from "@lunora/server";
-import { LunoraError, mutation, query, v } from "@lunora/server";
+import { LunoraError } from "@lunora/server";
+
+import type { Id } from "./_generated/server.js";
+import { mutation, query, v } from "./_generated/server.js";
 
 interface DocumentRow {
     _id: Id<"documents">;
@@ -34,27 +36,24 @@ const assertSignedIn = (userId: null | string): string => {
  * List documents in an organization, newest-first. Anyone signed in can call
  * this; pair it with `withAuthPlugins` to add a strict membership check.
  */
-export const list = query({
-    args: { organizationId: v.string() },
-    handler: async (ctx, { organizationId }): Promise<DocumentRow[]> => {
-        assertSignedIn(ctx.auth.userId);
+export const list = query.input({ organizationId: v.string() }).query(async ({ args: { organizationId }, ctx }): Promise<DocumentRow[]> => {
+    assertSignedIn(ctx.auth.userId);
 
-        const rows = (await ctx.db
-            .query("documents")
-            .withIndex("by_org_created", (range) => range.eq("organizationId", organizationId))
-            .collect()) as unknown as DocumentRow[];
+    const rows = (await ctx.db
+        .query("documents")
+        .withIndex("by_org_created", (range) => range.eq("organizationId", organizationId))
+        .collect()) as unknown as DocumentRow[];
 
-        return [...rows].sort((a, b) => b.createdAt - a.createdAt);
-    },
+    return [...rows].sort((a, b) => b.createdAt - a.createdAt);
 });
 
-export const create = mutation({
-    args: {
+export const create = mutation
+    .input({
         organizationId: v.string(),
         title: v.string(),
         body: v.string(),
-    },
-    handler: async (ctx, { organizationId, title, body }): Promise<Id<"documents">> => {
+    })
+    .mutation(async ({ args: { organizationId, title, body }, ctx }): Promise<Id<"documents">> => {
         const userId = assertSignedIn(ctx.auth.userId);
 
         return ctx.db.insert("documents", {
@@ -64,5 +63,4 @@ export const create = mutation({
             body,
             createdAt: Date.now(),
         });
-    },
-});
+    });

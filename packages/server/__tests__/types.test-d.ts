@@ -3,7 +3,9 @@
  * type surface. It is also imported by a no-op test so vitest counts it.
  */
 import type { ActionCtx, EmptyArgs, Id, Infer, LunoraRouteHandler, QueryCtx, RegisteredQuery, ScheduledFunctionDoc, StorageMetadata } from "../src/index";
-import { defineSchema, defineTable, httpRoute, initLunora, mutation, query, v } from "../src/index";
+import { defineSchema, defineTable, httpRoute, initLunora, v } from "../src/index";
+
+const { mutation, query } = initLunora.dataModel().create();
 
 type Assert<T extends true> = T;
 // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- canonical type-equality idiom; each fresh `T` in the two function signatures is structurally load-bearing (relaxing it breaks the invariance check).
@@ -17,15 +19,9 @@ const schema = defineSchema({
 // schema.tables.messages.shape.text is the v.string validator.
 type Check1 = Assert<Equal<Infer<typeof schema.tables.messages.shape.channelId>, Id<"channels">>>;
 
-const list = query({
-    args: { limit: v.number() },
-    handler: (_context, args) => args.limit,
-});
+const list = query.input({ limit: v.number() }).query(({ args }) => args.limit);
 
-const send = mutation({
-    args: { text: v.string() },
-    handler: (_context, args) => args.text,
-});
+const send = mutation.input({ text: v.string() }).mutation(({ args }) => args.text);
 
 type Check2 = Assert<Equal<typeof list.kind, "query">>;
 type Check3 = Assert<Equal<typeof send.kind, "mutation">>;

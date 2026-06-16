@@ -22,6 +22,7 @@
         "@lunora/db": "workspace:*",
         "@lunora/do": "workspace:*",
         "@lunora/mail": "workspace:*",
+        "@lunora/ratelimit": "workspace:*",
         "@lunora/react": "workspace:*",
         "@lunora/runtime": "workspace:*",
         "@lunora/scheduler": "workspace:*",

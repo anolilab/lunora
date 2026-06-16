@@ -1,7 +1,13 @@
+import type { RateLimitConfigMap } from "@lunora/ratelimit";
+import { createDbStore, rateLimit, RateLimiter } from "@lunora/ratelimit";
+
 // eslint-disable-next-line unicorn/prevent-abbreviations -- "Doc" is the generated dataModel type name; aliasing it breaks codegen
 import type { Doc } from "./_generated/dataModel.js";
 import type { Id } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
+
+// 10 channel creations per minute per user, durable via the DB-backed store.
+const limits: RateLimitConfigMap = { create: { kind: "token bucket", period: 60_000, rate: 10 } };
 
 /**
  * List every channel — `.global()` so the read happens against D1, with
@@ -9,13 +15,10 @@ import { mutation, query, v } from "./_generated/server.js";
  * (D1) tables use the `findMany` reader rather than the shard-local fluent
  * `query()` chain (which isn't available on the D1 backend).
  */
-export const list = query({
-    args: {},
-    handler: async (context): Promise<Doc<"channels">[]> => {
-        const { page } = await context.db.channels.findMany();
+export const list = query.query(async ({ ctx }): Promise<Doc<"channels">[]> => {
+    const { page } = await ctx.db.channels.findMany();
 
-        return page;
-    },
+    return page;
 });
 
 /**
@@ -29,16 +32,22 @@ export const list = query({
  * mutation handler must be deterministic, so the client stamps it (its optimistic
  * row carries the same value, so optimistic and persisted rows agree).
  */
-export const create = mutation({
-    args: {
+export const create = mutation
+    .input({
         createdAt: v.number(),
         id: v.optional(v.string().meta({ schema: { maxLength: 64 } })),
         name: v.string().meta({ schema: { maxLength: 128 } }),
-    },
-    handler: async (context, { createdAt, id, name }): Promise<Id<"channels">> => {
-        const userId = (context.auth.userId ?? "anonymous") as Id<"users">;
+    })
+    .use(
+        rateLimit((ctx) => new RateLimiter({ config: limits, store: createDbStore({ db: ctx.db }) }), "create", {
+            key: (ctx) => ctx.auth.userId ?? "anonymous",
+        }),
+    )
+    .mutation(async ({ args, ctx }): Promise<Id<"channels">> => {
+        const { createdAt, id, name } = args;
+        const userId = (ctx.auth.userId ?? "anonymous") as Id<"users">;
 
-        const channelId = await context.db.insert(
+        const channelId = await ctx.db.insert(
             "channels",
             {
                 createdAt,
@@ -51,8 +60,7 @@ export const create = mutation({
         // Kick off the durable per-channel welcome sequence (see
         // lunora/workflows.ts). Fire-and-forget: the workflow runs on its own
         // schedule — it posts a greeting, sleeps a minute, then posts a tip.
-        await context.workflows.get("channelWelcome").create({ params: { channelId } });
+        await ctx.workflows.get("channelWelcome").create({ params: { channelId } });
 
         return channelId;
-    },
-});
+    });

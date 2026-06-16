@@ -383,9 +383,6 @@ importers:
       '@babel/core':
         specifier: catalog:build
         version: 7.29.7
-      '@lunora/codegen':
-        specifier: workspace:*
-        version: link:packages/codegen
       '@commitlint/cli':
         specifier: catalog:prod
         version: 21.0.2(@types/node@25.9.3)(conventional-commits-filter@5.0.0)(conventional-commits-parser@6.4.0)(typescript@6.0.3)
@@ -395,6 +392,9 @@ importers:
       '@eslint-react/eslint-plugin':
         specifier: catalog:lint
         version: 5.9.0(eslint@10.5.0(jiti@2.7.0))(typescript@6.0.3)
+      '@lunora/codegen':
+        specifier: workspace:*
+        version: link:packages/codegen
       '@ospm/eslint-plugin-react-unhookify':
         specifier: catalog:lint
         version: 1.0.2(@types/react@19.2.17)(eslint@10.5.0(jiti@2.7.0))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -525,6 +525,9 @@ importers:
       '@lunora/mail':
         specifier: workspace:*
         version: link:../../packages/mail
+      '@lunora/ratelimit':
+        specifier: workspace:*
+        version: link:../../packages/ratelimit
       '@lunora/react':
         specifier: workspace:*
         version: link:../../packages/react
@@ -568,6 +571,9 @@ importers:
         specifier: 19.2.7
         version: 19.2.7(react@19.2.7)
     devDependencies:
+      '@cloudflare/workers-types':
+        specifier: catalog:cloudflare
+        version: 4.20260613.1
       '@lunora/cli':
         specifier: workspace:*
         version: link:../../packages/cli
@@ -577,9 +583,6 @@ importers:
       '@lunora/config':
         specifier: workspace:*
         version: link:../../packages/config
-      '@cloudflare/workers-types':
-        specifier: catalog:cloudflare
-        version: 4.20260613.1
       '@types/node':
         specifier: catalog:types
         version: 25.9.3
@@ -604,12 +607,12 @@ importers:
 
   apps/studio:
     dependencies:
-      '@lunora/studio':
-        specifier: workspace:*
-        version: link:../../packages/studio
       '@fontsource-variable/geist':
         specifier: catalog:ui
         version: 5.2.9
+      '@lunora/studio':
+        specifier: workspace:*
+        version: link:../../packages/studio
       react:
         specifier: 19.2.7
         version: 19.2.7
@@ -681,12 +684,12 @@ importers:
         specifier: 19.2.7
         version: 19.2.7(react@19.2.7)
     devDependencies:
-      '@lunora/cli':
-        specifier: workspace:*
-        version: link:../../packages/cli
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
         version: 4.20260613.1
+      '@lunora/cli':
+        specifier: workspace:*
+        version: link:../../packages/cli
       '@types/node':
         specifier: catalog:types
         version: 25.9.3
@@ -751,12 +754,12 @@ importers:
         specifier: 19.2.7
         version: 19.2.7(react@19.2.7)
     devDependencies:
-      '@lunora/cli':
-        specifier: workspace:*
-        version: link:../../packages/cli
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
         version: 4.20260613.1
+      '@lunora/cli':
+        specifier: workspace:*
+        version: link:../../packages/cli
       '@types/node':
         specifier: catalog:types
         version: 25.9.3
@@ -809,12 +812,12 @@ importers:
         specifier: ^22.2.1
         version: 22.2.1(@types/node@25.9.3)
     devDependencies:
-      '@lunora/cli':
-        specifier: workspace:*
-        version: link:../../packages/cli
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
         version: 4.20260613.1
+      '@lunora/cli':
+        specifier: workspace:*
+        version: link:../../packages/cli
       '@types/node':
         specifier: catalog:types
         version: 25.9.3
@@ -861,12 +864,12 @@ importers:
         specifier: 19.2.7
         version: 19.2.7(react@19.2.7)
     devDependencies:
-      '@lunora/cli':
-        specifier: workspace:*
-        version: link:../../packages/cli
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
         version: 4.20260613.1
+      '@lunora/cli':
+        specifier: workspace:*
+        version: link:../../packages/cli
       '@types/node':
         specifier: catalog:types
         version: 25.9.3
@@ -913,12 +916,12 @@ importers:
         specifier: 19.2.7
         version: 19.2.7(react@19.2.7)
     devDependencies:
-      '@lunora/cli':
-        specifier: workspace:*
-        version: link:../../packages/cli
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
         version: 4.20260613.1
+      '@lunora/cli':
+        specifier: workspace:*
+        version: link:../../packages/cli
       '@types/node':
         specifier: catalog:types
         version: 25.9.3
@@ -1212,18 +1215,18 @@ importers:
 
   packages/client:
     devDependencies:
-      '@lunora/do':
-        specifier: workspace:*
-        version: link:../do
-      '@lunora/runtime':
-        specifier: workspace:*
-        version: link:../runtime
       '@cloudflare/vitest-pool-workers':
         specifier: catalog:cloudflare
         version: 0.16.15(@cloudflare/workers-types@4.20260613.1)(@vitest/runner@4.1.8)(@vitest/snapshot@4.1.8)(vitest@4.1.8)
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
         version: 4.20260613.1
+      '@lunora/do':
+        specifier: workspace:*
+        version: link:../do
+      '@lunora/runtime':
+        specifier: workspace:*
+        version: link:../runtime
       '@types/node':
         specifier: catalog:types
         version: 25.9.3
@@ -1446,15 +1449,15 @@ importers:
         specifier: catalog:drizzle
         version: 0.45.2(@cloudflare/workers-types@4.20260613.1)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9)
     devDependencies:
-      '@lunora/vectors':
-        specifier: workspace:*
-        version: link:../vectors
       '@cloudflare/vitest-pool-workers':
         specifier: catalog:cloudflare
         version: 0.16.15(@cloudflare/workers-types@4.20260613.1)(@vitest/runner@4.1.8)(@vitest/snapshot@4.1.8)(vitest@4.1.8)
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
         version: 4.20260613.1
+      '@lunora/vectors':
+        specifier: workspace:*
+        version: link:../vectors
       '@types/node':
         specifier: catalog:types
         version: 25.9.3
@@ -1769,15 +1772,15 @@ importers:
 
   packages/runtime:
     devDependencies:
-      '@lunora/do':
-        specifier: workspace:*
-        version: link:../do
       '@cloudflare/vitest-pool-workers':
         specifier: catalog:cloudflare
         version: 0.16.15(@cloudflare/workers-types@4.20260613.1)(@vitest/runner@4.1.8)(@vitest/snapshot@4.1.8)(vitest@4.1.8)
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
         version: 4.20260613.1
+      '@lunora/do':
+        specifier: workspace:*
+        version: link:../do
       '@types/node':
         specifier: catalog:types
         version: 25.9.3
@@ -1989,18 +1992,6 @@ importers:
       '@base-ui/react':
         specifier: catalog:ui
         version: 1.5.0(@types/react@19.2.17)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
-      '@lunora/advisor':
-        specifier: workspace:*
-        version: link:../advisor
-      '@lunora/analytics':
-        specifier: workspace:*
-        version: link:../analytics
-      '@lunora/client':
-        specifier: workspace:*
-        version: link:../client
-      '@lunora/react':
-        specifier: workspace:*
-        version: link:../react
       '@hugeicons/core-free-icons':
         specifier: catalog:ui
         version: 4.2.0
@@ -2013,6 +2004,18 @@ importers:
       '@lingui/message-utils':
         specifier: catalog:i18n
         version: 6.3.0
+      '@lunora/advisor':
+        specifier: workspace:*
+        version: link:../advisor
+      '@lunora/analytics':
+        specifier: workspace:*
+        version: link:../analytics
+      '@lunora/client':
+        specifier: workspace:*
+        version: link:../client
+      '@lunora/react':
+        specifier: workspace:*
+        version: link:../react
       '@tanstack/react-router':
         specifier: catalog:frontend
         version: 1.170.15(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -2217,6 +2220,9 @@ importers:
 
   packages/vite:
     dependencies:
+      '@cloudflare/vite-plugin':
+        specifier: catalog:vite
+        version: 1.40.2(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))(workerd@1.20260611.1)(wrangler@4.100.0(@cloudflare/workers-types@4.20260613.1))
       '@lunora/codegen':
         specifier: workspace:*
         version: link:../codegen
@@ -2226,9 +2232,6 @@ importers:
       '@lunora/studio':
         specifier: workspace:*
         version: link:../studio
-      '@cloudflare/vite-plugin':
-        specifier: catalog:vite
-        version: 1.40.2(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))(workerd@1.20260611.1)(wrangler@4.100.0(@cloudflare/workers-types@4.20260613.1))
       '@visulima/vite-overlay':
         specifier: catalog:vite
         version: 2.0.0-alpha.33(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))

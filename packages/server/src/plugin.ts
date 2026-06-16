@@ -316,8 +316,8 @@ export interface DefineComponentOptions<
  *     extension: defineSchemaExtension("ratelimit", { tables: { buckets } }),
  *     middleware: ({ ctx, next }) => next({ ctx: { ...ctx, ratelimit: api(ctx) } }),
  *     functions: {
- *         check: query({ args: { key: v.string() }, handler: async ({ ctx, args }) => ... }),
- *         reset: mutation({ args: { key: v.string() }, handler: async ({ ctx, args }) => ... }),
+ *         check: query.input({ key: v.string() }).query(async ({ ctx, args }) => ...),
+ *         reset: mutation.input({ key: v.string() }).mutation(async ({ ctx, args }) => ...),
  *     },
  * });
  * ```

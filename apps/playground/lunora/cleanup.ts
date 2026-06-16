@@ -1,12 +1,12 @@
 import type { Id } from "./_generated/server.js";
-import { mutation, v } from "./_generated/server.js";
+import { internalMutation, v } from "./_generated/server.js";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
 /**
- * Daily cleanup job — purges messages older than 30 days. Registered as a
- * cron trigger in `wrangler.jsonc` and dispatched by the SchedulerDO at
- * 03:00 UTC every day.
+ * Daily cleanup job — purges messages older than 30 days. Modelled as an
+ * `internalMutation` (callable only server-side via `ctx.runMutation` / a cron),
+ * never from a client, so bulk deletes can't be triggered over the public API.
  *
  * Because `messages` is shard-by-channel this mutation runs per-shard. The
  * runtime fans the call out to every active channel DO so the workload
@@ -17,23 +17,20 @@ const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
  * (the same place a cron job supplies its args) and the handler derives the
  * 30-day cutoff from it.
  */
-export const cleanupOldMessages = mutation({
-    args: { now: v.number() },
-    handler: async (context, { now }): Promise<{ deleted: number }> => {
-        const cutoff = now - THIRTY_DAYS_MS;
-        // Indexed range scan on `by_created` — reads only the stale rows
-        // (`createdAt < cutoff`) instead of loading every message and filtering
-        // in memory.
-        const stale = (await context.db
-            .query("messages")
-            .withIndex("by_created", (q) => q.lt("createdAt", cutoff))
-            .collect()) as { _id: Id<"messages"> }[];
+export const cleanupOldMessages = internalMutation.input({ now: v.number() }).mutation(async ({ args, ctx }): Promise<{ deleted: number }> => {
+    const cutoff = args.now - THIRTY_DAYS_MS;
+    // Indexed range scan on `by_created` — reads only the stale rows
+    // (`createdAt < cutoff`) instead of loading every message and filtering
+    // in memory.
+    const stale = (await ctx.db
+        .query("messages")
+        .withIndex("by_created", (q) => q.lt("createdAt", cutoff))
+        .collect()) as { _id: Id<"messages"> }[];
 
-        for (const row of stale) {
-            // eslint-disable-next-line no-await-in-loop -- deletes share one DB handle; parallelizing would interleave statements on a single connection.
-            await context.db.delete(row._id);
-        }
+    for (const row of stale) {
+        // eslint-disable-next-line no-await-in-loop -- deletes share one DB handle; parallelizing would interleave statements on a single connection.
+        await ctx.db.delete(row._id);
+    }
 
-        return { deleted: stale.length };
-    },
+    return { deleted: stale.length };
 });

@@ -47,13 +47,13 @@
 
 import { v } from "@lunora/values";
 
+import { initLunora } from "./builder/index";
 import { LunoraError } from "./error";
-import { mutation, query } from "./functions";
 import { onDisconnect } from "./lifecycle";
 import type { Component, SchemaExtension } from "./plugin";
 import { defineComponent, defineSchemaExtension } from "./plugin";
 import { defineTable } from "./schema";
-import type { MutationCtx as MutationContext, QueryCtx as QueryContext, RegisteredLifecycleHook, RegisteredMutation, RegisteredQuery } from "./types";
+import type { MutationCtx as MutationContext, RegisteredLifecycleHook, RegisteredMutation, RegisteredQuery } from "./types";
 
 /** Default time-to-live for a presence row: a heartbeat keeps a member "present" for this long. */
 const DEFAULT_TTL_MS = 30_000;
@@ -191,16 +191,20 @@ const presenceExtension = defineSchemaExtension(PRESENCE_KEY, {
  * @param options presence configuration (TTL).
  * @returns a component bundling the extension and the presence functions.
  */
+// The presence functions are built with the procedure builders (no generated
+// server here, so bind the base contexts via `initLunora.dataModel().create()`).
+const { mutation, query } = initLunora.dataModel().create();
+
 const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent => {
     const ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
 
-    const heartbeat = mutation({
-        args: {
+    const heartbeat = mutation
+        .input({
             data: v.optional(v.record(v.string(), v.any())),
             roomId: v.string(),
             sessionId: v.string(),
-        },
-        handler: async (context: MutationContext, args): Promise<{ lastSeen: number }> => {
+        })
+        .mutation(async ({ args, ctx: context }): Promise<{ lastSeen: number }> => {
             const lastSeen = Date.now();
             const userId = context.auth.userId ?? undefined;
 
@@ -239,61 +243,54 @@ const definePresence = (options: DefinePresenceOptions = {}): PresenceComponent 
             await (existing ? context.db.patch(existing["_id"] as never, row) : context.db.insert(PRESENCE_TABLE, row));
 
             return { lastSeen };
-        },
+        });
+
+    const listPresent = query.input({ roomId: v.string() }).query(async ({ args, ctx: context }): Promise<PresenceMember[]> => {
+        const cutoff = Date.now() - ttlMs;
+
+        const rows = await context.db
+            .query(PRESENCE_TABLE)
+            .withIndex("byRoom", (q) => q.eq("roomId", args.roomId))
+            .collect();
+
+        return rows
+            .filter((row) => (row["lastSeen"] as number) > cutoff)
+            .map((row) => {
+                // `sessionId` is intentionally omitted from the public payload
+                // (see {@link PresenceMember}) so a subscriber can't enumerate
+                // other members' connection ids and target their rows.
+                const member: PresenceMember = {
+                    lastSeen: row["lastSeen"] as number,
+                    roomId: row["roomId"] as string,
+                };
+
+                if (row["userId"] !== undefined) {
+                    member.userId = row["userId"] as string;
+                }
+
+                if (row["data"] !== undefined) {
+                    member.data = row["data"] as Record<string, unknown>;
+                }
+
+                return member;
+            })
+            .toSorted((a, b) => b.lastSeen - a.lastSeen);
     });
 
-    const listPresent = query({
-        args: { roomId: v.string() },
-        handler: async (context: QueryContext, args): Promise<PresenceMember[]> => {
-            const cutoff = Date.now() - ttlMs;
+    const sweep = mutation.input({ roomId: v.string() }).mutation(async ({ args, ctx: context }): Promise<{ deleted: number }> => {
+        const cutoff = Date.now() - ttlMs;
 
-            const rows = await context.db
-                .query(PRESENCE_TABLE)
-                .withIndex("byRoom", (q) => q.eq("roomId", args.roomId))
-                .collect();
+        const stale = await context.db
+            .query(PRESENCE_TABLE)
+            .withIndex("byRoom", (q) => q.eq("roomId", args.roomId))
+            .filter((row) => (row["lastSeen"] as number) <= cutoff)
+            .collect();
 
-            return rows
-                .filter((row) => (row["lastSeen"] as number) > cutoff)
-                .map((row) => {
-                    // `sessionId` is intentionally omitted from the public payload
-                    // (see {@link PresenceMember}) so a subscriber can't enumerate
-                    // other members' connection ids and target their rows.
-                    const member: PresenceMember = {
-                        lastSeen: row["lastSeen"] as number,
-                        roomId: row["roomId"] as string,
-                    };
+        // These deletes share the mutation's snapshot and the stale set is
+        // small (one room's expired members); fire them together.
+        await Promise.all(stale.map((row) => context.db.delete(row["_id"] as never)));
 
-                    if (row["userId"] !== undefined) {
-                        member.userId = row["userId"] as string;
-                    }
-
-                    if (row["data"] !== undefined) {
-                        member.data = row["data"] as Record<string, unknown>;
-                    }
-
-                    return member;
-                })
-                .toSorted((a, b) => b.lastSeen - a.lastSeen);
-        },
-    });
-
-    const sweep = mutation({
-        args: { roomId: v.string() },
-        handler: async (context: MutationContext, args): Promise<{ deleted: number }> => {
-            const cutoff = Date.now() - ttlMs;
-
-            const stale = await context.db
-                .query(PRESENCE_TABLE)
-                .withIndex("byRoom", (q) => q.eq("roomId", args.roomId))
-                .filter((row) => (row["lastSeen"] as number) <= cutoff)
-                .collect();
-
-            // These deletes share the mutation's snapshot and the stale set is
-            // small (one room's expired members); fire them together.
-            await Promise.all(stale.map((row) => context.db.delete(row["_id"] as never)));
-
-            return { deleted: stale.length };
-        },
+        return { deleted: stale.length };
     });
 
     // `sweep` is server-only — stamp it internal so a client can't trigger bulk

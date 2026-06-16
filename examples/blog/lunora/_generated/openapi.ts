@@ -439,7 +439,7 @@ export const openApiSpec: Record<string, unknown> = {
         },
         "/_lunora/rpc#posts:requestImageUpload": {
             "post": {
-                "description": "Invoke the `mutation` `posts:requestImageUpload` over the Lunora RPC envelope (POST /_lunora/rpc).",
+                "description": "Invoke the `action` `posts:requestImageUpload` over the Lunora RPC envelope (POST /_lunora/rpc).",
                 "operationId": "posts:requestImageUpload",
                 "requestBody": {
                     "content": {
@@ -492,11 +492,11 @@ export const openApiSpec: Record<string, unknown> = {
                         "$ref": "#/components/responses/LunoraError"
                     }
                 },
-                "summary": "mutation: posts:requestImageUpload",
+                "summary": "action: posts:requestImageUpload",
                 "tags": [
                     "posts"
                 ],
-                "x-lunora-function-kind": "mutation"
+                "x-lunora-function-kind": "action"
             }
         },
         "/_lunora/rpc#posts:search": {

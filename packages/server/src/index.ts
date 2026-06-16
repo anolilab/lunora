@@ -21,8 +21,6 @@ export type { LunoraErrorCode } from "./error";
 export { LunoraError } from "./error";
 export type { FacadeEntry, FacadeWriterLike, OrmLike } from "./facade";
 export { bindOrm, bindTableFacade } from "./facade";
-export type { ActionDefinition, MutationDefinition, QueryDefinition } from "./functions";
-export { action, internalAction, internalMutation, internalQuery, mutation, query } from "./functions";
 export type {
     HttpActionCtx,
     HttpActionHandler,

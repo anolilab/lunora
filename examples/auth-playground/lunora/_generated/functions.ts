@@ -35,6 +35,17 @@ export const LUNORA_FUNCTIONS: Record<string, RegisteredLunoraFunction> = {
 };
 
 /**
+ * Connection-lifecycle manifest: the function paths the generated ShardDO
+ * dispatches when a client's WebSocket connects (`connect`) or disconnects
+ * (`disconnect`). Each path also resolves through {@link LUNORA_FUNCTIONS}; the
+ * DO runs every hook under the socket's verified identity via system dispatch.
+ */
+export const LUNORA_LIFECYCLE_HOOKS: { connect: readonly string[]; disconnect: readonly string[] } = {
+    connect: [],
+    disconnect: [],
+};
+
+/**
  * Resolve and invoke a registered function from an external caller. Throws a
  * LunoraError-shaped object (404) when the path is unknown — the runtime's
  * structural error mapper turns that into the right HTTP status. Internal

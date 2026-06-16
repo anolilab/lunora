@@ -1,7 +1,9 @@
-import { defineSchema, defineTable, internalMutation, mutation, query, v } from "@lunora/server";
+import { defineSchema, defineTable, initLunora, v } from "@lunora/server";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { lunoraTest } from "../src/index";
+
+const { internalMutation, mutation, query } = initLunora.dataModel().create();
 
 const schema = defineSchema({
     messages: defineTable({
@@ -10,37 +12,25 @@ const schema = defineSchema({
     }),
 });
 
-const send = mutation({
-    args: { author: v.string(), body: v.string() },
-    handler: async (ctx, args) => ctx.db.insert("messages", { author: args.author, body: args.body }),
-});
+const send = mutation
+    .input({ author: v.string(), body: v.string() })
+    .mutation(async ({ args, ctx }) => ctx.db.insert("messages", { author: args.author, body: args.body }));
 
-const list = query({
-    args: {},
-    handler: async (ctx) => ctx.db.query("messages").collect(),
-});
+const list = query.query(async ({ ctx }) => ctx.db.query("messages").collect());
 
-const whoAmI = query({
-    args: {},
-    handler: (ctx) => ctx.auth.userId,
-});
+const whoAmI = query.query(({ ctx }) => ctx.auth.userId);
 
-const scheduleSomething = mutation({
-    args: {},
-    handler: async (ctx) => ctx.scheduler.runAfter(1000, "noop:fn", {}),
-});
+const scheduleSomething = mutation.mutation(async ({ ctx }) => ctx.scheduler.runAfter(1000, "noop:fn", {}));
 
-const internalSend = internalMutation({
-    args: { author: v.string(), body: v.string() },
-    handler: async (ctx, args) => ctx.db.insert("messages", { author: args.author, body: args.body }),
-});
+const internalSend = internalMutation
+    .input({ author: v.string(), body: v.string() })
+    .mutation(async ({ args, ctx }) => ctx.db.insert("messages", { author: args.author, body: args.body }));
 
 // A public mutation that routes through ctx.runMutation to the internal one,
 // modelling prod's trusted system dispatch (where internals are reachable).
-const sendViaInternal = mutation({
-    args: { author: v.string(), body: v.string() },
-    handler: async (ctx, args) => ctx.runMutation(internalSend, { author: args.author, body: args.body }),
-});
+const sendViaInternal = mutation
+    .input({ author: v.string(), body: v.string() })
+    .mutation(async ({ args, ctx }) => ctx.runMutation(internalSend, { author: args.author, body: args.body }));
 
 // Track every harness so each test's in-memory SQLite handle is closed in
 // afterEach — exercising the harness `close()` API and leaking no native handles.

@@ -41,17 +41,16 @@ export default createTemplate({
  * you need to call third-party APIs or run non-deterministic logic. To
  * read or write data, call \`ctx.runQuery\` / \`ctx.runMutation\`.
  */
-export const ${camel} = action({
-    args: {
+export const ${camel} = action
+    .input({
         // Add your argument validators here:
-    },
-    handler: async (ctx, args) => {
+    })
+    .action(async ({ ctx, args }) => {
         // ctx.runQuery(api.<file>.<query>, { ... })
         // ctx.runMutation(api.<file>.<mutation>, { ... })
         // ctx.auth, ctx.scheduler, ctx.storage
         return { ok: true, args };
-    },
-});
+    });
 `,
                 },
             },

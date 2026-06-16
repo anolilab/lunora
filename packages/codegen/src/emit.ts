@@ -1004,32 +1004,26 @@ ${workflows.map((workflow) => `    get(name: ${JSON.stringify(workflow.exportNam
     const workflowsOmit = hasWorkflows ? ` | "workflows"` : "";
     const workflowsContextField = hasWorkflows ? `\n    readonly workflows: LunoraWorkflows;` : "";
 
-    const server = `${GENERATED_HEADER}import {
-    action as actionBase,
-    internalAction as internalActionBase,
-    internalMutation as internalMutationBase,
-    internalQuery as internalQueryBase,
-    mutation as mutationBase,
-    query as queryBase,
-    v as vBase,
-} from "@lunora/server";
+    const server = `${GENERATED_HEADER}import { initLunora, v as vBase } from "@lunora/server";
 import type {
+    ActionBuilder,
     ActionCtx as ActionCtxBase,
-    ArgsValidator,
     ColumnValidator,
     DatabaseReader,
     DatabaseWriter,
-    InferArgs,
+    EmptyArgs,
+    InternalActionBuilder,
+    InternalMutationBuilder,
+    InternalQueryBuilder,
+    MutationBuilder,
     MutationCtx as MutationCtxBase,
+    QueryBuilder,
     QueryCtx as QueryCtxBase,
     ReadOnlyStorage,
-    RegisteredAction,
-    RegisteredMutation,
-    RegisteredQuery,
     Storage as StorageBase,
 } from "@lunora/server";
 
-import type { DatabaseReaderFacade, DatabaseWriterFacade, Id as IdOfTable, OrmReader, OrmWriter, TableName } from "./dataModel.js";
+import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Id as IdOfTable, OrmReader, OrmWriter, TableName } from "./dataModel.js";
 ${aiTypeImport}${paymentsTypeImport}${containersTypeImport}${workflowsTypeImport}
 export type { DataModel, Doc, Id, TableName } from "./dataModel.js";
 
@@ -1061,41 +1055,32 @@ export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"${workflo
     readonly storage: StorageBase<StorageBucketName>;${aiActionField}${paymentsActionField}${containersActionField}${kvContextField}${hyperdriveActionField}${browserActionField}${imagesActionField}${analyticsContextField}${pipelinesActionField}${workflowsContextField}
 }
 
-/** \`query()\` bound to this project's typed {@link QueryCtx}. */
-export const query = queryBase as unknown as <A extends ArgsValidator, R>(definition: {
-    args: A;
-    handler: (context: QueryCtx, args: InferArgs<A>) => Promise<R> | R;
-}) => RegisteredQuery<A, R>;
+/**
+ * Procedure builders bound to this project's typed contexts. Chain
+ * \`.input({...})\` to declare args, \`.use(middleware)\` for rate limiting / RLS /
+ * masking (each middleware may refine \`ctx\`), then the terminal
+ * \`.query()\` / \`.mutation()\` / \`.action()\` with a \`({ ctx, args }) => ...\`
+ * handler. \`.output(validator)\` and (queries) \`.stream()\` are also available.
+ */
+const lunoraBuilders = initLunora.dataModel<DataModel>().create();
 
-/** \`mutation()\` bound to this project's typed {@link MutationCtx}. */
-export const mutation = mutationBase as unknown as <A extends ArgsValidator, R>(definition: {
-    args: A;
-    handler: (context: MutationCtx, args: InferArgs<A>) => Promise<R> | R;
-}) => RegisteredMutation<A, R>;
+/** \`query\` builder bound to this project's typed {@link QueryCtx}. */
+export const query = lunoraBuilders.query as unknown as QueryBuilder<QueryCtx, EmptyArgs>;
 
-/** \`action()\` bound to this project's typed {@link ActionCtx}. */
-export const action = actionBase as unknown as <A extends ArgsValidator, R>(definition: {
-    args: A;
-    handler: (context: ActionCtx, args: InferArgs<A>) => Promise<R> | R;
-}) => RegisteredAction<A, R>;
+/** \`mutation\` builder bound to this project's typed {@link MutationCtx}. */
+export const mutation = lunoraBuilders.mutation as unknown as MutationBuilder<MutationCtx, EmptyArgs>;
 
-/** \`internalQuery()\` bound to this project's typed {@link QueryCtx} — never exposed on \`api\`. */
-export const internalQuery = internalQueryBase as unknown as <A extends ArgsValidator, R>(definition: {
-    args: A;
-    handler: (context: QueryCtx, args: InferArgs<A>) => Promise<R> | R;
-}) => RegisteredQuery<A, R>;
+/** \`action\` builder bound to this project's typed {@link ActionCtx}. */
+export const action = lunoraBuilders.action as unknown as ActionBuilder<ActionCtx, EmptyArgs>;
 
-/** \`internalMutation()\` bound to this project's typed {@link MutationCtx} — never exposed on \`api\`. */
-export const internalMutation = internalMutationBase as unknown as <A extends ArgsValidator, R>(definition: {
-    args: A;
-    handler: (context: MutationCtx, args: InferArgs<A>) => Promise<R> | R;
-}) => RegisteredMutation<A, R>;
+/** \`internalQuery\` builder bound to this project's typed {@link QueryCtx} — never exposed on \`api\`. */
+export const internalQuery = lunoraBuilders.internalQuery as unknown as InternalQueryBuilder<QueryCtx, EmptyArgs>;
 
-/** \`internalAction()\` bound to this project's typed {@link ActionCtx} — never exposed on \`api\`. */
-export const internalAction = internalActionBase as unknown as <A extends ArgsValidator, R>(definition: {
-    args: A;
-    handler: (context: ActionCtx, args: InferArgs<A>) => Promise<R> | R;
-}) => RegisteredAction<A, R>;
+/** \`internalMutation\` builder bound to this project's typed {@link MutationCtx} — never exposed on \`api\`. */
+export const internalMutation = lunoraBuilders.internalMutation as unknown as InternalMutationBuilder<MutationCtx, EmptyArgs>;
+
+/** \`internalAction\` builder bound to this project's typed {@link ActionCtx} — never exposed on \`api\`. */
+export const internalAction = lunoraBuilders.internalAction as unknown as InternalActionBuilder<ActionCtx, EmptyArgs>;
 
 /**
  * The validator builder \`v\`, with \`v.id(...)\` constrained to THIS schema's

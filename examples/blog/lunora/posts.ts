@@ -1,7 +1,6 @@
-import type { Id } from "@lunora/server";
-import { mutation, query, v } from "@lunora/server";
-
 import { embedText } from "./embed.js";
+import type { Id } from "./_generated/server.js";
+import { action, mutation, query, v } from "./_generated/server.js";
 
 interface PostDoc {
     _id: Id<"posts">;
@@ -15,19 +14,15 @@ interface PostDoc {
 /**
  * Public feed — list every post, newest first. Open to anonymous readers.
  */
-export const list = query({
-    args: {},
-    handler: async (ctx): Promise<PostDoc[]> => {
-        const rows = (await ctx.db.query("posts").withIndex("by_published").collect()) as unknown as PostDoc[];
+export const list = query.query(async ({ ctx }): Promise<PostDoc[]> => {
+    const rows = (await ctx.db.query("posts").withIndex("by_published").collect()) as unknown as PostDoc[];
 
-        return [...rows].sort((a, b) => b.publishedAt - a.publishedAt);
-    },
+    return [...rows].sort((a, b) => b.publishedAt - a.publishedAt);
 });
 
-export const get = query({
-    args: { id: v.id("posts") },
-    handler: async (ctx, { id }): Promise<PostDoc | null> => ((await ctx.db.get(id)) as PostDoc | null) ?? null,
-});
+export const get = query
+    .input({ id: v.id("posts") })
+    .query(async ({ args: { id }, ctx }): Promise<PostDoc | null> => ((await ctx.db.get(id)) as PostDoc | null) ?? null);
 
 /**
  * Semantic search over post bodies. `.vectorize("body", …)` keeps the
@@ -35,9 +30,9 @@ export const get = query({
  * text and ask `ctx.vectors` for the nearest posts. `title` rides along as
  * Vectorize metadata, so a result preview needs no extra DB read.
  */
-export const search = query({
-    args: { text: v.string(), topK: v.optional(v.number()) },
-    handler: async (ctx, { text, topK }): Promise<Array<{ id: Id<"posts">; score: number; title: string }>> => {
+export const search = query
+    .input({ text: v.string(), topK: v.optional(v.number()) })
+    .query(async ({ args: { text, topK }, ctx }): Promise<Array<{ id: Id<"posts">; score: number; title: string }>> => {
         // Bound user-supplied inputs: clamp `topK` to a sane ceiling and cap the
         // query text length so a caller can't ask for unbounded work.
         const boundedTopK = Math.min(Math.max(topK ?? 5, 1), 50);
@@ -49,8 +44,7 @@ export const search = query({
             score: match.score,
             title: String(match.metadata?.title ?? ""),
         }));
-    },
-});
+    });
 
 /**
  * Image content types we hand out signed upload URLs for. Keeping this explicit
@@ -64,9 +58,9 @@ const ALLOWED_IMAGE_TYPES = new Set(["image/avif", "image/gif", "image/jpeg", "i
  * an authenticated session, exactly like `publish`, so uploads are always bound
  * to a real user and the client-supplied content type is on the allowlist.
  */
-export const requestImageUpload = mutation({
-    args: { contentType: v.string() },
-    handler: async (ctx, { contentType }): Promise<{ key: string; url: string }> => {
+export const requestImageUpload = action
+    .input({ contentType: v.string() })
+    .action(async ({ args: { contentType }, ctx }): Promise<{ key: string; url: string }> => {
         if (!ctx.auth.userId) {
             throw new Error("not signed in");
         }
@@ -75,20 +69,21 @@ export const requestImageUpload = mutation({
             throw new Error(`unsupported content type: ${contentType}`);
         }
 
+        // Minting a PUT upload URL is a write-side storage capability, so this is
+        // an `action` (queries/mutations only get the read-only storage surface).
         const key = `posts/${ctx.auth.userId}/${crypto.randomUUID()}`;
-        const url = await ctx.storage.getSignedUrl(key, { contentType, expiresInSeconds: 60, method: "PUT" });
+        const url = await ctx.storage.generateUploadUrl(key, { contentType, expiresInSeconds: 60 });
 
         return { key, url };
-    },
-});
+    });
 
 /**
  * Publish a post. Requires an authenticated session — `ctx.auth.userId` is
  * resolved from the `@lunora/auth` cookie/token by the runtime.
  */
-export const publish = mutation({
-    args: { title: v.string(), body: v.string(), imageKey: v.optional(v.string()) },
-    handler: async (ctx, { title, body, imageKey }): Promise<Id<"posts">> => {
+export const publish = mutation
+    .input({ title: v.string(), body: v.string(), imageKey: v.optional(v.string()) })
+    .mutation(async ({ args: { title, body, imageKey }, ctx }): Promise<Id<"posts">> => {
         if (!ctx.auth.userId) {
             throw new Error("not signed in");
         }
@@ -100,5 +95,4 @@ export const publish = mutation({
             publishedAt: Date.now(),
             title,
         });
-    },
-});
+    });

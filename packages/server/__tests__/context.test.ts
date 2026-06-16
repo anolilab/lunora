@@ -1,7 +1,9 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 
 import type { MutationCtx as MutationContext, QueryCtx as QueryContext, ReadOnlyStorage, Storage } from "../src/index";
-import { query, v } from "../src/index";
+import { initLunora, v } from "../src/index";
+
+const { query } = initLunora.dataModel().create();
 
 /**
  * Asserts at compile time that `Lhs` and `Rhs` are mutually assignable.
@@ -78,13 +80,11 @@ describe("queryCtx.storage / MutationCtx.storage", () => {
             getUrl: (key) => `https://cdn.example.com/${key}`,
         };
 
-        const getAvatar = query({
-            args: { userId: v.id("users") },
-            handler: async (context, { userId }): Promise<{ url: string }> => {
-                const url = await context.storage.getSignedUrl(`avatars/${userId}/profile`, { expiresInSeconds: 300 });
+        const getAvatar = query.input({ userId: v.id("users") }).query(async ({ args: { userId }, ctx }): Promise<{ url: string }> => {
+            const context = ctx;
+            const url = await context.storage.getSignedUrl(`avatars/${userId}/profile`, { expiresInSeconds: 300 });
 
-                return { url };
-            },
+            return { url };
         });
 
         const context = {

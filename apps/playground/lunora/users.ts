@@ -7,13 +7,10 @@ import { query } from "./_generated/server.js";
  * read hits D1; the client mirrors it into a TanStack DB collection and joins it
  * against `messages` to render author names instead of raw ids.
  */
-export const list = query({
-    args: {},
-    handler: async (context): Promise<Pick<Doc<"users">, "_id" | "name">[]> => {
-        const { page } = await context.db.users.findMany();
+export const list = query.query(async ({ ctx }): Promise<Pick<Doc<"users">, "_id" | "name">[]> => {
+    const { page } = await ctx.db.users.findMany();
 
-        return page.map((user) => {
-            return { _id: user._id, name: user.name };
-        });
-    },
+    return page.map((user) => {
+        return { _id: user._id, name: user.name };
+    });
 });

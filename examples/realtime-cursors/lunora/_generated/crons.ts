@@ -2,13 +2,17 @@
 // Run `lunora codegen` to regenerate.
 
 /**
- * One scheduled cron invocation. `functionPath` is the `namespace:fn`
- * dispatch ref (matches `__lunoraRef`); `args` are forwarded verbatim.
+ * One scheduled cron invocation. Exactly one target is set: `functionPath` is
+ * the `namespace:fn` dispatch ref (matches `__lunoraRef`), invoked on the
+ * shard; `workflow` is a `WORKFLOW_*` binding name whose durable workflow is
+ * started fresh per fire. `args` are forwarded verbatim (a workflow's become
+ * its `params`).
  */
 export interface LunoraCronJob {
     args: Record<string, unknown>;
-    functionPath: string;
+    functionPath?: string;
     name: string;
+    workflow?: string;
 }
 
 /**

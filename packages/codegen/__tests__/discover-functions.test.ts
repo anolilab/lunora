@@ -417,6 +417,41 @@ describe("discoverFunctions", () => {
             expect(result[0]?.args.limit).toEqual({ kind: "number" });
         });
 
+        it("falls back to the import name when the builder brand can't resolve (uninstalled deps)", () => {
+            // Simulates a freshly-scaffolded project before `pnpm install`: the
+            // builder root is imported from the Lunora surface but its type
+            // doesn't resolve, so the `__lunoraProcedure` brand is absent.
+            // Discovery must still classify the terminal via the root import name.
+            expect.assertions(4);
+
+            writeFunction(
+                "messages.ts",
+                `import { internalMutation, mutation, query, v } from "./_generated/server";
+
+            export const list = query
+                .input({ channelId: v.id("channels") })
+                .query(() => null);
+
+            export const send = mutation
+                .input({ text: v.string() })
+                .mutation(() => null);
+
+            export const purge = internalMutation
+                .input({ before: v.number() })
+                .mutation(() => null);
+        `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const result = discoverFunctions(project, workdir);
+            const byName = new Map(result.map((f) => [f.exportName, f]));
+
+            expect(result).toHaveLength(3);
+            expect(byName.get("list")).toMatchObject({ kind: "query", visibility: "public" });
+            expect(byName.get("send")).toMatchObject({ kind: "mutation", visibility: "public" });
+            expect(byName.get("purge")).toMatchObject({ kind: "mutation", visibility: "internal" });
+        });
+
         it("merges .input() args across the chain — a later .input() wins on collision", () => {
             expect.assertions(1);
 

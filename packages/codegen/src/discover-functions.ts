@@ -119,6 +119,47 @@ const resolveCalleeKind = (identifier: Identifier): string | undefined => {
     return undefined;
 };
 
+/**
+ * Resolve a builder-terminal chain's root identifier (`query`/`mutation`/...) to
+ * its visibility, walking leftward through the `.input()` / `.use()` / `.output()`
+ * steps to the root and resolving it by import name via {@link resolveCalleeKind}.
+ * Returns `"public"` / `"internal"` for a Lunora builder root, or `undefined`
+ * when the chain doesn't root at one (so an unrelated `obj.query(...)` method call
+ * isn't mistaken for a registration). Import-name based, so it doesn't depend on
+ * the `@lunora/server` types being installed/resolvable.
+ */
+const resolveBuilderRootKind = (receiver: Node): "internal" | "public" | undefined => {
+    let current: Node = receiver;
+
+    // Each builder step (`x.input({...})`, `x.use(...)`, `x.output(...)`) is a
+    // CallExpression whose callee is a PropertyAccess; descend to its receiver.
+    while (Node.isCallExpression(current)) {
+        const inner = current.getExpression();
+
+        if (!Node.isPropertyAccessExpression(inner)) {
+            return undefined;
+        }
+
+        current = inner.getExpression();
+    }
+
+    if (!Node.isIdentifier(current)) {
+        return undefined;
+    }
+
+    const rootName = resolveCalleeKind(current);
+
+    if (rootName === undefined) {
+        return undefined;
+    }
+
+    if (FUNCTION_KINDS.has(rootName)) {
+        return "public";
+    }
+
+    return INTERNAL_FACTORIES[rootName] ? "internal" : undefined;
+};
+
 /** Inspect a `query({ args, handler })` call and pull out the args validator map. */
 const argsFromCall = (call: CallExpression): Record<string, ValidatorIR> => {
     const first = call.getArguments()[0];
@@ -532,14 +573,26 @@ const classifyProcedureCall = (call: CallExpression): ProcedureClassification | 
 
         const receiver = callee.getExpression();
 
-        if (!receiver.getType().getProperty("__lunoraProcedure")) {
-            return undefined;
+        // Fast path: the runtime `__lunoraProcedure` brand on the receiver's
+        // type. Internal builders also carry `__lunoraVisibility: "internal"`,
+        // so its mere presence marks the procedure internal. This works when the
+        // project's `@lunora/server` types resolve.
+        if (receiver.getType().getProperty("__lunoraProcedure")) {
+            return { kind: method, receiver, visibility: receiver.getType().getProperty("__lunoraVisibility") ? "internal" : "public" };
         }
 
-        // Internal builders carry an extra `__lunoraVisibility: "internal"`
-        // brand the public builders don't declare, so its mere presence marks
-        // the procedure internal.
-        return { kind: method, receiver, visibility: receiver.getType().getProperty("__lunoraVisibility") ? "internal" : "public" };
+        // Robust fallback: walk the builder chain (`.input()`/`.use()`/`.output()`)
+        // to its root identifier and resolve it by import name — exactly as the
+        // bare-factory path does. This keeps discovery working when dependency
+        // types aren't installed (e.g. a freshly-scaffolded project before
+        // `pnpm install`, where the `__lunoraProcedure` brand can't resolve).
+        const rootKind = resolveBuilderRootKind(receiver);
+
+        if (rootKind) {
+            return { kind: method, receiver, visibility: rootKind };
+        }
+
+        return undefined;
     }
 
     if (!Node.isIdentifier(callee)) {

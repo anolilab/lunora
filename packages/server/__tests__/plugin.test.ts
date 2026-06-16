@@ -2,9 +2,10 @@ import { v } from "@lunora/values";
 import { describe, expect, expectTypeOf, it } from "vitest";
 
 import { initLunora } from "../src/builder/index";
-import { mutation, query } from "../src/functions";
 import { composePluginMiddleware, defineComponent, definePlugin, defineSchemaExtension, installPlugins, mergeSchemaExtension } from "../src/plugin";
 import { defineSchema, defineTable, defineVectorIndex } from "../src/schema";
+
+const { mutation, query } = initLunora.dataModel().create();
 
 describe("defineSchemaExtension", () => {
     it("returns the key and tables", () => {
@@ -316,17 +317,11 @@ describe("defineComponent", () => {
             tables: { ratelimit_buckets: defineTable({ count: v.number(), key: v.string() }) },
         });
 
-        const check = query({
-            args: { key: v.string() },
-            handler: () => {
-                return { allowed: true };
-            },
+        const check = query.input({ key: v.string() }).query(() => {
+            return { allowed: true };
         });
 
-        const reset = mutation({
-            args: { key: v.string() },
-            handler: () => undefined,
-        });
+        const reset = mutation.input({ key: v.string() }).mutation(() => undefined);
 
         const component = defineComponent("ratelimit", {
             extension,
@@ -354,10 +349,7 @@ describe("defineComponent", () => {
 
         const component = defineComponent("api", {
             functions: {
-                ping: query({
-                    args: {},
-                    handler: () => "pong",
-                }),
+                ping: query.query(() => "pong"),
             },
         });
 

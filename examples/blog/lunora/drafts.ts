@@ -1,5 +1,5 @@
-import type { Id } from "@lunora/server";
-import { mutation, query, v } from "@lunora/server";
+import type { Id } from "./_generated/server.js";
+import { mutation, query, v } from "./_generated/server.js";
 
 interface DraftDoc {
     _id: Id<"drafts">;
@@ -12,17 +12,14 @@ interface DraftDoc {
 /**
  * List the signed-in user's autosaved drafts.
  */
-export const listMine = query({
-    args: {},
-    handler: async (ctx): Promise<DraftDoc[]> => {
-        if (!ctx.auth.userId) {
-            return [];
-        }
+export const listMine = query.query(async ({ ctx }): Promise<DraftDoc[]> => {
+    if (!ctx.auth.userId) {
+        return [];
+    }
 
-        const rows = (await ctx.db.query("drafts").withIndex("by_updated").collect()) as unknown as DraftDoc[];
+    const rows = (await ctx.db.query("drafts").withIndex("by_updated").collect()) as unknown as DraftDoc[];
 
-        return rows.filter((draft) => draft.authorId === (ctx.auth.userId as Id<"users">));
-    },
+    return rows.filter((draft) => draft.authorId === (ctx.auth.userId as Id<"users">));
 });
 
 /**
@@ -30,9 +27,9 @@ export const listMine = query({
  * users never lose work — the nightly cleanup job below sweeps anything
  * older than 30 days.
  */
-export const save = mutation({
-    args: { id: v.optional(v.id("drafts")), title: v.string(), body: v.string() },
-    handler: async (ctx, { id, title, body }): Promise<Id<"drafts">> => {
+export const save = mutation
+    .input({ id: v.optional(v.id("drafts")), title: v.string(), body: v.string() })
+    .mutation(async ({ args: { id, title, body }, ctx }): Promise<Id<"drafts">> => {
         if (!ctx.auth.userId) {
             throw new Error("not signed in");
         }
@@ -46,5 +43,4 @@ export const save = mutation({
         }
 
         return ctx.db.insert("drafts", { authorId: userId, title, body, updatedAt: Date.now() });
-    },
-});
+    });

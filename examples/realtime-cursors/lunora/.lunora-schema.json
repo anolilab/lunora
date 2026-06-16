@@ -1,0 +1,46 @@
+{
+    "migrationIds": [],
+    "tables": {
+        "cursors": {
+            "fields": {
+                "roomId": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "sessionId": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "name": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "color": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "x": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "y": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "lastSeen": {
+                    "kind": "number",
+                    "optional": false
+                }
+            },
+            "indexes": {
+                "by_room_session": {
+                    "fields": ["roomId", "sessionId"],
+                    "unique": true
+                }
+            },
+            "relations": {},
+            "shardMode": "shardBy:roomId"
+        }
+    },
+    "version": 1
+}

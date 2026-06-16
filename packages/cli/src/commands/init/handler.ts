@@ -112,21 +112,19 @@ export default defineSchema({
 `;
 
 /** Sample `lunora/messages.ts` (one query + one mutation) written alongside the schema. */
-const SAMPLE_FUNCTION = `import { mutation, query, v } from "@lunora/server";
+const SAMPLE_FUNCTION = `import { mutation, query, v } from "./_generated/server";
 
-export const list = query({
-    args: { channelId: v.id("channels"), limit: v.optional(v.number()) },
-    handler: async (_context, args) => {
+export const list = query
+    .input({ channelId: v.id("channels"), limit: v.optional(v.number()) })
+    .query(async ({ args }) => {
         return { channelId: args.channelId, limit: args.limit ?? 50, messages: [] };
-    },
-});
+    });
 
-export const send = mutation({
-    args: { channelId: v.id("channels"), text: v.string() },
-    handler: async (_context, args) => {
+export const send = mutation
+    .input({ channelId: v.id("channels"), text: v.string() })
+    .mutation(async ({ args }) => {
         return { channelId: args.channelId, text: args.text };
-    },
-});
+    });
 `;
 
 const DEFAULT_SOURCE_BASE = "gh:anolilab/lunora/templates";

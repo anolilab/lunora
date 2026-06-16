@@ -29,6 +29,17 @@ export default defineSchema({
         to: v.array(v.string()),
     }).index("by_received", ["receivedAt"]),
 
+    // Backing table for `@lunora/ratelimit`'s `createDbStore` — one row per
+    // `(limit, key)` bucket, looked up by the opaque storage key. Written only by
+    // the rate-limit middleware (via `ctx.db`), never by a hand-written mutation,
+    // so the `table_without_insert` advisory is expected here.
+    rateLimits: defineTable({
+        key: v.string(),
+        prev: v.optional(v.number()),
+        ts: v.number(),
+        value: v.number(),
+    }).index("by_key", ["key"]),
+
     messages: defineTable({
         channelId: v.id("channels"),
         createdAt: v.number(),

@@ -44,18 +44,17 @@ export default createTemplate({
  * Run \`lunora codegen\` (or keep \`pnpm dev\` running) to regenerate the
  * typed API after you save this file.
  */
-export const ${camel} = query({
-    args: {
+export const ${camel} = query
+    .input({
         // Add your argument validators here:
         // limit: v.optional(v.number()),
-    },
-    handler: async (ctx, args) => {
+    })
+    .query(async ({ ctx, args }) => {
         // ctx.db: read-only database accessor
         // ctx.auth: optional caller identity
         // ctx.storage: read-only file storage
         return { ok: true, args };
-    },
-});
+    });
 `,
                 },
             },

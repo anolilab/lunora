@@ -1,23 +1,27 @@
+import type { RateLimitConfigMap } from "@lunora/ratelimit";
+import { createDbStore, rateLimit, RateLimiter } from "@lunora/ratelimit";
+
 // eslint-disable-next-line unicorn/prevent-abbreviations -- "Doc" is the generated dataModel type name; aliasing it breaks codegen
 import type { Doc } from "./_generated/dataModel.js";
 import type { Id } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
+
+// Named-limit config map. DB-backed (createDbStore) so the bucket is durable on
+// the channel shard DO — 30 sends per minute per user.
+const limits: RateLimitConfigMap = { send: { kind: "token bucket", period: 60_000, rate: 30 } };
 
 /**
  * List recent messages for a channel. The `shardBy("channelId")` on the
  * schema means the runtime routes this query to exactly the channel's DO —
  * no fan-out, full real-time subscriptions.
  */
-export const list = query({
-    args: { channelId: v.id("channels"), limit: v.optional(v.number()) },
-    handler: async (context, { channelId, limit }): Promise<Doc<"messages">[]> => {
-        const rows = await context.db
-            .query("messages")
-            .withIndex("by_channel_created", (q) => q.eq("channelId", channelId))
-            .take(limit ?? 50);
+export const list = query.input({ channelId: v.id("channels"), limit: v.optional(v.number()) }).query(async ({ args, ctx }): Promise<Doc<"messages">[]> => {
+    const rows = await ctx.db
+        .query("messages")
+        .withIndex("by_channel_created", (q) => q.eq("channelId", args.channelId))
+        .take(args.limit ?? 50);
 
-        return rows as unknown as Doc<"messages">[];
-    },
+    return rows as unknown as Doc<"messages">[];
 });
 
 /**
@@ -34,23 +38,32 @@ export const list = query({
  * mutation handler must be deterministic, so the caller stamps the timestamp
  * (the client's optimistic row, or the welcome workflow's step). Forwarding the
  * client's own value also makes the optimistic and persisted rows agree on it.
+ *
+ * `.use(rateLimit(...))` caps abusive senders before the write runs.
  */
-export const send = mutation({
-    args: {
+export const send = mutation
+    .input({
         channelId: v.id("channels"),
         createdAt: v.number(),
         id: v.optional(v.string().meta({ schema: { maxLength: 64 } })),
         text: v.string().meta({ schema: { maxLength: 4096 } }),
-    },
-    handler: async (context, { channelId, createdAt, id, text }): Promise<Id<"messages">> =>
-        context.db.insert(
+    })
+    .use(
+        rateLimit((ctx) => new RateLimiter({ config: limits, store: createDbStore({ db: ctx.db }) }), "send", {
+            key: (ctx) => ctx.auth.userId ?? "anonymous",
+        }),
+    )
+    .mutation(async ({ args, ctx }): Promise<Id<"messages">> => {
+        const { channelId, createdAt, id, text } = args;
+
+        return ctx.db.insert(
             "messages",
             {
                 channelId,
                 createdAt,
                 text,
-                userId: context.auth.userId ?? "anonymous",
+                userId: ctx.auth.userId ?? "anonymous",
             },
             id ? { clientId: id } : undefined,
-        ),
-});
+        );
+    });

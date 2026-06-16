@@ -40,19 +40,18 @@ export default createTemplate({
  * Replace the args validators and the handler body with your own logic.
  * Mutations run in a transactional context; throw to abort.
  */
-export const ${camel} = mutation({
-    args: {
+export const ${camel} = mutation
+    .input({
         // Add your argument validators here:
         // text: v.string(),
-    },
-    handler: async (ctx, args) => {
+    })
+    .mutation(async ({ ctx, args }) => {
         // ctx.db: read+write database accessor
         // ctx.auth: optional caller identity
         // ctx.scheduler: schedule follow-up work
         // ctx.storage: read-only file storage
         return { ok: true, args };
-    },
-});
+    });
 `,
                 },
             },

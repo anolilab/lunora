@@ -18,7 +18,7 @@ export interface ApiTypes {
         get: FunctionReference<"query", { id: Id<"posts"> }, null | { _id: Id<"posts">; authorId: Id<"users">; body: string; imageKey?: string; publishedAt: number; title: string }>;
         list: FunctionReference<"query", {}, { _id: Id<"posts">; authorId: Id<"users">; body: string; imageKey?: string; publishedAt: number; title: string }[]>;
         publish: FunctionReference<"mutation", { title: string; body: string; imageKey?: string }, Id<"posts">>;
-        requestImageUpload: FunctionReference<"mutation", { contentType: string }, { key: string; url: string; }>;
+        requestImageUpload: FunctionReference<"action", { contentType: string }, { key: string; url: string; }>;
         search: FunctionReference<"query", { text: string; topK?: number }, { id: Id<"posts">; score: number; title: string; }[]>;
     };
 }

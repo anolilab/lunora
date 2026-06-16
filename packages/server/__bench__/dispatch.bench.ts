@@ -1,7 +1,9 @@
 import { bench, describe } from "vitest";
 
 import type { Id } from "../src/index";
-import { mutation, query, v } from "../src/index";
+import { initLunora, v } from "../src/index";
+
+const { mutation, query } = initLunora.dataModel().create();
 
 /**
  * `query()`/`mutation()`/`action()` wrap the user's handler with the args
@@ -11,28 +13,21 @@ import { mutation, query, v } from "../src/index";
  * visible if either regresses.
  */
 
-const emptyArgsQuery = query({
-    args: {},
-    handler: () => 42,
-});
+const emptyArgsQuery = query.query(() => 42);
 
-const smallArgsQuery = query({
-    args: { id: v.id("users") },
-    handler: (_context, args) => args.id,
-});
+const smallArgsQuery = query.input({ id: v.id("users") }).query(({ args }) => args.id);
 
-const messageMutation = mutation({
-    args: {
+const messageMutation = mutation
+    .input({
         channelId: v.id("channels"),
         kind: v.union(v.literal("text"), v.literal("image")),
         tags: v.optional(v.array(v.string())),
         text: v.string(),
-    },
-    handler: (_context, args) => args,
-});
+    })
+    .mutation(({ args }) => args);
 
-const heavyMutation = mutation({
-    args: {
+const heavyMutation = mutation
+    .input({
         metadata: v.record(v.string(), v.string()),
         notes: v.optional(v.string()),
         user: v.object({
@@ -42,9 +37,8 @@ const heavyMutation = mutation({
             name: v.string(),
             roles: v.array(v.union(v.literal("admin"), v.literal("user"))),
         }),
-    },
-    handler: (_context, args) => args,
-});
+    })
+    .mutation(({ args }) => args);
 
 const sampleContext = {};
 

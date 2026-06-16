@@ -1,5 +1,5 @@
-import type { Id } from "@lunora/server";
-import { mutation, query, v } from "@lunora/server";
+import type { Id } from "./_generated/server.js";
+import { mutation, query, v } from "./_generated/server.js";
 
 interface TodoDoc {
     _id: Id<"todos">;
@@ -12,30 +12,20 @@ interface TodoDoc {
  * List todos newest-first. Subscribers receive deltas the moment any of
  * `add` / `toggle` / `remove` mutate the table.
  */
-export const list = query({
-    args: {},
-    handler: async (ctx): Promise<TodoDoc[]> => {
-        const rows = (await ctx.db.query("todos").withIndex("by_creation").collect()) as unknown as TodoDoc[];
+export const list = query.query(async ({ ctx }): Promise<TodoDoc[]> => {
+    const rows = (await ctx.db.query("todos").withIndex("by_creation").collect()) as unknown as TodoDoc[];
 
-        return [...rows].sort((a, b) => b.createdAt - a.createdAt);
-    },
+    return [...rows].sort((a, b) => b.createdAt - a.createdAt);
 });
 
-export const add = mutation({
-    args: { text: v.string() },
-    handler: async (ctx, { text }): Promise<Id<"todos">> => ctx.db.insert("todos", { text, done: false, createdAt: Date.now() }),
+export const add = mutation
+    .input({ text: v.string() })
+    .mutation(async ({ args: { text }, ctx }): Promise<Id<"todos">> => ctx.db.insert("todos", { text, done: false, createdAt: Date.now() }));
+
+export const toggle = mutation.input({ id: v.id("todos"), done: v.boolean() }).mutation(async ({ args: { id, done }, ctx }): Promise<void> => {
+    await ctx.db.patch(id, { done });
 });
 
-export const toggle = mutation({
-    args: { id: v.id("todos"), done: v.boolean() },
-    handler: async (ctx, { id, done }): Promise<void> => {
-        await ctx.db.patch(id, { done });
-    },
-});
-
-export const remove = mutation({
-    args: { id: v.id("todos") },
-    handler: async (ctx, { id }): Promise<void> => {
-        await ctx.db.delete(id);
-    },
+export const remove = mutation.input({ id: v.id("todos") }).mutation(async ({ args: { id }, ctx }): Promise<void> => {
+    await ctx.db.delete(id);
 });

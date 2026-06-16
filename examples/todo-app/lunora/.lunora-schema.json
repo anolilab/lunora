@@ -1,0 +1,30 @@
+{
+    "migrationIds": [],
+    "tables": {
+        "todos": {
+            "fields": {
+                "text": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "done": {
+                    "kind": "boolean",
+                    "optional": false
+                },
+                "createdAt": {
+                    "kind": "number",
+                    "optional": false
+                }
+            },
+            "indexes": {
+                "by_creation": {
+                    "fields": ["createdAt"],
+                    "unique": false
+                }
+            },
+            "relations": {},
+            "shardMode": "root"
+        }
+    },
+    "version": 1
+}

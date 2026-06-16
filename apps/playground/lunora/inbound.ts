@@ -1,7 +1,13 @@
+import type { RateLimitConfigMap } from "@lunora/ratelimit";
+import { createDbStore, rateLimit, RateLimiter } from "@lunora/ratelimit";
+
 // eslint-disable-next-line unicorn/prevent-abbreviations -- "Doc" is the generated dataModel type name; aliasing it breaks codegen
 import type { Doc } from "./_generated/dataModel.js";
 import type { Id } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";
+
+// A global cap (no per-key bucket) on inbound-email ingestion — 100/minute.
+const limits: RateLimitConfigMap = { onEmail: { kind: "fixed window", period: 60_000, rate: 100 } };
 
 /**
  * Persist an inbound email into the `inbox` table.
@@ -20,36 +26,36 @@ import { mutation, query, v } from "./_generated/server.js";
  * mutation handler must be deterministic, so the worker entry's `resolveArgs`
  * stamps the receive time (the correct place for the ambient clock call).
  */
-export const onEmail = mutation({
-    args: {
+export const onEmail = mutation
+    .input({
         from: v.string().meta({ schema: { maxLength: 320 } }),
         messageId: v.optional(v.string().meta({ schema: { maxLength: 256 } })),
         receivedAt: v.number(),
         subject: v.optional(v.string().meta({ schema: { maxLength: 512 } })),
         text: v.optional(v.string().meta({ schema: { maxLength: 100_000 } })),
         to: v.array(v.string().meta({ schema: { maxLength: 320 } })),
-    },
-    handler: async (context, { from, messageId, receivedAt, subject, text, to }): Promise<Id<"inbox">> =>
-        context.db.insert("inbox", {
+    })
+    .use(rateLimit((ctx) => new RateLimiter({ config: limits, store: createDbStore({ db: ctx.db }) }), "onEmail"))
+    .mutation(async ({ args, ctx }): Promise<Id<"inbox">> => {
+        const { from, messageId, receivedAt, subject, text, to } = args;
+
+        return ctx.db.insert("inbox", {
             body: text ?? "",
             from,
             messageId: messageId ?? "",
             receivedAt,
             subject: subject ?? "",
             to,
-        }),
-});
+        });
+    });
 
 /** Most-recently-received inbox messages, newest first via the `by_received` index. */
-export const list = query({
-    args: { limit: v.optional(v.number()) },
-    handler: async (context, { limit }): Promise<Doc<"inbox">[]> => {
-        const rows = await context.db
-            .query("inbox")
-            .withIndex("by_received")
-            .order("desc")
-            .take(limit ?? 50);
+export const list = query.input({ limit: v.optional(v.number()) }).query(async ({ args, ctx }): Promise<Doc<"inbox">[]> => {
+    const rows = await ctx.db
+        .query("inbox")
+        .withIndex("by_received")
+        .order("desc")
+        .take(args.limit ?? 50);
 
-        return rows as unknown as Doc<"inbox">[];
-    },
+    return rows as unknown as Doc<"inbox">[];
 });

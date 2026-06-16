@@ -1,0 +1,90 @@
+{
+    "migrationIds": [],
+    "tables": {
+        "drafts": {
+            "fields": {
+                "authorId": {
+                    "kind": "id",
+                    "optional": false
+                },
+                "title": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "body": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "updatedAt": {
+                    "kind": "number",
+                    "optional": false
+                }
+            },
+            "indexes": {
+                "by_updated": {
+                    "fields": ["updatedAt"],
+                    "unique": false
+                }
+            },
+            "relations": {},
+            "shardMode": "root"
+        },
+        "posts": {
+            "fields": {
+                "authorId": {
+                    "kind": "id",
+                    "optional": false
+                },
+                "title": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "body": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "imageKey": {
+                    "kind": "string",
+                    "optional": true
+                },
+                "publishedAt": {
+                    "kind": "number",
+                    "optional": false
+                }
+            },
+            "indexes": {
+                "by_published": {
+                    "fields": ["publishedAt"],
+                    "unique": false
+                }
+            },
+            "relations": {},
+            "shardMode": "root"
+        },
+        "users": {
+            "fields": {
+                "email": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "name": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "passwordHash": {
+                    "kind": "string",
+                    "optional": false
+                }
+            },
+            "indexes": {
+                "by_email": {
+                    "fields": ["email"],
+                    "unique": true
+                }
+            },
+            "relations": {},
+            "shardMode": "global"
+        }
+    },
+    "version": 1
+}

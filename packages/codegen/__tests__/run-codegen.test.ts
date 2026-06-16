@@ -296,25 +296,28 @@ export default crons;
         });
 
         it("emits server.ts with project-typed query/mutation/action wrappers", () => {
-            expect.assertions(17);
+            expect.assertions(14);
 
             const result = runCodegen({ projectRoot: workdir });
 
-            // The base factories are imported under `*Base` aliases and re-bound to
-            // the schema-typed contexts (rather than re-exported verbatim).
-            expect(result.generated.server).toContain("action as actionBase,");
-            expect(result.generated.server).toContain("mutation as mutationBase,");
-            expect(result.generated.server).toContain("query as queryBase,");
-            expect(result.generated.server).toContain('} from "@lunora/server";');
-            expect(result.generated.server).toContain("export const query = queryBase as unknown as");
-            expect(result.generated.server).toContain("export const mutation = mutationBase as unknown as");
-            expect(result.generated.server).toContain("export const action = actionBase as unknown as");
+            // The procedure builders come from `initLunora.dataModel<DataModel>().create()`
+            // and are re-bound to the schema-typed contexts via the exported builder types.
+            expect(result.generated.server).toContain('import { initLunora, v as vBase } from "@lunora/server";');
+            expect(result.generated.server).toContain("const lunoraBuilders = initLunora.dataModel<DataModel>().create();");
+            expect(result.generated.server).toContain("export const query = lunoraBuilders.query as unknown as QueryBuilder<QueryCtx, EmptyArgs>;");
+            expect(result.generated.server).toContain("export const mutation = lunoraBuilders.mutation as unknown as MutationBuilder<MutationCtx, EmptyArgs>;");
+            expect(result.generated.server).toContain("export const action = lunoraBuilders.action as unknown as ActionBuilder<ActionCtx, EmptyArgs>;");
 
-            // Internal factories are re-bound to typed contexts alongside the public ones.
-            expect(result.generated.server).toContain("internalQuery as internalQueryBase,");
-            expect(result.generated.server).toContain("export const internalQuery = internalQueryBase as unknown as");
-            expect(result.generated.server).toContain("export const internalMutation = internalMutationBase as unknown as");
-            expect(result.generated.server).toContain("export const internalAction = internalActionBase as unknown as");
+            // Internal builders are re-bound to typed contexts alongside the public ones.
+            expect(result.generated.server).toContain(
+                "export const internalQuery = lunoraBuilders.internalQuery as unknown as InternalQueryBuilder<QueryCtx, EmptyArgs>;",
+            );
+            expect(result.generated.server).toContain(
+                "export const internalMutation = lunoraBuilders.internalMutation as unknown as InternalMutationBuilder<MutationCtx, EmptyArgs>;",
+            );
+            expect(result.generated.server).toContain(
+                "export const internalAction = lunoraBuilders.internalAction as unknown as InternalActionBuilder<ActionCtx, EmptyArgs>;",
+            );
 
             // The typed contexts widen `db` to the generated per-table facade while
             // intersecting the legacy structural reader/writer for back-compat.
@@ -326,7 +329,7 @@ export default crons;
             // IdOfTable` + `TableName` back the typed `v.id(...)`.
             expect(result.generated.server).not.toContain("import * as lunora_");
             expect(result.generated.server).toContain(
-                'import type { DatabaseReaderFacade, DatabaseWriterFacade, Id as IdOfTable, OrmReader, OrmWriter, TableName } from "./dataModel.js"',
+                'import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Id as IdOfTable, OrmReader, OrmWriter, TableName } from "./dataModel.js"',
             );
             // The typed `v` whose `id(...)` autocompletes the schema's tables.
             // eslint-disable-next-line no-secrets/no-secrets -- generated TS type signature, not a credential
@@ -1634,10 +1637,10 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).not.toContain("import * as lunora_");
             expect(output).not.toContain("LUNORA_FUNCTIONS");
             expect(output).toContain("export const v = vBase as unknown as");
-            expect(output).toContain("export const mutation = mutationBase as unknown as");
+            expect(output).toContain("export const mutation = lunoraBuilders.mutation as unknown as");
             // The facade import stays minimal (ORM types are always pulled in).
             expect(output).toContain(
-                'import type { DatabaseReaderFacade, DatabaseWriterFacade, Id as IdOfTable, OrmReader, OrmWriter, TableName } from "./dataModel.js";',
+                'import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Id as IdOfTable, OrmReader, OrmWriter, TableName } from "./dataModel.js";',
             );
         });
     });
