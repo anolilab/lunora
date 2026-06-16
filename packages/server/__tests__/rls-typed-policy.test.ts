@@ -114,10 +114,10 @@ describe("createPolicyDsl — relation-aware typed definePolicy", () => {
     it("rejects a relation predicate naming a relation the table does not declare", () => {
         expect.assertions(0);
 
-        // @ts-expect-error — `posts` has no `editor` relation (only `author`).
         definePolicy({
             on: "read",
             table: "posts",
+            // @ts-expect-error — `posts` has no `editor` relation (only `author`).
             when: () => {
                 return { editor: { is: { name: "x" } } };
             },
