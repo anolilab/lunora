@@ -4,6 +4,12 @@
    two. Contains no `@import "tailwindcss"` or `@source` — those belong to each
    consumer's entry, which establishes the Tailwind context this file relies on.
 
+   Palette is aligned 1:1 with the reference dashboard theme (neutral base,
+   near-black primary, soft shadow scale, success/warning/info/error alert
+   tokens). The one deliberate deviation: `--sidebar` is a gentle gray (not the
+   reference's near-white) so the `variant="inset"` canvas reads as the soft gray
+   the reference screenshot floats its white panels on.
+
    `--font-sans` here is an asset-free system stack so the compiled library CSS
    links anywhere; the standalone app overrides it with Geist after importing. */
 @custom-variant dark (&:is(.dark *));
@@ -47,6 +53,14 @@
 
     --color-destructive: var(--destructive);
 
+    --color-success: var(--success);
+
+    --color-warning: var(--warning);
+
+    --color-info: var(--info);
+
+    --color-error: var(--error);
+
     --color-accent-foreground: var(--accent-foreground);
 
     --color-accent: var(--accent);
@@ -74,6 +88,22 @@
     --color-foreground: var(--foreground);
 
     --color-background: var(--background);
+
+    --shadow-2xs: var(--shadow-2xs);
+
+    --shadow-xs: var(--shadow-xs);
+
+    --shadow-sm: var(--shadow-sm);
+
+    --shadow: var(--shadow);
+
+    --shadow-md: var(--shadow-md);
+
+    --shadow-lg: var(--shadow-lg);
+
+    --shadow-xl: var(--shadow-xl);
+
+    --shadow-2xl: var(--shadow-2xl);
 
     --radius-sm: calc(var(--radius) * 0.6);
 
@@ -103,9 +133,10 @@
 
     --popover-foreground: oklch(0.141 0.005 285.823);
 
-    --primary: oklch(0.555 0.163 48.998);
+    /* Near-black primary — the dark pill button in the reference. */
+    --primary: oklch(0.21 0.006 285.885);
 
-    --primary-foreground: oklch(0.987 0.022 95.277);
+    --primary-foreground: oklch(0.985 0 0);
 
     --secondary: oklch(0.967 0.001 286.375);
 
@@ -127,80 +158,136 @@
 
     --ring: oklch(0.705 0.015 286.067);
 
-    --chart-1: oklch(0.879 0.169 91.605);
+    /* Monochrome chart ramp — the reference dashboard's bars are black/gray. */
+    --chart-1: oklch(0.21 0.006 285.885);
 
-    --chart-2: oklch(0.769 0.188 70.08);
+    --chart-2: oklch(0.45 0.004 286.32);
 
-    --chart-3: oklch(0.666 0.179 58.318);
+    --chart-3: oklch(0.6 0.003 286.32);
 
-    --chart-4: oklch(0.555 0.163 48.998);
+    --chart-4: oklch(0.72 0.003 286.32);
 
-    --chart-5: oklch(0.473 0.137 46.201);
+    --chart-5: oklch(0.84 0.002 286.32);
 
     --radius: 0.625rem;
 
-    --sidebar: oklch(0.985 0 0);
+    /* Gentle gray canvas the sidebar + inset panel float on (see header note). */
+    --sidebar: oklch(0.922 0.003 286.32);
 
-    --sidebar-foreground: oklch(0.141 0.005 285.823);
+    --sidebar-foreground: oklch(0.37 0.006 285.885);
 
-    --sidebar-primary: oklch(0.666 0.179 58.318);
+    --sidebar-primary: oklch(0.21 0.006 285.885);
 
-    --sidebar-primary-foreground: oklch(0.987 0.022 95.277);
+    --sidebar-primary-foreground: oklch(0.985 0 0);
 
-    --sidebar-accent: oklch(0.967 0.001 286.375);
+    /* The active nav item is a white pill on the gray canvas. */
+    --sidebar-accent: oklch(1 0 0);
 
     --sidebar-accent-foreground: oklch(0.21 0.006 285.885);
 
     --sidebar-border: oklch(0.92 0.004 286.32);
 
     --sidebar-ring: oklch(0.705 0.015 286.067);
+
+    --shadow-2xs: 0 1px 3px 0px hsl(0 0% 0% / 0.05);
+
+    --shadow-xs: 0 1px 3px 0px hsl(0 0% 0% / 0.05);
+
+    --shadow-sm: 0 1px 3px 0px hsl(0 0% 0% / 0.1), 0 1px 2px -1px hsl(0 0% 0% / 0.1);
+
+    --shadow: 0 1px 3px 0px hsl(0 0% 0% / 0.1), 0 1px 2px -1px hsl(0 0% 0% / 0.1);
+
+    --shadow-md: 0 1px 3px 0px hsl(0 0% 0% / 0.1), 0 2px 4px -1px hsl(0 0% 0% / 0.1);
+
+    --shadow-lg: 0 1px 3px 0px hsl(0 0% 0% / 0.1), 0 4px 6px -1px hsl(0 0% 0% / 0.1);
+
+    --shadow-xl: 0 1px 3px 0px hsl(0 0% 0% / 0.1), 0 8px 10px -1px hsl(0 0% 0% / 0.1);
+
+    --shadow-2xl: 0 1px 3px 0px hsl(0 0% 0% / 0.25);
+
+    /* Alert/status colours (reference theme) — drive the Badge success/warning variants. */
+    --error: oklch(0.704 0.191 22.216);
+
+    --success: oklch(0.5 0.16 162);
+
+    --info: oklch(0.55 0.18 241.16);
+
+    /* Slightly darkened so it reads as text on the soft warning tint (pending pill). */
+    --warning: oklch(0.62 0.16 64);
 }
 
-/* Retuned toward Supabase Studio: true-neutral grays (no zinc tint), layered
-   so sidebar < content < cards, with clearly visible borders. Amber primary
-   from the preset is kept. */
+/* Neutral dark theme aligned with the reference (inverted near-white primary,
+   layered surfaces). */
 .dark {
-    --background: oklch(0.225 0 0);
-    --foreground: oklch(0.96 0 0);
+    --background: oklch(0.141 0.005 285.823);
 
-    --card: oklch(0.265 0 0);
-    --card-foreground: oklch(0.96 0 0);
+    --foreground: oklch(0.985 0 0);
 
-    --popover: oklch(0.265 0 0);
-    --popover-foreground: oklch(0.96 0 0);
+    --card: oklch(0.21 0.006 285.885);
 
-    --primary: oklch(0.473 0.137 46.201);
-    --primary-foreground: oklch(0.987 0.022 95.277);
+    --card-foreground: oklch(0.985 0 0);
 
-    --secondary: oklch(0.3 0 0);
-    --secondary-foreground: oklch(0.96 0 0);
+    --popover: oklch(0.21 0.006 285.885);
 
-    --muted: oklch(0.28 0 0);
-    --muted-foreground: oklch(0.712 0 0);
+    --popover-foreground: oklch(0.985 0 0);
 
-    --accent: oklch(0.3 0 0);
-    --accent-foreground: oklch(0.96 0 0);
+    --primary: oklch(0.92 0.004 286.32);
+
+    --primary-foreground: oklch(0.21 0.006 285.885);
+
+    --secondary: oklch(0.274 0.006 286.033);
+
+    --secondary-foreground: oklch(0.985 0 0);
+
+    --muted: oklch(0.274 0.006 286.033);
+
+    --muted-foreground: oklch(0.705 0.015 286.067);
+
+    --accent: oklch(0.274 0.006 286.033);
+
+    --accent-foreground: oklch(0.985 0 0);
 
     --destructive: oklch(0.704 0.191 22.216);
 
-    --border: oklch(0.33 0 0);
-    --input: oklch(0.37 0 0);
-    --ring: oklch(0.55 0 0);
+    --border: oklch(1 0 0 / 10%);
 
-    --chart-1: oklch(0.879 0.169 91.605);
-    --chart-2: oklch(0.769 0.188 70.08);
-    --chart-3: oklch(0.666 0.179 58.318);
-    --chart-4: oklch(0.555 0.163 48.998);
-    --chart-5: oklch(0.473 0.137 46.201);
+    --input: oklch(1 0 0 / 15%);
 
-    --sidebar: oklch(0.185 0 0);
-    --sidebar-foreground: oklch(0.96 0 0);
-    --sidebar-primary: oklch(0.769 0.188 70.08);
-    --sidebar-primary-foreground: oklch(0.279 0.077 45.635);
-    --sidebar-accent: oklch(0.3 0 0);
-    --sidebar-accent-foreground: oklch(0.96 0 0);
-    --sidebar-border: oklch(0.33 0 0);
-    --sidebar-ring: oklch(0.55 0 0);
+    --ring: oklch(0.552 0.016 285.938);
+
+    --chart-1: oklch(0.985 0 0);
+
+    --chart-2: oklch(0.78 0.003 286.32);
+
+    --chart-3: oklch(0.62 0.004 286.32);
+
+    --chart-4: oklch(0.48 0.005 286.32);
+
+    --chart-5: oklch(0.36 0.006 286.32);
+
+    --sidebar: oklch(0.21 0.006 285.885);
+
+    --sidebar-foreground: oklch(0.985 0 0);
+
+    --sidebar-primary: oklch(0.985 0 0);
+
+    --sidebar-primary-foreground: oklch(0.21 0.006 285.885);
+
+    --sidebar-accent: oklch(0.274 0.006 286.033);
+
+    --sidebar-accent-foreground: oklch(0.985 0 0);
+
+    --sidebar-border: oklch(1 0 0 / 10%);
+
+    --sidebar-ring: oklch(0.552 0.016 285.938);
+
+    --error: oklch(0.704 0.191 22.216);
+
+    --success: oklch(0.696 0.17 162.48);
+
+    --info: oklch(0.62 0.18 241.16);
+
+    --warning: oklch(0.828 0.189 84.429);
 }
 
 @layer base {

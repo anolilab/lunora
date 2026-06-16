@@ -18,10 +18,12 @@
         "test": "vitest run --passWithNoTests"
     },
     "dependencies": {
-        "@lunora/studio": "workspace:*",
         "@fontsource-variable/geist": "catalog:ui",
+        "@lunora/studio": "workspace:*",
+        "motion": "catalog:frontend",
         "react": "catalog:frontend",
         "react-dom": "catalog:frontend",
+        "recharts": "catalog:frontend",
         "shadcn": "catalog:ui"
     },
     "devDependencies": {

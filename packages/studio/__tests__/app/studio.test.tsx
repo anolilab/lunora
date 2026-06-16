@@ -66,46 +66,34 @@ type KeysMatch<Keys extends string, Canonical extends string> = [Keys] extends [
 const STUDIO_FEATURES_KEY_GUARD: KeysMatch<keyof StudioFeaturesResult, (typeof STUDIO_FEATURE_KEYS)[number]> = true;
 
 describe("studio", () => {
-    it("shows a rail entry per domain and the active domain's sub-pages", async () => {
-        expect.assertions(12);
+    it("renders every domain's sub-pages at once in the grouped sidebar", async () => {
+        expect.assertions(4);
 
         render(renderStudio(createClient()));
 
-        // The two-zone shell renders inside the router's root route (resolved a
-        // tick after mount), so await the rail before the synchronous queries.
-        for (const group of ["home", "database", "functions", "auth", "storage", "reports", "advisors", "logs", "settings"]) {
-            // eslint-disable-next-line no-await-in-loop -- after the first resolves the rest are already present.
-            await expect(screen.findByTestId(`dash-rail-${group}`)).resolves.toBeDefined();
-        }
-
-        // The default domain (home) lists its sub-page in the secondary nav;
-        // sub-pages in other domains aren't rendered until their rail entry is selected.
-        expect(screen.getByTestId("dash-tab-home")).toBeDefined();
-        expect(screen.queryByTestId("dash-tab-data")).toBeNull();
-        expect(screen.queryByTestId("dash-tab-schedule")).toBeNull();
+        // The single grouped sidebar renders inside the router's root route
+        // (resolved a tick after mount) and lists every visible page directly —
+        // no rail to open first — so the home, database, and logs pages all show.
+        await expect(screen.findByTestId("dash-tab-home")).resolves.toBeDefined();
+        expect(screen.getByTestId("dash-tab-data")).toBeDefined();
+        expect(screen.getByTestId("dash-tab-schedule")).toBeDefined();
+        expect(screen.getByTestId("dash-tab-settings")).toBeDefined();
     });
 
-    it("renders the schedule panel via the client when its domain + sub-page are selected", async () => {
+    it("renders the schedule panel via the client when its sub-page is selected", async () => {
         expect.assertions(1);
 
-        render(renderStudio(createClient()));
-
-        // schedule lives in the "logs" domain — open the rail entry, then the sub-page.
-        fireEvent.click(await screen.findByTestId("dash-rail-logs"));
-        fireEvent.click(await screen.findByTestId("dash-tab-schedule"));
+        fireEvent.click(await renderAndFind("dash-tab-schedule"));
 
         const scheduledJobs = await screen.findByTestId("lunora-scheduled-jobs");
 
         expect(scheduledJobs).toBeDefined();
     });
 
-    it("renders the Security Advisor when the Advisors domain + Security sub-page are selected", async () => {
+    it("renders the Security Advisor when the Security sub-page is selected", async () => {
         expect.assertions(1);
 
-        render(renderStudio(createClient()));
-
-        fireEvent.click(await screen.findByTestId("dash-rail-advisors"));
-        fireEvent.click(await screen.findByTestId("dash-tab-security"));
+        fireEvent.click(await renderAndFind("dash-tab-security"));
 
         await expect(screen.findByTestId("lunora-security-advisor")).resolves.toBeDefined();
     });
@@ -113,48 +101,47 @@ describe("studio", () => {
     it("switches the active panel when a sub-page is clicked", async () => {
         expect.assertions(1);
 
-        render(renderStudio(createClient()));
-
-        fireEvent.click(await screen.findByTestId("dash-rail-database"));
-        fireEvent.click(await screen.findByTestId("dash-tab-migrations"));
+        fireEvent.click(await renderAndFind("dash-tab-migrations"));
 
         await screen.findByTestId("lunora-migrations");
 
         expect(screen.queryByTestId("lunora-home")).toBeNull();
     });
 
-    it("collapses and re-expands the secondary nav from the rail toggle", async () => {
+    it("collapses the sidebar to icons from the rail trigger", async () => {
         expect.assertions(2);
 
-        render(renderStudio(createClient()));
+        const { container } = render(renderStudio(createClient()));
 
-        const toggle = await screen.findByTestId("dash-rail-toggle");
-        const secondaryNav = screen.getByTestId("dash-tabs");
+        await screen.findByTestId("dash-tab-home");
+        const trigger = screen.getByRole("button", { name: /toggle sidebar/i });
 
-        fireEvent.click(toggle);
+        // The desktop sidebar carries its expanded/collapsed state on the container.
+        // eslint-disable-next-line testing-library/no-node-access -- the state lives as a data attribute on the sidebar shell, not on a queryable role.
+        const sidebar = container.querySelector('[data-slot="sidebar"][data-state]');
 
-        expect(secondaryNav.hasAttribute("hidden")).toBe(true);
+        expect(sidebar?.dataset.state).toBe("expanded");
 
-        fireEvent.click(toggle);
+        fireEvent.click(trigger);
 
-        expect(secondaryNav.hasAttribute("hidden")).toBe(false);
+        expect(sidebar?.dataset.state).toBe("collapsed");
     });
 
-    it("hides a domain's rail entry when its optional package is disabled", async () => {
+    it("hides a domain's pages when its optional package is disabled", async () => {
         expect.assertions(2);
 
         render(renderStudio(createClient({ storage: false })));
 
-        // Home is package-independent, so its rail entry is always present — await
-        // it first so the async feature fetch has resolved before we assert absence.
-        await screen.findByTestId("dash-rail-home");
+        // Home is package-independent, so its page is always present — await it
+        // first so the async feature fetch has resolved before we assert absence.
+        await screen.findByTestId("dash-tab-home");
 
         await waitFor(() => {
-            expect(screen.queryByTestId("dash-rail-storage")).toBeNull();
+            expect(screen.queryByTestId("dash-tab-files")).toBeNull();
         });
 
         // A domain whose feature stays enabled is untouched.
-        expect(screen.getByTestId("dash-rail-database")).toBeDefined();
+        expect(screen.getByTestId("dash-tab-data")).toBeDefined();
     });
 
     it("hides a single sub-page when its feature is disabled but keeps the domain's other pages", async () => {
@@ -164,9 +151,6 @@ describe("studio", () => {
         // it should drop only the payments sub-page, not the whole domain.
         render(renderStudio(createClient({ payments: false })));
 
-        fireEvent.click(await screen.findByTestId("dash-rail-logs"));
-
-        // The domain's other sub-pages still render.
         await screen.findByTestId("dash-tab-logs");
 
         await waitFor(() => {
@@ -176,31 +160,14 @@ describe("studio", () => {
         expect(screen.getByTestId("dash-tab-logs")).toBeDefined();
     });
 
-    it("wires the secondary nav as an ARIA tablist and rolls focus with arrow keys", async () => {
-        expect.assertions(5);
+    it("labels the panel region by the active sub-page", async () => {
+        expect.assertions(1);
 
-        render(renderStudio(createClient()));
+        fireEvent.click(await renderAndFind("dash-tab-logs"));
 
-        // Open a domain with several sub-pages (logs owns logs/audit/schedule/realtime).
-        fireEvent.click(await screen.findByTestId("dash-rail-logs"));
-
-        const logsTab = await screen.findByTestId("dash-tab-logs");
-        const auditTab = screen.getByTestId("dash-tab-audit");
-
-        // The active tab controls the panel, which is labelled back by that tab.
-        expect(logsTab.getAttribute("aria-controls")).toBe("dash-panel");
-        expect(screen.getByTestId("dash-panel").getAttribute("aria-labelledby")).toBe("dash-tab-logs");
-
-        // Roving tabindex: only the selected tab sits in the tab order.
-        expect(logsTab.tabIndex).toBe(0);
-        expect(auditTab.tabIndex).toBe(-1);
-
-        // ArrowDown from the focused tab moves focus to the next one (without navigating).
-        logsTab.focus();
-        fireEvent.keyDown(logsTab, { key: "ArrowDown" });
-
-        // eslint-disable-next-line testing-library/no-node-access -- no jest-dom toHaveFocus matcher is configured; activeElement is the only way to assert the roving-tabindex focus move.
-        expect(document.activeElement).toBe(auditTab);
+        await waitFor(() => {
+            expect(screen.getByTestId("dash-panel").getAttribute("aria-labelledby")).toBe("dash-tab-logs");
+        });
     });
 
     it("keeps the studio's StudioFeaturesResult mirror in lockstep with @lunora/do's contract", () => {
@@ -212,3 +179,10 @@ describe("studio", () => {
         expect([...STUDIO_FEATURE_KEYS]).toStrictEqual(["mail", "payments", "scheduler", "storage", "vectors", "workflows"]);
     });
 });
+
+/** Render the default studio and resolve the given sidebar page button once the router settles. */
+const renderAndFind = async (testId: string): Promise<HTMLElement> => {
+    render(renderStudio(createClient()));
+
+    return screen.findByTestId(testId);
+};

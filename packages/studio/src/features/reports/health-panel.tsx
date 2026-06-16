@@ -1,11 +1,12 @@
 import type { SchedulerStatus } from "@lunora/client";
 import { useLunora } from "@lunora/react";
-import type { ReactElement } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import ConnectionBadge from "../../components/connection-badge";
 import { LiveError } from "../../components/live-status";
 import { Badge } from "../../components/ui/badge";
+import { Card } from "../../components/ui/card";
 import useLiveAdmin from "../../hooks/use-live-admin";
 import type { TFunction } from "../../i18n/i18n-context";
 import { useT } from "../../i18n/i18n-context";
@@ -13,6 +14,7 @@ import type { AuthMetrics, FunctionCallStat, LogEntry, LogsResult, MetricsSnapsh
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { adminRef, callOptions, errorMessage, fireAndForget, formatTimestamp } from "../../lib/internal";
 import { loadRecentShards } from "../../lib/shard-history";
+import { cn } from "../../lib/utils";
 import { shardsToAggregate } from "./metrics-aggregate";
 import type { ShardSloResult, SloTotals } from "./slo-aggregate";
 import { dedupeMigrations, mergeFunctionStats, sumShardMetrics } from "./slo-aggregate";
@@ -147,14 +149,46 @@ const migrationTileValue = (summary: { failed: number; running: number }, t: TFu
     return t("OK");
 };
 
-/** A labelled SLO tile: a value with a status-coloured badge. */
-const SloTile = ({ label, level, testId, value }: { label: string; level: SloLevel; testId: string; value: string }): ReactElement => (
-    <div className="flex min-w-24 flex-col gap-1 rounded-md border border-border p-3">
-        <div className="text-xs text-muted-foreground">{label}</div>
-        <Badge data-testid={testId} variant={LEVEL_VARIANT[level]}>
-            {value}
-        </Badge>
-    </div>
+/** Status-level → dot / value-text classes for the SLO cards and status banner. */
+const LEVEL_DOT: Record<SloLevel, string> = { crit: "bg-destructive", ok: "bg-success", warn: "bg-warning" };
+const LEVEL_TEXT: Record<SloLevel, string> = { crit: "text-destructive", ok: "text-foreground", warn: "text-warning" };
+const LEVEL_RING: Record<SloLevel, string> = {
+    crit: "bg-destructive/10 text-destructive",
+    ok: "bg-success/10 text-success",
+    warn: "bg-warning/10 text-warning",
+};
+
+/** Rank levels so the worst one wins for the overall health verdict. */
+const worstLevel = (levels: ReadonlyArray<SloLevel>): SloLevel => (levels.includes("crit") ? "crit" : levels.includes("warn") ? "warn" : "ok");
+
+/** One SLO as a KPI card: an uppercase label with a status dot, the status-coloured value, and an optional sparkline. */
+const SloCard = ({
+    chart,
+    label,
+    level,
+    testId,
+    value,
+}: {
+    chart?: ReactNode;
+    label: string;
+    level: SloLevel;
+    testId: string;
+    value: string;
+}): ReactElement => (
+    <Card className="gap-0 py-0">
+        <div className="flex flex-col gap-2.5 p-4">
+            <span className="flex items-center gap-1.5 text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
+                <span aria-hidden="true" className={cn("size-1.5 shrink-0 rounded-full", LEVEL_DOT[level])} />
+                {label}
+            </span>
+            <div className="flex items-center justify-between gap-3">
+                <span className={cn("truncate text-2xl font-semibold tabular-nums", LEVEL_TEXT[level])} data-testid={testId}>
+                    {value}
+                </span>
+                {chart}
+            </div>
+        </div>
+    </Card>
 );
 
 /** The composed, ready-to-render SLO model one cross-shard fetch resolves to. */
@@ -386,161 +420,186 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
     const appErrorRate = totals === null || totals.requests === 0 ? 0 : totals.errors / totals.requests;
     const errorLevel = rateLevel(appErrorRate, REQUEST_ERROR_WARN, REQUEST_ERROR_CRIT);
     const authLevel = auth === null ? "ok" : rateLevel(auth.failureRate, AUTH_FAIL_WARN, AUTH_FAIL_CRIT);
+    const backlogLevel: SloLevel = scheduler === null ? "ok" : countLevel(scheduler.backlog, BACKLOG_WARN, BACKLOG_CRIT);
+    const overall = worstLevel([errorLevel, authLevel, backlogLevel, migration.level]);
+
+    const statusLabel = overall === "crit" ? t("Critical") : overall === "warn" ? t("Degraded") : t("All systems healthy");
+    const statusDescription =
+        overall === "crit"
+            ? t("One or more service levels are breached.")
+            : overall === "warn"
+              ? t("Some service levels need attention.")
+              : t("All service levels are within target.");
 
     return (
-        <div className="flex flex-col gap-4" data-testid="lunora-health">
-            <div className="flex flex-wrap items-center gap-3">
-                <ConnectionBadge />
-                <LiveError message={liveError} prefix="hl" />
-            </div>
-
-            <section className="rounded-md border border-border p-3" data-testid="hl-slo">
-                <h3 className="mb-2 text-sm font-semibold">{t("Service level")}</h3>
-                <div className="flex flex-wrap gap-3">
-                    <SloTile
-                        label={t("Error rate")}
-                        level={errorLevel}
-                        testId="hl-slo-errorrate"
-                        value={totals === null ? "—" : ratePercent(totals.errors, totals.requests)}
-                    />
-                    <SloTile
-                        label={t("Auth failures")}
-                        level={authLevel}
-                        testId="hl-slo-auth"
-                        value={auth === null ? "—" : ratePercent(auth.failures, auth.attempts)}
-                    />
-                    <SloTile
-                        label={t("Scheduler backlog")}
-                        level={scheduler === null ? "ok" : countLevel(scheduler.backlog, BACKLOG_WARN, BACKLOG_CRIT)}
-                        testId="hl-slo-backlog"
-                        value={scheduler === null ? "—" : scheduler.backlog.toString()}
-                    />
-                    <SloTile label={t("Migrations")} level={migration.level} testId="hl-slo-migrations" value={migrationTileValue(migration, t)} />
+        <div className="flex flex-col gap-6" data-testid="lunora-health">
+            {/* Overall status banner — the at-a-glance verdict plus headline throughput. */}
+            <Card className="gap-0 py-0">
+                <div className="flex flex-wrap items-center justify-between gap-4 p-4">
+                    <div className="flex items-center gap-3">
+                        <span aria-hidden="true" className={cn("flex size-10 shrink-0 items-center justify-center rounded-full", LEVEL_RING[overall])}>
+                            <span className={cn("size-3 rounded-full", LEVEL_DOT[overall])} />
+                        </span>
+                        <div className="grid leading-tight">
+                            <span className="text-sm font-semibold text-foreground" data-testid="hl-status">
+                                {statusLabel}
+                            </span>
+                            <span className="text-[13px] text-muted-foreground">{statusDescription}</span>
+                        </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-4">
+                        <div className="text-end">
+                            <div className="text-[10px] font-medium tracking-wider text-muted-foreground uppercase">{t("Requests")}</div>
+                            <div className="flex items-center justify-end gap-2">
+                                {trend.requests.length >= 2 && (
+                                    <Sparkline
+                                        ariaLabel={t("Requests over time")}
+                                        className="h-6 w-20 text-foreground"
+                                        series={trend.requests}
+                                        testId="hl-spark-requests"
+                                    />
+                                )}
+                                <span className="text-lg font-semibold tabular-nums text-foreground" data-testid="hl-requests">
+                                    {(totals?.requests ?? 0).toString()}
+                                </span>
+                            </div>
+                        </div>
+                        <span aria-hidden="true" className="h-9 w-px bg-border" />
+                        <div className="text-end">
+                            <div className="text-[10px] font-medium tracking-wider text-muted-foreground uppercase">{t("Error rate")}</div>
+                            <div className={cn("text-lg font-semibold tabular-nums", LEVEL_TEXT[errorLevel])} data-testid="hl-error-rate">
+                                {totals === null ? "—" : ratePercent(totals.errors, totals.requests)}
+                            </div>
+                        </div>
+                        <span aria-hidden="true" className="h-9 w-px bg-border" />
+                        <div className="flex items-center gap-2">
+                            <ConnectionBadge />
+                            <LiveError message={liveError} prefix="hl" />
+                        </div>
+                    </div>
                 </div>
+                {metricsError !== null && (
+                    <div className="border-t border-border bg-destructive/5 px-4 py-2 text-sm text-destructive" data-testid="hl-metrics-error" role="alert">
+                        {metricsError}
+                    </div>
+                )}
+            </Card>
 
-                <div className="mt-3 flex flex-wrap gap-6">
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground" data-testid="hl-trend-requests">
-                        <span>{t("Requests")}</span>
-                        {trend.requests.length < 2 ? (
-                            <span>{t("collecting samples…")}</span>
-                        ) : (
-                            <Sparkline ariaLabel={t("Requests over time")} className="text-primary" series={trend.requests} testId="hl-spark-requests" />
-                        )}
-                    </div>
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground" data-testid="hl-trend-errors">
-                        <span>{t("Errors")}</span>
-                        {trend.errors.length < 2 ? (
-                            <span>{t("collecting samples…")}</span>
-                        ) : (
-                            <Sparkline ariaLabel={t("Errors over time")} className="text-destructive" series={trend.errors} testId="hl-spark-errors" />
-                        )}
-                    </div>
-                    {authTrend.failures.length >= 2 && (
-                        <div className="flex items-center gap-2 text-xs text-muted-foreground" data-testid="hl-trend-auth">
-                            <span>{t("Auth failures")}</span>
+            {/* Service-level KPIs — status-coloured, with trend sparklines. */}
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" data-testid="hl-slo">
+                <SloCard
+                    chart={
+                        trend.errors.length >= 2 ? (
+                            <Sparkline ariaLabel={t("Errors over time")} className="h-7 w-20 text-destructive" series={trend.errors} testId="hl-spark-errors" />
+                        ) : undefined
+                    }
+                    label={t("Error rate")}
+                    level={errorLevel}
+                    testId="hl-slo-errorrate"
+                    value={totals === null ? "—" : ratePercent(totals.errors, totals.requests)}
+                />
+                <SloCard
+                    chart={
+                        authTrend.failures.length >= 2 ? (
                             <Sparkline
                                 ariaLabel={t("Auth failures over time")}
-                                className="text-destructive"
+                                className="h-7 w-20 text-destructive"
                                 series={authTrend.failures}
                                 testId="hl-spark-auth"
                             />
-                        </div>
+                        ) : undefined
+                    }
+                    label={t("Auth failures")}
+                    level={authLevel}
+                    testId="hl-slo-auth"
+                    value={auth === null ? "—" : ratePercent(auth.failures, auth.attempts)}
+                />
+                <SloCard
+                    label={t("Scheduler backlog")}
+                    level={backlogLevel}
+                    testId="hl-slo-backlog"
+                    value={scheduler === null ? "—" : scheduler.backlog.toString()}
+                />
+                <SloCard label={t("Migrations")} level={migration.level} testId="hl-slo-migrations" value={migrationTileValue(migration, t)} />
+            </div>
+
+            {/* Functions by error rate + recent errors, side by side. */}
+            <div className="grid gap-3 lg:grid-cols-2">
+                <Card className="gap-0 py-0" data-testid="hl-functions">
+                    <header className="border-b border-border px-4 py-3">
+                        <span className="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">{t("Functions by error rate")}</span>
+                    </header>
+                    {worstFunctions.length === 0 ? (
+                        <p className="px-4 py-8 text-center text-sm text-muted-foreground" data-testid="hl-functions-empty">
+                            {t("No function activity yet.")}
+                        </p>
+                    ) : (
+                        <ul className="divide-y divide-border">
+                            {worstFunctions.map((stat) => (
+                                <li className="flex flex-wrap items-center justify-between gap-2 px-4 py-2 text-xs" data-testid="hl-fn-row" key={stat.path}>
+                                    <span className="truncate font-mono text-foreground">{stat.path}</span>
+                                    <span className="flex shrink-0 items-center gap-2">
+                                        <span className="tabular-nums text-muted-foreground">{t("{count} calls", { count: stat.calls.toString() })}</span>
+                                        <Badge variant={LEVEL_VARIANT[rateLevel(stat.errors / stat.calls, REQUEST_ERROR_WARN, REQUEST_ERROR_CRIT)]}>
+                                            {ratePercent(stat.errors, stat.calls)}
+                                        </Badge>
+                                    </span>
+                                </li>
+                            ))}
+                        </ul>
                     )}
-                </div>
-            </section>
+                </Card>
 
-            <section className="rounded-md border border-border p-3" data-testid="hl-functions">
-                <h3 className="mb-2 text-sm font-semibold">{t("Functions by error rate")}</h3>
-                {worstFunctions.length === 0 ? (
-                    <p className="text-sm text-muted-foreground" data-testid="hl-functions-empty">
-                        {t("No function activity yet.")}
-                    </p>
-                ) : (
-                    <ul className="flex flex-col gap-1">
-                        {worstFunctions.map((stat) => (
-                            <li className="flex flex-wrap items-baseline justify-between gap-2 text-xs" data-testid="hl-fn-row" key={stat.path}>
-                                <span className="font-mono">{stat.path}</span>
-                                <span className="flex items-center gap-2">
-                                    <span className="text-muted-foreground">{t("{count} calls", { count: stat.calls.toString() })}</span>
-                                    <Badge variant={LEVEL_VARIANT[rateLevel(stat.errors / stat.calls, REQUEST_ERROR_WARN, REQUEST_ERROR_CRIT)]}>
-                                        {ratePercent(stat.errors, stat.calls)}
-                                    </Badge>
-                                </span>
-                            </li>
-                        ))}
-                    </ul>
-                )}
-            </section>
+                <Card className="gap-0 py-0">
+                    <header className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
+                        <span className="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">{t("Recent errors")}</span>
+                        <Badge data-testid="hl-error-count" variant={recentErrors.length > 0 ? "destructive" : "outline"}>
+                            {recentErrors.length}
+                        </Badge>
+                    </header>
 
-            <section className="rounded-md border border-border p-3">
-                <div className="mb-2 flex items-center justify-between gap-2">
-                    <h3 className="text-sm font-semibold">{t("Recent errors")}</h3>
-                    <Badge data-testid="hl-error-count" variant={recentErrors.length > 0 ? "destructive" : "outline"}>
-                        {recentErrors.length}
-                    </Badge>
-                </div>
+                    {logsError !== null && (
+                        <p className="px-4 py-8 text-center text-sm text-destructive" data-testid="hl-logs-error" role="alert">
+                            {logsError}
+                        </p>
+                    )}
 
-                {logsError !== null && (
-                    <p className="text-sm text-destructive" data-testid="hl-logs-error" role="alert">
-                        {logsError}
-                    </p>
-                )}
+                    {logsError === null && topErrors.length === 0 && (
+                        <p className="px-4 py-8 text-center text-sm text-muted-foreground" data-testid="hl-errors-empty">
+                            {t("No recent errors.")}
+                        </p>
+                    )}
 
-                {logsError === null && topErrors.length === 0 && (
-                    <p className="text-sm text-muted-foreground" data-testid="hl-errors-empty">
-                        {t("No recent errors.")}
-                    </p>
-                )}
+                    {topErrors.length > 0 && (
+                        <ul className="divide-y divide-border">
+                            {topErrors.map((entry, index) => (
+                                <li
+                                    className="flex flex-col gap-0.5 px-4 py-2 text-xs"
+                                    data-testid="hl-error-row"
+                                    key={`${entry.timestamp.toString()}-${index.toString()}`}
+                                >
+                                    <span className="flex items-center gap-2">
+                                        <time className="shrink-0 text-muted-foreground">{formatTimestamp(entry.timestamp)}</time>
+                                        {entry.functionPath !== undefined && <span className="truncate font-mono text-foreground">{entry.functionPath}</span>}
+                                    </span>
+                                    <span className="text-destructive">{entry.message}</span>
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                </Card>
+            </div>
 
-                {topErrors.length > 0 && (
-                    <ul className="flex flex-col gap-1">
-                        {topErrors.map((entry, index) => (
-                            <li
-                                className="flex flex-wrap items-baseline gap-2 text-xs"
-                                data-testid="hl-error-row"
-                                key={`${entry.timestamp.toString()}-${index.toString()}`}
-                            >
-                                <time className="text-muted-foreground">{formatTimestamp(entry.timestamp)}</time>
-                                {entry.functionPath !== undefined && <span className="font-mono">{entry.functionPath}</span>}
-                                <span className="text-destructive">{entry.message}</span>
-                            </li>
-                        ))}
-                    </ul>
-                )}
-            </section>
-
-            <section className="rounded-md border border-border p-3">
-                {metricsError !== null && (
-                    <p className="text-sm text-destructive" data-testid="hl-metrics-error" role="alert">
-                        {metricsError}
-                    </p>
-                )}
-
-                <div className="flex flex-wrap gap-6">
-                    <div>
-                        <div className="text-xs text-muted-foreground">{t("Requests")}</div>
-                        <div className="text-lg font-semibold" data-testid="hl-requests">
-                            {(totals?.requests ?? 0).toString()}
-                        </div>
-                    </div>
-                    <div>
-                        <div className="text-xs text-muted-foreground">{t("Errors")}</div>
-                        <div className="text-lg font-semibold" data-testid="hl-error-rate">
-                            {totals === null ? "—" : ratePercent(totals.errors, totals.requests)}
-                        </div>
-                    </div>
-                </div>
-            </section>
-
-            <section className="rounded-md border border-border p-3">
-                <div className="mb-2 flex items-center justify-between gap-2">
-                    <h3 className="text-sm font-semibold">{t("Shards seen")}</h3>
+            {/* Shards seen. */}
+            <Card className="gap-0 py-0">
+                <header className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
+                    <span className="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">{t("Shards seen")}</span>
                     <Badge data-testid="hl-shard-count" variant="outline">
                         {recentShards.length}
                     </Badge>
-                </div>
+                </header>
                 {recentShards.length > 0 && (
-                    <ul className="flex flex-wrap gap-1.5">
+                    <ul className="flex flex-wrap gap-1.5 p-4">
                         {recentShards.map((shard) => (
                             <li data-testid="hl-shard" key={shard}>
                                 <Badge variant="secondary">{shard}</Badge>
@@ -548,7 +607,7 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
                         ))}
                     </ul>
                 )}
-            </section>
+            </Card>
         </div>
     );
 };

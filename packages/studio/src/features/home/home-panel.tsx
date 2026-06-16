@@ -3,14 +3,16 @@ import { useNavigate } from "@tanstack/react-router";
 import type { ReactElement, ReactNode } from "react";
 import { useCallback, useEffect, useState } from "react";
 
+import { Bar, EvilBarChart } from "../../components/evilcharts/charts/bar-chart";
+import type { ChartConfig } from "../../components/evilcharts/ui/chart";
 import { Badge } from "../../components/ui/badge";
-import { Button } from "../../components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
+import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { useT } from "../../i18n/i18n-context";
-import type { FunctionStatsResult, SecurityAuditResult, ShardMetrics } from "../../lib/admin";
+import type { AuditEntry, FunctionCallStat, MetricsSnapshot, SecurityAuditResult, SubscriptionsResult } from "../../lib/admin";
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { adminRef, callOptions, fireAndForget, formatBytes } from "../../lib/internal";
+import { cn } from "../../lib/utils";
 import { deriveInsights } from "../advisors/derive-insights";
 
 interface HomePanelProps {
@@ -21,24 +23,167 @@ interface HomePanelProps {
 const GET_METRICS = adminRef(ADMIN_FUNCTIONS.getMetrics);
 const GET_FUNCTION_STATS = adminRef(ADMIN_FUNCTIONS.getFunctionStats);
 const GET_SECURITY_AUDIT = adminRef(ADMIN_FUNCTIONS.getSecurityAudit);
+const GET_AUDIT_LOG = adminRef(ADMIN_FUNCTIONS.getAuditLog);
+const LIST_SUBSCRIPTIONS = adminRef(ADMIN_FUNCTIONS.listSubscriptions);
 
-/** One labelled health metric in the digest row. */
-const StatCard = ({ label, value }: { readonly label: string; readonly value: ReactNode }): ReactElement => (
-    <Card className="rounded-md">
-        <CardContent className="flex flex-col gap-1 py-4">
-            <span className="text-xs tracking-wide text-muted-foreground uppercase">{label}</span>
-            <span className="text-2xl font-semibold tabular-nums text-foreground">{value}</span>
-        </CardContent>
-    </Card>
+/** Format a millisecond duration compactly (`24ms`, `1.2s`). */
+const formatMs = (ms: number): string => (ms >= 1000 ? `${(ms / 1000).toFixed(ms >= 10_000 ? 0 : 1)}s` : `${Math.round(ms)}ms`);
+
+/** A coarse "2m ago" / "3h ago" relative time from an epoch-ms timestamp. */
+const relativeTime = (ts: number, now: number): string => {
+    const seconds = Math.max(0, Math.round((now - ts) / 1000));
+
+    if (seconds < 60) {
+        return `${seconds}s ago`;
+    }
+
+    const minutes = Math.round(seconds / 60);
+
+    if (minutes < 60) {
+        return `${minutes}m ago`;
+    }
+
+    const hours = Math.round(minutes / 60);
+
+    return hours < 24 ? `${hours}h ago` : `${Math.round(hours / 24)}d ago`;
+};
+
+/** A one-line "vs. previous window" change shown in a stat card's footer. */
+interface StatDelta {
+    readonly positive: boolean;
+    readonly text: string;
+}
+
+/** Series colour for the stat-card sparkline (the foreground var already flips per theme). */
+const SPARKLINE_CONFIG = { value: { colors: { dark: ["var(--foreground)"], light: ["var(--foreground)"] }, label: "" } } satisfies ChartConfig;
+
+/** A compact monochrome bar sparkline (evilcharts) drawn from a numeric series (oldest → newest). */
+const Sparkline = ({ data }: { readonly data: ReadonlyArray<number> }): ReactElement | null => {
+    const bars = data.slice(-16);
+
+    // A single point can't read as a trend (and renders as one fat block), so a
+    // sparkline only shows once there are at least a few buckets.
+    if (bars.length < 3) {
+        return null;
+    }
+
+    const rows = bars.map((value, index) => {return { index, value }});
+
+    return (
+        <div aria-hidden="true" className="h-8 w-28">
+            <EvilBarChart animationType="none" barCategoryGap={1} className="h-8 w-full" config={SPARKLINE_CONFIG} data={rows}>
+                <Bar dataKey="value" />
+            </EvilBarChart>
+        </div>
+    );
+};
+
+/** Sum a metrics-history field per minute bucket, oldest first — the series a sparkline draws. */
+const bucketSeries = (history: MetricsSnapshot["history"], field: "calls" | "errors"): number[] => {
+    if (history === undefined || history.length === 0) {
+        return [];
+    }
+
+    const byBucket = new Map<number, number>();
+
+    for (const bucket of history) {
+        byBucket.set(bucket.bucketMs, (byBucket.get(bucket.bucketMs) ?? 0) + bucket[field]);
+    }
+
+    return [...byBucket.entries()].sort(([a], [b]) => a - b).map(([, total]) => total);
+};
+
+/** Percent change of a series' recent half vs. its earlier half; null when not derivable. `higherIsBetter` colours the result. */
+const seriesDelta = (series: number[], higherIsBetter = true): StatDelta | null => {
+    if (series.length < 4) {
+        return null;
+    }
+
+    const mid = Math.floor(series.length / 2);
+    const earlier = series.slice(0, mid).reduce((sum, value) => sum + value, 0);
+    const recent = series.slice(mid).reduce((sum, value) => sum + value, 0);
+
+    if (earlier === 0) {
+        return null;
+    }
+
+    const pct = ((recent - earlier) / earlier) * 100;
+
+    return { positive: higherIsBetter ? pct >= 0 : pct <= 0, text: `${pct >= 0 ? "+" : ""}${pct.toFixed(1)}%` };
+};
+
+/**
+ * One labelled health metric: an uppercase label, the value (with an optional
+ * unit), an optional monochrome sparkline beside it, and a tinted footer band
+ * carrying either a coloured delta or a neutral secondary stat — matching the
+ * reference dashboard's stat-card anatomy.
+ */
+const StatCard = ({
+    delta,
+    footer,
+    label,
+    trend,
+    unit,
+    value,
+}: {
+    readonly delta?: StatDelta | null;
+    readonly footer?: ReactNode;
+    readonly label: string;
+    readonly trend?: ReadonlyArray<number>;
+    readonly unit?: string;
+    readonly value: ReactNode;
+}): ReactElement => {
+    const t = useT();
+
+    return (
+        <Card className="justify-between gap-0 py-0">
+            <div className="flex flex-col gap-2.5 p-4">
+                <span className="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">{label}</span>
+                <div className="flex items-center justify-between gap-3">
+                    <span className="flex items-baseline gap-1.5">
+                        <span className="text-2xl font-semibold tabular-nums text-foreground">{value}</span>
+                        {unit !== undefined && <span className="text-xs text-muted-foreground">{unit}</span>}
+                    </span>
+                    {trend !== undefined && <Sparkline data={trend} />}
+                </div>
+            </div>
+            {delta == null ? (
+                footer != null && <div className="border-t border-border bg-muted/50 px-4 py-2.5 text-[11px] text-muted-foreground">{footer}</div>
+            ) : (
+                <div className="border-t border-border bg-muted/50 px-4 py-2.5 text-[11px]">
+                    <span className={cn("font-semibold", delta.positive ? "text-success" : "text-destructive")}>{delta.text}</span>{" "}
+                    <span className="text-muted-foreground">{t("vs. prev.")}</span>
+                </div>
+            )}
+        </Card>
+    );
+};
+
+/** A small right-chevron used in the card footers' "View →" affordances. */
+const ChevronRight = (): ReactElement => (
+    <svg
+        aria-hidden="true"
+        className="size-3.5"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth={1.8}
+        viewBox="0 0 24 24"
+    >
+        <path d="m9 6 6 6-6 6" />
+    </svg>
 );
 
-/** One "get connected" card: a method label + the command/import that wires it up. */
+/** One "get connected" card: a method label up top, the command/import in the tinted footer band. */
 const ConnectCard = ({ command, label }: { readonly command: string; readonly label: string }): ReactElement => (
-    <Card className="rounded-md">
-        <CardContent className="flex flex-col gap-2 py-4">
+    <Card className="justify-between gap-0 py-0">
+        <div className="p-4">
             <span className="text-sm font-medium text-foreground">{label}</span>
-            <code className="rounded bg-muted px-2 py-1 font-mono text-xs text-muted-foreground">{command}</code>
-        </CardContent>
+        </div>
+        <div className="border-t border-border bg-muted/50 px-4 py-2.5">
+            <code className="font-mono text-xs text-muted-foreground">{command}</code>
+        </div>
     </Card>
 );
 
@@ -50,76 +195,187 @@ interface AdvisorCardProps {
 }
 
 /**
- * One advisor summary card: a finding count with a jump to the advisor page.
- * `null` count (the digest hasn't loaded, or the read failed) renders a muted
- * placeholder rather than a misleading zero.
+ * One advisor summary card: a finding count up top with a "View" footer that
+ * jumps to the advisor page. `null` count (the digest hasn't loaded, or the read
+ * failed) renders a muted placeholder rather than a misleading zero.
  */
 const AdvisorCard = ({ count, onView, testId, title }: AdvisorCardProps): ReactElement => {
     const t = useT();
 
     return (
-        <Card className="rounded-md" data-testid={testId}>
-            <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
-                <CardTitle className="text-sm font-medium">{title}</CardTitle>
+        <Card className="justify-between gap-0 py-0" data-testid={testId}>
+            <div className="flex items-start justify-between gap-2 p-4">
+                <span className="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">{title}</span>
                 {count === null ? (
                     <span className="text-xs text-muted-foreground">{t("No data yet")}</span>
                 ) : (
-                    <Badge variant={count > 0 ? "destructive" : "outline"}>{count > 0 ? count : t("All clear")}</Badge>
+                    <Badge variant={count > 0 ? "destructive" : "success"}>{count > 0 ? count : t("All clear")}</Badge>
                 )}
-            </CardHeader>
-            <CardContent>
-                <Button onClick={onView} size="sm" type="button" variant="outline">
-                    {t("View")}
-                </Button>
+            </div>
+            <button
+                className="flex items-center gap-1 border-t border-border bg-muted/50 px-4 py-2.5 text-[12px] font-medium text-foreground outline-none transition-colors hover:bg-muted focus-visible:bg-muted"
+                onClick={onView}
+                type="button"
+            >
+                {t("View")}
+                <ChevronRight />
+            </button>
+        </Card>
+    );
+};
+
+/** A leaderboard of the busiest functions (calls / avg latency / errors). */
+const TopFunctionsCard = ({ functions }: { readonly functions: ReadonlyArray<FunctionCallStat> }): ReactElement => {
+    const t = useT();
+    const top = [...functions].sort((a, b) => b.calls - a.calls).slice(0, 5);
+
+    return (
+        <Card className="gap-0 py-0" data-testid="home-top-functions">
+            <div className="border-b border-border px-4 py-3">
+                <span className="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">{t("Top functions")}</span>
+            </div>
+            {top.length === 0 ? (
+                <p className="px-4 py-8 text-center text-xs text-muted-foreground">{t("No functions called yet.")}</p>
+            ) : (
+                <div className="divide-y divide-border">
+                    <div className="grid grid-cols-[1fr_auto_auto_auto] gap-4 px-4 py-1.5 text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
+                        <span>{t("Function")}</span>
+                        <span className="text-end">{t("Calls")}</span>
+                        <span className="w-12 text-end">{t("Avg")}</span>
+                        <span className="w-8 text-end">{t("Err")}</span>
+                    </div>
+                    {top.map((function_) => (
+                        <div className="grid grid-cols-[1fr_auto_auto_auto] items-center gap-4 px-4 py-2 text-[13px]" key={function_.path}>
+                            <span className="truncate font-mono text-xs text-foreground">{function_.path}</span>
+                            <span className="text-end tabular-nums">{function_.calls.toLocaleString()}</span>
+                            <span className="w-12 text-end tabular-nums text-muted-foreground">
+                                {formatMs(function_.calls > 0 ? function_.totalDurationMs / function_.calls : 0)}
+                            </span>
+                            <span className={cn("w-8 text-end tabular-nums", function_.errors > 0 ? "text-destructive" : "text-muted-foreground")}>{function_.errors}</span>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </Card>
+    );
+};
+
+/** Live real-time pulse: connected WebSockets and the subscriptions they track. */
+const LiveConnectionsCard = ({ subs }: { readonly subs: SubscriptionsResult | null }): ReactElement => {
+    const t = useT();
+
+    return (
+        <Card data-testid="home-live-connections">
+            <CardContent className="flex flex-col gap-2.5 py-4">
+                <span className="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">{t("Live connections")}</span>
+                <span className="flex items-baseline gap-1.5">
+                    <span className="text-2xl font-semibold tabular-nums text-foreground">{(subs?.totalConnections ?? 0).toLocaleString()}</span>
+                    <span className="text-xs text-muted-foreground">{t("sockets")}</span>
+                </span>
+                <span className="text-[11px] text-muted-foreground">
+                    {(subs?.totalSubscriptions ?? 0).toLocaleString()} {t("active subscriptions")}
+                </span>
             </CardContent>
         </Card>
     );
 };
 
+/** The latest durable admin operations (newest first). */
+const RecentActivityCard = ({ entries }: { readonly entries: ReadonlyArray<AuditEntry> }): ReactElement => {
+    const t = useT();
+    const now = Date.now();
+
+    return (
+        <Card className="gap-0 py-0" data-testid="home-recent-activity">
+            <div className="border-b border-border px-4 py-3">
+                <span className="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">{t("Recent activity")}</span>
+            </div>
+            {entries.length === 0 ? (
+                <p className="px-4 py-8 text-center text-xs text-muted-foreground">{t("No recent activity.")}</p>
+            ) : (
+                <ul className="divide-y divide-border">
+                    {entries.slice(0, 5).map((entry) => (
+                        <li className="flex items-center justify-between gap-3 px-4 py-2 text-[13px]" key={entry.seq}>
+                            <span className="flex min-w-0 items-center gap-2">
+                                <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-muted-foreground/40" />
+                                <span className="truncate text-foreground">
+                                    {entry.op}
+                                    {entry.table !== undefined && (
+                                        <span className="text-muted-foreground">
+                                            {" · "}
+                                            {entry.table}
+                                            {entry.id === undefined ? "" : `#${entry.id}`}
+                                        </span>
+                                    )}
+                                </span>
+                            </span>
+                            <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{relativeTime(entry.ts, now)}</span>
+                        </li>
+                    ))}
+                </ul>
+            )}
+        </Card>
+    );
+};
+
+/** Average handler latency across functions (total duration ÷ total calls). */
+const averageLatencyMs = (functions: ReadonlyArray<FunctionCallStat>): null | number => {
+    const calls = functions.reduce((sum, function_) => sum + function_.calls, 0);
+
+    if (calls === 0) {
+        return null;
+    }
+
+    return functions.reduce((sum, function_) => sum + function_.totalDurationMs, 0) / calls;
+};
+
 /**
- * The Home overview — the studio's landing page, modelled on Supabase Studio's
- * Home (`STUDIO-REDESIGN-PLAN.md` §2). It pulls the root shard's health snapshot
- * plus the two advisor signals and presents an at-a-glance digest: request/error
- * counts and database size, a security- and performance-findings summary that
- * deep-links into the Advisors section, and quick links into the busiest panels.
- * Every read is best-effort — a missing admin token or a cold instance leaves a
- * card showing a muted placeholder rather than blanking the page.
+ * The Home overview — the studio's landing page. It pulls the root shard's
+ * health snapshot, the function stats, the two advisor signals, the live
+ * subscription pulse, and the recent admin audit log, then presents an
+ * at-a-glance digest: a KPI row (requests, errors, latency, database size), a
+ * busiest-functions leaderboard, live connections, recent activity, the advisor
+ * summary, and connect/quick-link shortcuts. Every read is best-effort — a
+ * missing admin token or a cold instance leaves a card showing a muted
+ * placeholder rather than blanking the page.
  */
 export const HomePanel = ({ initialShardKey }: HomePanelProps): ReactElement => {
     const client = useLunora();
     const t = useT();
     const navigate = useNavigate();
 
-    const [metrics, setMetrics] = useState<ShardMetrics | null>(null);
+    const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
+    const [functions, setFunctions] = useState<FunctionCallStat[]>([]);
     const [performanceCount, setPerformanceCount] = useState<null | number>(null);
     const [securityCount, setSecurityCount] = useState<null | number>(null);
+    const [subscriptions, setSubscriptions] = useState<SubscriptionsResult | null>(null);
+    const [activity, setActivity] = useState<AuditEntry[]>([]);
 
     useEffect(() => {
         const shard = initialShardKey ?? "";
 
         const load = async (): Promise<void> => {
-            const [snapshot, stats, audit] = await Promise.allSettled([
-                client.query(GET_METRICS, {}, callOptions(shard)) as Promise<ShardMetrics>,
-                client.query(GET_FUNCTION_STATS, {}, callOptions(shard)) as Promise<FunctionStatsResult>,
+            const [snapshot, stats, audit, subs, recent] = await Promise.allSettled([
+                client.query(GET_METRICS, {}, callOptions(shard)) as Promise<MetricsSnapshot>,
+                client.query(GET_FUNCTION_STATS, {}, callOptions(shard)) as Promise<{ functions: FunctionCallStat[] }>,
                 client.query(GET_SECURITY_AUDIT, {}, callOptions("")) as Promise<SecurityAuditResult>,
+                client.query(LIST_SUBSCRIPTIONS, {}, callOptions(shard)) as Promise<SubscriptionsResult>,
+                client.query(GET_AUDIT_LOG, {}, callOptions(shard)) as Promise<{ entries: AuditEntry[] }>,
             ]);
 
             const snapshotValue = snapshot.status === "fulfilled" ? snapshot.value : null;
+            const statFns = stats.status === "fulfilled" && Array.isArray(stats.value.functions) ? stats.value.functions : [];
 
             setMetrics(snapshotValue);
-            setPerformanceCount(stats.status === "fulfilled" ? deriveInsights(snapshotValue, stats.value.functions).length : null);
+            setFunctions(statFns);
+            setPerformanceCount(stats.status === "fulfilled" ? deriveInsights(snapshotValue, statFns).length : null);
             setSecurityCount(audit.status === "fulfilled" && Array.isArray(audit.value.findings) ? audit.value.findings.length : null);
+            setSubscriptions(subs.status === "fulfilled" ? subs.value : null);
+            setActivity(recent.status === "fulfilled" && Array.isArray(recent.value.entries) ? recent.value.entries : []);
         };
 
         fireAndForget(load());
     }, [client, initialShardKey]);
-
-    const goTo = useCallback(
-        (event: React.MouseEvent<HTMLButtonElement>): void => {
-            fireAndForget(navigate({ to: event.currentTarget.dataset.to ?? "/home" }));
-        },
-        [navigate],
-    );
 
     const viewSecurity = useCallback((): void => {
         fireAndForget(navigate({ to: "/security" }));
@@ -129,17 +385,47 @@ export const HomePanel = ({ initialShardKey }: HomePanelProps): ReactElement => 
         fireAndForget(navigate({ to: "/insights" }));
     }, [navigate]);
 
+    // Minute-bucketed request / error series from the durable metrics history,
+    // drawn as the stat-card sparklines (empty until the snapshot resolves, or on
+    // a worker that predates the history feed).
+    const requestSeries = bucketSeries(metrics?.history, "calls");
+    const errorSeries = bucketSeries(metrics?.history, "errors");
+    const avgLatency = averageLatencyMs(functions);
+    const maxLatency = functions.reduce((max, function_) => Math.max(max, function_.maxDurationMs), 0);
+    const cache = metrics?.cache;
+    const cacheHitRate = cache != null && cache.hits + cache.misses > 0 ? Math.round((cache.hits / (cache.hits + cache.misses)) * 100) : null;
+
     return (
         <div className="flex flex-col gap-6" data-testid="lunora-home">
-            {/* Health digest. */}
-            <div className="grid gap-3 sm:grid-cols-3" data-testid="home-health">
-                <StatCard label={t("Requests")} value={(metrics?.requests ?? 0).toLocaleString()} />
-                <StatCard label={t("Errors")} value={(metrics?.errors ?? 0).toLocaleString()} />
-                <StatCard label={t("Database size")} value={formatBytes(metrics?.databaseSize ?? null)} />
+            {/* KPI row. */}
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" data-testid="home-health">
+                <StatCard delta={seriesDelta(requestSeries)} label={t("Requests")} trend={requestSeries} value={(metrics?.requests ?? 0).toLocaleString()} />
+                <StatCard delta={seriesDelta(errorSeries, false)} label={t("Errors")} trend={errorSeries} value={(metrics?.errors ?? 0).toLocaleString()} />
+                <StatCard
+                    footer={maxLatency > 0 ? `${t("max")} ${formatMs(maxLatency)}` : undefined}
+                    label={t("Avg latency")}
+                    value={avgLatency === null ? "—" : formatMs(avgLatency)}
+                />
+                <StatCard
+                    footer={cacheHitRate === null ? undefined : `${cacheHitRate}% ${t("cache hit")}`}
+                    label={t("Database size")}
+                    value={formatBytes(metrics?.databaseSize ?? null)}
+                />
+            </div>
+
+            {/* Activity: busiest functions, live connections, recent changes. */}
+            <div className="grid gap-3 lg:grid-cols-3">
+                <div className="lg:col-span-2">
+                    <TopFunctionsCard functions={functions} />
+                </div>
+                <div className="flex flex-col gap-3">
+                    <LiveConnectionsCard subs={subscriptions} />
+                    <RecentActivityCard entries={activity} />
+                </div>
             </div>
 
             {/* Advisors summary. When both advisors are loaded and clean, collapse
-                to a single "no issues" state (mirrors Supabase's Home advisor block). */}
+                to a single "no issues" state. */}
             <section className="flex flex-col gap-3" data-testid="home-advisors">
                 <h2 className="text-sm font-semibold tracking-tight text-foreground">{t("Advisors")}</h2>
                 {securityCount === 0 && performanceCount === 0 ? (
@@ -170,29 +456,13 @@ export const HomePanel = ({ initialShardKey }: HomePanelProps): ReactElement => 
                 )}
             </section>
 
-            {/* Get connected — point an app at this deployment (Supabase-style). */}
+            {/* Get connected — point an app at this deployment. */}
             <section className="flex flex-col gap-3" data-testid="home-get-connected">
                 <h2 className="text-sm font-semibold tracking-tight text-foreground">{t("Get connected")}</h2>
                 <div className="grid gap-3 sm:grid-cols-3">
                     <ConnectCard command="npm i @lunora/client" label={t("Client SDK")} />
                     <ConnectCard command="npm i @lunora/react" label={t("React")} />
                     <ConnectCard command="lunora dev" label={t("CLI")} />
-                </div>
-            </section>
-
-            {/* Quick links into the busiest panels. */}
-            <section className="flex flex-col gap-3" data-testid="home-quick-links">
-                <h2 className="text-sm font-semibold tracking-tight text-foreground">{t("Quick links")}</h2>
-                <div className="flex flex-wrap gap-2">
-                    <Button data-to="/data" onClick={goTo} size="sm" type="button" variant="outline">
-                        {t("Table editor")}
-                    </Button>
-                    <Button data-to="/functions" onClick={goTo} size="sm" type="button" variant="outline">
-                        {t("SQL / Functions")}
-                    </Button>
-                    <Button data-to="/logs" onClick={goTo} size="sm" type="button" variant="outline">
-                        {t("Logs")}
-                    </Button>
                 </div>
             </section>
         </div>

@@ -209,13 +209,15 @@ describe("sqlEditorPanel", () => {
         // A result with a numeric column surfaces the Export menu.
         expect(screen.getByTestId("grid-export")).toBeDefined();
 
-        // The Chart tab plots one bar per row (numeric `count` against `author`).
+        // The Chart tab plots the numeric column (evilcharts/Recharts). Recharts
+        // renders into a measured container (0-size under jsdom), so assert the
+        // chart mounted (not the empty-state) rather than its bars/labels.
         fireEvent.click(screen.getByTestId("sql-tab-chart"));
 
         const chart = await screen.findByTestId("sql-chart");
 
-        expect(within(chart).getAllByTestId("sql-chart-bar")).toHaveLength(2);
-        expect(chart.textContent).toContain("ada");
+        expect(chart).toBeDefined();
+        expect(screen.queryByTestId("sql-chart-empty")).toBeNull();
     });
 
     const typeInEditor = (value: string): void => {

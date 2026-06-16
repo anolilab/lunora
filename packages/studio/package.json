@@ -52,6 +52,8 @@
         "./package.json": "./package.json"
     },
     "scripts": {
+        "dev": "pnpm --filter @lunora/studio-app dev",
+        "dev:mock": "pnpm --filter @lunora/studio-app dev --open /mock.html",
         "build": "pnpm exec packem build --development && pnpm run build:css && pnpm run build:standalone",
         "build:css": "pnpm exec tailwindcss --input ./src/styles.css --output ./dist/styles.css --minify",
         "build:standalone": "node ./scripts/build-standalone.mjs",
@@ -81,6 +83,8 @@
         "@xyflow/react": "catalog:frontend",
         "class-variance-authority": "catalog:ui",
         "clsx": "catalog:ui",
+        "motion": "catalog:frontend",
+        "recharts": "catalog:frontend",
         "tailwind-merge": "catalog:ui"
     },
     "devDependencies": {

@@ -296,6 +296,10 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
     const asClient = {
         action,
         cancelScheduledJob,
+        // The header's ConnectionBadge reads live socket status via these; the
+        // mock has no socket, so it reports a stable "idle" and never notifies.
+        connectionStatus: () => "idle" as const,
+        onConnectionStatus: (_listener: () => void) => () => {},
         deleteStorageObject,
         facetGlobalColumn,
         fetchOpenApi,

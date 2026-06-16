@@ -12,9 +12,30 @@ import {
     useSearch,
 } from "@tanstack/react-router";
 import type { ReactElement, ReactNode } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo } from "react";
 
+import { BrandMark } from "../components/brand-mark";
 import { ErrorBoundary } from "../components/error-boundary";
+import { RulesBanner } from "../components/rules-banner";
+import { Badge } from "../components/ui/badge";
+import { Input } from "../components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popover";
+import {
+    Sidebar,
+    SidebarContent,
+    SidebarFooter,
+    SidebarGroup,
+    SidebarGroupContent,
+    SidebarGroupLabel,
+    SidebarHeader,
+    SidebarInset,
+    SidebarMenu,
+    SidebarMenuButton,
+    SidebarMenuItem,
+    SidebarProvider,
+    SidebarTrigger,
+    useSidebar,
+} from "../components/ui/sidebar";
 import { Skeleton } from "../components/ui/skeleton";
 import { InsightsPanel } from "../features/advisors/insights-panel";
 import RlsPanel from "../features/advisors/rls-panel";
@@ -59,7 +80,7 @@ import { fireAndForget } from "../lib/internal";
 import type { FunctionDescriptor } from "../lib/types";
 import { cn } from "../lib/utils";
 import type { CommandItem } from "./command-palette";
-import { CommandPalette } from "./command-palette";
+import { CommandPalette, openCommandPalette } from "./command-palette";
 
 /** Identifier for each built-in studio tab. */
 type StudioTab =
@@ -106,6 +127,13 @@ interface StudioProps {
      * the mount.
      */
     readonly basePath?: string;
+
+    /**
+     * App-owned top-bar + sidebar-footer chrome (theme toggle, admin-token
+     * popover, rules banner). The batteries-included {@link StudioApp} supplies
+     * this; composing `&lt;Studio>` bare omits those affordances. See {@link StudioChrome}.
+     */
+    readonly chrome?: StudioChrome;
 
     /**
      * Make the data tab editable (insert/edit/delete rows). Off by default so
@@ -190,13 +218,32 @@ interface StudioProps {
 type StudioShellProps = Omit<StudioProps, "i18n" | "locale">;
 
 /**
- * Stable identifier for each icon-rail domain; the display label is localised.
- * Adapts the Supabase-Studio section model (Home · Database · Functions · Auth ·
- * Storage · Reports · Advisors · Logs · Settings): the table editor, SQL editor,
- * and schema/migrations pages all live under one `database` domain so the data
- * and SQL surfaces sit together. Target IA in `STUDIO-REDESIGN-PLAN.md` §2.
+ * Top-bar + sidebar-footer chrome the {@link StudioApp} owns (theme + admin
+ * token state, the rules banner) but which renders *inside* the router-owned
+ * {@link StudioLayout} (the header and sidebar footer). The layout is a route
+ * component with no props, so it reads this from context rather than threading
+ * it through the router. Absent (composing `&lt;Studio>` bare) the layout simply
+ * omits those affordances.
  */
-type NavGroupKey = "advisors" | "auth" | "database" | "functions" | "home" | "logs" | "reports" | "settings" | "storage";
+interface StudioChrome {
+    readonly clearToken: () => void;
+    readonly onToggleTheme: () => void;
+    readonly onTokenChange: (event: React.ChangeEvent<HTMLInputElement>) => void;
+    readonly rulesInstalled?: boolean;
+    readonly theme: "dark" | "light";
+    readonly token: string;
+}
+
+const StudioChromeContext = createContext<StudioChrome | null>(null);
+
+/**
+ * Stable identifier for each sidebar domain; the display label is localised.
+ * Domains group the pages by concern — Overview · Database · Functions · Auth ·
+ * Storage · Observability (live logs + metrics) · Advisors · Operations (jobs,
+ * mail, drains, payments) · Settings — so the data/SQL surfaces sit together and
+ * monitoring is separated from the things you run.
+ */
+type NavGroupKey = "advisors" | "auth" | "database" | "functions" | "observability" | "operations" | "overview" | "settings" | "storage";
 
 /**
  * 16px line glyphs (drawn at a 24-unit grid) keyed by tab. Inline so the
@@ -257,14 +304,14 @@ type NavGroup = { readonly key: NavGroupKey; readonly tabs: ReadonlyArray<Studio
  * tuple so the first domain is a guaranteed fallback for the active-domain lookup.
  */
 const NAV_GROUPS: readonly [NavGroup, ...NavGroup[]] = [
-    { key: "home", tabs: ["home"] },
-    { key: "database", tabs: ["data", "sql", "schema", "migrations", "vectors", "export", "pitr"] },
+    { key: "overview", tabs: ["home", "dashboards"] },
+    { key: "database", tabs: ["data", "sql", "schema", "migrations", "vectors", "pitr", "export"] },
     { key: "functions", tabs: ["functions", "api", "workflows"] },
     { key: "auth", tabs: ["users", "organizations", "authSessions", "authConfig"] },
     { key: "storage", tabs: ["files", "storageRules"] },
-    { key: "reports", tabs: ["dashboards", "metrics", "analytics", "health"] },
+    { key: "observability", tabs: ["logs", "audit", "realtime", "metrics", "analytics", "health"] },
     { key: "advisors", tabs: ["security", "rls", "permissions", "insights"] },
-    { key: "logs", tabs: ["logs", "audit", "schedule", "realtime", "mail", "drains", "payments"] },
+    { key: "operations", tabs: ["schedule", "mail", "drains", "payments"] },
     { key: "settings", tabs: ["settings"] },
 ];
 
@@ -293,24 +340,6 @@ const isTabVisible = (tab: StudioTab, features: StudioFeaturesResult): boolean =
     const feature = TAB_FEATURE[tab];
 
     return feature === undefined || features[feature];
-};
-
-/**
- * Which tab's glyph represents each rail domain. The rail shows one icon per
- * domain (Supabase-style); the secondary nav shows a glyph per sub-page. Most
- * domains borrow their first sub-page's icon; `database` uses the data-cylinder
- * glyph (its first sub-page is the table editor).
- */
-const GROUP_ICON_TAB: Record<NavGroupKey, StudioTab> = {
-    advisors: "security",
-    auth: "users",
-    database: "data",
-    functions: "functions",
-    home: "home",
-    logs: "logs",
-    reports: "metrics",
-    settings: "settings",
-    storage: "files",
 };
 
 const TabIcon = ({ tab }: { readonly tab: StudioTab }): ReactElement => (
@@ -381,11 +410,226 @@ const tabFromPathname = (pathname: string): StudioTab => {
     return (TABS as ReadonlyArray<string>).includes(slug) ? (slug as StudioTab) : "home";
 };
 
+/** The admin-token form shown in the footer connect popover — shared by the expanded card and the collapsed avatar trigger. */
+const ConnectPopoverContent = ({ chrome, connected }: { readonly chrome: StudioChrome; readonly connected: boolean }): ReactElement => {
+    const t = useT();
+
+    return (
+        <div className="flex flex-col gap-2">
+            <label className="text-xs font-medium text-foreground" htmlFor="dash-app-token">
+                {t("admin token")}
+            </label>
+            <Input
+                className="h-8"
+                data-testid="dash-app-token"
+                id="dash-app-token"
+                onChange={chrome.onTokenChange}
+                placeholder="LUNORA_ADMIN_TOKEN"
+                type="password"
+                value={chrome.token}
+            />
+            {connected && (
+                <p className="flex items-start gap-1.5 text-[11px] text-muted-foreground" data-testid="dash-app-token-warning" role="note">
+                    <span aria-hidden="true" className="text-warning">
+                        ⚠
+                    </span>
+                    {t("Token rides the WebSocket URL — it can surface in browser DevTools and server logs. Use a dev-only token.")}
+                </p>
+            )}
+            {connected && (
+                <button
+                    className="self-start rounded-md border border-border px-2.5 py-1 text-xs font-medium outline-none transition-colors hover:bg-accent focus-visible:bg-accent"
+                    data-testid="dash-app-clear-token"
+                    onClick={chrome.clearToken}
+                    type="button"
+                >
+                    {t("Clear")}
+                </button>
+            )}
+        </div>
+    );
+};
+
+interface StudioSidebarProps {
+    readonly chrome: StudioChrome | null;
+    readonly connected: boolean;
+    readonly current: StudioTab;
+    readonly groupLabel: Record<NavGroupKey, string>;
+    readonly groups: ReadonlyArray<{ readonly key: NavGroupKey; readonly tabs: ReadonlyArray<StudioTab> }>;
+    readonly selectTab: (event: React.MouseEvent<HTMLButtonElement>) => void;
+    readonly tabDescription: Record<StudioTab, string>;
+    readonly tabLabel: Record<StudioTab, string>;
+}
+
 /**
- * Persistent shell rendered by the router's root route: the top-level grid with
- * the grouped sidebar (a tablist whose buttons navigate) and the routed panel
- * area (`&lt;Outlet />`). The active tab is derived from the URL, so deep links and
- * the browser back/forward buttons drive which panel shows.
+ * The grouped sidebar. Reads the provider's collapsed/expanded state to swap
+ * presentation: **expanded** shows the full labelled nav (each row's one-line
+ * description as a hover tooltip); **collapsed** shows one icon per domain, each
+ * opening a hover flyout of that domain's pages — so every page stays reachable
+ * from the narrow icon rail. Rendered inside `&lt;SidebarProvider>` so it can call
+ * {@link useSidebar}.
+ */
+const StudioSidebar = ({ chrome, connected, current, groupLabel, groups, selectTab, tabDescription, tabLabel }: StudioSidebarProps): ReactElement => {
+    const t = useT();
+    const { state } = useSidebar();
+    const collapsed = state === "collapsed";
+
+    return (
+        <Sidebar collapsible="icon" variant="inset">
+            {/* Brand — a static mark + wordmark (no button/hover), bigger logo. */}
+            <SidebarHeader>
+                <div className={cn("flex items-center gap-2.5 px-1.5 py-1", collapsed && "justify-center px-0")}>
+                    <BrandMark className="size-9 shrink-0 text-foreground" />
+                    {!collapsed && (
+                        <>
+                            <span className="grid flex-1 leading-tight">
+                                <span className="truncate text-sm font-semibold text-foreground">lunora</span>
+                                <span className="truncate text-[11px] text-muted-foreground">{t("Studio")}</span>
+                            </span>
+                            <Badge className="px-1.5 text-[10px] tracking-wider uppercase" variant="secondary">
+                                {connected ? t("Live") : t("Local")}
+                            </Badge>
+                        </>
+                    )}
+                </div>
+            </SidebarHeader>
+
+            <SidebarContent>
+                {collapsed
+                    ? groups.map((group) => (
+                          // Collapsed: one icon per domain. Hover (or click) opens a flyout
+                          // of its pages; the icon itself never navigates — only the flyout
+                          // rows do — so a click in the mini rail just reveals the submenu.
+                          <Popover key={group.key}>
+                              <PopoverTrigger
+                                  aria-current={group.tabs.includes(current) ? "page" : undefined}
+                                  aria-label={groupLabel[group.key]}
+                                  className="mx-auto flex size-8 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:bg-sidebar-accent data-[popup-open]:bg-sidebar-accent data-[popup-open]:text-sidebar-accent-foreground data-[popup-open]:shadow-xs aria-[current=page]:bg-sidebar-accent aria-[current=page]:text-sidebar-accent-foreground aria-[current=page]:shadow-xs"
+                                  delay={120}
+                                  openOnHover
+                              >
+                                  <TabIcon tab={group.tabs[0] as StudioTab} />
+                              </PopoverTrigger>
+                              <PopoverContent align="start" className="w-56 p-1" side="right" sideOffset={8}>
+                                  <div className="px-2 py-1.5 text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
+                                      {groupLabel[group.key]}
+                                  </div>
+                                  {group.tabs.map((tab) => (
+                                      <button
+                                          aria-current={current === tab ? "page" : undefined}
+                                          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-[13px] text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent aria-[current=page]:bg-accent aria-[current=page]:font-medium [&_svg]:opacity-70 aria-[current=page]:[&_svg]:opacity-100"
+                                          data-tab={tab}
+                                          data-testid={`dash-tab-${tab}`}
+                                          key={tab}
+                                          onClick={selectTab}
+                                          title={tabDescription[tab]}
+                                          type="button"
+                                      >
+                                          <TabIcon tab={tab} />
+                                          <span>{tabLabel[tab]}</span>
+                                      </button>
+                                  ))}
+                              </PopoverContent>
+                          </Popover>
+                      ))
+                    : groups.map((group) => (
+                          <SidebarGroup key={group.key}>
+                              <SidebarGroupLabel className="text-[11px] font-medium tracking-wider uppercase">{groupLabel[group.key]}</SidebarGroupLabel>
+                              <SidebarGroupContent>
+                                  <SidebarMenu>
+                                      {group.tabs.map((tab) => (
+                                          <SidebarMenuItem key={tab}>
+                                              <SidebarMenuButton
+                                                  className="data-active:shadow-xs"
+                                                  data-tab={tab}
+                                                  data-testid={`dash-tab-${tab}`}
+                                                  isActive={current === tab}
+                                                  onClick={selectTab}
+                                                  title={tabDescription[tab]}
+                                                  tooltip={tabDescription[tab]}
+                                              >
+                                                  <TabIcon tab={tab} />
+                                                  <span>{tabLabel[tab]}</span>
+                                              </SidebarMenuButton>
+                                          </SidebarMenuItem>
+                                      ))}
+                                  </SidebarMenu>
+                              </SidebarGroupContent>
+                          </SidebarGroup>
+                      ))}
+            </SidebarContent>
+
+            {/* Profile / connection card pinned to the bottom — opens the admin-token
+                popover. Collapses to just the avatar in the icon rail. */}
+            <SidebarFooter>
+                <SidebarMenu>
+                    <SidebarMenuItem>
+                        {chrome === null ? (
+                            <SidebarMenuButton className="data-active:bg-transparent" size="lg" tooltip={t("Admin")}>
+                                <span className="flex size-8 items-center justify-center rounded-full bg-sidebar-accent text-[11px] font-medium">C</span>
+                                <span className="grid flex-1 text-start leading-tight">
+                                    <span className="truncate text-[13px] font-medium">{t("Admin")}</span>
+                                    <span className="truncate text-[11px] text-muted-foreground">{t("Studio")}</span>
+                                </span>
+                            </SidebarMenuButton>
+                        ) : (
+                            <Popover>
+                                <PopoverTrigger
+                                    className={cn(
+                                        "flex items-center gap-2 rounded-md text-start outline-none transition-colors hover:bg-sidebar-accent focus-visible:bg-sidebar-accent",
+                                        collapsed ? "mx-auto size-8 justify-center" : "w-full p-2",
+                                    )}
+                                    data-testid="dash-app-connect"
+                                    title={connected ? t("Connected") : t("Not connected")}
+                                >
+                                    <span className="relative flex size-8 shrink-0 items-center justify-center rounded-full bg-sidebar-accent text-[11px] font-medium">
+                                        C
+                                        <span
+                                            aria-hidden="true"
+                                            className={cn(
+                                                "absolute -end-0.5 -bottom-0.5 size-2.5 rounded-full border-2 border-sidebar",
+                                                connected ? "bg-success" : "bg-muted-foreground/50",
+                                            )}
+                                        />
+                                    </span>
+                                    {!collapsed && (
+                                        <>
+                                            <span className="grid flex-1 text-start leading-tight">
+                                                <span className="truncate text-[13px] font-medium">{t("Admin")}</span>
+                                                <span className="truncate text-[11px] text-muted-foreground">
+                                                    {connected ? t("Connected") : t("Not connected")}
+                                                </span>
+                                            </span>
+                                            <svg
+                                                aria-hidden="true"
+                                                className="size-4 text-muted-foreground"
+                                                fill="none"
+                                                stroke="currentColor"
+                                                strokeWidth={1.7}
+                                                viewBox="0 0 24 24"
+                                            >
+                                                <path d="m8 9 4-4 4 4M8 15l4 4 4-4" strokeLinecap="round" strokeLinejoin="round" />
+                                            </svg>
+                                        </>
+                                    )}
+                                </PopoverTrigger>
+                                <PopoverContent align={collapsed ? "end" : "start"} keepMounted side={collapsed ? "right" : "top"}>
+                                    <ConnectPopoverContent chrome={chrome} connected={connected} />
+                                </PopoverContent>
+                            </Popover>
+                        )}
+                    </SidebarMenuItem>
+                </SidebarMenu>
+            </SidebarFooter>
+        </Sidebar>
+    );
+};
+
+/**
+ * Persistent shell rendered by the router's root route: the grouped sidebar
+ * ({@link StudioSidebar}) and the routed panel area (`&lt;Outlet />`). The active
+ * tab is derived from the URL, so deep links and the browser back/forward
+ * buttons drive which panel shows.
  */
 const StudioLayout = (): ReactElement => {
     const t = useT();
@@ -465,9 +709,9 @@ const StudioLayout = (): ReactElement => {
             auth: t("Auth"),
             database: t("Database"),
             functions: t("Functions"),
-            home: t("Home"),
-            logs: t("Logs"),
-            reports: t("Reports"),
+            observability: t("Observability"),
+            operations: t("Operations"),
+            overview: t("Overview"),
             settings: t("Settings"),
             storage: t("Storage"),
         };
@@ -527,23 +771,12 @@ const StudioLayout = (): ReactElement => {
         }
     }, [current, tabLabel]);
 
-    // The active rail area is the domain owning the current tab; the secondary
-    // nav lists that domain's sub-pages. Selecting a rail icon jumps to the
-    // domain's first sub-page. This is the two-zone console (48px icon rail +
-    // contextual nav) of `STUDIO-REDESIGN-PLAN.md` §2, modelled on Supabase Studio.
-    // `current` always belongs to a group, but `.find` is typed as possibly
-    // undefined; fall back to the first domain (defined by the non-empty tuple
-    // type) so the shell always has an active area.
+    // The domain owning the current tab, used for the header breadcrumb. `current`
+    // always belongs to a group, but `.find` is typed as possibly undefined; fall
+    // back to the first domain (the non-empty tuple type guarantees one).
     const activeGroup = visibleGroups.find((group) => group.tabs.includes(current)) ?? NAV_GROUPS[0];
 
-    const selectGroup = useCallback(
-        (event: React.MouseEvent<HTMLButtonElement>): void => {
-            fireAndForget(navigate({ to: `/${event.currentTarget.dataset.tab ?? ""}` }));
-        },
-        [navigate],
-    );
-
-    // Every navigable destination, in rail order, for the ⌘K command palette.
+    // Every navigable destination, in sidebar order, for the ⌘K command palette.
     const commandItems = useMemo<CommandItem[]>(
         () =>
             visibleGroups.flatMap((group) =>
@@ -554,182 +787,132 @@ const StudioLayout = (): ReactElement => {
         [groupLabel, tabLabel, visibleGroups],
     );
 
-    // Collapse the 250px secondary nav to just the icon rail (Supabase's bottom
-    // rail toggle). In-memory — a fresh session starts expanded.
-    const [navCollapsed, setNavCollapsed] = useState<boolean>(false);
-    const toggleNav = useCallback((): void => {
-        setNavCollapsed((collapsed) => !collapsed);
-    }, []);
-
-    // Roving-tabindex keyboard support for the secondary-nav tablist (ARIA tabs
-    // pattern, vertical + manual activation): Up/Down move focus between the
-    // sub-page tabs, Home/End jump to the ends. Only the selected tab sits in the
-    // tab order (`tabIndex` below); Enter/Space (native button) then activates the
-    // focused tab, which navigates. Focus moves without changing the route, so it
-    // never fires a navigation the user didn't ask for. The handler lives on each
-    // tab (already focusable) rather than the tablist container, so the container
-    // itself never becomes a tab stop.
-    const onTabKeyDown = useCallback((event: React.KeyboardEvent<HTMLButtonElement>): void => {
-        if (event.key !== "ArrowDown" && event.key !== "ArrowUp" && event.key !== "Home" && event.key !== "End") {
-            return;
-        }
-
-        const list = event.currentTarget.parentElement;
-
-        if (list === null) {
-            return;
-        }
-
-        const buttons = [...list.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
-        const activeIndex = buttons.indexOf(event.currentTarget);
-        let nextIndex: number;
-
-        switch (event.key) {
-            case "ArrowDown": {
-                nextIndex = (activeIndex + 1) % buttons.length;
-                break;
-            }
-            case "ArrowUp": {
-                nextIndex = (activeIndex - 1 + buttons.length) % buttons.length;
-                break;
-            }
-            case "End": {
-                nextIndex = buttons.length - 1;
-                break;
-            }
-            default: {
-                nextIndex = 0;
-                break;
-            }
-        }
-
-        event.preventDefault();
-        buttons[nextIndex]?.focus();
-    }, []);
+    // The app-owned chrome (theme + admin token + rules banner) renders inside this
+    // router-owned layout; absent when `<Studio>` is composed bare.
+    const chrome = useContext(StudioChromeContext);
+    const connected = chrome !== null && chrome.token !== "";
 
     return (
-        <div
-            className={cn("grid min-h-0 flex-1", navCollapsed ? "grid-cols-[3rem_minmax(0,1fr)]" : "grid-cols-[3rem_13.5rem_minmax(0,1fr)]")}
-            data-testid="lunora-studio"
-        >
+        <SidebarProvider className="min-h-0 flex-1" data-testid="lunora-studio">
             <CommandPalette items={commandItems} />
-            {/* Icon rail — one entry per area, settings pinned to the bottom. */}
-            <nav aria-label={t("Studio areas")} className="flex flex-col items-center gap-1 border-e border-border bg-sidebar py-2" data-testid="dash-rail">
-                {visibleGroups.map((group) => {
-                    // The rail icon routes to the group's first sub-page; its glyph
-                    // is the domain icon (Supabase-style), not necessarily that page's.
-                    const railTab = group.tabs[0] as StudioTab;
 
-                    return (
-                        <button
-                            aria-current={activeGroup.key === group.key ? "page" : undefined}
-                            aria-label={groupLabel[group.key]}
-                            className={cn(
-                                "flex size-8 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:bg-sidebar-accent aria-[current=page]:bg-sidebar-accent aria-[current=page]:text-foreground",
-                                group.key === "settings" && "mt-auto",
-                            )}
-                            data-tab={railTab}
-                            data-testid={`dash-rail-${group.key}`}
-                            key={group.key}
-                            onClick={selectGroup}
-                            title={groupLabel[group.key]}
-                            type="button"
+            <StudioSidebar
+                chrome={chrome}
+                connected={connected}
+                current={current}
+                groupLabel={groupLabel}
+                groups={visibleGroups}
+                selectTab={selectTab}
+                tabDescription={tabDescription}
+                tabLabel={tabLabel}
+            />
+
+            <SidebarInset className="overflow-hidden md:peer-data-[variant=inset]:rounded-xl md:peer-data-[variant=inset]:shadow-sm">
+                {/* Top bar — sidebar toggle + breadcrumb, centred ⌘K search, and the
+                    connection / theme cluster. Mirrors the reference dashboard header. */}
+                <header className="flex h-11 shrink-0 items-center gap-2 border-b border-border px-4" data-testid="dash-app-header">
+                    <SidebarTrigger className="-ms-1" />
+                    <nav aria-label={t("Breadcrumb")} className="flex items-center gap-1.5 text-[13px]">
+                        <span className="text-muted-foreground">{groupLabel[activeGroup.key]}</span>
+                        <svg
+                            aria-hidden="true"
+                            className="size-3.5 text-muted-foreground/60"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth={1.7}
+                            viewBox="0 0 24 24"
                         >
-                            <TabIcon tab={GROUP_ICON_TAB[group.key]} />
-                        </button>
-                    );
-                })}
+                            <path d="m9 6 6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                        <span className="font-medium text-foreground">{tabLabel[current]}</span>
+                    </nav>
 
-                {/* Collapse/expand the secondary nav — Supabase's bottom rail toggle. */}
-                <button
-                    aria-label={navCollapsed ? t("Expand sidebar") : t("Collapse sidebar")}
-                    aria-pressed={navCollapsed}
-                    className="flex size-8 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:bg-sidebar-accent"
-                    data-testid="dash-rail-toggle"
-                    onClick={toggleNav}
-                    title={navCollapsed ? t("Expand sidebar") : t("Collapse sidebar")}
-                    type="button"
+                    <button
+                        className="mx-auto hidden h-8 w-72 items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 text-xs text-muted-foreground transition-colors hover:bg-muted md:flex"
+                        data-testid="dash-app-search"
+                        onClick={openCommandPalette}
+                        type="button"
+                    >
+                        <svg aria-hidden="true" className="size-3.5" fill="none" stroke="currentColor" strokeWidth={1.8} viewBox="0 0 24 24">
+                            <circle cx="11" cy="11" r="7" />
+                            <path d="m21 21-4.3-4.3" strokeLinecap="round" />
+                        </svg>
+                        {t("Search…")}
+                        <kbd className="ms-auto rounded border border-border bg-background px-1 font-sans text-[10px] text-muted-foreground">⌘K</kbd>
+                    </button>
+
+                    <div className="ms-auto flex items-center gap-1.5 md:ms-0">
+                        {chrome !== null && (
+                            <button
+                                aria-label={chrome.theme === "dark" ? t("Switch to light theme") : t("Switch to dark theme")}
+                                className="flex size-8 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-accent hover:text-foreground focus-visible:bg-accent"
+                                data-testid="dash-app-theme"
+                                onClick={chrome.onToggleTheme}
+                                title={chrome.theme === "dark" ? t("Switch to light theme") : t("Switch to dark theme")}
+                                type="button"
+                            >
+                                {chrome.theme === "dark" ? (
+                                    <svg
+                                        aria-hidden="true"
+                                        className="size-4"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        strokeWidth={1.7}
+                                        viewBox="0 0 24 24"
+                                    >
+                                        <circle cx="12" cy="12" r="4" />
+                                        <path d="M12 2v2m0 16v2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4M2 12h2m16 0h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+                                    </svg>
+                                ) : (
+                                    <svg
+                                        aria-hidden="true"
+                                        className="size-4"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        strokeWidth={1.7}
+                                        viewBox="0 0 24 24"
+                                    >
+                                        <path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z" />
+                                    </svg>
+                                )}
+                            </button>
+                        )}
+                    </div>
+                </header>
+
+                {chrome?.rulesInstalled === false && <RulesBanner />}
+
+                <div
+                    aria-labelledby={`dash-tab-${current}`}
+                    className="flex min-w-0 flex-1 flex-col overflow-hidden"
+                    data-testid="dash-panel"
+                    id="dash-panel"
+                    role="tabpanel"
                 >
-                    <svg
-                        aria-hidden="true"
-                        className={cn("size-4 transition-transform", navCollapsed && "rotate-180")}
-                        fill="none"
-                        stroke="currentColor"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        strokeWidth={1.6}
-                        viewBox="0 0 24 24"
-                    >
-                        <path d="M15 6 9 12l6 6" />
-                    </svg>
-                </button>
-            </nav>
-
-            {/* Secondary nav — the active area's title + its tabs. Hidden when collapsed.
-                Only the inner list carries `role="tablist"` (a tablist may contain
-                only tabs, so the heading stays outside it); the list is labelled by
-                that heading and the tabs control the shared panel region. */}
-            <div
-                className={cn("flex flex-col overflow-y-auto border-e border-border bg-sidebar", navCollapsed && "hidden")}
-                data-testid="dash-tabs"
-                hidden={navCollapsed}
-            >
-                <header className="flex h-12 shrink-0 items-center px-4">
-                    <h2 className="text-[15px] font-semibold tracking-tight text-foreground" id="dash-tabs-heading">
-                        {groupLabel[activeGroup.key]}
-                    </h2>
-                </header>
-                <div aria-labelledby="dash-tabs-heading" aria-orientation="vertical" className="flex flex-col gap-px px-2 pb-3" role="tablist">
-                    {activeGroup.tabs.map((tab) => (
-                        <button
-                            aria-controls="dash-panel"
-                            aria-selected={current === tab}
-                            className="relative flex w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-start text-[13px] text-muted-foreground outline-none transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:bg-sidebar-accent focus-visible:text-sidebar-accent-foreground aria-selected:bg-sidebar-accent aria-selected:font-medium aria-selected:text-sidebar-accent-foreground [&_svg]:opacity-70 aria-selected:[&_svg]:opacity-100"
-                            data-tab={tab}
-                            data-testid={`dash-tab-${tab}`}
-                            id={`dash-tab-${tab}`}
-                            key={tab}
-                            onClick={selectTab}
-                            onKeyDown={onTabKeyDown}
-                            role="tab"
-                            tabIndex={current === tab ? 0 : -1}
-                            type="button"
+                    {/* No per-section title bar — the breadcrumb already names the page and
+                        each nav item carries its one-line description as a tooltip, so the
+                        panel gets the full content area. Key the boundary by tab so one
+                        panel throwing doesn't blank the shell, and switching tabs clears a
+                        prior panel's error. Full-height tabs (Table/SQL editor) own the
+                        height and scroll internally and fill edge-to-edge; the rest get the
+                        default padded, page-scrolled content area. */}
+                    <div className={fullHeight ? "flex min-w-0 flex-1 flex-col overflow-hidden" : "min-w-0 flex-1 overflow-auto p-6"}>
+                        <ErrorBoundary
+                            fallbackTitle={t("{title} failed", { title: tabLabel[current] })}
+                            key={current}
+                            label={tabLabel[current]}
+                            retryLabel={t("Try again")}
                         >
-                            <TabIcon tab={tab} />
-                            {tabLabel[tab]}
-                        </button>
-                    ))}
+                            <Outlet />
+                        </ErrorBoundary>
+                    </div>
                 </div>
-            </div>
-
-            <div
-                aria-labelledby={`dash-tab-${current}`}
-                className="flex min-w-0 flex-col overflow-hidden bg-background"
-                data-testid="dash-panel"
-                id="dash-panel"
-                role="tabpanel"
-            >
-                {/* Page header per section — a Studio-style title bar. */}
-                <header className="flex shrink-0 flex-col gap-0.5 border-b border-border px-6 py-4">
-                    <h1 className="text-lg font-semibold tracking-tight text-foreground">{tabLabel[current]}</h1>
-                    <p className="text-sm text-muted-foreground">{tabDescription[current]}</p>
-                </header>
-                {/* Key the boundary by tab so one panel throwing doesn't blank the
-                    shell, and switching tabs clears a prior panel's error. Full-height
-                    tabs (Table/SQL editor) own the height and scroll internally; the
-                    rest get the default padded, page-scrolled content area. */}
-                <div className={fullHeight ? "flex min-w-0 flex-1 flex-col overflow-hidden" : "min-w-0 flex-1 overflow-auto p-6"}>
-                    <ErrorBoundary
-                        fallbackTitle={t("{title} failed", { title: tabLabel[current] })}
-                        key={current}
-                        label={tabLabel[current]}
-                        retryLabel={t("Try again")}
-                    >
-                        <Outlet />
-                    </ErrorBoundary>
-                </div>
-            </div>
-        </div>
+            </SidebarInset>
+        </SidebarProvider>
     );
 };
 
@@ -883,6 +1066,7 @@ const buildRouter = ({
  */
 const StudioShell = ({
     basePath,
+    chrome,
     dataEditable,
     functions,
     initialShardKey,
@@ -927,7 +1111,11 @@ const StudioShell = ({
         ],
     );
 
-    return <RouterProvider router={router} />;
+    return (
+        <StudioChromeContext.Provider value={chrome ?? null}>
+            <RouterProvider router={router} />
+        </StudioChromeContext.Provider>
+    );
 };
 
 /**
@@ -942,6 +1130,7 @@ const StudioShell = ({
  */
 export const Studio = ({
     basePath,
+    chrome,
     dataEditable,
     functions,
     i18n,
@@ -958,6 +1147,7 @@ export const Studio = ({
     const shell = (
         <StudioShell
             basePath={basePath}
+            chrome={chrome}
             dataEditable={dataEditable}
             functions={functions}
             initialShardKey={initialShardKey}
@@ -982,4 +1172,4 @@ export const Studio = ({
     );
 };
 
-export type { StudioProps, StudioTab };
+export type { StudioChrome, StudioProps, StudioTab };

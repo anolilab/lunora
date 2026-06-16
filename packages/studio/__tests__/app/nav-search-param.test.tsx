@@ -65,7 +65,7 @@ describe("nav with a search param in the URL", () => {
         });
     });
 
-    it("jumps to another domain via the rail when ?table= is set", async () => {
+    it("jumps to another domain's page when ?table= is set", async () => {
         expect.hasAssertions();
 
         globalThis.history.pushState({}, "", "/data?table=verification");
@@ -73,8 +73,8 @@ describe("nav with a search param in the URL", () => {
         await waitFor(() => {
             expect(globalThis.location.pathname).toBe("/data");
         });
-        // The logs rail icon routes to its first sub-page (`/logs`).
-        fireEvent.click(await screen.findByTestId("dash-rail-logs"));
+        // Every page is directly reachable from the grouped sidebar.
+        fireEvent.click(await screen.findByTestId("dash-tab-logs"));
         await waitFor(() => {
             expect(globalThis.location.pathname).toBe("/logs");
         });

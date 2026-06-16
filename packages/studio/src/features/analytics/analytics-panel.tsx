@@ -3,6 +3,7 @@ import { createAnalyticsSqlClient } from "@lunora/analytics";
 import type { ReactElement } from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { Card } from "../../components/ui/card";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import type { MessageId } from "../../i18n/i18n-context";
@@ -91,23 +92,25 @@ const PanelResult = ({ state, title }: { readonly state: PanelState; readonly ti
     const { error, loading, result } = state;
 
     return (
-        <section className="rounded-md border border-border" data-testid={`analytics-panel-${title}`}>
-            <header className="border-b border-border px-3 py-2 text-sm font-medium text-foreground">{t(title)}</header>
+        <Card className="gap-0 py-0" data-testid={`analytics-panel-${title}`}>
+            <header className="border-b border-border px-4 py-3">
+                <span className="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">{t(title)}</span>
+            </header>
 
             {loading && (
-                <p className="px-3 py-6 text-sm text-muted-foreground" data-testid="analytics-loading">
+                <p className="px-4 py-8 text-center text-sm text-muted-foreground" data-testid="analytics-loading">
                     {t("Loading…")}
                 </p>
             )}
 
             {!loading && error !== null && (
-                <p className="px-3 py-6 text-sm text-destructive" data-testid="analytics-error" role="alert">
+                <p className="px-4 py-8 text-center text-sm text-destructive" data-testid="analytics-error" role="alert">
                     {error}
                 </p>
             )}
 
             {!loading && error === null && result !== null && result.rows.length === 0 && (
-                <p className="px-3 py-6 text-sm text-muted-foreground" data-testid="analytics-empty-rows">
+                <p className="px-4 py-8 text-center text-sm text-muted-foreground" data-testid="analytics-empty-rows">
                     {t("No data points yet.")}
                 </p>
             )}
@@ -135,7 +138,7 @@ const PanelResult = ({ state, title }: { readonly state: PanelState; readonly ti
                     </TableBody>
                 </Table>
             )}
-        </section>
+        </Card>
     );
 };
 

@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LiveError } from "../../components/live-status";
 import { ShardInput } from "../../components/shard-input";
 import { Button } from "../../components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
+import { Card, CardContent } from "../../components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import useLiveAdmin from "../../hooks/use-live-admin";
 import { useT } from "../../i18n/i18n-context";
@@ -18,7 +18,7 @@ import useLiveShardSeed from "../data/hooks/use-live-shard-seed";
 import type { ShardMetricsResult } from "./metrics-aggregate";
 import { aggregateMetrics, computeLatencyPercentiles, enrichQueryStats, shardsToAggregate } from "./metrics-aggregate";
 import { QueryInsights } from "./query-insights";
-import { SPARK_HEIGHT, SPARK_WIDTH, sparklinePoints } from "./sparkline";
+import { Sparkline } from "./sparkline";
 
 interface MetricsPanelProps {
     /** Shard key the panel reports on. Defaults to the root shard. */
@@ -55,18 +55,35 @@ const hitRate = (hits: number, misses: number): string => {
     return total === 0 ? "—" : `${((hits / total) * 100).toFixed(1)}%`;
 };
 
-/** A single labelled metric rendered as a compact stat Card. */
-const StatCard = ({ label, testId, value, valueSize = "lg" }: { label: string; testId?: string; value: ReactNode; valueSize?: "lg" | "xl" }): ReactElement => (
-    <Card className="rounded-md">
-        <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-normal text-muted-foreground">{label}</CardTitle>
-        </CardHeader>
-        <CardContent
-            className={valueSize === "xl" ? "text-2xl font-semibold tabular-nums text-foreground" : "text-lg font-semibold tabular-nums text-foreground"}
-            data-testid={testId}
-        >
-            {value}
-        </CardContent>
+/**
+ * One labelled metric as a KPI card: an uppercase label on top, the value (with
+ * an optional sparkline beside it), and an optional tinted footer band — the
+ * studio's shared stat-card anatomy.
+ */
+const StatCard = ({
+    chart,
+    footer,
+    label,
+    testId,
+    value,
+}: {
+    chart?: ReactNode;
+    footer?: ReactNode;
+    label: string;
+    testId?: string;
+    value: ReactNode;
+}): ReactElement => (
+    <Card className="justify-between gap-0 py-0">
+        <div className="flex flex-col gap-2.5 p-4">
+            <span className="text-[11px] font-medium tracking-wider text-muted-foreground uppercase">{label}</span>
+            <div className="flex items-center justify-between gap-3">
+                <span className="truncate text-2xl font-semibold tabular-nums text-foreground" data-testid={testId}>
+                    {value}
+                </span>
+                {chart}
+            </div>
+        </div>
+        {footer != null && <div className="border-t border-border bg-muted/50 px-4 py-2.5 text-[11px] text-muted-foreground">{footer}</div>}
     </Card>
 );
 
@@ -232,9 +249,6 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
 
     const errorRate = metrics === null || metrics.requests === 0 ? "—" : `${((metrics.errors / metrics.requests) * 100).toFixed(1)}%`;
     const currentDelta = history.length > 0 ? (history.at(-1) as number) : 0;
-    // Memoize the polyline so unrelated re-renders (e.g. shard-input typing)
-    // don't recompute Math.max/min over the history on every render.
-    const sparkline = useMemo(() => sparklinePoints(history), [history]);
 
     // P90/P95 latency computed from per-function stats in the snapshot.
     // `computeLatencyPercentiles` reads `snapshot.functions` via a cast inside;
@@ -316,30 +330,6 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
                 </a>
             </div>
 
-            <div className="flex items-center gap-3 text-sm text-muted-foreground" data-testid="mt-trend">
-                <span>{t("Requests / interval")}</span>
-                {history.length < 2 && <span data-testid="mt-sparkline-empty">{t("collecting samples…")}</span>}
-                {history.length >= 2 && (
-                    <>
-                        <svg
-                            aria-label={t("Requests per interval over time")}
-                            className="text-primary"
-                            data-testid="mt-sparkline"
-                            height={SPARK_HEIGHT}
-                            preserveAspectRatio="none"
-                            role="img"
-                            viewBox={`0 0 ${SPARK_WIDTH.toString()} ${SPARK_HEIGHT.toString()}`}
-                            width={SPARK_WIDTH}
-                        >
-                            <polyline fill="none" points={sparkline} stroke="currentColor" strokeWidth={1} />
-                        </svg>
-                        <span className="font-medium tabular-nums text-foreground" data-testid="mt-sparkline-value">
-                            {currentDelta}
-                        </span>
-                    </>
-                )}
-            </div>
-
             {error !== null && (
                 <p className="text-sm text-destructive" data-testid="mt-error" role="alert">
                     {error}
@@ -375,10 +365,33 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
             {activeTab === "query-insights" && queryStats !== undefined && <QueryInsights queryStats={queryStats} />}
 
             {activeTab === "overview" && metrics !== null && (
-                <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3" data-testid="mt-stats">
-                    <StatCard label={t("Shard")} testId="mt-shard" value={metrics.shard} />
-                    <StatCard label={t("Requests")} testId="mt-requests" value={metrics.requests} valueSize="xl" />
+                <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4" data-testid="mt-stats">
                     <StatCard
+                        chart={
+                            history.length >= 2 ? (
+                                <Sparkline
+                                    ariaLabel={t("Requests per interval over time")}
+                                    className="h-7 w-24 text-foreground"
+                                    series={history}
+                                    testId="mt-sparkline"
+                                />
+                            ) : undefined
+                        }
+                        footer={
+                            history.length >= 2 ? (
+                                <>
+                                    <span className="font-semibold text-foreground">{`+${currentDelta.toLocaleString()}`}</span> {t("last interval")}
+                                </>
+                            ) : (
+                                <span data-testid="mt-sparkline-empty">{t("collecting samples…")}</span>
+                            )
+                        }
+                        label={t("Requests")}
+                        testId="mt-requests"
+                        value={metrics.requests}
+                    />
+                    <StatCard
+                        footer={t("{rate} error rate", { rate: errorRate })}
                         label={t("Errors")}
                         testId="mt-errors"
                         value={
@@ -386,10 +399,21 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
                                 {metrics.errors} ({errorRate})
                             </>
                         }
-                        valueSize="xl"
                     />
+                    <StatCard
+                        footer={latencyPercentiles.p90 > 0 ? `P90 ${formatMs(latencyPercentiles.p90)}` : undefined}
+                        label={t("P95 latency")}
+                        testId="mt-p95"
+                        value={latencyPercentiles.p95 > 0 ? formatMs(latencyPercentiles.p95) : "—"}
+                    />
+                    <StatCard
+                        footer={metrics.cache === null ? undefined : `${(metrics.cache.entries ?? 0).toLocaleString()} ${t("cache entries")}`}
+                        label={t("Database size")}
+                        testId="mt-db-size"
+                        value={formatBytes(metrics.databaseSize)}
+                    />
+                    <StatCard label={t("Shard")} testId="mt-shard" value={metrics.shard} />
                     <StatCard label={t("Uptime")} testId="mt-uptime" value={formatDuration(metrics.uptimeMs)} />
-                    <StatCard label={t("Database size")} testId="mt-db-size" value={formatBytes(metrics.databaseSize)} />
                     <StatCard
                         label={t("Cache hit rate")}
                         testId="mt-cache"
@@ -399,8 +423,6 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
                                 : t("{rate} ({count} entries)", { count: metrics.cache.entries, rate: hitRate(metrics.cache.hits, metrics.cache.misses) })
                         }
                     />
-                    {latencyPercentiles.p90 > 0 && <StatCard label={t("P90 latency")} testId="mt-p90" value={formatMs(latencyPercentiles.p90)} />}
-                    {latencyPercentiles.p95 > 0 && <StatCard label={t("P95 latency")} testId="mt-p95" value={formatMs(latencyPercentiles.p95)} />}
                 </dl>
             )}
 
@@ -418,8 +440,8 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
                                     : t("{reachable} reachable", { reachable: aggregate.reachable })
                             }
                         />
-                        <StatCard label={t("Total requests")} testId="mt-agg-requests" value={aggregate.totalRequests} valueSize="xl" />
-                        <StatCard label={t("Total errors")} testId="mt-agg-errors" value={aggregate.totalErrors} valueSize="xl" />
+                        <StatCard label={t("Total requests")} testId="mt-agg-requests" value={aggregate.totalRequests} />
+                        <StatCard label={t("Total errors")} testId="mt-agg-errors" value={aggregate.totalErrors} />
                         <StatCard label={t("Total database size")} testId="mt-agg-db-size" value={formatBytes(aggregate.totalDatabaseSize)} />
                         <StatCard
                             label={t("Combined cache hit rate")}
@@ -428,34 +450,38 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
                         />
                     </dl>
 
-                    <Table data-testid="mt-agg-table">
-                        <TableHeader>
-                            <TableRow>
-                                <TableHead>{t("shard")}</TableHead>
-                                <TableHead>{t("requests")}</TableHead>
-                                <TableHead>{t("errors")}</TableHead>
-                                <TableHead>{t("db size")}</TableHead>
-                            </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                            {shardResults.map((result) => (
-                                <TableRow data-testid={`mt-agg-row-${result.shard}`} key={result.shard}>
-                                    <TableCell>{result.shard}</TableCell>
-                                    {result.metrics === null ? (
-                                        <TableCell className="text-destructive" colSpan={3}>
-                                            {result.error ?? t("unreachable")}
-                                        </TableCell>
-                                    ) : (
-                                        <>
-                                            <TableCell className="tabular-nums">{result.metrics.requests}</TableCell>
-                                            <TableCell className="tabular-nums">{result.metrics.errors}</TableCell>
-                                            <TableCell className="tabular-nums">{formatBytes(result.metrics.databaseSize)}</TableCell>
-                                        </>
-                                    )}
-                                </TableRow>
-                            ))}
-                        </TableBody>
-                    </Table>
+                    <Card className="overflow-hidden py-0">
+                        <CardContent className="px-0">
+                            <Table data-testid="mt-agg-table">
+                                <TableHeader>
+                                    <TableRow>
+                                        <TableHead>{t("shard")}</TableHead>
+                                        <TableHead>{t("requests")}</TableHead>
+                                        <TableHead>{t("errors")}</TableHead>
+                                        <TableHead>{t("db size")}</TableHead>
+                                    </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                    {shardResults.map((result) => (
+                                        <TableRow data-testid={`mt-agg-row-${result.shard}`} key={result.shard}>
+                                            <TableCell>{result.shard}</TableCell>
+                                            {result.metrics === null ? (
+                                                <TableCell className="text-destructive" colSpan={3}>
+                                                    {result.error ?? t("unreachable")}
+                                                </TableCell>
+                                            ) : (
+                                                <>
+                                                    <TableCell className="tabular-nums">{result.metrics.requests}</TableCell>
+                                                    <TableCell className="tabular-nums">{result.metrics.errors}</TableCell>
+                                                    <TableCell className="tabular-nums">{formatBytes(result.metrics.databaseSize)}</TableCell>
+                                                </>
+                                            )}
+                                        </TableRow>
+                                    ))}
+                                </TableBody>
+                            </Table>
+                        </CardContent>
+                    </Card>
                 </div>
             )}
         </div>
