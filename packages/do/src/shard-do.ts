@@ -3174,7 +3174,11 @@ abstract class ShardDO {
      * deferred (`waitUntil`) or concurrently-interleaved context.
      */
     // eslint-disable-next-line class-methods-use-this -- base-class override hook: the codegen subclass overrides this and uses `this` to dispatch via the generated function map
-    protected executeSubscription(_functionPath: string, _args: Record<string, unknown>, _identity?: SubscriptionIdentity): Promise<SubscriptionOutcome | null> {
+    protected executeSubscription(
+        _functionPath: string,
+        _args: Record<string, unknown>,
+        _identity?: SubscriptionIdentity,
+    ): Promise<SubscriptionOutcome | null> {
         // eslint-disable-next-line unicorn/no-null -- base default: `null` = "no such subscription"; the codegen subclass overrides and also returns null
         return Promise.resolve(null);
     }
@@ -5016,11 +5020,13 @@ abstract class ShardDO {
                 try {
                     const outcome = isAdmin
                         ? this.executeAdminSubscription(functionPath, query.args ?? {})
-                        : // eslint-disable-next-line no-await-in-loop -- subscriptions on a socket re-run sequentially; each shares the single SQLite handle
-                          // Anonymous identity is threaded EXPLICITLY (empty object), so this
-                          // deferred re-run (it runs under `waitUntil`, off the response path)
-                          // never reads or mutates the shared per-request identity fields.
-                          await this.executeSubscription(functionPath, query.args ?? {}, {});
+                        : // Re-run under the socket's OWN verified identity (stamped on the
+                          // attachment at upgrade, unforgeable by the client) — passed BY
+                          // VALUE, so this deferred re-run never reads or mutates the shared
+                          // per-request identity fields. Without it an `rls()` / `ctx.auth`
+                          // scoped live query would evaluate anonymous and return zero rows.
+                          // eslint-disable-next-line no-await-in-loop -- subscriptions on a socket re-run sequentially; each shares the single SQLite handle
+                          await this.executeSubscription(functionPath, query.args ?? {}, { identity: attachment.identity, userId: attachment.userId });
 
                     if (!outcome) {
                         continue;
@@ -5076,14 +5082,17 @@ abstract class ShardDO {
      */
     private async seedSubscription(ws: WebSocket, subId: string, query: SubscriptionQuery, functionPath: string, isAdmin: boolean): Promise<void> {
         const seedArgs = query.args ?? {};
-        // Anonymous identity is threaded EXPLICITLY (empty object) into the seed
-        // run: a subscribe envelope can arrive interleaved with an in-flight RPC
-        // (the seed parks at the handler's first non-storage await), so reading
-        // the shared per-request identity field here would race that RPC. Passing
-        // it by value keeps the seed anonymous regardless of what else is running.
+        // Seed under the socket's OWN verified identity (stamped on the attachment
+        // at upgrade, unforgeable by the client) — read here and passed BY VALUE,
+        // so even though a subscribe envelope can interleave with an in-flight RPC
+        // (the seed parks at the handler's first non-storage await), we never read
+        // the shared per-request identity field that RPC might be mutating. This is
+        // what makes an `rls()` / `ctx.auth`-scoped live query return the
+        // subscriber's own rows instead of evaluating anonymous.
+        const attachment = this.readAttachment(ws);
         const outcome = isAdmin
             ? this.executeAdminSubscription(functionPath, seedArgs)
-            : await this.executeSubscription(functionPath, seedArgs, {});
+            : await this.executeSubscription(functionPath, seedArgs, { identity: attachment.identity, userId: attachment.userId });
 
         if (!outcome) {
             return;
