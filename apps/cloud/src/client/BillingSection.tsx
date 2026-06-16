@@ -1,8 +1,8 @@
-import { useCirrus, useQuery } from "@cirrus/react";
+import { useLunora, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
-import { api } from "../../cirrus/_generated/api.js";
+import { api } from "../../lunora/_generated/api.js";
 import { AsyncList } from "./AsyncList";
 import type { OrgId } from "./types";
 
@@ -18,7 +18,7 @@ interface BillingSectionProps {
  * hardcoded in the client.
  */
 export const BillingSection = ({ organizationId }: BillingSectionProps): ReactElement => {
-    const client = useCirrus();
+    const client = useLunora();
     const entitlements = useQuery(api.billing.entitlements, { organizationId });
     const subscriptions = useQuery(api.billing.subscription, { organizationId });
 

@@ -1,4 +1,4 @@
-import { CirrusError } from "@cirrus/server";
+import { LunoraError } from "@lunora/server";
 
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
@@ -42,7 +42,7 @@ export const add = mutation({
         const existing = (page as unknown as MemberRow[])[0];
 
         if (existing) {
-            throw new CirrusError("CONFLICT", "user is already a member");
+            throw new LunoraError("CONFLICT", "user is already a member");
         }
 
         const all = await context.db.members.findMany({ where: { organizationId: arguments_.organizationId } });

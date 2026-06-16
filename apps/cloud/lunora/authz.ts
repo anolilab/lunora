@@ -1,4 +1,4 @@
-import { CirrusError } from "@cirrus/server";
+import { LunoraError } from "@lunora/server";
 
 import { hashDeployKey } from "../src/deploy/keys";
 import type { Id } from "./_generated/dataModel.js";
@@ -46,18 +46,18 @@ export const assertMember = async (
     const { userId } = context.auth;
 
     if (!userId) {
-        throw new CirrusError("UNAUTHORIZED", "not signed in");
+        throw new LunoraError("UNAUTHORIZED", "not signed in");
     }
 
     const { page } = await context.db.members.findMany({ where: { organizationId, userId } });
     const member = (page as unknown as MemberRow[])[0];
 
     if (!member) {
-        throw new CirrusError("FORBIDDEN", "not a member of this organization");
+        throw new LunoraError("FORBIDDEN", "not a member of this organization");
     }
 
     if (allowedRoles && !allowedRoles.includes(member.role)) {
-        throw new CirrusError("FORBIDDEN", `requires one of: ${allowedRoles.join(", ")}`);
+        throw new LunoraError("FORBIDDEN", `requires one of: ${allowedRoles.join(", ")}`);
     }
 
     return { role: member.role, userId };
@@ -80,11 +80,11 @@ export const authorizeDeployKey = async (
     const row = (page as unknown as DeployKeyRow[])[0];
 
     if (!row || row.revokedAt !== undefined || row.organizationId !== organizationId) {
-        throw new CirrusError("FORBIDDEN", "invalid deploy key for this organization");
+        throw new LunoraError("FORBIDDEN", "invalid deploy key for this organization");
     }
 
     if (row.projectId !== undefined && projectId !== undefined && row.projectId !== projectId) {
-        throw new CirrusError("FORBIDDEN", "deploy key is not authorized for this project");
+        throw new LunoraError("FORBIDDEN", "deploy key is not authorized for this project");
     }
 
     return row._id;
@@ -101,6 +101,6 @@ export const assertRowInOrg = async <T extends string>(context: QueryContext, id
     const row = (await context.db.get(id)) as { organizationId?: Id<"organizations"> } | null;
 
     if (row?.organizationId !== organizationId) {
-        throw new CirrusError("NOT_FOUND", `${label} not found in this organization`);
+        throw new LunoraError("NOT_FOUND", `${label} not found in this organization`);
     }
 };

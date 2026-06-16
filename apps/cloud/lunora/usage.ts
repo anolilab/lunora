@@ -7,7 +7,7 @@ import { assertMember, authorizeDeployKey } from "./authz";
  * Platform resource metering (CLOUD-PLAN.md §4). `record` is written by the
  * metering ingestion endpoint (`POST /v1/usage`) and the Analytics-Engine
  * stream; `summary` rolls a period up for the dashboard/billing. The roll-up
- * logic is the pure `aggregateUsage`. (Distinct from `@cirrus/payment`'s usage
+ * logic is the pure `aggregateUsage`. (Distinct from `@lunora/payment`'s usage
  * ledger, which meters billing features via `ctx.payments`.)
  */
 

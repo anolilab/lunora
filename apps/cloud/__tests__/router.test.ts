@@ -29,7 +29,7 @@ describe(createDeployRouter, () => {
     it("forwards the billing webhook to the signature-verifying action", async () => {
         const router = createDeployRouter();
         const ctx = makeCtx();
-        const response = await router.fetch(post("/v1/billing/webhook", { hello: "world" }), { __cirrusCtx: ctx });
+        const response = await router.fetch(post("/v1/billing/webhook", { hello: "world" }), { __lunoraCtx: ctx });
 
         expect(response.status).toBe(200);
         await expect(response.json()).resolves.toStrictEqual({ applied: true });
@@ -38,7 +38,7 @@ describe(createDeployRouter, () => {
 
     it("rejects metering ingestion missing required fields", async () => {
         const router = createDeployRouter();
-        const response = await router.fetch(post("/v1/usage", { organizationId: "org_1" }), { __cirrusCtx: makeCtx() });
+        const response = await router.fetch(post("/v1/usage", { organizationId: "org_1" }), { __lunoraCtx: makeCtx() });
 
         expect(response.status).toBe(400);
     });
@@ -47,7 +47,7 @@ describe(createDeployRouter, () => {
         const router = createDeployRouter();
         const ctx = makeCtx();
         const response = await router.fetch(post("/v1/usage", { deployKey: "k", kind: "requests", organizationId: "org_1", periodStart: 1000, quantity: 5 }), {
-            __cirrusCtx: ctx,
+            __lunoraCtx: ctx,
         });
 
         expect(response.status).toBe(200);

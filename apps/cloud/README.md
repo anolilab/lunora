@@ -1,4 +1,4 @@
-# @cirrus/cloud — Cirrus Cloud control plane
+# @lunora/cloud — Cirrus Cloud control plane
 
 The managed-platform control plane from [`CLOUD-PLAN.md`](../../CLOUD-PLAN.md),
 **dogfooded on Cirrus itself** — the platform's own metadata store is a Cirrus
@@ -12,7 +12,7 @@ Cloudflare Workers for Platforms; it is **not** a tenant worker.
 > `POST /v1/deploy` streaming endpoint, a **real Cloudflare REST provisioner**
 > (`src/cloudflare/api.ts` — D1/R2 create, dispatch-script upload, secrets), the
 > dispatcher Worker with **per-plan runtime limits**, the hosted-studio React SPA
-> (`src/client`), **billing on `@cirrus/payment`** (Stripe checkout/portal/webhook,
+> (`src/client`), **billing on `@lunora/payment`** (Stripe checkout/portal/webhook,
 > entitlements, metering ingestion), and **hardened better-auth** (mail-backed
 > verification/reset, optional OAuth, 2FA/passkeys, rate limiting). Still open
 > (needs live infra/services): end-to-end deploy validation, the billing-provider
@@ -22,10 +22,10 @@ Cloudflare Workers for Platforms; it is **not** a tenant worker.
 ## Layout
 
 ```
-cirrus/
+lunora/
   schema.ts          control-plane data model (cells, organizations, members,
                      projects, deployments, deployKeys, auditLog, invitations,
-                     platformUsage + the @cirrus/payment billing tables)
+                     platformUsage + the @lunora/payment billing tables)
   authz.ts           assertMember (session) + authorizeDeployKey (CI) — the ACL gate
   cells.ts           list / register cells (CF accounts, §2.5)
   organizations.ts   create / list / getBySlug  (+ seeds owner member + audit)
@@ -45,7 +45,7 @@ src/
   server.ts          control-plane Worker entry (D1 global tables + deploy router
                      + crons + better-auth `/api/auth/*` + studio identity; also the
                      tenant cron/queue fan-out scheduled()/queue() handlers, §2.4)
-  client/            hosted studio — React SPA served alongside the Worker by @cirrus/vite
+  client/            hosted studio — React SPA served alongside the Worker by @lunora/vite
     main.tsx         CirrusProvider + StrictMode mount
     auth-client.ts   better-auth React client (relative /api/auth basePath)
     App.tsx          session gate → org picker → org dashboard
@@ -63,7 +63,7 @@ src/
     ActivitySection.tsx        the org's audit log (who did what)
     AsyncList.tsx              loading/empty/populated helper for live lists
     styles.css                 studio styling
-  provision.ts       @cirrus/provision seam over the Cloudflare REST port
+  provision.ts       @lunora/provision seam over the Cloudflare REST port
   cloudflare/
     api.ts           Cloudflare REST port: D1/R2 create, dispatch-script upload, secrets
   secrets/
@@ -89,7 +89,7 @@ src/
   github/
     webhook.ts       GitHub webhook: HMAC verify + PR→preview-intent parse (§2.3)
   mail/
-    notify.ts        transactional email (invitations) on @cirrus/mail
+    notify.ts        transactional email (invitations) on @lunora/mail
   billing/
     plans.ts         plans + quota entitlements + per-plan runtime limits (§4)
     usage.ts         pure usage roll-up (aggregateUsage)
@@ -102,7 +102,7 @@ spikes/
 ```
 
 > **Moving to a private repo:** the control plane is the proprietary layer and is
-> meant to live in its own repo. It imports only published `@cirrus/*` entry points
+> meant to live in its own repo. It imports only published `@lunora/*` entry points
 > (no monorepo-internal reaches), so extraction is mechanical — see
 > [`EXTRACT.md`](./EXTRACT.md).
 
@@ -113,7 +113,7 @@ control plane, with relational, cross-queried, low-volume metadata. Reads use th
 per-table `findMany({ where })` facade. (Per-tenant _sharding_ in the plan refers
 to the tenant apps' own ShardDOs, not the control plane's own bookkeeping.)
 
-### Authorization (`cirrus/authz.ts`)
+### Authorization (`lunora/authz.ts`)
 
 Two paths gate every org-scoped function:
 
@@ -149,9 +149,9 @@ implementation could replace `createHttpCloudflareApi` later with no change abov
 this module. (What still needs a live account is end-to-end validation against
 real Cloudflare — the wire calls themselves are implemented, not stubbed.)
 
-### Billing & metering (`cirrus/billing.ts`, `src/billing/`, §4)
+### Billing & metering (`lunora/billing.ts`, `src/billing/`, §4)
 
-Billing rides `@cirrus/payment` with the **organization id as the payment
+Billing rides `@lunora/payment` with the **organization id as the payment
 `referenceId`**. `src/server.ts` wires a Stripe adapter into `createShardDO({
 payment })`, so the billing functions get `ctx.payments`: `checkout` / `portal`
 (owner/admin actions that redirect to Stripe), `entitlements` / `subscription`
@@ -161,7 +161,7 @@ mounted at `POST /v1/billing/webhook`). Entitlement reads work without Stripe
 keys; only live calls need them.
 
 **Quota is enforced against live subscription state**, not the static
-`organizations.plan` column: `cirrus/entitlements.ts` resolves the org's
+`organizations.plan` column: `lunora/entitlements.ts` resolves the org's
 entitlements from its synced `subscriptions` (the single source of truth), and
 `projects`/`members` creation call `assertWithinQuota` — so a Stripe upgrade
 raises the limits immediately, with no column to keep in sync.
@@ -175,7 +175,7 @@ an hourly `usage.rollup` cron compacts closed periods, and `usage.summary` reads
 the total. The AE→ledger reader (`createHttpAnalyticsReader`) is the prod rollup
 seam (runs at the edge with the account token).
 
-### Tenant secrets (`cirrus/secrets.ts`, `src/secrets/crypto.ts`, §7)
+### Tenant secrets (`lunora/secrets.ts`, `src/secrets/crypto.ts`, §7)
 
 Tenant env secrets are **AES-256-GCM encrypted at the edge** before storage:
 `POST /v1/secrets` encrypts with the `SECRET_ENCRYPTION_KEY` master key, so the
@@ -186,12 +186,12 @@ values into the tenant Worker's script secrets (alongside the platform-owned
 
 ### Auth (`src/server.ts`, §3)
 
-The hosted studio runs on hardened better-auth (`@cirrus/auth`): email/password
-with **mail-backed verification + password reset** (`@cirrus/mail`, captured into
+The hosted studio runs on hardened better-auth (`@lunora/auth`): email/password
+with **mail-backed verification + password reset** (`@lunora/mail`, captured into
 the studio Mail tab in dev), optional GitHub/Google OAuth (enabled only when the
 env creds are present), the `admin` / `twoFactor` / `passkey` plugins, and
 better-auth's built-in request rate limiting. The `/v1/*` control-plane surface
-adds a per-IP `@cirrus/ratelimit` cap. Org membership stays the Cirrus
+adds a per-IP `@lunora/ratelimit` cap. Org membership stays the Cirrus
 `organizations`/`members` model — the better-auth `organization` plugin is
 deliberately omitted to avoid two parallel org models.
 
@@ -199,15 +199,15 @@ deliberately omitted to avoid two parallel org models.
 
 ```bash
 pnpm install                         # from the repo root
-pnpm --filter "@cirrus/cloud" run codegen     # generate cirrus/_generated/*
-pnpm --filter "@cirrus/cloud" run lint:types  # codegen + tsc --noEmit
-pnpm --filter "@cirrus/cloud" run test        # vitest
-pnpm --filter "@cirrus/cloud" run build       # vite build (Worker + studio SPA)
-pnpm --filter "@cirrus/cloud" run dev         # vite dev server (Worker + studio on one origin)
+pnpm --filter "@lunora/cloud" run codegen     # generate lunora/_generated/*
+pnpm --filter "@lunora/cloud" run lint:types  # codegen + tsc --noEmit
+pnpm --filter "@lunora/cloud" run test        # vitest
+pnpm --filter "@lunora/cloud" run build       # vite build (Worker + studio SPA)
+pnpm --filter "@lunora/cloud" run dev         # vite dev server (Worker + studio on one origin)
 ```
 
 The hosted studio (`src/client`) and the control-plane Worker (`src/server.ts`)
-are served together by `@cirrus/vite` on a single origin — the SPA talks to the
+are served together by `@lunora/vite` on a single origin — the SPA talks to the
 Worker's `/api/auth/*` (better-auth) and Cirrus query/mutation endpoints with no
 cross-origin setup, mirroring how the playground app wires worker + client.
 

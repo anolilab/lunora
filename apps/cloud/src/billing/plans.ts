@@ -1,14 +1,14 @@
-import type { Entitlements, EntitlementsConfig } from "@cirrus/payment";
+import type { Entitlements, EntitlementsConfig } from "@lunora/payment";
 
 /**
  * Cirrus Cloud plans + quota evaluation (CLOUD-PLAN.md §4 / Phase 4). Built on
- * `@cirrus/payment`'s entitlements model: a plan grants numeric `limits` and
+ * `@lunora/payment`'s entitlements model: a plan grants numeric `limits` and
  * `features` when an active subscription holds one of its `priceIds`. An org
  * with no active subscription resolves to no entitlements, so we fall back to
  * the `free` plan's limits as the baseline.
  *
  * `priceIds` are placeholders here; the real provider price ids are configured
- * per environment when the payment provider (Stripe/Polar via `@cirrus/payment`)
+ * per environment when the payment provider (Stripe/Polar via `@lunora/payment`)
  * is wired.
  */
 export const CIRRUS_CLOUD_PLANS: EntitlementsConfig = {
@@ -50,7 +50,7 @@ export const withinQuota = (entitlements: Entitlements, resource: QuotaResource,
  * Plan tiers, most-generous first. The single source of precedence — used to
  * pick the effective tier when several plans are active and to order runtime
  * limits. (Quota itself resolves from live subscription entitlements, not a
- * plan name — see `cirrus/entitlements.ts`.)
+ * plan name — see `lunora/entitlements.ts`.)
  */
 export const PLAN_PRECEDENCE = ["enterprise", "pro", "free"] as const;
 
