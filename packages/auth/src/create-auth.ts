@@ -10,8 +10,12 @@ import { validateSessionPolicy } from "./session";
  */
 const MIN_SECRET_LENGTH = 32;
 
-/** True only for a non-empty secret below the recommended strength floor. */
-const isWeakSecret = (secret: string | undefined): boolean => typeof secret === "string" && secret.trim().length > 0 && secret.length < MIN_SECRET_LENGTH;
+/** True only for a non-empty secret below the recommended strength floor (measured after trimming, so surrounding whitespace never inflates the length). */
+const isWeakSecret = (secret: string | undefined): boolean => {
+    const trimmedLength = typeof secret === "string" ? secret.trim().length : 0;
+
+    return trimmedLength > 0 && trimmedLength < MIN_SECRET_LENGTH;
+};
 
 /**
  * Whether the deployment's `baseURL` is confidently HTTPS — used to force
