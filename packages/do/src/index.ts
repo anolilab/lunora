@@ -163,7 +163,13 @@ export type { CacheEntry, ReactiveCacheOptions } from "./reactive-cache";
 export { ReactiveCache, reactiveCacheKey, stableStringify } from "./reactive-cache";
 export { serveRelationFanout } from "./relation-fanout";
 export type { ResolveRelationPredicatesOptions } from "./relation-predicates";
-export { containsRelationPredicate, DEFAULT_MAX_RELATION_KEYS, isRelationPredicate, resolveRelationPredicates } from "./relation-predicates";
+export {
+    assertFlatPredicate,
+    containsRelationPredicate,
+    DEFAULT_MAX_RELATION_KEYS,
+    isRelationPredicate,
+    resolveRelationPredicates,
+} from "./relation-predicates";
 export type { ApplyOnDeleteOptions, NestedWith, OnDeleteActionLike, RelationDefinitionLike, ResolveWithOptions, WithInput } from "./relations";
 export { applyOnDelete, resolveWith, runRowValidators } from "./relations";
 export type { LogEventInput } from "./request-log";

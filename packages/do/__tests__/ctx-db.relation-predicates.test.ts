@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import type { DatabaseWriterLike, SchemaLike, SqlExec } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
-import type { QueryArgs } from "../src/query-args";
+import type { QueryArgs, QueryPage } from "../src/query-args";
+import { resolveRelationPredicates } from "../src/relation-predicates";
+import { RELATION_EXISTS_KEY } from "../src/where-clause-compiler";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
@@ -47,6 +49,15 @@ const makeWriter = (): DatabaseWriterLike => {
     runShardMigrations(harness.sql, schema);
 
     return createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: harness.sql });
+};
+
+// Production default is `"auto"` (semijoin-first), which on these small fixtures
+// never escalates to EXISTS — so the Phase 2 push-down tests force `"always"` to
+// exercise the correlated-EXISTS compile path directly.
+const makePushWriter = (): DatabaseWriterLike => {
+    runShardMigrations(harness.sql, schema);
+
+    return createShardContextDatabase({ clock: () => 1_700_000_000_000, relationExistsPushDown: "always", schema, sql: harness.sql });
 };
 
 const ids = (docs: Record<string, unknown>[]): unknown[] => docs.map((document_) => document_["_id"]).toSorted((a, b) => String(a).localeCompare(String(b)));
@@ -294,14 +305,63 @@ describe("ctx-db relation predicates", () => {
             await expect(writer.findMany("users", { where: { messages: { is: { body: "hi" } } } })).rejects.toThrow(/requires a to-one relation/u);
         });
 
-        it("rejects a relation predicate in count() with a clear error", async () => {
+        it("rankPage() rejects a relation predicate instead of silently dropping it", async () => {
             expect.assertions(1);
 
             const writer = makeWriter();
 
             await seed(writer);
 
-            await expect(writer.count("users", { messages: { some: { body: "hey" } } })).rejects.toThrow(/not supported in count/u);
+            // rankPage's `where` only pins the partition — it never compiles into
+            // a row filter — so a relation predicate would silently fail open.
+            // The guard sits before the rankIndex lookup, so it fires here even
+            // though the fixture declares no rankIndex.
+            await expect(writer.rankPage("messages", "by_author", { where: { author: { is: { name: "Ada" } } } })).rejects.toThrow(
+                /not supported in rankPage/u,
+            );
+        });
+    });
+
+    describe("aggregate / count / groupBy resolve relation predicates", () => {
+        it("count() resolves a to-many `some` to a semijoin", async () => {
+            expect.assertions(1);
+
+            const writer = makeWriter();
+
+            await seed(writer);
+
+            // u1 (Ada) and u2 (Linus) authored messages; u3 (Loner) didn't.
+            // `some: {}` matches every user with at least one message.
+            await expect(writer.count("users", { messages: { some: {} } })).resolves.toBe(2);
+        });
+
+        it("aggregate() resolves a relation predicate (max over the semijoined set)", async () => {
+            expect.assertions(1);
+
+            const writer = makeWriter();
+
+            await seed(writer);
+
+            // Only Ada's messages ("hi", "yo"), scoped via the to-one
+            // `author.is` semijoin; MAX over the two bodies is "yo". (`aggregate`
+            // is typed `number | null`; this field is text, so normalize for the
+            // comparison.)
+            const max = await writer.aggregate("messages", { field: "body", op: "max", where: { author: { is: { name: "Ada" } } } });
+
+            expect(String(max)).toBe("yo");
+        });
+
+        it("groupBy() resolves a relation predicate before grouping", async () => {
+            expect.assertions(1);
+
+            const writer = makeWriter();
+
+            await seed(writer);
+
+            // Group messages authored by Ada by their authorId — one group.
+            const groups = await writer.groupBy("messages", { by: ["authorId"], where: { author: { is: { name: "Ada" } } } });
+
+            expect(groups).toStrictEqual([{ key: { authorId: "u1" }, value: 2 }]);
         });
     });
 
@@ -322,14 +382,13 @@ describe("ctx-db relation predicates", () => {
         it("returns identical rows to the semijoin path on the same fixtures", async () => {
             expect.assertions(8);
 
-            const pushed = makeWriter();
+            const pushed = makePushWriter();
 
             await seed(pushed);
 
-            // A second writer over the *same* migrated+seeded SQLite, with the
-            // fast path disabled — so any divergence is the EXISTS rewrite, not
-            // the data.
-            const semijoin = createShardContextDatabase({ clock: () => 1_700_000_000_000, disableRelationExistsPushDown: true, schema, sql: harness.sql });
+            // A second writer over the *same* migrated+seeded SQLite, forced onto
+            // the semijoin — so any divergence is the EXISTS rewrite, not the data.
+            const semijoin = createShardContextDatabase({ clock: () => 1_700_000_000_000, relationExistsPushDown: "never", schema, sql: harness.sql });
 
             for (const { args, table } of cases) {
                 // eslint-disable-next-line no-await-in-loop -- sequential keeps the two reads paired per case
@@ -354,7 +413,7 @@ describe("ctx-db relation predicates", () => {
                     return harness.sql.exec<Row>(query, ...params);
                 },
             };
-            const writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: capturing });
+            const writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, relationExistsPushDown: "always", schema, sql: capturing });
 
             await seed(writer);
 
@@ -379,6 +438,7 @@ describe("ctx-db relation predicates", () => {
                 onRead: (table, idOrScan) => {
                     reads.push({ idOrScan, table });
                 },
+                relationExistsPushDown: "always",
                 schema,
                 sql: harness.sql,
             });
@@ -393,6 +453,137 @@ describe("ctx-db relation predicates", () => {
             await writer.findMany("messages", { where: { author: { is: { name: "Ada" } } } });
 
             expect(reads).toContainEqual({ idOrScan: "*scan", table: "users" });
+        });
+
+        it("stamps the child dependency on the semijoin path too (no EXISTS push-down)", async () => {
+            expect.assertions(1);
+
+            runShardMigrations(harness.sql, schema);
+
+            const reads: { idOrScan?: string; table: string }[] = [];
+            const writer = createShardContextDatabase({
+                clock: () => 1_700_000_000_000,
+                onRead: (table, idOrScan) => {
+                    reads.push({ idOrScan, table });
+                },
+                // Force the universal semijoin path: the child is fetched through
+                // this DO's own `findMany`, which must stamp the `users` read so a
+                // `users` write still invalidates the live query — the EXISTS
+                // strategy is not in play here, so this pins the other half.
+                relationExistsPushDown: "never",
+                schema,
+                sql: harness.sql,
+            });
+
+            await seed(writer);
+
+            reads.length = 0;
+
+            await writer.findMany("messages", { where: { author: { is: { name: "Ada" } } } });
+
+            expect(reads.some((read) => read.table === "users")).toBe(true);
+        });
+
+        it("honours relationBaseWhere (RLS) inside the subquery, identically to the semijoin", async () => {
+            expect.assertions(2);
+
+            const pushed = makePushWriter();
+
+            await seed(pushed);
+
+            const semijoin = createShardContextDatabase({ clock: () => 1_700_000_000_000, relationExistsPushDown: "never", schema, sql: harness.sql });
+
+            // The child read policy hides every message except body "hi", so the
+            // only readable child is Ada's m1 — `some: {}` must match Ada alone.
+            // If the EXISTS body dropped the RLS base, Linus (m3 "hey") would
+            // leak in, so this pins the subquery's fail-closed merge.
+            const args: QueryArgs = {
+                relationBaseWhere: (table) => (table === "messages" ? { body: "hi" } : undefined),
+                where: { messages: { some: {} } },
+            };
+
+            const pushedPage = await pushed.findMany("users", args);
+            const semijoinPage = await semijoin.findMany("users", args);
+
+            expect(ids(pushedPage.page)).toStrictEqual(["u1"]);
+            expect(ids(pushedPage.page)).toStrictEqual(ids(semijoinPage.page));
+        });
+    });
+
+    describe("maxRelationKeys fail-closed cap", () => {
+        it("throws rather than building an unbounded IN when the child key set exceeds the cap", async () => {
+            expect.assertions(1);
+
+            // A fetcher returning more distinct join keys than the cap allows.
+            // The semijoin path projects `authorId` off these rows (the to-many
+            // `messages` relation's child FK), so six distinct values overflow a
+            // cap of five and must fail closed rather than truncate.
+            const fetcher = async (): Promise<QueryPage> => {
+                return {
+                    continueCursor: null,
+                    isDone: true,
+                    page: Array.from({ length: 6 }, (_, index) => {
+                        return { authorId: `a${String(index)}` };
+                    }),
+                };
+            };
+
+            await expect(resolveRelationPredicates({ messages: { some: {} } }, { fetcher, maxRelationKeys: 5, schema, tableName: "users" })).rejects.toThrow(
+                /exceeding the 5-key limit/u,
+            );
+        });
+
+        it("escalates to a correlated EXISTS (not a throw) on overflow when the relation is co-located", async () => {
+            expect.assertions(2);
+
+            // Same over-cap fetcher, but now the relation is push-eligible
+            // (`canPushExists` → true). The cost-based `"auto"` policy must NOT
+            // fail closed: it escalates the oversized node to the unbounded
+            // EXISTS push-down, leaving a `__relationExists` marker for the
+            // compiler instead of a flat `IN (...)`.
+            let fetched = 0;
+            const fetcher = async (): Promise<QueryPage> => {
+                fetched += 1;
+
+                return {
+                    continueCursor: null,
+                    isDone: true,
+                    page: Array.from({ length: 6 }, (_, index) => {
+                        return { authorId: `a${String(index)}` };
+                    }),
+                };
+            };
+
+            const resolved = await resolveRelationPredicates(
+                { messages: { some: {} } },
+                { canPushExists: () => true, fetcher, maxRelationKeys: 5, schema, tableName: "users" },
+            );
+
+            // The probe fetch ran (that's how overflow is detected) and the node
+            // came back as an EXISTS marker, not a flat key clause.
+            expect(fetched).toBe(1);
+            expect(Object.keys(resolved ?? {})).toContain(RELATION_EXISTS_KEY);
+        });
+
+        it("auto stays on the cheap semijoin (no EXISTS marker) when the key set is under the cap", async () => {
+            expect.assertions(1);
+
+            // Push-eligible, but the child set fits the cap — `"auto"` keeps the
+            // faster semijoin and emits a flat clause, never escalating.
+            const fetcher = async (): Promise<QueryPage> => {
+                return {
+                    continueCursor: null,
+                    isDone: true,
+                    page: [{ authorId: "a0" }, { authorId: "a1" }],
+                };
+            };
+
+            const resolved = await resolveRelationPredicates(
+                { messages: { some: {} } },
+                { canPushExists: () => true, fetcher, maxRelationKeys: 5, schema, tableName: "users" },
+            );
+
+            expect(Object.keys(resolved ?? {})).not.toContain(RELATION_EXISTS_KEY);
         });
     });
 });

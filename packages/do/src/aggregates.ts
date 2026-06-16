@@ -59,12 +59,17 @@ interface AggregateIndexDefinitionLike {
  * - `where` — the user's filter predicate.
  * - `baseWhere` — a predicate injected by an RLS-aware ctx, AND-merged into
  * `where` before index planning.
+ * - `relationBaseWhere` — the per-child-table RLS read filter, threaded into
+ * the relation pre-resolver so that a relation-crossing predicate in `where`
+ * (or `baseWhere`) only counts/aggregates over child rows the caller may read
+ * (fail-closed). Mirrors the `findMany` seam.
  * - `restrictsCounts` — when `true`, `count()` throws `COUNT_RLS_UNSUPPORTED`
  * instead of returning a potentially undercounted result. `aggregate` /
  * `groupBy` are unaffected because they are explicitly scoped to `where`.
  */
 interface RestrictableQueryOptions {
     baseWhere?: WhereInput;
+    relationBaseWhere?: (table: string) => undefined | WhereInput;
     restrictsCounts?: boolean;
     where?: WhereInput;
 }

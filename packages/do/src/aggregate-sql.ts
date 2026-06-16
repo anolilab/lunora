@@ -16,7 +16,7 @@ import type { SchedulerLike } from "./triggers";
 import type { WhereInput } from "./where-clause-compiler";
 
 /** Marker keys distinguishing a restrictable-query option set from a bare `WhereInput` tree. */
-const COUNT_OPTION_KEYS = new Set(["baseWhere", "restrictsCounts", "where"]);
+const COUNT_OPTION_KEYS = new Set(["baseWhere", "relationBaseWhere", "restrictsCounts", "where"]);
 
 /**
  * Cheap predicate test against a flat literal `where` (the shape baked into

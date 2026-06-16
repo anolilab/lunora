@@ -53,7 +53,7 @@ import type {
 import { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
 import type { ReactiveCache } from "./reactive-cache";
 import type { RelationExistsMarker } from "./relation-predicates";
-import { containsRelationPredicate, resolveRelationPredicates } from "./relation-predicates";
+import { assertFlatPredicate as assertFlatRelationPredicate, resolveRelationPredicates } from "./relation-predicates";
 import type { RelationDefinitionLike } from "./relations";
 import { applyOnDelete, resolveWith, runRowValidators } from "./relations";
 import { buildFtsMatch, ftsTableName, scoreDocument, stringifySearchText, tokenizeSearch } from "./search-text";
@@ -249,15 +249,6 @@ interface CtxDbOptions {
     clock?: Clock;
 
     /**
-     * Disable the Phase 2 correlated-EXISTS push-down for relation-crossing
-     * `where` predicates, forcing the universal semijoin pre-resolution on every
-     * relation node. The push-down is a same-shard latency optimization that
-     * returns identical rows; this escape hatch exists for parity testing and as
-     * a safety valve. Leave undefined to keep the fast path enabled.
-     */
-    disableRelationExistsPushDown?: boolean;
-
-    /**
      * Optional writer for tables flagged `.global()`. When provided, an
      * `onDelete` cascade declared on a shard-local table whose holder lives
      * on a global table routes through this writer (DO → D1 cascade). Without
@@ -271,9 +262,40 @@ interface CtxDbOptions {
      */
     globalDb?: DatabaseWriterLike;
     idGenerator?: IdGenerator;
+
+    /**
+     * Upper bound on the number of join keys a single relation-crossing `where`
+     * predicate may pull back via semijoin pre-resolution before failing closed
+     * (`DEFAULT_MAX_RELATION_KEYS` when undefined). A co-located node escapes the
+     * cap by escalating to the EXISTS push-down (`relationExistsPushDown`); a
+     * cross-backend / cross-shard node has no subquery to fall back to, so this
+     * is the ceiling that keeps an unbounded `IN (...)` from being built. Raise
+     * it for trusted large-fan-in relations; lower it to tighten the guard.
+     */
+    maxRelationKeys?: number;
     onIndexUse?: IndexUseHook;
     onRead?: ReadHook;
     onWrite?: WriteHook;
+
+    /**
+     * Resolution policy for relation-crossing `where` predicates whose child is
+     * co-located in the same shard (Phase 2 correlated-EXISTS push-down):
+     *
+     * - `"auto"` (default) — **cost-based**: semijoin first (an indexed flat
+     * `IN (...)`, benchmarked 2.5–13× faster than the correlated subquery on the
+     * JSON-blob path) and escalate a node to the inline EXISTS only when its
+     * child key set overflows the fail-closed cap. Best of both: cheap common
+     * case, unbounded large case.
+     * - `"always"` — push every co-located node inline regardless of size (the
+     * original Phase 2 behaviour; kept for parity testing + benchmarking the
+     * EXISTS path directly).
+     * - `"never"` — force the universal semijoin on every node; a cap overflow
+     * fails closed. A safety valve / cross-backend-parity harness.
+     *
+     * All three return identical rows. Leave undefined for `"auto"`.
+     */
+    relationExistsPushDown?: "always" | "auto" | "never";
+
     /** Injected into the trigger context as `ctx.scheduler`; defaults to a throwing stub. */
     scheduler?: SchedulerLike;
     schema: SchemaLike;
@@ -1844,6 +1866,24 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         routeBackend(relationTable, "relation load").count(relationTable, relationWhere);
 
     /**
+     * Child reader for relation-predicate semijoin resolution. A local child
+     * routes back through this DO's own `findMany`, which stamps its read
+     * dependency for free — but a global (D1) child routes straight to
+     * `globalDb.findMany`, which has no reactive tracker, so a live
+     * relation-predicate subscription would never refresh on global-child
+     * writes. Stamp the conservative `*scan` marker here for global children
+     * (the EXISTS fast path stamps local children in its strategy; nested
+     * multi-hop fetches pass through here too, so each global hop is covered).
+     */
+    const relationPredicateFetcher = (relationTable: string, relationArgs: QueryArgs): Promise<QueryPage> => {
+        if (isGlobalTable(relationTable)) {
+            onRead(relationTable, SCAN_DEP);
+        }
+
+        return relationFetcher(relationTable, relationArgs);
+    };
+
+    /**
      * Phase 2 gate: a relation predicate can be pushed down as a correlated
      * EXISTS only when its child table is co-located in this DO's SQLite — i.e.
      * not a global (D1) table. The parent is always local on the `findMany`
@@ -1853,20 +1893,36 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
      * the child fetch to `globalDb`.
      */
     const canPushRelationExists = (relation: RelationDefinitionLike): boolean => !isGlobalTable(relation.table);
-    const relationExistsPushDownEnabled = options.disableRelationExistsPushDown !== true;
+    const relationExistsPushDown = options.relationExistsPushDown ?? "auto";
+    // "auto" and "always" both make a node EXISTS-*eligible*; the cost policy in
+    // the resolver (semijoin-first vs forced-push) is selected by `existsPushMode`.
+    const relationExistsPushDownEnabled = relationExistsPushDown !== "never";
+    const { maxRelationKeys } = options;
 
     /**
-     * Relation-crossing predicates (`{ author: { is: W } }`, …) are resolved
-     * only on the `findMany` read path. The aggregate/count/group/rank paths
-     * compile their predicate directly, where such a node would silently
-     * mis-compile as an ordinary column comparison — so reject it with a clear
-     * error instead of returning a confusing empty result.
+     * Resolve relation-crossing predicates (`{ author: { is: W } }`, …) on the
+     * aggregate/count/group/rank paths. Unlike `findMany` these compile their
+     * predicate directly and have no EXISTS strategy in scope, so resolution is
+     * **semijoin-only** (no `canPushExists`): a co-located node still takes the
+     * universal pre-resolution and a key set past `maxRelationKeys` fails closed
+     * rather than escalating. The child read honours its own RLS via
+     * `relationBaseWhere`, so an aggregate filtered by a relation can never
+     * count/measure rows the caller can't see. Returns the input reference
+     * unchanged when no relation predicate is present (the common path issues
+     * zero extra queries), which the callers use to keep their indexed fast-path.
      */
-    const assertFlatPredicate = (where: WhereInput | undefined, predicateTable: string, op: string): void => {
-        if (where && containsRelationPredicate(where, schema, predicateTable)) {
-            throw new Error(`relation-crossing predicates are not supported in ${op}() — use them in findMany/findFirst or an RLS read policy`);
-        }
-    };
+    const resolveAggregateRelations = (
+        where: WhereInput | undefined,
+        predicateTable: string,
+        relationBaseWhere: ((table: string) => undefined | WhereInput) | undefined,
+    ): Promise<WhereInput | undefined> =>
+        resolveRelationPredicates(where, {
+            fetcher: relationPredicateFetcher,
+            maxRelationKeys,
+            relationBaseWhere,
+            schema,
+            tableName: predicateTable,
+        });
 
     let triggerDepth = 0;
 
@@ -2478,6 +2534,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 // surface uniform so callers don't special-case it.
                 return writer.count(tableName, {
                     baseWhere: aggOptions.baseWhere,
+                    relationBaseWhere: aggOptions.relationBaseWhere,
                     restrictsCounts: aggOptions.restrictsCounts,
                     where: aggOptions.where,
                 });
@@ -2489,13 +2546,22 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             onRead(tableName, SCAN_DEP);
 
+            const effective = mergeWhere(aggOptions.baseWhere, aggOptions.where);
+            // Rewrite any relation-crossing predicate to a flat semijoin clause
+            // before compiling. The resolver returns `effective` unchanged when
+            // there is none, so `hasRelation` both skips the no-op fetch and —
+            // critically — disables the indexed fast-path, which can't honour a
+            // relation filter and would otherwise silently over-aggregate.
+            const resolved = await resolveAggregateRelations(effective, tableName, aggOptions.relationBaseWhere);
+            const hasRelation = resolved !== effective;
+
             // Indexed fast-path: the `__agg_` companion is now reducer-aware
             // (`__value__` holds the sum / running sum / extreme, `__count__`
             // the row count), so a matching `(by, field, op)` index answers
             // sum/avg/min/max in one row lookup. We only attempt it when no
             // baseWhere is set — the RLS predicate isn't a pure equality
             // conjunction, so it falls through to the SQL scan below.
-            if (definition.aggregateIndexes && !aggOptions.baseWhere) {
+            if (definition.aggregateIndexes && !aggOptions.baseWhere && !hasRelation) {
                 const planned = selectIndexForAggregate(definition.aggregateIndexes, aggOptions.op, aggOptions.field, aggOptions.where);
 
                 if (planned) {
@@ -2513,11 +2579,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 }
             }
 
-            const effective = mergeWhere(aggOptions.baseWhere, aggOptions.where);
-
-            assertFlatPredicate(effective, tableName, "aggregate");
-
-            const { params, sql: whereSql } = compileWhere(effective, doWhereStrategy);
+            const { params, sql: whereSql } = compileWhere(resolved, doWhereStrategy);
             const aggregateSql = aggregateSqlFunction(aggOptions.op);
             const ref = jsonPath(aggOptions.field);
 
@@ -2569,8 +2631,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             onRead(tableName, SCAN_DEP);
 
             const effective = mergeWhere(countOptions.baseWhere, countOptions.where);
-
-            assertFlatPredicate(effective, tableName, "count");
+            // Rewrite a relation-crossing predicate to a flat semijoin clause
+            // first; `hasRelation` disables the indexed fast-path below (an
+            // aggregate-index counter can't honour a relation filter).
+            const resolved = await resolveAggregateRelations(effective, tableName, countOptions.relationBaseWhere);
+            const hasRelation = resolved !== effective;
 
             // Indexed path: if the user passed a plain conjunction of equality
             // filters and a declared aggregateIndex covers them, route to the
@@ -2578,7 +2643,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // left out of the indexed path because we can't trust it to be a
             // pure equality conjunction; if `baseWhere` is set we fall through
             // to the scan so SQL handles it uniformly.
-            if (definition.aggregateIndexes && !countOptions.baseWhere) {
+            if (definition.aggregateIndexes && !countOptions.baseWhere && !hasRelation) {
                 const planned = selectIndexForCount(definition.aggregateIndexes, countOptions.where);
 
                 if (planned) {
@@ -2596,7 +2661,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 }
             }
 
-            const { params, sql: whereSql } = compileWhere(effective, doWhereStrategy);
+            const { params, sql: whereSql } = compileWhere(resolved, doWhereStrategy);
 
             let querySql = `SELECT COUNT(*) AS count FROM ${quoteIdentifier(tableName)}`;
 
@@ -2753,7 +2818,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // with no relation predicates returns unchanged (no extra query).
             predicate = await resolveRelationPredicates(predicate, {
                 canPushExists: relationExistsPushDownEnabled ? canPushRelationExists : undefined,
-                fetcher: relationFetcher,
+                existsPushMode: relationExistsPushDown === "always" ? "always" : "auto",
+                fetcher: relationPredicateFetcher,
+                maxRelationKeys,
                 relationBaseWhere: args.relationBaseWhere,
                 schema,
                 tableName,
@@ -2896,6 +2963,15 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 throw new Error(`groupBy(${tableName}, { agg: { op: "${agg.op}" } }): "field" is required for non-count reducers`);
             }
 
+            const effective = mergeWhere(groupOptions.baseWhere, groupOptions.where);
+            // Rewrite any relation-crossing predicate to a flat semijoin clause
+            // before compiling. The resolver returns `effective` unchanged when
+            // there is none, so `hasRelation` both skips the no-op fetch and —
+            // critically — disables the indexed fast-path, which can't honour a
+            // relation filter and would otherwise silently over-aggregate.
+            const resolved = await resolveAggregateRelations(effective, tableName, groupOptions.relationBaseWhere);
+            const hasRelation = resolved !== effective;
+
             // Indexed path: when no baseWhere is set and an aggregateIndex's
             // `by` exactly matches `groupOptions.by`, every group answer is
             // already in the reducer-aware companion table — read each row's
@@ -2903,7 +2979,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // One SELECT, no SQL `GROUP BY`. baseWhere falls through to scan so
             // RLS composes uniformly. Covers every op (count/sum/avg/min/max)
             // now that the companion is op-aware.
-            if (definition.aggregateIndexes && !groupOptions.baseWhere) {
+            if (definition.aggregateIndexes && !groupOptions.baseWhere && !hasRelation) {
                 const planned = selectIndexForGroupBy(definition.aggregateIndexes, agg.op, agg.field, groupOptions.by, groupOptions.where);
 
                 if (planned) {
@@ -2950,11 +3026,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 }
             }
 
-            const effective = mergeWhere(groupOptions.baseWhere, groupOptions.where);
-
-            assertFlatPredicate(effective, tableName, "groupBy");
-
-            const { params, sql: whereSql } = compileWhere(effective, doWhereStrategy);
+            const { params, sql: whereSql } = compileWhere(resolved, doWhereStrategy);
 
             const select = groupOptions.by.map((field) => `${jsonPath(field)} AS ${quoteIdentifier(field)}`);
 
@@ -3273,7 +3345,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // partition (otherwise the row isn't in the requested scope).
             const effective = mergeWhere(rankOptions.baseWhere, rankOptions.where);
 
-            assertFlatPredicate(effective, tableName, "rank");
+            // rank() uses `where` solely to pin/validate the partition (an
+            // equality on `partitionBy`), never as a row filter — it counts
+            // strictly-before over the whole partition. A relation-crossing
+            // predicate has nowhere to apply here, so resolving it would
+            // silently drop it (a fail-**open** hazard). Reject it instead.
+            assertFlatRelationPredicate(effective, schema, tableName, "rank");
 
             const partitionFromWhere = resolveRankPartition(index, effective);
 
@@ -3350,6 +3427,12 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         },
 
         async rankPage(tableName, indexName, rankPageOptions = {}) {
+            // Parity with rank(): rankPage's `where` only pins the partition (it is
+            // never compiled into a row filter), so a relation-crossing predicate
+            // would be silently dropped — a fail-**open** shape. Reject it on both
+            // the local and the global-routed path.
+            assertFlatRelationPredicate(mergeWhere(rankPageOptions.baseWhere, rankPageOptions.where), schema, tableName, "rankPage");
+
             const global = globalWriterFor(tableName, "rankPage");
 
             if (global) {
@@ -3375,6 +3458,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // shards. There is no `.global()` fallback — cross-shard rank paging
             // applies only to `.shardBy(...)` tables (the global path returns one
             // already-ordered page with no shard boundaries to merge).
+            assertFlatRelationPredicate(mergeWhere(rankPageOptions.baseWhere, rankPageOptions.where), schema, tableName, "rankPage");
+
             onIndexUse(tableName, indexName, "rank");
 
             const { directions, hasMore, rows } = computeRankPage(rankPageDeps, tableName, indexName, rankPageOptions);

@@ -39,6 +39,7 @@ import {
     aggregateSqlFunction,
     aggregateTableName,
     applyOnDelete,
+    assertFlatPredicate,
     assertValidClientId,
     buildFtsMatch,
     buildSeekWhere,
@@ -125,6 +126,16 @@ interface D1ContextDatabaseOptions {
     crossShardReader?: DatabaseWriterLike["findMany"];
     exec: D1Exec;
     idGenerator?: () => string;
+
+    /**
+     * Ceiling on the number of child join keys a relation-crossing `where`
+     * predicate may materialize before the semijoin pre-resolver fails closed
+     * (`relation predicate … exceeding the N-key limit`). D1 has no EXISTS
+     * push-down, so an overflow here can only fail closed — never truncate the
+     * `IN (...)` and silently mis-match. Defaults to the pre-resolver's shared
+     * key cap when omitted.
+     */
+    maxRelationKeys?: number;
 
     /**
      * Scheduler exposed to global-table trigger handlers as `ctx.scheduler`.
@@ -1182,7 +1193,7 @@ const trimD1CdcChanges = async (exec: D1Exec, throughSeq: number): Promise<void>
 };
 
 const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWriterLike => {
-    const { crossShardCounter, crossShardReader, exec, schema } = options;
+    const { crossShardCounter, crossShardReader, exec, maxRelationKeys, schema } = options;
     const clock = options.clock ?? (() => Date.now());
     const generateId = options.idGenerator ?? (() => crypto.randomUUID());
     const cdcEnabled = options.cdc ?? false;
@@ -2012,6 +2023,42 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
         );
     };
 
+    // Backend-routed child fetch for the relation pre-resolver, available to the
+    // aggregate/count/groupBy paths (the `findMany` method aliases this for its
+    // nested `with` load). Mutually recursive with `writer`, so it reads
+    // `writer` at call time.
+    const relationPredicateFetcher: DatabaseWriterLike["findMany"] = (childTable, childArgs) => {
+        if (!isShardLocalTarget(childTable)) {
+            // eslint-disable-next-line @typescript-eslint/no-use-before-define -- lazy closure read of post-construction `writer`
+            return writer.findMany(childTable, childArgs);
+        }
+
+        return crossShardReader ? crossShardReader(childTable, childArgs) : crossBackendUnsupported(childTable);
+    };
+
+    /**
+     * Resolve relation-crossing predicates on the aggregate/count/groupBy paths
+     * (the ones that compile `where` directly). D1 has no EXISTS push-down, so
+     * this is semijoin-only and an oversized child key set fails closed via the
+     * configured key cap. The child read honours its own RLS through
+     * `relationBaseWhere`, so a relation-filtered aggregate can never measure
+     * rows the caller can't see. Returns the input reference unchanged when no
+     * relation predicate is present — callers use that to keep their indexed
+     * fast-path.
+     */
+    const resolveAggregateRelations = (
+        where: WhereInput | undefined,
+        predicateTable: string,
+        relationBaseWhere: ((table: string) => undefined | WhereInput) | undefined,
+    ): Promise<WhereInput | undefined> =>
+        resolveRelationPredicates(where, {
+            fetcher: relationPredicateFetcher,
+            maxRelationKeys,
+            relationBaseWhere,
+            schema,
+            tableName: predicateTable,
+        });
+
     const writer: DatabaseWriterLike = {
         // eslint-disable-next-line sonarjs/cognitive-complexity -- routes count/sum/avg/min/max through the indexed companion vs scan fallback; the branching reads clearer inline than split across per-op helpers
         async aggregate(tableName, aggOptions: AggregateOptions): Promise<AggregateResult> {
@@ -2033,6 +2080,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             if (aggOptions.op === "count") {
                 return writer.count(tableName, {
                     baseWhere: aggOptions.baseWhere,
+                    relationBaseWhere: aggOptions.relationBaseWhere,
                     restrictsCounts: aggOptions.restrictsCounts,
                     where: aggOptions.where,
                 });
@@ -2042,13 +2090,22 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
                 throw new Error(`aggregate(${tableName}, { op: "${aggOptions.op}" }): "field" is required for non-count reducers`);
             }
 
+            const effective = mergeWhere(aggOptions.baseWhere, aggOptions.where);
+            // Rewrite any relation-crossing predicate to a flat semijoin clause
+            // before compiling. The resolver returns `effective` unchanged when
+            // there is none, so `hasRelation` skips the no-op fetch and disables
+            // the indexed fast-path (which can't honour a relation filter and
+            // would otherwise silently over-aggregate).
+            const resolved = await resolveAggregateRelations(effective, tableName, aggOptions.relationBaseWhere);
+            const hasRelation = resolved !== effective;
+
             // Indexed fast-path: the `__agg_` companion is now reducer-aware
             // (`__value__` holds the sum / running sum / extreme, `__count__`
             // the row count), so a matching `(by, field, op)` index whose
             // counter is materialized answers sum/avg/min/max in one row lookup.
             // We only attempt it when no baseWhere is set; the RLS predicate
             // falls through to the SQL scan below.
-            if (definition.aggregateIndexes && !aggOptions.baseWhere) {
+            if (definition.aggregateIndexes && !aggOptions.baseWhere && !hasRelation) {
                 const planned = selectIndexForAggregate(definition.aggregateIndexes, aggOptions.op, aggOptions.field, aggOptions.where);
 
                 if (planned) {
@@ -2067,8 +2124,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
                 }
             }
 
-            const effective = mergeWhere(aggOptions.baseWhere, aggOptions.where);
-            const { params, sql: whereSql } = compileWhere(effective, d1WhereStrategy);
+            const { params, sql: whereSql } = compileWhere(resolved, d1WhereStrategy);
 
             let querySql = `SELECT ${aggregateSqlFunction(aggOptions.op)}(${columnRef(aggOptions.field)}) AS value FROM ${quoteIdentifier(tableName)}`;
 
@@ -2100,10 +2156,17 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
                 throw new CountRlsUnsupportedError(tableName);
             }
 
+            const effective = mergeWhere(countOptions.baseWhere, countOptions.where);
+            // Rewrite any relation-crossing predicate to a flat semijoin clause
+            // before compiling. `hasRelation` (resolver returned a new tree)
+            // disables the indexed counter, which can't honour a relation filter.
+            const resolved = await resolveAggregateRelations(effective, tableName, countOptions.relationBaseWhere);
+            const hasRelation = resolved !== effective;
+
             // Indexed path: same planner as the DO dialect (see ctx-db.ts).
             // We only attempt the counter when no baseWhere is set; otherwise
             // we route uniformly through SQL so the RLS predicate participates.
-            if (definition.aggregateIndexes && !countOptions.baseWhere) {
+            if (definition.aggregateIndexes && !countOptions.baseWhere && !hasRelation) {
                 const planned = selectIndexForCount(definition.aggregateIndexes, countOptions.where);
 
                 if (planned) {
@@ -2119,8 +2182,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
                 }
             }
 
-            const effective = mergeWhere(countOptions.baseWhere, countOptions.where);
-            const { params, sql: whereSql } = compileWhere(effective, d1WhereStrategy);
+            const { params, sql: whereSql } = compileWhere(resolved, d1WhereStrategy);
 
             let querySql = `SELECT COUNT(*) AS count FROM ${quoteIdentifier(tableName)}`;
 
@@ -2240,20 +2302,12 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             const orderKeys = normalizeOrderKeys(args.orderBy);
             const seek = args.cursor ? buildSeekWhere(orderKeys, decodeCursor(args.cursor)) : undefined;
 
-            // Relation reads/counts routed by the child's backend: a shard-local
-            // child of this global parent fans out via the injected cross-shard
-            // reader (or throws when unwired); global/same-backend children stay
-            // on the local D1 writer. Defined here so referencing `writer` is at
-            // call time (the routed fetcher and `writer.findMany` are mutually
-            // recursive for nested `with`) and so the relation-predicate
-            // pre-resolver below can reuse the same routing.
-            const relationFetcher: DatabaseWriterLike["findMany"] = (childTable, childArgs) => {
-                if (!isShardLocalTarget(childTable)) {
-                    return writer.findMany(childTable, childArgs);
-                }
-
-                return crossShardReader ? crossShardReader(childTable, childArgs) : crossBackendUnsupported(childTable);
-            };
+            // Relation reads routed by the child's backend (shard-local child of
+            // this global parent → injected cross-shard reader; global/same-
+            // backend → local D1 writer). Shared with the aggregate/count paths
+            // as the top-level `relationPredicateFetcher`; aliased here for the
+            // nested `with` load.
+            const relationFetcher = relationPredicateFetcher;
             const relationCounter: DatabaseWriterLike["count"] = (childTable, where) => {
                 if (!isShardLocalTarget(childTable)) {
                     return writer.count(childTable, where);
@@ -2273,6 +2327,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             // pre-existing gap; the pre-resolver does not depend on that).
             predicate = await resolveRelationPredicates(predicate, {
                 fetcher: relationFetcher,
+                maxRelationKeys,
                 relationBaseWhere: args.relationBaseWhere,
                 schema,
                 tableName,
@@ -2367,12 +2422,19 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
                 throw new Error(`groupBy(${tableName}, { agg: { op: "${agg.op}" } }): "field" is required for non-count reducers`);
             }
 
+            const effective = mergeWhere(groupOptions.baseWhere, groupOptions.where);
+            // Rewrite any relation-crossing predicate to a flat semijoin clause
+            // before compiling. `hasRelation` disables the indexed companion,
+            // which can't honour a relation filter and would over-aggregate.
+            const resolved = await resolveAggregateRelations(effective, tableName, groupOptions.relationBaseWhere);
+            const hasRelation = resolved !== effective;
+
             // Indexed path: when no baseWhere is set and an aggregateIndex's
             // `by` exactly matches `groupOptions.by`, every group answer is
             // already in the reducer-aware companion table — covers every op
             // (count/sum/avg/min/max) now that `__value__`/`__count__` are
             // maintained per op. baseWhere falls through to scan so RLS composes.
-            if (definition.aggregateIndexes && !groupOptions.baseWhere) {
+            if (definition.aggregateIndexes && !groupOptions.baseWhere && !hasRelation) {
                 const indexed = await tryIndexedGroupBy(tableName, definition.aggregateIndexes, agg, groupOptions);
 
                 if (indexed !== undefined) {
@@ -2380,8 +2442,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
                 }
             }
 
-            const effective = mergeWhere(groupOptions.baseWhere, groupOptions.where);
-            const { params, sql: whereSql } = compileWhere(effective, d1WhereStrategy);
+            const { params, sql: whereSql } = compileWhere(resolved, d1WhereStrategy);
 
             const select = groupOptions.by.map((field) => `${columnRef(field)} AS ${quoteIdentifier(field)}`);
 
@@ -2733,6 +2794,12 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             const partitionKey = own["__partition__"] as string;
 
             const effective = mergeWhere(rankOptions.baseWhere, rankOptions.where);
+
+            // rank() uses `where` solely to pin/validate the partition, never as
+            // a row filter — a relation-crossing predicate has nowhere to apply,
+            // so resolving it would silently drop it (fail-**open**). Reject it.
+            assertFlatPredicate(effective, schema, tableName, "rank");
+
             const partitionFromWhere = resolveRankPartition(index, effective);
 
             if (partitionFromWhere) {
@@ -2756,6 +2823,12 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
         },
 
         async rankPage(tableName, indexName, rankPageOptions = {}): Promise<RankPage> {
+            // Parity with rank(): rankPage's `where` only pins the partition, never
+            // a row filter, so a relation-crossing predicate would be silently
+            // dropped (fail-**open**). Reject it first — mirrors the DO twin, which
+            // guards before the rankIndex lookup.
+            assertFlatPredicate(mergeWhere(rankPageOptions.baseWhere, rankPageOptions.where), schema, tableName, "rankPage");
+
             const definition = schema.tables[tableName];
 
             if (!definition) {

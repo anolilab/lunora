@@ -35,10 +35,53 @@ import { distinctValues } from "./relations";
 import type { WhereInput } from "./where-clause-compiler";
 import { RELATION_EXISTS_KEY } from "./where-clause-compiler";
 
-/** Prisma-style relation operators, dispatched by relation cardinality. */
-const ONE_OPERATORS = new Set(["is", "isNot"]);
-const MANY_OPERATORS = new Set(["every", "none", "some"]);
-const RELATION_OPERATORS = new Set([...ONE_OPERATORS, ...MANY_OPERATORS]);
+/**
+ * Single source of truth for the Prisma-style relation operators. Both the
+ * semijoin reduction ({@link compileOperator}) and the EXISTS push-down
+ * ({@link buildExistsMarker}) derive their entire truth table from this map, so
+ * adding a 6th operator is a one-line data change rather than edits scattered
+ * across two switch sites, the cardinality guard, and three operator sets.
+ *
+ * - `kind` — the relation cardinality the operator requires (`is`/`isNot` are
+ * to-one; `some`/`none`/`every` are to-many). Drives {@link assertCardinality}.
+ * - `negated` — the membership test is inverted: the flat clause uses `notIn`
+ * (vs `in`) and the EXISTS marker emits `NOT EXISTS` (vs `EXISTS`).
+ * - `negateChild` — run the child query with the predicate negated (`every` ≡
+ * "no child matches NOT W").
+ * - `nullDisjunct` — the semijoin must add an explicit `isNull` disjunct so an
+ * absent to-one relation (null FK) matches (`isNot`). The EXISTS path needs no
+ * such disjunct — `NOT EXISTS` over an absent FK is naturally true.
+ *
+ * The projected/clause join columns are not per-operator: they follow purely
+ * from the relation's cardinality (see {@link joinColumns}).
+ */
+interface RelationOperatorMeta {
+    kind: RelationDefinitionLike["kind"];
+    negateChild?: boolean;
+    negated: boolean;
+    nullDisjunct?: boolean;
+}
+
+const RELATION_OPERATOR_META: Record<string, RelationOperatorMeta> = {
+    every: { kind: "many", negateChild: true, negated: true },
+    is: { kind: "one", negated: false },
+    isNot: { kind: "one", negated: true, nullDisjunct: true },
+    none: { kind: "many", negated: true },
+    some: { kind: "many", negated: false },
+};
+
+const RELATION_OPERATORS = new Set(Object.keys(RELATION_OPERATOR_META));
+
+/**
+ * The two join columns a relation predicate touches, derived from cardinality:
+ * - **clause** — the *parent* column the rewritten flat clause / EXISTS
+ * correlation constrains. to-one: the parent's FK (`field`); to-many: the
+ * parent's referenced column (`references`).
+ * - **project** — the *child* column whose distinct values the semijoin reads
+ * off matched rows. Always the mirror of `clause`.
+ */
+const joinColumns = (relation: RelationDefinitionLike): { clause: string; project: string } =>
+    relation.kind === "one" ? { clause: relation.field, project: relation.references } : { clause: relation.references, project: relation.field };
 
 /**
  * Default cap on the number of join keys a single relation predicate may pull
@@ -68,16 +111,38 @@ interface RelationExistsMarker {
     relation: RelationDefinitionLike;
 }
 
+/**
+ * How an EXISTS-pushable relation node is resolved.
+ *
+ * - `"auto"` (default) — **cost-based**: resolve via the cheaper semijoin first
+ * and only escalate a node to the correlated EXISTS when its child key set
+ * overflows {@link DEFAULT_MAX_RELATION_KEYS}. Benchmarks put the semijoin at
+ * 2.5–13× the throughput of the push-down on the JSON-blob path (an indexed
+ * flat `IN (...)` vs a per-row correlated subquery), so EXISTS earns its keep on
+ * exactly one axis — it has no key cap. `"auto"` spends the cheap path on the
+ * common small/indexed set and reserves the pricier-but-unbounded push-down for
+ * the genuinely large set that would otherwise fail closed.
+ * - `"always"` — push every pushable node inline regardless of size (the old
+ * Phase 2 default; kept for EXISTS-path test coverage and benchmarking).
+ * - A relation is only ever a push candidate when {@link
+ * ResolveRelationPredicatesOptions.canPushExists} reports it co-located; absent
+ * that gate every node takes the semijoin and a cap overflow fails closed.
+ */
+type ExistsPushMode = "always" | "auto";
+
 interface ResolveRelationPredicatesOptions {
     /**
      * Phase 2 push-down gate. When supplied and it returns `true` for a
-     * relation, that relation node is rewritten to a correlated-EXISTS marker
-     * (compiled inline by the SQL layer) instead of being semijoin-resolved via
-     * a child fetch. Returning `false` (or omitting the gate) keeps the
-     * universal semijoin path. The DO dialect gates on parent+child co-location
-     * in one SQLite DB; D1 omits it (cross-backend, no shared subquery scope).
+     * relation, that relation node is *eligible* for a correlated-EXISTS marker
+     * (compiled inline by the SQL layer) instead of a semijoin child fetch —
+     * subject to {@link ExistsPushMode}. Returning `false` (or omitting the
+     * gate) pins the universal semijoin path. The DO dialect gates on
+     * parent+child co-location in one SQLite DB; D1 omits it (cross-backend, no
+     * shared subquery scope).
      */
     canPushExists?: (relation: RelationDefinitionLike) => boolean;
+    /** Push-eligible-node policy (see {@link ExistsPushMode}). Defaults to `"auto"`. */
+    existsPushMode?: ExistsPushMode;
     /** Backend-routed child reader — `resolveWith`'s `fetcher` (a DO/D1 `findMany`). */
     fetcher: (tableName: string, args: QueryArgs) => Promise<QueryPage>;
     /** Override the {@link DEFAULT_MAX_RELATION_KEYS} fail-closed cap. */
@@ -92,11 +157,19 @@ interface ResolveRelationPredicatesOptions {
 /** Internal threaded context (everything but the per-call `tableName`). */
 interface ResolveContext {
     canPushExists?: (relation: RelationDefinitionLike) => boolean;
+    existsPushMode: ExistsPushMode;
     fetcher: (tableName: string, args: QueryArgs) => Promise<QueryPage>;
     maxRelationKeys: number;
     relationBaseWhere?: (table: string) => undefined | WhereInput;
     schema: { readonly tables: Record<string, TableDefinitionLike> };
 }
+
+/**
+ * Sentinel returned by {@link projectChildKeys}/{@link compileOperator} when the
+ * child key set exceeds the cap *and* an EXISTS escalation is available — the
+ * caller swaps the semijoin for a push-down marker instead of failing closed.
+ */
+const KEY_OVERFLOW = Symbol("relation-key-overflow");
 
 /** Normalize an `AND`/`OR` branch value into a list of non-null sub-trees. */
 const branchesOf = (value: unknown): WhereInput[] => (Array.isArray(value) ? value.map((branch) => (branch ?? {}) as WhereInput) : []);
@@ -154,6 +227,20 @@ const containsRelationPredicate = (where: WhereInput, schema: ResolveContext["sc
 };
 
 /**
+ * Reject a relation-crossing predicate on a path that compiles `where` directly
+ * (aggregate / count / groupBy / rank) instead of resolving it. Such a node
+ * would otherwise silently mis-compile as an ordinary column comparison and
+ * return a confusing empty/wrong result — a fail-**open** RLS hazard when the
+ * predicate arrives via an injected read policy. Shared by both dialects so the
+ * DO and D1 backends can't drift on which ops are guarded.
+ */
+const assertFlatPredicate = (where: WhereInput | undefined, schema: ResolveContext["schema"], tableName: string, op: string): void => {
+    if (where && containsRelationPredicate(where, schema, tableName)) {
+        throw new Error(`relation-crossing predicates are not supported in ${op}() — use them in findMany/findFirst or an RLS read policy`);
+    }
+};
+
+/**
  * Run the child query and return the distinct values of `projectField` off the
  * matched rows. The child `where` is itself pre-resolved (multi-hop) and the
  * child's RLS read filter rides `baseWhere`, so an unreadable child row never
@@ -164,7 +251,8 @@ const projectChildKeys = async (
     childWhere: WhereInput,
     projectField: string,
     context: ResolveContext,
-): Promise<unknown[]> => {
+    escalatable: boolean,
+): Promise<typeof KEY_OVERFLOW | unknown[]> => {
     // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: a child predicate may itself cross relations (multi-hop)
     const resolvedChildWhere = await resolveForTable(childWhere, relation.table, context);
     const { page } = await context.fetcher(relation.table, {
@@ -175,6 +263,14 @@ const projectChildKeys = async (
     const keys = distinctValues(page, projectField);
 
     if (keys.length > context.maxRelationKeys) {
+        // A co-located relation can escape the cap via the (unbounded) EXISTS
+        // push-down — signal the overflow so the caller escalates. Otherwise
+        // (cross-backend/cross-shard) there is no subquery to fall back to, so
+        // fail closed rather than truncate the `IN (...)` and silently mis-match.
+        if (escalatable) {
+            return KEY_OVERFLOW;
+        }
+
         throw new Error(
             `relation predicate on "${relation.table}" matched ${String(keys.length)} rows, exceeding the ${String(context.maxRelationKeys)}-key limit; narrow the predicate (a same-shard EXISTS push-down lifts this cap)`,
         );
@@ -183,48 +279,53 @@ const projectChildKeys = async (
     return keys;
 };
 
-/** Compile one relation operator into the equivalent flat `WhereInput` clause. */
-const compileOperator = async (operator: string, relation: RelationDefinitionLike, childWhere: WhereInput, context: ResolveContext): Promise<WhereInput> => {
-    switch (operator) {
-        case "every": {
-            // "all children match W" ≡ "no child matches NOT W". Children the
-            // caller can't read are excluded by `relationBaseWhere`, so this is
-            // "every *readable* child matches W" (a deliberate RLS-respecting
-            // divergence). An empty violating set ⇒ `notIn []` ⇒ all parents,
-            // preserving vacuous truth for childless parents.
-            const violating = await projectChildKeys(relation, { NOT: childWhere }, relation.field, context);
+/**
+ * Compile one relation operator into the equivalent flat `WhereInput` clause,
+ * deriving the entire truth table from {@link RELATION_OPERATOR_META}:
+ *
+ * `negateChild` (`every`) runs the child query under `{ NOT: W }`, so the
+ * projected keys are the *violating* rows. Children the caller can't read are
+ * excluded by `relationBaseWhere` — so `every` means "every *readable* child
+ * matches W" (a deliberate RLS-respecting divergence). An empty violating set
+ * ⇒ `notIn []` ⇒ all parents, preserving vacuous truth for childless parents.
+ *
+ * `negated: false` (`is`/`some`) ⇒ `{ clause: { in: keys } }`. A null parent
+ * FK never matches a non-empty `in` (correct — no related row).
+ *
+ * `negated: true` + `nullDisjunct` (`isNot`) adds the explicit `isNull`
+ * disjunct: SQLite `NULL NOT IN (...)` is NULL (excluded), but `isNot` must
+ * match a row with no related record. `negated: true` without it
+ * (`none`/`every`) ⇒ a bare `notIn`.
+ */
+const compileOperator = async (
+    operator: string,
+    relation: RelationDefinitionLike,
+    childWhere: WhereInput,
+    context: ResolveContext,
+    escalatable: boolean,
+): Promise<typeof KEY_OVERFLOW | WhereInput> => {
+    const meta = RELATION_OPERATOR_META[operator];
 
-            return { [relation.references]: { notIn: violating } };
-        }
-        case "is": {
-            // Parent's FK points at a child matching W. Project the child's
-            // referenced column; a null parent FK never matches a non-empty IN.
-            const keys = await projectChildKeys(relation, childWhere, relation.references, context);
-
-            return { [relation.field]: { in: keys } };
-        }
-        case "isNot": {
-            // Absent relation (null FK) OR present-but-not-matching. The explicit
-            // isNull disjunct is required: SQLite `NULL NOT IN (...)` is NULL
-            // (excluded), but `isNot` must match a row with no related record.
-            const keys = await projectChildKeys(relation, childWhere, relation.references, context);
-
-            return { OR: [{ [relation.field]: { notIn: keys } }, { [relation.field]: { isNull: true } }] };
-        }
-        case "none": {
-            const keys = await projectChildKeys(relation, childWhere, relation.field, context);
-
-            return { [relation.references]: { notIn: keys } };
-        }
-        case "some": {
-            const keys = await projectChildKeys(relation, childWhere, relation.field, context);
-
-            return { [relation.references]: { in: keys } };
-        }
-        default: {
-            throw new Error(`unknown relation operator "${operator}"`);
-        }
+    if (!meta) {
+        throw new Error(`unknown relation operator "${operator}"`);
     }
+
+    const { clause, project } = joinColumns(relation);
+    const keys = await projectChildKeys(relation, meta.negateChild ? { NOT: childWhere } : childWhere, project, context, escalatable);
+
+    if (keys === KEY_OVERFLOW) {
+        return KEY_OVERFLOW;
+    }
+
+    if (!meta.negated) {
+        return { [clause]: { in: keys } };
+    }
+
+    if (meta.nullDisjunct) {
+        return { OR: [{ [clause]: { notIn: keys } }, { [clause]: { isNull: true } }] };
+    }
+
+    return { [clause]: { notIn: keys } };
 };
 
 /**
@@ -243,25 +344,28 @@ const buildExistsMarker = async (
     parentTable: string,
     context: ResolveContext,
 ): Promise<WhereInput> => {
+    const meta = RELATION_OPERATOR_META[operator];
+
+    if (!meta) {
+        throw new Error(`unknown relation operator "${operator}"`);
+    }
+
     const base = context.relationBaseWhere?.(relation.table);
-    const predicatePart: WhereInput = operator === "every" ? { NOT: childWhere } : childWhere;
+    const predicatePart: WhereInput = meta.negateChild ? { NOT: childWhere } : childWhere;
     const merged: WhereInput = base ? { AND: [base, predicatePart] } : predicatePart;
     // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: the child predicate may itself cross relations (multi-hop / nested push-down)
     const resolvedChild = await resolveForTable(merged, relation.table, context);
-    const negated = operator === "every" || operator === "isNot" || operator === "none";
-    const marker: RelationExistsMarker = { childWhere: resolvedChild, negated, parentTable, relation };
+    const marker: RelationExistsMarker = { childWhere: resolvedChild, negated: meta.negated, parentTable, relation };
 
     return { [RELATION_EXISTS_KEY]: marker };
 };
 
 /** Reject a relation operator applied to a relation of the wrong cardinality. */
 const assertCardinality = (operator: string, name: string, relation: RelationDefinitionLike): void => {
-    if (ONE_OPERATORS.has(operator) && relation.kind !== "one") {
-        throw new Error(`relation operator "${operator}" requires a to-one relation, but "${name}" is to-many`);
-    }
+    const meta = RELATION_OPERATOR_META[operator];
 
-    if (MANY_OPERATORS.has(operator) && relation.kind !== "many") {
-        throw new Error(`relation operator "${operator}" requires a to-many relation, but "${name}" is to-one`);
+    if (meta && meta.kind !== relation.kind) {
+        throw new Error(`relation operator "${operator}" requires a to-${meta.kind} relation, but "${name}" is to-${relation.kind}`);
     }
 };
 
@@ -284,13 +388,29 @@ const resolveRelationNode = async (
         assertCardinality(operator, name, relation);
 
         const childWhere = predicate[operator] ?? {};
+        const pushable = context.canPushExists?.(relation) ?? false;
 
-        if (context.canPushExists?.(relation)) {
+        if (pushable && context.existsPushMode === "always") {
+            // Forced push (parity tests / benchmarks): emit the EXISTS marker
+            // without the semijoin probe.
             // eslint-disable-next-line no-await-in-loop -- sequential bounded resolution per operator (a non-pushable grandchild may still fetch)
             clauses.push(await buildExistsMarker(operator, relation, childWhere, parentTable, context));
+
+            continue;
+        }
+
+        // Cost-based default: take the cheaper semijoin first. It only escalates
+        // to the (pricier but unbounded) EXISTS push-down when the child key set
+        // overflows the cap AND the relation is co-located (`pushable`); a
+        // non-pushable overflow fails closed inside `compileOperator`.
+        // eslint-disable-next-line no-await-in-loop -- one bounded child query per operator; sequential keeps the fan-out predictable
+        const semijoin = await compileOperator(operator, relation, childWhere, context, pushable);
+
+        if (semijoin === KEY_OVERFLOW) {
+            // eslint-disable-next-line no-await-in-loop -- escalation path: build the inline subquery for this oversized node
+            clauses.push(await buildExistsMarker(operator, relation, childWhere, parentTable, context));
         } else {
-            // eslint-disable-next-line no-await-in-loop -- one bounded child query per operator; sequential keeps the fan-out predictable
-            clauses.push(await compileOperator(operator, relation, childWhere, context));
+            clauses.push(semijoin);
         }
     }
 
@@ -354,6 +474,7 @@ const resolveRelationPredicates = async (where: WhereInput | undefined, options:
 
     return resolveForTable(where, options.tableName, {
         canPushExists: options.canPushExists,
+        existsPushMode: options.existsPushMode ?? "auto",
         fetcher: options.fetcher,
         maxRelationKeys: options.maxRelationKeys ?? DEFAULT_MAX_RELATION_KEYS,
         relationBaseWhere: options.relationBaseWhere,
@@ -361,5 +482,5 @@ const resolveRelationPredicates = async (where: WhereInput | undefined, options:
     });
 };
 
-export { containsRelationPredicate, DEFAULT_MAX_RELATION_KEYS, isRelationPredicate, resolveRelationPredicates };
+export { assertFlatPredicate, containsRelationPredicate, DEFAULT_MAX_RELATION_KEYS, isRelationPredicate, resolveRelationPredicates };
 export type { RelationExistsMarker, ResolveRelationPredicatesOptions };
