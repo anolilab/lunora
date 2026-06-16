@@ -1,5 +1,5 @@
-import type { Subscription } from "@cirrus/payment";
-import { resolveEntitlements } from "@cirrus/payment";
+import type { Subscription } from "@lunora/payment";
+import { resolveEntitlements } from "@lunora/payment";
 
 import type { QuotaResource } from "../src/billing/plans";
 import { CIRRUS_CLOUD_PLANS, effectiveLimit } from "../src/billing/plans";
@@ -7,7 +7,7 @@ import { action, query, v } from "./_generated/server.js";
 import { assertMember } from "./authz";
 
 /**
- * Billing (CLOUD-PLAN.md §4) on `@cirrus/payment`. The org id is the payment
+ * Billing (CLOUD-PLAN.md §4) on `@lunora/payment`. The org id is the payment
  * `referenceId`, so a subscription, customer, and metered usage all key on the
  * organization. `ctx.payments` is the facade codegen wires onto the action/
  * mutation context when these functions reach for it; the payment store rides

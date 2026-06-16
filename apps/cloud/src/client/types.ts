@@ -1,4 +1,4 @@
-import type { Id } from "../../cirrus/_generated/dataModel.js";
+import type { Id } from "../../lunora/_generated/dataModel.js";
 
 /** Shared id aliases so the client components don't repeat the generic. */
 export type OrgId = Id<"organizations">;

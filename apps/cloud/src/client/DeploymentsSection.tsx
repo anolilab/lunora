@@ -1,7 +1,7 @@
-import { useQuery } from "@cirrus/react";
+import { useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 
-import { api } from "../../cirrus/_generated/api.js";
+import { api } from "../../lunora/_generated/api.js";
 import { AsyncList } from "./AsyncList";
 import type { OrgId, ProjectId } from "./types";
 

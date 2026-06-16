@@ -725,42 +725,45 @@ importers:
 
   apps/cloud:
     dependencies:
-      '@cirrus/auth':
+      '@lunora/analytics':
+        specifier: workspace:*
+        version: link:../../packages/analytics
+      '@lunora/auth':
         specifier: workspace:*
         version: link:../../packages/auth
-      '@cirrus/client':
+      '@lunora/client':
         specifier: workspace:*
         version: link:../../packages/client
-      '@cirrus/d1':
+      '@lunora/d1':
         specifier: workspace:*
         version: link:../../packages/d1
-      '@cirrus/do':
+      '@lunora/do':
         specifier: workspace:*
         version: link:../../packages/do
-      '@cirrus/mail':
+      '@lunora/mail':
         specifier: workspace:*
         version: link:../../packages/mail
-      '@cirrus/payment':
+      '@lunora/payment':
         specifier: workspace:*
         version: link:../../packages/payment
-      '@cirrus/ratelimit':
+      '@lunora/ratelimit':
         specifier: workspace:*
         version: link:../../packages/ratelimit
-      '@cirrus/react':
+      '@lunora/react':
         specifier: workspace:*
         version: link:../../packages/react
-      '@cirrus/runtime':
+      '@lunora/runtime':
         specifier: workspace:*
         version: link:../../packages/runtime
-      '@cirrus/scheduler':
+      '@lunora/scheduler':
         specifier: workspace:*
         version: link:../../packages/scheduler
-      '@cirrus/server':
+      '@lunora/server':
         specifier: workspace:*
         version: link:../../packages/server
       better-auth:
         specifier: catalog:auth
-        version: 1.6.16(@cloudflare/workers-types@4.20260610.1)(@opentelemetry/api@1.9.1)(drizzle-orm@0.45.2(@cloudflare/workers-types@4.20260610.1)(@opentelemetry/api@1.9.1)(kysely@0.28.17))(next@16.2.9(@babel/core@7.29.7)(@opentelemetry/api@1.9.1)(@playwright/test@1.60.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.13)(svelte@5.56.3(@typescript-eslint/types@8.61.0))(vitest@4.1.8)(vue@3.5.35(typescript@6.0.3))
+        version: 1.6.19(@cloudflare/workers-types@4.20260616.1)(@opentelemetry/api@1.9.1)(@tanstack/react-start@1.168.25(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(vite-plugin-solid@2.11.12(@testing-library/jest-dom@6.9.1)(solid-js@1.9.13)(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0)))(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0)))(drizzle-orm@0.45.2(@cloudflare/workers-types@4.20260616.1)(@electric-sql/pglite@0.3.16)(@opentelemetry/api@1.9.1)(kysely@0.28.17)(mysql2@3.22.5(@types/node@25.9.3))(pg@8.21.0)(postgres@3.4.9))(mysql2@3.22.5(@types/node@25.9.3))(next@16.2.9(@babel/core@7.29.7)(@opentelemetry/api@1.9.1)(@playwright/test@1.61.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7))(pg@8.21.0)(react-dom@19.2.7(react@19.2.7))(react@19.2.7)(solid-js@1.9.13)(svelte@5.56.3(@typescript-eslint/types@8.61.0))(vitest@4.1.9)(vue@3.5.38(typescript@6.0.3))
       react:
         specifier: 19.2.7
         version: 19.2.7
@@ -769,26 +772,26 @@ importers:
         version: 19.2.7(react@19.2.7)
       stripe:
         specifier: ^19.0.0
-        version: 19.3.0(@types/node@25.9.2)
+        version: 19.3.0(@types/node@25.9.3)
     devDependencies:
-      '@cirrus/cli':
-        specifier: workspace:*
-        version: link:../../packages/cli
-      '@cirrus/codegen':
-        specifier: workspace:*
-        version: link:../../packages/codegen
-      '@cirrus/config':
-        specifier: workspace:*
-        version: link:../../packages/config
-      '@cirrus/vite':
-        specifier: workspace:*
-        version: link:../../packages/vite
       '@cloudflare/workers-types':
         specifier: catalog:cloudflare
-        version: 4.20260610.1
+        version: 4.20260616.1
+      '@lunora/cli':
+        specifier: workspace:*
+        version: link:../../packages/cli
+      '@lunora/codegen':
+        specifier: workspace:*
+        version: link:../../packages/codegen
+      '@lunora/config':
+        specifier: workspace:*
+        version: link:../../packages/config
+      '@lunora/vite':
+        specifier: workspace:*
+        version: link:../../packages/vite
       '@types/node':
         specifier: catalog:types
-        version: 25.9.2
+        version: 25.9.3
       '@types/react':
         specifier: catalog:frontend
         version: 19.2.17
@@ -800,13 +803,13 @@ importers:
         version: 6.0.3
       vite:
         specifier: catalog:vite
-        version: 8.0.16(@types/node@25.9.2)(esbuild@0.28.0)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0)
+        version: 8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0)
       vitest:
         specifier: catalog:test
-        version: 4.1.8(@opentelemetry/api@1.9.1)(@types/node@25.9.2)(@vitest/coverage-v8@4.1.8)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.16(@types/node@25.9.2)(esbuild@0.28.0)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
+        version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@25.9.3)(@vitest/coverage-v8@4.1.9)(happy-dom@20.10.2)(jsdom@29.1.1(@noble/hashes@2.2.0))(vite@8.0.16(@types/node@25.9.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
       wrangler:
         specifier: catalog:cloudflare
-        version: 4.99.0(@cloudflare/workers-types@4.20260610.1)
+        version: 4.100.0(@cloudflare/workers-types@4.20260616.1)
 
   apps/docs:
     dependencies:
@@ -3582,14 +3585,8 @@ packages:
       '@better-auth/utils': 0.4.2
       '@better-fetch/fetch': 1.3.1
 
-  '@better-auth/utils@0.4.1':
-    resolution: {integrity: sha512-SZBPRPF3z0nBvE5ygOkxae35wnnXPRShmqFo78S+qslLeFoPu/pMgnXAuNKFMMybac3tiLaVg1e3MQW5MC+1iA==}
-
   '@better-auth/utils@0.4.2':
     resolution: {integrity: sha512-AUxrvu+HaaODsUyzDxFgwd/8RZ1yZaYo42LXKSrU2oGgR38pS1ij8nqQKNgtTWoYGpNevNXtCfgTy6loHveW9A==}
-
-  '@better-fetch/fetch@1.3.0':
-    resolution: {integrity: sha512-Lgkl18IrUURFqa1nE38GNDWXf7XGzfxXQDCE/alCQV0yZ98YrPGtlmW61ch1T4YRt3lxrSAGA+Ft73FzuWWb3A==}
 
   '@better-fetch/fetch@1.3.1':
     resolution: {integrity: sha512-ABkD1WhyfPZprKRQI3bhATjeiFuNWC9PXhfGWqL+sg/gKrM977oFrYkdb4msM3hgUGonr7KlOsOFT5TU2rht9g==}
@@ -18430,15 +18427,9 @@ snapshots:
       '@better-auth/utils': 0.4.2
       '@better-fetch/fetch': 1.3.1
 
-  '@better-auth/utils@0.4.1':
-    dependencies:
-      '@noble/hashes': 2.2.0
-
   '@better-auth/utils@0.4.2':
     dependencies:
       '@noble/hashes': 2.2.0
-
-  '@better-fetch/fetch@1.3.0': {}
 
   '@better-fetch/fetch@1.3.1': {}
 
@@ -25649,8 +25640,8 @@ snapshots:
 
   better-call@1.3.6(zod@4.4.3):
     dependencies:
-      '@better-auth/utils': 0.4.1
-      '@better-fetch/fetch': 1.3.0
+      '@better-auth/utils': 0.4.2
+      '@better-fetch/fetch': 1.3.1
       rou3: 0.7.12
       set-cookie-parser: 3.1.0
     optionalDependencies:

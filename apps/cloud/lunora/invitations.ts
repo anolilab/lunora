@@ -1,4 +1,4 @@
-import { CirrusError } from "@cirrus/server";
+import { LunoraError } from "@lunora/server";
 
 import { randomSecret, sha256Hex } from "../src/deploy/keys";
 import type { Id } from "./_generated/dataModel.js";
@@ -91,7 +91,7 @@ export const accept = mutation({
         const { userId } = context.auth;
 
         if (!userId) {
-            throw new CirrusError("UNAUTHORIZED", "not signed in");
+            throw new LunoraError("UNAUTHORIZED", "not signed in");
         }
 
         const tokenHash = await sha256Hex(token);
@@ -99,7 +99,7 @@ export const accept = mutation({
         const invitation = (page as unknown as InvitationRow[])[0];
 
         if (invitation?.status !== "pending" || invitation.expiresAt < Date.now()) {
-            throw new CirrusError("FORBIDDEN", "invitation is invalid, revoked, or expired");
+            throw new LunoraError("FORBIDDEN", "invitation is invalid, revoked, or expired");
         }
 
         const members = await context.db.members.findMany({ where: { organizationId: invitation.organizationId, userId } });

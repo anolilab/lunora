@@ -1,7 +1,7 @@
-import { RateLimiter } from "@cirrus/ratelimit";
-import type { ExecutionContextLike } from "@cirrus/runtime";
+import { RateLimiter } from "@lunora/ratelimit";
+import type { ExecutionContextLike } from "@lunora/runtime";
 
-import { api } from "../../cirrus/_generated/api.js";
+import { api } from "../../lunora/_generated/api.js";
 import { proxyAdminRequest } from "../admin/proxy";
 import { createHttpCloudflareApi } from "../cloudflare/api";
 import { handleGitHubWebhook } from "../github/webhook";
@@ -13,15 +13,15 @@ import { handleDeployRequest } from "./handler";
 import { CellScheduler } from "./scheduler";
 import { cloudflareAccountBudget } from "./token-bucket";
 
-/** The Cirrus action context the worker injects on `env.__cirrusCtx`. */
-interface CirrusActionContext {
+/** The Cirrus action context the worker injects on `env.__lunoraCtx`. */
+interface LunoraActionContext {
     runAction: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     runMutation: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
     runQuery: <R>(reference: unknown, args?: Record<string, unknown>) => Promise<R>;
 }
 
 interface RouterEnv {
-    __cirrusCtx?: CirrusActionContext;
+    __lunoraCtx?: LunoraActionContext;
     /** Bearer gating the dispatcher's plan-lookup endpoint (`GET /v1/tenants/plan`). */
     CIRRUS_ADMIN_TOKEN?: string;
     CIRRUS_APP_DOMAIN?: string;
@@ -86,7 +86,7 @@ const handleWebhookRoute = (request: Request, environment: RouterEnv): Promise<R
         return Promise.resolve(jsonError(500, "github webhook secret not configured"));
     }
 
-    const context = environment.__cirrusCtx;
+    const context = environment.__lunoraCtx;
 
     if (!context) {
         return Promise.resolve(jsonError(500, "cirrus context unavailable"));
@@ -100,7 +100,7 @@ const handleWebhookRoute = (request: Request, environment: RouterEnv): Promise<R
 
 /** `POST /v1/admin` — hosted-studio admin proxy to a tenant deployment (§3). */
 const handleAdminRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
-    const context = environment.__cirrusCtx;
+    const context = environment.__lunoraCtx;
 
     if (!context) {
         return jsonError(500, "cirrus context unavailable");
@@ -141,7 +141,7 @@ const handleAdminRoute = async (request: Request, environment: RouterEnv): Promi
  * the verification + store write happen where `ctx.payments` exists.
  */
 const handleBillingWebhookRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
-    const context = environment.__cirrusCtx;
+    const context = environment.__lunoraCtx;
 
     if (!context) {
         return jsonError(500, "cirrus context unavailable");
@@ -160,7 +160,7 @@ const handleBillingWebhookRoute = async (request: Request, environment: RouterEn
  * requests/CPU/storage here.
  */
 const handleUsageRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
-    const context = environment.__cirrusCtx;
+    const context = environment.__lunoraCtx;
 
     if (!context) {
         return jsonError(500, "cirrus context unavailable");
@@ -195,7 +195,7 @@ const handleUsageRoute = async (request: Request, environment: RouterEnv): Promi
  * which is therefore never exposed to the browser.
  */
 const handleInviteRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
-    const context = environment.__cirrusCtx;
+    const context = environment.__lunoraCtx;
 
     if (!context) {
         return jsonError(500, "cirrus context unavailable");
@@ -229,7 +229,7 @@ const handleInviteRoute = async (request: Request, environment: RouterEnv): Prom
  * owner/admin `assertMember` gate applies).
  */
 const handleSecretRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
-    const context = environment.__cirrusCtx;
+    const context = environment.__lunoraCtx;
 
     if (!context) {
         return jsonError(500, "cirrus context unavailable");
@@ -283,7 +283,7 @@ const handleSecretRoute = async (request: Request, environment: RouterEnv): Prom
  * `CIRRUS_ADMIN_TOKEN` (the dispatcher is a trusted account-level Worker).
  */
 const handleTenantPlanRoute = async (request: Request, environment: RouterEnv): Promise<Response> => {
-    const context = environment.__cirrusCtx;
+    const context = environment.__lunoraCtx;
 
     if (!context) {
         return jsonError(500, "cirrus context unavailable");
@@ -311,7 +311,7 @@ const handleTenantPlanRoute = async (request: Request, environment: RouterEnv): 
  * The control-plane HTTP API, mounted as the worker's `httpRouter` (lowest-
  * priority matcher). Routes `POST /v1/{deploy,github/webhook,admin,usage,
  * billing/webhook,invitations/send}` and 404s the rest. The worker injects the
- * per-request Cirrus action context on `env.__cirrusCtx`; handlers reach the
+ * per-request Cirrus action context on `env.__lunoraCtx`; handlers reach the
  * control-plane functions through it. A per-instance, per-IP rate limiter caps
  * abuse on the `/v1/*` surface (§7).
  */
@@ -326,7 +326,7 @@ export const createDeployRouter = (): HttpRouterLike => {
     const limiter = new RateLimiter({ config: { api: { capacity: 120, kind: "token bucket", period: 60_000, rate: 120 } } });
 
     const handleDeployRoute = (request: Request, environment: RouterEnv): Promise<Response> => {
-        const context = environment.__cirrusCtx;
+        const context = environment.__lunoraCtx;
 
         if (!context) {
             return Promise.resolve(jsonError(500, "cirrus context unavailable"));

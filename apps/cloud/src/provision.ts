@@ -1,5 +1,5 @@
 /**
- * `@cirrus/provision` — the control plane's coupling to the deploy substrate
+ * `@lunora/provision` — the control plane's coupling to the deploy substrate
  * (CLOUD-PLAN.md §2.2). The provisioner converges a tenant deployment into a
  * Workers-for-Platforms dispatch namespace. It talks to Cloudflare only through
  * the injected {@link CloudflareApi} port, so the orchestration is unit-testable

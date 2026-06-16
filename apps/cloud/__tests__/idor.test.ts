@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import type { MutationCtx } from "../cirrus/_generated/server";
-import { revoke as revokeKey } from "../cirrus/deploy-keys";
-import { revoke as revokeInvite } from "../cirrus/invitations";
-import { remove as removeMember } from "../cirrus/members";
-import { remove as removeSecret } from "../cirrus/secrets";
+import type { MutationCtx } from "../lunora/_generated/server";
+import { revoke as revokeKey } from "../lunora/deploy-keys";
+import { revoke as revokeInvite } from "../lunora/invitations";
+import { remove as removeMember } from "../lunora/members";
+import { remove as removeSecret } from "../lunora/secrets";
 
 type Row = Record<string, unknown>;
 

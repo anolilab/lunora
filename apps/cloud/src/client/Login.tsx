@@ -5,7 +5,7 @@ import { authClient } from "./auth-client";
 
 /**
  * Email/password sign-in + sign-up for the hosted studio. Posts at the
- * `/api/auth/*` routes mounted by `@cirrus/auth` (better-auth). The HttpOnly
+ * `/api/auth/*` routes mounted by `@lunora/auth` (better-auth). The HttpOnly
  * session cookie is set by the response — there's no token to plumb back into
  * client state.
  *

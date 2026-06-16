@@ -23,7 +23,7 @@
     "dispatch_namespaces": [{ "binding": "DISPATCHER", "namespace": "cirrus-production" }],
     // Platform-owned queue consumer (§2.4): tenants can't be queue consumers under
     // WfP, so the control plane drains a shared queue and forwards each message to
-    // its tenant's /_cirrus/queue. Tenant producers tag messages with their script.
+    // its tenant's /_lunora/queue. Tenant producers tag messages with their script.
     "queues": {
         "consumers": [{ "queue": "cirrus-tenant-queue", "max_batch_size": 100, "max_batch_timeout": 5 }],
     },
@@ -40,4 +40,10 @@
         "CIRRUS_CELL": "default",
         "CIRRUS_APP_DOMAIN": "cirrus.app",
     },
+    "analytics_engine_datasets": [
+        {
+            "binding": "ANALYTICS",
+            "dataset": "ANALYTICS",
+        },
+    ],
 }

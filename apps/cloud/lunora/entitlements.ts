@@ -1,6 +1,6 @@
-import type { Entitlements, Subscription } from "@cirrus/payment";
-import { resolveEntitlements } from "@cirrus/payment";
-import { CirrusError } from "@cirrus/server";
+import type { Entitlements, Subscription } from "@lunora/payment";
+import { resolveEntitlements } from "@lunora/payment";
+import { LunoraError } from "@lunora/server";
 
 import type { QuotaResource } from "../src/billing/plans";
 import { CIRRUS_CLOUD_PLANS, effectiveLimit } from "../src/billing/plans";
@@ -40,6 +40,6 @@ export const assertWithinQuota = async (
     const limit = await orgLimit(context, organizationId, resource);
 
     if (current >= limit) {
-        throw new CirrusError("FORBIDDEN", `${resource} quota reached for this plan (limit ${String(limit)})`);
+        throw new LunoraError("FORBIDDEN", `${resource} quota reached for this plan (limit ${String(limit)})`);
     }
 };

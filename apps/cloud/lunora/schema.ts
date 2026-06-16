@@ -1,4 +1,4 @@
-import { defineSchema, defineTable, v } from "@cirrus/server";
+import { defineSchema, defineTable, v } from "@lunora/server";
 
 /**
  * Cirrus Cloud control-plane data model — see `CLOUD-PLAN.md` (§2.2 control
@@ -85,7 +85,7 @@ export default defineSchema({
 
     deployments: defineTable({
         // Tenant admin bearer the platform set on the deployed worker; lets the
-        // hosted-studio admin proxy (§3) call its /_cirrus/admin/*. Should be
+        // hosted-studio admin proxy (§3) call its /_lunora/admin/*. Should be
         // envelope-encrypted at rest (§7) — stored plain here for the scaffold.
         adminToken: v.optional(v.string()),
         // Preview deployments carry the originating git branch (§2.3).
@@ -160,7 +160,7 @@ export default defineSchema({
     // Platform resource-metering events (§4), summed per org per billing period
     // for quota + overage billing. Written by the platform metering ingestion
     // endpoint (`POST /v1/usage`) and the Analytics-Engine stream. Distinct from
-    // the `@cirrus/payment` `usageEvents` ledger below (which meters *billing*
+    // the `@lunora/payment` `usageEvents` ledger below (which meters *billing*
     // features); this one meters platform resources (requests/CPU/storage).
     platformUsage: defineTable({
         createdAt: v.number(),
@@ -189,9 +189,9 @@ export default defineSchema({
         .index("by_project", ["projectId"])
         .index("by_project_name", ["projectId", "name"], { unique: true }),
 
-    // ── @cirrus/payment tables (§4 billing) ───────────────────────────────────
+    // ── @lunora/payment tables (§4 billing) ───────────────────────────────────
     // Declared inline (codegen parses this file's AST and can't resolve a cross-
-    // package `...paymentTables` spread). `@cirrus/payment`'s exported
+    // package `...paymentTables` spread). `@lunora/payment`'s exported
     // `paymentTables` is the canonical column reference these mirror; the payment
     // store reads/writes them via `ctx.payments`. All `.global()` so billing state
     // lives in the control-plane D1 alongside the org metadata it keys on
