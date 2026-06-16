@@ -1,26 +1,28 @@
 /**
- * Platform metering source (CLOUD-PLAN.md §4). The dispatcher emits one data
- * point per tenant request to a Cloudflare **Analytics Engine** dataset — the
- * cheap, fire-and-forget, request-path metering source. A control-plane rollup
- * reads the dataset back through the AE SQL API (`AnalyticsUsageReader`) and
- * folds it into the `platformUsage` ledger. Both sides are seams: the writer
- * no-ops when the binding is absent, and the reader is a port with an HTTP impl
- * so the rollup is unit-testable with a fake.
+ * Platform metering source (CLOUD-PLAN.md §4) — a thin domain layer over
+ * `@lunora/analytics`. The dispatcher emits one request data point per tenant
+ * request to a Cloudflare Analytics Engine dataset (the cheap, fire-and-forget
+ * request-path source); a control-plane rollup reads it back through the AE SQL
+ * API and folds it into the `platformUsage` ledger. The write helper no-ops when
+ * the binding is absent; the reader is a port with an HTTP impl (built on
+ * `createAnalyticsSqlClient`) so the rollup is unit-testable with a fake fetch.
  */
+import type { AnalyticsEngineDatasetLike } from "@lunora/analytics";
+import { createAnalytics, createAnalyticsSqlClient } from "@lunora/analytics";
 
-/** The subset of Cloudflare's Analytics Engine binding we use. */
-export interface AnalyticsEngineDataset {
-    writeDataPoint: (event: { blobs?: string[]; doubles?: number[]; indexes?: string[] }) => void;
-}
+export type { AnalyticsEngineDatasetLike } from "@lunora/analytics";
 
 /** Emit one request data point: `blob1=script`, `blob2=plan`, `double1=count`. */
-export const recordRequestUsage = (dataset: AnalyticsEngineDataset | undefined, input: { plan: string; scriptName: string }): void => {
-    dataset?.writeDataPoint({ blobs: [input.scriptName, input.plan], doubles: [1], indexes: [input.scriptName] });
+export const recordRequestUsage = (dataset: AnalyticsEngineDatasetLike | undefined, input: { plan: string; scriptName: string }): void => {
+    if (!dataset) {
+        return;
+    }
+
+    createAnalytics(dataset).writeDataPoint({ blobs: [input.scriptName, input.plan], doubles: [1], indexes: [input.scriptName] });
 };
 
 /** A row read back from the AE dataset, summed per script over a window. */
 export interface AnalyticsUsageRow {
-    organizationId?: string;
     requests: number;
     scriptName: string;
 }
@@ -35,39 +37,29 @@ interface AnalyticsReaderOptions {
     apiToken: string;
     /** AE dataset name the dispatcher writes to. */
     dataset: string;
-    fetch?: typeof fetch;
-}
-
-interface AnalyticsSqlResponse {
-    data?: { requests?: number | string; scriptName?: string }[];
+    fetch?: typeof globalThis.fetch;
 }
 
 /**
- * HTTP `AnalyticsUsageReader` over the Analytics Engine SQL API. Runs at the
- * edge (needs the account API token); the SQL groups request counts per script
- * over the window.
+ * HTTP `AnalyticsUsageReader` over the Analytics Engine SQL API (via
+ * `@lunora/analytics`'s read client). Runs at the edge (needs the account API
+ * token); the SQL groups request counts per script over the window.
  */
 export const createHttpAnalyticsReader = (options: AnalyticsReaderOptions): AnalyticsUsageReader => {
-    const fetchImpl = options.fetch ?? fetch;
+    const sql = createAnalyticsSqlClient({ accountId: options.accountId, apiToken: options.apiToken, fetch: options.fetch });
 
     return {
         readRequestUsage: async (sinceMs) => {
             const sinceSeconds = Math.floor(sinceMs / 1000);
-            const sql = `SELECT blob1 AS scriptName, SUM(double1) AS requests FROM ${options.dataset} WHERE timestamp > toDateTime(${String(sinceSeconds)}) GROUP BY scriptName`;
-            const response = await fetchImpl(`https://api.cloudflare.com/client/v4/accounts/${options.accountId}/analytics_engine/sql`, {
-                body: sql,
-                headers: { authorization: `Bearer ${options.apiToken}` },
-                method: "POST",
-            });
+            const result = await sql.query(
+                `SELECT blob1 AS scriptName, SUM(double1) AS requests FROM ${options.dataset} WHERE timestamp > toDateTime(${String(sinceSeconds)}) GROUP BY scriptName`,
+            );
 
-            if (!response.ok) {
-                throw new Error(`analytics read failed: ${String(response.status)}`);
-            }
-
-            const payload: AnalyticsSqlResponse = await response.json();
-
-            return (payload.data ?? []).map((row) => {
-                return { requests: Number(row.requests ?? 0), scriptName: row.scriptName ?? "" };
+            return result.rows.map((row) => {
+                return {
+                    requests: typeof row.requests === "number" ? row.requests : Number(row.requests ?? 0),
+                    scriptName: typeof row.scriptName === "string" ? row.scriptName : "",
+                };
             });
         },
     };

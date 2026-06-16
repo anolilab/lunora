@@ -1,8 +1,8 @@
-import { useMutation, useQuery } from "@cirrus/react";
+import { useMutation, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
-import { api } from "../../cirrus/_generated/api.js";
+import { api } from "../../lunora/_generated/api.js";
 import { AsyncList } from "./AsyncList";
 import type { OrgId } from "./types";
 
@@ -13,7 +13,7 @@ interface InvitationsSectionProps {
 /**
  * Invitations tab. Inviting POSTs to the control plane's `/v1/invitations/send`
  * edge route, which runs `invitations.invite` under the session and emails the
- * one-time accept link via `@cirrus/mail` — so the token is mailed to the
+ * one-time accept link via `@lunora/mail` — so the token is mailed to the
  * invitee, never shown in the browser. Pending/accepted/revoked status comes
  * from the live `invitations.list` query; revoking stays a direct mutation.
  */

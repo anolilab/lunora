@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { QueryCtx } from "../cirrus/_generated/server";
-import { assertWithinQuota, orgLimit } from "../cirrus/entitlements";
+import type { QueryCtx } from "../lunora/_generated/server";
+import { assertWithinQuota, orgLimit } from "../lunora/entitlements";
 
 type Sub = { currentPeriodStart?: number; priceId: string; state: string };
 

@@ -1,21 +1,21 @@
-import type { CirrusAuth, CirrusAuthOptions } from "@cirrus/auth";
-import { cirrusD1Adapter, createAuth, createAuthAdmin, ensureMigrated, handleAuthRequest } from "@cirrus/auth";
-import { admin, passkey, twoFactor } from "@cirrus/auth/plugins";
-import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@cirrus/d1";
-import { createD1CtxDb, listGlobalTables, readGlobalTablePage } from "@cirrus/d1";
-import { createMailerFromEnv } from "@cirrus/mail";
-import type { PaymentsFromContextOptions, StripeClientLike } from "@cirrus/payment";
-import { createStripeAdapter } from "@cirrus/payment";
-import type { ExecutionContextLike, GlobalIntrospector, ScheduledControllerLike, ShardNamespaceLike } from "@cirrus/runtime";
-import { createWorker } from "@cirrus/runtime";
+import type { LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
+import { createAuth, createAuthAdmin, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
+import { admin, passkey, twoFactor } from "@lunora/auth/plugins";
+import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";
+import { createD1CtxDb, facetGlobalColumn, listGlobalTables, readGlobalTablePage } from "@lunora/d1";
+import { createMailerFromEnv } from "@lunora/mail";
+import type { PaymentsFromContextOptions, StripeClientLike } from "@lunora/payment";
+import { createStripeAdapter } from "@lunora/payment";
+import type { ExecutionContextLike, GlobalIntrospector, ScheduledControllerLike, ShardNamespaceLike } from "@lunora/runtime";
+import { createWorker } from "@lunora/runtime";
 // eslint-disable-next-line import/no-named-as-default -- `stripe`'s default export is the `Stripe` class; this is its documented import form
 import Stripe from "stripe";
 
-import { CIRRUS_CRONS } from "../cirrus/_generated/crons.js";
-import { CIRRUS_FUNCTIONS } from "../cirrus/_generated/functions.js";
-import { openApiSpec } from "../cirrus/_generated/openapi.js";
-import { createShardDO } from "../cirrus/_generated/shard.js";
-import schema from "../cirrus/schema.js";
+import { LUNORA_CRONS } from "../lunora/_generated/crons.js";
+import { LUNORA_FUNCTIONS } from "../lunora/_generated/functions.js";
+import { openApiSpec } from "../lunora/_generated/openapi.js";
+import { createShardDO } from "../lunora/_generated/shard.js";
+import schema from "../lunora/schema.js";
 import { CIRRUS_CLOUD_PLANS } from "./billing/plans";
 import { createDeployRouter } from "./deploy/router";
 import type { CronTarget } from "./fanout/cron";
@@ -30,7 +30,7 @@ import { fanOutQueue, groupByTenant } from "./fanout/queue";
  * (`cells`, `organizations`) live in the control-plane D1 bound as `DB`.
  */
 
-/** Adapt the raw D1 binding to `@cirrus/d1`'s `D1Exec`. */
+/** Adapt the raw D1 binding to `@lunora/d1`'s `D1Exec`. */
 const buildExec = (database: D1DatabaseLike): D1Exec => {
     return {
         all: async (sql, parameters) => {
@@ -55,6 +55,7 @@ const d1Introspector = (database: D1DatabaseLike): GlobalIntrospector => {
     const exec = buildExec(database);
 
     return {
+        facetColumn: (options) => facetGlobalColumn(exec, schema as never, options),
         listTables: () => listGlobalTables(exec, schema as never),
         readTablePage: (options) => readGlobalTablePage(exec, schema as never, options),
     };
@@ -67,12 +68,12 @@ interface ShardEnv {
 }
 
 /**
- * Build the `@cirrus/payment` config for a shard request (CLOUD-PLAN.md §4).
+ * Build the `@lunora/payment` config for a shard request (CLOUD-PLAN.md §4).
  * The org id is the payment `referenceId`; the store rides `ctx.db` (the
  * `.global()` payment tables in the control-plane D1). The provider adapter is
  * always wired so entitlement reads work offline — only live Stripe calls
  * (checkout/portal/webhook) need a real `STRIPE_SECRET_KEY`. Membership is
- * gated by the `cirrus/billing.ts` functions (which `assertMember` before
+ * gated by the `lunora/billing.ts` functions (which `assertMember` before
  * touching `ctx.payments`), so the per-caller `authorize` here is allow-all.
  */
 // Memoized per isolate: the Stripe client + adapter are pure functions of env
@@ -158,8 +159,8 @@ interface Env {
 }
 
 /** Build the OAuth provider map from env — only providers with creds are enabled. */
-const socialProviders = (env: Env): CirrusAuthOptions["socialProviders"] => {
-    const providers: NonNullable<CirrusAuthOptions["socialProviders"]> = {};
+const socialProviders = (env: Env): LunoraAuthOptions["socialProviders"] => {
+    const providers: NonNullable<LunoraAuthOptions["socialProviders"]> = {};
 
     if (env.GITHUB_CLIENT_ID && env.GITHUB_CLIENT_SECRET) {
         providers.github = { clientId: env.GITHUB_CLIENT_ID, clientSecret: env.GITHUB_CLIENT_SECRET };
@@ -173,7 +174,7 @@ const socialProviders = (env: Env): CirrusAuthOptions["socialProviders"] => {
 };
 
 let worker: ReturnType<typeof createWorker> | null = null;
-let auth: CirrusAuth | null = null;
+let auth: LunoraAuth | null = null;
 
 // The deploy API (`POST /v1/deploy`), mounted as the lowest-priority matcher.
 // Created once so its per-cell scheduler persists across requests.
@@ -183,7 +184,7 @@ const deployRouter = createDeployRouter();
 // by due-evaluation in the fan-out (§2.4). Its own code crons still fire on their
 // own declared expressions (both are in wrangler.jsonc `triggers.crons`).
 // Matches the `*/1 * * * *` expression `crons.interval({ minutes: 1 })` compiles
-// to (the "tenant cron fan-out tick" heartbeat in cirrus/crons.ts).
+// to (the "tenant cron fan-out tick" heartbeat in lunora/crons.ts).
 const EVERY_MINUTE = "*/1 * * * *";
 
 interface LiveDeploymentRow {
@@ -237,7 +238,7 @@ const dispatchCronTick = async (
     tick: { adminToken: string; cron: string; scriptName: string },
 ): Promise<boolean> => {
     const response = await dispatcher.get(tick.scriptName).fetch(
-        new Request("https://tenant.internal/_cirrus/scheduled", {
+        new Request("https://tenant.internal/_lunora/scheduled", {
             body: JSON.stringify({ cron: tick.cron }),
             headers: { authorization: `Bearer ${tick.adminToken}`, "content-type": "application/json" },
             method: "POST",
@@ -248,13 +249,13 @@ const dispatchCronTick = async (
 };
 
 /**
- * Forward one tenant's queue sub-batch to its `/_cirrus/queue` endpoint, gated by
+ * Forward one tenant's queue sub-batch to its `/_lunora/queue` endpoint, gated by
  * its admin token. Returns the message ids the tenant asked to retry; on a
  * delivery failure the whole group is retried (the caller catches the throw).
  */
 const dispatchQueueBatch = async (dispatcher: NonNullable<Env["DISPATCHER"]>, group: TenantQueueGroup, adminToken: string): Promise<string[]> => {
     const response = await dispatcher.get(group.script).fetch(
-        new Request("https://tenant.internal/_cirrus/queue", {
+        new Request("https://tenant.internal/_lunora/queue", {
             body: JSON.stringify({ messages: group.messages, queue: "tenant" }),
             headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
             method: "POST",
@@ -282,7 +283,7 @@ interface QueueBatchLike {
  * The platform-owned queue consumer (§2.4). WfP tenants can't be queue
  * consumers, so this account-level handler drains the shared queue, groups by
  * the producing tenant's script, and forwards each sub-batch to that tenant's
- * `/_cirrus/queue` (admin tokens resolved in-process). Per the tenant's reply
+ * `/_lunora/queue` (admin tokens resolved in-process). Per the tenant's reply
  * (or a delivery failure) it retries only the failed messages.
  */
 const handleQueueBatch = async (batch: QueueBatchLike, env: Env): Promise<void> => {
@@ -332,14 +333,14 @@ const handleQueueBatch = async (batch: QueueBatchLike, env: Env): Promise<void> 
 /**
  * Better-auth config backing the hosted studio (§3). Hardened beyond bare
  * email/password: password-reset + email-verification mail route through
- * `@cirrus/mail` (captured into the studio Mail tab in dev), optional GitHub/
+ * `@lunora/mail` (captured into the studio Mail tab in dev), optional GitHub/
  * Google OAuth when configured, better-auth's built-in request rate limiting,
  * and the `admin` (user management) / `twoFactor` / `passkey` plugins the
  * studio's auth dashboard adapts to. Org membership stays the Cirrus
  * `organizations`/`members` model — the better-auth `organization` plugin is
  * deliberately omitted to avoid two parallel org models.
  */
-const authOptions = (env: Env): CirrusAuthOptions => {
+const authOptions = (env: Env): LunoraAuthOptions => {
     if (!env.AUTH_SECRET) {
         throw new Error("AUTH_SECRET is required");
     }
@@ -379,12 +380,12 @@ const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
         // studio SPA + the control plane share an origin.
         authAdmin: auth ? createAuthAdmin(auth) : undefined,
         authHandler: (request) => (auth ? handleAuthRequest(auth, request) : Promise.resolve(undefined)),
-        // Code-first crons (cirrus/crons.ts): the cleanup-expired-previews job
+        // Code-first crons (lunora/crons.ts): the cleanup-expired-previews job
         // fires on the worker's `scheduled()` entry. The control plane is an
         // account-level worker, so its cron triggers fire normally (§2.4).
-        cronJobs: CIRRUS_CRONS,
+        cronJobs: LUNORA_CRONS,
         d1: env.DB,
-        functions: CIRRUS_FUNCTIONS,
+        functions: LUNORA_FUNCTIONS,
         globalIntrospector: env.DB ? d1Introspector(env.DB as D1DatabaseLike) : undefined,
         httpRouter: deployRouter,
         openApiSpec,
@@ -406,7 +407,7 @@ export default {
         if (!auth) {
             // Runtime auth instance uses the SQL adapter; a throwaway instance on
             // the raw D1 drives the one-time schema migration (better-auth Kysely).
-            auth = createAuth({ ...authOptions(env), database: cirrusD1Adapter(env.DB as never) });
+            auth = createAuth({ ...authOptions(env), database: lunoraD1Adapter(env.DB as never) });
             await ensureMigrated(createAuth({ ...authOptions(env), database: env.DB as never }));
         }
 

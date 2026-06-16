@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { MutationCtx } from "../cirrus/_generated/server";
-import { cleanupExpiredPreviews } from "../cirrus/deployments";
+import type { MutationCtx } from "../lunora/_generated/server";
+import { cleanupExpiredPreviews } from "../lunora/deployments";
 
 type Row = Record<string, unknown>;
 

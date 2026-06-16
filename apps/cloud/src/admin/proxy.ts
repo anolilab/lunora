@@ -2,7 +2,7 @@
  * Hosted-studio admin-RPC proxy (CLOUD-PLAN.md §3). The hosted dashboard never
  * talks to a tenant Worker directly; it goes through this proxy, which (1)
  * authorizes the caller's org membership, (2) forwards the admin RPC to the
- * tenant's `/_cirrus/admin/*` with that deployment's admin token, and (3) records
+ * tenant's `/_lunora/admin/*` with that deployment's admin token, and (3) records
  * an audit entry. Pure — all I/O is injected, so it's unit-testable with fakes.
  */
 
@@ -18,7 +18,7 @@ export interface AdminProxyRequest {
     deploymentId: string;
     method: string;
     organizationId: string;
-    /** Admin sub-path, e.g. `functions` → `/_cirrus/admin/functions`. */
+    /** Admin sub-path, e.g. `functions` → `/_lunora/admin/functions`. */
     path: string;
 }
 
@@ -54,7 +54,7 @@ export const proxyAdminRequest = async (request: AdminProxyRequest, deps: AdminP
     }
 
     const fetchImpl = deps.fetch ?? globalThis.fetch;
-    const response = await fetchImpl(`${stripTrailingSlashes(target.url)}/_cirrus/admin/${request.path}`, {
+    const response = await fetchImpl(`${stripTrailingSlashes(target.url)}/_lunora/admin/${request.path}`, {
         body: request.body === undefined ? undefined : JSON.stringify(request.body),
         headers: { authorization: `Bearer ${target.adminToken}`, "content-type": "application/json" },
         method: request.method,

@@ -29,7 +29,7 @@ describe(proxyAdminRequest, () => {
 
         const [url, init] = fetchMock.mock.calls[0];
 
-        expect(url).toBe("https://tenant.example.com/_cirrus/admin/functions");
+        expect(url).toBe("https://tenant.example.com/_lunora/admin/functions");
         expect((init.headers as Record<string, string>)["authorization"]).toBe("Bearer tok");
         expect(response.status).toBe(200);
         expect(audits).toStrictEqual([{ action: "admin.functions", organizationId: "org_1" }]);

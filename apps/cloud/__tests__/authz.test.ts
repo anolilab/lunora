@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { QueryCtx } from "../cirrus/_generated/server";
-import { assertMember, authorizeDeployKey } from "../cirrus/authz";
+import type { QueryCtx } from "../lunora/_generated/server";
+import { assertMember, authorizeDeployKey } from "../lunora/authz";
 import { hashDeployKey } from "../src/deploy/keys";
 
 type Row = Record<string, unknown>;

@@ -1,6 +1,6 @@
 /**
  * Usage metering aggregation (CLOUD-PLAN.md §4). Metered events are summed per
- * billing period to drive quota + overage billing through `@cirrus/payment`.
+ * billing period to drive quota + overage billing through `@lunora/payment`.
  * Pure — the control plane records events; this rolls them up.
  */
 
