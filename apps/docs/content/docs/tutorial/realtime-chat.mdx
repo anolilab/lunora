@@ -74,15 +74,12 @@ its contents with the real implementation):
 ```ts
 import { mutation, query, v } from "@lunora/server";
 
-export const list = query({
-    args: { channelId: v.id("channels"), limit: v.optional(v.number()) },
-    handler: async (ctx, { channelId, limit }) => {
-        return ctx.db
-            .query("messages")
-            .withIndex("by_channel", (q) => q.eq("channelId", channelId))
-            .order("desc")
-            .take(limit ?? 50);
-    },
+export const list = query.input({ channelId: v.id("channels"), limit: v.optional(v.number()) }).query(async ({ ctx, args: { channelId, limit } }) => {
+    return ctx.db
+        .query("messages")
+        .withIndex("by_channel", (q) => q.eq("channelId", channelId))
+        .order("desc")
+        .take(limit ?? 50);
 });
 ```
 
@@ -93,18 +90,15 @@ Every Lunora `query` doubles as a subscription. The React side calls
 ## 5. Write the mutation
 
 ```ts
-export const send = mutation({
-    args: { channelId: v.id("channels"), text: v.string() },
-    handler: async (ctx, { channelId, text }) => {
-        if (!ctx.auth.user) throw new Error("must be signed in");
+export const send = mutation.input({ channelId: v.id("channels"), text: v.string() }).mutation(async ({ ctx, args: { channelId, text } }) => {
+    if (!ctx.auth.user) throw new Error("must be signed in");
 
-        await ctx.db.insert("messages", {
-            channelId,
-            userId: ctx.auth.user.id,
-            text,
-            createdAt: Date.now(),
-        });
-    },
+    await ctx.db.insert("messages", {
+        channelId,
+        userId: ctx.auth.user.id,
+        text,
+        createdAt: Date.now(),
+    });
 });
 ```
 

@@ -39,14 +39,11 @@ import { mutation, v } from "@lunora/server";
 
 import { internal } from "./_generated/api";
 
-export const startTrial = mutation({
-    args: { userId: v.string() },
-    handler: async (ctx, { userId }) => {
-        // run an internal action 14 days from now
-        const { id } = await ctx.scheduler.runAfter(14 * 24 * 60 * 60 * 1000, internal.billing.endTrial, { userId });
+export const startTrial = mutation.input({ userId: v.string() }).mutation(async ({ ctx, args: { userId } }) => {
+    // run an internal action 14 days from now
+    const { id } = await ctx.scheduler.runAfter(14 * 24 * 60 * 60 * 1000, internal.billing.endTrial, { userId });
 
-        return { jobId: id };
-    },
+    return { jobId: id };
 });
 ```
 

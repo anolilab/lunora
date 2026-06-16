@@ -160,15 +160,11 @@ export default defineSchema({
 import type { Id } from "@lunora/server";
 import { mutation, query, v } from "@lunora/server";
 
-export const list = query({
-    args: {},
-    handler: async (ctx) => ctx.db.query("todos").withIndex("by_creation").collect(),
-});
+export const list = query.query(async ({ ctx }) => ctx.db.query("todos").withIndex("by_creation").collect());
 
-export const add = mutation({
-    args: { text: v.string() },
-    handler: async (ctx, { text }): Promise<Id<"todos">> => ctx.db.insert("todos", { text, done: false, createdAt: Date.now() }),
-});
+export const add = mutation
+    .input({ text: v.string() })
+    .mutation(async ({ ctx, args: { text } }): Promise<Id<"todos">> => ctx.db.insert("todos", { text, done: false, createdAt: Date.now() }));
 ```
 
 Run `lunora codegen`, then use it in a component. The `api` object and `Doc` /

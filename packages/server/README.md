@@ -67,19 +67,16 @@ export default defineSchema({
 });
 
 // lunora/messages.ts
-export const list = query({
-    args: { room: v.string() },
-    handler: (ctx, { room }) =>
-        ctx.db
-            .query("messages")
-            .withIndex("by_room_ts", (q) => q.eq("room", room))
-            .take(50),
-});
+export const list = query.input({ room: v.string() }).query(({ args: { room }, ctx }) =>
+    ctx.db
+        .query("messages")
+        .withIndex("by_room_ts", (q) => q.eq("room", room))
+        .take(50),
+);
 
-export const send = mutation({
-    args: { room: v.string(), body: v.string(), ts: v.number() },
-    handler: (ctx, { room, body, ts }) => ctx.db.insert("messages", { room, body, ts }),
-});
+export const send = mutation
+    .input({ room: v.string(), body: v.string(), ts: v.number() })
+    .mutation(({ args: { room, body, ts }, ctx }) => ctx.db.insert("messages", { room, body, ts }));
 ```
 
 > **Determinism:** `query` and `mutation` handlers must be deterministic — they may be re-run on OCC retry or subscription re-evaluation. Compute time, randomness, and network results in an `action` (e.g. `Date.now()`, `crypto.randomUUID()`, `fetch`) and pass them into the mutation as arguments.

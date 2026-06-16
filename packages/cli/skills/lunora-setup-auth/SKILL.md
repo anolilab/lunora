@@ -106,14 +106,11 @@ The runtime resolves the session and exposes the user on every context:
 ```ts
 import { LunoraError, mutation, v } from "@lunora/server";
 
-export const createDocument = mutation({
-    args: { title: v.string() },
-    handler: async (ctx, { title }) => {
-        if (!ctx.auth.userId) {
-            throw new LunoraError("UNAUTHORIZED", "not signed in");
-        }
-        return ctx.db.insert("documents", { ownerId: ctx.auth.userId, title, createdAt: Date.now() });
-    },
+export const createDocument = mutation.input({ title: v.string() }).mutation(async ({ ctx, args: { title } }) => {
+    if (!ctx.auth.userId) {
+        throw new LunoraError("UNAUTHORIZED", "not signed in");
+    }
+    return ctx.db.insert("documents", { ownerId: ctx.auth.userId, title, createdAt: Date.now() });
 });
 ```
 

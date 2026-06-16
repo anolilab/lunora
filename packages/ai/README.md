@@ -63,16 +63,13 @@ When a function uses AI, codegen wires a typed **`ctx.ai`** onto the action cont
 import { action, v } from "@lunora/server";
 import { generateText } from "@lunora/ai";
 
-export const summarize = action({
-    args: { text: v.string() },
-    handler: async (ctx, { text }) => {
-        const { text: summary } = await generateText({
-            model: ctx.ai.model("@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
-            prompt: `Summarize:\n\n${text}`,
-        });
+export const summarize = action.input({ text: v.string() }).action(async ({ args: { text }, ctx }) => {
+    const { text: summary } = await generateText({
+        model: ctx.ai.model("@cf/meta/llama-3.3-70b-instruct-fp8-fast"),
+        prompt: `Summarize:\n\n${text}`,
+    });
 
-        return summary;
-    },
+    return summary;
 });
 ```
 

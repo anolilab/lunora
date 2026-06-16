@@ -5,8 +5,11 @@ description: Side-by-side mapping — schema, queries, mutations, actions, React
 
 Lunora borrows Convex's authoring shape on purpose: if you've used Convex, you
 already know 80% of Lunora. The wire transport, runtime, and storage are
-different — but the file layout, the `defineSchema` / `query` / `mutation` /
-`action` factories and the React hooks are intentionally near-identical.
+different — and where Convex defines a function with an object
+(`query({ args, handler })`), Lunora uses a typed, chainable builder form
+(`query.input({...}).query(handler)`) instead. But the file layout, the
+`defineSchema` / `query` / `mutation` / `action` factories and the React hooks
+are intentionally familiar.
 
 This guide is a side-by-side mapping plus the specific gotchas you'll hit
 when porting an existing Convex app.
@@ -75,7 +78,9 @@ determines which Durable Object owns the row**. See
 
 ## Queries, mutations, actions
 
-Same factories, same `(args, handler)` shape, same `ctx` properties.
+Same factories, same `ctx` properties. The difference is the authoring form:
+Convex passes an `{ args, handler }` object; Lunora uses a chainable builder
+(`.input({...})` then a `.query` / `.mutation` / `.action` terminal).
 
 Convex:
 
@@ -99,19 +104,20 @@ Lunora:
 ```ts
 import { mutation, query, v } from "@lunora/server";
 
-export const list = query({
-    args: { channelId: v.id("channels") },
-    handler: async (ctx, { channelId }) => {
-        return ctx.db
-            .query("messages")
-            .withIndex("by_channel", (q) => q.eq("channelId", channelId))
-            .collect();
-    },
+export const list = query.input({ channelId: v.id("channels") }).query(async ({ ctx, args: { channelId } }) => {
+    return ctx.db
+        .query("messages")
+        .withIndex("by_channel", (q) => q.eq("channelId", channelId))
+        .collect();
 });
 ```
 
 Single import path (`@lunora/server`) instead of two
-(`./_generated/server` + `convex/values`). The body is identical.
+(`./_generated/server` + `convex/values`). Where Convex passes an object
+(`{ args, handler }`), Lunora uses a typed, chainable builder form — declare
+inputs with `.input({...})`, then close with a `.query` / `.mutation` /
+`.action` terminal whose handler takes a single `{ ctx, args }` argument. The
+handler body itself is identical.
 
 ## React
 

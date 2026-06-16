@@ -139,19 +139,16 @@ the search.
 import { query, v } from "@lunora/server";
 import { embed } from "../app/embed";
 
-export const searchDocs = query({
-    args: { q: v.string(), workspaceId: v.id("workspaces") },
-    handler: async (ctx, { q, workspaceId }) => {
-        const { matches } = await ctx.vectors.query("docs-body", {
-            input: q,
-            embed,
-            topK: 10,
-            namespace: workspaceId,
-            filter: { workspaceId },
-        });
+export const searchDocs = query.input({ q: v.string(), workspaceId: v.id("workspaces") }).query(async ({ ctx, args: { q, workspaceId } }) => {
+    const { matches } = await ctx.vectors.query("docs-body", {
+        input: q,
+        embed,
+        topK: 10,
+        namespace: workspaceId,
+        filter: { workspaceId },
+    });
 
-        return matches.map((m) => ({ id: m.id, score: m.score, ...m.metadata }));
-    },
+    return matches.map((m) => ({ id: m.id, score: m.score, ...m.metadata }));
 });
 ```
 
@@ -209,22 +206,19 @@ external call, so it lives on **action** contexts.
 import { action, v } from "@lunora/server";
 import { embed as aiEmbed } from "@lunora/ai";
 
-export const semanticSearch = action({
-    args: { q: v.string(), workspaceId: v.id("workspaces") },
-    handler: async (ctx, { q, workspaceId }) => {
-        const { embedding } = await aiEmbed({
-            model: ctx.ai.embeddingModel("@cf/baai/bge-base-en-v1.5"),
-            value: q,
-        });
+export const semanticSearch = action.input({ q: v.string(), workspaceId: v.id("workspaces") }).action(async ({ ctx, args: { q, workspaceId } }) => {
+    const { embedding } = await aiEmbed({
+        model: ctx.ai.embeddingModel("@cf/baai/bge-base-en-v1.5"),
+        value: q,
+    });
 
-        const { matches } = await ctx.vectors.query("docs-body", {
-            vector: embedding,
-            topK: 5,
-            namespace: workspaceId,
-        });
+    const { matches } = await ctx.vectors.query("docs-body", {
+        vector: embedding,
+        topK: 5,
+        namespace: workspaceId,
+    });
 
-        return matches.map((m) => m.id);
-    },
+    return matches.map((m) => m.id);
 });
 ```
 

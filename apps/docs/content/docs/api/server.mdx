@@ -46,11 +46,8 @@ errors in an `args.<field>` path for fast debugging.
 ## `query / mutation / action`
 
 ```ts
-export const send = mutation({
-    args: { channelId: v.id("channels"), text: v.string() },
-    handler: async (ctx, args) => {
-        /* ... */
-    },
+export const send = mutation.input({ channelId: v.id("channels"), text: v.string() }).mutation(async ({ ctx, args }) => {
+    /* ... */
 });
 ```
 

@@ -69,15 +69,9 @@ import { expect, test } from "vitest";
 
 import schema from "./schema";
 
-const send = mutation({
-    args: { author: v.string(), body: v.string() },
-    handler: (ctx, args) => ctx.db.insert("messages", args),
-});
+const send = mutation.input({ author: v.string(), body: v.string() }).mutation(({ args, ctx }) => ctx.db.insert("messages", args));
 
-const list = query({
-    args: {},
-    handler: (ctx) => ctx.db.query("messages").collect(),
-});
+const list = query.query(({ ctx }) => ctx.db.query("messages").collect());
 
 test("sends and lists a message", async () => {
     const t = lunoraTest(schema);

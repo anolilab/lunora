@@ -104,19 +104,16 @@ Call the facade from an action. Every method authorizes the caller against the
 ```ts
 import { action, query, v } from "./_generated/server";
 
-export const checkout = action({
-    args: { priceId: v.string() },
-    handler: async (ctx, { priceId }): Promise<{ url: string }> => {
-        const { url } = await ctx.payments.createCheckout({
-            referenceId: ctx.auth.userId,
-            priceId,
-            mode: "subscription",
-            successUrl: "https://app.test/done",
-            cancelUrl: "https://app.test/cancel",
-        });
+export const checkout = action.input({ priceId: v.string() }).action(async ({ ctx, args: { priceId } }): Promise<{ url: string }> => {
+    const { url } = await ctx.payments.createCheckout({
+        referenceId: ctx.auth.userId,
+        priceId,
+        mode: "subscription",
+        successUrl: "https://app.test/done",
+        cancelUrl: "https://app.test/cancel",
+    });
 
-        return { url };
-    },
+    return { url };
 });
 ```
 
@@ -139,23 +136,17 @@ cap the same limit, the most-generous value wins.
   tracked this period and returns `{ allowed, balance, limit, used }`.
 
 ```ts
-export const recordApiCall = action({
-    args: {},
-    handler: async (ctx): Promise<{ recorded: boolean }> => {
-        // `mode: "add"` (default) increments; `"set"` reconciles the period total.
-        const result = await ctx.payments.track({ referenceId: ctx.auth.userId, featureId: "api_calls" });
+export const recordApiCall = action.action(async ({ ctx }): Promise<{ recorded: boolean }> => {
+    // `mode: "add"` (default) increments; `"set"` reconciles the period total.
+    const result = await ctx.payments.track({ referenceId: ctx.auth.userId, featureId: "api_calls" });
 
-        return { recorded: result.recorded };
-    },
+    return { recorded: result.recorded };
 });
 
-export const apiCallsRemaining = action({
-    args: {},
-    handler: async (ctx): Promise<{ allowed: boolean; balance?: number }> => {
-        const result = await ctx.payments.check({ referenceId: ctx.auth.userId, featureId: "api_calls" });
+export const apiCallsRemaining = action.action(async ({ ctx }): Promise<{ allowed: boolean; balance?: number }> => {
+    const result = await ctx.payments.check({ referenceId: ctx.auth.userId, featureId: "api_calls" });
 
-        return { allowed: result.allowed, balance: result.balance };
-    },
+    return { allowed: result.allowed, balance: result.balance };
 });
 ```
 
@@ -195,9 +186,9 @@ app.post(
 // lunora/billing.ts
 import { internalAction, v } from "./_generated/server";
 
-export const processWebhook = internalAction({
-    args: { body: v.string(), signature: v.string() },
-    handler: async (ctx, { body, signature }): Promise<{ applied: boolean; status: number }> => {
+export const processWebhook = internalAction
+    .input({ body: v.string(), signature: v.string() })
+    .action(async ({ ctx, args: { body, signature } }): Promise<{ applied: boolean; status: number }> => {
         const request = new Request("https://internal/payment/webhook", {
             body,
             headers: { "stripe-signature": signature },
@@ -207,8 +198,7 @@ export const processWebhook = internalAction({
         const result = (await response.json()) as { applied?: boolean };
 
         return { applied: result.applied ?? false, status: response.status };
-    },
-});
+    });
 ```
 
 `handleWebhook` verifies the signature, normalizes the event into a

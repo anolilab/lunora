@@ -20,11 +20,8 @@ Inside a mutation or action:
 ```ts
 import { mutation, v } from "@lunora/server";
 
-export const requestExport = mutation({
-    args: { workspaceId: v.id("workspaces") },
-    handler: async (ctx, { workspaceId }) => {
-        await ctx.scheduler.runAfter(5 * 60_000, "exports:run", { workspaceId });
-    },
+export const requestExport = mutation.input({ workspaceId: v.id("workspaces") }).mutation(async ({ ctx, args: { workspaceId } }) => {
+    await ctx.scheduler.runAfter(5 * 60_000, "exports:run", { workspaceId });
 });
 ```
 

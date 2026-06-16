@@ -104,14 +104,11 @@ import postgres from "postgres";
 
 import { action, v } from "@lunora/server";
 
-export const listLegacyOrders = action({
-    args: { orgId: v.string() },
-    handler: async (ctx, { orgId }) => {
-        const { connectionString } = createHyperdrive(ctx.env.HYPERDRIVE);
-        ctx.sql = fromPostgresJs(postgres(connectionString));
+export const listLegacyOrders = action.input({ orgId: v.string() }).action(async ({ ctx, args: { orgId } }) => {
+    const { connectionString } = createHyperdrive(ctx.env.HYPERDRIVE);
+    ctx.sql = fromPostgresJs(postgres(connectionString));
 
-        return ctx.sql.query<{ id: string; total: number }>("select id, total from orders where org = $1", [orgId]);
-    },
+    return ctx.sql.query<{ id: string; total: number }>("select id, total from orders where org = $1", [orgId]);
 });
 ```
 

@@ -23,16 +23,13 @@ export const storage = createStorage({
 import { mutation, v } from "@lunora/server";
 import { storage } from "./storage";
 
-export const uploadAvatar = mutation({
-    args: { key: v.string(), contentType: v.string() },
-    handler: async (ctx, { key, contentType }) => {
-        const url = await storage.getSignedUrl(`avatars/${ctx.auth.user.id}/${key}`, {
-            method: "PUT",
-            expiresInSeconds: 60,
-            contentType,
-        });
-        return { url };
-    },
+export const uploadAvatar = mutation.input({ key: v.string(), contentType: v.string() }).mutation(async ({ ctx, args: { key, contentType } }) => {
+    const url = await storage.getSignedUrl(`avatars/${ctx.auth.user.id}/${key}`, {
+        method: "PUT",
+        expiresInSeconds: 60,
+        contentType,
+    });
+    return { url };
 });
 ```
 

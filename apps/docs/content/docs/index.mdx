@@ -20,21 +20,16 @@ sharding, and the moment you do, every call site routes itself.
 // lunora/messages.ts
 import { mutation, query, v } from "@lunora/server";
 
-export const send = mutation({
-    args: { channelId: v.id("channels"), text: v.string() },
-    handler: async (ctx, args) => {
-        await ctx.db.insert("messages", { ...args, userId: ctx.auth.user.id });
-    },
+export const send = mutation.input({ channelId: v.id("channels"), text: v.string() }).mutation(async ({ ctx, args }) => {
+    await ctx.db.insert("messages", { ...args, userId: ctx.auth.user.id });
 });
 
-export const list = query({
-    args: { channelId: v.id("channels") },
-    handler: async (ctx, args) =>
-        ctx.db
-            .query("messages")
-            .withIndex("by_channel", (q) => q.eq("channelId", args.channelId))
-            .collect(),
-});
+export const list = query.input({ channelId: v.id("channels") }).query(async ({ ctx, args }) =>
+    ctx.db
+        .query("messages")
+        .withIndex("by_channel", (q) => q.eq("channelId", args.channelId))
+        .collect(),
+);
 ```
 
 ## What ships in v0.1

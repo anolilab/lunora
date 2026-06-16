@@ -69,18 +69,15 @@ Add the binding to your `wrangler.jsonc` (the Lunora Vite plugin / CLI infers an
 ```ts
 import { action, v } from "@lunora/server";
 
-export const screenshotPage = action({
-    args: { url: v.string() },
-    handler: async (ctx, { url }) => {
-        // ctx.browser is wired automatically — action context only.
-        const png = await ctx.browser.screenshot(url, { fullPage: true });
+export const screenshotPage = action.input({ url: v.string() }).action(async ({ args: { url }, ctx }) => {
+    // ctx.browser is wired automatically — action context only.
+    const png = await ctx.browser.screenshot(url, { fullPage: true });
 
-        const { key } = await ctx.storage.store(`shots/${crypto.randomUUID()}.png`, png.buffer, {
-            contentType: "image/png",
-        });
+    const { key } = await ctx.storage.store(`shots/${crypto.randomUUID()}.png`, png.buffer, {
+        contentType: "image/png",
+    });
 
-        return ctx.storage.getUrl(key);
-    },
+    return ctx.storage.getUrl(key);
 });
 ```
 

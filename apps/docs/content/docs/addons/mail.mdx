@@ -27,17 +27,14 @@ import { action, v } from "@lunora/server";
 
 import { mailer } from "./mail";
 
-export const welcomeEmail = action({
-    args: { userId: v.id("users") },
-    handler: async (ctx, { userId }) => {
-        const user = await ctx.runQuery("users:get", { userId });
+export const welcomeEmail = action.input({ userId: v.id("users") }).action(async ({ ctx, args: { userId } }) => {
+    const user = await ctx.runQuery("users:get", { userId });
 
-        await mailer.send({
-            to: user.email,
-            subject: "Welcome to Lunora",
-            html: `<p>Hi ${user.name} — your account is ready.</p>`,
-        });
-    },
+    await mailer.send({
+        to: user.email,
+        subject: "Welcome to Lunora",
+        html: `<p>Hi ${user.name} — your account is ready.</p>`,
+    });
 });
 ```
 
@@ -123,17 +120,16 @@ The receiving function is an ordinary mutation/action:
 ```ts
 import { mutation, v } from "@lunora/server";
 
-export const onEmail = mutation({
-    args: {
+export const onEmail = mutation
+    .input({
         from: v.string(),
         to: v.array(v.string()),
         subject: v.optional(v.string()),
         text: v.optional(v.string()),
-    },
-    handler: async (ctx, { from, subject, text }) => {
+    })
+    .mutation(async ({ ctx, args: { from, subject, text } }) => {
         await ctx.db.insert("inbox", { from, subject: subject ?? "", body: text ?? "" });
-    },
-});
+    });
 ```
 
 ### wrangler config

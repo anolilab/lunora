@@ -170,10 +170,11 @@ hands it to `optimistic` (as the row's `_id`) and forwards it to the mutation vi
 `toArgs` — your mutation persists it with the validated `clientId` option:
 
 ```ts title="lunora/messages.ts"
-export const send = mutation({
-    args: { channelId: v.id("channels"), id: v.optional(v.string()), text: v.string() },
-    handler: (ctx, { channelId, id, text }) => ctx.db.insert("messages", { channelId, text, userId: ctx.auth.userId }, id ? { clientId: id } : undefined),
-});
+export const send = mutation
+    .input({ channelId: v.id("channels"), id: v.optional(v.string()), text: v.string() })
+    .mutation(({ ctx, args: { channelId, id, text } }) =>
+        ctx.db.insert("messages", { channelId, text, userId: ctx.auth.userId }, id ? { clientId: id } : undefined),
+    );
 ```
 
 `ctx.db.insert(table, doc, { clientId })` honours a **UUID-shaped** client id and

@@ -143,7 +143,7 @@ All packages are published under the [`@lunora`](https://www.npmjs.com/org/lunor
 
 | Package                                      | What it does                                                                       |
 | -------------------------------------------- | ---------------------------------------------------------------------------------- |
-| [`@lunora/server`](./packages/server/)       | `defineSchema`, `query`, `mutation`, `action` — the Convex-style function API.     |
+| [`@lunora/server`](./packages/server/)       | `defineSchema`, `query`, `mutation`, `action` — the typed, chainable function API. |
 | [`@lunora/runtime`](./packages/runtime/)     | Worker entry layer. Parses the RPC envelope, resolves shards, mounts HTTP routes.  |
 | [`@lunora/do`](./packages/do/)               | `ShardDO` + `SessionDO` base classes (SQLite + WebSocket Hibernation API).         |
 | [`@lunora/d1`](./packages/d1/)               | D1 adapter with per-request Sessions API and a sequential migration runner.        |

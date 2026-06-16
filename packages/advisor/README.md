@@ -6,7 +6,7 @@
 
 </a>
 
-<h3 align="center">Schema & query lints (splinter-style advisors) for Lunora, feeding the Studio Advisors view</h3>
+<h3 align="center">Schema &amp; query lints (splinter-style advisors) for Lunora, feeding the Studio Advisors view</h3>
 
 <!-- END_PACKAGE_OG_IMAGE_PLACEHOLDER -->
 

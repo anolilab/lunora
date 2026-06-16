@@ -61,20 +61,17 @@ The most common flow: an object lives in R2 (`@lunora/storage`), and an action d
 ```ts
 import { action } from "@lunora/server";
 
-export const thumbnail = action({
-    args: { key: v.string() },
-    handler: async (ctx, { key }) => {
-        // ctx.storage from @lunora/storage, ctx.images from @lunora/images — both on ActionCtx.
-        const object = await ctx.storage.download(key);
+export const thumbnail = action.input({ key: v.string() }).action(async ({ args: { key }, ctx }) => {
+    // ctx.storage from @lunora/storage, ctx.images from @lunora/images — both on ActionCtx.
+    const object = await ctx.storage.download(key);
 
-        const result = await ctx.images.transform(
-            object, // an R2 object body is accepted directly — its .body stream is read for you
-            { width: 256, height: 256, fit: "cover" },
-            { format: "image/webp", quality: 82 },
-        );
+    const result = await ctx.images.transform(
+        object, // an R2 object body is accepted directly — its .body stream is read for you
+        { width: 256, height: 256, fit: "cover" },
+        { format: "image/webp", quality: 82 },
+    );
 
-        return result.response(); // a Response, ready to return or cache
-    },
+    return result.response(); // a Response, ready to return or cache
 });
 ```
 

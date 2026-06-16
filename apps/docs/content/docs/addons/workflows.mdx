@@ -110,13 +110,10 @@ Start an instance from a function:
 
 ```ts
 // lunora/channels.ts
-export const create = mutation({
-    args: { channelId: v.id("channels") },
-    handler: async (context, { channelId }) => {
-        const instance = await context.workflows.get("channelWelcome").create({ params: { channelId } });
+export const create = mutation.input({ channelId: v.id("channels") }).mutation(async ({ ctx, args: { channelId } }) => {
+    const instance = await ctx.workflows.get("channelWelcome").create({ params: { channelId } });
 
-        return { instanceId: instance.id };
-    },
+    return { instanceId: instance.id };
 });
 ```
 

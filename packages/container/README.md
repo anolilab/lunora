@@ -24,15 +24,12 @@ export const transcoder = defineContainer({
 Codegen emits the Container Durable Object class into `_generated/containers.ts` (re-export it from your worker entry) and wires a typed handle onto `ActionCtx`:
 
 ```ts
-export const transcode = action({
-    args: { videoId: v.id("videos") },
-    handler: async (ctx, { videoId }) => {
-        // one instance per entity
-        const res = await ctx.containers.transcoder.get(videoId).fetch("/transcode", { method: "POST" });
+export const transcode = action.input({ videoId: v.id("videos") }).action(async ({ args: { videoId }, ctx }) => {
+    // one instance per entity
+    const res = await ctx.containers.transcoder.get(videoId).fetch("/transcode", { method: "POST" });
 
-        // or a random instance from a fixed pool
-        const probe = await ctx.containers.transcoder.any().fetch("/healthz");
-    },
+    // or a random instance from a fixed pool
+    const probe = await ctx.containers.transcoder.any().fetch("/healthz");
 });
 ```
 

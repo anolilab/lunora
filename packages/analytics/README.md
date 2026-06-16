@@ -59,16 +59,13 @@ pnpm add @lunora/analytics
 Importing `@lunora/analytics` in a `lunora/` source auto-reconciles the self-describing `analytics_engine_datasets` binding (`{ binding: "ANALYTICS", dataset: "ANALYTICS" }`) and wires `ctx.analytics` onto every context. The write is a side-effect-only telemetry emit — sampled and fire-and-forget, never read back in-handler.
 
 ```ts
-export const send = mutation({
-    args: { roomId: v.id("rooms") },
-    handler: async (ctx, { roomId }) => {
-        // ...
-        ctx.analytics.track("function_call", {
-            dimensions: { fn: "messages:send", shard: roomId },
-            index: "messages:send",
-            metrics: { durationMs: 12 },
-        });
-    },
+export const send = mutation.input({ roomId: v.id("rooms") }).mutation(async ({ args: { roomId }, ctx }) => {
+    // ...
+    ctx.analytics.track("function_call", {
+        dimensions: { fn: "messages:send", shard: roomId },
+        index: "messages:send",
+        metrics: { durationMs: 12 },
+    });
 });
 ```
 

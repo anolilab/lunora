@@ -66,7 +66,8 @@ fields — required is the default.
 
 ## Functions: query / mutation / action
 
-Each function declares `args` (a `v.*` map) and a `handler`. Export them as named
+Each function declares its inputs with `.input(...)` (a `v.*` map) and ends with a
+terminal `.query` / `.mutation` / `.action` handler. Export them as named
 consts from `lunora/*.ts`; codegen surfaces them as `api.<file>.<name>`.
 
 | Kind       | Reads `ctx.db`                    | Writes `ctx.db` | Side effects / `fetch` | Reactive |
@@ -82,18 +83,16 @@ import { action, LunoraError, mutation, query, v } from "@lunora/server";
 // `api` / `internal` come from codegen:
 // import { api, internal } from "./_generated/api";
 
-export const listByChannel = query({
-    args: { channelId: v.id("channels") },
-    handler: async (ctx, { channelId }) =>
-        ctx.db
-            .query("messages")
-            .withIndex("by_channel", (q) => q.eq("channelId", channelId))
-            .collect(),
-});
+export const listByChannel = query.input({ channelId: v.id("channels") }).query(async ({ ctx, args: { channelId } }) =>
+    ctx.db
+        .query("messages")
+        .withIndex("by_channel", (q) => q.eq("channelId", channelId))
+        .collect(),
+);
 
-export const send = mutation({
-    args: { channelId: v.id("channels"), body: v.string() },
-    handler: async (ctx, { channelId, body }): Promise<Id<"messages">> => {
+export const send = mutation
+    .input({ channelId: v.id("channels"), body: v.string() })
+    .mutation(async ({ ctx, args: { channelId, body } }): Promise<Id<"messages">> => {
         if (!ctx.auth.userId) {
             throw new LunoraError("UNAUTHORIZED", "not signed in");
         }
@@ -103,15 +102,11 @@ export const send = mutation({
             body,
             createdAt: Date.now(),
         });
-    },
-});
+    });
 
-export const notifySlack = action({
-    args: { messageId: v.id("messages") },
-    handler: async (ctx, { messageId }) => {
-        const message = await ctx.runQuery(api.messages.getById, { messageId });
-        await fetch(SLACK_WEBHOOK, { method: "POST", body: JSON.stringify(message) });
-    },
+export const notifySlack = action.input({ messageId: v.id("messages") }).action(async ({ ctx, args: { messageId } }) => {
+    const message = await ctx.runQuery(api.messages.getById, { messageId });
+    await fetch(SLACK_WEBHOOK, { method: "POST", body: JSON.stringify(message) });
 });
 ```
 

@@ -89,17 +89,14 @@ import postgres from "postgres";
 
 import { action, v } from "@lunora/server";
 
-export const importLegacyOrders = action({
-    args: { orgId: v.string() },
-    handler: async (ctx, { orgId }) => {
-        const { connectionString } = createHyperdrive(ctx.env.HYPERDRIVE);
-        ctx.sql = fromPostgresJs(postgres(connectionString));
+export const importLegacyOrders = action.input({ orgId: v.string() }).action(async ({ ctx, args: { orgId } }) => {
+    const { connectionString } = createHyperdrive(ctx.env.HYPERDRIVE);
+    ctx.sql = fromPostgresJs(postgres(connectionString));
 
-        // Read from external Postgres ($1, $2, … placeholders).
-        const orders = await ctx.sql.query<{ id: string; total: number }>("select id, total from orders where org = $1", [orgId]);
+    // Read from external Postgres ($1, $2, … placeholders).
+    const orders = await ctx.sql.query<{ id: string; total: number }>("select id, total from orders where org = $1", [orgId]);
 
-        return orders;
-    },
+    return orders;
 });
 ```
 
@@ -125,17 +122,14 @@ table won't re-fire when Postgres changes. To make external data reactive,
 the change-feed, so live queries reading the projection re-run:
 
 ```ts
-export const syncOrder = action({
-    args: { id: v.string() },
-    handler: async (ctx, { id }) => {
-        const { connectionString } = createHyperdrive(ctx.env.HYPERDRIVE);
-        ctx.sql = fromPostgresJs(postgres(connectionString));
+export const syncOrder = action.input({ id: v.string() }).action(async ({ ctx, args: { id } }) => {
+    const { connectionString } = createHyperdrive(ctx.env.HYPERDRIVE);
+    ctx.sql = fromPostgresJs(postgres(connectionString));
 
-        const [row] = await ctx.sql.query<{ id: string; total: number }>("select id, total from orders where id = $1", [id]);
+    const [row] = await ctx.sql.query<{ id: string; total: number }>("select id, total from orders where id = $1", [id]);
 
-        // This write is tracked — a `query` over `orders` re-runs for subscribers.
-        await ctx.runMutation("orders:upsert", { id: row.id, total: row.total });
-    },
+    // This write is tracked — a `query` over `orders` re-runs for subscribers.
+    await ctx.runMutation("orders:upsert", { id: row.id, total: row.total });
 });
 ```
 

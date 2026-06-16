@@ -62,7 +62,7 @@ Types: `feat`, `fix`, `perf`, `docs`, `dx`, `refactor`, `test`, `workflow`, `bui
 
 ## Architecture Overview
 
-Lunora exposes a Convex-style functional API on top of Cloudflare Workers and Durable Objects:
+Lunora exposes a typed, chainable functional API (the `query`/`mutation`/`action` procedure builders) on top of Cloudflare Workers and Durable Objects:
 
 - **Default topology**: A single Durable Object per app. Easiest to reason about, sufficient for most apps.
 - **Opt-in sharding**: `.shardBy(key)` partitions state across many DOs by user/tenant/room.

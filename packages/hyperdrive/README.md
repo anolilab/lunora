@@ -79,16 +79,14 @@ import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
 import postgres from "postgres";
 
 // ctx.sql is wired by codegen onto ActionCtx ONLY — never QueryCtx/MutationCtx.
-export const syncCustomer = action({
-    handler: async (ctx, { orgId }) => {
-        const { connectionString } = createHyperdrive(ctx.env.HYPERDRIVE);
-        ctx.sql = fromPostgresJs(postgres(connectionString));
+export const syncCustomer = action.action(async ({ args: { orgId }, ctx }) => {
+    const { connectionString } = createHyperdrive(ctx.env.HYPERDRIVE);
+    ctx.sql = fromPostgresJs(postgres(connectionString));
 
-        const rows = await ctx.sql.query<{ id: string; name: string }>("select id, name from customers where org = $1", [orgId]);
+    const rows = await ctx.sql.query<{ id: string; name: string }>("select id, name from customers where org = $1", [orgId]);
 
-        // Want it reactive? Project it into a Lunora table — THIS write is tracked.
-        await ctx.runMutation(api.customers.upsertMany, { rows });
-    },
+    // Want it reactive? Project it into a Lunora table — THIS write is tracked.
+    await ctx.runMutation(api.customers.upsertMany, { rows });
 });
 ```
 

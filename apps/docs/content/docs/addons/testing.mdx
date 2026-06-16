@@ -35,15 +35,9 @@ const schema = defineSchema({
     }),
 });
 
-const send = mutation({
-    args: { author: v.string(), body: v.string() },
-    handler: (ctx, args) => ctx.db.insert("messages", args),
-});
+const send = mutation.input({ author: v.string(), body: v.string() }).mutation(({ ctx, args }) => ctx.db.insert("messages", args));
 
-const list = query({
-    args: {},
-    handler: (ctx) => ctx.db.query("messages").collect(),
-});
+const list = query.query(({ ctx }) => ctx.db.query("messages").collect());
 
 test("sends and lists a message", async () => {
     const t = lunoraTest(schema);
@@ -113,10 +107,7 @@ read from `ctx.auth.userId`; any additional fields are returned verbatim from
 scoped view persist for every accessor.
 
 ```ts
-const whoAmI = query({
-    args: {},
-    handler: (ctx) => ctx.auth.userId,
-});
+const whoAmI = query.query(({ ctx }) => ctx.auth.userId);
 
 test("reflects the injected identity", async () => {
     const t = lunoraTest(schema);
@@ -151,16 +142,10 @@ system dispatch.
 ```ts
 import { internalMutation } from "@lunora/server";
 
-const internalSend = internalMutation({
-    args: { author: v.string(), body: v.string() },
-    handler: (ctx, args) => ctx.db.insert("messages", args),
-});
+const internalSend = internalMutation.input({ author: v.string(), body: v.string() }).mutation(({ ctx, args }) => ctx.db.insert("messages", args));
 
 // A public mutation routes through ctx.runMutation to the internal one.
-const sendViaInternal = mutation({
-    args: { author: v.string(), body: v.string() },
-    handler: (ctx, args) => ctx.runMutation(internalSend, args),
-});
+const sendViaInternal = mutation.input({ author: v.string(), body: v.string() }).mutation(({ ctx, args }) => ctx.runMutation(internalSend, args));
 
 test("internal functions are only reachable via ctx.run*", async () => {
     const t = lunoraTest(schema);
@@ -183,10 +168,7 @@ clearly-throwing stubs. A handler that touches one fails with a descriptive
 error the first time it reaches for it:
 
 ```ts
-const scheduleSomething = mutation({
-    args: {},
-    handler: (ctx) => ctx.scheduler.runAfter(1000, "noop:fn", {}),
-});
+const scheduleSomething = mutation.mutation(({ ctx }) => ctx.scheduler.runAfter(1000, "noop:fn", {}));
 
 test("stubbed surfaces throw a clear error", async () => {
     const t = lunoraTest(schema);

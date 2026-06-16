@@ -72,13 +72,10 @@ export default defineSchema({
 // lunora/searchDocs.ts — query from a handler via ctx.vectors
 import { query, v } from "@lunora/server";
 
-export const searchDocs = query({
-    args: { q: v.string() },
-    handler: async (ctx, { q }) => {
-        const { matches } = await ctx.vectors.query("docs-body", { input: q, embed, topK: 10 });
+export const searchDocs = query.input({ q: v.string() }).query(async ({ args: { q }, ctx }) => {
+    const { matches } = await ctx.vectors.query("docs-body", { input: q, embed, topK: 10 });
 
-        return matches.map((m) => m.id);
-    },
+    return matches.map((m) => m.id);
 });
 ```
 

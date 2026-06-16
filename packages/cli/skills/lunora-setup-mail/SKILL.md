@@ -86,16 +86,13 @@ import { mutation, v } from "@lunora/server";
 
 import { api } from "./_generated/api";
 
-export const inviteUser = mutation({
-    args: { email: v.string() },
-    handler: async (ctx, { email }) => {
-        // ...persist the invite, then send the mail as a follow-up action
-        await ctx.scheduler.runAfter(0, api.mail.sendEmail, {
-            to: email,
-            subject: "You're invited",
-            html: "<p>Click the link to join.</p>",
-        });
-    },
+export const inviteUser = mutation.input({ email: v.string() }).mutation(async ({ ctx, args: { email } }) => {
+    // ...persist the invite, then send the mail as a follow-up action
+    await ctx.scheduler.runAfter(0, api.mail.sendEmail, {
+        to: email,
+        subject: "You're invited",
+        html: "<p>Click the link to join.</p>",
+    });
 });
 ```
 
