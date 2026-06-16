@@ -4,11 +4,11 @@
     // namespace so the cloud dispatcher can route to it:
     //
     //   wrangler deploy -c tenant.wrangler.jsonc \
-    //     --dispatch-namespace cirrus-production --name ws-spike
+    //     --dispatch-namespace lunora-production --name ws-spike
     //
-    // Then the dispatcher serves it at https://ws-spike.<CIRRUS_APP_DOMAIN>/...
+    // Then the dispatcher serves it at https://ws-spike.<LUNORA_APP_DOMAIN>/...
     // (Workers for Platforms paid add-on required.)
-    "name": "cirrus-ws-spike-tenant",
+    "name": "lunora-ws-spike-tenant",
     "main": "tenant-worker.ts",
     "compatibility_date": "2026-06-10",
     "compatibility_flags": ["nodejs_compat"],

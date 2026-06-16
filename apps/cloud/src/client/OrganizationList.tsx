@@ -36,7 +36,7 @@ const slugify = (value: string): string => {
 
 /**
  * Organization picker + create form. Listing organizations and the cells they
- * land on both run through live Cirrus queries; creating one routes through the
+ * land on both run through live Lunora queries; creating one routes through the
  * `organizations.create` mutation, which requires choosing the cell (account
  * shard) the org's tenants will be provisioned into.
  */

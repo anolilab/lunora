@@ -3,22 +3,22 @@
     // The dispatcher Worker (CLOUD-PLAN.md §2.1) — a SEPARATE deployable from the
     // control plane (wrangler.jsonc). Deploy with:
     //   wrangler deploy -c dispatcher.wrangler.jsonc
-    "name": "cirrus-dispatcher",
+    "name": "lunora-dispatcher",
     "main": "src/dispatcher/worker.ts",
     "compatibility_date": "2026-06-10",
     "compatibility_flags": ["nodejs_compat"],
     // Bind the production dispatch namespace holding tenant Worker scripts.
     // (Requires the Workers-for-Platforms paid add-on.)
-    "dispatch_namespaces": [{ "binding": "DISPATCHER", "namespace": "cirrus-production" }],
+    "dispatch_namespaces": [{ "binding": "DISPATCHER", "namespace": "lunora-production" }],
     // Per-request metering source (§4): the dispatcher writes one data point per
     // tenant request; the control-plane rollup reads it back via the AE SQL API.
-    "analytics_engine_datasets": [{ "binding": "USAGE_ANALYTICS", "dataset": "cirrus_tenant_usage" }],
+    "analytics_engine_datasets": [{ "binding": "USAGE_ANALYTICS", "dataset": "lunora_tenant_usage" }],
     "vars": {
-        "CIRRUS_APP_DOMAIN": "cirrus.app",
+        "LUNORA_APP_DOMAIN": "lunora.app",
         // Control-plane base URL — enables per-plan runtime limits (GET /v1/tenants/plan).
         // Set CONTROL_PLANE_TOKEN as a secret: `wrangler secret put CONTROL_PLANE_TOKEN -c dispatcher.wrangler.jsonc`.
-        "CONTROL_PLANE_URL": "https://cirrus-cloud.example.workers.dev",
+        "CONTROL_PLANE_URL": "https://lunora-cloud.example.workers.dev",
     },
     // Route all hostnames through the dispatcher (subdomains + custom hostnames).
-    "routes": [{ "pattern": "*/*", "zone_name": "cirrus.app" }],
+    "routes": [{ "pattern": "*/*", "zone_name": "lunora.app" }],
 }

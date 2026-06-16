@@ -31,7 +31,7 @@ export interface TenantDeploymentSpec {
     bundle: ArrayBuffer;
     /** Which cell (Cloudflare account) hosts this tenant (§2.5). */
     cell: string;
-    /** Dispatch namespace to deploy into (e.g. `cirrus-production`). */
+    /** Dispatch namespace to deploy into (e.g. `lunora-production`). */
     dispatchNamespace: string;
     /** Dispatch-namespace script id. */
     scriptName: string;

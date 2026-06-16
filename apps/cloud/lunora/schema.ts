@@ -1,9 +1,9 @@
 import { defineSchema, defineTable, v } from "@lunora/server";
 
 /**
- * Cirrus Cloud control-plane data model — see `CLOUD-PLAN.md` (§2.2 control
- * plane, §2.5 cells). This is the *platform's* own schema, dogfooded on Cirrus
- * itself (the platform's metadata store is a Cirrus app).
+ * Lunora Cloud control-plane data model — see `CLOUD-PLAN.md` (§2.2 control
+ * plane, §2.5 cells). This is the *platform's* own schema, dogfooded on Lunora
+ * itself (the platform's metadata store is a Lunora app).
  *
  * Every table is `.global()` (D1-backed): the control plane is the "Worker + D1"
  * service of the plan, and its bookkeeping is relational, cross-queried, and low

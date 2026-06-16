@@ -13,7 +13,7 @@ import type { CellScheduler } from "./scheduler";
  *
  * Pure: all I/O is behind {@link DeployBackend} + the injected provisioner/
  * scheduler. The Worker mount in `src/server.ts` wires the backend to the
- * control-plane mutations via the Cirrus action context.
+ * control-plane mutations via the Lunora action context.
  */
 
 export type DeployKind = "dev" | "preview" | "production";
@@ -112,7 +112,7 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
     const { branch, projectId, scriptName } = body;
 
     // The platform-minted tenant admin token: recorded on the deployment (for the
-    // admin proxy) and set as the worker's CIRRUS_ADMIN_TOKEN secret.
+    // admin proxy) and set as the worker's LUNORA_ADMIN_TOKEN secret.
     const adminToken = randomSecret();
 
     let deploymentId: string;
@@ -140,7 +140,7 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
 
             write({ deploymentId, event: "accepted" });
 
-            // Tenant env secrets are decrypted and merged in; CIRRUS_ADMIN_TOKEN
+            // Tenant env secrets are decrypted and merged in; LUNORA_ADMIN_TOKEN
             // is platform-owned and always wins over a same-named tenant secret.
             // A decrypt failure (e.g. a corrupt secret or a rotated master key)
             // must surface as a failed deployment, not leave the row stuck in
@@ -166,7 +166,7 @@ export const handleDeployRequest = async (request: Request, deps: DeployHandlerD
                 cell: deps.cell,
                 dispatchNamespace: deps.dispatchNamespace(kind),
                 scriptName,
-                secrets: { ...tenantSecrets, CIRRUS_ADMIN_TOKEN: adminToken },
+                secrets: { ...tenantSecrets, LUNORA_ADMIN_TOKEN: adminToken },
                 tags: [`org:${target.organizationId}`, `project:${projectId}`, `env:${kind}`],
             };
 
