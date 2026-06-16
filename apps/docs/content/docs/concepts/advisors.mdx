@@ -45,12 +45,20 @@ Run against the declared schema alone — deterministic, no running shard needed
 
 ### Security
 
-| Lint                            | Level | Detects                                                                                                                                                     |
-| ------------------------------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `rls_uncovered_table`           | warn  | A **public** procedure reads/writes a table that's RLS-protected elsewhere but has no `.use(rls(...))` — an authorization bypass.                           |
-| `mask_uncovered_pii_column`     | warn  | A **public** procedure reads a table whose columns are [masked](/docs/concepts/masking) elsewhere but has no `.use(mask(...))` — PII returned in the clear. |
-| `auth_api_call_without_headers` | warn  | A `ctx.authApi.<method>(...)` call omits `headers`, so better-auth skips session authorization and runs with full privilege.                                |
-| `container_public_internet`     | info  | A container with `enableInternet` unset (defaults on) — egress billed per GB, wider attack surface.                                                         |
+| Lint                                     | Level | Detects                                                                                                                                                                 |
+| ---------------------------------------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hardcoded_secret`                       | error | A secret-shaped literal (`sk_live…`, `AKIA…`, a PEM header, a high-entropy 32+ char token) checked into `lunora/` source — rotate it and move it to a binding/secret.   |
+| `sql_injection_risk`                     | error | A `ctx.sql` tagged-template splices an unparameterized string expression into the query — pass request input through a bound placeholder instead.                       |
+| `rls_uncovered_table`                    | warn  | A **public** procedure reads/writes a table that's RLS-protected elsewhere but has no `.use(rls(...))` — an authorization bypass.                                       |
+| `mask_uncovered_pii_column`              | warn  | A **public** procedure reads a table whose columns are [masked](/docs/concepts/masking) elsewhere but has no `.use(mask(...))` — PII returned in the clear.             |
+| `auth_api_call_without_headers`          | warn  | A `ctx.authApi.<method>(...)` call omits `headers`, so better-auth skips session authorization and runs with full privilege.                                            |
+| `public_mutation_without_ratelimit`      | warn  | A public `mutation`/`action` installs no `rateLimit` — abuse-sensitive names (login/signup/reset/magic/subscribe/contact) raise the urgency. Wrap with `protectPublic`. |
+| `user_creating_mutation_without_captcha` | warn  | A public procedure writes a user/session/account table (or calls `ctx.mail`) with no CAPTCHA — add `verifyTurnstile` or `protectPublic({ captcha })`.                   |
+| `public_arg_uses_any`                    | warn  | A public procedure accepts a `v.any()` argument — unvalidated input. Give it a concrete validator.                                                                      |
+| `admin_route_without_guard`              | warn  | An `httpRoute` on an admin/privileged-looking path whose handler references no auth/admin guard.                                                                        |
+| `nondeterministic_query_mutation`        | warn  | A `query`/`mutation` calls `Date.now`/`Math.random`/`fetch` — non-deterministic reads break caching and replay. Move side effects into an `action`.                     |
+| `unbounded_string_arg`                   | info  | A public `v.string()` argument with no max-length bound — a storage/DoS abuse vector. Add a length `.check`.                                                            |
+| `container_public_internet`              | info  | A container with `enableInternet` unset (defaults on) — egress billed per GB, wider attack surface.                                                                     |
 
 ### Operational
 

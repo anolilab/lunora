@@ -14,6 +14,7 @@
         "concepts/masking",
         "concepts/migrations",
         "concepts/advisors",
+        "concepts/security",
         "---Frameworks---",
         "frameworks/reactive-loaders",
         "frameworks/bring-your-framework",
