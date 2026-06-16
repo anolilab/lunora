@@ -162,8 +162,12 @@ narrow, so the `rls()` chain discovers a policy authored either way the same.
 - **`count` is unsupported on a restricted table.** It throws
   `COUNT_RLS_UNSUPPORTED` (HTTP 422) — a count over a row-filtered table would
   leak the size of rows you can't see.
-- **Nested relations aren't re-checked.** Rows hydrated through a `with` clause
-  sit below the facade the middleware wraps — the same boundary masking draws.
+- **Nested `with` reads inherit the child's read policy.** A row hydrated through
+  a `with` clause is filtered by the related table's own `read` policy — the same
+  `baseWhere` a direct read of that table would get is threaded down every `with`
+  level (and into `_count`), so `findMany({ with: { child: true } })` can't return
+  child rows the caller couldn't read directly. (Column-level **masking** is the
+  boundary that still draws at the wrapped facade — see below.)
 - **It's opt-in.** Only procedures whose chain includes `.use(rls(...))` are
   guarded. The [`rls_uncovered_table`](/docs/concepts/advisors) advisor warns
   when a **public** procedure reads or writes a table that's RLS-protected
