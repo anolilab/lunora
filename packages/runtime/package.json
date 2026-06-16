@@ -54,7 +54,7 @@
         "lint:types": "tsc --noEmit",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage",
-        "bench": "vitest bench --run"
+        "test:bench": "vitest bench --run --config vitest.bench.config.ts"
     },
     "devDependencies": {
         "@lunora/do": "workspace:*",
@@ -62,6 +62,7 @@
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
+        "@codspeed/vitest-plugin": "catalog:test",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
         "hono": "catalog:http",

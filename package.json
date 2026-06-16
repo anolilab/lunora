@@ -51,6 +51,7 @@
         "@anolilab/prettier-config": "catalog:lint",
         "@anolilab/semantic-release-preset": "catalog:dev",
         "@babel/core": "catalog:build",
+        "@codspeed/vitest-plugin": "catalog:test",
         "@lunora/codegen": "workspace:*",
         "@commitlint/cli": "catalog:prod",
         "@commitlint/config-conventional": "catalog:prod",

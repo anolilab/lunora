@@ -57,7 +57,7 @@
         "lint:prettier": "prettier --check .",
         "lint:prettier:fix": "prettier --write .",
         "lint:types": "tsc --noEmit",
-        "bench": "vitest bench --run",
+        "test:bench": "vitest bench --run --config vitest.bench.config.ts",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage"
     },
@@ -84,6 +84,7 @@
     "devDependencies": {
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
+        "@codspeed/vitest-plugin": "catalog:test",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
         "typescript": "catalog:tsc",

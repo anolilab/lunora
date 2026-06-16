@@ -1,0 +1,103 @@
+# https://help.github.com/en/categories/automating-your-workflow-with-github-actions
+
+"name": "CodSpeed"
+
+"on": # yamllint disable-line rule:truthy
+    "push":
+        "branches": ["main", "alpha"]
+    "pull_request":
+        "types": ["opened", "synchronize", "reopened"]
+        "branches": ["main", "alpha", "next", "beta"]
+    "workflow_dispatch": # yamllint disable-line rule:empty-values
+
+"concurrency":
+    "group": "${{ github.workflow }}-${{ github.ref }}"
+    "cancel-in-progress": true
+
+"permissions":
+    "contents": "read" # to fetch code (actions/checkout)
+
+"jobs":
+    "benchmark":
+        "name": "Benchmarks"
+        "runs-on": "ubuntu-latest"
+        "timeout-minutes": 30
+        # Scope the CodSpeed OIDC token to an environment so secrets and
+        # reviewer rules (configured in repo settings) can apply to uploads.
+        "environment": "benchmarks"
+        "permissions":
+            "contents": "read"
+            "id-token": "write" # required for OIDC authentication with CodSpeed
+        "steps":
+            - "name": "Harden Runner"
+              "uses": "step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411" # v2.19.4
+              "with":
+                  "egress-policy": "audit"
+
+            - "name": "Git checkout"
+              "uses": "actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd" # v6.0.2
+              "with":
+                  "persist-credentials": false
+                  # Pulls all commits + branches so `vis affected` can resolve
+                  # the PR base ref (origin/<base>) for change detection.
+                  "fetch-depth": 0
+              "env":
+                  "GIT_COMMITTER_NAME": "GitHub Actions Shell"
+                  "GIT_AUTHOR_NAME": "GitHub Actions Shell"
+                  "EMAIL": "github-actions[bot]@users.noreply.github.com"
+
+            - "name": "Setup pnpm"
+              "uses": "pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093" # v6.0.8
+              "with":
+                  "version": "11.5.3"
+                  "run_install": false
+
+            - "name": "Use Node.js 22.15"
+              "uses": "actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e" # v6.4.0
+              "with":
+                  "node-version": "22.15"
+
+            - "name": "Resolve pnpm store path"
+              "id": "pnpm-store"
+              "shell": "bash"
+              "run": |
+                  echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+            - "name": "Restore pnpm cache"
+              "uses": "actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae" # v5.0.5
+              "with":
+                  "path": "${{ steps.pnpm-store.outputs.path }}"
+                  "key": "pnpm-${{ runner.os }}-node22.15-${{ hashFiles('pnpm-lock.yaml') }}"
+                  "restore-keys": |
+                      pnpm-${{ runner.os }}-node22.15-
+                      pnpm-${{ runner.os }}-
+
+            - "name": "Install dependencies"
+              "run": "pnpm install --frozen-lockfile"
+
+            # On PRs only the benches whose project (or an upstream dependency)
+            # changed are run; on push to main/alpha every bench runs so CodSpeed
+            # always has a complete, fresh baseline. `--no-cache` forces real
+            # execution — a vis cache hit would short-circuit the run and starve
+            # CodSpeed of measurements.
+            - "name": "Resolve benchmark command"
+              "id": "bench-cmd"
+              "shell": "bash"
+              "env":
+                  # Bound to env (not interpolated into the script) so untrusted
+                  # context never reaches the shell directly — see zizmor
+                  # template-injection rule.
+                  "EVENT_NAME": "${{ github.event_name }}"
+                  "BASE_REF": "${{ github.base_ref }}"
+              "run": |
+                  if [ "$EVENT_NAME" = "pull_request" ]; then
+                      printf 'run=pnpm exec vis affected test:bench --no-cache --fail-fast --base "origin/%s"\n' "$BASE_REF" >> "$GITHUB_OUTPUT"
+                  else
+                      echo "run=pnpm exec vis run test:bench --no-cache" >> "$GITHUB_OUTPUT"
+                  fi
+
+            - "name": "Run benchmarks"
+              "uses": "CodSpeedHQ/action@3194d9a39c4d46684cb44bf7207fc56626aad8fd" # v4.15.1
+              "with":
+                  "mode": "simulation"
+                  "run": "${{ steps.bench-cmd.outputs.run }}"

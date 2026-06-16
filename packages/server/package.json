@@ -66,7 +66,7 @@
         "lint:types": "tsc --noEmit",
         "test": "vitest run",
         "test:coverage": "vitest run --coverage",
-        "bench": "vitest bench --run"
+        "test:bench": "vitest bench --run --config vitest.bench.config.ts"
     },
     "dependencies": {
         "@lunora/scheduler": "workspace:*",
@@ -77,6 +77,7 @@
     "devDependencies": {
         "@types/node": "catalog:types",
         "@visulima/packem": "catalog:build",
+        "@codspeed/vitest-plugin": "catalog:test",
         "@vitest/coverage-v8": "catalog:test",
         "esbuild": "catalog:build",
         "typescript": "catalog:tsc",

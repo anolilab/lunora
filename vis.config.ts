@@ -79,7 +79,7 @@ export default defineConfig({
         },
         "test:bench": {
             cache: true,
-            inputs: ["default", "^production", "{projectRoot}/vitest.config.ts"],
+            inputs: ["default", "^production", "{projectRoot}/vitest.bench.config.ts"],
         },
         e2e: {
             cache: false,
