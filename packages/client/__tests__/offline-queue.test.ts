@@ -53,6 +53,30 @@ describe("offlineQueue", () => {
         expect(drained.map((d) => d.functionPath)).toEqual(["mid", "new"]);
     });
 
+    it("requeue restores drained items to the front in FIFO order without re-persisting", async () => {
+        expect.assertions(3);
+
+        const persistence = createInMemoryPersistence();
+        const queue = new OfflineQueue({}, persistence);
+
+        queue.enqueue({ args: {}, functionPath: "a", reject: () => undefined, resolve: () => undefined });
+        queue.enqueue({ args: {}, functionPath: "b", reject: () => undefined, resolve: () => undefined });
+
+        const drained = queue.drain();
+
+        // A fresh write arrives while the drained pair is being replayed.
+        queue.enqueue({ args: {}, functionPath: "c", reject: () => undefined, resolve: () => undefined });
+        queue.requeue(drained);
+
+        expect(queue.drain().map((d) => d.functionPath)).toEqual(["a", "b", "c"]);
+
+        // requeue must not append again — the records were never unpersisted.
+        const persisted = await persistence.load();
+
+        expect(persisted.map((p) => p.functionPath)).toEqual(["a", "b", "c"]);
+        expect(persisted).toHaveLength(3);
+    });
+
     it("clear() rejects pending mutations with CLIENT_CLOSED and empties the queue", () => {
         expect.assertions(4);
 

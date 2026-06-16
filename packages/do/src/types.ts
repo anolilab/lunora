@@ -128,6 +128,15 @@ export interface SocketAttachment {
     admin?: boolean;
 
     /**
+     * `true` once the socket's `connect` envelope has fired the `onConnect`
+     * hooks. Gates the dispatch so a client that re-sends `connect` (or a
+     * duplicate frame) can't re-fire the hooks for an already-announced socket —
+     * `onConnect`/`onDisconnect` stay symmetric. Persisted so it survives
+     * hibernation.
+     */
+    connected?: boolean;
+
+    /**
      * Stable per-socket id minted at upgrade. Its presence marks a socket that
      * has been through the lifecycle-aware upgrade path, so `webSocketClose`
      * only dispatches `onDisconnect` hooks for a socket that recorded one.

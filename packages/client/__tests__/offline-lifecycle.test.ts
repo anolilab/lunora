@@ -354,6 +354,69 @@ describe("offline lifecycle (e2e)", () => {
         client.close();
     });
 
+    it("6. keeps a write persisted and retries when replay hits a transient transport error", async () => {
+        expect.assertions(4);
+
+        vi.useFakeTimers();
+
+        const storage = createFakeAsyncStorage();
+
+        // A durable write left by a prior signed-out session.
+        await createAsyncStoragePersistence({ storage }).append({
+            args: { title: "durable" },
+            functionPath: "posts:create",
+            id: "m1",
+            identity: null,
+        });
+
+        let attempt = 0;
+        const fetchMock = vi.fn<typeof fetch>(async () => {
+            attempt += 1;
+
+            // First replay: the network dropped mid-flight. A transport error
+            // carries no server `code`, so the write must survive for a retry.
+            if (attempt === 1) {
+                throw new TypeError("Failed to fetch");
+            }
+
+            return jsonResponse({ result: { id: "m1" } });
+        });
+
+        const makeClient = (): LunoraClient =>
+            new LunoraClient({
+                fetch: fetchMock,
+                heartbeatIntervalMs: 0,
+                persistence: createAsyncStoragePersistence({ storage }),
+                reconnect: { initialDelayMs: 10, jitter: false, maxDelayMs: 10 },
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+        // --- Session A: hydration opens a socket → first flush fails transiently
+        const clientA = makeClient();
+
+        await vi.advanceTimersByTimeAsync(0);
+        latestSocket().open();
+        await vi.runAllTimersAsync();
+
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+        await expect(createAsyncStoragePersistence({ storage }).load()).resolves.toHaveLength(1);
+
+        clientA.close();
+
+        // --- Session B: relaunch retries the still-durable write to success ---
+        const clientB = makeClient();
+
+        await vi.advanceTimersByTimeAsync(0);
+        latestSocket().open();
+        await vi.runAllTimersAsync();
+
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+        await expect(createAsyncStoragePersistence({ storage }).load()).resolves.toEqual([]);
+
+        clientB.close();
+    });
+
     it("5. drops cached reads and queued writes from a different identity across sessions", async () => {
         expect.assertions(3);
 

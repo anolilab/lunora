@@ -1,0 +1,92 @@
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+
+import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
+import type { ShardDOState } from "../src/shard-do";
+import { ShardDO } from "../src/shard-do";
+import { messagesSchema } from "./_helpers/fake-sql";
+import createSqliteExec from "./_helpers/node-sqlite";
+
+/**
+ * `evaluateResume` decides whether a reconnecting subscription can replay the
+ * deltas it missed (resumable) or must re-snapshot. Driven through a real SQLite
+ * `__cdc_log` so the read-set intersection runs against actual changes.
+ */
+
+let harness: ReturnType<typeof createSqliteExec>;
+
+/** A ShardDO that exposes the protected resume probe against the seeded sql. */
+class ResumeShard extends ShardDO {
+    // eslint-disable-next-line class-methods-use-this -- abstract stub; the resume probe never dispatches an RPC
+    public override handleRpc(): Promise<unknown> {
+        return Promise.resolve(undefined);
+    }
+
+    public probe(sinceSeq: number, readSet: Set<string>): { cursor: number | undefined; resumable: boolean } {
+        return this.evaluateResume(sinceSeq, readSet);
+    }
+}
+
+const buildShard = (): ResumeShard => {
+    const state: ShardDOState = {
+        acceptWebSocket() {
+            // no sockets in these tests
+        },
+        getWebSockets() {
+            return [];
+        },
+        id: { name: "shard-a" },
+        storage: { sql: harness.sql },
+    } as unknown as ShardDOState;
+
+    return new ResumeShard(state, {});
+};
+
+describe("shardDO.evaluateResume", () => {
+    beforeEach(async () => {
+        harness = createSqliteExec();
+        runShardMigrations(harness.sql, messagesSchema, { cdc: true });
+
+        const writer = createShardContextDatabase({
+            broadcast: () => undefined,
+            cdc: true,
+            clock: () => 1_700_000_000_000,
+            schema: messagesSchema,
+            sql: harness.sql,
+        });
+
+        // One committed write → a single `__cdc_log` row on the `messages` table.
+        await writer.insert("messages", { _id: "m_1", authorId: "u1", channelId: "c1", text: "hi" }, { allowExplicitId: true });
+    });
+
+    afterEach(() => {
+        harness.close();
+    });
+
+    it("does not resume an empty read-set (unknown deps) when newer changes exist", () => {
+        expect.assertions(1);
+
+        // Empty read-set means we never recorded the query's table deps, so we
+        // can't prove they were untouched — must re-snapshot, never resume blind.
+        expect(buildShard().probe(0, new Set()).resumable).toBe(false);
+    });
+
+    it("resumes when no read-set table changed since the cursor", () => {
+        expect.assertions(1);
+
+        // The change touched `messages`; a query reading only `users` is unaffected.
+        expect(buildShard().probe(0, new Set(["users"])).resumable).toBe(true);
+    });
+
+    it("does not resume when a read-set table changed since the cursor", () => {
+        expect.assertions(1);
+
+        expect(buildShard().probe(0, new Set(["messages"])).resumable).toBe(false);
+    });
+
+    it("resumes trivially when the client is already at the high-watermark", () => {
+        expect.assertions(1);
+
+        // `sinceSeq >= cursor`: nothing newer exists, current regardless of deps.
+        expect(buildShard().probe(1, new Set()).resumable).toBe(true);
+    });
+});

@@ -1949,16 +1949,25 @@ abstract class ShardDO {
             // `onConnect` lifecycle hooks under the socket's verified identity.
             const attachment = this.readAttachment(ws);
 
+            // Idempotent: a socket announces `connect` exactly once. A re-sent
+            // (or duplicate) frame must not re-fire `onConnect`, or it would
+            // out-number the single `onDisconnect` at close.
+            if (attachment.connected === true) {
+                return;
+            }
+
             if (envelope.context !== undefined) {
                 attachment.context = envelope.context;
+            }
 
-                try {
-                    (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
-                } catch {
-                    // Over-large context can't be persisted; the hook still runs
-                    // with the supplied context this turn, but it won't survive
-                    // to disconnect. Never throw out of webSocketMessage.
-                }
+            attachment.connected = true;
+
+            try {
+                (ws as HibernatableWebSocket).serializeAttachment?.(attachment);
+            } catch {
+                // Over-large context can't be persisted; the hook still runs
+                // with the supplied context this turn, but it won't survive
+                // to disconnect. Never throw out of webSocketMessage.
             }
 
             await this.dispatchLifecycle("connect", this.lifecycleInfo(attachment));
@@ -2874,9 +2883,16 @@ abstract class ShardDO {
             return { cursor, resumable: false };
         }
 
+        // An empty read-set means we never recorded which tables the query
+        // depends on (unknown deps), so we can't prove it was untouched — force
+        // a full snapshot rather than resuming blindly on stale data.
+        if (readSet.size === 0) {
+            return { cursor, resumable: false };
+        }
+
         // Resumable iff no table the query reads changed since `sinceSeq`. We
         // read the missed changes (bounded) and test intersection with the
-        // read-set; an empty read-set (unknown deps) never resumes.
+        // read-set.
         const { changes } = readCdcChanges(sql, { limit: CDC_RESUME_SCAN_LIMIT, sinceSeq });
 
         // Cap hit: more than `CDC_RESUME_SCAN_LIMIT` changes accumulated since

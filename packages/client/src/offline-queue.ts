@@ -178,6 +178,20 @@ class OfflineQueue {
         return drained;
     }
 
+    /**
+     * Return previously-drained mutations to the front of the queue, preserving
+     * their FIFO order, without re-persisting them — they were never unpersisted,
+     * so durable storage still holds them. Used when a flush aborts on a transient
+     * transport failure: the unreplayed writes stay queued for the next reconnect.
+     */
+    public requeue(items: QueuedMutation[]): void {
+        if (items.length === 0) {
+            return;
+        }
+
+        this.items.unshift(...items);
+    }
+
     public clear(): void {
         // Reject every pending mutation so awaiting callers don't hang
         // forever when the client is closed mid-flight. Durable storage is left
@@ -195,5 +209,5 @@ class OfflineQueue {
     }
 }
 
-export { OfflineQueue, reportPersistenceError };
+export { nextId, OfflineQueue, reportPersistenceError };
 export type { QueuedMutation };

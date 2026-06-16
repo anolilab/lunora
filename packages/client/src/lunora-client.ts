@@ -2641,7 +2641,12 @@ class LunoraClient {
         // Sequential replay — parallel `.then()` chains would race and break
         // the FIFO ordering callers rely on, particularly when replayed
         // mutations depend on each other.
-        for (const item of drained) {
+        for (let index = 0; index < drained.length; index += 1) {
+            const item = drained[index];
+
+            if (!item) {
+                continue;
+            }
             // Identity guard: a write stamped under one identity must never
             // replay under another. The live `queuedIdentities` map is the
             // source of truth for the current session; a hydrated write whose id
@@ -2685,11 +2690,26 @@ class LunoraClient {
                 this.unpersist(item.id);
                 item.resolve(value);
             } catch (error) {
-                // Remove on rejection too: the server reached a verdict, so
-                // replaying again would only re-trigger the same failure
-                // (a poison-message loop).
-                this.unpersist(item.id);
-                item.reject(error);
+                // Only a *coded* error means the server reached a verdict on a
+                // mutation it received: replaying would re-trigger the same
+                // failure (a poison-message loop), so drop it. Transport/transient
+                // failures — offline mid-replay, a 5xx, a non-JSON body — carry no
+                // code and may mean the write never committed; dropping one here
+                // would silently lose a durable write the queue exists to protect.
+                if ((error as { code?: string }).code !== undefined) {
+                    this.unpersist(item.id);
+                    item.reject(error);
+
+                    continue;
+                }
+
+                // Stop the flush and re-queue this write and every unreplayed one
+                // (still in durable storage) in FIFO order. Their callers stay
+                // pending; the next reconnect retries them. The identity guard
+                // still applies on retry via each record's persisted stamp.
+                this.offlineQueue.requeue(drained.slice(index));
+
+                return;
             }
         }
     }

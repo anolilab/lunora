@@ -144,6 +144,25 @@ describe("shardDO connection-lifecycle dispatch", () => {
         expect(shard.dispatched).toHaveLength(2);
     });
 
+    it("fires onConnect exactly once even when the client re-sends the connect frame", async () => {
+        expect.assertions(2);
+
+        const shard = new LifecycleShard(state, {});
+        shard.connectPaths = ["hooks:onJoin"];
+
+        const ws = createFakeWebSocket();
+        shard.registerSocket(ws, attachment());
+
+        // A duplicate / re-sent connect frame on an already-announced socket must
+        // not re-fire the hooks — otherwise onConnect out-numbers the single
+        // onDisconnect dispatched at close.
+        await shard.driveMessage(ws, connectEnvelope({ roomId: "room-1" }));
+        await shard.driveMessage(ws, connectEnvelope({ roomId: "room-1" }));
+
+        expect(shard.dispatched).toHaveLength(1);
+        expect(shard.dispatched[0]?.functionPath).toBe("hooks:onJoin");
+    });
+
     it("runs onConnect hooks under the socket's verified identity via system dispatch", async () => {
         expect.assertions(3);
 
