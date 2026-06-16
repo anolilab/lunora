@@ -124,6 +124,13 @@ const latestSocket = (): MockSocket => {
     return last;
 };
 
+/**
+ * The first subscribe frame a socket sent, past the always-first `connect`
+ * lifecycle envelope (the client announces every socket on open so `onConnect`
+ * fires symmetrically with `onDisconnect`).
+ */
+const firstSub = (socket: MockSocket) => socket.sent.map((raw) => JSON.parse(raw)).find((frame) => frame.type === "subscribe");
+
 const fnRef = (ref: string): FunctionReference => {
     return { __lunoraRef: ref };
 };
@@ -256,7 +263,7 @@ describe("offline lifecycle (e2e)", () => {
 
         // The subscribe frame asks the server to resume from the cached cursor.
         latestSocket().open();
-        const sub = JSON.parse(latestSocket().sent[0]!);
+        const sub = firstSub(latestSocket());
 
         expect(sub.query.sinceSeq).toBe(5);
 
@@ -283,7 +290,7 @@ describe("offline lifecycle (e2e)", () => {
 
         first.open();
 
-        const sub1 = JSON.parse(first.sent[0]!);
+        const sub1 = firstSub(first);
 
         // Cold subscription — no cursor to resume from yet.
         expect(sub1.query.sinceSeq).toBeUndefined();
@@ -299,7 +306,7 @@ describe("offline lifecycle (e2e)", () => {
 
         second.open();
 
-        const sub2 = JSON.parse(second.sent[0]!);
+        const sub2 = firstSub(second);
 
         // The re-subscribe carries the last server cursor as `sinceSeq`, so the
         // server replays only the deltas since 21 instead of a full snapshot.
@@ -328,7 +335,7 @@ describe("offline lifecycle (e2e)", () => {
 
         socket.open();
 
-        const sub = JSON.parse(socket.sent[0]!);
+        const sub = firstSub(socket);
 
         socket.receive({ delta: 5, id: sub.id, type: "delta" });
 

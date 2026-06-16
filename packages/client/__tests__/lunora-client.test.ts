@@ -109,6 +109,22 @@ const latestSocket = (): MockSocket => {
     return last;
 };
 
+/**
+ * The JSON control frames a socket sent, excluding the always-first `connect`
+ * lifecycle envelope (the client announces every socket on open so `onConnect`
+ * fires symmetrically with `onDisconnect`) and the raw `lunora-ping` keepalive
+ * strings. Tests assert on the subscribe/unsubscribe traffic, which the leading
+ * connect frame would otherwise shift off index 0.
+ */
+const wireFrames = (socket: MockSocket) =>
+    socket.sent
+        .filter((frame) => frame !== "lunora-ping")
+        .map((frame) => JSON.parse(frame))
+        .filter((frame) => frame.type !== "connect");
+
+/** The first subscribe/unsubscribe frame a socket sent, past the connect envelope. */
+const firstSub = (socket: MockSocket) => wireFrames(socket)[0];
+
 const fnRef = (ref: string): FunctionReference => {
     return { __lunoraRef: ref };
 };
@@ -329,9 +345,9 @@ describe("lunoraClient", () => {
 
             socket.open();
 
-            expect(socket.sent).toHaveLength(1);
+            expect(wireFrames(socket)).toHaveLength(1);
 
-            const sub = JSON.parse(socket.sent[0]!);
+            const sub = firstSub(socket);
 
             expect(sub.type).toBe("subscribe");
             expect(sub.id).toMatch(/^sub_/);
@@ -347,6 +363,56 @@ describe("lunoraClient", () => {
             const last = JSON.parse(socket.sent.at(-1)!);
 
             expect(last).toEqual({ id: sub.id, type: "unsubscribe" });
+        });
+
+        it("announces every socket with a context-less connect envelope before resubscribing", () => {
+            expect.assertions(3);
+
+            const client = new LunoraClient({
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            // No connection context registered: the socket must still announce
+            // itself so the server's `onConnect` hooks fire symmetrically with
+            // `onDisconnect`. The envelope simply carries no `context`.
+            client.subscribe(fnRef("messages:list"), {}, () => undefined);
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            const connect = JSON.parse(socket.sent[0]!);
+
+            expect(connect).toEqual({ id: "connect", type: "connect" });
+            // The connect frame leads, then the subscribe — order matters so the
+            // hook runs with any context in place before subscriptions replay.
+            expect(JSON.parse(socket.sent[1]!).type).toBe("subscribe");
+            expect(connect.context).toBeUndefined();
+
+            client.close();
+        });
+
+        it("carries the registered connection context on the connect envelope", () => {
+            expect.assertions(1);
+
+            const client = new LunoraClient({
+                connectionContext: { roomId: "room-1" },
+                fetch: vi.fn<typeof fetch>(),
+                url: "https://app.example",
+                WebSocket: createMockWebSocket(),
+            });
+
+            client.subscribe(fnRef("messages:list"), {}, () => undefined);
+
+            const socket = latestSocket();
+
+            socket.open();
+
+            expect(JSON.parse(socket.sent[0]!)).toEqual({ context: { roomId: "room-1" }, id: "connect", type: "connect" });
+
+            client.close();
         });
 
         it("sends keepalive pings on an open socket and stops them on disconnect", () => {
@@ -367,8 +433,8 @@ describe("lunoraClient", () => {
 
             socket.open();
 
-            // First frame is the subscribe envelope; no ping has fired yet.
-            expect(socket.sent).toHaveLength(1);
+            // Only the subscribe envelope counts here (the connect frame is filtered out); no ping has fired yet.
+            expect(wireFrames(socket)).toHaveLength(1);
 
             vi.advanceTimersByTime(1000);
 
@@ -431,9 +497,9 @@ describe("lunoraClient", () => {
             socket.open();
 
             // Distinct ranges ⇒ two distinct subscribe envelopes with distinct ids.
-            expect(socket.sent).toHaveLength(2);
+            expect(wireFrames(socket)).toHaveLength(2);
 
-            const sentIds = socket.sent.map((raw) => JSON.parse(raw).id);
+            const sentIds = wireFrames(socket).map((frame) => frame.id);
 
             expect(new Set(sentIds).size).toBe(2);
 
@@ -446,7 +512,7 @@ describe("lunoraClient", () => {
 
             client.subscribe(fnRef("messages:list"), { paginationOpts: { cursor: null, endCursor: "C1", numItems: 5 } }, () => undefined);
 
-            expect(socket.sent).toHaveLength(2);
+            expect(wireFrames(socket)).toHaveLength(2);
         });
 
         it("appends wsToken to the WebSocket URL so the upgrade can authorize it", () => {
@@ -485,7 +551,7 @@ describe("lunoraClient", () => {
             const socket = latestSocket();
 
             socket.open();
-            socket.receive({ id: JSON.parse(socket.sent[0]!).id, message: "admin subscription requires admin authorization", type: "error" });
+            socket.receive({ id: firstSub(socket).id, message: "admin subscription requires admin authorization", type: "error" });
 
             expect(errors).toEqual([{ message: "admin subscription requires admin authorization" }]);
             expect(data).toHaveLength(0);
@@ -521,7 +587,7 @@ describe("lunoraClient", () => {
             // admin flag and the re-sent subscribe clears the admin gate.
             expect(second).not.toBe(first);
             expect(second.url).toContain("token=adm1n");
-            expect(JSON.parse(second.sent[0]!).query.functionPath).toBe("__lunora_admin__:getMetrics");
+            expect(firstSub(second).query.functionPath).toBe("__lunora_admin__:getMetrics");
 
             vi.useRealTimers();
         });
@@ -542,7 +608,7 @@ describe("lunoraClient", () => {
 
             first.open();
 
-            expect(first.sent).toHaveLength(1);
+            expect(wireFrames(first)).toHaveLength(1);
 
             first.triggerClose();
 
@@ -555,9 +621,9 @@ describe("lunoraClient", () => {
 
             second.open();
 
-            expect(second.sent).toHaveLength(1);
+            expect(wireFrames(second)).toHaveLength(1);
 
-            const env = JSON.parse(second.sent[0]!);
+            const env = firstSub(second);
 
             expect(env.type).toBe("subscribe");
             expect(env.query.args).toEqual({ x: 1 });
@@ -620,7 +686,7 @@ describe("lunoraClient", () => {
 
             socket.open();
 
-            const sub = JSON.parse(socket.sent[0]!);
+            const sub = firstSub(socket);
 
             socket.receive({ id: sub.id, type: "ack" });
 
@@ -662,7 +728,7 @@ describe("lunoraClient", () => {
 
             socket.open();
 
-            const sub = JSON.parse(socket.sent[0]!);
+            const sub = firstSub(socket);
 
             socket.receive({ id: sub.id, type: "ack" });
             socket.receive({ data: [{ _id: "a" }, { _id: "b" }], id: sub.id, type: "data" });
@@ -690,7 +756,7 @@ describe("lunoraClient", () => {
 
             socket.open();
 
-            const sub = JSON.parse(socket.sent[0]!);
+            const sub = firstSub(socket);
 
             socket.receive({ id: sub.id, type: "ack" });
             // Cached value is a scalar aggregate, not an id-keyed list.
@@ -966,7 +1032,7 @@ describe("lunoraClient", () => {
             socket.open();
 
             // Seed the subscriber with a server value.
-            const subId = JSON.parse(socket.sent[0]!).id as string;
+            const subId = firstSub(socket).id as string;
 
             socket.receive({ delta: 5, id: subId, type: "delta" });
 
@@ -1000,7 +1066,7 @@ describe("lunoraClient", () => {
 
             client.subscribe(fnRef("c:get"), {}, (d) => received.push(d));
             latestSocket().open();
-            const subId = JSON.parse(latestSocket().sent[0]!).id as string;
+            const subId = firstSub(latestSocket()).id as string;
 
             latestSocket().receive({ delta: 0, id: subId, type: "delta" });
 
@@ -1034,7 +1100,7 @@ describe("lunoraClient", () => {
             const socket = latestSocket();
 
             socket.open();
-            const subId = JSON.parse(socket.sent[0]!).id as string;
+            const subId = firstSub(socket).id as string;
 
             socket.receive({ delta: 0, id: subId, type: "delta" });
 
@@ -1076,8 +1142,8 @@ describe("lunoraClient", () => {
 
             socket.open();
 
-            const aId = JSON.parse(socket.sent[0]!).id as string;
-            const bId = JSON.parse(socket.sent[1]!).id as string;
+            const aId = firstSub(socket).id as string;
+            const bId = wireFrames(socket)[1].id as string;
 
             socket.receive({ delta: 1, id: aId, type: "delta" });
             socket.receive({ delta: 10, id: bId, type: "delta" });
@@ -1114,7 +1180,7 @@ describe("lunoraClient", () => {
 
             client.subscribe(fnRef("q:list"), {}, (d) => received.push(d));
             latestSocket().open();
-            const subId = JSON.parse(latestSocket().sent[0]!).id as string;
+            const subId = firstSub(latestSocket()).id as string;
 
             latestSocket().receive({ delta: 0, id: subId, type: "delta" });
 
@@ -1153,7 +1219,7 @@ describe("lunoraClient", () => {
             const socket = latestSocket();
 
             socket.open();
-            const subId = JSON.parse(socket.sent[0]!).id as string;
+            const subId = firstSub(socket).id as string;
 
             socket.receive({ delta: 0, id: subId, type: "delta" });
 
@@ -1190,7 +1256,7 @@ describe("lunoraClient", () => {
 
             client.subscribe(fnRef("q:watched"), {}, (d) => received.push(d));
             latestSocket().open();
-            const subId = JSON.parse(latestSocket().sent[0]!).id as string;
+            const subId = firstSub(latestSocket()).id as string;
 
             latestSocket().receive({ delta: 0, id: subId, type: "delta" });
 
@@ -2023,7 +2089,7 @@ describe("lunoraClient", () => {
             socket.open();
 
             // The subscribe frame carries the persisted cursor as `sinceSeq`.
-            const sub = JSON.parse(socket.sent[0]!);
+            const sub = firstSub(socket);
 
             expect(sub.query.sinceSeq).toBe(7);
         });
@@ -2069,7 +2135,7 @@ describe("lunoraClient", () => {
 
             socket.open();
 
-            const sub = JSON.parse(socket.sent[0]!);
+            const sub = firstSub(socket);
 
             expect(sub.query.sinceSeq).toBeUndefined();
         });
@@ -2098,7 +2164,7 @@ describe("lunoraClient", () => {
 
             socket.open();
 
-            const sub = JSON.parse(socket.sent[0]!);
+            const sub = firstSub(socket);
 
             // The server proves nothing changed since `sinceSeq` and resumes,
             // advancing the watermark to 9.
@@ -2137,7 +2203,7 @@ describe("lunoraClient", () => {
 
             socket.open();
 
-            const sub = JSON.parse(socket.sent[0]!);
+            const sub = firstSub(socket);
 
             socket.receive({ id: sub.id, type: "ack" });
             socket.receive({ cursor: 12, data: { count: 5 }, id: sub.id, type: "data" });

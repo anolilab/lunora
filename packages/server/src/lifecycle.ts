@@ -12,7 +12,7 @@
  * wires `resolveIdentity` into the WS upgrade).
  *
  * ```ts
- * // cirrus/lifecycle.ts
+ * // lunora/lifecycle.ts
  * import { onConnect, onDisconnect } from "@lunora/server";
  *
  * export const connected = onConnect(async (ctx, event) => {
@@ -28,6 +28,12 @@
  * The hook receives a {@link LifecycleEvent} (`connectionId`, `shardKey`,
  * optional client `context`, `userId`); richer identity claims are on
  * `ctx.auth`. Hooks are internal — a client can never invoke one directly.
+ *
+ * Both sides fire **once per socket, unconditionally** — `onConnect` the instant
+ * the socket opens (the client announces every connection, with or without a
+ * registered `context`) and `onDisconnect` the instant it closes. Registering a
+ * connection `context` on the client is optional: it only enriches the event and
+ * is replayed to `onDisconnect`; it is never required to make either hook run.
  */
 
 import type { LifecycleEvent, MutationCtx as MutationContext, RegisteredLifecycleHook } from "./types";

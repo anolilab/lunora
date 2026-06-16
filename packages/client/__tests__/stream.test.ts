@@ -310,7 +310,9 @@ describe("stream", () => {
             const iterable = client.stream(fnRef<number>("metrics:boom"), {});
 
             latestSocket().open();
-            const id = (JSON.parse(latestSocket().sent[0] as string) as Record<string, unknown>).id as string;
+            const id = latestSocket()
+                .sent.map((raw) => JSON.parse(raw) as Record<string, unknown>)
+                .find((f) => f.type === "stream")?.id as string;
 
             latestSocket().receive({ error: { code: "FORBIDDEN", message: "nope" }, id, type: "error" });
 

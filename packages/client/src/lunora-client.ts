@@ -2130,26 +2130,26 @@ class LunoraClient {
     }
 
     /**
-     * Send the one-shot `connect` envelope on an open shard socket, carrying the
-     * shard's registered context (or the client-wide default). Only sent when a
-     * context is registered: the envelope exists to deliver that context to the
-     * DO, which records it for replay to `onDisconnect` and runs the server's
-     * `onConnect` hooks once per socket. A socket with no context has nothing to
-     * announce, so it stays off the wire and plain subscriptions are unaffected.
-     * Register a context — e.g. `setConnectionContext({})` — to opt a socket into
-     * lifecycle dispatch.
+     * Send the one-shot `connect` envelope on an open shard socket. Always sent
+     * once per socket open, so the server's `onConnect` hooks fire symmetrically
+     * with `onDisconnect` (which the DO dispatches unconditionally at close for
+     * every lifecycle-aware socket). The DO no-ops cheaply when no `onConnect`
+     * hooks are registered, so the single frame costs nothing in the common case.
+     *
+     * The shard's registered context (or the client-wide default) rides along
+     * when one is set — the DO records it on the attachment for replay to
+     * `onDisconnect`. A socket with no registered context still announces itself;
+     * the envelope simply omits `context`, which is optional on the wire.
+     * Register a context — e.g. `setConnectionContext({})` — to attach app state
+     * to the lifecycle dispatch.
      */
     private sendConnectEnvelope(conn: ShardConnection): void {
         const context = this.connectionContexts.get(connectionKey(conn.shardKey)) ?? this.defaultConnectionContext;
 
-        if (context === undefined) {
-            return;
-        }
-
         sendOn(conn, {
-            context,
             id: "connect",
             type: "connect",
+            ...(context === undefined ? {} : { context }),
         });
     }
 
