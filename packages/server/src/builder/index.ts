@@ -5,13 +5,13 @@ import type { ActionCtx as ActionContext, ArgsValidator, FunctionKind, InferArgs
 import runMiddlewareChain from "./run-middleware";
 import type {
     ActionBuilder,
-    LunoraBuilders,
     CreateOptions,
     DataModelInit,
     EmptyArgs,
     InternalActionBuilder,
     InternalMutationBuilder,
     InternalQueryBuilder,
+    LunoraBuilders,
     Middleware,
     MutationBuilder,
     QueryBuilder,
@@ -202,13 +202,13 @@ export { initLunora };
 
 export type {
     ActionBuilder,
-    LunoraBuilders,
     CreateOptions,
     DataModelInit,
     EmptyArgs,
     InternalActionBuilder,
     InternalMutationBuilder,
     InternalQueryBuilder,
+    LunoraBuilders,
     Middleware,
     MiddlewareNext,
     MutationBuilder,

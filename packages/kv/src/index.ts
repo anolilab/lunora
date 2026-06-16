@@ -1,6 +1,5 @@
 export { createKv, scopeKey } from "./create-kv";
 export type {
-    LunoraKvOptions,
     Kv,
     KvGetOptions,
     KvListKey,
@@ -13,4 +12,5 @@ export type {
     KvValue,
     KvValueType,
     KvValueWithMetadata,
+    LunoraKvOptions,
 } from "./types";

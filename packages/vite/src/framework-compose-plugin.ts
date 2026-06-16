@@ -209,5 +209,5 @@ const frameworkComposePlugin = (options: ResolvedLunoraPluginOptions, context: L
 };
 
 export type { ClassAWiring };
-export { buildWorkerEntrySource, LUNORA_WORKER_VIRTUAL_ID, CLASS_A_WIRING, isAutoComposable, RESOLVED_LUNORA_WORKER_ID };
+export { buildWorkerEntrySource, CLASS_A_WIRING, isAutoComposable, LUNORA_WORKER_VIRTUAL_ID, RESOLVED_LUNORA_WORKER_ID };
 export default frameworkComposePlugin;

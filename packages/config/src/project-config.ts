@@ -88,4 +88,4 @@ const readProjectRemotePreference = (projectRoot: string): RemotePreference => {
 };
 
 export type { LunoraProjectConfig, RemotePreference };
-export { LUNORA_CONFIG_FILE, interpretRemote, readProjectRemotePreference };
+export { interpretRemote, LUNORA_CONFIG_FILE, readProjectRemotePreference };

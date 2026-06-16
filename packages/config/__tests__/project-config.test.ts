@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { LUNORA_CONFIG_FILE, interpretRemote, readProjectRemotePreference } from "../src/project-config";
+import { interpretRemote, LUNORA_CONFIG_FILE, readProjectRemotePreference } from "../src/project-config";
 
 describe("interpretRemote", () => {
     it("passes a boolean through unchanged", () => {

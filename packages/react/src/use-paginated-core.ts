@@ -5,7 +5,7 @@ import type { QueryKey } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 
-import { lunoraQueryKey, getSubscriptionRegistry, serializeQueryKey } from "./cache";
+import { getSubscriptionRegistry, lunoraQueryKey, serializeQueryKey } from "./cache";
 import { useLunora } from "./lunora-provider";
 import type { PaginationResult, PaginationStatus } from "./types";
 import useLazyRef from "./use-lazy-ref";

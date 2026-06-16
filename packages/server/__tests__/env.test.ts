@@ -1,6 +1,6 @@
 import { describe, expect, expectTypeOf, it, vi } from "vitest";
 
-import { LunoraEnvError, defineEnv, redactSecrets, v } from "../src/index";
+import { defineEnv, LunoraEnvError, redactSecrets, v } from "../src/index";
 
 // Fake credentials are assembled at runtime from harmless fragments so the
 // repo's secret scanners (`no-secrets`, `sonarjs/no-hardcoded-secrets`) don't

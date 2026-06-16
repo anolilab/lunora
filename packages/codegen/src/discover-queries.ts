@@ -1,7 +1,7 @@
 import type { CallExpression, Node as TsNode, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { lunoraRelativePath, listLunoraSourceFiles } from "./discover-functions";
+import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
 import type { QueryReadIR } from "./ir";
 
 /** Chain methods that narrow a read so it is not a full scan. */

@@ -1,5 +1,5 @@
 /* eslint-disable no-underscore-dangle -- `__lunoraRef` is the Lunora function-reference field the wire types expose; fixtures mirror it verbatim. */
-import type { LunoraClient, FunctionReference, Unsubscribe } from "@lunora/client";
+import type { FunctionReference, LunoraClient, Unsubscribe } from "@lunora/client";
 
 /**
  * A minimal stand-in for `LunoraClient` exposing just the surface the Solid

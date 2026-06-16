@@ -1,5 +1,5 @@
 import type { LunoraAuth, LunoraAuthOptions } from "@lunora/auth";
-import { lunoraD1Adapter, createAuth, createAuthAdmin, ensureMigrated, handleAuthRequest } from "@lunora/auth";
+import { createAuth, createAuthAdmin, ensureMigrated, handleAuthRequest, lunoraD1Adapter } from "@lunora/auth";
 import { admin, organization, passkey, twoFactor } from "@lunora/auth/plugins";
 import type { D1CtxDbOptions, D1DatabaseLike, D1Exec } from "@lunora/d1";
 import { createD1CtxDb, facetGlobalColumn, listGlobalTables, readGlobalTablePage } from "@lunora/d1";
@@ -61,10 +61,10 @@ export { SchedulerDO } from "./scheduler-do.js";
 interface ShardEnv {
     /** Second R2 bucket, demonstrating multi-bucket `ctx.storage` — reached via `ctx.storage.bucket("avatars")`. */
     AVATARS?: R2BucketLike;
-    LUNORA_WORKER_ORIGIN?: string;
     /** D1 binding backing `.global()` tables — wired into the DO so generic `ctx.db` writes to a global table route to it. */
     DB?: D1DatabaseLike;
     FILES?: R2BucketLike;
+    LUNORA_WORKER_ORIGIN?: string;
     PUBLIC_STORAGE_BASE_URL?: string;
     SCHEDULER?: DurableObjectNamespaceLike;
     STORAGE_SECRET?: string;
@@ -141,6 +141,9 @@ interface Env {
     AUTH_URL?: string;
     /** Second R2 bucket for the studio file browser's bucket picker. */
     AVATARS?: R2BucketLike;
+    DB: unknown;
+
+    FILES: R2BucketLike;
     /** Bearer token gating the admin export/import and scheduled-job endpoints. */
     LUNORA_ADMIN_TOKEN?: string;
 
@@ -154,8 +157,6 @@ interface Env {
     LUNORA_E2E?: string;
     /** Origin the SchedulerDO dispatches HTTP callbacks back to (job execution). */
     LUNORA_WORKER_ORIGIN?: string;
-    DB: unknown;
-    FILES: R2BucketLike;
     /** Sender address for auth (verification / reset) email; captured into the studio Mail tab in dev. */
     MAIL_FROM?: string;
     /** Public base URL R2 objects resolve against — used to mint signed URLs. */
@@ -538,7 +539,7 @@ const handleStorageAsset = async (request: Request, env: Env): Promise<null | Re
  * Dormant until a Cloudflare Email Routing rule routes an address to this Worker
  * (dashboard-configured); on a parse/dispatch failure the handler defaults to
  * `message.setReject(reason)` so Cloudflare bounces or retries. `env.SHARD`'s
- * runtime stub `fetch` is typed `(Request) => Promise<Response>`; the inbound
+ * runtime stub `fetch` is typed `(Request) => Promise&lt;Response>`; the inbound
  * dispatcher's structural namespace expects `fetch(url, init)` — the DO stub
  * accepts both at runtime, so the cast is sound.
  */
@@ -546,14 +547,16 @@ export const email = async (message: ForwardableEmailMessageLike, env: Env, cont
     const handler = createInboundEmailHandler({
         dispatch: dispatchToLunoraFunction({
             functionPath: "inbound:onEmail",
-            resolveArgs: (parsed) => ({
-                from: parsed.from,
-                messageId: parsed.messageId,
-                receivedAt: Date.now(),
-                subject: parsed.subject,
-                text: parsed.text,
-                to: parsed.to,
-            }),
+            resolveArgs: (parsed) => {
+                return {
+                    from: parsed.from,
+                    messageId: parsed.messageId,
+                    receivedAt: Date.now(),
+                    subject: parsed.subject,
+                    text: parsed.text,
+                    to: parsed.to,
+                };
+            },
             shard: env.SHARD as unknown as InboundShardNamespaceLike,
             shardKey: "__root__",
         }),

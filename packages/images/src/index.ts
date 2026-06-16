@@ -4,7 +4,6 @@ export { buildImageDeliveryUrl } from "./delivery-url";
 export type { SignedImageUrlOptions, VerifyImageResult } from "./signed-delivery-url";
 export { buildSignedImageUrl, verifySignedImageUrl } from "./signed-delivery-url";
 export type {
-    LunoraImagesOptions,
     ImageInfoLike,
     ImageInput,
     ImageOutputFormat,
@@ -12,6 +11,7 @@ export type {
     ImagesBindingLike,
     ImageTransformationResultLike,
     ImageTransformerLike,
+    LunoraImagesOptions,
     OutputOptions,
     R2ObjectBodyLike,
     TransformOptions,

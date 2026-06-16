@@ -11,7 +11,7 @@ import frameworkDetectPlugin, { createPluginContext } from "./framework-detect-p
 import logStreamPlugin from "./log-stream-plugin";
 import { planViteRemoteBindings, remoteBindingsCleanupPlugin, withRemoteBindings } from "./remote-bindings-plugin";
 import { studioPlugin } from "./studio-plugin";
-import type { LunoraPluginOptions, LunoraPlugins, CloudflarePluginOptions, OverlayPluginOptions, ResolvedLunoraPluginOptions } from "./types";
+import type { CloudflarePluginOptions, LunoraPluginOptions, LunoraPlugins, OverlayPluginOptions, ResolvedLunoraPluginOptions } from "./types";
 import { withWorkerStartupHint } from "./worker-startup-hint";
 import { wranglerValidatorPlugin } from "./wrangler-validator-plugin";
 
@@ -146,10 +146,10 @@ export { createCommandProbe, DEV_WORKER_ENV_VALUE, DEV_WORKER_ENV_VAR, withDevWo
 export type { ClassAWiring } from "./framework-compose-plugin";
 export {
     buildWorkerEntrySource,
-    LUNORA_WORKER_VIRTUAL_ID,
     CLASS_A_WIRING,
     default as frameworkComposePlugin,
     isAutoComposable,
+    LUNORA_WORKER_VIRTUAL_ID,
 } from "./framework-compose-plugin";
 // `framework-detect-plugin` (the `LunoraPluginContext` bag + `createPluginContext`
 // + the plugin itself) stays internal plumbing — it is wired into `lunora()`
@@ -159,7 +159,7 @@ export { default as logStreamPlugin } from "./log-stream-plugin";
 export type { PlanViteRemoteOptions, ViteRemotePlan } from "./remote-bindings-plugin";
 export { planViteRemoteBindings, remoteBindingsCleanupPlugin, withRemoteBindings } from "./remote-bindings-plugin";
 export { buildStudioUrl, STUDIO_PATH, studioPlugin } from "./studio-plugin";
-export type { LunoraPluginOptions, LunoraPlugins, CloudflarePluginOptions, OverlayPluginOptions, ResolvedLunoraPluginOptions } from "./types";
+export type { CloudflarePluginOptions, LunoraPluginOptions, LunoraPlugins, OverlayPluginOptions, ResolvedLunoraPluginOptions } from "./types";
 export { augmentWorkerStartupError, isWorkerEntryEvalError, withWorkerStartupHint, WORKER_STARTUP_HINT } from "./worker-startup-hint";
 export { wranglerValidatorPlugin } from "./wrangler-validator-plugin";
 export { lunora, VERSION };

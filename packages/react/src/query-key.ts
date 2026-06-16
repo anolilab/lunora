@@ -59,4 +59,4 @@ const lunoraQueryKey = (function_: FunctionReference, args: Record<string, unkno
  */
 const serializeQueryKey = (queryKey: QueryKey): string => keyHash(queryKey);
 
-export { lunoraQueryKey, keyHash, serializeQueryKey, stableStringify };
+export { keyHash, lunoraQueryKey, serializeQueryKey, stableStringify };

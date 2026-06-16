@@ -1,8 +1,7 @@
-import type { Id } from "./_generated/server.js";
-import { mutation, query, v } from "./_generated/server.js";
-
 // eslint-disable-next-line unicorn/prevent-abbreviations -- "Doc" is the generated dataModel type name; aliasing it breaks codegen
 import type { Doc } from "./_generated/dataModel.js";
+import type { Id } from "./_generated/server.js";
+import { mutation, query, v } from "./_generated/server.js";
 
 /**
  * Persist an inbound email into the `inbox` table.

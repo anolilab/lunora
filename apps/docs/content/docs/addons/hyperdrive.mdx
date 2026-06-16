@@ -48,7 +48,7 @@ pnpm add mysql2          # mysql2        → fromMysql2
 
 ## Set up the binding
 
-1. Create a Hyperdrive config pointing at your origin database:
+1.  Create a Hyperdrive config pointing at your origin database:
 
     ```bash
     wrangler hyperdrive create my-db --connection-string="postgres://user:pass@host:5432/db" # gitleaks:allow -- placeholder, not a real secret
@@ -56,25 +56,26 @@ pnpm add mysql2          # mysql2        → fromMysql2
 
     This prints an `id`.
 
-2. Add the binding to `wrangler.jsonc`. Use `localConnectionString` so local
-   dev (`lunora dev`) connects straight to your DB without the edge proxy:
+2.  Add the binding to `wrangler.jsonc`. Use `localConnectionString` so local
+    dev (`lunora dev`) connects straight to your DB without the edge proxy:
 
-    ```jsonc
-    {
-        "hyperdrive": [
-            {
-                "binding": "HYPERDRIVE",
-                "id": "<the id from step 1>",
-                "localConnectionString": "postgres://user:pass@localhost:5432/db", // gitleaks:allow -- placeholder, not a real secret
-            },
-        ],
-    }
-    ```
+        ```jsonc
+        {
+            "hyperdrive": [
+                {
+                    "binding": "HYPERDRIVE",
+                    "id": "<the id from step 1>",
+                    "localConnectionString": "postgres://user:pass@localhost:5432/db", // gitleaks:allow -- placeholder, not a real secret
+                },
+            ],
+        }
+        ```
 
-    Lunora validates the binding (it errors when `binding` is missing and warns
-    when `id` is empty — a placeholder id can't connect), but it does **not**
-    auto-provision the `id`: that's a remote resource only `wrangler hyperdrive
-create` can mint, so importing `@lunora/hyperdrive` surfaces a hint rather
+        Lunora validates the binding (it errors when `binding` is missing and warns
+        when `id` is empty — a placeholder id can't connect), but it does **not**
+        auto-provision the `id`: that's a remote resource only `wrangler hyperdrive
+
+    create`can mint, so importing`@lunora/hyperdrive` surfaces a hint rather
     than writing the binding for you.
 
 ## The canonical recipe

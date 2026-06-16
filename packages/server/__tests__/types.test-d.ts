@@ -2,7 +2,7 @@
  * Compile-time only: this file is included by `tsc --noEmit` to exercise the
  * type surface. It is also imported by a no-op test so vitest counts it.
  */
-import type { ActionCtx, LunoraRouteHandler, EmptyArgs, Id, Infer, QueryCtx, RegisteredQuery, ScheduledFunctionDoc, StorageMetadata } from "../src/index";
+import type { ActionCtx, EmptyArgs, Id, Infer, LunoraRouteHandler, QueryCtx, RegisteredQuery, ScheduledFunctionDoc, StorageMetadata } from "../src/index";
 import { defineSchema, defineTable, httpRoute, initLunora, mutation, query, v } from "../src/index";
 
 type Assert<T extends true> = T;

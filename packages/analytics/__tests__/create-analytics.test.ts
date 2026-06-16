@@ -37,10 +37,10 @@ describe("createAnalytics", () => {
         const analytics = createAnalytics(binding);
 
         expect(() => {
-            analytics.writeDataPoint({ blobs: Array.from({length: 21}).fill("x") });
+            analytics.writeDataPoint({ blobs: Array.from({ length: 21 }).fill("x") });
         }).toThrow(/at most 20 blobs/);
         expect(() => {
-            analytics.writeDataPoint({ doubles: Array.from({length: 21}).fill(0) });
+            analytics.writeDataPoint({ doubles: Array.from({ length: 21 }).fill(0) });
         }).toThrow(/at most 20 doubles/);
         expect(() => {
             analytics.writeDataPoint({ indexes: ["a", "b"] });

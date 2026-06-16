@@ -10,7 +10,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { MaskOptions, MaskPolicies, Middleware } from "../src/index";
-import { LunoraError, definePermission, defineRole, initLunora, mask } from "../src/index";
+import { definePermission, defineRole, initLunora, LunoraError, mask } from "../src/index";
 
 /**
  * The procedure builder types `ctx.db` nominally; the mask middleware's

@@ -1,5 +1,4 @@
 import type {
-    LunoraKvOptions,
     Kv,
     KvGetOptions,
     KvListKey,
@@ -9,6 +8,7 @@ import type {
     KvPutOptions,
     KvValue,
     KvValueWithMetadata,
+    LunoraKvOptions,
 } from "./types";
 
 /** Workers KV's documented key-length ceiling (512 bytes). */

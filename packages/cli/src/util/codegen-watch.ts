@@ -79,11 +79,11 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
 export interface CodegenWatcherOptions {
     /** Which API spec(s) to emit. Defaults to codegen's `"openapi"` when omitted. */
     apiSpec?: CodegenOptions["apiSpec"];
-    /** Override the lunora subdirectory name. Defaults to `"lunora"`. */
-    lunoraDirectory?: string;
     /** Debounce window for coalescing rapid edits. Defaults to 100ms. */
     debounceMs?: number;
     logger: Logger;
+    /** Override the lunora subdirectory name. Defaults to `"lunora"`. */
+    lunoraDirectory?: string;
     /** Project root containing the `lunora/` directory. */
     projectRoot: string;
 }

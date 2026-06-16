@@ -64,6 +64,7 @@ describe("createWorker — storage admin endpoint", () => {
         const worker = createWorker({ adminToken: ADMIN_TOKEN, shardDO: noopNamespace, storageList });
 
         const response = await worker.fetch(
+            // eslint-disable-next-line no-secrets/no-secrets -- example admin URL fixture, not a secret
             new Request("https://app.example/_lunora/admin/storage?prefix=avatars/&cursor=z&limit=25&bucket=media", {
                 headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
                 method: "GET",

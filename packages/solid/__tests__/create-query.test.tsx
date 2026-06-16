@@ -2,8 +2,8 @@ import type { FunctionReference } from "@lunora/client";
 import { render } from "@solidjs/testing-library";
 import { describe, expect, it } from "vitest";
 
-import { LunoraProvider } from "../src/lunora-provider";
 import { createQuery } from "../src/create-query";
+import { LunoraProvider } from "../src/lunora-provider";
 import { createFakeClient } from "./fake-client";
 
 const listRef = { __lunoraRef: "messages:list" } as FunctionReference;

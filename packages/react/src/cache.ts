@@ -1,4 +1,4 @@
-import type { LunoraClient, FunctionReference, Unsubscribe } from "@lunora/client";
+import type { FunctionReference, LunoraClient, Unsubscribe } from "@lunora/client";
 import type { QueryClient, QueryKey } from "@tanstack/react-query";
 
 import { keyHash } from "./query-key";
@@ -130,5 +130,5 @@ const getSubscriptionRegistry = (client: LunoraClient): LunoraSubscriptionRegist
     return registry;
 };
 
-export { LunoraSubscriptionRegistry, getSubscriptionRegistry };
+export { getSubscriptionRegistry, LunoraSubscriptionRegistry };
 export { lunoraQueryKey, serializeQueryKey, stableStringify } from "./query-key";

@@ -17,8 +17,8 @@ export type { LunoraQueryOptions } from "./query-options";
 export { lunoraQueryOptions } from "./query-options";
 export type {
     ArgsOf,
-    LunoraClient,
     FunctionReference,
+    LunoraClient,
     OptimisticLocalStore,
     OptimisticUpdate,
     PaginationResult,

@@ -1,7 +1,7 @@
 import type { CallExpression, Node as TsNode, Project, SourceFile, VariableDeclaration } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { lunoraRelativePath, classifyProcedureCall, listLunoraSourceFiles } from "./discover-functions";
+import { classifyProcedureCall, listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
 import type { NondeterministicCallIR } from "./ir";
 
 /**

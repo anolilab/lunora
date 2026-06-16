@@ -2,7 +2,7 @@ export type { AdapterRegistry, PaymentAdapter, WebhookHeaders, WebhookInput } fr
 export { createAdapterRegistry } from "./adapter";
 export type { LunoraDatabaseLike, PaymentContextLike, PaymentsFromContextOptions } from "./context";
 export { lunoraDatabaseToPaymentDatabase, paymentsFromContext } from "./context";
-export type { AuthorizeReference, LunoraPayment, CreatePaymentOptions } from "./create-payment";
+export type { AuthorizeReference, CreatePaymentOptions, LunoraPayment } from "./create-payment";
 export { createPayment } from "./create-payment";
 export type { PaymentDatabase, PaymentRow } from "./database-store";
 export { createDatabasePaymentStore } from "./database-store";

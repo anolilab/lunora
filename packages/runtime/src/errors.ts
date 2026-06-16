@@ -90,5 +90,5 @@ const toErrorResponse = (error: unknown): Response => {
     });
 };
 
-export { LunoraError, isStructuralLunoraError, isStructuralConflictError, toErrorResponse };
+export { isStructuralConflictError, isStructuralLunoraError, LunoraError, toErrorResponse };
 export type { LunoraErrorBody, StructuralLunoraErrorLike };

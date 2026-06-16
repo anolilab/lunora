@@ -405,4 +405,4 @@ const defineEnv = <S extends EnvShape>(shape: S): EnvAccessor<S> => {
 };
 
 export type { EnvAccessor, EnvKeyFailure, EnvShape, InferEnv };
-export { LunoraEnvError, defineEnv, redactSecrets };
+export { defineEnv, LunoraEnvError, redactSecrets };

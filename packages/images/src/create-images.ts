@@ -7,12 +7,12 @@
  * their own modules and are safe anywhere.
  */
 import type {
-    LunoraImagesOptions,
     ImageInfoLike,
     ImageInput,
     ImageOutputFormat,
     Images,
     ImageTransformationResultLike,
+    LunoraImagesOptions,
     OutputOptions,
     R2ObjectBodyLike,
     TransformOptions,

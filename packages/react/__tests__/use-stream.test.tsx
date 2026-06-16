@@ -1,4 +1,4 @@
-import type { LunoraClient, FunctionReference, StreamHandle, StreamIterable } from "@lunora/client";
+import type { FunctionReference, LunoraClient, StreamHandle, StreamIterable } from "@lunora/client";
 import { createStream } from "@lunora/client";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";

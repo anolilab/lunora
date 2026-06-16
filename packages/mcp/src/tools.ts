@@ -1,4 +1,4 @@
-import type { LunoraClient, FunctionReference } from "@lunora/client";
+import type { FunctionReference, LunoraClient } from "@lunora/client";
 
 /**
  * The tool surface this MCP server exposes. Each tool maps onto a method the

@@ -2,8 +2,8 @@ import type { Preloaded } from "@lunora/client";
 import { render } from "@solidjs/testing-library";
 import { describe, expect, it } from "vitest";
 
-import { LunoraProvider } from "../src/lunora-provider";
 import hydratePreloaded from "../src/hydrate-preloaded";
+import { LunoraProvider } from "../src/lunora-provider";
 import { createFakeClient } from "./fake-client";
 
 const makePreloaded = <T,>(value: T): Preloaded<T> => {

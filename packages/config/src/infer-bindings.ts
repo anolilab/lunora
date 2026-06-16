@@ -36,7 +36,7 @@ import { readWranglerJsonc, WRANGLER_FILES } from "./wrangler-path";
 const SOURCE_EXTENSIONS = new Set([".cjs", ".cts", ".js", ".jsx", ".mjs", ".mts", ".ts", ".tsx"]);
 
 /** Directories never worth descending into during a capability scan. */
-const IGNORED_DIRECTORIES = new Set([".lunora-cache", ".git", ".wrangler", "_generated", "dist", "node_modules"]);
+const IGNORED_DIRECTORIES = new Set([".git", ".lunora-cache", ".wrangler", "_generated", "dist", "node_modules"]);
 
 /** Directories scanned for capability signals when the caller does not override. */
 const DEFAULT_SCAN_DIRECTORIES = ["lunora", "src"] as const;

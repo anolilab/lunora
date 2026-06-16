@@ -9,7 +9,7 @@
 import type { CallExpression, Node as TsNode, Project, SourceFile } from "ts-morph";
 import { Node } from "ts-morph";
 
-import { lunoraRelativePath, classifyProcedureCall, listLunoraSourceFiles } from "./discover-functions";
+import { classifyProcedureCall, listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
 import type { StorageRuleIR, StorageRulesMetadataIR } from "./ir";
 
 /** The operations `defineStorageRule({ on })` accepts; anything else is ignored as malformed. */

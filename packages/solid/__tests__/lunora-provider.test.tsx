@@ -1,8 +1,8 @@
 import { render } from "@solidjs/testing-library";
 import { describe, expect, it } from "vitest";
 
-import { LunoraProvider } from "../src/lunora-provider";
 import { useLunora } from "../src/context";
+import { LunoraProvider } from "../src/lunora-provider";
 import { createFakeClient } from "./fake-client";
 
 describe(LunoraProvider, () => {

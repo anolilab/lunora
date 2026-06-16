@@ -30,6 +30,16 @@ const sampleSource = (sample: Sample, operation: ApiOperation, server: string): 
     const args = JSON.stringify(exampleForSchema(operation.argsSchema) ?? {}, undefined, 2);
 
     switch (sample) {
+        case "curl": {
+            const hasBody = operation.method !== "GET" && operation.method !== "HEAD";
+            const lines = [`curl -X ${operation.method} ${JSON.stringify(url)}`];
+
+            if (hasBody) {
+                lines.push(`  -H "Content-Type: application/json"`, `  -d '${body}'`);
+            }
+
+            return lines.join(" \\\n");
+        }
         case "lunora": {
             if (operation.functionPath === undefined) {
                 return `await fetch(${JSON.stringify(operation.httpPath)}, { method: ${JSON.stringify(operation.method)} });`;
@@ -40,16 +50,6 @@ const sampleSource = (sample: Sample, operation: ApiOperation, server: string): 
             // Emit the public, documented surface — the generated `api.*` handle —
             // not the internal `{ __lunoraRef }` admin escape hatch.
             return `import { useLunora } from "@lunora/react";\nimport { api } from "./_generated/api";\n\nconst client = useLunora();\nawait client.${method}(${apiReferenceOf(operation.functionPath)}, ${args});`;
-        }
-        case "curl": {
-            const hasBody = operation.method !== "GET" && operation.method !== "HEAD";
-            const lines = [`curl -X ${operation.method} ${JSON.stringify(url)}`];
-
-            if (hasBody) {
-                lines.push(`  -H "Content-Type: application/json"`, `  -d '${body}'`);
-            }
-
-            return lines.join(" \\\n");
         }
         default: {
             const hasBody = operation.method !== "GET" && operation.method !== "HEAD";

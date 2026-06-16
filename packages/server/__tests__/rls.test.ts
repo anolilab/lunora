@@ -10,7 +10,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Middleware, Policy, Role } from "../src/index";
-import { LunoraError, definePermission, definePolicies, definePolicy, defineRole, initLunora, rls } from "../src/index";
+import { definePermission, definePolicies, definePolicy, defineRole, initLunora, LunoraError, rls } from "../src/index";
 
 /**
  * The procedure builder types `ctx.db` nominally (`DatabaseReader`/

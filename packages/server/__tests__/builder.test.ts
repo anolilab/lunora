@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { LunoraError, initLunora, v, ValidationError } from "../src/index";
+import { initLunora, LunoraError, v, ValidationError } from "../src/index";
 
 const c = initLunora.dataModel<Record<string, never>>().create();
 

@@ -89,6 +89,8 @@ export interface DefinePolicyInput<Context = unknown> {
     /** Logical table name the policy applies to. */
     table: string;
 
+    /* eslint-disable no-secrets/no-secrets -- JSDoc names a stable error-kind constant, not a secret */
+
     /**
      * Decision function. Returning a `WhereInput` (read only) AND-merges the
      * predicate; `true` allows; `false` denies; `undefined` skips this policy.
@@ -97,6 +99,7 @@ export interface DefinePolicyInput<Context = unknown> {
      * reader throws `LunoraError("COUNT_RLS_UNSUPPORTED")` (422). This mirrors
      * kitcn's documented behavior.
      */
+    /* eslint-enable no-secrets/no-secrets */
     when: (context: PolicyContext<Context>) => PolicyDecision;
 }
 

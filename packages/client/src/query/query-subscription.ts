@@ -1,4 +1,4 @@
-import type { ArgsOf, LunoraClient, FunctionReference, ReturnOf, SubscriptionError, SubscriptionErrorCallback, Unsubscribe } from "../index";
+import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, SubscriptionError, SubscriptionErrorCallback, Unsubscribe } from "../index";
 
 /**
  * The sentinel a framework adapter resolves its reactive args to when it wants

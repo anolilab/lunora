@@ -1,3 +1,5 @@
+/* eslint-disable no-secrets/no-secrets -- JSDoc names a stable error-kind constant, not a secret */
+
 /**
  * Public surface for Row-Level Security (PLAN2 §3.2).
  *
@@ -42,6 +44,7 @@
  * builders.mutation.use(rls(definePolicies([policy]), { roles: [admin] }));
  * ```
  */
+/* eslint-enable no-secrets/no-secrets */
 export { definePermission, definePolicies, definePolicy, defineRole } from "./define";
 export { rls } from "./middleware";
 export type { DefinePolicyInput, Permission, Policy, PolicyContext, PolicyDecision, PolicyOperation, RlsOptions, Role, WhereInput } from "./types";

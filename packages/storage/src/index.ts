@@ -6,8 +6,8 @@ export { buildPresignedUrl } from "./presigned-url";
 export type { VerifyResult } from "./signed-url";
 export { buildSignedUrl, verifySignedUrl } from "./signed-url";
 export type {
-    LunoraStorageOptions,
     ListOptions,
+    LunoraStorageOptions,
     ObjectMetadata,
     PresignedUrlOptions,
     R2BucketLike,

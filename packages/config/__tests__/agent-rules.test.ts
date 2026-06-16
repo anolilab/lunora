@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { AGENT_RULES_DIR, AGENT_RULES_HINT_ENV, LUNORA_SKILL_NAMES, claimAgentRulesHint, detectAgentRules } from "../src/agent-rules";
+import { AGENT_RULES_DIR, AGENT_RULES_HINT_ENV, claimAgentRulesHint, detectAgentRules, LUNORA_SKILL_NAMES } from "../src/agent-rules";
 
 let workdir: string;
 

@@ -1,4 +1,4 @@
-import type { LunoraClient, FunctionReference, Unsubscribe } from "@lunora/client";
+import type { FunctionReference, LunoraClient, Unsubscribe } from "@lunora/client";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";

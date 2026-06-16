@@ -201,5 +201,5 @@ const formatLunoraEvent = (line: string): LunoraFormattedLine | undefined => {
     return undefined;
 };
 
-export { LUNORA_EVENT_SOURCE, formatLunoraEvent };
+export { formatLunoraEvent, LUNORA_EVENT_SOURCE };
 export type { LunoraFormattedLine, LunoraLineLevel };

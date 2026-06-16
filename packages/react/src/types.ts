@@ -89,8 +89,8 @@ export interface UseAuthResult {
 
 export {
     type ArgsOf,
-    type LunoraClient,
     type FunctionReference,
+    type LunoraClient,
     type OptimisticLocalStore,
     type OptimisticUpdate,
     type Preloaded,

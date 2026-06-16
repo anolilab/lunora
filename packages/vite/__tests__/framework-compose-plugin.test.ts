@@ -15,8 +15,8 @@ import { describe, expect, it } from "vitest";
 import type { DetectedFramework, FrameworkClass } from "../src/detect-framework";
 import frameworkComposePlugin, {
     buildWorkerEntrySource,
-    LUNORA_WORKER_VIRTUAL_ID,
     isAutoComposable,
+    LUNORA_WORKER_VIRTUAL_ID,
     RESOLVED_LUNORA_WORKER_ID,
 } from "../src/framework-compose-plugin";
 import type { LunoraPluginContext } from "../src/framework-detect-plugin";

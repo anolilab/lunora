@@ -4,7 +4,7 @@ import type { FunctionReference, Preloaded } from "@lunora/client";
 import { useQuery as useTanStackQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo } from "react";
 
-import { lunoraQueryKey, getSubscriptionRegistry, serializeQueryKey } from "./cache";
+import { getSubscriptionRegistry, lunoraQueryKey, serializeQueryKey } from "./cache";
 import { useLunora } from "./lunora-provider";
 
 /**

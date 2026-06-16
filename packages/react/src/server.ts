@@ -1,4 +1,4 @@
-import type { ArgsOf, LunoraClient, FunctionReference, ReturnOf } from "@lunora/client";
+import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf } from "@lunora/client";
 import type { ServerClientOptions } from "@lunora/client/ssr";
 import { createServerClient } from "@lunora/client/ssr";
 import type { QueryClient } from "@tanstack/react-query";

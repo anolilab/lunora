@@ -26,11 +26,14 @@ interface SchedulerDOState {
 interface SchedulerEnv {
     [key: string]: unknown;
 
+    /* eslint-disable no-secrets/no-secrets -- JSDoc names a stable env-var, not a secret */
+
     /**
      * Fallback bearer token attached to the dispatch when
      * {@link SchedulerEnv.LUNORA_SCHEDULER_SECRET} is not configured. Sent as
      * `authorization: Bearer &lt;token>`.
      */
+    /* eslint-enable no-secrets/no-secrets */
     LUNORA_ADMIN_TOKEN?: string;
 
     /**

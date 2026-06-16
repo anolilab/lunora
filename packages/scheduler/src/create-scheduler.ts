@@ -1,4 +1,4 @@
-import type { ArgsOf, LunoraSchedulerOptions, FunctionReference, RunOptions, Scheduler, ScheduleRecord } from "./types";
+import type { ArgsOf, FunctionReference, LunoraSchedulerOptions, RunOptions, Scheduler, ScheduleRecord } from "./types";
 
 const callDO = async <T>(options: LunoraSchedulerOptions, path: string, body: unknown): Promise<T> => {
     const stub = options.namespace.get(options.namespace.idFromName(options.instanceName ?? "default"));

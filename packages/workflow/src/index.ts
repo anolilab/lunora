@@ -5,8 +5,8 @@ export { defineWorkflow, isWorkflowDefinition, workflowBindingName, workflowClas
 export { createWorkflowLogger, createWorkflowRunContext, createWorkflowRunner } from "./run-context";
 export type {
     ArgsOf,
-    LunoraWorkflowsOptions,
     FunctionReference,
+    LunoraWorkflowsOptions,
     RunFunctionOptions,
     WorkflowBindingLike,
     WorkflowConfig,

@@ -94,4 +94,4 @@ const detectAgentRules = (projectRoot: string): AgentRulesStatus => {
 };
 
 export type { AgentRulesStatus };
-export { AGENT_RULES_DIR, AGENT_RULES_HINT, AGENT_RULES_HINT_ENV, LUNORA_SKILL_NAMES, claimAgentRulesHint, detectAgentRules, ROOT_SKILL_NAME };
+export { AGENT_RULES_DIR, AGENT_RULES_HINT, AGENT_RULES_HINT_ENV, claimAgentRulesHint, detectAgentRules, LUNORA_SKILL_NAMES, ROOT_SKILL_NAME };

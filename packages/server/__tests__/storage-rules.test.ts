@@ -6,7 +6,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Middleware, StorageRule } from "../src/index";
-import { LunoraError, defineStorageRule, defineStorageRules, initLunora, storageRules } from "../src/index";
+import { defineStorageRule, defineStorageRules, initLunora, LunoraError, storageRules } from "../src/index";
 
 const lunora = initLunora.dataModel<Record<string, never>>().create();
 

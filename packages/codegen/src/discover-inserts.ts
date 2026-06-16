@@ -1,7 +1,7 @@
 import type { CallExpression, Project } from "ts-morph";
 import { Node, SyntaxKind } from "ts-morph";
 
-import { lunoraRelativePath, listLunoraSourceFiles } from "./discover-functions";
+import { listLunoraSourceFiles, lunoraRelativePath } from "./discover-functions";
 import type { InsertWriteIR } from "./ir";
 
 /**

@@ -779,9 +779,6 @@ const serveStorageObject = async (context: ContextWithStorage, key: string, requ
 export { httpAction, httpRoute, httpRouter, serveStorageObject };
 
 export type {
-    LunoraHttpApp,
-    LunoraHttpEnv,
-    LunoraRouteHandler,
     HttpActionCtx,
     HttpActionHandler,
     HttpMethod,
@@ -790,4 +787,7 @@ export type {
     HttpRouteFactory,
     HttpRouteHandlerOptions,
     HttpStreamHandlerOptions,
+    LunoraHttpApp,
+    LunoraHttpEnv,
+    LunoraRouteHandler,
 };

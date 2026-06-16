@@ -22,5 +22,5 @@
  */
 export type { AstroIntegrationLike, LunoraIntegrationOptions } from "./integration";
 export { lunora } from "./integration";
-export type { AstroWorkerHandler, LunoraOptions, ComposedWorker } from "./with-lunora";
+export type { AstroWorkerHandler, ComposedWorker, LunoraOptions } from "./with-lunora";
 export { withLunora } from "./with-lunora";

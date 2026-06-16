@@ -43,8 +43,8 @@
  */
 export type {
     FrameworkHostHandler as AstroWorkerHandler,
-    FrameworkWorkerOptions as LunoraOptions,
     LunoraWorker as ComposedWorker,
     FrameworkWorkerOptionsInput,
+    FrameworkWorkerOptions as LunoraOptions,
 } from "@lunora/runtime";
 export { withFrameworkWorker as withLunora } from "@lunora/runtime";

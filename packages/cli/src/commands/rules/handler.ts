@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-import { AGENT_RULES_DIR, LUNORA_SKILL_NAMES, detectAgentRules } from "@lunora/config";
+import { AGENT_RULES_DIR, detectAgentRules, LUNORA_SKILL_NAMES } from "@lunora/config";
 import { dirname, join, relative } from "@visulima/path";
 
 import type { CommandHandler } from "../../util/command";

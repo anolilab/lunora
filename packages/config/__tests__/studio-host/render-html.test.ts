@@ -8,6 +8,7 @@ describe("renderStudioHtml", () => {
 
         const html = renderStudioHtml({ basePath: "/__lunora", scriptSrc: "/__lunora/studio.js", styleHref: "/__lunora/styles.css" });
 
+        // eslint-disable-next-line no-secrets/no-secrets -- lunora basepath marker, not a secret
         expect(html).toContain('window.__LUNORA_BASE_PATH__="/__lunora";');
         expect(html).toContain('src="/__lunora/studio.js"');
         expect(html).toContain('href="/__lunora/styles.css"');

@@ -1,4 +1,4 @@
-import { LUNORA_EVENT_SOURCE, formatLunoraEvent } from "@lunora/config";
+import { formatLunoraEvent, LUNORA_EVENT_SOURCE } from "@lunora/config";
 import type { Plugin } from "vite";
 
 /**

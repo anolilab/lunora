@@ -3,9 +3,9 @@ export {
     AGENT_RULES_DIR,
     AGENT_RULES_HINT,
     AGENT_RULES_HINT_ENV,
-    LUNORA_SKILL_NAMES,
     claimAgentRulesHint,
     detectAgentRules,
+    LUNORA_SKILL_NAMES,
     ROOT_SKILL_NAME,
 } from "./agent-rules";
 export type { ContainerIR, DiscoverContainerInfoResult } from "./container-info";
@@ -16,9 +16,9 @@ export { DEV_VARS_EXAMPLE_FILE, DEV_VARS_FILE, DEV_VARS_KEY_PATTERN, parseDevVar
 export type { InferOptions, InferredBindings, InferredContainer, InferredWorkflow } from "./infer-bindings";
 export { inferLunoraBindings } from "./infer-bindings";
 export type { LunoraFormattedLine, LunoraLineLevel } from "./log-format";
-export { LUNORA_EVENT_SOURCE, formatLunoraEvent } from "./log-format";
+export { formatLunoraEvent, LUNORA_EVENT_SOURCE } from "./log-format";
 export type { LunoraProjectConfig, RemotePreference } from "./project-config";
-export { LUNORA_CONFIG_FILE, interpretRemote, readProjectRemotePreference } from "./project-config";
+export { interpretRemote, LUNORA_CONFIG_FILE, readProjectRemotePreference } from "./project-config";
 export type { MultiSelectOption, SelectOption } from "./prompt";
 export { createConfirm, isInteractive, promptMultiSelect, promptSelect, promptYesNo } from "./prompt";
 export type { ExportGap, ReconcileBindingsResult } from "./reconcile-bindings";
