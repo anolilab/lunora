@@ -1,12 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { AnalyticsEngineDataset } from "../src/metering/analytics";
+import type { AnalyticsEngineDatasetLike } from "../src/metering/analytics";
 import { createHttpAnalyticsReader, recordRequestUsage } from "../src/metering/analytics";
 
 describe(recordRequestUsage, () => {
     it("writes a per-request data point", () => {
         const writeDataPoint = vi.fn();
-        const dataset: AnalyticsEngineDataset = { writeDataPoint };
+        const dataset: AnalyticsEngineDatasetLike = { writeDataPoint };
 
         recordRequestUsage(dataset, { plan: "pro", scriptName: "acme-app" });
 
@@ -36,6 +36,7 @@ describe(createHttpAnalyticsReader, () => {
             fetch: async () => new Response("nope", { status: 500 }),
         });
 
-        await expect(reader.readRequestUsage(0)).rejects.toThrow(/analytics read failed/u);
+        // @lunora/analytics' SQL client throws AnalyticsSqlError on a non-2xx.
+        await expect(reader.readRequestUsage(0)).rejects.toThrow();
     });
 });

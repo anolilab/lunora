@@ -1,5 +1,5 @@
 import { limitsForPlan } from "../billing/plans";
-import type { AnalyticsEngineDataset } from "../metering/analytics";
+import type { AnalyticsEngineDatasetLike } from "../metering/analytics";
 import { recordRequestUsage } from "../metering/analytics";
 import { createPlanResolver, resolveTenant } from "./route";
 
@@ -30,7 +30,7 @@ interface DispatcherEnv {
     CONTROL_PLANE_URL?: string;
     DISPATCHER: DispatchNamespace;
     /** Analytics Engine dataset for per-request metering (§4). Optional. */
-    USAGE_ANALYTICS?: AnalyticsEngineDataset;
+    USAGE_ANALYTICS?: AnalyticsEngineDatasetLike;
 }
 
 const NOT_FOUND = (message: string): Response => new Response(message, { status: 404 });
@@ -72,7 +72,7 @@ export default {
             const userWorker = env.DISPATCHER.get(route.scriptName, undefined, { limits });
             // A WebSocket upgrade returns a 101 response carrying `webSocket`;
             // returning it verbatim hands the hibernatable socket back to the
-            // eyeball (Cirrus's `/_cirrus/ws` subscription path). Post-upgrade
+            // eyeball (Cirrus's `/_lunora/ws` subscription path). Post-upgrade
             // message invocations run inside the tenant's DO, not back through
             // this dispatcher — see spikes/ws-dispatch for the live validation.
             const response = await userWorker.fetch(request);

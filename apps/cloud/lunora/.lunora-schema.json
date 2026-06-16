@@ -69,6 +69,42 @@
             "relations": {},
             "shardMode": "global"
         },
+        "customers": {
+            "fields": {
+                "createdAt": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "email": {
+                    "kind": "string",
+                    "optional": true
+                },
+                "provider": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "providerCustomerId": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "referenceId": {
+                    "kind": "string",
+                    "optional": false
+                }
+            },
+            "indexes": {
+                "by_reference": {
+                    "fields": ["referenceId"],
+                    "unique": false
+                },
+                "by_provider_customer": {
+                    "fields": ["provider", "providerCustomerId"],
+                    "unique": true
+                }
+            },
+            "relations": {},
+            "shardMode": "global"
+        },
         "deployKeys": {
             "fields": {
                 "createdAt": {
@@ -127,6 +163,10 @@
                     "kind": "string",
                     "optional": true
                 },
+                "cronSpecs": {
+                    "kind": "array",
+                    "optional": true
+                },
                 "bundleHash": {
                     "kind": "string",
                     "optional": true
@@ -173,6 +213,10 @@
                 }
             },
             "indexes": {
+                "by_script": {
+                    "fields": ["scriptName"],
+                    "unique": false
+                },
                 "by_project": {
                     "fields": ["projectId"],
                     "unique": false
@@ -180,6 +224,34 @@
                 "by_kind": {
                     "fields": ["kind"],
                     "unique": false
+                }
+            },
+            "relations": {},
+            "shardMode": "global"
+        },
+        "events": {
+            "fields": {
+                "processedAt": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "provider": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "providerEventId": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "type": {
+                    "kind": "string",
+                    "optional": false
+                }
+            },
+            "indexes": {
+                "by_provider_event": {
+                    "fields": ["provider", "providerEventId"],
+                    "unique": true
                 }
             },
             "relations": {},
@@ -289,6 +361,98 @@
             "relations": {},
             "shardMode": "global"
         },
+        "paymentSessions": {
+            "fields": {
+                "amountMinor": {
+                    "kind": "bigint",
+                    "optional": false
+                },
+                "capturedMinor": {
+                    "kind": "bigint",
+                    "optional": false
+                },
+                "createdAt": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "currency": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "provider": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "providerSessionId": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "referenceId": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "refundedMinor": {
+                    "kind": "bigint",
+                    "optional": false
+                },
+                "state": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "updatedAt": {
+                    "kind": "number",
+                    "optional": false
+                }
+            },
+            "indexes": {
+                "by_reference": {
+                    "fields": ["referenceId"],
+                    "unique": false
+                },
+                "by_provider_session": {
+                    "fields": ["provider", "providerSessionId"],
+                    "unique": true
+                }
+            },
+            "relations": {},
+            "shardMode": "global"
+        },
+        "platformUsage": {
+            "fields": {
+                "createdAt": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "deploymentId": {
+                    "kind": "id",
+                    "optional": true
+                },
+                "kind": {
+                    "kind": "union",
+                    "optional": false
+                },
+                "organizationId": {
+                    "kind": "id",
+                    "optional": false
+                },
+                "periodStart": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "quantity": {
+                    "kind": "number",
+                    "optional": false
+                }
+            },
+            "indexes": {
+                "by_org": {
+                    "fields": ["organizationId"],
+                    "unique": false
+                }
+            },
+            "relations": {},
+            "shardMode": "global"
+        },
         "projects": {
             "fields": {
                 "createdAt": {
@@ -329,37 +493,149 @@
             "relations": {},
             "shardMode": "global"
         },
-        "usageEvents": {
+        "secrets": {
             "fields": {
+                "ciphertext": {
+                    "kind": "string",
+                    "optional": false
+                },
                 "createdAt": {
                     "kind": "number",
                     "optional": false
                 },
-                "deploymentId": {
-                    "kind": "id",
-                    "optional": true
+                "iv": {
+                    "kind": "string",
+                    "optional": false
                 },
-                "kind": {
-                    "kind": "union",
+                "name": {
+                    "kind": "string",
                     "optional": false
                 },
                 "organizationId": {
                     "kind": "id",
                     "optional": false
                 },
-                "periodStart": {
-                    "kind": "number",
+                "projectId": {
+                    "kind": "id",
                     "optional": false
                 },
-                "quantity": {
+                "updatedAt": {
                     "kind": "number",
                     "optional": false
                 }
             },
             "indexes": {
-                "by_org": {
-                    "fields": ["organizationId"],
+                "by_project_name": {
+                    "fields": ["projectId", "name"],
+                    "unique": true
+                },
+                "by_project": {
+                    "fields": ["projectId"],
                     "unique": false
+                }
+            },
+            "relations": {},
+            "shardMode": "global"
+        },
+        "subscriptions": {
+            "fields": {
+                "cancelAtPeriodEnd": {
+                    "kind": "boolean",
+                    "optional": false
+                },
+                "createdAt": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "currentPeriodEnd": {
+                    "kind": "number",
+                    "optional": true
+                },
+                "currentPeriodStart": {
+                    "kind": "number",
+                    "optional": true
+                },
+                "priceId": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "provider": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "providerSubscriptionId": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "quantity": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "referenceId": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "state": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "updatedAt": {
+                    "kind": "number",
+                    "optional": false
+                }
+            },
+            "indexes": {
+                "by_reference": {
+                    "fields": ["referenceId"],
+                    "unique": false
+                },
+                "by_provider_subscription": {
+                    "fields": ["provider", "providerSubscriptionId"],
+                    "unique": true
+                }
+            },
+            "relations": {},
+            "shardMode": "global"
+        },
+        "usageEvents": {
+            "fields": {
+                "createdAt": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "featureId": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "idempotencyKey": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "provider": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "quantity": {
+                    "kind": "number",
+                    "optional": false
+                },
+                "referenceId": {
+                    "kind": "string",
+                    "optional": false
+                },
+                "reportedToProvider": {
+                    "kind": "boolean",
+                    "optional": false
+                }
+            },
+            "indexes": {
+                "by_reference_feature": {
+                    "fields": ["referenceId", "featureId"],
+                    "unique": false
+                },
+                "by_idempotency": {
+                    "fields": ["provider", "idempotencyKey"],
+                    "unique": true
                 }
             },
             "relations": {},
