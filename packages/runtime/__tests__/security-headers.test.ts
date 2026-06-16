@@ -54,6 +54,50 @@ describe("resolveSecurity", () => {
         expect(resolved.headers.enabled).toBe(true);
         expect(resolved.csrf.enabled).toBe(true);
     });
+
+    it("configures CORS from LUNORA_ALLOWED_ORIGINS when code config is absent", () => {
+        expect.hasAssertions();
+
+        const resolved = resolveSecurity(undefined, {
+            LUNORA_ALLOWED_ORIGINS: "https://app.example.com, https://admin.example.com",
+            LUNORA_CORS_ALLOW_CREDENTIALS: "true",
+        });
+
+        expect(resolved.cors.enabled).toBe(true);
+        expect(resolved.cors.allowCredentials).toBe(true);
+        expect(resolved.cors.isAllowed("https://app.example.com")).toBe(true);
+        expect(resolved.cors.isAllowed("https://admin.example.com")).toBe(true);
+        expect(resolved.cors.isAllowed("https://evil.example.com")).toBe(false);
+    });
+
+    it("sanitizes an env wildcard+credentials to wildcard-without-credentials instead of throwing", () => {
+        expect.hasAssertions();
+
+        const resolved = resolveSecurity(undefined, {
+            LUNORA_ALLOWED_ORIGINS: "*",
+            LUNORA_CORS_ALLOW_CREDENTIALS: "true",
+        });
+
+        expect(resolved.cors.enabled).toBe(true);
+        expect(resolved.cors.allowCredentials).toBe(false); // credentials dropped, not thrown
+        expect(resolved.cors.isAllowed("https://anything.example.com")).toBe(true);
+    });
+
+    it("leaves CORS deny-by-default when no env allowlist is set", () => {
+        expect.hasAssertions();
+
+        expect(resolveSecurity(undefined, { LUNORA_CORS_ALLOW_CREDENTIALS: "true" }).cors.enabled).toBe(false);
+        expect(resolveSecurity(undefined, { LUNORA_ALLOWED_ORIGINS: "   ,  " }).cors.enabled).toBe(false);
+    });
+
+    it("lets explicit code CORS config override the env allowlist", () => {
+        expect.hasAssertions();
+
+        const resolved = resolveSecurity({ cors: { allowedOrigins: ["https://code.example.com"] } }, { LUNORA_ALLOWED_ORIGINS: "https://env.example.com" });
+
+        expect(resolved.cors.isAllowed("https://code.example.com")).toBe(true);
+        expect(resolved.cors.isAllowed("https://env.example.com")).toBe(false);
+    });
 });
 
 describe("decorateResponse", () => {

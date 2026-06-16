@@ -86,8 +86,6 @@ interface ResolvedCors {
     enabled: boolean;
     isAllowed: (origin: string) => boolean;
     maxAge: number;
-    /** Raw allowlist when given as an array — surfaced for config-time validation/audit. */
-    rawList: string[] | undefined;
 }
 
 interface ResolvedCsrf {
@@ -174,7 +172,6 @@ const resolveCors = (input: CorsOptions | false | undefined): ResolvedCors => {
         enabled: false,
         isAllowed: () => false,
         maxAge: 600,
-        rawList: undefined,
     };
 
     if (input === undefined || input === false) {
@@ -200,7 +197,6 @@ const resolveCors = (input: CorsOptions | false | undefined): ResolvedCors => {
         enabled: true,
         isAllowed,
         maxAge: input.maxAge ?? 600,
-        rawList,
     };
 };
 
@@ -217,8 +213,50 @@ const resolveCsrf = (input: boolean | CsrfOptions | undefined): ResolvedCsrf => 
 /** Env values that read as "disable this layer" for the `LUNORA_SECURITY_*` opt-out vars. */
 const DISABLED_ENV_VALUES = new Set(["0", "disabled", "false", "no", "off"]);
 
+/** Env values that read as "on" for a boolean-ish flag like `LUNORA_CORS_ALLOW_CREDENTIALS`. */
+const ENABLED_ENV_VALUES = new Set(["1", "enabled", "on", "true", "yes"]);
+
 /** True when an env var is explicitly set to a disable value (`off`, `false`, `0`, …). */
 const isEnvDisabled = (value: unknown): boolean => typeof value === "string" && DISABLED_ENV_VALUES.has(value.trim().toLowerCase());
+
+/** True when an env var is explicitly set to an enable value (`on`, `true`, `1`, …). */
+const isEnvEnabled = (value: unknown): boolean => typeof value === "string" && ENABLED_ENV_VALUES.has(value.trim().toLowerCase());
+
+/**
+ * Build a {@link CorsOptions} from the deployment env when CORS isn't configured
+ * in code. `LUNORA_ALLOWED_ORIGINS` is a comma-separated allowlist (a single `*`
+ * permits any origin); `LUNORA_CORS_ALLOW_CREDENTIALS` echoes credentials.
+ * Returns `undefined` when no allowlist is set, so the secure deny-by-default
+ * stands.
+ *
+ * Unlike the code path (which throws on a wildcard paired with credentials, a
+ * developer error worth failing fast), an env-driven wildcard+credentials is
+ * **sanitized** to wildcard-without-credentials rather than thrown — the
+ * combination is already rejected at build time by `@lunora/config` and flagged
+ * by the DO security audit, and a throw here would 500 every request on a live
+ * worker. Degrading to the safe interpretation keeps the deployment serving.
+ */
+const parseEnvCors = (env: Record<string, unknown> | undefined): CorsOptions | undefined => {
+    const raw = env?.["LUNORA_ALLOWED_ORIGINS"];
+
+    if (typeof raw !== "string") {
+        return undefined;
+    }
+
+    const allowedOrigins = raw
+        .split(",")
+        .map((origin) => origin.trim())
+        .filter((origin) => origin.length > 0);
+
+    if (allowedOrigins.length === 0) {
+        return undefined;
+    }
+
+    const wildcard = allowedOrigins.includes("*");
+    const allowCredentials = !wildcard && isEnvEnabled(env?.["LUNORA_CORS_ALLOW_CREDENTIALS"]);
+
+    return { allowCredentials, allowedOrigins };
+};
 
 /**
  * Normalize the public {@link SecurityOptions} into the resolved form the
@@ -226,19 +264,21 @@ const isEnvDisabled = (value: unknown): boolean => typeof value === "string" && 
  * CORS + credentials) so the misconfiguration surfaces at worker construction
  * rather than silently shipping an unenforceable policy.
  *
- * `env` supplies the deployment-level `LUNORA_SECURITY_HEADERS` /
- * `LUNORA_SECURITY_CSRF` opt-out vars: setting either to `off`/`false`/`0`
- * disables that layer. **Code config wins** — an explicit `security.headers` /
- * `security.csrf` in {@link SecurityOptions} overrides the env knob — so the env
- * var only relaxes the secure default, and the DO security audit (which reads the
+ * `env` supplies the deployment-level security vars: `LUNORA_SECURITY_HEADERS` /
+ * `LUNORA_SECURITY_CSRF` opt out of those layers (set either to `off`/`false`/`0`),
+ * and `LUNORA_ALLOWED_ORIGINS` / `LUNORA_CORS_ALLOW_CREDENTIALS` configure CORS
+ * when it isn't set in code. **Code config wins** — an explicit `security.*` in
+ * {@link SecurityOptions} overrides the matching env knob — so the env var only
+ * relaxes or fills the secure default, and the DO security audit (which reads the
  * same vars) and the running worker stay in agreement.
  */
 const resolveSecurity = (security: SecurityOptions | undefined, env?: Record<string, unknown>): ResolvedSecurity => {
     const headers = security?.headers ?? (isEnvDisabled(env?.["LUNORA_SECURITY_HEADERS"]) ? false : undefined);
     const csrf = security?.csrf ?? (isEnvDisabled(env?.["LUNORA_SECURITY_CSRF"]) ? false : undefined);
+    const cors = security?.cors ?? parseEnvCors(env);
 
     return {
-        cors: resolveCors(security?.cors),
+        cors: resolveCors(cors),
         csrf: resolveCsrf(csrf),
         headers: resolveHeaders(headers),
     };

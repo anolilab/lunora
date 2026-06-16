@@ -2237,12 +2237,20 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
     let resolvedSecurity = resolveSecurity(options.security);
     let securityEnvResolved = false;
 
-    const handle = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<Response> => {
+    // Fold the deployment env into the resolved security config once, on the
+    // first request. `env` isn't available at construction, so the eager resolve
+    // above sees only code config; this picks up the `LUNORA_SECURITY_*` /
+    // `LUNORA_ALLOWED_ORIGINS` env knobs. Must run before the preflight/CSRF
+    // guards in `fetch` (not just inside `handle`), or the very first request per
+    // cold isolate would evaluate them against the env-less config.
+    const ensureSecurityResolved = (env: unknown): void => {
         if (!securityEnvResolved) {
             securityEnvResolved = true;
             resolvedSecurity = resolveSecurity(options.security, (env ?? {}) as Record<string, unknown>);
         }
+    };
 
+    const handle = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<Response> => {
         const url = new URL(request.url);
 
         // Fast-path reject on a declared `Content-Length` over the cap — cheap
@@ -2305,6 +2313,11 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             if (options.passThroughOnException) {
                 context.passThroughOnException();
             }
+
+            // Resolve env-driven security knobs before the preflight/CSRF guards
+            // below read `resolvedSecurity`, so opt-outs and env CORS apply from
+            // the first request per isolate (not just the second onward).
+            ensureSecurityResolved(env);
 
             // CORS preflight is answered up front for allowlisted origins; its
             // own response already carries the `Access-Control-Allow-*` headers,
