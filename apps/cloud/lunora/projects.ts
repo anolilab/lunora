@@ -40,7 +40,7 @@ export const byGithubRepo = query({
  * Create a project in an organization. Per-org slug uniqueness is enforced by
  * the composite `by_org_slug` unique index; the org's live entitlements cap
  * project count (resolved from its synced subscription state, not the static
- * `plan` column — see `cirrus/entitlements.ts`).
+ * `plan` column — see `lunora/entitlements.ts`).
  */
 export const create = mutation({
     args: {

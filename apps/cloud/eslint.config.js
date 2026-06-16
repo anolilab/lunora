@@ -1,6 +1,6 @@
 import { createConfig } from "@anolilab/eslint-config";
 
-// Self-contained flat config for @cirrus/cloud (backend-only control plane).
+// Self-contained flat config for @lunora/cloud (backend-only control plane).
 // Builds on @anolilab/eslint-config; Prettier owns formatting.
 export default createConfig(
     {
@@ -48,11 +48,11 @@ export default createConfig(
                     ],
                 },
             ],
-            // `_id` / `_creationTime` are the public document fields; `__cirrus*` are
+            // `_id` / `_creationTime` are the public document fields; `__lunora*` are
             // internal markers. Accidental dangles are still flagged.
             "no-underscore-dangle": [
                 "error",
-                { allow: ["_id", "_creationTime", "_meta", "__cirrusRef", "__cirrusVisibility", "__cirrusProcedure", "__cirrusCtx", "__cirrusTable"] },
+                { allow: ["_id", "_creationTime", "_meta", "__lunoraRef", "__lunoraVisibility", "__lunoraProcedure", "__lunoraCtx", "__lunoraTable"] },
             ],
         },
     },
@@ -97,7 +97,7 @@ export default createConfig(
     // wrangler reference them by name, so a single-export file is still idiomatically
     // a named export.
     {
-        files: ["cirrus/**/*.ts", "src/**/*.{ts,tsx}"],
+        files: ["lunora/**/*.ts", "src/**/*.{ts,tsx}"],
         rules: {
             "import/exports-last": "off",
             "import/prefer-default-export": "off",
@@ -107,7 +107,7 @@ export default createConfig(
     // untyped `env` / binding values TS sees as non-null, and for query "not
     // found" returns (matching the framework's own example apps).
     {
-        files: ["cirrus/**/*.ts", "src/**/*.{ts,tsx}"],
+        files: ["lunora/**/*.ts", "src/**/*.{ts,tsx}"],
         rules: {
             "@typescript-eslint/no-unnecessary-condition": "off",
             "unicorn/no-null": "off",

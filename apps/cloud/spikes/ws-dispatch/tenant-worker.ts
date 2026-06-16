@@ -1,6 +1,6 @@
 /**
  * Spike tenant Worker (CLOUD-PLAN.md §6 risk #3) — a minimal hibernatable-
- * WebSocket Durable Object, mirroring the exact Cloudflare primitive `@cirrus/do`'s
+ * WebSocket Durable Object, mirroring the exact Cloudflare primitive `@lunora/do`'s
  * `ShardDO` uses for subscriptions (`state.acceptWebSocket` + the
  * `webSocketMessage`/`webSocketClose` hibernation handlers). Deployed INTO a
  * Workers-for-Platforms dispatch namespace so the spike can drive it through the

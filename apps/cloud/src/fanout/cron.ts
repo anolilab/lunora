@@ -3,7 +3,7 @@
  * `triggers.crons` for Workers uploaded into a Workers-for-Platforms dispatch
  * namespace, so tenant cron jobs never fire on their own. The control plane runs
  * an every-minute trigger and fans ticks out to each tenant whose cron is due,
- * POSTing the tenant runtime's `/_cirrus/scheduled` endpoint through the
+ * POSTing the tenant runtime's `/_lunora/scheduled` endpoint through the
  * dispatcher. This module is the pure core: parse + match standard 5-field cron
  * expressions and compute which tenant ticks are due. The I/O (reading live
  * targets, dispatching) is injected so it stays unit-testable.
@@ -11,7 +11,7 @@
 
 /** A live tenant deployment that declares cron expressions. */
 export interface CronTarget {
-    /** The tenant's per-deployment admin token (gates `/_cirrus/scheduled`). */
+    /** The tenant's per-deployment admin token (gates `/_lunora/scheduled`). */
     adminToken: string;
     /** The tenant's compiled cron expressions. */
     cronSpecs: ReadonlyArray<string>;

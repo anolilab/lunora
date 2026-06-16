@@ -5,11 +5,11 @@ import { dirname, join } from "node:path";
 import type { CliConfig, ConfigStore } from "./config";
 
 /**
- * File-backed {@link ConfigStore} at `~/.cirrus/cloud.json` — the default store
+ * File-backed {@link ConfigStore} at `~/.lunora/cloud.json` — the default store
  * for the deploy CLI (which runs in Node, not the Worker). A missing/garbled
  * file reads as empty config.
  */
-export const createFileConfigStore = (path: string = join(homedir(), ".cirrus", "cloud.json")): ConfigStore => {
+export const createFileConfigStore = (path: string = join(homedir(), ".lunora", "cloud.json")): ConfigStore => {
     return {
         read: async () => {
             try {

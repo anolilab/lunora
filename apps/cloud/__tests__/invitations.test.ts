@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import type { MutationCtx } from "../cirrus/_generated/server";
-import { accept } from "../cirrus/invitations";
+import type { MutationCtx } from "../lunora/_generated/server";
+import { accept } from "../lunora/invitations";
 import { sha256Hex } from "../src/deploy/keys";
 
 type Row = Record<string, unknown>;
