@@ -32,7 +32,15 @@ import { internal } from "./_generated/api.js";
  *   crons.daily(name, { hourUTC: 9, minuteUTC: 0 }, fn, args)  // daily at a UTC time
  *   crons.weekly(name, { dayOfWeek: "monday", hourUTC: 9, minuteUTC: 0 }, fn, args)
  *   crons.monthly(name, { day: 1, hourUTC: 9, minuteUTC: 0 }, fn, args)
- *   crons.cron(name, "0 * * * *", fn, args)                    // raw cron escape hatch
+ *   crons.cron(name, "0 9 * * 1L", fn, args)                   // raw cron escape hatch (full cron-parser grammar)
+ *
+ * The target can be an \`internal.<file>.<fn>\` function reference (one-shot
+ * dispatch) OR a durable workflow via the generated \`workflows.<name>\`
+ * reference — targeting a workflow starts a fresh, multi-step, retried instance
+ * on each fire (the args, type-checked against the workflow's \`params\`, become
+ * its \`params\`):
+ *   import { workflows } from "./_generated/api.js";
+ *   crons.daily(name, { hourUTC: 9, minuteUTC: 0 }, workflows.digestPipeline, args)
  */
 const crons = cronJobs();
 

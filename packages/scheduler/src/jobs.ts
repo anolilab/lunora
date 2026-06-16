@@ -15,11 +15,22 @@
  * export default crons;
  * ```
  *
+ * A job's target may be a function reference (a one-shot dispatch, above) or a
+ * durable workflow — passing the generated `workflows.&lt;name>` reference starts a
+ * fresh, multi-step, retried workflow INSTANCE on each fire, and the args are
+ * type-checked against the workflow's `params`:
+ *
+ * ```ts
+ * import { workflows } from "./_generated/api";
+ * crons.daily("nightly digest", { hourUTC: 9, minuteUTC: 0 }, workflows.digestPipeline, { region: "eu" });
+ * ```
+ *
  * `@lunora/codegen` discovers the registered jobs and emits both the
  * wrangler.jsonc schedule array and a dispatcher map the runtime's
  * `scheduled()` handler consumes — the user never edits wrangler by hand.
  */
-import type { FunctionReference } from "./types";
+import type { CronTarget, CronTargetArgs } from "./types";
+import { isWorkflowReference } from "./types";
 import { assertValidCronExpression } from "./validate-cron";
 
 /** Sub-day recurrence. Exactly one unit must be provided. */
@@ -55,14 +66,27 @@ interface MonthlySchedule extends DailySchedule {
  * and the runtime dispatcher — keep the shape stable across all three.
  */
 interface CronJob {
-    /** Args forwarded to the function on each fire. */
+    /** Args forwarded to the function (or, for a workflow target, used as its `params`) on each fire. */
     args: Record<string, unknown>;
     /** Compiled standard cron expression, e.g. `"0 9 * * *"`. */
     cron: string;
-    /** `__lunoraRef` of the target function. */
-    functionPath: string;
+
+    /**
+     * `__lunoraRef` of the target function. Present for a function target;
+     * absent when the job targets a workflow ({@link CronJob.workflow} instead).
+     */
+    functionPath?: string;
     /** Human-readable identifier — must be unique within one `cronJobs()`. */
     name: string;
+
+    /**
+     * Set when the job targets a durable workflow rather than a function: the
+     * workflow's stable name (`defineWorkflow({ name })`) when one was declared,
+     * otherwise `""`. `@lunora/codegen` statically resolves the concrete
+     * `lunora/workflows.ts` export + its `WORKFLOW_*` binding for the emitted
+     * dispatch map, so this authoring-time value is informational only.
+     */
+    workflow?: string;
 }
 
 const WEEKDAY_INDEX: Record<WeeklySchedule["dayOfWeek"], number> = {
@@ -176,18 +200,22 @@ const compileCronSchedule = (kind: CronScheduleKind, schedule: DailySchedule | I
  * surface at definition time rather than at codegen.
  */
 interface CronJobsBuilder {
-    /** Raw cron expression escape hatch (5- or 6-field). */
-    cron: (name: string, cronExpr: string, function_: FunctionReference, args?: Record<string, unknown>) => CronJobsBuilder;
-    /** Daily at `hourUTC:minuteUTC` (UTC). */
-    daily: (name: string, schedule: DailySchedule, function_: FunctionReference, args?: Record<string, unknown>) => CronJobsBuilder;
-    /** Every `{ seconds | minutes | hours }`. */
-    interval: (name: string, schedule: IntervalSchedule, function_: FunctionReference, args?: Record<string, unknown>) => CronJobsBuilder;
+    /**
+     * Raw cron expression escape hatch (5- or 6-field, full cron-parser grammar).
+     * The target may be a function (`internal.file.fn`) or a durable workflow
+     * (`workflows.&lt;name>`); a workflow's `args` are inferred from its `params`.
+     */
+    cron: <T extends CronTarget>(name: string, cronExpr: string, target: T, args?: CronTargetArgs<T>) => CronJobsBuilder;
+    /** Daily at `hourUTC:minuteUTC` (UTC). The target may be a function or a durable workflow (`workflows.&lt;name>`). */
+    daily: <T extends CronTarget>(name: string, schedule: DailySchedule, target: T, args?: CronTargetArgs<T>) => CronJobsBuilder;
+    /** Every `{ seconds | minutes | hours }`. The target may be a function or a durable workflow (`workflows.&lt;name>`). */
+    interval: <T extends CronTarget>(name: string, schedule: IntervalSchedule, target: T, args?: CronTargetArgs<T>) => CronJobsBuilder;
     /** Snapshot of the registered jobs, in declaration order. */
     jobs: () => ReadonlyArray<CronJob>;
-    /** Monthly on `day` at `hourUTC:minuteUTC` (UTC). */
-    monthly: (name: string, schedule: MonthlySchedule, function_: FunctionReference, args?: Record<string, unknown>) => CronJobsBuilder;
-    /** Weekly on `dayOfWeek` at `hourUTC:minuteUTC` (UTC). */
-    weekly: (name: string, schedule: WeeklySchedule, function_: FunctionReference, args?: Record<string, unknown>) => CronJobsBuilder;
+    /** Monthly on `day` at `hourUTC:minuteUTC` (UTC). The target may be a function or a durable workflow (`workflows.&lt;name>`). */
+    monthly: <T extends CronTarget>(name: string, schedule: MonthlySchedule, target: T, args?: CronTargetArgs<T>) => CronJobsBuilder;
+    /** Weekly on `dayOfWeek` at `hourUTC:minuteUTC` (UTC). The target may be a function or a durable workflow (`workflows.&lt;name>`). */
+    weekly: <T extends CronTarget>(name: string, schedule: WeeklySchedule, target: T, args?: CronTargetArgs<T>) => CronJobsBuilder;
 }
 
 /**
@@ -199,7 +227,7 @@ const cronJobs = (): CronJobsBuilder => {
     const jobs: CronJob[] = [];
     const seen = new Set<string>();
 
-    const register = (name: string, cron: string, function_: FunctionReference, args: Record<string, unknown> | undefined): void => {
+    const register = (name: string, cron: string, target: CronTarget, args: Record<string, unknown> | undefined): void => {
         if (typeof name !== "string" || name.trim() === "") {
             throw new Error(`@lunora/scheduler: cron job name must be a non-empty string`);
         }
@@ -208,15 +236,28 @@ const cronJobs = (): CronJobsBuilder => {
             throw new Error(`@lunora/scheduler: duplicate cron job name "${name}" — names must be unique within one cronJobs()`);
         }
 
+        // Workflow target — starts a durable workflow INSTANCE per fire (args ⇒
+        // its `params`). The concrete `lunora/workflows.ts` export + `WORKFLOW_*`
+        // binding is resolved statically by `@lunora/codegen`; the builder only
+        // records the optional stable-name override for `.jobs()` introspection.
+        if (isWorkflowReference(target)) {
+            assertValidCronExpression(cron, `cron expression for job "${name}"`);
+
+            seen.add(name);
+            jobs.push({ args: args ?? {}, cron, name, workflow: typeof target.name === "string" ? target.name : "" });
+
+            return;
+        }
+
         // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- guards untrusted JS callers despite the required type
-        if (!function_ || typeof function_.__lunoraRef !== "string") {
-            throw new Error(`@lunora/scheduler: cron job "${name}" requires a function reference (e.g. internal.email.digest)`);
+        if (!target || typeof target.__lunoraRef !== "string") {
+            throw new Error(`@lunora/scheduler: cron job "${name}" requires a function reference (e.g. internal.email.digest) or a workflow reference`);
         }
 
         assertValidCronExpression(cron, `cron expression for job "${name}"`);
 
         seen.add(name);
-        jobs.push({ args: args ?? {}, cron, functionPath: function_.__lunoraRef, name });
+        jobs.push({ args: args ?? {}, cron, functionPath: target.__lunoraRef, name });
     };
 
     const builder: CronJobsBuilder = {

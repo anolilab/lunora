@@ -152,6 +152,7 @@ const buildIntrospectionAdminRoutes = (deps: IntrospectionAdminRouteDeps): Recor
                         functionPath: dispatch.functionPath,
                         name: dispatch.name,
                         shardKey: dispatch.shardKey,
+                        workflow: dispatch.workflow,
                     };
                 }),
             )

@@ -16,6 +16,43 @@ export interface FunctionReference {
 export type ArgsOf<F extends FunctionReference> = F extends { _args?: infer A } ? A : Record<string, unknown>;
 
 /**
+ * Typed reference to a Lunora durable workflow — either the generated
+ * `workflows.&lt;name>` reference object (`_generated/api.ts`, which carries the
+ * `WORKFLOW_*` binding + export name) or, structurally, a `defineWorkflow()`
+ * result imported directly. Both are matched by the `isLunoraWorkflow` brand and
+ * carry the workflow's `params` in the phantom `__params`, so a `cronJobs()`
+ * registration infers them.
+ *
+ * Declared structurally here so `@lunora/scheduler` can let a `cronJobs()`
+ * builder target a workflow without depending on `@lunora/workflow` (and so the
+ * generated `workflows.*` object needs no `@lunora/scheduler` import — it
+ * matches structurally). A cron whose target is a {@link WorkflowReference}
+ * starts a new workflow INSTANCE on each fire (the args become its `params`)
+ * instead of dispatching a one-shot function. `@lunora/codegen` resolves the
+ * concrete `lunora/workflows.ts` export statically; the runtime brand here is
+ * the authoring-time guard.
+ */
+export interface WorkflowReference<Params = Record<string, unknown>> {
+    /** Phantom carrier for the workflow's `params` type — drives `cronJobs()` arg inference. Never read at runtime. */
+    readonly __params?: Params;
+    /** The `WORKFLOW_*` binding name (present on a generated `workflows.&lt;name>` ref). */
+    readonly binding?: string;
+    readonly isLunoraWorkflow: true;
+    /** The workflow's export/stable name (present on a generated ref; a `defineWorkflow({ name })` override otherwise). */
+    readonly name?: string;
+}
+
+/** A cron job's target: either a one-shot function dispatch or a durable workflow start. */
+export type CronTarget = FunctionReference | WorkflowReference;
+
+/** The arguments a cron's target accepts: a workflow's inferred `params`, else an open record (function args aren't inferred). */
+export type CronTargetArgs<T extends CronTarget> = T extends WorkflowReference<infer Params> ? Params : Record<string, unknown>;
+
+/** Narrow a {@link CronTarget} to a {@link WorkflowReference} by its runtime brand. */
+export const isWorkflowReference = (target: unknown): target is WorkflowReference =>
+    typeof target === "object" && target !== null && (target as { isLunoraWorkflow?: unknown }).isLunoraWorkflow === true;
+
+/**
  * Per-job retry policy. Wired into the SchedulerDO's existing attempts/backoff
  * machinery. When omitted, the DO falls back to its built-in defaults
  * (`maxAttempts: 5`, `backoff: "exponential"`, `baseMs: 30_000`) so existing

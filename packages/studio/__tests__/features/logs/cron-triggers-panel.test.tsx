@@ -1,6 +1,6 @@
 import type { CronJobInfo } from "@lunora/client";
 import { LunoraProvider } from "@lunora/react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactElement, ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
@@ -14,6 +14,8 @@ const JOBS: CronJobInfo[] = [
     { args: {}, cron: "0 9 * * *", functionPath: "report:daily", name: "daily digest" },
     { args: { tenant: "acme" }, cron: "*/5 * * * *", functionPath: "presence:clear", name: "clear presence", shardKey: "acme" },
 ];
+
+const WORKFLOW_JOBS: CronJobInfo[] = [{ args: { region: "eu" }, cron: "0 9 * * *", name: "nightly digest", workflow: "WORKFLOW_DIGEST" }];
 
 const loadEmpty = async (): Promise<CronJobInfo[]> => [];
 
@@ -71,5 +73,60 @@ describe("cronTriggersPanel", () => {
         const error = await screen.findByTestId("cron-error");
 
         expect(error.textContent).toContain("boom");
+    });
+
+    it("labels a workflow target with a workflow badge and its binding", async () => {
+        expect.assertions(2);
+
+        const loadCronJobs = vi.fn<() => Promise<CronJobInfo[]>>(async () => WORKFLOW_JOBS);
+
+        render(withProvider(createMockClient(), <CronTriggersPanel loadCronJobs={loadCronJobs} />));
+
+        await screen.findByTestId("cron-table");
+
+        expect(screen.getByText("workflow")).toBeDefined();
+        expect(screen.getByText("WORKFLOW_DIGEST")).toBeDefined();
+    });
+
+    it("runs a cron job on demand and shows it ran", async () => {
+        expect.assertions(2);
+
+        const loadCronJobs = vi.fn<() => Promise<CronJobInfo[]>>(async () => JOBS);
+        const runCronJob = vi.fn<(name: string) => Promise<{ name: string; ran: boolean }>>(async (name: string) => {
+            return { name, ran: true };
+        });
+
+        render(withProvider(createMockClient(), <CronTriggersPanel loadCronJobs={loadCronJobs} runCronJob={runCronJob} />));
+
+        await screen.findByTestId("cron-table");
+
+        // ConfirmButton: first click reveals confirm, second fires.
+        fireEvent.click(screen.getByTestId("cron-run-daily digest"));
+        fireEvent.click(screen.getByTestId("cron-run-daily digest-confirm"));
+
+        await screen.findByTestId("cron-ran-daily digest");
+
+        expect(runCronJob).toHaveBeenCalledWith("daily digest");
+        expect(runCronJob).toHaveBeenCalledTimes(1);
+    });
+
+    it("surfaces a run error inline without affecting other rows", async () => {
+        expect.assertions(1);
+
+        const loadCronJobs = vi.fn<() => Promise<CronJobInfo[]>>(async () => JOBS);
+        const runCronJob = vi.fn<(name: string) => Promise<{ name: string; ran: boolean }>>(async () => {
+            throw new Error("dispatch failed");
+        });
+
+        render(withProvider(createMockClient(), <CronTriggersPanel loadCronJobs={loadCronJobs} runCronJob={runCronJob} />));
+
+        await screen.findByTestId("cron-table");
+
+        fireEvent.click(screen.getByTestId("cron-run-clear presence"));
+        fireEvent.click(screen.getByTestId("cron-run-clear presence-confirm"));
+
+        await waitFor(() => {
+            expect(screen.getByTestId("cron-run-error-clear presence").textContent).toContain("dispatch failed");
+        });
     });
 });

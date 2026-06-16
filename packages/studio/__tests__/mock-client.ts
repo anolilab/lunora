@@ -2,7 +2,6 @@ import type {
     AuthPage,
     AuthSession,
     AuthUser,
-    LunoraClient,
     CronJobInfo,
     FunctionDescriptor,
     FunctionReference,
@@ -10,6 +9,7 @@ import type {
     GlobalFilterClause,
     GlobalTableInfo,
     GlobalTablePage,
+    LunoraClient,
     ScheduleRecord,
     ShardTrafficResult,
     StorageListPage,
@@ -61,6 +61,7 @@ interface MockClientHooks {
     removeAuthUser: ReturnType<typeof vi.fn>;
     revokeAuthSession: ReturnType<typeof vi.fn>;
     revokeAuthUserSessions: ReturnType<typeof vi.fn>;
+    runCronJob: ReturnType<typeof vi.fn>;
     setAuthUserPassword: ReturnType<typeof vi.fn>; // gitleaks:allow -- mock method name, not a secret
     setAuthUserRole: ReturnType<typeof vi.fn>;
     shardTraffic: ReturnType<typeof vi.fn>;
@@ -110,6 +111,7 @@ interface MockClientImpls {
     query?: Impl;
     queryVectorIndex?: (options: { name: string; text: string; topK?: number }) => VectorQueryMatch[];
     readGlobalTablePage?: (options: { filters?: GlobalFilterClause[]; limit?: number; offset?: number; table: string }) => GlobalTablePage;
+    runCronJob?: (name: string) => { name: string; ran: boolean };
     shardTraffic?: (table: string) => ShardTrafficResult;
     signedStorageUrl?: (key: string) => string;
 }
@@ -125,6 +127,9 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
     const getCronJobs = vi.fn<() => Promise<CronJobInfo[]>>(async () => impls.getCronJobs?.() ?? []);
     const cancelScheduledJob = vi.fn<(id: string) => Promise<{ cancelled: boolean }>>(
         async (id: string) => impls.cancelScheduledJob?.(id) ?? { cancelled: true },
+    );
+    const runCronJob = vi.fn<(name: string) => Promise<{ name: string; ran: boolean }>>(
+        async (name: string) => impls.runCronJob?.(name) ?? { name, ran: true },
     );
     const listStorageBuckets = vi.fn<() => Promise<string[]>>(async () => impls.listStorageBuckets?.() ?? []);
     const listStorageObjects = vi.fn<(options?: { bucket?: string; cursor?: string; limit?: number; prefix?: string }) => Promise<StorageListPage>>(
@@ -308,6 +313,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         query,
         queryVectorIndex,
         readGlobalTablePage,
+        runCronJob,
         shardTraffic,
         signedStorageUrl,
         subscribe,
@@ -340,6 +346,7 @@ export const createMockClient = (impls: MockClientImpls = {}): MockClientHooks =
         query,
         queryVectorIndex,
         readGlobalTablePage,
+        runCronJob,
         shardTraffic,
         signedStorageUrl,
         subscribe,

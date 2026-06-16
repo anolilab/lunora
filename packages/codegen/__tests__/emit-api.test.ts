@@ -7,9 +7,38 @@
 import { describe, expect, it } from "vitest";
 
 import { emitApi, emitFunctions } from "../src/emit";
-import type { FunctionIR } from "../src/ir";
+import type { FunctionIR, WorkflowIR } from "../src/ir";
 
 describe("emitApi", () => {
+    it("emits a typed `workflows.*` reference object when the project declares workflows", () => {
+        expect.assertions(5);
+
+        const workflows: ReadonlyArray<WorkflowIR> = [
+            { bindingName: "WORKFLOW_DIGEST_PIPELINE", className: "DigestPipelineWorkflow", exportName: "digestPipeline", name: "digest-pipeline" },
+        ];
+
+        const rendered = emitApi([], workflows);
+
+        // Imports the workflow definitions so params can be inferred from `__params`.
+        expect(rendered).toContain('import type * as lunoraWorkflowDefinitions from "../workflows.js";');
+        // Typed reference carries the inferred params.
+        // eslint-disable-next-line no-secrets/no-secrets -- generated TS generic, not a credential
+        expect(rendered).toContain("digestPipeline: WorkflowReference<WorkflowParamsOf<typeof lunoraWorkflowDefinitions.digestPipeline>>;");
+        // Runtime object carries the WORKFLOW_* binding + name.
+        expect(rendered).toContain('digestPipeline: { isLunoraWorkflow: true, binding: "WORKFLOW_DIGEST_PIPELINE", name: "digestPipeline" },');
+        expect(rendered).toContain("export const workflows: WorkflowsRef = {");
+        expect(rendered).toContain("export interface WorkflowsRef {");
+    });
+
+    it("omits the `workflows` block entirely when no workflows are declared", () => {
+        expect.assertions(2);
+
+        const rendered = emitApi([]);
+
+        expect(rendered).not.toContain("WorkflowsRef");
+        expect(rendered).not.toContain("lunoraWorkflowDefinitions");
+    });
+
     it("rewrites `import('./_generated/X')` qualifiers to `import('./X')` so paths resolve inside _generated/", () => {
         expect.assertions(2);
 

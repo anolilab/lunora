@@ -203,7 +203,13 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     const functions = discoverFunctions(project, lunoraDirectory);
     const httpRoutes = discoverHttpRoutes(project, lunoraDirectory);
     const migrations = discoverMigrations(project, lunoraDirectory);
-    const crons = discoverCrons(project, lunoraDirectory);
+
+    // Workflows declared via `defineWorkflow` exports in `lunora/workflows.ts`.
+    // Discovered before crons so a `cronJobs()` registration can target a
+    // workflow by its export name (the cron then starts a durable instance per
+    // fire instead of dispatching a one-shot function).
+    const workflows = discoverWorkflows(project, lunoraDirectory);
+    const crons = discoverCrons(project, lunoraDirectory, workflows);
 
     // Static advisories (unindexed FKs, redundant indexes, unknown index/relation
     // fields, filter-without-index, …). Cheap, derived from the schema + the
@@ -219,12 +225,10 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     // the `container_*` advisor lints below.
     const containers = discoverContainers(project, lunoraDirectory);
 
-    // Workflows declared via `defineWorkflow` exports in `lunora/workflows.ts`.
-    // Gates `_generated/workflows.ts` (the WorkflowEntrypoint classes) + the
-    // typed `ctx.workflows` on Mutation/Action contexts, and feeds the config
-    // layer's wrangler reconciliation (the `workflows[]` array — NOT a Durable
-    // Object binding or migration; workflows are not DOs).
-    const workflows = discoverWorkflows(project, lunoraDirectory);
+    // Workflows (`_generated/workflows.ts` — the WorkflowEntrypoint classes — the
+    // typed `ctx.workflows` on Mutation/Action contexts, and the config layer's
+    // wrangler reconciliation of the `workflows[]` array) are discovered above,
+    // ahead of crons, so a cron may target one.
 
     const advisories =
         options.lint === false
@@ -300,7 +304,7 @@ export const runCodegen = (options: CodegenOptions): CodegenResult => {
     });
 
     const dataModelContent = emitDataModel(schema);
-    const apiContent = emitApi(functions);
+    const apiContent = emitApi(functions, workflows);
     const serverContent = emitServer({
         containers,
         hasAi,

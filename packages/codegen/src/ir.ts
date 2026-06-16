@@ -183,10 +183,19 @@ export interface CronJobIR {
     args: Record<string, unknown>;
     /** Compiled standard cron expression, e.g. `"0 9 * * *"`. */
     cron: string;
-    /** Target function ref `namespace:fn`. */
-    functionPath: string;
+    /** Target function ref `namespace:fn`. Present for a function target; absent when {@link CronJobIR.workflow} is set. */
+    functionPath?: string;
     /** Unique, human-readable job name. */
     name: string;
+
+    /**
+     * Set when the job targets a durable workflow (a `lunora/workflows.ts`
+     * export) instead of a function: the workflow's `WORKFLOW_*` binding name
+     * plus its export name. On each fire the worker starts a new workflow
+     * INSTANCE (the {@link CronJobIR.args} become its `params`) rather than
+     * dispatching a one-shot function.
+     */
+    workflow?: { binding: string; exportName: string };
 }
 
 /**

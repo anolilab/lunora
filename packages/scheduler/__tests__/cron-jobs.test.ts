@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import type { CronScheduleKind } from "../src/jobs";
 import { compileCronSchedule, cronJobs } from "../src/jobs";
-import type { FunctionReference } from "../src/types";
+import type { FunctionReference, WorkflowReference } from "../src/types";
 
 interface ParityCase {
     expected: string;
@@ -58,6 +58,30 @@ describe("cronJobs", () => {
         expect(() => crons.cron("bad", "every minute", fnRef("foo.bar"))).toThrow(/invalid cron expression/u);
     });
 
+    it("accepts the full cron grammar via cron-parser (names, lists, ranges, steps, L/#, seconds)", () => {
+        expect.assertions(6);
+
+        const crons = cronJobs();
+
+        // Named months/weekdays, lists, ranges, and steps.
+        crons.cron("named", "0 0 * JAN-MAR MON,FRI", fnRef("a.b"));
+        // Quartz-style last-weekday-of-month.
+        crons.cron("last-friday", "0 9 * * 5L", fnRef("a.c"));
+        // Nth weekday of the month.
+        crons.cron("second-monday", "0 0 * * 1#2", fnRef("a.d"));
+        // 6-field, seconds-leading.
+        crons.cron("with-seconds", "*/15 * * * * *", fnRef("a.e"));
+
+        expect(crons.jobs()).toHaveLength(4);
+        expect(crons.jobs()[0]?.cron).toBe("0 0 * JAN-MAR MON,FRI");
+        expect(crons.jobs()[1]?.cron).toBe("0 9 * * 5L");
+        expect(crons.jobs()[2]?.cron).toBe("0 0 * * 1#2");
+
+        // Still rejects clearly malformed expressions and prose.
+        expect(() => crons.cron("garbage", "0 0 0", fnRef("a.f"))).toThrow(/invalid cron expression/u);
+        expect(() => crons.cron("prose", "hourly please", fnRef("a.g"))).toThrow(/invalid cron expression/u);
+    });
+
     it("defaults args to an empty object and records the function path", () => {
         expect.assertions(1);
 
@@ -97,6 +121,36 @@ describe("cronJobs", () => {
         expect(() => crons.interval("dup", { minutes: 2 }, fnRef("a.c"))).toThrow(/duplicate cron job name/u);
         // @ts-expect-error - intentional misuse: missing function reference
         expect(() => crons.interval("nofn", { minutes: 1 }, undefined)).toThrow(/requires a function reference/u);
+    });
+
+    it("records a workflow target (no functionPath) when passed a workflow reference", () => {
+        expect.assertions(2);
+
+        const crons = cronJobs();
+
+        // Shaped like the generated `workflows.<name>` reference object.
+        crons.daily("nightly digest", { hourUTC: 9, minuteUTC: 0 }, { binding: "WORKFLOW_DIGEST", isLunoraWorkflow: true, name: "digest" }, { region: "eu" });
+        crons.interval("anon flow", { minutes: 30 }, { isLunoraWorkflow: true });
+
+        expect(crons.jobs()[0]).toEqual({ args: { region: "eu" }, cron: "0 9 * * *", name: "nightly digest", workflow: "digest" });
+        // A workflow with no stable-name override records an empty marker (codegen resolves the real binding).
+        expect(crons.jobs()[1]).toEqual({ args: {}, cron: "*/30 * * * *", name: "anon flow", workflow: "" });
+    });
+
+    it("infers a workflow target's args from its params type", () => {
+        expect.assertions(1);
+
+        const crons = cronJobs();
+        // A generated `workflows.<name>` ref carries the workflow's params in `__params`.
+        const digest: WorkflowReference<{ region: string }> = { binding: "WORKFLOW_DIGEST", isLunoraWorkflow: true, name: "digest" };
+
+        crons.daily("digest", { hourUTC: 9, minuteUTC: 0 }, digest, { region: "eu" });
+        // @ts-expect-error -- `region` must be a string (inferred from the workflow's params)
+        crons.daily("typo", { hourUTC: 9, minuteUTC: 0 }, digest, { region: 123 });
+        // @ts-expect-error -- `reglon` is not a declared param
+        crons.daily("typo2", { hourUTC: 9, minuteUTC: 0 }, digest, { reglon: "eu" });
+
+        expect(crons.jobs()).toHaveLength(3);
     });
 
     it("is chainable across builder methods", () => {
