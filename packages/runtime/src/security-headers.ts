@@ -214,17 +214,33 @@ const resolveCsrf = (input: boolean | CsrfOptions | undefined): ResolvedCsrf => 
     return { enabled: true, trustedOrigins: options.trustedOrigins ?? [] };
 };
 
+/** Env values that read as "disable this layer" for the `LUNORA_SECURITY_*` opt-out vars. */
+const DISABLED_ENV_VALUES = new Set(["0", "disabled", "false", "no", "off"]);
+
+/** True when an env var is explicitly set to a disable value (`off`, `false`, `0`, …). */
+const isEnvDisabled = (value: unknown): boolean => typeof value === "string" && DISABLED_ENV_VALUES.has(value.trim().toLowerCase());
+
 /**
  * Normalize the public {@link SecurityOptions} into the resolved form the
  * request path applies. Pure — throws only on an invalid combination (wildcard
  * CORS + credentials) so the misconfiguration surfaces at worker construction
  * rather than silently shipping an unenforceable policy.
+ *
+ * `env` supplies the deployment-level `LUNORA_SECURITY_HEADERS` /
+ * `LUNORA_SECURITY_CSRF` opt-out vars: setting either to `off`/`false`/`0`
+ * disables that layer. **Code config wins** — an explicit `security.headers` /
+ * `security.csrf` in {@link SecurityOptions} overrides the env knob — so the env
+ * var only relaxes the secure default, and the DO security audit (which reads the
+ * same vars) and the running worker stay in agreement.
  */
-const resolveSecurity = (security: SecurityOptions | undefined): ResolvedSecurity => {
+const resolveSecurity = (security: SecurityOptions | undefined, env?: Record<string, unknown>): ResolvedSecurity => {
+    const headers = security?.headers ?? (isEnvDisabled(env?.["LUNORA_SECURITY_HEADERS"]) ? false : undefined);
+    const csrf = security?.csrf ?? (isEnvDisabled(env?.["LUNORA_SECURITY_CSRF"]) ? false : undefined);
+
     return {
         cors: resolveCors(security?.cors),
-        csrf: resolveCsrf(security?.csrf),
-        headers: resolveHeaders(security?.headers),
+        csrf: resolveCsrf(csrf),
+        headers: resolveHeaders(headers),
     };
 };
 

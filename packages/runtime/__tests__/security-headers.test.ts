@@ -27,6 +27,33 @@ describe("resolveSecurity", () => {
 
         expect(() => resolveSecurity({ cors: { allowedOrigins: ["*"] } })).not.toThrow();
     });
+
+    it("honors the LUNORA_SECURITY_HEADERS / LUNORA_SECURITY_CSRF env opt-outs", () => {
+        expect.hasAssertions();
+
+        const resolved = resolveSecurity(undefined, { LUNORA_SECURITY_CSRF: "off", LUNORA_SECURITY_HEADERS: "false" });
+
+        expect(resolved.headers.enabled).toBe(false);
+        expect(resolved.csrf.enabled).toBe(false);
+    });
+
+    it("lets explicit code config override the env opt-out", () => {
+        expect.hasAssertions();
+
+        const resolved = resolveSecurity({ csrf: true, headers: true }, { LUNORA_SECURITY_CSRF: "off", LUNORA_SECURITY_HEADERS: "off" });
+
+        expect(resolved.headers.enabled).toBe(true);
+        expect(resolved.csrf.enabled).toBe(true);
+    });
+
+    it("ignores non-disable env values", () => {
+        expect.hasAssertions();
+
+        const resolved = resolveSecurity(undefined, { LUNORA_SECURITY_CSRF: "on", LUNORA_SECURITY_HEADERS: "1" });
+
+        expect(resolved.headers.enabled).toBe(true);
+        expect(resolved.csrf.enabled).toBe(true);
+    });
 });
 
 describe("decorateResponse", () => {

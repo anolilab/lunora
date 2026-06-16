@@ -2231,10 +2231,18 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
     // Resolve the secure-by-default HTTP edge once at construction. Throws here
     // (rather than per request) on an unenforceable combination such as a
-    // wildcard CORS origin paired with credentials.
-    const resolvedSecurity = resolveSecurity(options.security);
+    // wildcard CORS origin paired with credentials. The `env`-aware re-resolve
+    // (honoring the `LUNORA_SECURITY_*` opt-out vars) happens lazily on the first
+    // request — env is per-invocation, but deployment-stable, so it is memoized.
+    let resolvedSecurity = resolveSecurity(options.security);
+    let securityEnvResolved = false;
 
     const handle = async (request: Request, env: unknown, context: ExecutionContextLike): Promise<Response> => {
+        if (!securityEnvResolved) {
+            securityEnvResolved = true;
+            resolvedSecurity = resolveSecurity(options.security, (env ?? {}) as Record<string, unknown>);
+        }
+
         const url = new URL(request.url);
 
         // Fast-path reject on a declared `Content-Length` over the cap — cheap
