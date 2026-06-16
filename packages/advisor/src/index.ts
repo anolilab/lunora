@@ -23,6 +23,7 @@ import hyperdriveOutsideAction from "./lints/static/hyperdrive-outside-action";
 import indexReferencesUnknownField from "./lints/static/index-references-unknown-field";
 import maskUncoveredPiiColumn from "./lints/static/mask-uncovered-pii-column";
 import nondeterministicQueryMutation from "./lints/static/nondeterministic-query-mutation";
+import policyReferencesUnknownTable from "./lints/static/policy-references-unknown-table";
 import publicArgumentUsesAny from "./lints/static/public-argument-uses-any";
 import publicMutationWithoutRatelimit from "./lints/static/public-mutation-without-ratelimit";
 import relationReferencesUnknownField from "./lints/static/relation-references-unknown-field";
@@ -63,6 +64,7 @@ export { default as hyperdriveOutsideAction } from "./lints/static/hyperdrive-ou
 export { default as indexReferencesUnknownField } from "./lints/static/index-references-unknown-field";
 export { default as maskUncoveredPiiColumn } from "./lints/static/mask-uncovered-pii-column";
 export { default as nondeterministicQueryMutation } from "./lints/static/nondeterministic-query-mutation";
+export { default as policyReferencesUnknownTable } from "./lints/static/policy-references-unknown-table";
 export { default as publicArgumentUsesAny } from "./lints/static/public-argument-uses-any";
 export { default as publicMutationWithoutRatelimit } from "./lints/static/public-mutation-without-ratelimit";
 export { default as relationReferencesUnknownField } from "./lints/static/relation-references-unknown-field";
@@ -112,6 +114,7 @@ export const STATIC_LINTS: ReadonlyArray<Lint> = [
     nondeterministicQueryMutation,
     hyperdriveOutsideAction,
     authApiCallWithoutHeaders,
+    policyReferencesUnknownTable,
     rlsUncoveredTable,
     maskUncoveredPiiColumn,
     containerOversizedInstance,
