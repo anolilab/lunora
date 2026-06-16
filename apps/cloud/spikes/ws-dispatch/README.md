@@ -1,7 +1,7 @@
 # Spike: WebSockets + dispatch (CLOUD-PLAN.md §6 risk #3)
 
 **Question.** Cirrus's hottest path is the hibernated-WebSocket subscription
-(`/_cirrus/ws` → `forwardToShard` → `ShardDO.acceptWebSocket`). The least-
+(`/_lunora/ws` → `forwardToShard` → `ShardDO.acceptWebSocket`). The least-
 documented Workers-for-Platforms case is whether that path — and per-invocation
 CPU limits — behave correctly when the upgrade traverses
 `env.DISPATCHER.get(script).fetch(request)`. This spike validates it on real
@@ -9,7 +9,7 @@ Cloudflare before we build the rest of the cloud on the assumption that it works
 
 ## Hypotheses to validate
 
-1. **Upgrade survives dispatch.** A `GET /_cirrus/ws` upgrade routed through the
+1. **Upgrade survives dispatch.** A `GET /_lunora/ws` upgrade routed through the
    dispatcher returns `101 Switching Protocols` with a live `webSocket`, and the
    socket stays open eyeball↔tenant.
 2. **Hibernated delivery survives dispatch.** After the DO hibernates, an inbound

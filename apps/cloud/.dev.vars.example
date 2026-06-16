@@ -18,13 +18,13 @@ CLOUDFLARE_API_TOKEN=replace-with-cloudflare-api-token
 # Generate with: openssl rand -hex 32
 GITHUB_WEBHOOK_SECRET=replace-with-openssl-rand-hex-32
 
-# ── Billing (§4) — Stripe via @cirrus/payment ────────────────────────────────
+# ── Billing (§4) — Stripe via @lunora/payment ────────────────────────────────
 # Absent → entitlement reads still work (everyone resolves to the free plan);
 # checkout / portal / webhook fail until these are set.
 STRIPE_SECRET_KEY=sk_test_replace-me
 STRIPE_WEBHOOK_SECRET=whsec_replace-me
 
-# ── Email (§3) — @cirrus/mail ────────────────────────────────────────────────
+# ── Email (§3) — @lunora/mail ────────────────────────────────────────────────
 # In dev, mail is captured into the studio Mail tab (no transport needed). For
 # real delivery set a sender + a Resend key (or bind a SEND_EMAIL transport).
 MAIL_FROM=Cirrus Cloud <noreply@example.com>

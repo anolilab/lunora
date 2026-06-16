@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 import dispatcher from "../src/dispatcher/worker";
-import type { AnalyticsEngineDataset } from "../src/metering/analytics";
+import type { AnalyticsEngineDatasetLike } from "../src/metering/analytics";
 
 /**
  * Dispatcher WebSocket pass-through (CLOUD-PLAN.md §6 risk #3 spike). The hottest
- * Cirrus path is the hibernated-WS subscription, served at `/_cirrus/ws`. Through
+ * Cirrus path is the hibernated-WS subscription, served at `/_lunora/ws`. Through
  * Workers for Platforms that upgrade must traverse `env.DISPATCHER.get(script)
  * .fetch(request)` and the resulting 101 response (carrying `webSocket`) must be
  * returned to the eyeball UNCHANGED. These tests pin that forwarding contract for
@@ -13,15 +13,15 @@ import type { AnalyticsEngineDataset } from "../src/metering/analytics";
  * namespace is validated by `spikes/ws-dispatch` (see its README).
  */
 
-const upgrade = (host = "acme.cirrus.app"): Request => new Request(`https://${host}/_cirrus/ws?shard=default`, { headers: { Upgrade: "websocket" } });
+const upgrade = (host = "acme.cirrus.app"): Request => new Request(`https://${host}/_lunora/ws?shard=default`, { headers: { Upgrade: "websocket" } });
 
 interface FakeEnv {
     CIRRUS_APP_DOMAIN: string;
     DISPATCHER: { get: ReturnType<typeof vi.fn> };
-    USAGE_ANALYTICS?: AnalyticsEngineDataset;
+    USAGE_ANALYTICS?: AnalyticsEngineDatasetLike;
 }
 
-const makeEnv = (fetchImpl: (request: Request) => Promise<Response>, analytics?: AnalyticsEngineDataset): FakeEnv => {
+const makeEnv = (fetchImpl: (request: Request) => Promise<Response>, analytics?: AnalyticsEngineDatasetLike): FakeEnv => {
     return {
         CIRRUS_APP_DOMAIN: "cirrus.app",
         DISPATCHER: { get: vi.fn().mockReturnValue({ fetch: fetchImpl }) },

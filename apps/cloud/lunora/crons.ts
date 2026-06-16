@@ -1,4 +1,4 @@
-import { cronJobs } from "@cirrus/scheduler";
+import { cronJobs } from "@lunora/scheduler";
 
 import { internal } from "./_generated/api.js";
 
@@ -17,7 +17,7 @@ crons.interval("cleanup expired previews", { hours: 1 }, internal.deployments.cl
 crons.interval("rollup platform usage", { hours: 1 }, internal.usage.rollup, {});
 
 // Every-minute heartbeat that emits the `*/1 * * * *` trigger the edge cron
-// fan-out rides on (§2.4) — the job itself is a no-op; see cirrus/fanout.ts.
+// fan-out rides on (§2.4) — the job itself is a no-op; see lunora/fanout.ts.
 crons.interval("tenant cron fan-out tick", { minutes: 1 }, internal.fanout.tick, {});
 
 export default crons;

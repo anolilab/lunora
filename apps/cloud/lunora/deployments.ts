@@ -1,4 +1,4 @@
-import { CirrusError } from "@cirrus/server";
+import { LunoraError } from "@lunora/server";
 
 import { highestPlan } from "../src/billing/plans";
 import { previewExpiry } from "../src/deploy/preview";
@@ -120,7 +120,7 @@ export const create = mutation({
         const { page } = await context.db.projects.findMany({ where: { organizationId: arguments_.organizationId } });
 
         if (!(page as unknown as ProjectRow[]).some((project) => project._id === arguments_.projectId)) {
-            throw new CirrusError("NOT_FOUND", "project not found in this organization");
+            throw new LunoraError("NOT_FOUND", "project not found in this organization");
         }
 
         const now = Date.now();
@@ -145,7 +145,7 @@ export const create = mutation({
 
 /**
  * Mark expired preview deployments as `destroyed` (CLOUD-PLAN.md §2.3). Driven
- * by the cleanup cron (`cirrus/crons.ts`); `internalMutation` so it is reachable
+ * by the cleanup cron (`lunora/crons.ts`); `internalMutation` so it is reachable
  * only via the cron's system dispatch, never from a client. The actual
  * Cloudflare teardown is the provisioner's `destroy` (orchestrator) — wired once
  * Alchemy lands; this records the lifecycle transition.
@@ -193,7 +193,7 @@ export const updateStatus = mutation({
         const existing = (await context.db.get(id)) as DeploymentRow | null;
 
         if (!existing) {
-            throw new CirrusError("NOT_FOUND", "deployment not found");
+            throw new LunoraError("NOT_FOUND", "deployment not found");
         }
 
         await (deployKey
