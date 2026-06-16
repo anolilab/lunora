@@ -85,7 +85,7 @@ export const parsePullRequestEvent = (payload: unknown): null | PreviewIntent =>
     return null;
 };
 
-/** Resolves a connected GitHub repository to its Cirrus project. */
+/** Resolves a connected GitHub repository to its Lunora project. */
 export type ResolveProject = (repository: string) => Promise<null | { organizationId: string; projectId: string; slug: string }>; // secret-scanner:allow -- domain field name
 
 /**

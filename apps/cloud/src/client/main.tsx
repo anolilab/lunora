@@ -9,7 +9,7 @@ import { App } from "./App";
 
 // `@cloudflare/vite-plugin` serves the control-plane Worker on the same origin
 // as Vite, so default to `location.origin` rather than a separate workerd port.
-const url = (import.meta.env.VITE_CIRRUS_URL as string | undefined) ?? globalThis.location.origin;
+const url = (import.meta.env.VITE_LUNORA_URL as string | undefined) ?? globalThis.location.origin;
 const client = new LunoraClient({ url });
 
 const root = document.querySelector("#root");

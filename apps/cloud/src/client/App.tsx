@@ -34,7 +34,7 @@ export const App = (): ReactElement => {
                     }}
                     type="button"
                 >
-                    Cirrus Cloud
+                    Lunora Cloud
                 </button>
                 <div className="topbar-right">
                     <span className="muted">{session.data.user.email}</span>
