@@ -38,7 +38,7 @@ export const create = mutation
         id: v.optional(v.string().check((value) => value.length <= 64, { message: "must be at most 64 characters", schema: { maxLength: 64 } })),
         name: v.string().check((value) => value.length <= 128, { message: "must be at most 128 characters", schema: { maxLength: 128 } }),
     })
-    .use(dbRateLimit(limits, "create", { key: (ctx) => ctx.auth.userId ?? "anonymous" }))
+    .use(dbRateLimit(limits, "create", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anonymous" }))
     .mutation(async ({ args, ctx }): Promise<Id<"channels">> => {
         const { createdAt, id, name } = args;
         const userId = (ctx.auth.userId ?? "anonymous") as Id<"users">;

@@ -950,7 +950,16 @@ interface LunoraLogger {
 // eslint-disable-next-line unicorn/prevent-abbreviations -- public API name re-exported by src/index.ts; renaming would break consumers
 interface QueryCtx {
     readonly auth: AuthState;
+
     readonly db: DatabaseReader;
+
+    /**
+     * The caller's IP for this request — Cloudflare's trusted `CF-Connecting-IP`,
+     * forwarded server-side (never read from a client header). `undefined` when
+     * unknown: a live-subscription re-run, a server-initiated dispatch, or
+     * non-Cloudflare hosting. A convenient rate-limit key for anonymous traffic.
+     */
+    readonly ip?: string;
     /** Structured, function-attributed logger; see {@link LunoraLogger}. */
     readonly log: LunoraLogger;
 
@@ -970,7 +979,16 @@ interface QueryCtx {
 // eslint-disable-next-line unicorn/prevent-abbreviations -- public API name re-exported by src/index.ts; renaming would break consumers
 interface MutationCtx {
     readonly auth: AuthState;
+
     readonly db: DatabaseWriter;
+
+    /**
+     * The caller's IP for this request — Cloudflare's trusted `CF-Connecting-IP`,
+     * forwarded server-side (never read from a client header). `undefined` when
+     * unknown: a live-subscription re-run, a server-initiated dispatch, or
+     * non-Cloudflare hosting. A convenient rate-limit key for anonymous traffic.
+     */
+    readonly ip?: string;
     /** Structured, function-attributed logger; see {@link LunoraLogger}. */
     readonly log: LunoraLogger;
 
@@ -1002,8 +1020,17 @@ interface MutationCtx {
 // eslint-disable-next-line unicorn/prevent-abbreviations -- public API name re-exported by src/index.ts; renaming would break consumers
 interface ActionCtx {
     readonly auth: AuthState;
+
     readonly db: DatabaseWriter;
     readonly fetch: typeof globalThis.fetch;
+
+    /**
+     * The caller's IP for this request — Cloudflare's trusted `CF-Connecting-IP`,
+     * forwarded server-side (never read from a client header). `undefined` when
+     * unknown: a live-subscription re-run, a server-initiated dispatch, or
+     * non-Cloudflare hosting. A convenient rate-limit key for anonymous traffic.
+     */
+    readonly ip?: string;
     /** Structured, function-attributed logger; see {@link LunoraLogger}. */
     readonly log: LunoraLogger;
     readonly runAction: <A extends ArgsValidator, R>(reference: RegisteredAction<A, R>, args: InferArgs<A>) => Promise<R>;

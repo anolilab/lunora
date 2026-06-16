@@ -148,10 +148,7 @@ type GlobalCdcApplyFunction = (request: { changes: ReadonlyArray<Record<string, 
  * `startLine` field is the line of the FIRST global row, retained only as a
  * backward-compatible fallback for importers that haven't adopted per-row lines.
  */
-type GlobalImportFunction = (request: {
-    rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>;
-    startLine?: number;
-}) => Promise<{
+type GlobalImportFunction = (request: { rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>; startLine?: number }) => Promise<{
     conflicts: number;
     errors: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
     inserted: Record<string, number>;
@@ -958,6 +955,16 @@ const resolveForwardContext = async (request: Request, env: unknown, resolveIden
 
     if (mutationId) {
         headers["x-lunora-mutation-id"] = mutationId;
+    }
+
+    // Forward the caller's IP server-side from Cloudflare's `CF-Connecting-IP`
+    // (set by the edge, overwriting any client-supplied value — so it's trusted;
+    // a raw `x-forwarded-for` is client-spoofable and deliberately NOT used).
+    // The DO surfaces it as `ctx.ip` (e.g. to rate-limit anonymous traffic by IP).
+    const clientIp = request.headers.get("cf-connecting-ip");
+
+    if (clientIp) {
+        headers["x-lunora-client-ip"] = clientIp;
     }
 
     if (!resolveIdentity) {

@@ -713,6 +713,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
                 },
                 db,
                 fetch: globalThis.fetch.bind(globalThis),
+                ip: this.getCurrentIp(),
                 log,
                 orm: bindOrm(facade),
                 scheduler,

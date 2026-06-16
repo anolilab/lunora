@@ -46,12 +46,12 @@ export const send = mutation
         id: v.optional(v.string().check((value) => value.length <= 64, { message: "must be at most 64 characters", schema: { maxLength: 64 } })),
         text: v.string().check((value) => value.length <= 4096, { message: "must be at most 4096 characters", schema: { maxLength: 4096 } }),
     })
-    // Rate-limit per user. NOTE: unauthenticated callers all fall back to the
-    // single `"anonymous"` bucket, so on a genuinely public endpoint one client
-    // can exhaust the limit for every anonymous caller. Keying anon traffic by
-    // request IP is the robust fix — it needs a per-request IP on `ctx` (a
-    // framework follow-up); the shared bucket is acceptable for this demo.
-    .use(dbRateLimit(limits, "send", { key: (ctx) => ctx.auth.userId ?? "anonymous" }))
+    // Rate-limit per user, falling back to the caller's IP (`ctx.ip`, sourced
+    // from Cloudflare's trusted CF-Connecting-IP) for unauthenticated traffic so
+    // a single anonymous client can't exhaust a shared bucket for everyone. The
+    // final `"anonymous"` literal only applies when neither is known (e.g. local
+    // dev without an IP).
+    .use(dbRateLimit(limits, "send", { key: (ctx) => ctx.auth.userId ?? ctx.ip ?? "anonymous" }))
     .mutation(async ({ args, ctx }): Promise<Id<"messages">> => {
         const { channelId, createdAt, id, text } = args;
 

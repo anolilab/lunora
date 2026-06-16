@@ -2905,6 +2905,7 @@ ${facadeBlock}${paymentsBuild}
                 },
                 db,
                 fetch: globalThis.fetch.bind(globalThis),
+                ip: this.getCurrentIp(),
                 log,${ormContextField}
                 scheduler,
                 storage,${vectorsContextField}${aiContextField}${everyContextField}${paymentsContextField}${containersContextField}${workflowsContextField}

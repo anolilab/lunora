@@ -1606,6 +1606,14 @@ abstract class ShardDO {
     private currentRequestUserId: string | undefined;
 
     /**
+     * Per-request caller IP forwarded from the runtime via the
+     * `x-lunora-client-ip` header (sourced server-side from Cloudflare's trusted
+     * `CF-Connecting-IP`). Surfaced to handlers as `ctx.ip` via `getCurrentIp`;
+     * cleared in the `finally` block of `fetch` like the other per-request fields.
+     */
+    private currentRequestIp: string | undefined;
+
+    /**
      * Client-issued idempotency key for the in-flight mutation, forwarded via the
      * `x-lunora-mutation-id` header. When set, the dispatch path dedups the call
      * by `(currentRequestUserId, mutationId)`: a replay short-circuits to the
@@ -1816,6 +1824,11 @@ abstract class ShardDO {
         this.currentRequestUserId = request.headers.get("x-lunora-userid") ?? undefined;
         this.currentRequestMutationId = request.headers.get("x-lunora-mutation-id") ?? undefined;
         this.currentRequestIdentity = parseIdentityHeader(request.headers.get("x-lunora-identity"));
+        // The caller's IP, forwarded server-side from Cloudflare's trusted
+        // `CF-Connecting-IP` (never copied from a client header). Surfaced as
+        // `ctx.ip` so handlers/middleware can key on it (e.g. rate-limit
+        // unauthenticated traffic by IP).
+        this.currentRequestIp = request.headers.get("x-lunora-client-ip") ?? undefined;
         this.currentRequestSystem = request.headers.get("x-lunora-system") === "1";
         // Reset the per-request read/cache capture (filled by `runCachedQuery`
         // for cached query paths) so a previous dispatch can't leak into this
@@ -1955,6 +1968,7 @@ abstract class ShardDO {
             this.currentRequestUserId = undefined;
             this.currentRequestMutationId = undefined;
             this.currentRequestIdentity = undefined;
+            this.currentRequestIp = undefined;
             this.currentRequestSystem = false;
             this.currentScannedTables = undefined;
             this.currentIndexHits = undefined;
@@ -2480,6 +2494,15 @@ abstract class ShardDO {
      */
     protected getCurrentUserId(): string | undefined {
         return this.currentRequestUserId;
+    }
+
+    /**
+     * The caller's IP for the current request (Cloudflare's `CF-Connecting-IP`,
+     * forwarded server-side), or `undefined` when unknown. Use this to populate
+     * `ctx.ip` inside `buildCtx`.
+     */
+    protected getCurrentIp(): string | undefined {
+        return this.currentRequestIp;
     }
 
     /**
