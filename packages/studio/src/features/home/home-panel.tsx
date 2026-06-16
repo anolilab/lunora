@@ -27,25 +27,33 @@ const GET_AUDIT_LOG = adminRef(ADMIN_FUNCTIONS.getAuditLog);
 const LIST_SUBSCRIPTIONS = adminRef(ADMIN_FUNCTIONS.listSubscriptions);
 
 /** Format a millisecond duration compactly (`24ms`, `1.2s`). */
-const formatMs = (ms: number): string => (ms >= 1000 ? `${(ms / 1000).toFixed(ms >= 10_000 ? 0 : 1)}s` : `${Math.round(ms)}ms`);
+const formatMs = (ms: number): string => {
+    if (ms < 1000) {
+        return `${String(Math.round(ms))}ms`;
+    }
+
+    const digits = ms >= 10_000 ? 0 : 1;
+
+    return `${(ms / 1000).toFixed(digits)}s`;
+};
 
 /** A coarse "2m ago" / "3h ago" relative time from an epoch-ms timestamp. */
 const relativeTime = (ts: number, now: number): string => {
     const seconds = Math.max(0, Math.round((now - ts) / 1000));
 
     if (seconds < 60) {
-        return `${seconds}s ago`;
+        return `${String(seconds)}s ago`;
     }
 
     const minutes = Math.round(seconds / 60);
 
     if (minutes < 60) {
-        return `${minutes}m ago`;
+        return `${String(minutes)}m ago`;
     }
 
     const hours = Math.round(minutes / 60);
 
-    return hours < 24 ? `${hours}h ago` : `${Math.round(hours / 24)}d ago`;
+    return hours < 24 ? `${String(hours)}h ago` : `${String(Math.round(hours / 24))}d ago`;
 };
 
 /** A one-line "vs. previous window" change shown in a stat card's footer. */
@@ -67,7 +75,9 @@ const Sparkline = ({ data }: { readonly data: ReadonlyArray<number> }): ReactEle
         return null;
     }
 
-    const rows = bars.map((value, index) => {return { index, value }});
+    const rows = bars.map((value, index) => {
+        return { index, value };
+    });
 
     return (
         <div aria-hidden="true" className="h-8 w-28">
@@ -90,7 +100,7 @@ const bucketSeries = (history: MetricsSnapshot["history"], field: "calls" | "err
         byBucket.set(bucket.bucketMs, (byBucket.get(bucket.bucketMs) ?? 0) + bucket[field]);
     }
 
-    return [...byBucket.entries()].sort(([a], [b]) => a - b).map(([, total]) => total);
+    return [...byBucket.entries()].toSorted(([a], [b]) => a - b).map(([, total]) => total);
 };
 
 /** Percent change of a series' recent half vs. its earlier half; null when not derivable. `higherIsBetter` colours the result. */
@@ -227,7 +237,7 @@ const AdvisorCard = ({ count, onView, testId, title }: AdvisorCardProps): ReactE
 /** A leaderboard of the busiest functions (calls / avg latency / errors). */
 const TopFunctionsCard = ({ functions }: { readonly functions: ReadonlyArray<FunctionCallStat> }): ReactElement => {
     const t = useT();
-    const top = [...functions].sort((a, b) => b.calls - a.calls).slice(0, 5);
+    const top = [...functions].toSorted((a, b) => b.calls - a.calls).slice(0, 5);
 
     return (
         <Card className="gap-0 py-0" data-testid="home-top-functions">
@@ -251,7 +261,9 @@ const TopFunctionsCard = ({ functions }: { readonly functions: ReadonlyArray<Fun
                             <span className="w-12 text-end tabular-nums text-muted-foreground">
                                 {formatMs(function_.calls > 0 ? function_.totalDurationMs / function_.calls : 0)}
                             </span>
-                            <span className={cn("w-8 text-end tabular-nums", function_.errors > 0 ? "text-destructive" : "text-muted-foreground")}>{function_.errors}</span>
+                            <span className={cn("w-8 text-end tabular-nums", function_.errors > 0 ? "text-destructive" : "text-muted-foreground")}>
+                                {function_.errors}
+                            </span>
                         </div>
                     ))}
                 </div>
@@ -391,7 +403,7 @@ export const HomePanel = ({ initialShardKey }: HomePanelProps): ReactElement => 
     const requestSeries = bucketSeries(metrics?.history, "calls");
     const errorSeries = bucketSeries(metrics?.history, "errors");
     const avgLatency = averageLatencyMs(functions);
-    const maxLatency = functions.reduce((max, function_) => Math.max(max, function_.maxDurationMs), 0);
+    const maxLatency = Math.max(0, ...functions.map((function_) => function_.maxDurationMs));
     const cache = metrics?.cache;
     const cacheHitRate = cache != null && cache.hits + cache.misses > 0 ? Math.round((cache.hits / (cache.hits + cache.misses)) * 100) : null;
 
@@ -407,7 +419,7 @@ export const HomePanel = ({ initialShardKey }: HomePanelProps): ReactElement => 
                     value={avgLatency === null ? "—" : formatMs(avgLatency)}
                 />
                 <StatCard
-                    footer={cacheHitRate === null ? undefined : `${cacheHitRate}% ${t("cache hit")}`}
+                    footer={cacheHitRate === null ? undefined : `${String(cacheHitRate)}% ${t("cache hit")}`}
                     label={t("Database size")}
                     value={formatBytes(metrics?.databaseSize ?? null)}
                 />

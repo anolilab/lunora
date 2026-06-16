@@ -93,7 +93,8 @@ const ShardExplorer = ({ onFetchTables, onSelect }: ShardExplorerProps): ReactEl
             setError(undefined);
             setLoading(true);
 
-            const myRequestId = ++requestIdRef.current;
+            requestIdRef.current += 1;
+            const myRequestId = requestIdRef.current;
 
             try {
                 const result = await onFetchTables(shardKey);

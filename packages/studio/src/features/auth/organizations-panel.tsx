@@ -133,9 +133,8 @@ export const OrganizationsPanel = (): ReactElement => {
     }, [capabilities.organization, client, version]);
 
     useEffect(() => {
-        // eslint-disable-next-line react-you-might-not-need-an-effect/no-event-handler -- data-load effect: refetch members + invitations whenever the selected org (or the `version` refetch token) changes; selection can change programmatically and the async fetch must follow the committed `selected` state
         if (selected === null) {
-            return;
+            return undefined;
         }
 
         // Staleness guard: capture the org id this fetch is for and discard the
@@ -152,11 +151,13 @@ export const OrganizationsPanel = (): ReactElement => {
                         client.listAuthOrgInvitations({ limit: 200, organizationId: selected }),
                     ]);
 
+                    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `cancelled` is flipped by the effect's cleanup during the await, so TS's narrowing from the declaration is stale.
                     if (!cancelled) {
                         setMembers(memberPage.rows);
                         setInvitations(invitePage.rows);
                     }
                 } catch (error_) {
+                    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `cancelled` is flipped by the effect's cleanup during the await, so TS's narrowing from the declaration is stale.
                     if (!cancelled) {
                         setError(errorMessage(error_));
                     }

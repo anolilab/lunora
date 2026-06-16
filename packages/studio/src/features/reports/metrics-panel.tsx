@@ -407,7 +407,7 @@ export const MetricsPanel = ({ initialShardKey }: MetricsPanelProps): ReactEleme
                         value={latencyPercentiles.p95 > 0 ? formatMs(latencyPercentiles.p95) : "—"}
                     />
                     <StatCard
-                        footer={metrics.cache === null ? undefined : `${(metrics.cache.entries ?? 0).toLocaleString()} ${t("cache entries")}`}
+                        footer={metrics.cache === null ? undefined : `${metrics.cache.entries.toLocaleString()} ${t("cache entries")}`}
                         label={t("Database size")}
                         testId="mt-db-size"
                         value={formatBytes(metrics.databaseSize)}

@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { useState } from "react";
+import { useCallback, useState } from "react";
 
 import { useT } from "../i18n/i18n-context";
 
@@ -30,18 +30,18 @@ const writeBannerDismissed = (): void => {
  * stays gone across reloads. Reads lazily and tolerates storage being unavailable
  * (private mode / embeddings).
  */
-export const RulesBanner = (): ReactElement | null => {
+const RulesBanner = (): ReactElement | null => {
     const t = useT();
     const [dismissed, setDismissed] = useState<boolean>(() => readBannerDismissed());
+
+    const dismiss = useCallback((): void => {
+        setDismissed(true);
+        writeBannerDismissed();
+    }, []);
 
     if (dismissed) {
         return null;
     }
-
-    const dismiss = (): void => {
-        setDismissed(true);
-        writeBannerDismissed();
-    };
 
     return (
         <div
@@ -70,3 +70,5 @@ export const RulesBanner = (): ReactElement | null => {
         </div>
     );
 };
+
+export default RulesBanner;

@@ -73,6 +73,40 @@ const resolveBaseUrl = (explicit: string | undefined): string => {
     return "http://localhost:5173";
 };
 
+interface StudioAppBodyProps {
+    readonly basePath?: string;
+    readonly chrome: StudioChrome;
+    readonly studio?: StudioAppProps["studio"];
+}
+
+/**
+ * The composed studio plus its error boundary. Kept separate from {@link
+ * StudioApp} because its `useT` (for the error-boundary label) must read the
+ * `StudioI18nProvider` the app renders above it. The composed `&lt;Studio>`
+ * inherits that same provider, so it isn't handed an instance here.
+ */
+const StudioAppBody = ({ basePath, chrome, studio }: StudioAppBodyProps): ReactElement => {
+    const t = useT();
+
+    return (
+        <ErrorBoundary fallbackTitle={t("Studio failed")} label={t("Studio")} retryLabel={t("Try again")}>
+            <Studio
+                basePath={basePath}
+                chrome={chrome}
+                dataEditable={studio?.dataEditable}
+                functions={studio?.functions}
+                initialShardKey={studio?.initialShardKey}
+                openApiSpec={studio?.openApiSpec}
+                openRpcSpec={studio?.openRpcSpec}
+                runAsIdentity={studio?.runAsIdentity}
+                scheduledCancel={studio?.scheduledCancel}
+                scheduledLoad={studio?.scheduledLoad}
+                schemaEditable={studio?.schemaEditable}
+            />
+        </ErrorBoundary>
+    );
+};
+
 /**
  * A fully self-contained studio page: it constructs a {@link LunoraClient}
  * pointed at the worker, wires it through a `&lt;LunoraProvider>`, manages the
@@ -85,7 +119,7 @@ const resolveBaseUrl = (explicit: string | undefined): string => {
  * yourself. For embedding into an existing admin UI, use the individual panels
  * or `&lt;Studio>` under your own provider instead.
  */
-export const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClient, rulesInstalled, studio, locale }: StudioAppProps = {}): ReactElement => {
+const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClient, rulesInstalled, studio, locale }: StudioAppProps = {}): ReactElement => {
     // Seed from the prop, else a token persisted in a prior session (so a reload
     // doesn't force a re-paste). The prop wins when explicitly provided.
     const [token, setToken] = useState<string>(() => adminToken ?? loadToken());
@@ -157,10 +191,9 @@ export const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClien
 
     // The app-owned chrome rendered inside the sidebar shell (header theme toggle,
     // footer admin-token popover, rules banner).
-    const chrome = useMemo<StudioChrome>(
-        () => {return { clearToken, onToggleTheme, onTokenChange, rulesInstalled, theme, token }},
-        [clearToken, onToggleTheme, onTokenChange, rulesInstalled, theme, token],
-    );
+    const chrome = useMemo<StudioChrome>(() => {
+        return { clearToken, onToggleTheme, onTokenChange, rulesInstalled, theme, token };
+    }, [clearToken, onToggleTheme, onTokenChange, rulesInstalled, theme, token]);
 
     return (
         <div
@@ -178,38 +211,5 @@ export const StudioApp = ({ adminToken, basePath, baseUrl, client: injectedClien
     );
 };
 
-interface StudioAppBodyProps {
-    readonly basePath?: string;
-    readonly chrome: StudioChrome;
-    readonly studio?: StudioAppProps["studio"];
-}
-
-/**
- * The composed studio plus its error boundary. Kept separate from {@link
- * StudioApp} because its `useT` (for the error-boundary label) must read the
- * `StudioI18nProvider` the app renders above it. The composed `&lt;Studio>`
- * inherits that same provider, so it isn't handed an instance here.
- */
-const StudioAppBody = ({ basePath, chrome, studio }: StudioAppBodyProps): ReactElement => {
-    const t = useT();
-
-    return (
-        <ErrorBoundary fallbackTitle={t("Studio failed")} label={t("Studio")} retryLabel={t("Try again")}>
-            <Studio
-                basePath={basePath}
-                chrome={chrome}
-                dataEditable={studio?.dataEditable}
-                functions={studio?.functions}
-                initialShardKey={studio?.initialShardKey}
-                openApiSpec={studio?.openApiSpec}
-                openRpcSpec={studio?.openRpcSpec}
-                runAsIdentity={studio?.runAsIdentity}
-                scheduledCancel={studio?.scheduledCancel}
-                scheduledLoad={studio?.scheduledLoad}
-                schemaEditable={studio?.schemaEditable}
-            />
-        </ErrorBoundary>
-    );
-};
-
+export { StudioApp };
 export type { StudioAppProps };

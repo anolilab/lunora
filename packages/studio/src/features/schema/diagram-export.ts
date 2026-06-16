@@ -66,8 +66,8 @@ const exportDiagramAsJson = (nodes: Node[], edges: Edge[], filename = "schema-di
     // tick as the click can abort the download in some browsers because the fetch of
     // the blob URL is initiated asynchronously. A brief setTimeout is the standard
     // approach (used by FileSaver.js and the MDN download-blob pattern).
-    // eslint-disable-next-line n/no-unsupported-features/node-builtins -- browser-only; pairs with createObjectURL above
     globalThis.setTimeout(() => {
+        // eslint-disable-next-line n/no-unsupported-features/node-builtins -- browser-only; pairs with createObjectURL above
         globalThis.URL.revokeObjectURL(url);
     }, 0);
 };
@@ -118,8 +118,8 @@ const exportDiagramAsPng = async (viewportElement: HTMLElement, nodes: Node[], f
     // Defer revocation off the click's synchronous turn — same reason as the JSON
     // path above: some browsers fetch blob: URLs asynchronously after the anchor
     // click returns, so revoking in the same tick can abort the download.
-    // eslint-disable-next-line n/no-unsupported-features/node-builtins -- browser-only; pairs with createObjectURL above
     globalThis.setTimeout(() => {
+        // eslint-disable-next-line n/no-unsupported-features/node-builtins -- browser-only; pairs with createObjectURL above
         globalThis.URL.revokeObjectURL(url);
     }, 0);
 };

@@ -12,11 +12,11 @@ import {
     useSearch,
 } from "@tanstack/react-router";
 import type { ReactElement, ReactNode } from "react";
-import { createContext, useCallback, useContext, useEffect, useMemo } from "react";
+import { createContext, use, useCallback, useEffect, useMemo } from "react";
 
-import { BrandMark } from "../components/brand-mark";
+import BrandMark from "../components/brand-mark";
 import { ErrorBoundary } from "../components/error-boundary";
-import { RulesBanner } from "../components/rules-banner";
+import RulesBanner from "../components/rules-banner";
 import { Badge } from "../components/ui/badge";
 import { Input } from "../components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "../components/ui/popover";
@@ -130,7 +130,7 @@ interface StudioProps {
 
     /**
      * App-owned top-bar + sidebar-footer chrome (theme toggle, admin-token
-     * popover, rules banner). The batteries-included {@link StudioApp} supplies
+     * popover, rules banner). The batteries-included `StudioApp` supplies
      * this; composing `&lt;Studio>` bare omits those affordances. See {@link StudioChrome}.
      */
     readonly chrome?: StudioChrome;
@@ -218,7 +218,7 @@ interface StudioProps {
 type StudioShellProps = Omit<StudioProps, "i18n" | "locale">;
 
 /**
- * Top-bar + sidebar-footer chrome the {@link StudioApp} owns (theme + admin
+ * Top-bar + sidebar-footer chrome the `StudioApp` owns (theme + admin
  * token state, the rules banner) but which renders *inside* the router-owned
  * {@link StudioLayout} (the header and sidebar footer). The layout is a route
  * component with no props, so it reads this from context rather than threading
@@ -462,6 +462,133 @@ interface StudioSidebarProps {
 }
 
 /**
+ * One domain in the **collapsed** icon rail: a single icon that opens a hover
+ * flyout listing that domain's pages. The icon itself never navigates — only the
+ * flyout rows do — so every page stays reachable from the narrow rail. Extracted
+ * from {@link StudioSidebar} to keep that component's branching shallow.
+ */
+const CollapsedGroupNav = ({
+    current,
+    group,
+    groupLabel,
+    selectTab,
+    tabDescription,
+    tabLabel,
+}: {
+    readonly current: StudioTab;
+    readonly group: { readonly key: NavGroupKey; readonly tabs: ReadonlyArray<StudioTab> };
+    readonly groupLabel: Record<NavGroupKey, string>;
+    readonly selectTab: (event: React.MouseEvent<HTMLButtonElement>) => void;
+    readonly tabDescription: Record<StudioTab, string>;
+    readonly tabLabel: Record<StudioTab, string>;
+}): ReactElement => (
+    <Popover>
+        <PopoverTrigger
+            aria-current={group.tabs.includes(current) ? "page" : undefined}
+            aria-label={groupLabel[group.key]}
+            className="mx-auto flex size-8 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:bg-sidebar-accent data-[popup-open]:bg-sidebar-accent data-[popup-open]:text-sidebar-accent-foreground data-[popup-open]:shadow-xs aria-[current=page]:bg-sidebar-accent aria-[current=page]:text-sidebar-accent-foreground aria-[current=page]:shadow-xs"
+            delay={120}
+            openOnHover
+        >
+            <TabIcon tab={group.tabs[0] as StudioTab} />
+        </PopoverTrigger>
+        <PopoverContent align="start" className="w-56 p-1" side="right" sideOffset={8}>
+            <div className="px-2 py-1.5 text-[11px] font-medium tracking-wider text-muted-foreground uppercase">{groupLabel[group.key]}</div>
+            {group.tabs.map((tab) => (
+                <button
+                    aria-current={current === tab ? "page" : undefined}
+                    className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-[13px] text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent aria-[current=page]:bg-accent aria-[current=page]:font-medium [&_svg]:opacity-70 aria-[current=page]:[&_svg]:opacity-100"
+                    data-tab={tab}
+                    data-testid={`dash-tab-${tab}`}
+                    key={tab}
+                    onClick={selectTab}
+                    title={tabDescription[tab]}
+                    type="button"
+                >
+                    <TabIcon tab={tab} />
+                    <span>{tabLabel[tab]}</span>
+                </button>
+            ))}
+        </PopoverContent>
+    </Popover>
+);
+
+/**
+ * The bottom-pinned profile / connection card. Without app-owned `chrome`
+ * (composing `&lt;Studio>` bare) it's a static avatar; with it, it's the trigger
+ * for the admin-token popover. Extracted from {@link StudioSidebar} to keep that
+ * component's branching shallow.
+ */
+const SidebarFooterProfile = ({
+    chrome,
+    collapsed,
+    connected,
+}: {
+    readonly chrome: StudioChrome | null;
+    readonly collapsed: boolean;
+    readonly connected: boolean;
+}): ReactElement => {
+    const t = useT();
+
+    if (chrome === null) {
+        return (
+            <SidebarMenuButton className="data-active:bg-transparent" size="lg" tooltip={t("Admin")}>
+                <span className="flex size-8 items-center justify-center rounded-full bg-sidebar-accent text-[11px] font-medium">C</span>
+                <span className="grid flex-1 text-start leading-tight">
+                    <span className="truncate text-[13px] font-medium">{t("Admin")}</span>
+                    <span className="truncate text-[11px] text-muted-foreground">{t("Studio")}</span>
+                </span>
+            </SidebarMenuButton>
+        );
+    }
+
+    return (
+        <Popover>
+            <PopoverTrigger
+                className={cn(
+                    "flex items-center gap-2 rounded-md text-start outline-none transition-colors hover:bg-sidebar-accent focus-visible:bg-sidebar-accent",
+                    collapsed ? "mx-auto size-8 justify-center" : "w-full p-2",
+                )}
+                data-testid="dash-app-connect"
+                title={connected ? t("Connected") : t("Not connected")}
+            >
+                <span className="relative flex size-8 shrink-0 items-center justify-center rounded-full bg-sidebar-accent text-[11px] font-medium">
+                    C
+                    <span
+                        aria-hidden="true"
+                        className={cn(
+                            "absolute -end-0.5 -bottom-0.5 size-2.5 rounded-full border-2 border-sidebar",
+                            connected ? "bg-success" : "bg-muted-foreground/50",
+                        )}
+                    />
+                </span>
+                {!collapsed && (
+                    <>
+                        <span className="grid flex-1 text-start leading-tight">
+                            <span className="truncate text-[13px] font-medium">{t("Admin")}</span>
+                            <span className="truncate text-[11px] text-muted-foreground">{connected ? t("Connected") : t("Not connected")}</span>
+                        </span>
+                        <svg
+                            aria-hidden="true"
+                            className="size-4 text-muted-foreground"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth={1.7}
+                            viewBox="0 0 24 24"
+                        >
+                            <path d="m8 9 4-4 4 4M8 15l4 4 4-4" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                    </>
+                )}
+            </PopoverTrigger>
+            <PopoverContent align={collapsed ? "end" : "start"} keepMounted side={collapsed ? "right" : "top"}>
+                <ConnectPopoverContent chrome={chrome} connected={connected} />
+            </PopoverContent>
+        </Popover>
+    );
+};
+
+/**
  * The grouped sidebar. Reads the provider's collapsed/expanded state to swap
  * presentation: **expanded** shows the full labelled nav (each row's one-line
  * description as a hover tooltip); **collapsed** shows one icon per domain, each
@@ -497,40 +624,15 @@ const StudioSidebar = ({ chrome, connected, current, groupLabel, groups, selectT
             <SidebarContent>
                 {collapsed
                     ? groups.map((group) => (
-                          // Collapsed: one icon per domain. Hover (or click) opens a flyout
-                          // of its pages; the icon itself never navigates — only the flyout
-                          // rows do — so a click in the mini rail just reveals the submenu.
-                          <Popover key={group.key}>
-                              <PopoverTrigger
-                                  aria-current={group.tabs.includes(current) ? "page" : undefined}
-                                  aria-label={groupLabel[group.key]}
-                                  className="mx-auto flex size-8 items-center justify-center rounded-md text-muted-foreground outline-none transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:bg-sidebar-accent data-[popup-open]:bg-sidebar-accent data-[popup-open]:text-sidebar-accent-foreground data-[popup-open]:shadow-xs aria-[current=page]:bg-sidebar-accent aria-[current=page]:text-sidebar-accent-foreground aria-[current=page]:shadow-xs"
-                                  delay={120}
-                                  openOnHover
-                              >
-                                  <TabIcon tab={group.tabs[0] as StudioTab} />
-                              </PopoverTrigger>
-                              <PopoverContent align="start" className="w-56 p-1" side="right" sideOffset={8}>
-                                  <div className="px-2 py-1.5 text-[11px] font-medium tracking-wider text-muted-foreground uppercase">
-                                      {groupLabel[group.key]}
-                                  </div>
-                                  {group.tabs.map((tab) => (
-                                      <button
-                                          aria-current={current === tab ? "page" : undefined}
-                                          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-start text-[13px] text-foreground outline-none transition-colors hover:bg-accent focus-visible:bg-accent aria-[current=page]:bg-accent aria-[current=page]:font-medium [&_svg]:opacity-70 aria-[current=page]:[&_svg]:opacity-100"
-                                          data-tab={tab}
-                                          data-testid={`dash-tab-${tab}`}
-                                          key={tab}
-                                          onClick={selectTab}
-                                          title={tabDescription[tab]}
-                                          type="button"
-                                      >
-                                          <TabIcon tab={tab} />
-                                          <span>{tabLabel[tab]}</span>
-                                      </button>
-                                  ))}
-                              </PopoverContent>
-                          </Popover>
+                          <CollapsedGroupNav
+                              current={current}
+                              group={group}
+                              groupLabel={groupLabel}
+                              key={group.key}
+                              selectTab={selectTab}
+                              tabDescription={tabDescription}
+                              tabLabel={tabLabel}
+                          />
                       ))
                     : groups.map((group) => (
                           <SidebarGroup key={group.key}>
@@ -564,60 +666,7 @@ const StudioSidebar = ({ chrome, connected, current, groupLabel, groups, selectT
             <SidebarFooter>
                 <SidebarMenu>
                     <SidebarMenuItem>
-                        {chrome === null ? (
-                            <SidebarMenuButton className="data-active:bg-transparent" size="lg" tooltip={t("Admin")}>
-                                <span className="flex size-8 items-center justify-center rounded-full bg-sidebar-accent text-[11px] font-medium">C</span>
-                                <span className="grid flex-1 text-start leading-tight">
-                                    <span className="truncate text-[13px] font-medium">{t("Admin")}</span>
-                                    <span className="truncate text-[11px] text-muted-foreground">{t("Studio")}</span>
-                                </span>
-                            </SidebarMenuButton>
-                        ) : (
-                            <Popover>
-                                <PopoverTrigger
-                                    className={cn(
-                                        "flex items-center gap-2 rounded-md text-start outline-none transition-colors hover:bg-sidebar-accent focus-visible:bg-sidebar-accent",
-                                        collapsed ? "mx-auto size-8 justify-center" : "w-full p-2",
-                                    )}
-                                    data-testid="dash-app-connect"
-                                    title={connected ? t("Connected") : t("Not connected")}
-                                >
-                                    <span className="relative flex size-8 shrink-0 items-center justify-center rounded-full bg-sidebar-accent text-[11px] font-medium">
-                                        C
-                                        <span
-                                            aria-hidden="true"
-                                            className={cn(
-                                                "absolute -end-0.5 -bottom-0.5 size-2.5 rounded-full border-2 border-sidebar",
-                                                connected ? "bg-success" : "bg-muted-foreground/50",
-                                            )}
-                                        />
-                                    </span>
-                                    {!collapsed && (
-                                        <>
-                                            <span className="grid flex-1 text-start leading-tight">
-                                                <span className="truncate text-[13px] font-medium">{t("Admin")}</span>
-                                                <span className="truncate text-[11px] text-muted-foreground">
-                                                    {connected ? t("Connected") : t("Not connected")}
-                                                </span>
-                                            </span>
-                                            <svg
-                                                aria-hidden="true"
-                                                className="size-4 text-muted-foreground"
-                                                fill="none"
-                                                stroke="currentColor"
-                                                strokeWidth={1.7}
-                                                viewBox="0 0 24 24"
-                                            >
-                                                <path d="m8 9 4-4 4 4M8 15l4 4 4-4" strokeLinecap="round" strokeLinejoin="round" />
-                                            </svg>
-                                        </>
-                                    )}
-                                </PopoverTrigger>
-                                <PopoverContent align={collapsed ? "end" : "start"} keepMounted side={collapsed ? "right" : "top"}>
-                                    <ConnectPopoverContent chrome={chrome} connected={connected} />
-                                </PopoverContent>
-                            </Popover>
-                        )}
+                        <SidebarFooterProfile chrome={chrome} collapsed={collapsed} connected={connected} />
                     </SidebarMenuItem>
                 </SidebarMenu>
             </SidebarFooter>
@@ -789,7 +838,7 @@ const StudioLayout = (): ReactElement => {
 
     // The app-owned chrome (theme + admin token + rules banner) renders inside this
     // router-owned layout; absent when `<Studio>` is composed bare.
-    const chrome = useContext(StudioChromeContext);
+    const chrome = use(StudioChromeContext);
     const connected = chrome !== null && chrome.token !== "";
 
     return (
@@ -1112,9 +1161,9 @@ const StudioShell = ({
     );
 
     return (
-        <StudioChromeContext.Provider value={chrome ?? null}>
+        <StudioChromeContext value={chrome ?? null}>
             <RouterProvider router={router} />
-        </StudioChromeContext.Provider>
+        </StudioChromeContext>
     );
 };
 

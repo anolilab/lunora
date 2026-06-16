@@ -159,7 +159,13 @@ const LEVEL_RING: Record<SloLevel, string> = {
 };
 
 /** Rank levels so the worst one wins for the overall health verdict. */
-const worstLevel = (levels: ReadonlyArray<SloLevel>): SloLevel => (levels.includes("crit") ? "crit" : levels.includes("warn") ? "warn" : "ok");
+const worstLevel = (levels: ReadonlyArray<SloLevel>): SloLevel => {
+    if (levels.includes("crit")) {
+        return "crit";
+    }
+
+    return levels.includes("warn") ? "warn" : "ok";
+};
 
 /** One SLO as a KPI card: an uppercase label with a status dot, the status-coloured value, and an optional sparkline. */
 const SloCard = ({
@@ -423,13 +429,19 @@ export const HealthPanel = ({ initialShardKey }: HealthPanelProps): ReactElement
     const backlogLevel: SloLevel = scheduler === null ? "ok" : countLevel(scheduler.backlog, BACKLOG_WARN, BACKLOG_CRIT);
     const overall = worstLevel([errorLevel, authLevel, backlogLevel, migration.level]);
 
-    const statusLabel = overall === "crit" ? t("Critical") : overall === "warn" ? t("Degraded") : t("All systems healthy");
-    const statusDescription =
-        overall === "crit"
-            ? t("One or more service levels are breached.")
-            : overall === "warn"
-              ? t("Some service levels need attention.")
-              : t("All service levels are within target.");
+    let statusLabel: string;
+    let statusDescription: string;
+
+    if (overall === "crit") {
+        statusLabel = t("Critical");
+        statusDescription = t("One or more service levels are breached.");
+    } else if (overall === "warn") {
+        statusLabel = t("Degraded");
+        statusDescription = t("Some service levels need attention.");
+    } else {
+        statusLabel = t("All systems healthy");
+        statusDescription = t("All service levels are within target.");
+    }
 
     return (
         <div className="flex flex-col gap-6" data-testid="lunora-health">

@@ -29,7 +29,14 @@ export default createConfig(
             // and kept verbatim so `shadcn add`/diff stays clean. Not hand-authored
             // source, so the strict import/sort/style rules don't apply.
             "**/components/ui/**",
+            // Vendored evilcharts chart primitives (recharts-based) — kept verbatim
+            // from upstream so updates stay a clean diff; same rationale as the
+            // shadcn `ui/` primitives above.
+            "**/components/evilcharts/**",
             "**/lib/utils.ts",
+            // Vendored shadcn `use-mobile` hook (ships with the sidebar block) —
+            // kept verbatim like the other shadcn primitives above.
+            "**/hooks/use-mobile.ts",
             // Code fences inside markdown (e.g. DESIGN.md) are extracted as
             // virtual .ts files that aren't in any tsconfig, so type-aware
             // linting can't parse them — don't lint doc snippets as source.
