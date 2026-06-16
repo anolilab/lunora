@@ -69,11 +69,18 @@ createWorker({
 });
 ```
 
-A `*` wildcard combined with `allowCredentials: true` is rejected — browsers
-refuse the combination and it defeats the allowlist. The worker throws at
-construction, and the [`@lunora/config`](#config-time-validation) validator
-catches the same mistake at build time when it is driven through wrangler `vars`.
-Preflight (`OPTIONS`) is answered automatically for allowlisted origins.
+When you don't pass `security.cors` in code, the worker falls back to env config:
+`LUNORA_ALLOWED_ORIGINS` is a comma-separated allowlist and
+`LUNORA_CORS_ALLOW_CREDENTIALS` (`true`/`on`/`1`) opts credentials in. This lets a
+deployment set its origins through wrangler `vars` without a code change. Code
+config always wins — an explicit `security.cors` ignores the env vars entirely.
+
+A `*` wildcard combined with credentials is rejected — browsers refuse the
+combination and it defeats the allowlist. Set in code it throws at construction;
+set through the env vars the worker keeps serving the allowlist but **silently
+drops credentials** (it can't throw in the request path), and the
+[`@lunora/config`](#config-time-validation) validator catches the same mistake at
+build time. Preflight (`OPTIONS`) is answered automatically for allowlisted origins.
 
 ### CSRF / origin guard
 
@@ -153,7 +160,6 @@ lints run on every `lunora dev` save and on deploy.
 | `user_creating_mutation_without_captcha` | warn  | Add `verifyTurnstile` / `protectPublic({ captcha })` to the user-creating procedure.  |
 | `public_arg_uses_any`                    | warn  | Replace the `v.any()` argument with a concrete validator.                             |
 | `admin_route_without_guard`              | warn  | Reference an auth/admin guard in the privileged `httpRoute` handler.                  |
-| `nondeterministic_query_mutation`        | warn  | Move `Date.now`/`Math.random`/`fetch` out of the query/mutation into an `action`.     |
 | `unbounded_string_arg`                   | info  | Add a max-length `.check` to the public string argument.                              |
 | `container_public_internet`              | info  | Set `enableInternet: false` on the container if it needs no outbound egress.          |
 
