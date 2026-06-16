@@ -1,5 +1,5 @@
 import type { Id } from "./_generated/server.js";
-import { mutation } from "./_generated/server.js";
+import { mutation, v } from "./_generated/server.js";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
 
@@ -11,11 +11,16 @@ const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
  * Because `messages` is shard-by-channel this mutation runs per-shard. The
  * runtime fans the call out to every active channel DO so the workload
  * stays close to its data.
+ *
+ * `now` is taken as an arg rather than read from `Date.now()` here — a mutation
+ * handler must be deterministic, so the dispatcher stamps the wall-clock time
+ * (the same place a cron job supplies its args) and the handler derives the
+ * 30-day cutoff from it.
  */
 export const cleanupOldMessages = mutation({
-    args: {},
-    handler: async (context): Promise<{ deleted: number }> => {
-        const cutoff = Date.now() - THIRTY_DAYS_MS;
+    args: { now: v.number() },
+    handler: async (context, { now }): Promise<{ deleted: number }> => {
+        const cutoff = now - THIRTY_DAYS_MS;
         // Indexed range scan on `by_created` — reads only the stale rows
         // (`createdAt < cutoff`) instead of loading every message and filtering
         // in memory.

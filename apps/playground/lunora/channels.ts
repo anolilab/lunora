@@ -24,16 +24,24 @@ export const list = query({
  *
  * Accepts an optional client-generated `id` so the offline outbox can key its
  * optimistic channel by the same id the persisted row carries.
+ *
+ * `createdAt` is taken as an arg rather than read from `Date.now()` here — a
+ * mutation handler must be deterministic, so the client stamps it (its optimistic
+ * row carries the same value, so optimistic and persisted rows agree).
  */
 export const create = mutation({
-    args: { id: v.optional(v.string()), name: v.string() },
-    handler: async (context, { id, name }): Promise<Id<"channels">> => {
+    args: {
+        createdAt: v.number(),
+        id: v.optional(v.string().meta({ schema: { maxLength: 64 } })),
+        name: v.string().meta({ schema: { maxLength: 128 } }),
+    },
+    handler: async (context, { createdAt, id, name }): Promise<Id<"channels">> => {
         const userId = (context.auth.userId ?? "anonymous") as Id<"users">;
 
         const channelId = await context.db.insert(
             "channels",
             {
-                createdAt: Date.now(),
+                createdAt,
                 createdBy: userId,
                 name,
             },

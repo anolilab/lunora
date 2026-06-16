@@ -22,12 +22,12 @@ import { mutation, query, v } from "./_generated/server.js";
  */
 export const onEmail = mutation({
     args: {
-        from: v.string(),
-        messageId: v.optional(v.string()),
+        from: v.string().meta({ schema: { maxLength: 320 } }),
+        messageId: v.optional(v.string().meta({ schema: { maxLength: 256 } })),
         receivedAt: v.number(),
-        subject: v.optional(v.string()),
-        text: v.optional(v.string()),
-        to: v.array(v.string()),
+        subject: v.optional(v.string().meta({ schema: { maxLength: 512 } })),
+        text: v.optional(v.string().meta({ schema: { maxLength: 100_000 } })),
+        to: v.array(v.string().meta({ schema: { maxLength: 320 } })),
     },
     handler: async (context, { from, messageId, receivedAt, subject, text, to }): Promise<Id<"inbox">> =>
         context.db.insert("inbox", {

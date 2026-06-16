@@ -8,7 +8,10 @@ import { action, query, v } from "./_generated/server.js";
  * capability — queries/mutations only get the read-only storage surface.
  */
 export const uploadAvatar = action({
-    args: { contentType: v.string(), key: v.string() },
+    args: {
+        contentType: v.string().meta({ schema: { maxLength: 128 } }),
+        key: v.string().meta({ schema: { maxLength: 256 } }),
+    },
     handler: async (context, { contentType, key }): Promise<{ key: string; url: string }> => {
         const userId = context.auth.userId ?? "anonymous";
         const scopedKey = `avatars/${userId}/${key}`;

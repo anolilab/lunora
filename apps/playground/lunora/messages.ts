@@ -29,15 +29,25 @@ export const list = query({
  * persisted server row must carry the *same* id for the sync engine to supersede
  * the optimistic entry on ack (per-row key match). Forwarded to `insert` as the
  * validated `clientId`; without it Lunora mints a fresh server id as usual.
+ *
+ * `createdAt` is taken as an arg rather than read from `Date.now()` here — a
+ * mutation handler must be deterministic, so the caller stamps the timestamp
+ * (the client's optimistic row, or the welcome workflow's step). Forwarding the
+ * client's own value also makes the optimistic and persisted rows agree on it.
  */
 export const send = mutation({
-    args: { channelId: v.id("channels"), id: v.optional(v.string()), text: v.string() },
-    handler: async (context, { channelId, id, text }): Promise<Id<"messages">> =>
+    args: {
+        channelId: v.id("channels"),
+        createdAt: v.number(),
+        id: v.optional(v.string().meta({ schema: { maxLength: 64 } })),
+        text: v.string().meta({ schema: { maxLength: 4096 } }),
+    },
+    handler: async (context, { channelId, createdAt, id, text }): Promise<Id<"messages">> =>
         context.db.insert(
             "messages",
             {
                 channelId,
-                createdAt: Date.now(),
+                createdAt,
                 text,
                 userId: context.auth.userId ?? "anonymous",
             },

@@ -19,15 +19,26 @@ export const channelWelcome = defineWorkflow<{ channelId: Id<"channels"> }, { ch
     handler: async (context) => {
         const { channelId } = context.params;
 
+        // `createdAt` is stamped inside the durable step (which runs once and
+        // memoizes its result) — `messages.send` is a deterministic mutation that
+        // takes the timestamp as an arg rather than calling `Date.now()` itself.
         await context.step.do("greet", () =>
-            context.run(api.messages.send, { channelId, text: "👋 Welcome to the channel! Say hi to get started." }, { shardKey: channelId }),
+            context.run(
+                api.messages.send,
+                { channelId, createdAt: Date.now(), text: "👋 Welcome to the channel! Say hi to get started." },
+                { shardKey: channelId },
+            ),
         );
 
         // Durable wait — the workflow hibernates here and resumes after a minute.
         await context.step.sleep("settle", "1 minute");
 
         await context.step.do("tips", () =>
-            context.run(api.messages.send, { channelId, text: "Tip: messages stream in real time over a WebSocket subscription." }, { shardKey: channelId }),
+            context.run(
+                api.messages.send,
+                { channelId, createdAt: Date.now(), text: "Tip: messages stream in real time over a WebSocket subscription." },
+                { shardKey: channelId },
+            ),
         );
 
         context.log.info("channel welcome sequence complete", { channelId });

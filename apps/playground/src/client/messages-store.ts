@@ -55,7 +55,7 @@ export const getMessagesStore = (client: LunoraClient): MessagesStore => {
                     };
                 },
                 toArgs: (row) => {
-                    return { id: row._id, name: row.name };
+                    return { createdAt: row.createdAt, id: row._id, name: row.name };
                 },
             },
             list: api.channels.list,
@@ -74,7 +74,7 @@ export const getMessagesStore = (client: LunoraClient): MessagesStore => {
                     };
                 },
                 toArgs: (row) => {
-                    return { channelId: row.channelId, id: row._id, text: row.text };
+                    return { channelId: row.channelId, createdAt: row.createdAt, id: row._id, text: row.text };
                 },
             },
             list: api.messages.list,
