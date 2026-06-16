@@ -52,6 +52,7 @@ import type {
 } from "./rank";
 import { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
 import type { ReactiveCache } from "./reactive-cache";
+import { containsRelationPredicate, resolveRelationPredicates } from "./relation-predicates";
 import type { RelationDefinitionLike } from "./relations";
 import { applyOnDelete, resolveWith, runRowValidators } from "./relations";
 import { buildFtsMatch, ftsTableName, scoreDocument, stringifySearchText, tokenizeSearch } from "./search-text";
@@ -1740,6 +1741,19 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const relationCounter = (relationTable: string, relationWhere?: WhereInput): Promise<number> =>
         routeBackend(relationTable, "relation load").count(relationTable, relationWhere);
 
+    /**
+     * Relation-crossing predicates (`{ author: { is: W } }`, …) are resolved
+     * only on the `findMany` read path. The aggregate/count/group/rank paths
+     * compile their predicate directly, where such a node would silently
+     * mis-compile as an ordinary column comparison — so reject it with a clear
+     * error instead of returning a confusing empty result.
+     */
+    const assertFlatPredicate = (where: WhereInput | undefined, predicateTable: string, op: string): void => {
+        if (where && containsRelationPredicate(where, schema, predicateTable)) {
+            throw new Error(`relation-crossing predicates are not supported in ${op}() — use them in findMany/findFirst or an RLS read policy`);
+        }
+    };
+
     let triggerDepth = 0;
 
     /**
@@ -2386,6 +2400,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             }
 
             const effective = mergeWhere(aggOptions.baseWhere, aggOptions.where);
+
+            assertFlatPredicate(effective, tableName, "aggregate");
+
             const { params, sql: whereSql } = compileWhere(effective, doWhereStrategy);
             const aggregateSql = aggregateSqlFunction(aggOptions.op);
             const ref = jsonPath(aggOptions.field);
@@ -2438,6 +2455,8 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             onRead(tableName, SCAN_DEP);
 
             const effective = mergeWhere(countOptions.baseWhere, countOptions.where);
+
+            assertFlatPredicate(effective, tableName, "count");
 
             // Indexed path: if the user passed a plain conjunction of equality
             // filters and a declared aggregateIndex covers them, route to the
@@ -2612,6 +2631,18 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // RLS (3.2) / aggregates (3.1) inject a `baseWhere` we AND-merge
             // before the keyset seek so policy + cursor compose cleanly.
             let predicate: WhereInput | undefined = mergeWhere(args.baseWhere, args.where);
+
+            // Rewrite any relation-crossing predicate (`{ author: { is: W } }`,
+            // `{ posts: { some: W } }`, …) into a flat `IN`/`NOT IN` via a
+            // backend-routed child fetch, *before* compiling — the predicate may
+            // arrive from caller `where` or an injected RLS `baseWhere`. A read
+            // with no relation predicates returns unchanged (no extra query).
+            predicate = await resolveRelationPredicates(predicate, {
+                fetcher: relationFetcher,
+                relationBaseWhere: args.relationBaseWhere,
+                schema,
+                tableName,
+            });
 
             if (seek) {
                 predicate = predicate ? { AND: [predicate, seek] } : seek;
@@ -2799,6 +2830,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             }
 
             const effective = mergeWhere(groupOptions.baseWhere, groupOptions.where);
+
+            assertFlatPredicate(effective, tableName, "groupBy");
+
             const { params, sql: whereSql } = compileWhere(effective, doWhereStrategy);
 
             const select = groupOptions.by.map((field) => `${jsonPath(field)} AS ${quoteIdentifier(field)}`);
@@ -3117,6 +3151,9 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // to scope the rank — but only when it matches the row's stored
             // partition (otherwise the row isn't in the requested scope).
             const effective = mergeWhere(rankOptions.baseWhere, rankOptions.where);
+
+            assertFlatPredicate(effective, tableName, "rank");
+
             const partitionFromWhere = resolveRankPartition(index, effective);
 
             if (partitionFromWhere) {

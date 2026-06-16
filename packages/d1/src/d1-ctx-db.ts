@@ -66,6 +66,7 @@ import {
     rankTableName,
     readAggregateValue,
     resolveRankPartition,
+    resolveRelationPredicates,
     resolveWith,
     runRowValidators,
     runTriggers,
@@ -2239,9 +2240,43 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             const orderKeys = normalizeOrderKeys(args.orderBy);
             const seek = args.cursor ? buildSeekWhere(orderKeys, decodeCursor(args.cursor)) : undefined;
 
+            // Relation reads/counts routed by the child's backend: a shard-local
+            // child of this global parent fans out via the injected cross-shard
+            // reader (or throws when unwired); global/same-backend children stay
+            // on the local D1 writer. Defined here so referencing `writer` is at
+            // call time (the routed fetcher and `writer.findMany` are mutually
+            // recursive for nested `with`) and so the relation-predicate
+            // pre-resolver below can reuse the same routing.
+            const relationFetcher: DatabaseWriterLike["findMany"] = (childTable, childArgs) => {
+                if (!isShardLocalTarget(childTable)) {
+                    return writer.findMany(childTable, childArgs);
+                }
+
+                return crossShardReader ? crossShardReader(childTable, childArgs) : crossBackendUnsupported(childTable);
+            };
+            const relationCounter: DatabaseWriterLike["count"] = (childTable, where) => {
+                if (!isShardLocalTarget(childTable)) {
+                    return writer.count(childTable, where);
+                }
+
+                return crossShardCounter ? crossShardCounter(childTable, where) : crossBackendUnsupported(childTable);
+            };
+
             // RLS (3.2) / aggregates (3.1) inject `baseWhere` we AND-merge
             // before the keyset seek so policy + cursor compose cleanly.
             let predicate: undefined | WhereInput = mergeWhere(args.baseWhere, args.where);
+
+            // Rewrite relation-crossing predicates into flat `IN`/`NOT IN` via a
+            // backend-routed child fetch before compiling. `relationBaseWhere` is
+            // threaded through so a child table's RLS read filter applies on the
+            // hop (the `with`-load `resolveWith` calls below omit it — a separate
+            // pre-existing gap; the pre-resolver does not depend on that).
+            predicate = await resolveRelationPredicates(predicate, {
+                fetcher: relationFetcher,
+                relationBaseWhere: args.relationBaseWhere,
+                schema,
+                tableName,
+            });
 
             if (seek) {
                 predicate = predicate ? { AND: [predicate, seek] } : seek;
@@ -2266,27 +2301,6 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
 
             const rows = await exec.all(querySql, params);
             const documents = decodeRows(definition, rows);
-
-            // Relation reads/counts routed by the child's backend: a shard-local
-            // child of this global parent fans out via the injected cross-shard
-            // reader (or throws when unwired); global/same-backend children stay
-            // on the local D1 writer. Defined here so referencing `writer` is at
-            // call time (the routed fetcher and `writer.findMany` are mutually
-            // recursive for nested `with`).
-            const relationFetcher: DatabaseWriterLike["findMany"] = (childTable, childArgs) => {
-                if (!isShardLocalTarget(childTable)) {
-                    return writer.findMany(childTable, childArgs);
-                }
-
-                return crossShardReader ? crossShardReader(childTable, childArgs) : crossBackendUnsupported(childTable);
-            };
-            const relationCounter: DatabaseWriterLike["count"] = (childTable, where) => {
-                if (!isShardLocalTarget(childTable)) {
-                    return writer.count(childTable, where);
-                }
-
-                return crossShardCounter ? crossShardCounter(childTable, where) : crossBackendUnsupported(childTable);
-            };
 
             if (limit === undefined) {
                 if (args.with) {

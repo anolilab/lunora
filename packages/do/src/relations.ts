@@ -412,5 +412,5 @@ const runRowValidators = (definition: TableDefinitionLike, document: Record<stri
     }
 };
 
-export { applyOnDelete, resolveWith, runRowValidators };
+export { applyOnDelete, distinctValues, resolveWith, runRowValidators };
 export type { ApplyOnDeleteOptions, NestedWith, OnDeleteActionLike, RelationDefinitionLike, ResolveWithOptions, WithInput };
