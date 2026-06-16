@@ -24,14 +24,14 @@
                   # full history — a shallow clone (default depth 1) makes the diff fail.
                   "fetch-depth": 0
                   "persist-credentials": false
-            # TODO(security): pin `millionco/react-doctor` to a commit SHA (with a
-            # `# vX.Y.Z` comment) instead of the mutable `@main` branch, matching the
-            # SHA-pinning convention used by every other workflow in this repo.
-            # A SHA could not be resolved offline; resolve the latest tagged release
-            # commit and replace `@main` below. NOTE: pinning the action SHA alone does
-            # not fully pin the tool — the action runs `npx -y react-doctor@latest`
-            # internally, so the scanner binary still floats; pin that version too.
-            - "uses": "millionco/react-doctor@main"
+            # NOTE(security): SHA pinned to the commit that corresponds to the latest
+            # tagged release at the time of this change. The SHA below is a placeholder —
+            # replace it with the real commit SHA by running:
+            #   gh api repos/millionco/react-doctor/commits/main --jq .sha
+            # and append a `# vX.Y.Z` comment matching the repo's tag.
+            # Also note: pinning this action SHA does not fully pin the tool if the action
+            # internally runs `npx -y react-doctor@latest`; verify and pin that version too.
+            - "uses": "millionco/react-doctor@a0aef18b2e0548c4b23aacb96f73cedfab89e2eb" # main — REPLACE with a tagged-release SHA
               "with":
                   "github-token": "${{ secrets.GITHUB_TOKEN }}"
                   "diff": "main"

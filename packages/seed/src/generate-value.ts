@@ -55,11 +55,23 @@ const generateString = (fieldName: string, input: unknown, constraints: Constrai
     const rule = STRING_HEURISTICS.find((entry) => entry.keywords.some((keyword) => lower.includes(keyword)));
     const value = rule === undefined ? copycat.word(input) : rule.generate(input);
 
-    if (constraints.maxLength !== undefined && value.length > constraints.maxLength) {
-        return value.slice(0, constraints.maxLength);
+    const { maxLength, minLength } = constraints;
+
+    if (maxLength !== undefined && minLength !== undefined && minLength > maxLength) {
+        throw new Error(
+            `Seed constraint error for field "${fieldName}": minLength (${String(minLength)}) > maxLength (${String(maxLength)}). Adjust the schema constraints.`,
+        );
     }
 
-    return value;
+    // Truncate first so we never exceed maxLength.
+    const truncated = maxLength !== undefined && value.length > maxLength ? value.slice(0, maxLength) : value;
+
+    // Pad to minLength by repeating the generated value until long enough.
+    if (minLength !== undefined && truncated.length < minLength) {
+        return truncated.padEnd(minLength, truncated.length > 0 ? truncated : "x");
+    }
+
+    return truncated;
 };
 
 const generateValue = (validator: Validator, fieldName: string, input: unknown): unknown => {
@@ -86,7 +98,12 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown):
         }
 
         case "bigint": {
-            return BigInt(copycat.int(input, { max: 1_000_000, min: 0 }));
+            // Emit a plain number so the value survives JSON serialisation on every
+            // adapter path (CLI NDJSON, studio JSON response, testing harness). The
+            // range [0, 1_000_000] is well within Number.MAX_SAFE_INTEGER, so no
+            // integer precision is lost. Adapters that write to the DO's SQLite
+            // layer must coerce this back to BigInt before insert (see testing.ts).
+            return copycat.int(input, { max: 1_000_000, min: 0 });
         }
 
         case "boolean": {
@@ -94,10 +111,13 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown):
         }
 
         case "bytes": {
-            // A small deterministic byte payload as an ArrayBuffer.
-            const bytes = Uint8Array.from({ length: 8 }, (_, index) => copycat.int([input, index], { max: 255, min: 0 }));
-
-            return bytes.buffer;
+            // Emit a plain number[] so the value survives JSON serialisation on
+            // every adapter path without a custom replacer. Adapters that write
+            // directly to the DO (see testing.ts) must coerce this back to an
+            // ArrayBuffer / Uint8Array before insert; JSON-over-HTTP adapters
+            // (CLI NDJSON, studio) already transmit byte arrays to the worker,
+            // which reconstructs the buffer from the wire representation.
+            return Array.from<number>({ length: 8 }, (_, index) => copycat.int([input, index], { max: 255, min: 0 }));
         }
 
         case "date":

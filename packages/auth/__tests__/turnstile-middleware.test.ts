@@ -98,6 +98,18 @@ describe("verifyTurnstileMiddleware", () => {
         expect(error.status).toBe(403);
     });
 
+    it("throws FORBIDDEN/403 when the returned hostname does not match expectedHostname", async () => {
+        expect.assertions(2);
+
+        const fetch = vi.fn<FetchLike>(async () => jsonResponse({ hostname: "evil.example", success: true }));
+        const mw = verifyTurnstileMiddleware<Ctx>({ expectedHostname: "app.example", fetch, secret: "sek", token: (c) => c.turnstileToken });
+
+        const error = (await run(mw, { turnstileToken: "good" }).catch((error_: unknown) => error_)) as LunoraErrorShape;
+
+        expect(error.code).toBe("FORBIDDEN");
+        expect(error.status).toBe(403);
+    });
+
     it("fails closed (FORBIDDEN/403) on a siteverify transport error", async () => {
         expect.assertions(2);
 

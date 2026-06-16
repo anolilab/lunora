@@ -1,9 +1,25 @@
 import type { Middleware } from "@lunora/server";
 
-import type { FetchLike } from "./turnstile";
+import type { FetchLike, TurnstileVerifyResult } from "./turnstile";
 import { verifyTurnstile } from "./turnstile";
 
 interface VerifyTurnstileMiddlewareOptions<Context> {
+    /**
+     * Assert the widget `action` the token was solved for (forwarded to
+     * {@link verifyTurnstile}). When set and the siteverify response's `action`
+     * does not match, the verdict is treated as a failure (403). Optional.
+     */
+    expectedAction?: string;
+
+    /**
+     * Assert the `hostname` the challenge was solved on (forwarded to
+     * {@link verifyTurnstile}). When set and the siteverify response's `hostname`
+     * does not match, the verdict is treated as a failure (403). Set this when a
+     * single secret/sitekey is shared across multiple domains to stop a token
+     * harvested on one origin being replayed against this procedure. Optional.
+     */
+    expectedHostname?: string;
+
     /**
      * Behavior when the siteverify call itself throws (network error, non-2xx).
      * Defaults to `false` (**fail closed**: reject with 403). Set `true` only
@@ -36,6 +52,14 @@ interface VerifyTurnstileMiddlewareOptions<Context> {
      * must travel in the function `args` and be read out here.
      */
     token: (context: Context) => string | undefined;
+
+    /**
+     * Extra predicate run on a `success: true` verdict (after the built-in
+     * `expectedHostname`/`expectedAction` checks). Return `false` to reject the
+     * request with 403 — use it for any custom replay/abuse guard that needs the
+     * full verdict (e.g. matching `cdata`, or one hostname out of an allow-list).
+     */
+    validate?: (result: TurnstileVerifyResult) => boolean;
 }
 
 /**
@@ -55,6 +79,12 @@ interface VerifyTurnstileMiddlewareOptions<Context> {
  * **Failure policy:** if the siteverify call itself throws, the middleware
  * **fails closed by default** (logs and rejects with 403). Pass
  * `failOpen: true` to admit the request instead — mirrors `@lunora/ratelimit`.
+ *
+ * **Cross-origin replay:** a token solved on one origin can be replayed against
+ * a different endpoint when a single secret/sitekey is shared across multiple
+ * domains. Pass `expectedHostname` (and optionally `expectedAction`, or a custom
+ * `validate(result)` predicate) to assert the siteverify response's `hostname`
+ * /`action` and reject mismatches with 403.
  */
 export const verifyTurnstileMiddleware =
     <Context>(options: VerifyTurnstileMiddlewareOptions<Context>): Middleware<Context, Context> =>
@@ -73,6 +103,8 @@ export const verifyTurnstileMiddleware =
 
         try {
             result = await verifyTurnstile({
+                expectedAction: options.expectedAction,
+                expectedHostname: options.expectedHostname,
                 fetch: options.fetch,
                 remoteip: options.remoteip?.(ctx),
                 secret: options.secret,
@@ -96,7 +128,7 @@ export const verifyTurnstileMiddleware =
             });
         }
 
-        if (!result.success) {
+        if (!result.success || (options.validate !== undefined && !options.validate(result))) {
             throw Object.assign(new Error(options.message ?? "turnstile verification failed"), {
                 code: "FORBIDDEN",
                 errorCodes: result.errorCodes,

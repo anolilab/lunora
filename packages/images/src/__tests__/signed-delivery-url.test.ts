@@ -117,6 +117,19 @@ describe("buildSignedImageUrl / verifySignedImageUrl", () => {
 
         await expect(buildSignedImageUrl({ baseUrl: BASE, expiresInSeconds: 8 * 24 * 60 * 60, key: "k.png", secret: SECRET })).rejects.toThrow(/7 days/);
     });
+
+    it("round-trips a key that has a leading slash (canonical/URL mismatch regression)", async () => {
+        // A leading-slash key was previously signed with the slash in the
+        // canonical but built into the URL without it, so verify always returned
+        // bad_signature. Both paths now normalize the key first.
+        expect.assertions(2);
+
+        const url = await buildSignedImageUrl({ baseUrl: BASE, key: "/uploads/avatar.png", secret: SECRET });
+        const result = await verifySignedImageUrl(url, SECRET);
+
+        expect(result.valid).toBe(true);
+        expect(result.key).toBe("uploads/avatar.png");
+    });
 });
 
 describe("buildImageDeliveryUrl", () => {

@@ -29,6 +29,17 @@ import type {
 
 const jsonResponse = (body: unknown, status: number): Response => Response.json(body, { headers: { "content-type": "application/json" }, status });
 
+/** Drop a caller-supplied `referenceId` from checkout metadata — it's framework-controlled, never caller-set. */
+const stripReferenceId = (metadata: Record<string, string> | undefined): Record<string, string> | undefined => {
+    if (!metadata || !("referenceId" in metadata)) {
+        return metadata;
+    }
+
+    const { referenceId: _referenceId, ...rest } = metadata;
+
+    return rest;
+};
+
 /** Returns whether the current caller may act on `referenceId`. Throwing is also treated as denial. */
 export type AuthorizeReference = (referenceId: string) => boolean | Promise<boolean>;
 
@@ -108,6 +119,11 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
     const startCheckout = async (input: CheckoutInput): Promise<CheckoutResult> => {
         await ensureAuthorized(input.referenceId);
 
+        // `referenceId` is the tenant-isolation key and is framework-controlled: never let caller-supplied
+        // checkout metadata smuggle a `referenceId` override that decouples the attributed owner from the
+        // authorized one. Strip it here so the invariant holds regardless of adapter spread order.
+        const metadata = stripReferenceId(input.metadata);
+
         let { customerId } = input;
 
         if (!customerId) {
@@ -123,9 +139,24 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
             }
         }
 
-        const key = input.idempotencyKey ?? idempotencyKey("checkout", adapter.identifier, input.referenceId, input.priceId, input.mode);
+        // Derive a key over every request-shaping field, not just (reference, price, mode): a second
+        // checkout that changes quantity/URLs/metadata must not collide with the provider's idempotency
+        // window (which would error or return the stale earlier session).
+        const key =
+            input.idempotencyKey ??
+            idempotencyKey(
+                "checkout",
+                adapter.identifier,
+                input.referenceId,
+                input.priceId,
+                input.mode,
+                String(input.quantity ?? 1),
+                input.successUrl,
+                input.cancelUrl,
+                metadata ? JSON.stringify(metadata) : "",
+            );
 
-        return adapter.createCheckout({ ...input, customerId, idempotencyKey: key });
+        return adapter.createCheckout({ ...input, customerId, idempotencyKey: key, metadata });
     };
 
     // Resolve one feature's allowance — shared by `check` and `listBalances`. A metered feature
@@ -157,11 +188,18 @@ export const createPayment = (options: CreatePaymentOptions): LunoraPayment => {
         cancelSubscription: async (subscriptionId, cancelOptions) => {
             const existing = await store.getSubscription(adapter.identifier, subscriptionId);
 
+            // Collapse "doesn't exist" and "not yours" into one indistinguishable NOT_FOUND so the
+            // endpoint can't be used as a cross-tenant existence oracle. A non-owner authorizer denial
+            // is rewritten to the same 404 as a genuinely missing id.
             if (!existing) {
                 throw new LunoraPaymentError("NOT_FOUND", `subscription "${subscriptionId}" not found`);
             }
 
-            await ensureAuthorized(existing.referenceId);
+            try {
+                await ensureAuthorized(existing.referenceId);
+            } catch {
+                throw new LunoraPaymentError("NOT_FOUND", `subscription "${subscriptionId}" not found`);
+            }
 
             const key = cancelOptions?.idempotencyKey ?? idempotencyKey("cancel_subscription", adapter.identifier, subscriptionId);
             const updated = await adapter.cancelSubscription(subscriptionId, { ...cancelOptions, idempotencyKey: key });

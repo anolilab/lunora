@@ -142,4 +142,22 @@ describe("loadAnalyticsRuntimeMetrics", () => {
 
         await expect(loadAnalyticsRuntimeMetrics(stubSource({}), { dataset: "ANALYTICS; DROP TABLE x" })).rejects.toThrow(/invalid Analytics Engine dataset/u);
     });
+
+    it("escapes backslashes in the group filter so a trailing backslash cannot consume the closing quote", async () => {
+        expect.assertions(1);
+
+        // A group value ending in `\` would, without backslash escaping, produce
+        // `... = 'bad\'` where the backslash consumes the closing quote and breaks
+        // the SQL literal.  With the fix it becomes `... = 'bad\\'`, a valid
+        // escaped-backslash literal.
+        const source = stubSource({ shardRequest: [] });
+
+        await loadAnalyticsRuntimeMetrics(source, { dataset: "ANALYTICS", group: "bad\\" });
+
+        const calls = (source.query as ReturnType<typeof vi.fn>).mock.calls.map((call) => call[0] as string);
+        const shardQuery = calls.find((sql) => sql.includes(`'${AE_METRIC_EVENTS.shardRequest.event}'`));
+
+        // The group literal must appear as `'bad\\'` (backslash doubled) in the SQL.
+        expect(shardQuery).toContain("'bad\\\\'");
+    });
 });

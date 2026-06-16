@@ -138,8 +138,20 @@ type GlobalCdcSyncFunction = (request: { limit?: number; sinceSeq: number }) => 
  */
 type GlobalCdcApplyFunction = (request: { changes: ReadonlyArray<Record<string, unknown>> }) => Promise<number>;
 
-/** Bulk import of `.global()` rows. Returns insert counts + errors merged across tables. */
-type GlobalImportFunction = (request: { rows: ReadonlyArray<{ doc: Record<string, unknown>; table: string }>; startLine?: number }) => Promise<{
+/**
+ * Bulk import of `.global()` rows. Returns insert counts + errors merged across
+ * tables.
+ *
+ * Each row carries its true physical source `line` so error attribution stays
+ * accurate even when global rows are interspersed with shard rows or blank lines
+ * in the NDJSON (a single `startLine` can't describe non-contiguous rows). The
+ * `startLine` field is the line of the FIRST global row, retained only as a
+ * backward-compatible fallback for importers that haven't adopted per-row lines.
+ */
+type GlobalImportFunction = (request: {
+    rows: ReadonlyArray<{ doc: Record<string, unknown>; line: number; table: string }>;
+    startLine?: number;
+}) => Promise<{
     conflicts: number;
     errors: ReadonlyArray<{ code: string; line: number; message: string; table: string }>;
     inserted: Record<string, number>;

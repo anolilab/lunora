@@ -208,4 +208,62 @@ describe("constraint_validator", () => {
         expect(finding?.level).toBe("WARN");
         expect(finding?.cacheKey).toMatch(/^constraint_validator:/);
     });
+
+    describe("optional and nullable fields must not produce false-positive NOT NULL findings", () => {
+        it("does not flag a null value in a v.optional() column", () => {
+            expect.assertions(1);
+
+            // `bio` is declared optional — a null/absent value is perfectly valid
+            // and must not produce a constraint_validator:null finding.
+            const schemaWithOptional = fromServerSchema(
+                defineSchema({
+                    profiles: defineTable({ bio: v.optional(v.string()), handle: v.string() }),
+                }),
+            );
+            const sample = makeSample("profiles", [
+                { _id: "p1", bio: null, handle: "alice" },
+                { _id: "p2", handle: "bob" }, // bio absent
+            ]);
+
+            const findings = constraintValidator.run({ schema: schemaWithOptional, tableSamples: [sample] });
+
+            expect(findings.filter((f) => f.metadata["kind"] === "null" && f.metadata["column"] === "bio")).toHaveLength(0);
+        });
+
+        it("does not flag a null value in a .nullable() column", () => {
+            expect.assertions(1);
+
+            // `deletedAt` uses .nullable() — null is a valid stored value and
+            // must not trigger a NOT NULL finding.
+            const schemaWithNullable = fromServerSchema(
+                defineSchema({
+                    items: defineTable({ deletedAt: v.number().nullable(), name: v.string() }),
+                }),
+            );
+            const sample = makeSample("items", [
+                { _id: "i1", deletedAt: null, name: "widget" },
+                { _id: "i2", deletedAt: 1_700_000_000_000, name: "gadget" },
+            ]);
+
+            const findings = constraintValidator.run({ schema: schemaWithNullable, tableSamples: [sample] });
+
+            expect(findings.filter((f) => f.metadata["kind"] === "null" && f.metadata["column"] === "deletedAt")).toHaveLength(0);
+        });
+
+        it("still flags null in a required (non-optional, non-nullable) column", () => {
+            expect.assertions(1);
+
+            // `name` is required — a null value is a genuine violation.
+            const schemaWithRequired = fromServerSchema(
+                defineSchema({
+                    items: defineTable({ name: v.string() }),
+                }),
+            );
+            const sample = makeSample("items", [{ _id: "i1", name: null }]);
+
+            const findings = constraintValidator.run({ schema: schemaWithRequired, tableSamples: [sample] });
+
+            expect(findings.filter((f) => f.metadata["kind"] === "null" && f.metadata["column"] === "name")).toHaveLength(1);
+        });
+    });
 });

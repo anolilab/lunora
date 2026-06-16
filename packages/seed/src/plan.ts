@@ -168,7 +168,11 @@ const seedPlan = (schema: Schema, options: SeedOptions = {}): ReadonlyArray<Tabl
     const requested = new Set(only ?? specs.map((spec) => spec.name));
     // Pull in transitive FK parents so child foreign keys resolve, but skip any
     // parent fully covered by `existingIds` unless it was requested outright.
-    const selected = new Set([...fkParentClosure(specs, requested)].filter((table) => requested.has(table) || !Object.hasOwn(existingIds, table)));
+    // A parent table is considered "covered" by existingIds only when it supplies
+    // at least one id. An empty array means the caller sampled the table but found
+    // no rows — treating that as covered would leave required FKs with no pool to
+    // draw from, producing dangling placeholder ids.
+    const selected = new Set([...fkParentClosure(specs, requested)].filter((table) => requested.has(table) || (existingIds[table] ?? []).length === 0));
     const order = orderTables(specs, selected);
     const specByName = new Map(specs.map((spec) => [spec.name, spec]));
 

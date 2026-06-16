@@ -97,6 +97,36 @@ describe("parseInboundEmail", () => {
         expect(parsed.headers["subject"]).toBe("Re: Original");
     });
 
+    it("parses DKIM/SPF/DMARC verdicts from Authentication-Results", async () => {
+        expect.assertions(3);
+
+        const authed = crlf([
+            "From: Eve <eve@example.com>",
+            "To: rcpt@example.test",
+            "Subject: Authed",
+            "Message-ID: <auth-1@example.com>",
+            "Authentication-Results: mx.cloudflare.net; dkim=pass header.d=example.com; spf=pass; dmarc=fail",
+            "Content-Type: text/plain; charset=utf-8",
+            "",
+            "body",
+            "",
+        ]);
+
+        const parsed = await parseInboundEmail(authed);
+
+        expect(parsed.authentication.dkim).toBe("pass");
+        expect(parsed.authentication.spf).toBe("pass");
+        expect(parsed.authentication.dmarc).toBe("fail");
+    });
+
+    it("reports all-null verdicts when Authentication-Results is absent", async () => {
+        expect.assertions(1);
+
+        const parsed = await parseInboundEmail(MULTIPART_ALTERNATIVE);
+
+        expect(parsed.authentication).toStrictEqual({ dkim: null, dmarc: null, spf: null });
+    });
+
     it("accepts an ArrayBuffer as well as a string", async () => {
         expect.assertions(1);
 

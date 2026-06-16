@@ -23,6 +23,16 @@ export interface AdvisorTable {
     indexes: ReadonlyArray<AdvisorIndex>;
     /** Table name. */
     name: string;
+    /**
+     * Column names that are optional or nullable and therefore may legally hold
+     * `null` / `undefined` in stored rows. Populated by {@link fromServerSchema}
+     * from the runtime validator graph (`v.optional(...)` → kind `"optional"`;
+     * `.nullable()` → `column.notNull === false`). When absent (e.g. from the
+     * codegen feeder, which does not supply this field), constraint lints that
+     * check NOT NULL should skip the check entirely or treat every field as
+     * required (the codegen feeder never runs runtime lints anyway).
+     */
+    optionalFields?: ReadonlySet<string>;
     /** Declared relations (`.relations((r) => …)`). */
     relations: ReadonlyArray<AdvisorRelation>;
 }
@@ -83,10 +93,33 @@ export const fromServerSchema = (schema: Schema): AdvisorSchema => {
                 }),
             ];
 
+            // Collect optional/nullable field names so the constraint-validator
+            // can skip them when checking NOT NULL. A field is optional when its
+            // validator kind is "optional" (v.optional(inner)) or nullable when
+            // its column.notNull flag is false (inner.nullable()).
+            const optionalFields = new Set<string>();
+
+            for (const [fieldName, validator] of Object.entries(table.shape)) {
+                if (validator.kind === "optional") {
+                    optionalFields.add(fieldName);
+                } else {
+                    // Access the internal _meta.column shape that the runtime
+                    // validator carries. This is an internal implementation
+                    // detail of @lunora/values — the cast is intentional and
+                    // matches the same pattern used in isOrWrapsFromValidator.
+                    const column = (validator as { _meta?: { column?: { notNull?: boolean } } })._meta?.column;
+
+                    if (column !== undefined && column.notNull === false) {
+                        optionalFields.add(fieldName);
+                    }
+                }
+            }
+
             return {
                 fields: Object.keys(table.shape),
                 indexes,
                 name,
+                optionalFields,
                 relations: Object.entries(table.relationMap).map(([accessor, relation]) => {
                     return {
                         field: relation.field,

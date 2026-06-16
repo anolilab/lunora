@@ -40,17 +40,35 @@ describe("cloudflare transport (default provider)", () => {
         expect(sendEmail).toHaveBeenCalledTimes(1);
     });
 
-    it("delivers to the single first recipient (binding is single-recipient)", async () => {
+    it("delivers to a single recipient (binding is single-recipient)", async () => {
         expect.assertions(1);
 
         sendEmail.mockResolvedValue({ data: { messageId: "cf-2" }, success: true });
         const mailer = createMailer({ cloudflareSend: async () => undefined, from: "noreply@x.test" });
 
-        await mailer.send({ subject: "Hi", text: "x", to: ["first@x.test", "second@x.test"] });
+        await mailer.send({ subject: "Hi", text: "x", to: "only@x.test" });
 
         const [options] = sendEmail.mock.calls[0] as [{ to: { email: string } }];
 
-        expect(options.to).toStrictEqual({ email: "first@x.test" });
+        expect(options.to).toStrictEqual({ email: "only@x.test" });
+    });
+
+    it("throws loudly (no silent truncation) when given multiple `to` recipients", async () => {
+        expect.assertions(2);
+
+        const mailer = createMailer({ cloudflareSend: async () => undefined, from: "noreply@x.test" });
+
+        await expect(mailer.send({ subject: "Hi", text: "x", to: ["first@x.test", "second@x.test"] })).rejects.toThrow(/single-recipient/);
+        expect(sendEmail).not.toHaveBeenCalled();
+    });
+
+    it("throws a clear error (not a generic 'send failed') when cc/bcc is supplied", async () => {
+        expect.assertions(2);
+
+        const mailer = createMailer({ cloudflareSend: async () => undefined, from: "noreply@x.test" });
+
+        await expect(mailer.send({ cc: ["cc@x.test"], subject: "Hi", text: "x", to: "user@x.test" })).rejects.toThrow(/does not support cc\/bcc/);
+        expect(sendEmail).not.toHaveBeenCalled();
     });
 
     it("throws a generic error and logs the provider detail on failure", async () => {

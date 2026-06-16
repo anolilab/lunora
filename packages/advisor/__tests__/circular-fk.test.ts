@@ -134,4 +134,48 @@ describe("circular_fk", () => {
         expect(finding?.metadata["path"]).toContain("→");
         expect(Array.isArray(finding?.metadata["cycle"])).toBe(true);
     });
+
+    it("detects overlapping cycles that share an interior node (chord / diamond pattern)", () => {
+        expect.assertions(2);
+
+        // Graph: A→B, A→C, B→D, C→D, D→A
+        // Two distinct simple cycles share node D:
+        //   A → B → D → A
+        //   A → C → D → A
+        // The old global `visited` set would detect the first and then skip D on
+        // the second path because D was already marked visited, silently dropping
+        // the second cycle.
+        const schema = defineSchema({
+            a: defineTable({ bId: v.id("b"), cId: v.id("c") }).relations((r) => {
+                return {
+                    b: r.one("b", { field: "bId" }),
+                    c: r.one("c", { field: "cId" }),
+                };
+            }),
+            b: defineTable({ dId: v.id("d") }).relations((r) => {
+                return { d: r.one("d", { field: "dId" }) };
+            }),
+            c: defineTable({ dId: v.id("d") }).relations((r) => {
+                return { d: r.one("d", { field: "dId" }) };
+            }),
+            d: defineTable({ aId: v.id("a") }).relations((r) => {
+                return { a: r.one("a", { field: "aId" }) };
+            }),
+        });
+
+        const findings = run(schema);
+
+        // Both distinct cycles must be reported.
+        expect(findings.length).toBeGreaterThanOrEqual(2);
+
+        const cycles = findings.map((f) => (f.metadata["cycle"] as string[]).toSorted((x, y) => x.localeCompare(y)));
+
+        // One cycle covers {a, b, d} and the other covers {a, c, d}.
+        expect(cycles).toEqual(
+            expect.arrayContaining([
+                expect.arrayContaining(["a", "b", "d"]),
+                expect.arrayContaining(["a", "c", "d"]),
+            ]),
+        );
+    });
 });

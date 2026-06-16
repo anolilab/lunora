@@ -29,6 +29,13 @@ interface VectorQueryInputLike {
     filter?: Record<string, unknown>;
     input?: string;
     namespace?: string;
+    /**
+     * How much stored metadata to return on matches. Defaults to `"indexed"`
+     * (only fields declared as index metadata) rather than `"all"`, so a query
+     * never leaks arbitrary stored fields by default. Callers that genuinely
+     * need every field opt in with `"all"`; pass `"none"` to drop metadata.
+     */
+    returnMetadata?: "none" | "indexed" | "all";
     topK?: number;
     vector?: ReadonlyArray<number>;
 }
@@ -91,8 +98,8 @@ const createContextVectors = (lunora: LunoraVectors): VectorSearchLike => {
                 // Default to "indexed" rather than "all": returning every
                 // metadata field by default leaks whatever was stored on the
                 // vector (potentially cross-tenant if namespaces aren't wired).
-                // Callers that need full metadata opt in explicitly.
-                returnMetadata: "indexed",
+                // Callers that need full metadata opt in explicitly via input.
+                returnMetadata: input.returnMetadata ?? "indexed",
                 topK: input.topK,
                 vector: input.vector,
             });
@@ -150,31 +157,37 @@ interface SchemaLike {
 }
 
 /**
- * Index names already warned about (metadata synced without a namespace). The
- * warning is a one-time-per-process dev signal, so we dedupe by index name
- * across every hook invocation rather than spamming on every write.
+ * Index names already warned about (synced without a namespace). The warning is
+ * a one-time-per-process dev signal, so we dedupe by index name across every
+ * hook invocation rather than spamming on every write.
  */
-const sharedMetadataWarned = new Set<string>();
+const sharedNamespaceWarned = new Set<string>();
 
 /**
- * Emit a single dev warning when an index carrying metadata is synced with no
- * namespace — in a multi-tenant/sharded app that silently shares one tenant's
- * vectors + metadata with every other tenant. Side-effect-only: never touches
- * the upsert payload. At most one warning per index name per process.
+ * Emit a single dev warning when an index is synced with no namespace — in a
+ * multi-tenant/sharded app that silently shares one tenant's vectors (and any
+ * captured metadata) with every other tenant. The exposure is the vectors
+ * themselves, not just metadata: a namespace-less upsert is cross-tenant
+ * queryable (ids/scores leak existence + semantic similarity) even when the
+ * index carries no metadata, so the warning fires on ANY namespace-less sync,
+ * not only when metadata is present. Side-effect-only: never touches the upsert
+ * payload. At most one warning per index name per process.
  */
-const warnSharedMetadata = (indexName: string): void => {
-    if (sharedMetadataWarned.has(indexName)) {
+const warnSharedNamespace = (indexName: string): void => {
+    if (sharedNamespaceWarned.has(indexName)) {
         return;
     }
 
-    sharedMetadataWarned.add(indexName);
+    sharedNamespaceWarned.add(indexName);
 
     // eslint-disable-next-line no-console
     console.warn(
-        `[@lunora/vectors] index "${indexName}" syncs metadata without a namespace — in a\n` +
-            "multi-tenant/sharded app this exposes one tenant's vectors+metadata to others.\n" +
-            "Pass `namespace` (the shard/tenant key) on both write and query. Suppress via\n" +
-            "{ allowSharedMetadata: true }.",
+        `[@lunora/vectors] index "${indexName}" syncs vectors without a namespace — in a\n` +
+            "multi-tenant/sharded app this exposes one tenant's vectors (and any captured\n" +
+            "metadata) to every other tenant, since Vectorize indexes are account-global.\n" +
+            "Pass `namespace` (the shard/tenant key) on both write and query — query-side\n" +
+            "namespace filtering is mandatory for multi-tenant apps. Single-tenant apps that\n" +
+            "legitimately have no tenant key suppress this via { allowSharedNamespace: true }.",
     );
 };
 
@@ -199,11 +212,14 @@ const pickMetadata = (row: Record<string, unknown>, fields: ReadonlyArray<string
  * Tenant isolation — IMPORTANT: Vectorize indexes are account-global and shared
  * by every shard DO. Without a `namespace`, a multi-tenant sharded app has NO
  * isolation between tenants in the vector index — one tenant's vectors are
- * queryable by another. The caller MUST pass `options.namespace` (the shard /
- * tenant key) so upserts are scoped, and MUST apply the same namespace on the
- * query side. The namespace is threaded onto upserts here; pass it from the
- * shard DO that owns this hook. When it genuinely cannot be supplied, the hook
- * still functions but offers no cross-tenant isolation.
+ * queryable by another (ids/scores leak existence + semantic similarity even
+ * when no metadata is indexed). The caller MUST pass `options.namespace` (the
+ * shard / tenant key) so upserts are scoped, and MUST apply the same namespace
+ * on the query side — query-side namespace filtering is mandatory, not optional.
+ * The namespace is threaded onto upserts here; pass it from the shard DO that
+ * owns this hook. Any namespace-less sync emits a one-time-per-index dev warning
+ * (regardless of whether metadata is present); a genuinely single-tenant app
+ * suppresses it with `allowSharedNamespace: true`.
  *
  * Consistency — IMPORTANT: this hook runs inline within the mutation but talks
  * to Vectorize, which is external and non-transactional. The per-index calls
@@ -216,8 +232,8 @@ const pickMetadata = (row: Record<string, unknown>, fields: ReadonlyArray<string
  * upsert can itself fail — this is best-effort, the authoritative recovery is
  * re-running the (idempotent) write.
  */
-const createVectorSyncHook = (options: { allowSharedMetadata?: boolean; namespace?: string; schema: SchemaLike; vectors: VectorSearchLike }): WriteHook => {
-    const { allowSharedMetadata, namespace, schema, vectors } = options;
+const createVectorSyncHook = (options: { allowSharedNamespace?: boolean; namespace?: string; schema: SchemaLike; vectors: VectorSearchLike }): WriteHook => {
+    const { allowSharedNamespace, namespace, schema, vectors } = options;
 
     return async (event: WriteEvent): Promise<void> => {
         const tableDefinition = schema.tables[event.table];
@@ -284,8 +300,8 @@ const createVectorSyncHook = (options: { allowSharedMetadata?: boolean; namespac
                 await vectors.deleteByIds(entry.index.name, [event.id]);
             }),
             ...inlineToUpsert.map((entry) => async (): Promise<void> => {
-                if (!allowSharedMetadata && namespace === undefined && entry.index.metadata !== undefined && entry.index.metadata.length > 0) {
-                    warnSharedMetadata(entry.index.name);
+                if (!allowSharedNamespace && namespace === undefined) {
+                    warnSharedNamespace(entry.index.name);
                 }
 
                 await vectors.upsert(entry.index.name, {
@@ -297,8 +313,8 @@ const createVectorSyncHook = (options: { allowSharedMetadata?: boolean; namespac
                 });
             }),
             ...standaloneIndexes.map(([name, definition]) => async (): Promise<void> => {
-                if (!allowSharedMetadata && namespace === undefined && definition.metadata !== undefined) {
-                    warnSharedMetadata(name);
+                if (!allowSharedNamespace && namespace === undefined) {
+                    warnSharedNamespace(name);
                 }
 
                 await vectors.upsert(name, {

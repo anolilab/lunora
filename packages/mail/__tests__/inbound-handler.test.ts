@@ -7,6 +7,7 @@ import type { InboundEmail } from "../src/inbound/parse";
 /** A parsed message fixture used by the handler tests (parsing is covered separately). */
 const fixture: InboundEmail = {
     attachments: [],
+    authentication: { dkim: null, dmarc: null, spf: null },
     from: "alice@example.com",
     headers: { subject: "Hi" },
     messageId: "<m-1@example.com>",
@@ -51,13 +52,14 @@ describe("createInboundEmailHandler", () => {
         expect(context).toMatchObject({ ctx: { ctxToken: 1 }, env, message });
     });
 
-    it("rejects the message via setReject when dispatch throws (default onError)", async () => {
-        expect.assertions(2);
+    it("rejects with a generic reason (not internal error text) when dispatch throws", async () => {
+        expect.assertions(3);
 
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
         const message = fakeMessage();
         const handler = createInboundEmailHandler({
             dispatch: async () => {
-                throw new Error("boom");
+                throw new Error("internal secret detail");
             },
             parse: async () => fixture,
         });
@@ -65,7 +67,33 @@ describe("createInboundEmailHandler", () => {
         await handler(message, {}, undefined);
 
         expect(message.setReject).toHaveBeenCalledTimes(1);
-        expect(message.setReject).toHaveBeenCalledWith("boom");
+        // Reflected to the (attacker-controlled) sender — must NOT leak internals.
+        expect(message.setReject).toHaveBeenCalledWith("message could not be processed");
+        // The real error is logged server-side instead.
+        expect(consoleError).toHaveBeenCalledWith(expect.stringContaining("dropping message"), expect.any(Error));
+
+        consoleError.mockRestore();
+    });
+
+    it("runs the verify gate before dispatch and rejects unverified mail", async () => {
+        expect.assertions(3);
+
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const dispatch = vi.fn<() => Promise<void>>(async () => undefined);
+        const message = fakeMessage();
+        const handler = createInboundEmailHandler({
+            dispatch,
+            parse: async () => fixture,
+            verify: () => false,
+        });
+
+        await handler(message, {}, undefined);
+
+        expect(dispatch).not.toHaveBeenCalled();
+        expect(message.setReject).toHaveBeenCalledTimes(1);
+        expect(message.setReject).toHaveBeenCalledWith("message could not be processed");
+
+        consoleError.mockRestore();
     });
 
     it("routes a parse failure through a custom onError instead of setReject", async () => {
@@ -124,6 +152,36 @@ describe("dispatchToLunoraFunction", () => {
 
         expect(envelope).toMatchObject({ functionPath: "inbound:onEmail", shardKey: "__root__" });
         expect(envelope.args).toMatchObject({ from: "alice@example.com", subject: "Hi" });
+    });
+
+    it("base64-encodes binary attachment content so it survives JSON serialisation", async () => {
+        expect.assertions(3);
+
+        const { fetch, shard } = stubShard({
+            json: async () => {
+                return { result: "ok" };
+            },
+            ok: true,
+        });
+
+        const bytes = new Uint8Array([0, 1, 2, 255]);
+        const withAttachment: InboundEmail = {
+            ...fixture,
+            attachments: [{ content: bytes, disposition: "attachment", filename: "blob.bin", mimeType: "application/octet-stream" }],
+        };
+
+        const dispatch = dispatchToLunoraFunction({ functionPath: "inbound:onEmail", shard });
+
+        await dispatch(withAttachment, { ctx: undefined, env: { LUNORA_ADMIN_TOKEN: "secret" }, message: fakeMessage() });
+
+        const [, init] = fetch.mock.calls[0] as unknown as [string, { body: string }];
+        const envelope = JSON.parse(init.body) as { args: { attachments: { content: string; encoding: string }[] } };
+        const [attachment] = envelope.args.attachments;
+
+        // Round-trips intact instead of corrupting to `{}` / index-keyed object.
+        expect(attachment?.encoding).toBe("base64");
+        expect(attachment?.content).toBe(Buffer.from(bytes).toString("base64"));
+        expect([...Buffer.from(attachment?.content ?? "", "base64")]).toStrictEqual([0, 1, 2, 255]);
     });
 
     it("honours a custom shardKey and resolveArgs", async () => {
@@ -200,9 +258,10 @@ describe("dispatchToLunoraFunction", () => {
         await expect(dispatch(fixture, { ctx: undefined, env: { LUNORA_ADMIN_TOKEN: "secret" }, message: fakeMessage() })).rejects.toThrow(/returned an error/);
     });
 
-    it("end-to-end: handler + dispatcher rejects the message when the shard errors", async () => {
+    it("end-to-end: handler + dispatcher rejects with a generic reason when the shard errors", async () => {
         expect.assertions(2);
 
+        const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
         const { shard } = stubShard({
             json: async () => {
                 return { error: "boom" };
@@ -219,6 +278,9 @@ describe("dispatchToLunoraFunction", () => {
         await handler(message, { LUNORA_ADMIN_TOKEN: "secret" }, undefined);
 
         expect(message.setReject).toHaveBeenCalledTimes(1);
-        expect(message.setReject).toHaveBeenCalledWith(expect.stringContaining("returned an error"));
+        // The internal "returned an error" detail must not reach the sender's bounce.
+        expect(message.setReject).toHaveBeenCalledWith("message could not be processed");
+
+        consoleError.mockRestore();
     });
 });

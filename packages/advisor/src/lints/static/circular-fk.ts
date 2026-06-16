@@ -15,9 +15,11 @@ import type { Finding, Lint } from "../../types";
  * to the same edge from the opposite side and would cause every edge to be
  * double-counted; skipping them gives the correct directed graph.
  *
- * Each cycle is reported once: the cycle path is canonicalized to its
- * lexicographically smallest rotation so two DFS traversals that enter the
- * same ring at different nodes emit the same cacheKey and detail.
+ * Each unique cycle is reported once: the cycle path is canonicalized to its
+ * lexicographically smallest rotation so two DFS traversals that enter the same
+ * ring at different nodes emit the same cacheKey and detail. A representative
+ * cycle is reported for each distinct simple cycle in the graph; overlapping or
+ * chord cycles that share interior nodes are each detected independently.
  */
 const circularFk: Lint = {
     categories: ["SCHEMA"],
@@ -52,69 +54,84 @@ const circularFk: Lint = {
             }
         }
 
-        // DFS cycle detection. `visited` tracks all nodes seen in the current
-        // run; `stack` tracks nodes on the current DFS path (to detect back
-        // edges). `reported` deduplicates cycles by their canonical form.
-        const visited = new Set<string>();
+        // DFS cycle detection. `onStack` tracks nodes on the current DFS path
+        // (used as an O(1) back-edge test); `path` is the ordered path list
+        // used to extract the cycle slice. `reported` deduplicates found cycles
+        // by their canonical form.
+        //
+        // There is intentionally NO global `visited` set that would mark a node
+        // as permanently done after the first DFS visit. Such a set would
+        // prevent the algorithm from re-entering a node that is an interior node
+        // of two different cycles (overlapping / chord cycles), causing the
+        // second cycle to be silently dropped. Instead, redundant subtree work
+        // is bounded by the `reported` set (a known cycle is not re-emitted) and
+        // by the `onStack` guard (a neighbor already on the current path is a
+        // back edge, not a recursive descent).
+        const onStack = new Set<string>();
         const reported = new Set<string>();
 
         /**
          * Walk the relation graph from `node`, collecting the current path in
-         * `path`. When a back edge is found, extract + canonicalize the cycle
-         * and emit exactly one finding per unique cycle.
+         * `path` / `onStack`. When a back edge is found, extract + canonicalize
+         * the cycle and emit exactly one finding per unique cycle.
          */
         const dfs = (node: string, path: string[]): void => {
-            if (visited.has(node)) {
+            // Already on the current DFS path → back edge handled by the
+            // caller (neighbor lookup); do not descend further.
+            if (onStack.has(node)) {
                 return;
             }
 
-            visited.add(node);
+            onStack.add(node);
             path.push(node);
 
             for (const neighbor of edges.get(node) ?? []) {
-                const cycleStart = path.indexOf(neighbor);
+                if (onStack.has(neighbor)) {
+                    // Back edge — extract the cycle: path[cycleStart..] forms the ring.
+                    const cycleStart = path.indexOf(neighbor);
 
-                if (cycleStart === -1) {
-                    dfs(neighbor, path);
-                } else {
-                    // Extract the cycle: path[cycleStart..] closes back to neighbor.
-                    const cycle = path.slice(cycleStart);
+                    if (cycleStart !== -1) {
+                        const cycle = path.slice(cycleStart);
 
-                    // Canonicalize: rotate to the lexicographically smallest
-                    // start node so the same ring entered at different points
-                    // produces the same key regardless of DFS traversal order.
-                    let minIndex = 0;
+                        // Canonicalize: rotate to the lexicographically smallest
+                        // start node so the same ring entered at different points
+                        // produces the same key regardless of DFS traversal order.
+                        let minIndex = 0;
 
-                    for (let i = 1; i < cycle.length; i += 1) {
-                        if ((cycle[i] as string) < (cycle[minIndex] as string)) {
-                            minIndex = i;
+                        for (let i = 1; i < cycle.length; i += 1) {
+                            if ((cycle[i] as string) < (cycle[minIndex] as string)) {
+                                minIndex = i;
+                            }
+                        }
+
+                        const canonical = [...cycle.slice(minIndex), ...cycle.slice(0, minIndex)];
+                        const key = canonical.join("→");
+
+                        if (!reported.has(key)) {
+                            reported.add(key);
+
+                            const displayPath = [...canonical, canonical[0] as string].join(" → ");
+
+                            findings.push(
+                                emit(circularFk, {
+                                    cacheKey: `circular_fk:${key}`,
+                                    detail: `Circular foreign-key dependency detected: ${displayPath}. This cycle can cause unexpected behavior during DELETE operations.`,
+                                    metadata: {
+                                        cycle: canonical,
+                                        path: displayPath,
+                                        tables: canonical,
+                                    },
+                                }),
+                            );
                         }
                     }
-
-                    const canonical = [...cycle.slice(minIndex), ...cycle.slice(0, minIndex)];
-                    const key = canonical.join("→");
-
-                    if (!reported.has(key)) {
-                        reported.add(key);
-
-                        const displayPath = [...canonical, canonical[0] as string].join(" → ");
-
-                        findings.push(
-                            emit(circularFk, {
-                                cacheKey: `circular_fk:${key}`,
-                                detail: `Circular foreign-key dependency detected: ${displayPath}. This cycle can cause unexpected behavior during DELETE operations.`,
-                                metadata: {
-                                    cycle: canonical,
-                                    path: displayPath,
-                                    tables: canonical,
-                                },
-                            }),
-                        );
-                    }
+                } else {
+                    dfs(neighbor, path);
                 }
             }
 
             path.pop();
+            onStack.delete(node);
         };
 
         for (const table of context.schema.tables) {

@@ -29,6 +29,8 @@ interface ReconcileInput {
 interface ReconcileResult {
     readonly checkedPayments: number;
     readonly checkedSubscriptions: number;
+    readonly failedPayments: number;
+    readonly failedSubscriptions: number;
     readonly updatedPayments: number;
     readonly updatedSubscriptions: number;
 }
@@ -77,26 +79,72 @@ const reconcilePayment = async (adapter: PaymentAdapter, store: PaymentStore, id
     return true;
 };
 
-const countTrue = (results: ReadonlyArray<boolean>): number => results.filter(Boolean).length;
+interface SweepCounts {
+    readonly failed: number;
+    readonly updated: number;
+}
+
+// Fan out over a batch with per-id fault isolation: a single failing id (a 404'd/deleted row, a
+// transient 5xx, a 429) must never abort the whole sweep, or drift for every other id would never
+// self-heal. Each rejection is surfaced as a `reconcile.error` signal rather than thrown.
+const sweep = async (
+    ids: ReadonlyArray<string>,
+    kind: "payment" | "subscription",
+    reconcileOne: (id: string) => Promise<boolean>,
+    adapter: PaymentAdapter,
+    observer?: PaymentObserver,
+): Promise<SweepCounts> => {
+    const settled = await Promise.allSettled(ids.map((id) => reconcileOne(id)));
+
+    let updated = 0;
+    let failed = 0;
+
+    for (const [index, result] of settled.entries()) {
+        if (result.status === "fulfilled") {
+            if (result.value) {
+                updated += 1;
+            }
+        } else {
+            failed += 1;
+            notifyObserver(observer, { error: result.reason, id: ids[index] ?? "", kind, provider: adapter.identifier, type: "reconcile.error" });
+        }
+    }
+
+    return { failed, updated };
+};
 
 const reconcile = async (input: ReconcileInput): Promise<ReconcileResult> => {
     const { adapter, observability, store } = input;
     const subscriptionIds = input.subscriptionIds ?? [];
     const paymentSessionIds = input.paymentSessionIds ?? [];
 
-    const subscriptionResults = await Promise.all(subscriptionIds.map((id) => reconcileSubscription(adapter, store, id, observability)));
-    const paymentResults = await Promise.all(paymentSessionIds.map((id) => reconcilePayment(adapter, store, id, observability)));
+    const subscriptionCounts = await sweep(
+        subscriptionIds,
+        "subscription",
+        (id) => reconcileSubscription(adapter, store, id, observability),
+        adapter,
+        observability,
+    );
+    const paymentCounts = await sweep(paymentSessionIds, "payment", (id) => reconcilePayment(adapter, store, id, observability), adapter, observability);
 
-    const updatedPayments = countTrue(paymentResults);
-    const updatedSubscriptions = countTrue(subscriptionResults);
-
-    notifyObserver(observability, { provider: adapter.identifier, type: "reconcile.completed", updatedPayments, updatedSubscriptions });
+    // Always fire `reconcile.completed` (even when some ids failed) so the sweep is never a monitoring
+    // blind spot, and report the failed counts alongside the updated ones.
+    notifyObserver(observability, {
+        failedPayments: paymentCounts.failed,
+        failedSubscriptions: subscriptionCounts.failed,
+        provider: adapter.identifier,
+        type: "reconcile.completed",
+        updatedPayments: paymentCounts.updated,
+        updatedSubscriptions: subscriptionCounts.updated,
+    });
 
     return {
         checkedPayments: paymentSessionIds.length,
         checkedSubscriptions: subscriptionIds.length,
-        updatedPayments,
-        updatedSubscriptions,
+        failedPayments: paymentCounts.failed,
+        failedSubscriptions: subscriptionCounts.failed,
+        updatedPayments: paymentCounts.updated,
+        updatedSubscriptions: subscriptionCounts.updated,
     };
 };
 

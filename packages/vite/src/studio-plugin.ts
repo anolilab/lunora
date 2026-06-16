@@ -32,6 +32,142 @@ const STUDIO_STYLE_PATH: string = `${STUDIO_PATH}/styles.css`;
 const LEADING_SLASH = /^\//;
 const TRAILING_SLASH = /\/$/;
 
+/** The local-dev endpoints that perform state-changing side effects (source writes + codegen). */
+const STATE_CHANGING_ENDPOINTS = new Set<string>([SCHEMA_EDIT_ENDPOINT, POLICY_SCAFFOLD_ENDPOINT, SEED_ENDPOINT]);
+
+/** A single header value, lower-cased and trimmed; `undefined` when absent or array-valued. */
+const headerValue = (raw: string | string[] | undefined): string | undefined => {
+    const value = Array.isArray(raw) ? raw[0] : raw;
+
+    return typeof value === "string" ? value.trim().toLowerCase() : undefined;
+};
+
+/**
+ * True for an IPv4/IPv6 loopback peer (`127.0.0.0/8`, `::1`, and the
+ * IPv4-mapped `::ffff:127.x`). A missing address means we cannot read the
+ * transport (e.g. a mocked request in tests) — treated as loopback so the
+ * config-derived gate stays the source of truth there; on a real Vite/Node
+ * server `remoteAddress` is always populated.
+ */
+const isLoopbackAddress = (remoteAddress: string | undefined): boolean => {
+    if (remoteAddress === undefined || remoteAddress === "") {
+        return true;
+    }
+
+    const address = remoteAddress.toLowerCase();
+    // Strip the IPv4-mapped IPv6 prefix (`::ffff:127.0.0.1`) so the v4 test applies.
+    const v4 = address.startsWith("::ffff:") ? address.slice(7) : address;
+
+    if (v4 === "::1") {
+        return true;
+    }
+
+    return v4.startsWith("127.");
+};
+
+/** The host portion (no port) of a `Host` header value, lower-cased; brackets stripped from IPv6. */
+const hostnameOf = (host: string | undefined): string | undefined => {
+    if (host === undefined) {
+        return undefined;
+    }
+
+    if (host.startsWith("[")) {
+        // `[::1]:5173` → `::1`
+        const close = host.indexOf("]");
+
+        return close === -1 ? host.slice(1) : host.slice(1, close);
+    }
+
+    const colon = host.indexOf(":");
+
+    return colon === -1 ? host : host.slice(0, colon);
+};
+
+/** Localhost names + loopback literals the `Host` header is allowed to carry. */
+const LOOPBACK_HOSTS = new Set<string>(["localhost", "127.0.0.1", "::1", "0.0.0.0"]);
+
+/**
+ * Per-request transport gate, independent of the config-derived
+ * `isNonLoopbackBind`. In Vite middleware mode the real bind belongs to the
+ * embedding server (so the config check measures the wrong thing); here we read
+ * the actual socket peer and the `Host` header. Returns a refusal reason, or
+ * `undefined` when the connection is loopback-local.
+ */
+const transportRejectionReason = (request: IncomingMessage): string | undefined => {
+    if (!isLoopbackAddress(request.socket?.remoteAddress ?? undefined)) {
+        return "Lunora studio is only available on loopback connections in dev.";
+    }
+
+    // Defend against DNS rebinding: a public DNS name resolving to loopback
+    // still arrives with that name in `Host`. Only a localhost/loopback Host is
+    // allowed. An absent Host (HTTP/1.0) is permitted — there is nothing to rebind.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `headers` is typed required but partial/mocked requests omit it
+    const host = hostnameOf(headerValue(request.headers?.host));
+
+    if (host !== undefined && !LOOPBACK_HOSTS.has(host)) {
+        return "Lunora studio rejects a non-localhost Host header in dev.";
+    }
+
+    return undefined;
+};
+
+/**
+ * Application-level CSRF defense for the state-changing local endpoints
+ * (schema-edit / policy-scaffold / seed). The loopback bind alone does NOT stop
+ * a cross-site page in the developer's OWN browser from POSTing a CORS "simple
+ * request" whose side effects (source write + codegen) execute before the
+ * browser blocks the *response* read. This middleware therefore defends
+ * independently of `@lunora/config`'s serve-json-handler. Two layers, both must
+ * pass; returns a refusal reason or `undefined`.
+ *
+ * 1. Origin: prefer the unforgeable `Sec-Fetch-Site` header (reject anything
+ *    other than `same-origin`/`same-site`/`none`); else compare the `Origin`
+ *    host:port against the request `Host`.
+ * 2. Content-Type: a state-changing request must be `application/json`, which a
+ *    cross-origin `fetch` cannot set without triggering a (then-blocked)
+ *    preflight — closing the simple-request bypass.
+ */
+const csrfRejectionReason = (request: IncomingMessage): string | undefined => {
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- `headers` is typed required but partial/mocked requests omit it
+    const headers = request.headers ?? {};
+    const secFetchSite = headerValue(headers["sec-fetch-site"]);
+
+    if (secFetchSite !== undefined) {
+        if (secFetchSite !== "same-origin" && secFetchSite !== "same-site" && secFetchSite !== "none") {
+            return "cross-origin request rejected";
+        }
+    } else {
+        const origin = headerValue(headers.origin);
+
+        if (origin !== undefined && origin !== "null") {
+            const host = headerValue(headers.host);
+            let originHost: string | undefined;
+
+            try {
+                originHost = new URL(origin).host.toLowerCase();
+            } catch {
+                return "invalid origin header";
+            }
+
+            if (host === undefined || originHost !== host) {
+                return "cross-origin request rejected";
+            }
+        }
+    }
+
+    const method = (request.method ?? "GET").toUpperCase();
+
+    if (method !== "GET" && method !== "HEAD") {
+        const contentType = headerValue(request.headers["content-type"]);
+
+        if (contentType === undefined || !contentType.startsWith("application/json")) {
+            return "content-type must be application/json";
+        }
+    }
+
+    return undefined;
+};
+
 /** Write a 200 response with the given body and content type. */
 const sendOk = (response: ServerResponse, body: Buffer | string, contentType: string): void => {
     response.statusCode = 200;
@@ -109,7 +245,11 @@ const createStudioHandler = (
 
         // The studio ships admin tooling that assumes the developer is the
         // only consumer — never expose it on a non-loopback bind (`--host`).
-        if (isNonLoopbackBind) {
+        // Two checks: the config-declared host intent (catches `--host`) AND the
+        // actual transport (catches middleware-mode public binds, where Vite's
+        // own `server.host` is undefined while the embedding server listens
+        // publicly, plus DNS rebinding via the Host header).
+        if (isNonLoopbackBind || transportRejectionReason(request) !== undefined) {
             response.statusCode = 403;
             response.setHeader("Content-Type", "text/plain");
             response.end("Lunora studio is only available on loopback hosts in dev.");
@@ -117,16 +257,34 @@ const createStudioHandler = (
             return;
         }
 
-        // Local schema-edit endpoint (plan 024). Loopback-gated above; never the
-        // worker. Intercept before the SPA fallback so it isn't shadowed.
+        // CSRF defense for the state-changing endpoints (schema-edit /
+        // policy-scaffold / seed): the loopback gate above does NOT stop a
+        // cross-site page in the developer's own browser from driving these.
+        // Enforced here in the Vite middleware independently of
+        // `@lunora/config`'s serve-json-handler (which also guards), so the
+        // route defends even if that layer regresses.
+        if (STATE_CHANGING_ENDPOINTS.has(pathname)) {
+            const csrf = csrfRejectionReason(request);
+
+            if (csrf !== undefined) {
+                response.statusCode = 403;
+                response.setHeader("Content-Type", "application/json; charset=utf-8");
+                response.end(JSON.stringify({ error: csrf, ok: false }));
+
+                return;
+            }
+        }
+
+        // Local schema-edit endpoint (plan 024). Loopback- and CSRF-gated above;
+        // never the worker. Intercept before the SPA fallback so it isn't shadowed.
         if (pathname === SCHEMA_EDIT_ENDPOINT) {
             serveJsonHandler(request, response, handleSchemaEditRequest, projectRoot);
 
             return;
         }
 
-        // Local policy-scaffold endpoint (plan 025 Item 3). Same loopback gate
-        // and codegen toolchain as the schema editor above.
+        // Local policy-scaffold endpoint (plan 025 Item 3). Same loopback + CSRF
+        // gate and codegen toolchain as the schema editor above.
         if (pathname === POLICY_SCAFFOLD_ENDPOINT) {
             serveJsonHandler(request, response, handlePolicyScaffoldRequest, projectRoot);
 
@@ -134,8 +292,8 @@ const createStudioHandler = (
         }
 
         // Local seed-data endpoint (the studio "Generate rows" action). Loopback-
-        // gated above; generates rows in Node so faker stays out of the browser
-        // bundle and the worker. The client inserts the rows via `writeRow`.
+        // and CSRF-gated above; generates rows in Node so faker stays out of the
+        // browser bundle and the worker. The client inserts the rows via `writeRow`.
         if (pathname === SEED_ENDPOINT) {
             serveJsonHandler(request, response, handleSeedRequest, projectRoot);
 

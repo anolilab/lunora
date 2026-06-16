@@ -50,7 +50,12 @@ const fetchSchema = async (): Promise<{ kind: "error"; message: string } | { kin
 const applyEdit = async (edit: AdditiveEdit): Promise<SchemaEditResult> => {
     const response = await fetch(SCHEMA_EDIT_ENDPOINT, {
         body: JSON.stringify(edit),
-        headers: { "Content-Type": "application/json" },
+        // `Content-Type: application/json` is non-simple and forces a CORS preflight
+        // for cross-origin fetches, preventing CSRF via the browser's same-origin
+        // policy. `X-Lunora-Studio` is an additional custom header that also triggers
+        // a preflight and lets the server-side guard identify studio traffic; both
+        // headers are checked by the `@lunora/config` `csrfRejectionReason` guard.
+        headers: { "Content-Type": "application/json", "X-Lunora-Studio": "1" },
         method: "POST",
     });
     const body = (await response.json()) as {

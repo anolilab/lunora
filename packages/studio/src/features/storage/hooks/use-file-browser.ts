@@ -349,8 +349,12 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
 
     const listFirst = useCallback((): void => {
         setPrefix(draftPrefix);
+        // Scope change: the loaded objects are about to change under the selection,
+        // so clear it to prevent stale keys from a prior prefix being bulk-deleted
+        // against the new listing.
+        clearSelection();
         fireAndForget(list(draftPrefix, undefined, false));
-    }, [draftPrefix, list]);
+    }, [clearSelection, draftPrefix, list]);
 
     const loadMore = useCallback((): void => {
         fireAndForget(list(prefix, nextCursor, true));
@@ -567,10 +571,21 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
                         cursor = liveKeys.length >= ORPHAN_LIVE_KEY_CAP ? undefined : page.cursor;
                     } while (cursor !== undefined);
 
-                    const result = (await client.query(STORAGE_ORPHANS, { liveKeys }, callOptions(referenceShard))) as Partial<DanglingReferenceResult>;
+                    const enumTruncated = liveKeys.length >= ORPHAN_LIVE_KEY_CAP;
 
-                    setDanglingReferences(result.references ?? []);
-                    setDanglingTruncated(result.truncated === true || liveKeys.length >= ORPHAN_LIVE_KEY_CAP);
+                    if (enumTruncated) {
+                        // The live-key set is incomplete: running storageOrphans with a
+                        // partial key set would flag in-bucket objects as dangling simply
+                        // because they weren't reached during enumeration. Surface the
+                        // truncation without producing unreliable dangling rows.
+                        setDanglingReferences([]);
+                        setDanglingTruncated(true);
+                    } else {
+                        const result = (await client.query(STORAGE_ORPHANS, { liveKeys }, callOptions(referenceShard))) as Partial<DanglingReferenceResult>;
+
+                        setDanglingReferences(result.references ?? []);
+                        setDanglingTruncated(result.truncated === true);
+                    }
                 } catch (error_) {
                     setDanglingReferences([]);
                     setDanglingTruncated(false);
@@ -584,14 +599,17 @@ const useFileBrowser = ({ initialPrefix, pageSize }: UseFileBrowserOptions): Fil
 
     // Switch buckets: reset navigation to the initial prefix; the `list` callback's
     // identity changes (it closes over `bucket`), so the mount effect re-lists.
+    // Clear selection so keys from the previous bucket are never bulk-deleted against
+    // the newly-active bucket — the primary stale-selection bug vector.
     const selectBucket = useCallback(
         (name: string): void => {
             setBucket(name);
             setPrefix(initialPrefix ?? "");
             setDraftPrefix(initialPrefix ?? "");
             setObjects(undefined);
+            clearSelection();
         },
-        [initialPrefix],
+        [clearSelection, initialPrefix],
     );
 
     return {

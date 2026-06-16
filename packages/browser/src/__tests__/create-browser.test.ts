@@ -179,6 +179,12 @@ describe("createBrowser", () => {
             [".internal", "https://api.internal/health"],
             [".local", "http://printer.local"],
             ["embedded credentials", "https://user:pass@example.com"], // gitleaks:allow -- test fixture asserting credential rejection, not a real secret
+            // IPv4-compatible / NAT64 SSRF bypass regression (the WHATWG URL parser
+            // normalises `::127.0.0.1` to the hex form `::7f00:1`).
+            ["ipv6 compatible loopback hex", "http://[::7f00:1]/"],
+            ["ipv6 compatible private 10.x hex", "http://[::a00:1]/"],
+            ["ipv6 nat64 loopback", "http://[64:ff9b::7f00:1]/"],
+            ["ipv6 nat64 link-local metadata", "http://[64:ff9b::a9fe:a9fe]/"],
         ];
         /* eslint-enable sonarjs/no-clear-text-protocols */
 

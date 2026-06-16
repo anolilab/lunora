@@ -17,6 +17,26 @@ type FetchLike = (input: string, init?: { body?: BodyInit; headers?: Record<stri
 
 interface VerifyTurnstileOptions {
     /**
+     * Assert the widget `action` the token was solved for. Cloudflare echoes the
+     * customer-supplied `action` back in the siteverify response; when this is
+     * set and the returned `action` does not match, the verdict is downgraded to
+     * `success: false` (with error code `action-mismatch`). Leave unset to skip
+     * the check.
+     */
+    expectedAction?: string;
+
+    /**
+     * Assert the `hostname` the challenge was solved on. Cloudflare returns the
+     * solving hostname in the siteverify response; when this is set and the
+     * returned `hostname` does not match, the verdict is downgraded to
+     * `success: false` (with error code `hostname-mismatch`). Set this when a
+     * single secret/sitekey is shared across multiple domains to stop a token
+     * harvested on one origin from being replayed against another. Leave unset
+     * to skip the check.
+     */
+    expectedHostname?: string;
+
+    /**
      * Inject a `fetch` implementation. Defaults to `globalThis.fetch`. Primarily
      * for unit tests — production callers can omit it.
      */
@@ -86,7 +106,14 @@ const asStringArray = (value: unknown): string[] => (Array.isArray(value) ? valu
  * "siteverify is down" failure is distinguishable from a "this is a bot"
  * verdict.
  */
-const verifyTurnstile = async ({ fetch = globalThis.fetch, remoteip, secret, token }: VerifyTurnstileOptions): Promise<TurnstileVerifyResult> => {
+const verifyTurnstile = async ({
+    expectedAction,
+    expectedHostname,
+    fetch = globalThis.fetch,
+    remoteip,
+    secret,
+    token,
+}: VerifyTurnstileOptions): Promise<TurnstileVerifyResult> => {
     const body = new URLSearchParams({ response: token, secret });
 
     if (remoteip !== undefined && remoteip !== "") {
@@ -120,13 +147,33 @@ const verifyTurnstile = async ({ fetch = globalThis.fetch, remoteip, secret, tok
 
     const raw: RawSiteverifyResponse = await response.json();
 
+    const action = asString(raw.action);
+    const hostname = asString(raw.hostname);
+    const errorCodes = asStringArray(raw["error-codes"]);
+    let success = raw.success === true;
+
+    // Even a token Cloudflare reports as valid can be a cross-origin/cross-action
+    // replay when one secret/sitekey is shared across domains or widgets. Assert
+    // the returned `hostname`/`action` against the caller's expectation and
+    // downgrade the verdict to a failure (single-use semantics preserved: the
+    // token is still spent) when they don't match.
+    if (success && expectedHostname !== undefined && hostname !== expectedHostname) {
+        success = false;
+        errorCodes.push("hostname-mismatch");
+    }
+
+    if (success && expectedAction !== undefined && action !== expectedAction) {
+        success = false;
+        errorCodes.push("action-mismatch");
+    }
+
     return {
-        action: asString(raw.action),
+        action,
         cdata: asString(raw.cdata),
         challengeTs: asString(raw.challenge_ts),
-        errorCodes: asStringArray(raw["error-codes"]),
-        hostname: asString(raw.hostname),
-        success: raw.success === true,
+        errorCodes,
+        hostname,
+        success,
     };
 };
 

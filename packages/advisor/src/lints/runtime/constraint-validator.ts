@@ -88,8 +88,16 @@ const checkFkRelation = (
     });
 };
 
-/** Check NOT NULL violations for a single declared field on a sampled table. */
-const checkNullField = (lint: Lint, sample: AdvisorTableSample, field: string): Finding | undefined => {
+/**
+ * Check NOT NULL violations for a single declared field on a sampled table.
+ * `isRequired` must be `true` only for fields the schema declares as
+ * non-optional and non-nullable; passing `false` short-circuits the check so
+ * optional / nullable fields never produce false-positive findings.
+ */
+const checkNullField = (lint: Lint, sample: AdvisorTableSample, field: string, isRequired: boolean): Finding | undefined => {
+    if (!isRequired) {
+        return undefined;
+    }
     const nullIds: string[] = [];
 
     for (const row of sample.rows) {
@@ -233,7 +241,13 @@ const checkTable = (lint: Lint, sample: AdvisorTableSample, sampleByTable: Map<s
     }
 
     for (const field of schemaTable.fields) {
-        const f = checkNullField(lint, sample, field);
+        // Skip optional/nullable fields — a null or absent value is valid for
+        // them and must not produce a false-positive NOT NULL finding. When
+        // `optionalFields` is absent (e.g. the codegen feeder path, which never
+        // runs runtime lints), treat every field as required to preserve the
+        // existing behaviour.
+        const isRequired = schemaTable.optionalFields === undefined || !schemaTable.optionalFields.has(field);
+        const f = checkNullField(lint, sample, field, isRequired);
 
         if (f) {
             findings.push(f);

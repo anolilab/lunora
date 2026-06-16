@@ -286,7 +286,7 @@ describe("createVectorSyncHook", () => {
         await hook({ doc: { author: "ann", body: "hi" }, id: "m1", op: "insert", table: "messages" });
 
         expect(warn).toHaveBeenCalledTimes(1);
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining('index "warn-no-ns" syncs metadata without a namespace'));
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('index "warn-no-ns" syncs vectors without a namespace'));
 
         // A second sync of the same index does not warn again (one-time per process).
         await hook({ doc: { author: "bob", body: "yo" }, id: "m2", op: "insert", table: "messages" });
@@ -323,7 +323,7 @@ describe("createVectorSyncHook", () => {
         warn.mockRestore();
     });
 
-    it("does not warn when allowSharedMetadata is set", async () => {
+    it("does not warn when allowSharedNamespace is set", async () => {
         expect.assertions(1);
 
         const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -332,7 +332,7 @@ describe("createVectorSyncHook", () => {
             tables: { messages: { vectorIndexes: [{ embed, field: "body", metadata: ["author"], name: "warn-opt-out" }] } },
             vectorIndexes: {},
         };
-        const hook = createVectorSyncHook({ allowSharedMetadata: true, schema, vectors });
+        const hook = createVectorSyncHook({ allowSharedNamespace: true, schema, vectors });
 
         await hook({ doc: { author: "ann", body: "hi" }, id: "m1", op: "insert", table: "messages" });
 
@@ -359,8 +359,8 @@ describe("createVectorSyncHook", () => {
         warn.mockRestore();
     });
 
-    it("does not warn for an index without metadata even when namespace is absent", async () => {
-        expect.assertions(1);
+    it("warns for an index without metadata when namespace is absent (vectors leak too)", async () => {
+        expect.assertions(2);
 
         const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
         const vectors = fakeVectorSearch();
@@ -372,7 +372,11 @@ describe("createVectorSyncHook", () => {
 
         await hook({ doc: { body: "hi" }, id: "m1", op: "insert", table: "messages" });
 
-        expect(warn).not.toHaveBeenCalled();
+        // The cross-tenant exposure is the vectors themselves (ids/scores leak),
+        // not just metadata — so a namespace-less sync warns even with no
+        // metadata declared (Finding 49).
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('index "warn-no-metadata" syncs vectors without a namespace'));
 
         warn.mockRestore();
     });

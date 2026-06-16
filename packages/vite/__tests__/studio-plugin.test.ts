@@ -232,6 +232,111 @@ describe("studioPlugin", () => {
         expect(response.statusCode).toBe(200);
     });
 
+    // A request shape rich enough for the loopback/CSRF gates: headers + a
+    // socket peer. The middleware only reads `url`, `method`, `headers`, and
+    // `socket.remoteAddress`, so this is enough to drive the security checks.
+    type GatedRequest = {
+        headers?: Record<string, string>;
+        method?: string;
+        socket?: { remoteAddress?: string };
+        url?: string;
+    };
+
+    const callGated = (
+        configuredHost: unknown,
+        request: GatedRequest,
+    ): { end: ReturnType<typeof vi.fn>; next: ReturnType<typeof vi.fn>; response: ServerResponse } => {
+        const middleware = installMiddleware(configuredHost) as unknown as (
+            request: GatedRequest,
+            response: ServerResponse,
+            next: () => void,
+        ) => void;
+        const { end, response } = makeResponse();
+        const next = vi.fn<() => void>();
+
+        middleware(request, response, next);
+
+        return { end, next, response };
+    };
+
+    it("rejects a state-changing endpoint from a non-loopback transport peer", () => {
+        expect.assertions(2);
+
+        // Config host is loopback-clean (middleware mode), but the actual peer is
+        // public — the per-request transport gate must still 403.
+        const { next, response } = callGated(undefined, {
+            headers: { host: "localhost:5173" },
+            method: "POST",
+            socket: { remoteAddress: "203.0.113.7" },
+            url: `${STUDIO_PATH}/schema-edit`,
+        });
+
+        expect(response.statusCode).toBe(403);
+        expect(next).not.toHaveBeenCalled();
+    });
+
+    it("rejects a non-localhost Host header (DNS rebinding) on a loopback peer", () => {
+        expect.assertions(1);
+
+        const { response } = callGated(undefined, {
+            headers: { host: "evil.example.com" },
+            method: "GET",
+            socket: { remoteAddress: "127.0.0.1" },
+            url: STUDIO_PATH,
+        });
+
+        expect(response.statusCode).toBe(403);
+    });
+
+    it("rejects a cross-origin POST to schema-edit (CSRF)", () => {
+        expect.assertions(1);
+
+        const { response } = callGated("localhost", {
+            headers: {
+                "content-type": "application/json",
+                host: "localhost:5173",
+                origin: "http://evil.example.com",
+            },
+            method: "POST",
+            socket: { remoteAddress: "127.0.0.1" },
+            url: `${STUDIO_PATH}/schema-edit`,
+        });
+
+        expect(response.statusCode).toBe(403);
+    });
+
+    it("rejects a simple-request (text/plain) POST to schema-edit (CSRF)", () => {
+        expect.assertions(1);
+
+        // A CORS "simple request" carries text/plain and no preflight — must be
+        // refused on Content-Type even when same-origin headers are absent.
+        const { response } = callGated("localhost", {
+            headers: { "content-type": "text/plain;charset=UTF-8", host: "localhost:5173" },
+            method: "POST",
+            socket: { remoteAddress: "127.0.0.1" },
+            url: `${STUDIO_PATH}/seed`,
+        });
+
+        expect(response.statusCode).toBe(403);
+    });
+
+    it("rejects a non-same-site Sec-Fetch-Site request (CSRF)", () => {
+        expect.assertions(1);
+
+        const { response } = callGated("localhost", {
+            headers: {
+                "content-type": "application/json",
+                host: "localhost:5173",
+                "sec-fetch-site": "cross-site",
+            },
+            method: "POST",
+            socket: { remoteAddress: "127.0.0.1" },
+            url: `${STUDIO_PATH}/policy-scaffold`,
+        });
+
+        expect(response.statusCode).toBe(403);
+    });
+
     it.each([`${STUDIO_PATH}/globals`, `${STUDIO_PATH}/data`, `${STUDIO_PATH}/logs/123`])(
         "serves the SPA history fallback for deep-link sub-route %s (no 404)",
         (url) => {

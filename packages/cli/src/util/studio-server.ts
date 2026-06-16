@@ -197,10 +197,12 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
     const server: Server = createServer((request, response) => {
         const pathname = pathnameOf(request.url ?? "/");
 
-        // Anti-DNS-rebinding: reject any request whose Host header isn't an exact
-        // loopback literal BEFORE serving the token-bearing HTML or proxying the
-        // worker admin surface. A rebound attacker page sends its own hostname here.
-        if (!isLoopbackHost(request.headers.host)) {
+        // Anti-DNS-rebinding: on a loopback bind, reject any request whose Host
+        // header isn't an exact loopback literal BEFORE serving the token-bearing
+        // HTML or proxying the worker admin surface. A non-loopback bind never
+        // embeds the token and refuses proxy/mutating endpoints below, so it can
+        // serve the read-only shell to the LAN host that the browser sends here.
+        if (isLoopback && !isLoopbackHost(request.headers.host)) {
             response.statusCode = 403;
             response.setHeader("Content-Type", "text/plain");
             response.end("Lunora studio: refusing a request whose Host is not a loopback literal (DNS-rebinding guard).");
@@ -280,7 +282,7 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
 
     server.on("upgrade", (request, socket, head) => {
         // Mirror the HTTP anti-rebinding + loopback-only-proxy guards on the WS path.
-        if (!isLoopbackHost(request.headers.host) || !isLoopback) {
+        if (!isLoopback || !isLoopbackHost(request.headers.host)) {
             socket.destroy();
 
             return;

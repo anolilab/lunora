@@ -84,8 +84,7 @@ const resolveImportShardKey = (
 
 interface BucketedImport {
     errors: ImportRowError[];
-    globalLineMap: number[];
-    globalRows: { doc: Record<string, unknown>; table: string }[];
+    globalRows: { doc: Record<string, unknown>; line: number; table: string }[];
     perShard: Map<string, AdminBatch>;
 }
 
@@ -101,8 +100,10 @@ const bucketImportStream = async (request: Request, options: WorkerOptions, defa
     }
 
     const errors: ImportRowError[] = [];
-    const globalRows: { doc: Record<string, unknown>; table: string }[] = [];
-    const globalLineMap: number[] = [];
+    // Each global row carries its true physical source line so error attribution
+    // survives interspersed shard rows / blank lines — a single `startLine` can
+    // only describe rows physically contiguous from the first one.
+    const globalRows: { doc: Record<string, unknown>; line: number; table: string }[] = [];
     const perShard = new Map<string, AdminBatch>();
     // Physical 1-based source line index. Incremented for EVERY line handled,
     // including blank ones, so `error.line` / `startLine` always point at the
@@ -141,8 +142,7 @@ const bucketImportStream = async (request: Request, options: WorkerOptions, defa
         const info = options.resolveTableSharding?.(table);
 
         if (info?.mode.kind === "global") {
-            globalRows.push({ doc: documentRow, table });
-            globalLineMap.push(physicalLine);
+            globalRows.push({ doc: documentRow, line: physicalLine, table });
 
             return;
         }
@@ -204,7 +204,7 @@ const bucketImportStream = async (request: Request, options: WorkerOptions, defa
         handleLine(buffer);
     }
 
-    return { errors, globalLineMap, globalRows, perShard };
+    return { errors, globalRows, perShard };
 };
 
 interface ImportTotals {
@@ -252,7 +252,7 @@ const streamingImport = async (
 }> => {
     const defaultShard = options.defaultShardKey ?? "__root__";
 
-    const { errors, globalLineMap, globalRows, perShard } = await bucketImportStream(request, options, defaultShard);
+    const { errors, globalRows, perShard } = await bucketImportStream(request, options, defaultShard);
 
     const totals: ImportTotals = { conflicts: 0, errors, inserted: {} };
 
@@ -276,15 +276,19 @@ const streamingImport = async (
     // Run global imports through the user-supplied helper.
     if (globalRows.length > 0) {
         if (options.importGlobals) {
-            const startLine = globalLineMap[0] ?? 1;
+            // Pass each row's true physical `line` (carried on the row) so error
+            // attribution is correct even when global rows are interspersed with
+            // shard rows or blank lines. `startLine` is the first global row's
+            // line, retained only as a backward-compat fallback.
+            const startLine = globalRows[0]?.line ?? 1;
             const result = await options.importGlobals({ rows: globalRows, startLine });
 
             mergeImportResult(totals, result);
         } else {
-            for (const [index, globalRow] of globalRows.entries()) {
+            for (const globalRow of globalRows) {
                 totals.errors.push({
                     code: "GLOBAL_NOT_CONFIGURED",
-                    line: globalLineMap[index] ?? 1,
+                    line: globalRow.line,
                     message: `row targets global table "${globalRow.table}" but no \`importGlobals\` is configured`,
                     table: globalRow.table,
                 });

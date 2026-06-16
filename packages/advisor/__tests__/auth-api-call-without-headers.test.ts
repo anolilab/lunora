@@ -60,4 +60,22 @@ describe("auth_api_call_without_headers", () => {
         expect(findings[0]!.cacheKey).toBe("auth_api_call_without_headers:admin:5:banUser");
         expect(findings[1]!.cacheKey).toBe("auth_api_call_without_headers:admin:20:setRole");
     });
+
+    it("produces distinct cacheKeys for two same-method calls on the same source line", () => {
+        expect.assertions(3);
+
+        // `await Promise.all([ctx.authApi.banUser({ body: a }), ctx.authApi.banUser({ body: b })])`
+        // — both on line 12, same method.  Without a within-line discriminator
+        // they collapse to one cacheKey and dismissing one silently hides the other.
+        const calls: AdvisorAuthApiCall[] = [
+            { exportName: "bulkBan", file: "admin", hasHeaders: false, line: 12, method: "banUser" },
+            { exportName: "bulkBan", file: "admin", hasHeaders: false, line: 12, method: "banUser" },
+        ];
+        const findings = run(calls);
+
+        expect(findings).toHaveLength(2);
+        // First occurrence has no suffix; second gets `:2`.
+        expect(findings[0]!.cacheKey).toBe("auth_api_call_without_headers:admin:12:banUser");
+        expect(findings[1]!.cacheKey).toBe("auth_api_call_without_headers:admin:12:banUser:2");
+    });
 });

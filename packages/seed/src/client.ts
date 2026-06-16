@@ -190,18 +190,21 @@ const createSeedClient = <InsertModel = Record<string, Record<string, unknown>>>
     const state = {
         $ids: idsByTable,
         $reset: (): void => {
-            // Clear in place — `$store`/`$ids` are returned by reference and
-            // `idsByTable` is handed to `seedPlan` as `existingIds` each call.
+            // Delete keys entirely rather than assigning empty arrays. `idsByTable`
+            // is passed to `seedPlan` as `existingIds`, and seedPlan treats key
+            // *presence* (not array length) as "this parent table is already covered".
+            // Leaving an empty-array key after reset would suppress parent auto-
+            // generation on the very next child call, producing dangling FK ids.
             for (const key of Object.keys(store)) {
-                store[key] = [];
+                delete store[key];
             }
 
             for (const key of Object.keys(idsByTable)) {
-                idsByTable[key] = [];
+                delete idsByTable[key];
             }
 
             for (const key of Object.keys(createdCount)) {
-                createdCount[key] = 0;
+                delete createdCount[key];
             }
         },
         $store: store,

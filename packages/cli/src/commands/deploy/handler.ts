@@ -338,17 +338,6 @@ const warnDevVariablesNotPushed = (cwd: string, logger: Logger): void => {
  * auditable, and safe.
  */
 const runPostDeployMigrations = async (options: DeployCommandOptions, cwd: string): Promise<number> => {
-    // `wrangler deploy`'s published URL is never captured here, so without an
-    // explicit `--migrate-url` the downstream migration would default to
-    // `http://localhost:8787` (the dev worker) and apply against LOCAL state —
-    // and ship the production admin bearer to whatever listens on that port.
-    // Refuse rather than silently target localhost.
-    if (options.migrateUrl === undefined) {
-        options.logger.error("--migrate requires --migrate-url <https://your-worker> — the deploy target URL is not captured automatically, refusing to default to localhost");
-
-        return 1;
-    }
-
     const project = new Project({ skipAddingFilesFromTsConfig: true });
     const lunoraDirectory = join(cwd, "lunora");
     let migrations: ReadonlyArray<{ id: string; table: string }>;
@@ -402,6 +391,47 @@ const runPostDeployMigrations = async (options: DeployCommandOptions, cwd: strin
     }
 
     return 0;
+};
+
+/**
+ * Validate the migration options that would otherwise fail only after the live
+ * worker has already been replaced by `wrangler deploy`.
+ */
+const validateMigrateDeployPreflight = (options: DeployCommandOptions): string | undefined => {
+    if (!options.migrate) {
+        return undefined;
+    }
+
+    // `wrangler deploy`'s published URL is never captured here, so without an
+    // explicit `--migrate-url` the downstream migration would default to
+    // `http://localhost:8787` (the dev worker) and apply against LOCAL state —
+    // and ship the production admin bearer to whatever listens on that port.
+    // Refuse before deploying rather than silently targeting localhost later.
+    if (options.migrateUrl === undefined) {
+        const message = "--migrate requires --migrate-url <https://your-worker> — the deploy target URL is not captured automatically, refusing to default to localhost";
+
+        options.logger.error(message);
+
+        return message;
+    }
+
+    if (options.migrateYes !== true) {
+        const message = "--migrate runs production data migrations after deploy. Re-run with --migrate-yes to confirm.";
+
+        options.logger.error(message);
+
+        return message;
+    }
+
+    if ((options.migrateToken ?? process.env.LUNORA_ADMIN_TOKEN) === undefined || (options.migrateToken ?? process.env.LUNORA_ADMIN_TOKEN) === "") {
+        const message = "admin token required for --migrate — pass --migrate-token or set LUNORA_ADMIN_TOKEN";
+
+        options.logger.error(message);
+
+        return message;
+    }
+
+    return undefined;
 };
 
 /**
@@ -578,6 +608,12 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
     }
 
     await provisionBindings(cwd, options.logger);
+
+    const migratePreflightError = validateMigrateDeployPreflight(options);
+
+    if (migratePreflightError !== undefined) {
+        return { code: 1, descriptor: undefined, error: migratePreflightError, validation: { problems: [], wranglerPath: undefined } };
+    }
 
     // Pre-wrangler gates: the D1 placeholder hard-block, the Dockerfile-container
     // Docker preflight, and the Railpack `{ build }` build+push step. Each aborts

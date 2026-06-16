@@ -94,6 +94,12 @@ export interface VerifyStripeSignatureInput {
  * {@link LunoraPaymentError} on any failure.
  */
 export const verifyStripeSignature = async (input: VerifyStripeSignatureInput): Promise<void> => {
+    // Fail closed on an empty/missing secret: WebCrypto would happily MAC with a zero-length (or
+    // "undefined"-stringified) key the attacker also knows, making the signature forgeable.
+    if (!input.secret) {
+        throw new LunoraPaymentError("CONFIG_INVALID", "webhook secret not configured");
+    }
+
     const toleranceSeconds = input.toleranceSeconds ?? 300;
     const nowMs = input.now ?? Date.now();
     const { signatures, timestamp } = parseStripeSignatureHeader(input.signatureHeader);
@@ -136,6 +142,11 @@ export interface VerifyStandardWebhookInput {
  * entries, with a replay-window check. Throws a {@link LunoraPaymentError} on any failure.
  */
 export const verifyStandardWebhook = async (input: VerifyStandardWebhookInput): Promise<void> => {
+    // Fail closed on an empty/missing secret: a zero-length HMAC key is attacker-known and forgeable.
+    if (!input.secret) {
+        throw new LunoraPaymentError("CONFIG_INVALID", "webhook secret not configured");
+    }
+
     const toleranceSeconds = input.toleranceSeconds ?? 300;
     const nowMs = input.now ?? Date.now();
     const timestamp = Number(input.webhookTimestamp);
@@ -149,7 +160,18 @@ export const verifyStandardWebhook = async (input: VerifyStandardWebhookInput): 
     }
 
     const rawSecret = input.secret.startsWith(SYMMETRIC_PREFIX) ? input.secret.slice(SYMMETRIC_PREFIX.length) : input.secret;
-    const expected = await hmacSha256Base64(base64ToBytes(rawSecret), `${input.webhookId}.${input.webhookTimestamp}.${input.payload}`);
+
+    if (!rawSecret) {
+        throw new LunoraPaymentError("CONFIG_INVALID", "webhook secret not configured");
+    }
+
+    const keyBytes = base64ToBytes(rawSecret);
+
+    if (keyBytes.length === 0) {
+        throw new LunoraPaymentError("CONFIG_INVALID", "webhook secret not configured");
+    }
+
+    const expected = await hmacSha256Base64(keyBytes, `${input.webhookId}.${input.webhookTimestamp}.${input.payload}`);
     const provided = input.webhookSignature
         .split(" ")
         .map((entry) => {

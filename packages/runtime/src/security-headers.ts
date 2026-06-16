@@ -85,6 +85,15 @@ interface ResolvedCors {
     allowedMethods: string[];
     enabled: boolean;
     isAllowed: (origin: string) => boolean;
+    /**
+     * Like {@link ResolvedCors.isAllowed} but NEVER satisfied by a wildcard `*`
+     * allowlist — an origin counts only when matched by an explicit, non-wildcard
+     * rule (a named origin in the list, or a custom predicate the developer
+     * wrote). Used by the CSRF guard: a wildcard CORS allowlist means "any origin
+     * may read my non-credentialed responses", which must NOT be conflated with
+     * "I trust any origin to make authenticated state changes".
+     */
+    isExplicitlyAllowed: (origin: string) => boolean;
     maxAge: number;
 }
 
@@ -171,6 +180,7 @@ const resolveCors = (input: CorsOptions | false | undefined): ResolvedCors => {
         allowedMethods: DEFAULT_CORS_METHODS,
         enabled: false,
         isAllowed: () => false,
+        isExplicitlyAllowed: () => false,
         maxAge: 600,
     };
 
@@ -189,6 +199,10 @@ const resolveCors = (input: CorsOptions | false | undefined): ResolvedCors => {
     }
 
     const isAllowed = typeof origins === "function" ? origins : (origin: string): boolean => origins.includes("*") || origins.includes(origin);
+    // A custom predicate is an explicit developer decision, so it counts for CSRF
+    // trust; a list-based allowlist counts ONLY for the non-wildcard entries it
+    // names (a `*` entry never confers CSRF trust).
+    const isExplicitlyAllowed = typeof origins === "function" ? origins : (origin: string): boolean => origins.includes(origin);
 
     return {
         allowCredentials,
@@ -196,6 +210,7 @@ const resolveCors = (input: CorsOptions | false | undefined): ResolvedCors => {
         allowedMethods: input.allowedMethods ?? DEFAULT_CORS_METHODS,
         enabled: true,
         isAllowed,
+        isExplicitlyAllowed,
         maxAge: input.maxAge ?? 600,
     };
 };
@@ -297,7 +312,16 @@ const originOf = (value: string | null): string | undefined => {
     }
 };
 
-/** Whether `origin` is same-origin, an explicitly trusted origin, or a CORS-allowed origin. */
+/**
+ * Whether `origin` is same-origin, an explicitly trusted CSRF origin, or matched
+ * by an **explicit, non-wildcard** CORS rule.
+ *
+ * A wildcard CORS allowlist (`*`) deliberately does NOT confer CSRF trust here:
+ * "any origin may read my non-credentialed responses" is not "I trust any origin
+ * to make authenticated state changes for my logged-in users". Use
+ * `cors.isExplicitlyAllowed`, which never matches via a `*` entry, so a wildcard
+ * CORS config cannot silently defeat the CSRF guard.
+ */
 const isTrustedOrigin = (origin: string, selfOrigin: string, resolved: ResolvedSecurity): boolean => {
     if (origin === selfOrigin) {
         return true;
@@ -307,7 +331,7 @@ const isTrustedOrigin = (origin: string, selfOrigin: string, resolved: ResolvedS
         return true;
     }
 
-    return resolved.cors.enabled && resolved.cors.isAllowed(origin);
+    return resolved.cors.enabled && resolved.cors.isExplicitlyAllowed(origin);
 };
 
 /**

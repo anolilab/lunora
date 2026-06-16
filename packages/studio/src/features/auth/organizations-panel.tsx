@@ -138,6 +138,12 @@ export const OrganizationsPanel = (): ReactElement => {
             return;
         }
 
+        // Staleness guard: capture the org id this fetch is for and discard the
+        // response if `selected` has changed (i.e. the operator switched orgs) before
+        // both fetches resolve — otherwise the slower response for org A would
+        // overwrite org B's data while B is displayed.
+        let cancelled = false;
+
         fireAndForget(
             (async (): Promise<void> => {
                 try {
@@ -146,13 +152,21 @@ export const OrganizationsPanel = (): ReactElement => {
                         client.listAuthOrgInvitations({ limit: 200, organizationId: selected }),
                     ]);
 
-                    setMembers(memberPage.rows);
-                    setInvitations(invitePage.rows);
+                    if (!cancelled) {
+                        setMembers(memberPage.rows);
+                        setInvitations(invitePage.rows);
+                    }
                 } catch (error_) {
-                    setError(errorMessage(error_));
+                    if (!cancelled) {
+                        setError(errorMessage(error_));
+                    }
                 }
             })(),
         );
+
+        return () => {
+            cancelled = true;
+        };
     }, [client, selected, version]);
 
     // The org/auth store is HTTP-only (no subscription channel), so poll while the

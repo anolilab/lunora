@@ -45,6 +45,13 @@ const fromBase64Url = (input: string): Uint8Array => {
 // (non-extractable) CryptoKey is memoized by secret value: this removes one
 // `crypto.subtle.importKey` from the verify hot path on every request. Caching
 // the Promise (not the resolved key) also coalesces concurrent imports.
+//
+// The cache is bounded to a small number of entries so a multi-tenant app that
+// cycles through many per-tenant secrets doesn't accumulate unbounded memory.
+// When the limit is reached the oldest entry is evicted (insertion-ordered Map
+// iteration is FIFO). A maximum of 64 distinct secrets per isolate is well
+// above any realistic single-tenant scenario, and isolates recycle anyway.
+const KEY_CACHE_MAX = 64;
 const keyCache = new Map<string, Promise<CryptoKey>>();
 
 const importHmacKey = async (secret: string): Promise<CryptoKey> => {
@@ -52,6 +59,15 @@ const importHmacKey = async (secret: string): Promise<CryptoKey> => {
 
     if (cached) {
         return cached;
+    }
+
+    // Evict the oldest entry when the cache is full.
+    if (keyCache.size >= KEY_CACHE_MAX) {
+        const oldest = keyCache.keys().next().value;
+
+        if (oldest !== undefined) {
+            keyCache.delete(oldest);
+        }
     }
 
     const keyPromise = crypto.subtle.importKey("raw", textEncoder.encode(secret), { hash: "SHA-256", name: "HMAC" }, false, ["sign", "verify"]);
@@ -138,12 +154,16 @@ export const buildSignedImageUrl = async (options: SignedImageUrlOptions): Promi
     const exp = Math.floor(Date.now() / 1000) + expiresInSeconds;
     const host = extractHost(options.baseUrl);
     const transform = serializeTransform(options.transform);
+    // Normalize the key once and use the same form for both the canonical and
+    // the URL path so signing and verification always agree, even when the
+    // caller passes a key with a leading slash.
+    const normalizedKey = options.key.replace(LEADING_SLASH_RE, "");
     const cryptoKey = await importHmacKey(options.secret);
-    const signature = await crypto.subtle.sign("HMAC", cryptoKey, textEncoder.encode(canonicalize(host, options.key, exp, transform)));
+    const signature = await crypto.subtle.sign("HMAC", cryptoKey, textEncoder.encode(canonicalize(host, normalizedKey, exp, transform)));
     const sig = toBase64Url(new Uint8Array(signature));
 
     const base = options.baseUrl.endsWith("/") ? options.baseUrl.slice(0, -1) : options.baseUrl;
-    const safeKey = encodeKey(options.key.replace(LEADING_SLASH_RE, ""));
+    const safeKey = encodeKey(normalizedKey);
     const tParameter = transform === "" ? "" : `&t=${encodeURIComponent(transform)}`;
 
     return `${base}/${safeKey}?exp=${String(exp)}&sig=${sig}${tParameter}`;

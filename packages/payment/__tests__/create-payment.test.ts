@@ -72,7 +72,9 @@ describe("createPayment", () => {
             successUrl: "https://x/ok",
         });
 
-        expect(result.url).toBe("https://pay.test/checkout:stripe:user_1:price_1:subscription");
+        // The derived key spans every request-shaping field (quantity / urls / metadata), not just
+        // (reference, price, mode), so a re-checkout with changed params gets a distinct key.
+        expect(result.url).toBe("https://pay.test/checkout:stripe:user_1:price_1:subscription:1:https://x/ok:https://x/cancel:");
     });
 
     it("enforces authorization on the referenceId", async () => {
@@ -93,14 +95,17 @@ describe("createPayment", () => {
         ).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
 
-    it("rejects cancelling another caller's subscription (IDOR)", async () => {
+    it("rejects cancelling another caller's subscription as NOT_FOUND (no existence oracle)", async () => {
         const store = new MemoryPaymentStore();
 
         await store.upsertSubscription(subscription("user_2", "active"));
 
         const payment = createPayment({ adapter: fakeAdapter(), authorize: (referenceId) => referenceId === "user_1", store });
 
-        await expect(payment.cancelSubscription("sub_1")).rejects.toMatchObject({ code: "FORBIDDEN" });
+        // A non-owner gets the same NOT_FOUND as a truly missing id, so the endpoint can't be used to
+        // confirm another tenant's subscription id exists.
+        await expect(payment.cancelSubscription("sub_1")).rejects.toMatchObject({ code: "NOT_FOUND" });
+        await expect(payment.cancelSubscription("sub_absent")).rejects.toMatchObject({ code: "NOT_FOUND" });
     });
 
     it("cancels an owned subscription and syncs the store", async () => {
@@ -170,7 +175,7 @@ describe("createPayment — attach / check / track", () => {
 
         const result = await payment.attach({ cancelUrl: "https://x/cancel", priceId: "price_1", referenceId: "user_1", successUrl: "https://x/ok" });
 
-        expect(result.url).toBe("https://pay.test/checkout:stripe:user_1:price_1:subscription");
+        expect(result.url).toBe("https://pay.test/checkout:stripe:user_1:price_1:subscription:1:https://x/ok:https://x/cancel:");
     });
 
     it("attach honors an explicit one-time payment mode", async () => {
@@ -184,7 +189,7 @@ describe("createPayment — attach / check / track", () => {
             successUrl: "https://x/ok",
         });
 
-        expect(result.url).toBe("https://pay.test/checkout:stripe:user_1:price_1:payment");
+        expect(result.url).toBe("https://pay.test/checkout:stripe:user_1:price_1:payment:1:https://x/ok:https://x/cancel:");
     });
 
     it("check throws when entitlements are not configured", async () => {

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, expectTypeOf, it } from "vitest";
+import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 
 import { SchedulerDO } from "../src/scheduler-do";
 import type { ScheduleRecord } from "../src/types";
@@ -532,5 +532,165 @@ describe("schedulerDO — alarm contract (fake clock)", () => {
         expect(scheduler.attempts).toBe(2);
         // Each failure pushes the next alarm further out (growing backoff).
         expect(setAlarmCalls.at(-1) ?? 0).toBeGreaterThan(rearmed);
+    });
+});
+
+/**
+ * Drive the REAL `dispatch()` (the production fetch path the unit suites stub
+ * out) against a fake `globalThis.fetch`, so the 2xx-only success contract and
+ * the outbound auth header are actually exercised. The other suites override
+ * `dispatch()` and never see this code.
+ */
+describe("schedulerDO — real dispatch() fetch contract", () => {
+    let restoreFetch: (() => void) | undefined;
+
+    afterEach(() => {
+        restoreFetch?.();
+        restoreFetch = undefined;
+    });
+
+    /** Stub global fetch with a fixed status; capture every request it sees. */
+    const stubFetch = (status: number): { calls: { headers: Headers; url: string }[] } => {
+        const calls: { headers: Headers; url: string }[] = [];
+        const stub = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+            calls.push({ headers: new Headers(init?.headers), url: String(input) });
+
+            return new Response(null, { status });
+        });
+        const original = globalThis.fetch;
+
+        globalThis.fetch = stub as unknown as typeof globalThis.fetch;
+        restoreFetch = () => {
+            globalThis.fetch = original;
+        };
+
+        return { calls };
+    };
+
+    it("clears the job on a 2xx dispatch (success)", async () => {
+        expect.assertions(2);
+
+        stubFetch(200);
+
+        const state = createFakeState();
+        const scheduler = new SchedulerDO(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const id = await scheduledId(await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: Date.now() - 1000 })));
+
+        await scheduler.alarm();
+
+        // A 2xx is the only success: the header is gone and nothing was parked.
+        expect(state.storageMap.has(`id:${id}`)).toBe(false);
+        expect([...state.storageMap.keys()].filter((key) => key.startsWith("dead:"))).toHaveLength(0);
+    });
+
+    it("retries (does NOT delete) when the receiver route is missing (404)", async () => {
+        expect.assertions(2);
+
+        stubFetch(404);
+
+        const state = createFakeState();
+        const scheduler = new SchedulerDO(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const id = await scheduledId(await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: Date.now() - 1000 })));
+
+        await scheduler.alarm();
+
+        // 404 is a transient/route-missing failure, not success: the job is kept
+        // for retry rather than silently dropped.
+        expect(state.storageMap.has(`id:${id}`)).toBe(true);
+        expect([...state.storageMap.keys()].filter((key) => key.startsWith("retry:"))).toHaveLength(1);
+    });
+
+    it("retries on a 400 application rejection rather than deleting", async () => {
+        expect.assertions(1);
+
+        stubFetch(400);
+
+        const state = createFakeState();
+        const scheduler = new SchedulerDO(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+        const id = await scheduledId(await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: Date.now() - 1000 })));
+
+        await scheduler.alarm();
+
+        // Any non-2xx (incl. a permanent 400) is preserved — never silently deleted.
+        expect(state.storageMap.has(`id:${id}`)).toBe(true);
+    });
+
+    it("posts to /_lunora/scheduler/dispatch with an HMAC signature header when a secret is set", async () => {
+        expect.assertions(3);
+
+        const { calls } = stubFetch(200);
+
+        const state = createFakeState();
+        const scheduler = new SchedulerDO(state, {
+            LUNORA_ORIGIN_URL: "https://app.test",
+            LUNORA_SCHEDULER_SECRET: "s3cr3t",
+        });
+
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: Date.now() - 1000 }));
+        await scheduler.alarm();
+
+        expect(calls).toHaveLength(1);
+        expect(calls[0]?.url).toBe("https://app.test/_lunora/scheduler/dispatch");
+        // The body is HMAC-signed so the receiver can reject anonymous callers.
+        expect((calls[0]?.headers.get("x-lunora-scheduler-signature") ?? "").length).toBeGreaterThan(0);
+    });
+
+    it("falls back to a bearer admin token when no HMAC secret is configured", async () => {
+        expect.assertions(2);
+
+        const { calls } = stubFetch(200);
+
+        const state = createFakeState();
+        const scheduler = new SchedulerDO(state, {
+            LUNORA_ADMIN_TOKEN: "admin-token",
+            LUNORA_ORIGIN_URL: "https://app.test",
+        });
+
+        await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: Date.now() - 1000 }));
+        await scheduler.alarm();
+
+        expect(calls[0]?.headers.get("x-lunora-scheduler-signature")).toBeNull();
+        expect(calls[0]?.headers.get("authorization")).toBe("Bearer admin-token");
+    });
+});
+
+describe("schedulerDO — scheduledFor validation", () => {
+    it("rejects an out-of-range scheduledFor (>= 1e21) that would corrupt the time index", async () => {
+        expect.assertions(2);
+
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+
+        // String(1e21) === "1e+21": padStart can't zero-pad it and parseInt
+        // recovery stops at the 'e', so such a job would mis-sort and fire at
+        // epoch ≈ 0. It must be rejected up front.
+        const response = await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: 1e21 }));
+
+        expect(response.status).toBe(400);
+        // Nothing was persisted for the rejected schedule.
+        expect([...state.storageMap.keys()].filter((key) => key.startsWith("id:"))).toHaveLength(0);
+    });
+
+    it("rejects a non-integer / non-finite scheduledFor", async () => {
+        expect.assertions(2);
+
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+
+        expect((await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: 1.5 }))).status).toBe(400);
+        expect((await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: Number.POSITIVE_INFINITY }))).status).toBe(400);
+    });
+
+    it("accepts the maximum valid Date millisecond value", async () => {
+        expect.assertions(1);
+
+        const state = createFakeState();
+        const scheduler = new TestScheduler(state, { LUNORA_ORIGIN_URL: "https://app.test" });
+
+        // 8.64e15 is the largest valid Date; String() stays in plain digits so
+        // the index padding holds.
+        const response = await scheduler.fetch(post("/schedule", { args: {}, functionPath: "f", scheduledFor: 8_640_000_000_000_000 }));
+
+        expect(response.status).toBe(200);
     });
 });

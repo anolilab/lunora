@@ -37,10 +37,25 @@ const nondeterministicQueryMutation: Lint = {
 
         const findings = [];
 
+        // Per-(file, line, callee) occurrence counter: two calls of the same
+        // non-deterministic API on the same source line (e.g.
+        // `[Math.random(), Math.random()]`) would otherwise share an identical
+        // cacheKey and collapse to one dismissible finding.
+        const occurrenceCount = new Map<string, number>();
+
         for (const call of context.nondeterministicCalls) {
+            const baseKey = `${call.file}:${call.line.toString()}:${call.callee}`;
+            const occurrence = (occurrenceCount.get(baseKey) ?? 0) + 1;
+
+            occurrenceCount.set(baseKey, occurrence);
+
+            // Suffix the occurrence index only for the second and beyond so
+            // existing single-occurrence cacheKeys remain stable across runs.
+            const occurrenceSuffix = occurrence > 1 ? `:${occurrence.toString()}` : "";
+
             findings.push(
                 emit(nondeterministicQueryMutation, {
-                    cacheKey: `nondeterministic_query_mutation:${call.file}:${call.line.toString()}:${call.callee}`,
+                    cacheKey: `nondeterministic_query_mutation:${baseKey}${occurrenceSuffix}`,
                     detail: `\`${call.callee}(…)\` in ${call.exportName} (${call.file}:${call.line.toString()}) runs inside a ${call.kind} handler — query/mutation handlers must be deterministic. Compute it in an \`action\` and pass the value into the mutation as an argument.`,
                     metadata: { callee: call.callee, exportName: call.exportName, file: call.file, kind: call.kind, line: call.line },
                 }),

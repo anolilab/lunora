@@ -314,7 +314,8 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
                     client_reference_id: input.referenceId,
                     customer: input.customerId,
                     line_items: [{ price: input.priceId, quantity: input.quantity ?? 1 }],
-                    metadata: { referenceId: input.referenceId, ...input.metadata },
+                    // Pin the framework-controlled `referenceId` LAST so caller metadata can never override it.
+                    metadata: { ...input.metadata, referenceId: input.referenceId },
                     mode: input.mode,
                     subscription_data: input.mode === "subscription" ? { metadata: { referenceId: input.referenceId } } : undefined,
                     success_url: input.successUrl,
@@ -333,7 +334,7 @@ export const createStripeAdapter = (options: StripeAdapterOptions): PaymentAdapt
 
         getOrCreateCustomer: async (ref: CustomerRef): Promise<Customer> => {
             const customer = await client.customers.create(
-                { email: ref.email, metadata: { referenceId: ref.referenceId, ...ref.metadata } },
+                { email: ref.email, metadata: { ...ref.metadata, referenceId: ref.referenceId } },
                 { idempotencyKey: idempotencyKey("customer", "stripe", ref.referenceId) },
             );
 

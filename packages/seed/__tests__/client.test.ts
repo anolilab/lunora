@@ -194,6 +194,27 @@ describe("createSeedClient", () => {
         expect(seed.$ids.users).toEqual(fromFresh.users);
     });
 
+    it("re-seeds FK parents after $reset (regression: $reset must not leave empty-array tombstones)", async () => {
+        // Before the fix, $reset left `idsByTable.users = []` in place. The next
+        // posts call passed that empty array as `existingIds.users`, which seedPlan
+        // treated as "parent already covered" and skipped user generation — leaving
+        // the FK pool empty and generating dangling placeholder ids.
+        expect.hasAssertions();
+
+        const seed = client();
+
+        await seed.users(3);
+        seed.$reset();
+
+        // After reset, seeding posts must auto-seed users so authorId FKs resolve.
+        await seed.posts(5);
+
+        const userIds = new Set(seed.$ids.users ?? []);
+
+        expect(userIds.size).toBeGreaterThan(0);
+        expect(seed.$store.posts!.every((post) => userIds.has(post.authorId as string))).toBe(true);
+    });
+
     it("is deterministic for a given seed and varies across seeds", async () => {
         expect.hasAssertions();
 

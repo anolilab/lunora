@@ -135,6 +135,22 @@ describe("seedPlan", () => {
         expect(posts.every((post) => pool.has(post.authorId as string))).toBe(true);
     });
 
+    it("re-seeds a parent when existingIds entry is present but empty (regression: empty array must not be treated as covered)", () => {
+        // An empty existingIds array means the caller found no existing rows — the
+        // planner must still seed the parent so child FKs resolve to real ids.
+        expect.hasAssertions();
+
+        const plan = seedPlan(schema, { defaultCount: 3, existingIds: { users: [] }, only: ["posts"] });
+        const tables = plan.map((entry) => entry.table);
+
+        expect(tables).toContain("users");
+
+        const userIds = new Set(plan.find((entry) => entry.table === "users")!.rows.map((row) => row._id));
+        const posts = plan.find((entry) => entry.table === "posts")!.rows;
+
+        expect(posts.every((post) => userIds.has(post.authorId))).toBe(true);
+    });
+
     it("exposes a cross-table `store` to override functions", () => {
         expect.hasAssertions();
 

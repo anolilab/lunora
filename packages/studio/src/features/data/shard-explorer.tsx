@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 import { useT } from "../../i18n/i18n-context";
 import type { TableInfo } from "../../lib/admin";
@@ -75,6 +75,12 @@ const ShardExplorer = ({ onFetchTables, onSelect }: ShardExplorerProps): ReactEl
     const [loading, setLoading] = useState<boolean>(false);
     const [error, setError] = useState<string | undefined>(undefined);
 
+    // Monotonically-increasing request counter used to discard stale responses.
+    // When the operator clicks shard A then B in quick succession, the fetch for A
+    // may resolve after B's; incrementing the counter on each pick and comparing
+    // inside the async closure ensures only the latest response wins.
+    const requestIdRef = useRef<number>(0);
+
     const toggleOpen = useCallback((): void => {
         setOpen((current) => !current);
     }, []);
@@ -87,14 +93,23 @@ const ShardExplorer = ({ onFetchTables, onSelect }: ShardExplorerProps): ReactEl
             setError(undefined);
             setLoading(true);
 
+            const myRequestId = ++requestIdRef.current;
+
             try {
                 const result = await onFetchTables(shardKey);
 
-                setTables(result?.slice(0, MAX_SUMMARY_TABLES));
+                // Discard if a newer pick superseded this one while it was in flight.
+                if (requestIdRef.current === myRequestId) {
+                    setTables(result?.slice(0, MAX_SUMMARY_TABLES));
+                }
             } catch (error_) {
-                setError((error_ as Error).message);
+                if (requestIdRef.current === myRequestId) {
+                    setError((error_ as Error).message);
+                }
             } finally {
-                setLoading(false);
+                if (requestIdRef.current === myRequestId) {
+                    setLoading(false);
+                }
             }
         },
         [onFetchTables, onSelect],

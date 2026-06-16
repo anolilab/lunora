@@ -116,8 +116,15 @@ const assertDataset = (dataset: string): void => {
     }
 };
 
-/** Single-quote-escape a string for an AE SQL literal. */
-const sqlString = (value: string): string => `'${value.replaceAll("'", "''")}'`;
+/**
+ * Single-quote-escape a string for an AE SQL literal.
+ *
+ * Escapes backslashes first (so a trailing `\` cannot consume the closing
+ * quote) and then doubles any single quotes — the standard defence-in-depth
+ * escape for SQL string literals regardless of whether the AE/ClickHouse
+ * dialect treats backslash as an escape character.
+ */
+const sqlString = (value: string): string => `'${value.replaceAll("\\", "\\\\").replaceAll("'", "''")}'`;
 
 /** Run one query, mapping a transport/SQL error to an empty result so one bad metric never aborts the whole feed. */
 const queryOrEmpty = async (source: AnalyticsMetricsSource, sql: string): Promise<ReadonlyArray<Record<string, unknown>>> => {

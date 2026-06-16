@@ -49,7 +49,14 @@ describe("reconcile", () => {
 
         const result = await reconcile({ adapter: truthAdapter(), store, subscriptionIds: ["sub_1"] });
 
-        expect(result).toEqual({ checkedPayments: 0, checkedSubscriptions: 1, updatedPayments: 0, updatedSubscriptions: 1 });
+        expect(result).toEqual({
+            checkedPayments: 0,
+            checkedSubscriptions: 1,
+            failedPayments: 0,
+            failedSubscriptions: 0,
+            updatedPayments: 0,
+            updatedSubscriptions: 1,
+        });
 
         const repaired = await store.getSubscription("stripe", "sub_1");
 
@@ -73,11 +80,60 @@ describe("reconcile", () => {
 
         const result = await reconcile({ adapter: truthAdapter(), paymentSessionIds: ["pi_1"], store });
 
-        expect(result).toEqual({ checkedPayments: 1, checkedSubscriptions: 0, updatedPayments: 1, updatedSubscriptions: 0 });
+        expect(result).toEqual({
+            checkedPayments: 1,
+            checkedSubscriptions: 0,
+            failedPayments: 0,
+            failedSubscriptions: 0,
+            updatedPayments: 1,
+            updatedSubscriptions: 0,
+        });
 
         const session = await store.getPaymentSession("stripe", "pi_1");
 
         expect(session?.state).toBe("captured");
         expect(session?.capturedAmount.minorUnits).toBe(1000n);
+    });
+
+    it("isolates a failing id so the rest of the batch still self-heals", async () => {
+        const store = new MemoryPaymentStore();
+
+        await store.upsertSubscription(subscription("past_due"));
+
+        // First id throws (e.g. a deleted/404'd subscription); the second must still reconcile.
+        const flakyAdapter = {
+            getSubscriptionStatus: async (id: string) => {
+                if (id === "sub_boom") {
+                    throw new Error("provider 404");
+                }
+
+                return subscription("active");
+            },
+            identifier: "stripe",
+        } as unknown as PaymentAdapter;
+
+        const events: { type: string }[] = [];
+
+        const result = await reconcile({
+            adapter: flakyAdapter,
+            observability: (event) => events.push(event),
+            store,
+            subscriptionIds: ["sub_boom", "sub_1"],
+        });
+
+        expect(result).toEqual({
+            checkedPayments: 0,
+            checkedSubscriptions: 2,
+            failedPayments: 0,
+            failedSubscriptions: 1,
+            updatedPayments: 0,
+            updatedSubscriptions: 1,
+        });
+
+        // The healthy id was still repaired despite the sibling failure.
+        expect((await store.getSubscription("stripe", "sub_1"))?.state).toBe("active");
+        // The failure is surfaced and `reconcile.completed` always fires.
+        expect(events.map((event) => event.type)).toContain("reconcile.error");
+        expect(events.at(-1)?.type).toBe("reconcile.completed");
     });
 });

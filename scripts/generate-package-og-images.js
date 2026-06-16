@@ -172,7 +172,7 @@ const insertSVGIntoReadme = (readmePath, svgPath, packageName, packageDescriptio
         return false;
     }
 
-    const imageLink = `<a href="https://www.anolilab.com/open-source" align="center">\n\n  <img src="${svgPath}" alt="${packageName}" />\n\n</a>\n\n<h3 align="center">${packageDescription}</h3>`;
+    const imageLink = `<a href="https://www.anolilab.com/open-source" align="center">\n\n  <img src="${svgPath}" alt="${escapeHtml(packageName)}" />\n\n</a>\n\n<h3 align="center">${escapeHtml(packageDescription)}</h3>`;
 
     const before = content.slice(0, startIndex);
     const after = content.slice(endIndex + END_PLACEHOLDER.length);

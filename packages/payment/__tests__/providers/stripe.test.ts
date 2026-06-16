@@ -103,6 +103,25 @@ describe("stripe adapter", () => {
         expect((checkout?.args[0] as { metadata?: Record<string, string> }).metadata?.referenceId).toBe("user_1");
     });
 
+    it("never lets caller metadata override the framework referenceId on checkout", async () => {
+        const calls: RecordedCall[] = [];
+        const adapter = createStripeAdapter({ client: makeClient(calls), webhookSecret: "whsec" });
+
+        await adapter.createCheckout({
+            cancelUrl: "https://x/cancel",
+            metadata: { referenceId: "victim" },
+            mode: "subscription",
+            priceId: "price_1",
+            referenceId: "user_1",
+            successUrl: "https://x/ok",
+        });
+
+        const checkout = calls.find((call) => call.name === "checkout");
+
+        // The framework's referenceId wins over the caller-supplied override.
+        expect((checkout?.args[0] as { metadata?: Record<string, string> }).metadata?.referenceId).toBe("user_1");
+    });
+
     it("maps a captured intent to a payment session", async () => {
         const adapter = createStripeAdapter({ client: makeClient([]), webhookSecret: "whsec" });
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { LunoraPaymentError } from "../src/errors";
-import { constantTimeEqual, hmacSha256Hex, parseStripeSignatureHeader, verifyStripeSignature } from "../src/webhook";
+import { constantTimeEqual, hmacSha256Hex, parseStripeSignatureHeader, verifyStandardWebhook, verifyStripeSignature } from "../src/webhook";
 
 const sign = async (secret: string, payload: string, timestamp: number): Promise<string> => {
     const signature = await hmacSha256Hex(secret, `${String(timestamp)}.${payload}`);
@@ -51,5 +51,22 @@ describe("webhook verification", () => {
 
     it("parses a multi-signature header", () => {
         expect(parseStripeSignatureHeader("t=5,v1=aa,v1=bb")).toEqual({ signatures: ["aa", "bb"], timestamp: 5 });
+    });
+
+    it("fails closed on an empty signing secret (no forgeable zero-length-key MAC)", async () => {
+        const signatureHeader = await sign("", payload, timestamp);
+
+        await expect(verifyStripeSignature({ now, payload, secret: "", signatureHeader })).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+
+        await expect(
+            verifyStandardWebhook({
+                now,
+                payload,
+                secret: "",
+                webhookId: "msg_1",
+                webhookSignature: "v1,sig",
+                webhookTimestamp: String(timestamp),
+            }),
+        ).rejects.toMatchObject({ code: "CONFIG_INVALID" });
     });
 });

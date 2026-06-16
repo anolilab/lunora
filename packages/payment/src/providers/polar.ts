@@ -233,7 +233,8 @@ export const createPolarAdapter = (options: PolarAdapterOptions): PaymentAdapter
         createCheckout: async (input: CheckoutInput): Promise<CheckoutResult> => {
             const checkout = await client.checkouts.create({
                 customerEmail: undefined,
-                metadata: { referenceId: input.referenceId, ...input.metadata },
+                // Pin the framework-controlled `referenceId` LAST so caller metadata can never override it.
+                metadata: { ...input.metadata, referenceId: input.referenceId },
                 products: [input.priceId],
                 successUrl: input.successUrl,
             });
@@ -251,7 +252,7 @@ export const createPolarAdapter = (options: PolarAdapterOptions): PaymentAdapter
             const customer = await client.customers.create({
                 email: ref.email,
                 externalId: ref.referenceId,
-                metadata: { referenceId: ref.referenceId, ...ref.metadata },
+                metadata: { ...ref.metadata, referenceId: ref.referenceId },
             });
 
             return { createdAt: Date.now(), email: customer.email ?? undefined, id: customer.id, provider: "polar", referenceId: ref.referenceId };

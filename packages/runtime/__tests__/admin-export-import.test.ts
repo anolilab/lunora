@@ -490,6 +490,59 @@ describe("createWorker — admin import endpoint", () => {
         expect(orchestrateImport).not.toHaveBeenCalled();
     });
 
+    it("attributes the true physical line to interspersed global rows", async () => {
+        expect.assertions(1);
+
+        let capturedRows: { doc: Record<string, unknown>; line: number; table: string }[] = [];
+        const importGlobals = vi.fn<(request: { rows: { doc: Record<string, unknown>; line: number; table: string }[] }) => Promise<unknown>>(
+            async (request) => {
+                capturedRows = request.rows;
+
+                return { conflicts: 0, errors: [], inserted: { settings: request.rows.length } };
+            },
+        );
+
+        const worker = createWorker({
+            adminToken: ADMIN_TOKEN,
+            importGlobals: importGlobals as never,
+            queryCoordinator: {
+                fanOut: vi.fn<() => never>(),
+                orchestrateApplyCdc: vi.fn<() => never>(),
+                orchestrateCdcSync: vi.fn<() => never>(),
+                orchestrateExport: vi.fn<() => never>(),
+                orchestrateImport: orchestrateImport as never,
+                orchestrateMigration: vi.fn<() => never>(),
+                orchestrateRank: vi.fn<() => never>(),
+                orchestrateRankPage: vi.fn<() => never>(),
+                orchestrateShardTraffic: vi.fn<() => never>(),
+                registry: {} as never,
+            },
+            resolveTableSharding: (table: string): ShardingInfo | undefined =>
+                table === "settings" ? { mode: { kind: "global" } } : { mode: { kind: "root" } },
+            shardDO: noopNamespace,
+        });
+
+        // Global row on line 1, a shard row on line 2, a second global row on line
+        // 3 — the second global row's true source line is 3, not 2.
+        const ndjson = [
+            JSON.stringify({ doc: { _id: "g1" }, table: "settings" }),
+            JSON.stringify({ doc: { _id: "s1" }, table: "messages" }),
+            JSON.stringify({ doc: { _id: "g2" }, table: "settings" }),
+        ].join("\n");
+
+        await worker.fetch(
+            new Request("https://app.example/_lunora/admin/import", {
+                body: ndjson,
+                headers: { authorization: `Bearer ${ADMIN_TOKEN}` },
+                method: "POST",
+            }),
+            {},
+            fakeContext,
+        );
+
+        expect(capturedRows.map((row) => row.line)).toEqual([1, 3]);
+    });
+
     it("reports global rows as errors when importGlobals is not configured", async () => {
         expect.assertions(2);
 

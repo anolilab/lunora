@@ -76,7 +76,7 @@ export const requestImageUpload = mutation({
         }
 
         const key = `posts/${ctx.auth.userId}/${crypto.randomUUID()}`;
-        const url = await ctx.storage.getSignedUrl(key, { expiresInSeconds: 60 });
+        const url = await ctx.storage.getSignedUrl(key, { contentType, expiresInSeconds: 60, method: "PUT" });
 
         return { key, url };
     },

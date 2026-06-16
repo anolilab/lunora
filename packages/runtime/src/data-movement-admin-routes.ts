@@ -308,10 +308,13 @@ const buildDataMovementAdminRoutes = (deps: DataMovementAdminRouteDeps): Record<
         const raw = await readJsonBodyWithLimit(request);
         const rawBatches = Array.isArray(raw["batches"]) ? raw["batches"] : [];
         const batches = rawBatches
-            .map((batch) => batch as { changes?: unknown; shardKey?: unknown })
+            .map((batch) => batch as { changes?: unknown; shardKey?: unknown } | null)
             .filter(
                 (batch): batch is { changes: ReadonlyArray<Record<string, unknown>>; shardKey: string } =>
-                    typeof batch.shardKey === "string" && Array.isArray(batch.changes),
+                    // Guard object-ness before property access — a `null`/non-object
+                    // entry (e.g. `{"batches":[null]}`) would otherwise throw a
+                    // TypeError that surfaces as a confusing 500; here it's skipped.
+                    batch !== null && typeof batch === "object" && typeof batch.shardKey === "string" && Array.isArray(batch.changes),
             );
         const globalChanges = Array.isArray(raw["globalChanges"]) ? (raw["globalChanges"] as ReadonlyArray<Record<string, unknown>>) : [];
 

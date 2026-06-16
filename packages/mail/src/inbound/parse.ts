@@ -33,11 +33,37 @@ interface InboundAttachment {
     mimeType: string;
 }
 
+/**
+ * Sender-authentication verdicts pulled from the `Authentication-Results` header
+ * the receiving MX (e.g. Cloudflare Email Routing) stamped on the message.
+ *
+ * SECURITY: Cloudflare Email Routing authenticates only the *recipient* domain,
+ * **not** the sender. The envelope `from` and message content are trivially
+ * spoofable, so a downstream handler MUST NOT make trust/authorization decisions
+ * on `email.from` alone — gate on these verdicts (or your own policy) instead.
+ * Verdicts are best-effort: when the receiving MX did not stamp an
+ * `Authentication-Results` header, every field is `null` ("unknown").
+ */
+interface InboundAuthentication {
+    /** DKIM verdict (`"pass"`/`"fail"`/…), or `null` when not reported. */
+    dkim: string | null;
+    /** DMARC verdict (`"pass"`/`"fail"`/…), or `null` when not reported. */
+    dmarc: string | null;
+    /** SPF verdict (`"pass"`/`"fail"`/…), or `null` when not reported. */
+    spf: string | null;
+}
+
 /** Normalised, transport-agnostic view of a received message. */
 interface InboundEmail {
     /** Decoded attachments (empty array when none). */
     attachments: InboundAttachment[];
-    /** Sender mailbox (`from`), CR/LF-checked. Empty string when the message omitted it. */
+    /**
+     * Sender-authentication verdicts (DKIM/SPF/DMARC) parsed from the receiving
+     * MX's `Authentication-Results` header. SECURITY: see {@link InboundAuthentication}
+     * — `from` is spoofable; gate trust on these verdicts, not on `from`.
+     */
+    authentication: InboundAuthentication;
+    /** Sender mailbox (`from`), CR/LF-checked. Empty string when the message omitted it. SECURITY: spoofable — do not trust for authorization. */
     from: string;
     /** Flattened `key → value` of the parsed headers (lowercase keys), each value CR/LF-checked. */
     headers: Record<string, string>;
@@ -86,6 +112,33 @@ const formatAddress = (entry: { address?: string; group?: { address?: string; na
 };
 
 /**
+ * Pull a single `method=result` verdict (e.g. `dkim=pass`) out of an
+ * `Authentication-Results` header value. Case-insensitive on the method name;
+ * returns `null` when the method isn't present.
+ */
+const authVerdict = (authResults: string, method: string): string | null => {
+    const match = new RegExp(`\\b${method}=([a-zA-Z]+)`, "i").exec(authResults);
+
+    return match?.[1]?.toLowerCase() ?? null;
+};
+
+/**
+ * Parse the receiving MX's `Authentication-Results` header into DKIM/SPF/DMARC
+ * verdicts. Returns all-`null` ("unknown") when the header is absent.
+ */
+const parseAuthentication = (authResults: string | undefined): InboundAuthentication => {
+    if (authResults === undefined || authResults === "") {
+        return { dkim: null, dmarc: null, spf: null };
+    }
+
+    return {
+        dkim: authVerdict(authResults, "dkim"),
+        dmarc: authVerdict(authResults, "dmarc"),
+        spf: authVerdict(authResults, "spf"),
+    };
+};
+
+/**
  * Parse a raw RFC 822 message into a normalised {@link InboundEmail}. Accepts the
  * shapes a Cloudflare Email Worker can hand off — `ReadableStream`, `ArrayBuffer`,
  * `Uint8Array`, or a decoded string.
@@ -125,6 +178,7 @@ const parseInboundEmail = async (raw: RawInboundEmail): Promise<InboundEmail> =>
 
     return {
         attachments,
+        authentication: parseAuthentication(headers["authentication-results"]),
         from,
         headers,
         ...(parsed.html === undefined ? {} : { html: parsed.html }),
@@ -138,4 +192,4 @@ const parseInboundEmail = async (raw: RawInboundEmail): Promise<InboundEmail> =>
 };
 
 export { parseInboundEmail };
-export type { InboundAttachment, InboundEmail, RawInboundEmail };
+export type { InboundAttachment, InboundAuthentication, InboundEmail, RawInboundEmail };

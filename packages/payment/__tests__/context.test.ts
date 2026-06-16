@@ -107,4 +107,13 @@ describe("paymentsFromContext", () => {
             payment.createCheckout({ cancelUrl: "https://x/c", mode: "payment", priceId: "price_1", referenceId: "user_1", successUrl: "https://x/o" }),
         ).rejects.toMatchObject({ code: "FORBIDDEN" });
     });
+
+    it("treats an empty-string identity as unauthenticated (no empty-reference orphan match)", async () => {
+        const payment = paymentsFromContext({ auth: { userId: "" }, db: makeDb() }, { adapter: fakeAdapter });
+
+        // A falsy-but-present identity must not be authorized against an empty/orphan referenceId.
+        await expect(
+            payment.createCheckout({ cancelUrl: "https://x/c", mode: "payment", priceId: "price_1", referenceId: "", successUrl: "https://x/o" }),
+        ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    });
 });

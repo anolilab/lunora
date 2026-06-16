@@ -94,6 +94,38 @@ describe("verifyTurnstile", () => {
         });
     });
 
+    it("downgrades a valid token to failure on a hostname mismatch", async () => {
+        expect.assertions(2);
+
+        const fetch = vi.fn<FetchLike>(async () => jsonResponse({ hostname: "evil.example", success: true }));
+
+        const result = await verifyTurnstile({ expectedHostname: "app.example", fetch, secret: "sek", token: "tok" });
+
+        expect(result.success).toBe(false);
+        expect(result.errorCodes).toContain("hostname-mismatch");
+    });
+
+    it("downgrades a valid token to failure on an action mismatch", async () => {
+        expect.assertions(2);
+
+        const fetch = vi.fn<FetchLike>(async () => jsonResponse({ action: "signup", success: true }));
+
+        const result = await verifyTurnstile({ expectedAction: "login", fetch, secret: "sek", token: "tok" });
+
+        expect(result.success).toBe(false);
+        expect(result.errorCodes).toContain("action-mismatch");
+    });
+
+    it("keeps success when hostname and action match the expectation", async () => {
+        expect.assertions(1);
+
+        const fetch = vi.fn<FetchLike>(async () => jsonResponse({ action: "login", hostname: "app.example", success: true }));
+
+        const result = await verifyTurnstile({ expectedAction: "login", expectedHostname: "app.example", fetch, secret: "sek", token: "tok" });
+
+        expect(result.success).toBe(true);
+    });
+
     it("throws a structural LunoraError on a non-2xx response", async () => {
         expect.assertions(2);
 

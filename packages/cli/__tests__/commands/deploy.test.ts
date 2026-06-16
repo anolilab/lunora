@@ -425,11 +425,65 @@ export const transcoder = defineContainer({ image: "./containers/transcoder" });
             const { spawner: failingSpawner } = createRecordingSpawner(1);
             const { logger, infos } = silentLogger();
 
-            const result = await runDeployCommand({ cwd: workdir, logger, migrate: true, spawner: failingSpawner });
+            const result = await runDeployCommand({
+                cwd: workdir,
+                logger,
+                migrate: true,
+                migrateToken: "test-token",
+                migrateUrl: "https://my-worker.workers.dev",
+                migrateYes: true,
+                spawner: failingSpawner,
+            });
 
             expect(result.code).toBe(1);
             // No migration info messages — migration phase was skipped
             expect(infos.some((line) => line.includes("--migrate"))).toBe(false);
+        });
+
+        it("--migrate: blocks before deploy when production migration confirmation is missing", async () => {
+            expect.assertions(4);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { errors, logger } = silentLogger();
+
+            const result = await runDeployCommand({
+                cwd: workdir,
+                logger,
+                migrate: true,
+                migrateToken: "test-token",
+                migrateUrl: "https://my-worker.workers.dev",
+                spawner,
+            });
+
+            expect(result.code).toBe(1);
+            expect(result.descriptor).toBeUndefined();
+            expect(calls).toHaveLength(0);
+            expect(errors.some((line) => line.includes("--migrate-yes"))).toBe(true);
+        });
+
+        it("--migrate: blocks before deploy when the worker migration URL is missing", async () => {
+            expect.assertions(4);
+
+            writeFileSync(join(workdir, "wrangler.jsonc"), VALID_WRANGLER, "utf8");
+
+            const { calls, spawner } = createRecordingSpawner();
+            const { errors, logger } = silentLogger();
+
+            const result = await runDeployCommand({
+                cwd: workdir,
+                logger,
+                migrate: true,
+                migrateToken: "test-token",
+                migrateYes: true,
+                spawner,
+            });
+
+            expect(result.code).toBe(1);
+            expect(result.descriptor).toBeUndefined();
+            expect(calls).toHaveLength(0);
+            expect(errors.some((line) => line.includes("--migrate-url"))).toBe(true);
         });
 
         it("--migrate: runs all declared migrations after a successful deploy", async () => {
@@ -473,6 +527,7 @@ export const backfillNames = defineMigration({
                 migrate: true,
                 migrateToken: "test-token",
                 migrateUrl: "https://my-worker.workers.dev",
+                migrateYes: true,
                 spawner,
             });
 

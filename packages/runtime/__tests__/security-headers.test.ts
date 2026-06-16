@@ -278,4 +278,24 @@ describe("enforceOrigin", () => {
 
         expect(blocked?.status).toBe(403);
     });
+
+    it("does NOT treat a wildcard CORS allowlist as CSRF-trusted", () => {
+        expect.hasAssertions();
+
+        // A `*` CORS allowlist means "any origin may read my non-credentialed
+        // responses" — it must NOT confer CSRF trust for state-changing requests.
+        const wildcard = resolveSecurity({ cors: { allowedOrigins: ["*"] } });
+        const blocked = enforceOrigin(httpsRequest({ method: "POST", headers: { cookie: "session=1", origin: "https://evil.example.com" } }), wildcard);
+
+        expect(blocked?.status).toBe(403);
+    });
+
+    it("trusts an explicit (non-wildcard) CORS origin for CSRF", () => {
+        expect.hasAssertions();
+
+        const explicit = resolveSecurity({ cors: { allowedOrigins: ["https://partner.example.com"] } });
+        const ok = enforceOrigin(httpsRequest({ method: "POST", headers: { cookie: "session=1", origin: "https://partner.example.com" } }), explicit);
+
+        expect(ok).toBeUndefined();
+    });
 });

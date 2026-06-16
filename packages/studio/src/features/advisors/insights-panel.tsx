@@ -22,6 +22,7 @@ import type {
 import { ADMIN_FUNCTIONS } from "../../lib/admin";
 import { adminRef, callOptions, errorMessage, fireAndForget } from "../../lib/internal";
 import { recordShard } from "../../lib/shard-history";
+import useLiveShardSeed from "../data/hooks/use-live-shard-seed";
 import type { AdvisorRow } from "./advisor-view";
 import { AdvisorView, advisoryRow } from "./advisor-view";
 import { ApplyIndexButton } from "./apply-index-button";
@@ -251,9 +252,12 @@ export const InsightsPanel = ({ initialShardKey, loadShardTraffic }: InsightsPan
         [client, fanShardTraffic],
     );
 
-    useEffect(() => {
-        fireAndForget(refresh(initialShardKey ?? ""));
-    }, [refresh, initialShardKey]);
+    // Drive the initial load and re-load whenever `shardKey` changes (debounced),
+    // mirroring the `useLiveShardSeed` protocol used by function-stats, audit-panel,
+    // and logs-panel. Previously the panel only reloaded on mount + visibility change,
+    // so typing a different shard key never re-fetched — operators saw stale data for
+    // whatever shard was loaded at mount.
+    useLiveShardSeed(shardKey, refresh);
 
     // Auto-refresh when the tab regains focus. The studio is a standalone app
     // (not a Vite HMR client), so it can't hear codegen reloads directly — but

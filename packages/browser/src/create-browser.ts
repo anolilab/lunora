@@ -19,6 +19,30 @@ const IPV6_MAPPED_HEX = /^::ffff:([\da-f]{1,4}):([\da-f]{1,4})$/;
 /** IPv4-mapped IPv6 in dotted form (`::ffff:127.0.0.1`), for parsers that keep it. */
 const IPV6_MAPPED_DOTTED = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/;
 
+/**
+ * IPv4-compatible IPv6 (`::a.b.c.d` dotted form; deprecated but still parsed).
+ * The WHATWG URL parser normalizes these to a non-`ffff` two-word hex form such
+ * as `::7f00:1` for `::127.0.0.1`. We match both shapes.
+ */
+const IPV6_COMPATIBLE_DOTTED = /^::(\d{1,3}(?:\.\d{1,3}){3})$/;
+
+/**
+ * IPv4-compatible in the compact two-word hex form the WHATWG parser emits
+ * (`::W:X` where the full 128-bit prefix is `0000…0000:W:X`). Distinguishable
+ * from `::ffff:W:X` (mapped) because the `ffff` group is absent.
+ * We only need to match the `::` prefix (everything else is either `::1`,
+ * `::ffff:…`, or a longer form that wouldn't match the `::` shorthand), so
+ * we recognise `::` followed by exactly two colon-separated hex groups.
+ */
+const IPV6_COMPATIBLE_HEX = /^::([\da-f]{1,4}):([\da-f]{1,4})$/;
+
+/**
+ * NAT64 well-known prefix `64:ff9b::/96`. The WHATWG URL parser expands the
+ * embedded IPv4 into a full eight-group address, so we match the normalised
+ * `64:ff9b::W:X` compact form (two trailing hex words encoding the IPv4).
+ */
+const IPV6_NAT64_HEX = /^64:ff9b::([\da-f]{1,4}):([\da-f]{1,4})$/;
+
 /** Leading / trailing `URL.hostname` IPv6 brackets (`[::1]`). */
 const IPV6_BRACKETS = /^\[|\]$/g;
 
@@ -56,6 +80,23 @@ const isPrivateIpv4 = ([a, b]: [number, number, number, number]): boolean =>
     (a === 192 && b === 168) || // 192.168.0.0/16 private
     a >= 224; // 224.0.0.0/4 multicast + 240.0.0.0/4 reserved + 255.255.255.255 broadcast
 
+/**
+ * Decode the embedded 32-bit IPv4 from two hex groups (high word, low word)
+ * and test it against the private-range table. Returns `true` when the decoded
+ * address is private, or when the groups cannot be parsed (fail-closed).
+ */
+const isPrivateEmbeddedIpv4 = (highGroup: string | undefined, lowGroup: string | undefined): boolean => {
+    const high = Number.parseInt(highGroup ?? "", 16);
+    const low = Number.parseInt(lowGroup ?? "", 16);
+
+    // If either group doesn't parse cleanly, treat as private (fail-closed).
+    if (!Number.isFinite(high) || !Number.isFinite(low)) {
+        return true;
+    }
+
+    return isPrivateIpv4([Math.floor(high / 256), high % 256, Math.floor(low / 256), low % 256]);
+};
+
 /** True if an IPv6 literal (brackets already stripped) is loopback / unspecified / ULA / link-local, or maps to a private IPv4. */
 const isPrivateIpv6 = (host: string): boolean => {
     const ip = host.toLowerCase();
@@ -67,10 +108,7 @@ const isPrivateIpv6 = (host: string): boolean => {
     const mappedHex = IPV6_MAPPED_HEX.exec(ip);
 
     if (mappedHex) {
-        const high = Number.parseInt(mappedHex[1] ?? "0", 16);
-        const low = Number.parseInt(mappedHex[2] ?? "0", 16);
-
-        return isPrivateIpv4([Math.floor(high / 256), high % 256, Math.floor(low / 256), low % 256]);
+        return isPrivateEmbeddedIpv4(mappedHex[1], mappedHex[2]);
     }
 
     const mappedDotted = IPV6_MAPPED_DOTTED.exec(ip);
@@ -79,6 +117,30 @@ const isPrivateIpv6 = (host: string): boolean => {
         const v4 = parseIpv4(mappedDotted[1] ?? "");
 
         return v4 === undefined || isPrivateIpv4(v4);
+    }
+
+    // IPv4-compatible (`::a.b.c.d` dotted; deprecated).
+    const compatDotted = IPV6_COMPATIBLE_DOTTED.exec(ip);
+
+    if (compatDotted) {
+        const v4 = parseIpv4(compatDotted[1] ?? "");
+
+        return v4 === undefined || isPrivateIpv4(v4);
+    }
+
+    // IPv4-compatible in the WHATWG-normalised hex form (`::W:X`, no `ffff`).
+    const compatHex = IPV6_COMPATIBLE_HEX.exec(ip);
+
+    if (compatHex) {
+        return isPrivateEmbeddedIpv4(compatHex[1], compatHex[2]);
+    }
+
+    // NAT64 well-known prefix `64:ff9b::/96`. Block unconditionally: any
+    // address in this range translates an embedded IPv4 at the egress NAT64
+    // gateway, and an embedded private IPv4 (e.g. 169.254.169.254) reaches an
+    // internal host. Failing closed on the whole prefix is the safest posture.
+    if (IPV6_NAT64_HEX.test(ip)) {
+        return true;
     }
 
     return (

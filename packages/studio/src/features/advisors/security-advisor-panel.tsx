@@ -23,7 +23,7 @@ const findingTitle = (t: TFunction, finding: SecurityFinding): string =>
         "dev-args-unredacted": t("Request log keeps un-redacted args"),
         "security-headers-disabled": t("Security headers are off"),
         "ws-gate-open": t("Live admin subscriptions are ungated"),
-    })[finding.kind];
+    })[finding.kind] ?? t("Unknown security finding");
 
 /** The env binding each finding concerns, shown in the Entity column. */
 const findingEntity = (finding: SecurityFinding): string =>
@@ -36,7 +36,7 @@ const findingEntity = (finding: SecurityFinding): string =>
         "dev-args-unredacted": "request log",
         "security-headers-disabled": "LUNORA_SECURITY_HEADERS",
         "ws-gate-open": "LUNORA_WS_BEARER",
-    })[finding.kind];
+    })[finding.kind] ?? finding.kind;
 
 /** Localized one-line explanation + remediation per finding kind. `admin-token-weak`/`auth-secret-weak` interpolate the offending length. */
 const findingDetail = (t: TFunction, finding: SecurityFinding): string =>
@@ -67,7 +67,7 @@ const findingDetail = (t: TFunction, finding: SecurityFinding): string =>
         "ws-gate-open": t(
             "LUNORA_WS_BEARER is unset, so the WebSocket upgrade gate is open: live admin subscriptions need no credential. Set it to gate them like the HTTP admin RPCs.",
         ),
-    })[finding.kind];
+    })[finding.kind] ?? t("Update your worker to a version of Lunora that describes this finding.");
 
 /**
  * The Security Advisor — a 1-to-1 of Supabase's Security Advisor: severity tabs

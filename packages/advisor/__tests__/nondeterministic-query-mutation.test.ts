@@ -70,4 +70,22 @@ describe("nondeterministic_query_mutation", () => {
         expect(findings[1]!.cacheKey).toBe("nondeterministic_query_mutation:messages:20:crypto.randomUUID");
         expect(findings[2]!.cacheKey).toBe("nondeterministic_query_mutation:messages:25:fetch");
     });
+
+    it("produces distinct cacheKeys for two same-callee calls on the same source line", () => {
+        expect.assertions(3);
+
+        // `const pair = [Math.random(), Math.random()]` — both on line 7 with
+        // the same callee.  Without a within-line discriminator they collapse to
+        // one cacheKey and a single dismissal would silence both.
+        const calls: AdvisorNondeterministicCall[] = [
+            { callee: "Math.random", exportName: "makeId", file: "ids", kind: "mutation", line: 7 },
+            { callee: "Math.random", exportName: "makeId", file: "ids", kind: "mutation", line: 7 },
+        ];
+        const findings = run(calls);
+
+        expect(findings).toHaveLength(2);
+        // First occurrence has no suffix; second gets `:2`.
+        expect(findings[0]!.cacheKey).toBe("nondeterministic_query_mutation:ids:7:Math.random");
+        expect(findings[1]!.cacheKey).toBe("nondeterministic_query_mutation:ids:7:Math.random:2");
+    });
 });

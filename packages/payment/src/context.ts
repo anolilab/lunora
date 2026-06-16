@@ -53,11 +53,15 @@ export const lunoraDatabaseToPaymentDatabase = (database: LunoraDatabaseLike): P
 };
 
 export const paymentsFromContext = (context: PaymentContextLike, options: PaymentsFromContextOptions): LunoraPayment => {
-    const userId = context.auth?.userId ?? undefined;
+    // Normalize any falsy identity (null/undefined/empty string) to `undefined` so a falsy-but-present
+    // principal can never match an empty/orphan `referenceId`.
+    const userId = context.auth?.userId || undefined;
 
     return createPayment({
         adapter: options.adapter,
-        authorize: options.authorize ?? ((referenceId) => userId !== undefined && referenceId === userId),
+        // The default authorizer fails closed on an empty/whitespace reference: a missing identity or a
+        // blank reference (e.g. webhook-orphaned rows with `referenceId: ""`) is never authorized.
+        authorize: options.authorize ?? ((referenceId) => referenceId.trim() !== "" && userId !== undefined && referenceId === userId),
         entitlements: options.entitlements,
         observability: options.observability,
         store: createDatabasePaymentStore(lunoraDatabaseToPaymentDatabase(context.db)),
