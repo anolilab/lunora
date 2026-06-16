@@ -128,7 +128,7 @@ const resolveCalleeKind = (identifier: Identifier): string | undefined => {
  * isn't mistaken for a registration). Import-name based, so it doesn't depend on
  * the `@lunora/server` types being installed/resolvable.
  */
-const resolveBuilderRootKind = (receiver: Node): "internal" | "public" | undefined => {
+const resolveBuilderRootKind = (receiver: Node, followedLocal = false): "internal" | "public" | undefined => {
     let current: Node = receiver;
 
     // Each builder step (`x.input({...})`, `x.use(...)`, `x.output(...)`) is a
@@ -150,6 +150,25 @@ const resolveBuilderRootKind = (receiver: Node): "internal" | "public" | undefin
     const rootName = resolveCalleeKind(current);
 
     if (rootName === undefined) {
+        // The root identifier didn't resolve to an imported Lunora factory. It
+        // may instead be a LOCAL const bound to a partially-applied builder
+        // (`const b = mutation.input({...}); export const x = b.mutation(...)`).
+        // Follow the const's initializer ONE hop and re-resolve, so the chain
+        // is still discovered under degraded types (where the `__lunoraProcedure`
+        // brand can't resolve). Bounded to a single hop so a `const a = b; const
+        // b = a;` cycle can't loop.
+        if (followedLocal) {
+            return undefined;
+        }
+
+        const declaration = current.getSymbol()?.getValueDeclaration();
+
+        if (declaration && Node.isVariableDeclaration(declaration)) {
+            const initializer = declaration.getInitializer();
+
+            return initializer ? resolveBuilderRootKind(initializer, true) : undefined;
+        }
+
         return undefined;
     }
 

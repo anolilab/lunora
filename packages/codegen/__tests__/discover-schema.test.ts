@@ -269,6 +269,21 @@ describe("discoverSchema", () => {
         expect(() => discoverSchema(project, schemaPath)).toThrow(/`unique` must be a literal/u);
     });
 
+    it("throws a diagnostic when a table name collides with a `ctx.db` member (reserved name)", () => {
+        expect.assertions(2);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                query: defineTable({ text: v.string() }),
+            });
+        `);
+
+        expect(() => discoverSchema(project, schemaPath)).toThrow(CodegenDiagnosticError);
+        expect(() => discoverSchema(project, schemaPath)).toThrow(/table name "query" is reserved/u);
+    });
+
     it("captures an inline .vectorize() index hoisted into schema.vectorIndexes (Shape A)", () => {
         expect.assertions(2);
 

@@ -322,8 +322,12 @@ export default crons;
             // The typed contexts widen `db` to the generated per-table facade while
             // intersecting the legacy structural reader/writer for back-compat.
             expect(result.generated.server).toContain('export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage">');
-            expect(result.generated.server).toContain('readonly db: Omit<DatabaseReader, "query"> & DatabaseReaderFacade & { query: TypedTableQuery };');
-            expect(result.generated.server).toContain('readonly db: Omit<DatabaseWriter, "query"> & DatabaseWriterFacade & { query: TypedTableQuery };');
+            expect(result.generated.server).toContain(
+                'readonly db: Omit<DatabaseReader, "query" | "get"> & DatabaseReaderFacade & { query: TypedTableQuery; get: TypedTableGet };',
+            );
+            expect(result.generated.server).toContain(
+                'readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };',
+            );
             // server.ts is the builder file user code imports, so it must NOT import
             // the user function modules (that cycle lives in functions.ts). `Id as
             // IdOfTable` + `TableName` back the typed `v.id(...)`.

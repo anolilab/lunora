@@ -452,6 +452,39 @@ describe("discoverFunctions", () => {
             expect(byName.get("purge")).toMatchObject({ kind: "mutation", visibility: "internal" });
         });
 
+        it("discovers a const-assigned builder — follows the local const one hop to its factory root", () => {
+            // Degraded-types fallback: the `__lunoraProcedure` brand can't
+            // resolve, AND the builder root is a LOCAL const bound to a
+            // partially-applied builder (`const base = mutation.input({...})`).
+            // Discovery must follow that const's initializer one hop to the
+            // imported `mutation` factory, rather than silently dropping the fn.
+            expect.assertions(3);
+
+            writeFunction(
+                "messages.ts",
+                `import { mutation, query, v } from "./_generated/server";
+
+            const base = mutation.input({ channelId: v.id("channels") });
+
+            export const send = base
+                .input({ text: v.string() })
+                .mutation(() => null);
+
+            const readBase = query.input({ id: v.string() });
+
+            export const get = readBase.query(() => null);
+        `,
+            );
+
+            const project = new Project({ skipAddingFilesFromTsConfig: true, useInMemoryFileSystem: false });
+            const result = discoverFunctions(project, workdir);
+            const byName = new Map(result.map((f) => [f.exportName, f]));
+
+            expect(result).toHaveLength(2);
+            expect(byName.get("send")).toMatchObject({ kind: "mutation", visibility: "public" });
+            expect(byName.get("get")).toMatchObject({ kind: "query", visibility: "public" });
+        });
+
         it("merges .input() args across the chain — a later .input() wins on collision", () => {
             expect.assertions(1);
 

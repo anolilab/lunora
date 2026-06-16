@@ -20,9 +20,7 @@ export const list = query.query(async ({ ctx }): Promise<PostDoc[]> => {
     return [...rows].sort((a, b) => b.publishedAt - a.publishedAt);
 });
 
-export const get = query
-    .input({ id: v.id("posts") })
-    .query(async ({ args: { id }, ctx }): Promise<PostDoc | null> => ((await ctx.db.get(id)) as PostDoc | null) ?? null);
+export const get = query.input({ id: v.id("posts") }).query(async ({ args: { id }, ctx }): Promise<PostDoc | null> => (await ctx.db.get(id)) ?? null);
 
 /**
  * Semantic search over post bodies. `.vectorize("body", …)` keeps the

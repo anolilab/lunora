@@ -1051,20 +1051,27 @@ export type StorageBucketName = ${storageBucketUnion};${envBlock}${workflowsType
  */
 type TypedTableQuery = (<T extends TableName>(table: T) => TableReader<Doc<T>>) & ((table: string) => TableReader);
 
+/**
+ * The point read \`ctx.db.get(id)\`, bound to this schema: an \`Id<"table">\`
+ * carries its table name, so the resolved document is typed \`Doc<table>\` (or
+ * \`null\` when absent) with no \`as Doc<...>\` cast. Mirrors {@link TypedTableQuery}.
+ */
+type TypedTableGet = <T extends TableName>(id: IdOfTable<T>) => Promise<Doc<T> | null>;
+
 export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"> {
-    readonly db: Omit<DatabaseReader, "query"> & DatabaseReaderFacade & { query: TypedTableQuery };
+    readonly db: Omit<DatabaseReader, "query" | "get"> & DatabaseReaderFacade & { query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmReader;
     readonly storage: ReadOnlyStorage<StorageBucketName>;${kvContextField}${analyticsContextField}
 }
 
 export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"${workflowsOmit}> {
-    readonly db: Omit<DatabaseWriter, "query"> & DatabaseWriterFacade & { query: TypedTableQuery };
+    readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
     readonly storage: ReadOnlyStorage<StorageBucketName>;${kvContextField}${analyticsContextField}${workflowsContextField}
 }
 
 export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"${workflowsOmit}> {
-    readonly db: Omit<DatabaseWriter, "query"> & DatabaseWriterFacade & { query: TypedTableQuery };
+    readonly db: Omit<DatabaseWriter, "query" | "get"> & DatabaseWriterFacade & { query: TypedTableQuery; get: TypedTableGet };
     readonly orm: OrmWriter;
     readonly storage: StorageBase<StorageBucketName>;${aiActionField}${paymentsActionField}${containersActionField}${kvContextField}${hyperdriveActionField}${browserActionField}${imagesActionField}${analyticsContextField}${pipelinesActionField}${workflowsContextField}
 }

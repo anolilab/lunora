@@ -8,6 +8,28 @@ import { parseObjectShape } from "./parse-validator";
 const VECTOR_METRICS = new Set(["cosine", "dot-product", "euclidean"]);
 const ON_DELETE_ACTIONS = new Set(["cascade", "restrict", "set null"]);
 
+/**
+ * Table names that collide with members of `ctx.db` (the typed reader/writer the
+ * generated `_generated/server.ts` widens with the per-table facade). A table so
+ * named would shadow the corresponding `ctx.db.&lt;member>` and silently corrupt
+ * the emitted type, so codegen rejects it up front with a clear diagnostic.
+ */
+const RESERVED_TABLE_NAMES = new Set(["delete", "get", "insert", "normalizeId", "patch", "query", "replace", "system"]);
+
+/**
+ * Throw a pinpointed diagnostic when a discovered table key collides with a
+ * `ctx.db` member. The `node` is the table's name node (or the table builder
+ * expression) so the error points at the offending declaration.
+ */
+const assertTableNameAllowed = (name: string, node: Node): void => {
+    if (RESERVED_TABLE_NAMES.has(name)) {
+        throw diagnosticAt(
+            node,
+            `table name "${name}" is reserved — it collides with a \`ctx.db\` member (one of ${[...RESERVED_TABLE_NAMES].map((reserved) => `"${reserved}"`).join(", ")}). Rename the table.`,
+        );
+    }
+};
+
 /** Read a string-literal property from an object literal, or `undefined`. */
 const getStringProperty = (object: ObjectLiteralExpression, key: string): string | undefined => {
     const property = object.getProperty(key);
@@ -795,7 +817,10 @@ const parseBaseTables = (object: ObjectLiteralExpression): TableIR[] => {
         const initializer = property.getInitializer();
 
         if (initializer) {
-            tables.push(parseTableBuilder(initializer, property.getName()));
+            const name = property.getName();
+
+            assertTableNameAllowed(name, property.getNameNode());
+            tables.push(parseTableBuilder(initializer, name));
         }
     }
 
