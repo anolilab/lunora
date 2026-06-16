@@ -50,7 +50,7 @@ describe("lunora init smoke", () => {
 
     describe("lunora init → codegen → wrangler validator (Phase 5 smoke)", () => {
         it("vite template produces a project that codegen + wrangler validator accept", async () => {
-            expect.assertions(7);
+            expect.assertions(9);
 
             const result = await runInitCommand({
                 cwd: workdir,
@@ -79,6 +79,16 @@ describe("lunora init smoke", () => {
 
             expect(api).toContain("messages");
 
+            // The discovered FUNCTIONS — not just the table — must surface in the
+            // generated api. The vite template's `lunora/messages.ts` exports a
+            // `list` query and a `send` mutation, both imported from
+            // `./_generated/server`. If that procedure import were broken (the
+            // class of bug that previously shipped in a template), codegen would
+            // fail to discover these functions and they would be absent here.
+            // Asserting both names guards the broken-import regression.
+            expect(api).toContain("list:");
+            expect(api).toContain("send:");
+
             // 2. Wrangler validator must accept the scaffolded wrangler.jsonc
             //    against the scaffolded schema (SHARD binding, compatibility flag).
             const wranglerResult = validateWranglerProject({ projectRoot });
@@ -88,7 +98,7 @@ describe("lunora init smoke", () => {
         });
 
         it("standalone template produces a project that codegen + wrangler validator accept", async () => {
-            expect.assertions(3);
+            expect.assertions(4);
 
             const result = await runInitCommand({
                 cwd: workdir,
@@ -104,6 +114,14 @@ describe("lunora init smoke", () => {
             const codegenResult = runCodegen({ projectRoot });
 
             expect(existsSync(join(codegenResult.outputDirectory, "api.ts"))).toBe(true);
+
+            // The standalone template also ships `lunora/messages.ts` (a `list`
+            // query + `send` mutation via the generated-server procedure import).
+            // Assert codegen discovered the functions, not merely emitted an
+            // empty api — guards the broken-procedure-import regression.
+            const api = readFileSync(join(codegenResult.outputDirectory, "api.ts"), "utf8");
+
+            expect(api).toContain("send:");
 
             const wranglerResult = validateWranglerProject({ projectRoot });
 

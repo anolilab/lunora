@@ -101,6 +101,22 @@
               "if": "github.event_name != 'pull_request'"
               "run": "pnpm run lint:types"
 
+            # Always typecheck the examples explicitly, on every event.
+            # The examples (`@lunora-example/*`) are vis projects and the affected
+            # graph normally covers them, but a PR that only touches example
+            # source must never be able to slip a type error through (two latent
+            # bugs — a PUT upload URL minted from a mutation, and a broken
+            # procedure import — previously got in this way). `lint:types` runs
+            # `tsc --noEmit` per example, which does NOT build the upstream
+            # `@lunora/*` packages, so build the package dist first (the examples
+            # import from it). Examples track committed `_generated/`, so no
+            # codegen is required here.
+            - "name": "Build packages for example typecheck"
+              "run": "pnpm run build:packages"
+
+            - "name": "Typecheck examples"
+              "run": 'pnpm --filter "@lunora-example/*" run lint:types'
+
     "test":
         "name": "Test (node-${{ matrix.node_version }})"
         "runs-on": "ubuntu-latest"
