@@ -77,6 +77,33 @@ export const thumbnail = action.input({ key: v.string() }).action(async ({ args:
 
 `transform` clamps `width`/`height` to a configurable ceiling and validates the output `format` against an allowlist, so a hostile request can't ask for a multi-gigapixel canvas or an unexpected content type.
 
+It also covers the full optimize surface — the `aspect-crop` / `scale-up` fit modes and AI `upscale: "generate"` for sharper enlargements:
+
+```ts
+await ctx.images.transform(object, { fit: "scale-up", height: 2048, upscale: "generate", width: 2048 }, { format: "image/webp" });
+```
+
+## Overlays (watermarks, badges)
+
+Composite one or more overlays onto the result via the optional fourth argument. Overlays are drawn in order (last on top); each carries its own image bytes plus blend / position / opacity options, and an optional `transform` to pre-size the overlay.
+
+```ts
+const logo = await ctx.storage.download("brand/logo.png");
+
+await ctx.images.transform(object, { width: 1200 }, { format: "image/webp" }, [
+    {
+        image: logo, // a stream, buffer, Blob, or R2 object body
+        transform: { width: 128 }, // pre-size the overlay before compositing
+        composite: "over", // over | in | atop | out | xor | lighter
+        opacity: 0.85,
+        bottom: 24,
+        right: 24,
+    },
+]);
+```
+
+> Overlays are a Workers-only capability, so they run through the binding (`ctx.images.transform`) — the plain `/cdn-cgi/image/...` URL form from `buildImageDeliveryUrl` cannot express them. The signed-delivery flow does carry them (your Worker re-applies them via the binding). For the **URL-form** overlay shape (referenced by `url`), `TransformOptions.draw` mirrors `cf.image.draw`.
+
 ## URL-based transform (no binding round-trip)
 
 `buildImageDeliveryUrl` produces the Cloudflare on-the-fly transform path, `/cdn-cgi/image/<options>/<source>`, or the hosted-Images delivery-variant form. Pure string building — call it anywhere.

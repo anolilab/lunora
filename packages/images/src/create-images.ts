@@ -7,11 +7,14 @@
  * their own modules and are safe anywhere.
  */
 import type {
+    ImageDrawOptions,
     ImageInfoLike,
     ImageInput,
     ImageOutputFormat,
+    ImageOverlay,
     Images,
     ImageTransformationResultLike,
+    ImageTransformerLike,
     LunoraImagesOptions,
     OutputOptions,
     R2ObjectBodyLike,
@@ -66,6 +69,10 @@ const toStream = (input: ImageInput): ReadableStream<Uint8Array> => {
  * Clamp `width`/`height` to `[1, maxDimension]` (integers) so a malformed or
  * hostile request can't request an absurd canvas. Other transform keys pass
  * through untouched — the binding owns their validation.
+ *
+ * The URL-form `draw` key (overlays referenced by `url`) is dropped: on the
+ * binding path overlays are applied via the `overlays` argument and the `draw`
+ * step, so passing it to `binding.transform(...)` would be a confusing no-op.
  */
 const sanitizeTransform = (transform: TransformOptions | undefined, maxDimension: number): TransformOptions => {
     if (transform === undefined) {
@@ -84,11 +91,23 @@ const sanitizeTransform = (transform: TransformOptions | undefined, maxDimension
         return Math.min(Math.floor(value), maxDimension);
     };
 
+    // The URL-form `draw` overlays are not a binding-transform key; drop them.
+    const rest: TransformOptions = { ...transform };
+
+    delete rest.draw;
+
     return {
-        ...transform,
+        ...rest,
         ...(transform.width === undefined ? {} : { width: clampDimension(transform.width) }),
         ...(transform.height === undefined ? {} : { height: clampDimension(transform.height) }),
     };
+};
+
+/** Split an overlay into its image-bearing parts and the bare `draw` blend/position options. */
+const splitOverlay = (overlay: ImageOverlay): { drawOptions: ImageDrawOptions; image: ImageInput; transform?: TransformOptions } => {
+    const { image, transform, ...drawOptions } = overlay;
+
+    return { drawOptions, image, transform };
 };
 
 const resolveOutput = (output: OutputOptions | undefined): OutputOptions & { format: ImageOutputFormat } => {
@@ -121,11 +140,30 @@ export const createImages = (options: LunoraImagesOptions): Images => {
     return {
         info: async (input: ImageInput): Promise<ImageInfoLike> => binding.info(toStream(input)),
 
-        transform: async (input: ImageInput, transform?: TransformOptions, output?: OutputOptions): Promise<ImageTransformationResultLike> => {
+        transform: async (
+            input: ImageInput,
+            transform?: TransformOptions,
+            output?: OutputOptions,
+            overlays?: ImageOverlay[],
+        ): Promise<ImageTransformationResultLike> => {
             const safeTransform = sanitizeTransform(transform, maxDimension);
             const outputOptions = resolveOutput(output);
 
-            return binding.input(toStream(input)).transform(safeTransform).output(outputOptions);
+            let transformer: ImageTransformerLike = binding.input(toStream(input)).transform(safeTransform);
+
+            for (const overlay of overlays ?? []) {
+                const { drawOptions, image, transform: overlayTransform } = splitOverlay(overlay);
+                // Pre-size/reformat the overlay via its own transform when requested, otherwise
+                // hand the raw stream to `draw` directly.
+                const overlayImage =
+                    overlayTransform === undefined
+                        ? toStream(image)
+                        : binding.input(toStream(image)).transform(sanitizeTransform(overlayTransform, maxDimension));
+
+                transformer = transformer.draw(overlayImage, drawOptions);
+            }
+
+            return transformer.output(outputOptions);
         },
     };
 };

@@ -1,25 +1,70 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { createImages } from "../create-images";
-import type { ImageInfoLike, ImagesBindingLike, ImageTransformationResultLike, OutputOptions, TransformOptions } from "../types";
+import type {
+    ImageDrawOptions,
+    ImageInfoLike,
+    ImagesBindingLike,
+    ImageTransformationResultLike,
+    ImageTransformerLike,
+    OutputOptions,
+    TransformOptions,
+} from "../types";
+
+interface DrawCall {
+    image: ImageTransformerLike | ReadableStream<Uint8Array>;
+    options?: ImageDrawOptions;
+}
+
+interface RecordedCalls {
+    /** Every `draw(image, options)` applied to the primary transformer chain. */
+    draws: DrawCall[];
+    infoStreams: ReadableStream[];
+    /** Every `input(stream)` call's stream, in order (base image first, then overlay streams). */
+    inputStreams: ReadableStream[];
+    output?: OutputOptions;
+    /** The base image stream (first `input(...)`). */
+    stream?: ReadableStream;
+    /** Every `transform(...)` call, in order (base transform first, then any overlay transforms). */
+    transforms: TransformOptions[];
+}
 
 /**
- * A recording double for the `input(stream).transform(opts).output(opts)` chain.
- * Captures the transform + output options the factory threads through so we can
- * assert on them without a real `env.IMAGES` worker pool.
+ * A recording double for the `input(stream).transform(opts).draw(...).output(opts)`
+ * chain. Captures the transform + draw + output options the factory threads
+ * through so we can assert on them without a real `env.IMAGES` worker pool.
  */
-const createFakeBinding = (): {
-    binding: ImagesBindingLike;
-    calls: { infoStreams: ReadableStream[]; output?: OutputOptions; stream?: ReadableStream; transform?: TransformOptions };
-} => {
-    const calls: { infoStreams: ReadableStream[]; output?: OutputOptions; stream?: ReadableStream; transform?: TransformOptions } = {
-        infoStreams: [],
-    };
+const createFakeBinding = (): { binding: ImagesBindingLike; calls: RecordedCalls } => {
+    const calls: RecordedCalls = { draws: [], infoStreams: [], inputStreams: [], transforms: [] };
 
     const result: ImageTransformationResultLike = {
         contentType: () => "image/webp",
         image: () => new ReadableStream<Uint8Array>(),
         response: () => new Response(null),
+    };
+
+    // Every link in the chain shares one recording transformer so draws/transforms
+    // applied after the first `.transform(...)` are all captured.
+    const makeTransformer = (): ImageTransformerLike => {
+        const transformer: ImageTransformerLike = {
+            draw: (image, options) => {
+                calls.draws.push({ image, options });
+
+                return transformer;
+            },
+            output: async (output): Promise<ImageTransformationResultLike> => {
+                calls.output = output;
+
+                return result;
+            },
+            transform: (transform) => {
+                calls.transforms.push(transform);
+
+                return transformer;
+            },
+        };
+
+        return transformer;
     };
 
     const binding: ImagesBindingLike = {
@@ -29,29 +74,10 @@ const createFakeBinding = (): {
             return { fileSize: 100, format: "image/png", height: 10, width: 10 };
         },
         input: (stream) => {
-            calls.stream = stream;
+            calls.inputStreams.push(stream);
+            calls.stream ??= stream;
 
-            return {
-                output: async (output): Promise<ImageTransformationResultLike> => {
-                    calls.output = output;
-
-                    return result;
-                },
-                transform: (transform) => {
-                    calls.transform = transform;
-
-                    return {
-                        output: async (output): Promise<ImageTransformationResultLike> => {
-                            calls.output = output;
-
-                            return result;
-                        },
-                        transform: () => {
-                            throw new Error("unused");
-                        },
-                    };
-                },
-            };
+            return makeTransformer();
         },
     };
 
@@ -75,7 +101,7 @@ describe("createImages", () => {
 
         await images.transform(streamOf(new Uint8Array([1, 2, 3])), { fit: "cover", height: 128, width: 256 }, { format: "image/avif", quality: 80 });
 
-        expect(calls.transform).toMatchObject({ fit: "cover", height: 128, width: 256 });
+        expect(calls.transforms[0]).toMatchObject({ fit: "cover", height: 128, width: 256 });
         expect(calls.output).toEqual({ format: "image/avif", quality: 80 });
     });
 
@@ -100,7 +126,7 @@ describe("createImages", () => {
         await images.transform({ body }, { width: 64 });
 
         expect(calls.stream).toBe(body);
-        expect(calls.transform).toMatchObject({ width: 64 });
+        expect(calls.transforms[0]).toMatchObject({ width: 64 });
     });
 
     it("throws when an R2 object body is null", async () => {
@@ -133,7 +159,7 @@ describe("createImages", () => {
 
         await images.transform(streamOf(new Uint8Array([1])), { height: 10_000_000, width: 10_000 });
 
-        expect(calls.transform).toMatchObject({ height: 4096, width: 4096 });
+        expect(calls.transforms[0]).toMatchObject({ height: 4096, width: 4096 });
     });
 
     it("rejects a non-positive dimension", async () => {
@@ -167,6 +193,62 @@ describe("createImages", () => {
         await images.transform(new Blob([new Uint8Array([1, 2, 3])]), { width: 32 });
 
         expect(calls.stream).toBeInstanceOf(ReadableStream);
-        expect(calls.transform).toMatchObject({ width: 32 });
+        expect(calls.transforms[0]).toMatchObject({ width: 32 });
+    });
+
+    it("threads the new scale-up fit + AI upscale knobs through unchanged", async () => {
+        expect.assertions(1);
+
+        const { binding, calls } = createFakeBinding();
+        const images = createImages({ binding });
+
+        await images.transform(streamOf(new Uint8Array([1])), { fit: "scale-up", height: 2000, upscale: "generate", width: 2000 });
+
+        expect(calls.transforms[0]).toMatchObject({ fit: "scale-up", upscale: "generate" });
+    });
+
+    it("applies overlays via draw() in order, last on top", async () => {
+        expect.assertions(3);
+
+        const { binding, calls } = createFakeBinding();
+        const images = createImages({ binding });
+        const logo = streamOf(new Uint8Array([7]));
+        const badge = streamOf(new Uint8Array([8]));
+
+        await images.transform(streamOf(new Uint8Array([1])), { width: 800 }, { format: "image/webp" }, [
+            { composite: "over", image: logo, opacity: 0.8, top: 10, left: 10 },
+            { composite: "lighter", image: badge, bottom: 0, right: 0 },
+        ]);
+
+        expect(calls.draws).toHaveLength(2);
+        expect(calls.draws[0]).toMatchObject({ image: logo, options: { composite: "over", left: 10, opacity: 0.8, top: 10 } });
+        expect(calls.draws[1]).toMatchObject({ image: badge, options: { bottom: 0, composite: "lighter", right: 0 } });
+    });
+
+    it("pre-sizes an overlay through its own transform before drawing", async () => {
+        expect.assertions(3);
+
+        const { binding, calls } = createFakeBinding();
+        const images = createImages({ binding });
+        const logo = streamOf(new Uint8Array([7]));
+
+        await images.transform(streamOf(new Uint8Array([1])), { width: 800 }, undefined, [{ image: logo, transform: { width: 64 }, top: 5 }]);
+
+        // base transform + overlay transform both recorded; overlay drawn with a transformer, not the raw stream.
+        expect(calls.transforms).toEqual([{ width: 800 }, { width: 64 }]);
+        expect(calls.draws[0]?.options).toMatchObject({ top: 5 });
+        expect(calls.draws[0]?.image).not.toBe(logo);
+    });
+
+    it("does not leak the URL-form draw key into the binding transform", async () => {
+        expect.assertions(2);
+
+        const { binding, calls } = createFakeBinding();
+        const images = createImages({ binding });
+
+        await images.transform(streamOf(new Uint8Array([1])), { draw: [{ url: "https://cdn.test/logo.png" }], width: 128 });
+
+        expect(calls.transforms[0]).not.toHaveProperty("draw");
+        expect(calls.transforms[0]).toMatchObject({ width: 128 });
     });
 });

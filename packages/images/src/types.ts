@@ -7,7 +7,59 @@
  * project only the slice of the chain we actually call
  * (`input(stream).transform(opts).output(opts)` + `info(stream)`), not the full
  * hosted-images CRUD surface.
+ *
+ * TODO(workers-types): the 2026-06-16 optimization features — the `aspect-crop`
+ * / `scale-up` fit modes and the `upscale` param — are modeled here by hand
+ * because `@cloudflare/workers-types` (through 4.20260616.1) does not type them
+ * yet. Re-check on the next `@cloudflare/workers-types` bump: once `ImageTransform`
+ * carries `fit: "aspect-crop" | "scale-up"` and `upscale`, drop our hand-rolled
+ * additions and lean on the upstream type.
  */
+
+/**
+ * Porter-Duff compositing operation controlling how an overlay is blended onto
+ * the image beneath it. Mirrors the binding's `ImageCompositeMode`.
+ *
+ * - `over` — foreground drawn on top of the backdrop (default).
+ * - `in` — foreground shown only where the backdrop is opaque.
+ * - `atop` — foreground drawn on top, clipped to the backdrop's shape.
+ * - `out` — foreground shown only where the backdrop is transparent.
+ * - `xor` — foreground and backdrop visible only where the other is not.
+ * - `lighter` — foreground and backdrop channels added (brightening).
+ */
+export type ImageCompositeMode = "atop" | "in" | "lighter" | "out" | "over" | "xor";
+
+/**
+ * One overlay in a {@link TransformOptions.draw} list — the **URL-form** overlay
+ * (the `cf.image.draw` / `/cdn-cgi/image` shape), where the overlay image is
+ * referenced by absolute `url`. For the **binding** path use {@link ImageOverlay}
+ * instead, which carries the overlay bytes as a stream.
+ *
+ * `width`/`height` accept either an integer (pixels) or a decimal in `(0, 1]`
+ * interpreted as a fraction of the base image's corresponding dimension.
+ */
+export interface DrawOverlay {
+    /** Offset, in pixels, from the bottom edge. */
+    bottom?: number;
+    /** Blend mode for compositing this overlay onto the image. Default `over`. */
+    composite?: ImageCompositeMode;
+    /** Overlay height — pixels (integer) or a `0–1` fraction of the base height. */
+    height?: number;
+    /** Offset, in pixels, from the left edge. */
+    left?: number;
+    /** Overlay opacity, `0.0` (transparent) – `1.0` (opaque). */
+    opacity?: number;
+    /** Tile the overlay across the base image: `true`, or a single axis `"x"`/`"y"`. */
+    repeat?: "x" | "y" | boolean;
+    /** Offset, in pixels, from the right edge. */
+    right?: number;
+    /** Offset, in pixels, from the top edge. */
+    top?: number;
+    /** Absolute URL of the overlay image. */
+    url: string;
+    /** Overlay width — pixels (integer) or a `0–1` fraction of the base width. */
+    width?: number;
+}
 
 /**
  * Transform parameters threaded into `binding.input(stream).transform(...)`.
@@ -24,8 +76,28 @@ export interface TransformOptions {
     brightness?: number;
     /** Contrast multiplier (1 = unchanged). */
     contrast?: number;
-    /** Resize mode. Affects how `width`/`height` are interpreted. */
-    fit?: "contain" | "cover" | "crop" | "pad" | "scale-down" | "squeeze";
+
+    /**
+     * URL-form overlays composited over the result, in paint order (last entry on
+     * top). Consumed by the URL builders ({@link DrawOverlay} references each
+     * overlay by `url`); the binding path applies overlays via the `overlays`
+     * argument to `Images.transform` instead, so this key is ignored there.
+     */
+    draw?: DrawOverlay[];
+
+    /**
+     * Resize mode. Affects how `width`/`height` are interpreted.
+     *
+     * - `scale-down` — contain, but never enlarges.
+     * - `contain` — fit within the box, preserving aspect ratio.
+     * - `cover` — fill the box, cropping overflow.
+     * - `crop` — shrink-and-crop to fit, but never enlarges.
+     * - `aspect-crop` — crop to the target aspect ratio, but never enlarges.
+     * - `pad` — fit within the box, padding the remainder with `background`.
+     * - `squeeze` — stretch to the exact box, distorting aspect ratio.
+     * - `scale-up` — enlarge to show the whole image, but never downscales.
+     */
+    fit?: "aspect-crop" | "contain" | "cover" | "crop" | "pad" | "scale-down" | "scale-up" | "squeeze";
     /** Mirror the image horizontally, vertically, or both. */
     flip?: "h" | "hv" | "v";
     /** Gamma multiplier (1 = unchanged). */
@@ -42,6 +114,14 @@ export interface TransformOptions {
     segment?: "foreground";
     /** Sharpen strength (0–10). */
     sharpen?: number;
+
+    /**
+     * Algorithm used when a transform enlarges the image (e.g. `fit: "scale-up"`).
+     *
+     * - `interpolate` — bicubic interpolation (default), may soften detail.
+     * - `generate` — AI upscaling for sharper, more detailed enlargements.
+     */
+    upscale?: "generate" | "interpolate";
     /** Target width in pixels (integer). Clamped to the configured ceiling. */
     width?: number;
 }
@@ -75,8 +155,44 @@ export interface ImageTransformationResultLike {
 /** Metadata returned by `binding.info(...)` — format, and (for raster images) dimensions + size. */
 export type ImageInfoLike = { fileSize: number; format: string; height: number; width: number } | { format: string };
 
-/** One link in the transform chain: apply more transforms or finalize with `output`. */
+/**
+ * Binding-side overlay options for `transformer.draw(image, options)` — the
+ * blend/position/opacity knobs. Unlike {@link DrawOverlay} there is no `url`
+ * (the overlay bytes are passed as the stream) and no `width`/`height` (the
+ * overlay is pre-sized via its own transform); mirrors `ImageDrawOptions`.
+ */
+export interface ImageDrawOptions {
+    /** Offset, in pixels, from the bottom edge. */
+    bottom?: number;
+    /** Blend mode for compositing this overlay onto the image. Default `over`. */
+    composite?: ImageCompositeMode;
+    /** Offset, in pixels, from the left edge. */
+    left?: number;
+    /** Overlay opacity, `0.0` (transparent) – `1.0` (opaque). */
+    opacity?: number;
+    /** Tile the overlay across the base image: `true`, or a single axis `"x"`/`"y"`. */
+    repeat?: "x" | "y" | boolean;
+    /** Offset, in pixels, from the right edge. */
+    right?: number;
+    /** Offset, in pixels, from the top edge. */
+    top?: number;
+}
+
+/**
+ * One overlay applied through the **binding** path (`Images.transform`'s
+ * `overlays` argument). The overlay bytes come from `image` (any {@link ImageInput});
+ * an optional `transform` pre-sizes/reformats the overlay before it is drawn.
+ */
+export interface ImageOverlay extends ImageDrawOptions {
+    /** The overlay image bytes — a stream, buffer, `Blob`, or R2 object body. */
+    image: ImageInput;
+    /** Optional transform applied to the overlay before compositing (e.g. resize). */
+    transform?: TransformOptions;
+}
+
+/** One link in the transform chain: apply more transforms, draw an overlay, or finalize with `output`. */
 export interface ImageTransformerLike {
+    draw: (image: ImageTransformerLike | ReadableStream<Uint8Array>, options?: ImageDrawOptions) => ImageTransformerLike;
     output: (options: OutputOptions) => Promise<ImageTransformationResultLike>;
     transform: (transform: TransformOptions) => ImageTransformerLike;
 }
@@ -142,6 +258,10 @@ export interface Images {
      * `transform` dimensions are clamped to the configured ceiling and the output
      * `format` is validated against the allowlist, so a hostile request can't
      * mint a multi-gigapixel canvas or an unexpected content type.
+     *
+     * `overlays` are composited over the result in order (last on top) via the
+     * binding's `draw` step — each overlay's bytes come from its own `image`, with
+     * optional per-overlay `transform` (resize/reformat) and blend/position options.
      */
-    transform: (input: ImageInput, transform?: TransformOptions, output?: OutputOptions) => Promise<ImageTransformationResultLike>;
+    transform: (input: ImageInput, transform?: TransformOptions, output?: OutputOptions, overlays?: ImageOverlay[]) => Promise<ImageTransformationResultLike>;
 }
