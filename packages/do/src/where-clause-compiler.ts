@@ -24,6 +24,17 @@ type SerializeValue = (value: unknown) => unknown;
 
 interface WhereCompilerStrategy {
     fieldRef: FieldRef;
+
+    /**
+     * Phase 2 push-down hook: compile a correlated-EXISTS marker node (carried
+     * under {@link RELATION_EXISTS_KEY}) into a `[NOT] EXISTS (...)` fragment.
+     * The `request` payload is opaque to the compiler — only the dialect that
+     * emitted the marker (the DO `ctx-db.ts` reader) understands it, so the
+     * compiler stays storage-blind. Absent when no relation predicate was
+     * pushed; a marker reaching a strategy without the hook is a wiring bug and
+     * throws.
+     */
+    relationExists?: (request: unknown) => CompiledWhere;
     serialize: SerializeValue;
 }
 
@@ -65,6 +76,15 @@ interface WhereInput {
 
 const OPERATOR_KEYS = ["eq", "ne", "lt", "lte", "gt", "gte", "in", "notIn", "isNull", "contains"] as const;
 const OPERATOR_KEY_SET = new Set<string>(OPERATOR_KEYS);
+
+/**
+ * Reserved `WhereInput` key carrying a correlated-EXISTS marker (Phase 2
+ * relation push-down). The semijoin pre-resolver emits it for a co-located
+ * relation node; {@link compileNode} delegates it to `strategy.relationExists`.
+ * The `__`-prefix keeps it disjoint from user field names (the codegen
+ * reserved-name guard blocks `__`-prefixed columns).
+ */
+const RELATION_EXISTS_KEY = "__relationExists";
 
 /** Binary operators that map straight to `&lt;ref> &lt;cmp> ?` with one bound param. */
 const BINARY_COMPARATORS: Record<string, string> = { eq: "=", gt: ">", gte: ">=", lt: "<", lte: "<=", ne: "<>" };
@@ -145,62 +165,96 @@ const compileFieldOperators = (reference: string, operators: FieldOperators, str
     return clauses;
 };
 
+/** Compile an `AND`/`OR` branch list, applying the empty-group sentinels. */
+const compileGroup = (value: unknown, joiner: "AND" | "OR", strategy: WhereCompilerStrategy, params: unknown[]): string => {
+    const branches = Array.isArray(value) ? value : [];
+    const parts: string[] = [];
+
+    for (const branch of branches) {
+        // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion with compileNode
+        const compiled = compileNode((branch ?? {}) as WhereInput, strategy, params);
+
+        if (compiled) {
+            parts.push(compiled);
+        }
+    }
+
+    if (parts.length === 0) {
+        // An empty disjunction matches nothing; an empty conjunction is
+        // vacuously true and contributes no clause.
+        return joiner === "OR" ? "0 = 1" : "";
+    }
+
+    return `(${parts.join(` ${joiner} `)})`;
+};
+
+/** Delegate a `RELATION_EXISTS_KEY` marker to the dialect's `relationExists` hook. */
+const compileExistsMarker = (value: unknown, strategy: WhereCompilerStrategy, params: unknown[]): string => {
+    if (!strategy.relationExists) {
+        throw new Error("encountered a relation EXISTS marker without a relationExists strategy hook");
+    }
+
+    const fragment = strategy.relationExists(value);
+
+    for (const parameter of fragment.params) {
+        params.push(parameter);
+    }
+
+    return fragment.sql;
+};
+
+/** Compile a plain field key: an operator object, an `IS NULL`, or an equality literal. */
+const compileFieldKey = (key: string, value: unknown, strategy: WhereCompilerStrategy, params: unknown[]): string[] => {
+    const reference = strategy.fieldRef(key);
+
+    if (isOperatorObject(value)) {
+        return compileFieldOperators(reference, value, strategy, params);
+    }
+
+    if (value === null) {
+        return [`${reference} IS NULL`];
+    }
+
+    params.push(strategy.serialize(value));
+
+    return [`${reference} = ?`];
+};
+
+/**
+ * Compile a structural key (`AND`/`OR`/`NOT`/`RELATION_EXISTS_KEY`). Returns the
+ * SQL fragment (possibly empty — a vacuous group contributes nothing), or
+ * `undefined` when `key` is an ordinary field the caller must handle itself.
+ */
+const compileStructuralKey = (key: string, value: unknown, strategy: WhereCompilerStrategy, params: unknown[]): string | undefined => {
+    if (key === "AND" || key === "OR") {
+        return compileGroup(value, key, strategy, params);
+    }
+
+    if (key === "NOT") {
+        // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion with compileNode
+        const inner = compileNode((value ?? {}) as WhereInput, strategy, params);
+
+        return inner ? `NOT (${inner})` : "";
+    }
+
+    if (key === RELATION_EXISTS_KEY) {
+        return compileExistsMarker(value, strategy, params);
+    }
+
+    return undefined;
+};
+
 const compileNode = (where: WhereInput, strategy: WhereCompilerStrategy, params: unknown[]): string => {
-    const compileGroup = (value: unknown, joiner: "AND" | "OR"): string => {
-        const branches = Array.isArray(value) ? value : [];
-        const parts: string[] = [];
-
-        for (const branch of branches) {
-            const compiled = compileNode((branch ?? {}) as WhereInput, strategy, params);
-
-            if (compiled) {
-                parts.push(compiled);
-            }
-        }
-
-        if (parts.length === 0) {
-            // An empty disjunction matches nothing; an empty conjunction is
-            // vacuously true and contributes no clause.
-            return joiner === "OR" ? "0 = 1" : "";
-        }
-
-        return `(${parts.join(` ${joiner} `)})`;
-    };
-
     const clauses: string[] = [];
 
     for (const key of Object.keys(where)) {
         const value = where[key];
+        const structural = compileStructuralKey(key, value, strategy, params);
 
-        if (key === "AND" || key === "OR") {
-            const group = compileGroup(value, key);
-
-            if (group) {
-                clauses.push(group);
-            }
-
-            continue;
-        }
-
-        if (key === "NOT") {
-            const inner = compileNode((value ?? {}) as WhereInput, strategy, params);
-
-            if (inner) {
-                clauses.push(`NOT (${inner})`);
-            }
-
-            continue;
-        }
-
-        const reference = strategy.fieldRef(key);
-
-        if (isOperatorObject(value)) {
-            clauses.push(...compileFieldOperators(reference, value, strategy, params));
-        } else if (value === null) {
-            clauses.push(`${reference} IS NULL`);
-        } else {
-            clauses.push(`${reference} = ?`);
-            params.push(strategy.serialize(value));
+        if (structural === undefined) {
+            clauses.push(...compileFieldKey(key, value, strategy, params));
+        } else if (structural) {
+            clauses.push(structural);
         }
     }
 
@@ -222,5 +276,5 @@ const compileWhere = (where: WhereInput | undefined, strategy: WhereCompilerStra
     return { params, sql: compileNode(where, strategy, params) };
 };
 
-export { compileWhere };
+export { compileWhere, RELATION_EXISTS_KEY };
 export type { CompiledWhere, FieldOperators, FieldRef, SerializeValue, WhereCompilerStrategy, WhereInput };

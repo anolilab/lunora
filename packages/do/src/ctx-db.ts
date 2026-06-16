@@ -52,6 +52,7 @@ import type {
 } from "./rank";
 import { encodePartitionKey, matchesRankStaticWhere, RANK_TIEBREAK, rankTableName, resolveRankPartition, sortColumnName } from "./rank";
 import type { ReactiveCache } from "./reactive-cache";
+import type { RelationExistsMarker } from "./relation-predicates";
 import { containsRelationPredicate, resolveRelationPredicates } from "./relation-predicates";
 import type { RelationDefinitionLike } from "./relations";
 import { applyOnDelete, resolveWith, runRowValidators } from "./relations";
@@ -246,6 +247,15 @@ interface CtxDbOptions {
      */
     cdc?: boolean;
     clock?: Clock;
+
+    /**
+     * Disable the Phase 2 correlated-EXISTS push-down for relation-crossing
+     * `where` predicates, forcing the universal semijoin pre-resolution on every
+     * relation node. The push-down is a same-shard latency optimization that
+     * returns identical rows; this escape hatch exists for parity testing and as
+     * a safety valve. Leave undefined to keep the fast path enabled.
+     */
+    disableRelationExistsPushDown?: boolean;
 
     /**
      * Optional writer for tables flagged `.global()`. When provided, an
@@ -763,6 +773,98 @@ const searchViaScan = (sql: SqlExec, tableName: string, search: SearchStage, lim
 
 /** DO dialect: fields resolve through `json_extract`; values via {@link serializeSqlValue}. */
 const doWhereStrategy: WhereCompilerStrategy = { fieldRef: jsonPath, serialize: serializeSqlValue };
+
+/**
+ * Table-qualified twin of {@link jsonPath}, for the correlation refs in a
+ * pushed-down EXISTS subquery: the parent side must name the outer table and
+ * the child side its alias, so neither binds to the wrong scope on a
+ * self-relation. Mirrors `jsonPath`'s `_id`/`id`/`_creationTime` column mapping.
+ */
+const qualifiedJsonPath = (table: string, field: string): string => {
+    const qualified = quoteIdentifier(table);
+
+    if (field === "_id" || field === "id") {
+        return `${qualified}.id`;
+    }
+
+    if (field === "_creationTime") {
+        return `${qualified}._creationTime`;
+    }
+
+    return `json_extract(${qualified}.${DOC_COLUMN}, '$.${field.replaceAll("'", "''")}')`;
+};
+
+/**
+ * Build a per-query `where` strategy that can compile correlated-EXISTS marker
+ * nodes (Phase 2 relation push-down) in addition to the flat {@link doWhereStrategy}.
+ *
+ * Each call gets a fresh child-alias counter so aliases stay unique within one
+ * compiled statement; nested markers reuse the same `strategy` (and counter), so
+ * deeply nested / multi-hop relation predicates compose into nested subqueries.
+ * The `relationExists` hook owns the storage-specific SQL — child-table aliasing,
+ * `json_extract` correlation refs, and the `[NOT] EXISTS` wrapper — which keeps
+ * `where-clause-compiler.ts` dialect-blind. The child predicate is compiled with
+ * the *unqualified* {@link doWhereStrategy} refs, which bind to the aliased child
+ * (the innermost `FROM` scope) rather than the outer table.
+ *
+ * Unlike the semijoin path — whose child fetch routes through `findMany` and so
+ * stamps a precise per-row read dependency on the child table — a pushed EXISTS
+ * issues no separate read, so it must stamp the child dependency itself. We can't
+ * know which child rows the subquery touched, so we stamp the conservative
+ * `*scan` marker per referenced child table (nested/multi-hop markers each stamp
+ * their own): any write to a child table re-runs a relation-predicate
+ * subscription. Over-invalidating is correct; under-invalidating would silently
+ * miss live updates.
+ */
+const makeRelationExistsStrategy = (onRead: ReadHook): WhereCompilerStrategy => {
+    let aliasCounter = 0;
+    // The enclosing-subquery aliases, outermost-last. A nested EXISTS correlates
+    // against the row of its *immediately enclosing* subquery, which is aliased
+    // (e.g. `__rel_0`) — the real table name is out of scope there. The
+    // top-level marker (empty stack) correlates against the unaliased outer
+    // table, which is the `parentTable` baked into the marker at resolve time.
+    const scopeStack: string[] = [];
+
+    const strategy: WhereCompilerStrategy = {
+        fieldRef: jsonPath,
+        relationExists: (request) => {
+            const { childWhere, negated, parentTable, relation } = request as RelationExistsMarker;
+            const alias = `__rel_${String(aliasCounter)}`;
+            const parentRef = scopeStack.at(-1) ?? parentTable;
+
+            aliasCounter += 1;
+
+            // The child table is read only inside this subquery — stamp a
+            // conservative scan dependency so live subscriptions refresh on its
+            // writes (the semijoin path's child fetch stamps this for free).
+            onRead(relation.table, SCAN_DEP);
+
+            // to-one: the parent holds the FK (`field`) → child `references`.
+            // to-many: the child holds the FK (`field`) → parent `references`.
+            const parentColumn = relation.kind === "one" ? relation.field : relation.references;
+            const childColumn = relation.kind === "one" ? relation.references : relation.field;
+            const correlation = `${qualifiedJsonPath(alias, childColumn)} = ${qualifiedJsonPath(parentRef, parentColumn)}`;
+
+            // Compile the child predicate with this subquery's alias on the scope
+            // stack so any deeper EXISTS correlates against `alias`, not the real
+            // (now-aliased) child table — `compileWhere` is synchronous, so the
+            // push/pop bracket is reentrancy-safe.
+            scopeStack.push(alias);
+
+            const { params, sql } = compileWhere(childWhere, strategy);
+
+            scopeStack.pop();
+
+            const condition = sql ? `${correlation} AND ${sql}` : correlation;
+            const existsSql = `${negated ? "NOT " : ""}EXISTS (SELECT 1 FROM ${quoteIdentifier(relation.table)} AS ${quoteIdentifier(alias)} WHERE ${condition})`;
+
+            return { params, sql: existsSql };
+        },
+        serialize: serializeSqlValue,
+    };
+
+    return strategy;
+};
 
 /** Invert the reader's staged SQL comparators back into `where`-tree operators. */
 const COMPARATOR_TO_OPERATOR: Record<string, string> = { "<": "lt", "<=": "lte", "=": "eq", ">": "gt", ">=": "gte" };
@@ -1742,6 +1844,18 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
         routeBackend(relationTable, "relation load").count(relationTable, relationWhere);
 
     /**
+     * Phase 2 gate: a relation predicate can be pushed down as a correlated
+     * EXISTS only when its child table is co-located in this DO's SQLite — i.e.
+     * not a global (D1) table. The parent is always local on the `findMany`
+     * push-down path (a global parent routes to `globalDb` before reaching the
+     * compile site), so co-location reduces to "the child is local too". Global
+     * children fall back to the universal semijoin pre-resolution, which routes
+     * the child fetch to `globalDb`.
+     */
+    const canPushRelationExists = (relation: RelationDefinitionLike): boolean => !isGlobalTable(relation.table);
+    const relationExistsPushDownEnabled = options.disableRelationExistsPushDown !== true;
+
+    /**
      * Relation-crossing predicates (`{ author: { is: W } }`, …) are resolved
      * only on the `findMany` read path. The aggregate/count/group/rank paths
      * compile their predicate directly, where such a node would silently
@@ -2638,6 +2752,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             // arrive from caller `where` or an injected RLS `baseWhere`. A read
             // with no relation predicates returns unchanged (no extra query).
             predicate = await resolveRelationPredicates(predicate, {
+                canPushExists: relationExistsPushDownEnabled ? canPushRelationExists : undefined,
                 fetcher: relationFetcher,
                 relationBaseWhere: args.relationBaseWhere,
                 schema,
@@ -2648,7 +2763,13 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 predicate = predicate ? { AND: [predicate, seek] } : seek;
             }
 
-            const { params, sql: whereSql } = compileWhere(predicate, doWhereStrategy);
+            // A pushed-down relation node leaves a `__relationExists` marker in
+            // the tree; compile it with the EXISTS-aware strategy. Without the
+            // fast path (or with no relation predicates) the flat strategy is
+            // equivalent and cheaper, so only build the per-query strategy when
+            // the push-down is enabled.
+            const whereStrategy = relationExistsPushDownEnabled ? makeRelationExistsStrategy(onRead) : doWhereStrategy;
+            const { params, sql: whereSql } = compileWhere(predicate, whereStrategy);
 
             let querySql = `SELECT id, _creationTime, ${DOC_COLUMN} FROM ${quoteIdentifier(tableName)}`;
 

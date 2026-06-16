@@ -33,6 +33,7 @@ import type { QueryArgs, QueryPage } from "./query-args";
 import type { RelationDefinitionLike } from "./relations";
 import { distinctValues } from "./relations";
 import type { WhereInput } from "./where-clause-compiler";
+import { RELATION_EXISTS_KEY } from "./where-clause-compiler";
 
 /** Prisma-style relation operators, dispatched by relation cardinality. */
 const ONE_OPERATORS = new Set(["is", "isNot"]);
@@ -48,7 +49,35 @@ const RELATION_OPERATORS = new Set([...ONE_OPERATORS, ...MANY_OPERATORS]);
  */
 const DEFAULT_MAX_RELATION_KEYS = 5000;
 
+/**
+ * Marker node payload for a pushed-down correlated EXISTS. Emitted under the
+ * reserved `RELATION_EXISTS_KEY` in place of a semijoin rewrite when the dialect
+ * reports the relation as co-located (same SQLite DB). The compiler's
+ * `relationExists` strategy hook turns it into `[NOT] EXISTS (...)`; this module
+ * stays storage-blind and only assembles the (RLS-merged, recursively resolved)
+ * child predicate plus the correlation metadata the SQL layer needs.
+ */
+interface RelationExistsMarker {
+    /** Child predicate compiled inside the subquery: RLS base AND (W | NOT W). */
+    childWhere: WhereInput;
+    /** `true` → `NOT EXISTS` (none/isNot/every); `false` → `EXISTS` (some/is). */
+    negated: boolean;
+    /** Table the outer `where` reads — the correlation's parent side. */
+    parentTable: string;
+    /** The relation crossed, carrying kind + join columns. */
+    relation: RelationDefinitionLike;
+}
+
 interface ResolveRelationPredicatesOptions {
+    /**
+     * Phase 2 push-down gate. When supplied and it returns `true` for a
+     * relation, that relation node is rewritten to a correlated-EXISTS marker
+     * (compiled inline by the SQL layer) instead of being semijoin-resolved via
+     * a child fetch. Returning `false` (or omitting the gate) keeps the
+     * universal semijoin path. The DO dialect gates on parent+child co-location
+     * in one SQLite DB; D1 omits it (cross-backend, no shared subquery scope).
+     */
+    canPushExists?: (relation: RelationDefinitionLike) => boolean;
     /** Backend-routed child reader — `resolveWith`'s `fetcher` (a DO/D1 `findMany`). */
     fetcher: (tableName: string, args: QueryArgs) => Promise<QueryPage>;
     /** Override the {@link DEFAULT_MAX_RELATION_KEYS} fail-closed cap. */
@@ -62,6 +91,7 @@ interface ResolveRelationPredicatesOptions {
 
 /** Internal threaded context (everything but the per-call `tableName`). */
 interface ResolveContext {
+    canPushExists?: (relation: RelationDefinitionLike) => boolean;
     fetcher: (tableName: string, args: QueryArgs) => Promise<QueryPage>;
     maxRelationKeys: number;
     relationBaseWhere?: (table: string) => undefined | WhereInput;
@@ -197,6 +227,33 @@ const compileOperator = async (operator: string, relation: RelationDefinitionLik
     }
 };
 
+/**
+ * Phase 2: rewrite a pushable relation operator into a correlated-EXISTS marker
+ * instead of a semijoin (no child fetch). The child predicate is RLS-merged
+ * (`relationBaseWhere`) and recursively resolved — so a co-located grandchild
+ * pushes down too. `every` ("no readable child violates W") negates only `W`,
+ * leaving the RLS base intact, and emits `NOT EXISTS`; this mirrors the semijoin
+ * truth table exactly (`NOT EXISTS` over a null/absent FK is naturally `true`,
+ * matching the explicit `isNull` disjunct the semijoin path adds).
+ */
+const buildExistsMarker = async (
+    operator: string,
+    relation: RelationDefinitionLike,
+    childWhere: WhereInput,
+    parentTable: string,
+    context: ResolveContext,
+): Promise<WhereInput> => {
+    const base = context.relationBaseWhere?.(relation.table);
+    const predicatePart: WhereInput = operator === "every" ? { NOT: childWhere } : childWhere;
+    const merged: WhereInput = base ? { AND: [base, predicatePart] } : predicatePart;
+    // eslint-disable-next-line @typescript-eslint/no-use-before-define -- mutual recursion: the child predicate may itself cross relations (multi-hop / nested push-down)
+    const resolvedChild = await resolveForTable(merged, relation.table, context);
+    const negated = operator === "every" || operator === "isNot" || operator === "none";
+    const marker: RelationExistsMarker = { childWhere: resolvedChild, negated, parentTable, relation };
+
+    return { [RELATION_EXISTS_KEY]: marker };
+};
+
 /** Reject a relation operator applied to a relation of the wrong cardinality. */
 const assertCardinality = (operator: string, name: string, relation: RelationDefinitionLike): void => {
     if (ONE_OPERATORS.has(operator) && relation.kind !== "one") {
@@ -218,6 +275,7 @@ const resolveRelationNode = async (
     name: string,
     relation: RelationDefinitionLike,
     predicate: Record<string, WhereInput>,
+    parentTable: string,
     context: ResolveContext,
 ): Promise<WhereInput> => {
     const clauses: WhereInput[] = [];
@@ -225,8 +283,15 @@ const resolveRelationNode = async (
     for (const operator of Object.keys(predicate)) {
         assertCardinality(operator, name, relation);
 
-        // eslint-disable-next-line no-await-in-loop -- one bounded child query per operator; sequential keeps the fan-out predictable
-        clauses.push(await compileOperator(operator, relation, predicate[operator] ?? {}, context));
+        const childWhere = predicate[operator] ?? {};
+
+        if (context.canPushExists?.(relation)) {
+            // eslint-disable-next-line no-await-in-loop -- sequential bounded resolution per operator (a non-pushable grandchild may still fetch)
+            clauses.push(await buildExistsMarker(operator, relation, childWhere, parentTable, context));
+        } else {
+            // eslint-disable-next-line no-await-in-loop -- one bounded child query per operator; sequential keeps the fan-out predictable
+            clauses.push(await compileOperator(operator, relation, childWhere, context));
+        }
     }
 
     return combineAnd(clauses);
@@ -253,7 +318,7 @@ const resolveKey = async (key: string, value: unknown, tableName: string, contex
     const relation = context.schema.tables[tableName]?.relationMap?.[key];
 
     if (relation && isRelationPredicate(value)) {
-        return resolveRelationNode(key, relation, value, context);
+        return resolveRelationNode(key, relation, value, tableName, context);
     }
 
     return { [key]: value };
@@ -288,6 +353,7 @@ const resolveRelationPredicates = async (where: WhereInput | undefined, options:
     }
 
     return resolveForTable(where, options.tableName, {
+        canPushExists: options.canPushExists,
         fetcher: options.fetcher,
         maxRelationKeys: options.maxRelationKeys ?? DEFAULT_MAX_RELATION_KEYS,
         relationBaseWhere: options.relationBaseWhere,
@@ -296,4 +362,4 @@ const resolveRelationPredicates = async (where: WhereInput | undefined, options:
 };
 
 export { containsRelationPredicate, DEFAULT_MAX_RELATION_KEYS, isRelationPredicate, resolveRelationPredicates };
-export type { ResolveRelationPredicatesOptions };
+export type { RelationExistsMarker, ResolveRelationPredicatesOptions };

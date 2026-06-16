@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { DatabaseWriterLike, SchemaLike } from "../src/ctx-db";
+import type { DatabaseWriterLike, SchemaLike, SqlExec } from "../src/ctx-db";
 import { createShardCtxDb as createShardContextDatabase, runShardMigrations } from "../src/ctx-db";
+import type { QueryArgs } from "../src/query-args";
 import createSqliteExec from "./_helpers/node-sqlite";
 
 /**
@@ -301,6 +302,97 @@ describe("ctx-db relation predicates", () => {
             await seed(writer);
 
             await expect(writer.count("users", { messages: { some: { body: "hey" } } })).rejects.toThrow(/not supported in count/u);
+        });
+    });
+
+    describe("phase 2 — correlated EXISTS push-down", () => {
+        // A representative slice of every operator + nesting shape, run through
+        // both the push-down and the semijoin path on the same fixtures.
+        const cases: { args: QueryArgs; table: string }[] = [
+            { args: { where: { author: { is: { name: "Ada" } } } }, table: "messages" },
+            { args: { where: { author: { isNot: { name: "Ada" } } } }, table: "messages" },
+            { args: { where: { messages: { some: { body: "hey" } } } }, table: "users" },
+            { args: { where: { messages: { none: { body: "hey" } } } }, table: "users" },
+            { args: { where: { messages: { every: { body: { contains: "h" } } } } }, table: "users" },
+            { args: { where: { AND: [{ author: { is: { name: "Ada" } } }, { body: "hi" }] } }, table: "messages" },
+            { args: { where: { OR: [{ messages: { some: { body: "hey" } } }, { messages: { some: { body: "hi" } } }] } }, table: "users" },
+            { args: { where: { message: { is: { author: { is: { name: "Ada" } } } } } }, table: "reactions" },
+        ];
+
+        it("returns identical rows to the semijoin path on the same fixtures", async () => {
+            expect.assertions(8);
+
+            const pushed = makeWriter();
+
+            await seed(pushed);
+
+            // A second writer over the *same* migrated+seeded SQLite, with the
+            // fast path disabled — so any divergence is the EXISTS rewrite, not
+            // the data.
+            const semijoin = createShardContextDatabase({ clock: () => 1_700_000_000_000, disableRelationExistsPushDown: true, schema, sql: harness.sql });
+
+            for (const { args, table } of cases) {
+                // eslint-disable-next-line no-await-in-loop -- sequential keeps the two reads paired per case
+                const pushedPage = await pushed.findMany(table, args);
+                // eslint-disable-next-line no-await-in-loop -- paired with the push-down read above
+                const semijoinPage = await semijoin.findMany(table, args);
+
+                expect(ids(pushedPage.page)).toStrictEqual(ids(semijoinPage.page));
+            }
+        });
+
+        it("actually emits a correlated EXISTS subquery (no silent fallback to the semijoin)", async () => {
+            expect.assertions(2);
+
+            runShardMigrations(harness.sql, schema);
+
+            const queries: string[] = [];
+            const capturing: SqlExec = {
+                exec: <Row = Record<string, unknown>>(query: string, ...params: unknown[]) => {
+                    queries.push(query);
+
+                    return harness.sql.exec<Row>(query, ...params);
+                },
+            };
+            const writer = createShardContextDatabase({ clock: () => 1_700_000_000_000, schema, sql: capturing });
+
+            await seed(writer);
+
+            queries.length = 0;
+
+            const { page } = await writer.findMany("messages", { where: { author: { is: { name: "Ada" } } } });
+
+            expect(ids(page)).toStrictEqual(["m1", "m2"]);
+            // The push-down compiles the relation node inline — exactly one
+            // SELECT carrying an EXISTS, and no separate child fetch.
+            expect(queries.some((query) => /SELECT.*EXISTS \(SELECT 1 FROM/su.test(query))).toBe(true);
+        });
+
+        it("stamps a read dependency on the child table so subscriptions refresh on child writes", async () => {
+            expect.assertions(1);
+
+            runShardMigrations(harness.sql, schema);
+
+            const reads: { idOrScan?: string; table: string }[] = [];
+            const writer = createShardContextDatabase({
+                clock: () => 1_700_000_000_000,
+                onRead: (table, idOrScan) => {
+                    reads.push({ idOrScan, table });
+                },
+                schema,
+                sql: harness.sql,
+            });
+
+            await seed(writer);
+
+            reads.length = 0;
+
+            // The EXISTS subquery reads `users` inline (no child fetch), so the
+            // reader must stamp the dependency itself or a `users` write would
+            // silently fail to invalidate this live query.
+            await writer.findMany("messages", { where: { author: { is: { name: "Ada" } } } });
+
+            expect(reads).toContainEqual({ idOrScan: "*scan", table: "users" });
         });
     });
 });
