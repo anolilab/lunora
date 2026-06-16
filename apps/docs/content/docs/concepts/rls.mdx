@@ -97,6 +97,61 @@ is conservative and fails closed for unknown roles. Permissions and roles are
 shared with [data masking](/docs/concepts/masking), which checks the same
 `auth.can(...)` view.
 
+## Relation predicates
+
+A policy predicate can cross a relation. Alongside the flat column operators, a
+`when` decision may return a Prisma-style **relation predicate** — `is`/`isNot`
+on a to-one relation, `some`/`none`/`every` on a to-many — and the `@lunora/do`
+pre-resolver resolves it (a batched semijoin, or a correlated `EXISTS` when the
+related table is co-located on the same shard) before the read runs:
+
+```ts
+// "you can read a post when its author is in your org"
+definePolicy({
+    table: "posts",
+    on: "read",
+    when: ({ ctx }) => ({ author: { is: { orgId: ctx.orgId } } }),
+});
+
+// "you can read an org row when it has at least one member that is you"
+definePolicy({
+    table: "orgs",
+    on: "read",
+    when: ({ auth }) => ({ members: { some: { userId: auth.userId } } }),
+});
+```
+
+The child read is itself filtered by the child table's own read policy, so a
+relation predicate can never widen visibility past what the caller could read
+directly (`every` therefore means "every child _the caller can read_ matches").
+
+Relation predicates are a **read-policy** capability. A write policy evaluates a
+single in-memory candidate row and has no fetcher, so a relation predicate in an
+`insert`/`update`/`delete` decision throws `RELATION_PREDICATE_UNSUPPORTED` —
+use a flat column check (or a read policy) instead. `rank`/`rankPage` likewise
+reject them: their `where` only pins a partition, so a relation predicate there
+would silently drop. They are also bounded — an overly broad `some: {}` that
+collects more than `maxRelationKeys` child keys fails closed with a descriptive
+error rather than silently truncating the `IN (...)` set (a same-shard `EXISTS`
+push-down lifts this cap, since it needs no key list).
+
+### Typed authoring
+
+Import `definePolicy` from your generated `./_generated/server` (rather than
+`@lunora/server`) to get a relation-aware authoring surface bound to your
+schema: `table` autocompletes to a real table name and the `when` predicate
+type-checks against the table's columns **and** its declared relations.
+
+```ts
+import { definePolicy } from "./_generated/server";
+
+// `author` autocompletes; a typo or an unknown relation is a compile error.
+definePolicy({ table: "posts", on: "read", when: ({ ctx }) => ({ author: { is: { orgId: ctx.orgId } } }) });
+```
+
+It is runtime-identical to `@lunora/server`'s `definePolicy` — only the types
+narrow, so the `rls()` chain discovers a policy authored either way the same.
+
 ## What's covered, what isn't
 
 - **Reads are AND-merged.** Every `get`, `findFirst`/`findMany`, and the
@@ -113,6 +168,23 @@ shared with [data masking](/docs/concepts/masking), which checks the same
   guarded. The [`rls_uncovered_table`](/docs/concepts/advisors) advisor warns
   when a **public** procedure reads or writes a table that's RLS-protected
   elsewhere but skips the middleware — the authorization gap.
+
+### RLS over live queries
+
+A subscription re-runs its query server-side on every relevant write, then
+pushes the new result down the socket. That re-run evaluates RLS under the
+**socket's own verified identity** — the `userId`/identity stamped at WebSocket
+upgrade (unforgeable, carried by the connection), not a per-request claim — so
+an `rls()`/`ctx.auth`-scoped live query returns the subscriber's rows over the
+live channel exactly as it does on the initial HTTP fetch.
+
+A relation-predicate policy keeps working live because the semijoin's child
+fetch stamps a **read dependency on the child table**: a write to the related
+table invalidates the subscription and triggers the re-run, so
+`{ author: { is: … } }` refreshes when an _author_ changes, not only when a
+_post_ does. The same holds on the same-shard `EXISTS` fast path (the subquery
+stamps the child) and for a global (D1) child (a conservative table-level
+dependency is stamped, since D1 has no per-row reactive tracker).
 
 ## See also
 
