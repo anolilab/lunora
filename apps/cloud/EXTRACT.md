@@ -31,14 +31,14 @@ Everything else is already self-contained.
    above; add a local `prettier.config.js`; remove `project.json`.
 4. `pnpm install`, then `pnpm run codegen` (the `@lunora/cli` dep still drives
    codegen unchanged), then `pnpm run lint:types && pnpm test`.
-5. Provision: create the control-plane D1 (`wrangler d1 create cirrus-cloud`),
+5. Provision: create the control-plane D1 (`wrangler d1 create lunora-cloud`),
    fill `wrangler.jsonc`'s `database_id`, copy `.dev.vars.example` → `.dev.vars`.
 
 ## Invariants to keep so extraction stays cheap
 
 - **Import only `@lunora/*` public entry points** (and their documented subpaths
   like `@lunora/server/data-model`). Never relative-import into `../../packages`.
-- Keep all platform logic under `apps/cloud/{cirrus,src}` — no edits to framework
+- Keep all platform logic under `apps/cloud/{lunora,src}` — no edits to framework
   packages required to run the control plane.
 - Treat the framework as a **versioned dependency**: when it ships breaking
   changes, bump the pinned `@lunora/*` versions deliberately (same as any external

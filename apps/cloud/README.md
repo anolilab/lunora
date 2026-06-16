@@ -1,7 +1,7 @@
-# @lunora/cloud — Cirrus Cloud control plane
+# @lunora/cloud — Lunora Cloud control plane
 
 The managed-platform control plane from [`CLOUD-PLAN.md`](../../CLOUD-PLAN.md),
-**dogfooded on Cirrus itself** — the platform's own metadata store is a Cirrus
+**dogfooded on Lunora itself** — the platform's own metadata store is a Lunora
 app. This is the service that provisions and tracks tenant deployments on
 Cloudflare Workers for Platforms; it is **not** a tenant worker.
 
@@ -46,7 +46,7 @@ src/
                      + crons + better-auth `/api/auth/*` + studio identity; also the
                      tenant cron/queue fan-out scheduled()/queue() handlers, §2.4)
   client/            hosted studio — React SPA served alongside the Worker by @lunora/vite
-    main.tsx         CirrusProvider + StrictMode mount
+    main.tsx         LunoraProvider + StrictMode mount
     auth-client.ts   better-auth React client (relative /api/auth basePath)
     App.tsx          session gate → org picker → org dashboard
     Login.tsx        email/password sign-in + sign-up
@@ -80,7 +80,7 @@ src/
     keys.ts          deploy-key format / parse / hash helpers
     preview.ts       preview script-name + TTL helpers (§2.3)
     handler.ts       POST /v1/deploy handler (auth → orchestrate → stream NDJSON)
-    client.ts        cirrus-deploy client (POST + consume NDJSON stream)
+    client.ts        lunora-deploy client (POST + consume NDJSON stream)
     router.ts        httpRouter: /v1/{deploy,github/webhook,billing/webhook,usage,
                      invitations/send,secrets,admin,tenants/plan} + per-IP rate limiting
   dispatcher/
@@ -95,7 +95,7 @@ src/
     usage.ts         pure usage roll-up (aggregateUsage)
   admin/
     proxy.ts         hosted-studio admin proxy to a tenant deployment (§3)
-  cli/               cirrus login / link / deploy
+  cli/               lunora login / link / deploy
 spikes/
   ws-dispatch/       Phase 1 spike: hibernated-WS subscriptions + per-invocation
                      limits through env.DISPATCHER.get() (deploy + probe; see its README)
@@ -129,8 +129,8 @@ Mounted as the worker's `httpRouter` (lowest-priority matcher). Flow: read the
 a queued record, then drive `runDeployment` while streaming **NDJSON progress**
 (`accepted` → `queued` → `provisioning` → `live`/`failed` → `done`), patching
 status via `deployments:updateStatus` per phase. All Cloudflare work is paced by
-the per-cell `CellScheduler`. The route reaches these mutations through the Cirrus
-action context (`env.__cirrusCtx.runMutation`); they stay **public** (not
+the per-cell `CellScheduler`. The route reaches these mutations through the Lunora
+action context (`env.__lunoraCtx.runMutation`); they stay **public** (not
 `internalMutation`) because that dispatch carries no system flag — an internal
 function would 404 at the RPC visibility gate — so authorization is enforced
 inside each mutation (deploy key or membership).
@@ -155,7 +155,7 @@ Billing rides `@lunora/payment` with the **organization id as the payment
 `referenceId`**. `src/server.ts` wires a Stripe adapter into `createShardDO({
 payment })`, so the billing functions get `ctx.payments`: `checkout` / `portal`
 (owner/admin actions that redirect to Stripe), `entitlements` / `subscription`
-(member reads that resolve plan → features/limits through `CIRRUS_CLOUD_PLANS`,
+(member reads that resolve plan → features/limits through `LUNORA_CLOUD_PLANS`,
 falling back to the free baseline), and `processWebhook` (signature-verified,
 mounted at `POST /v1/billing/webhook`). Entitlement reads work without Stripe
 keys; only live calls need them.
@@ -182,7 +182,7 @@ Tenant env secrets are **AES-256-GCM encrypted at the edge** before storage:
 control-plane D1 only ever holds ciphertext + a per-secret IV. `list` returns
 names only; at deploy time the handler fetches `listEncrypted` and decrypts the
 values into the tenant Worker's script secrets (alongside the platform-owned
-`CIRRUS_ADMIN_TOKEN`). The plaintext never reaches a browser.
+`LUNORA_ADMIN_TOKEN`). The plaintext never reaches a browser.
 
 ### Auth (`src/server.ts`, §3)
 
@@ -191,7 +191,7 @@ with **mail-backed verification + password reset** (`@lunora/mail`, captured int
 the studio Mail tab in dev), optional GitHub/Google OAuth (enabled only when the
 env creds are present), the `admin` / `twoFactor` / `passkey` plugins, and
 better-auth's built-in request rate limiting. The `/v1/*` control-plane surface
-adds a per-IP `@lunora/ratelimit` cap. Org membership stays the Cirrus
+adds a per-IP `@lunora/ratelimit` cap. Org membership stays the Lunora
 `organizations`/`members` model — the better-auth `organization` plugin is
 deliberately omitted to avoid two parallel org models.
 
@@ -208,10 +208,10 @@ pnpm --filter "@lunora/cloud" run dev         # vite dev server (Worker + studio
 
 The hosted studio (`src/client`) and the control-plane Worker (`src/server.ts`)
 are served together by `@lunora/vite` on a single origin — the SPA talks to the
-Worker's `/api/auth/*` (better-auth) and Cirrus query/mutation endpoints with no
+Worker's `/api/auth/*` (better-auth) and Lunora query/mutation endpoints with no
 cross-origin setup, mirroring how the playground app wires worker + client.
 
-Copy `.dev.vars.example` → `.dev.vars` and fill `CIRRUS_ADMIN_TOKEN` and
+Copy `.dev.vars.example` → `.dev.vars` and fill `LUNORA_ADMIN_TOKEN` and
 `AUTH_SECRET` (the studio's better-auth session secret). Before a real deploy,
 create the D1 database and replace the `database_id` placeholder in
 `wrangler.jsonc`.

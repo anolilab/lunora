@@ -16,7 +16,7 @@ import { LUNORA_FUNCTIONS } from "../lunora/_generated/functions.js";
 import { openApiSpec } from "../lunora/_generated/openapi.js";
 import { createShardDO } from "../lunora/_generated/shard.js";
 import schema from "../lunora/schema.js";
-import { CIRRUS_CLOUD_PLANS } from "./billing/plans";
+import { LUNORA_CLOUD_PLANS } from "./billing/plans";
 import { createDeployRouter } from "./deploy/router";
 import type { CronTarget } from "./fanout/cron";
 import { fanOutCron } from "./fanout/cron";
@@ -24,7 +24,7 @@ import type { QueueMessage, TenantQueueGroup } from "./fanout/queue";
 import { fanOutQueue, groupByTenant } from "./fanout/queue";
 
 /**
- * Cirrus Cloud control-plane Worker — the platform itself, dogfooded on Cirrus
+ * Lunora Cloud control-plane Worker — the platform itself, dogfooded on Lunora
  * (see CLOUD-PLAN.md). This is NOT a tenant Worker; it is the service that
  * provisions and tracks tenant deployments. Its own `.global()` tables
  * (`cells`, `organizations`) live in the control-plane D1 bound as `DB`.
@@ -98,7 +98,7 @@ const paymentConfig = (env: ShardEnv): PaymentsFromContextOptions => {
                     webhookSecret: env.STRIPE_WEBHOOK_SECRET ?? "",
                 }),
                 authorize: () => true,
-                entitlements: CIRRUS_CLOUD_PLANS,
+                entitlements: LUNORA_CLOUD_PLANS,
                 observability: (event) => {
                     // eslint-disable-next-line no-console -- route billing telemetry to logs/metrics/alerts
                     console.log("[payment]", event.type, event);
@@ -138,8 +138,6 @@ interface Env {
     AUTH_SECRET?: string;
     /** Base URL better-auth resolves callbacks against. */
     AUTH_URL?: string;
-    /** Bearer token gating the admin endpoints the studio + platform tools call. */
-    CIRRUS_ADMIN_TOKEN?: string;
     /** Control-plane D1 — backs the `.global()` cells/organizations tables + auth. */
     DB: unknown;
     /** Dispatch namespace — used by the cron fan-out to tick tenants (§2.4). */
@@ -150,6 +148,8 @@ interface Env {
     /** Optional Google OAuth app for studio social sign-in. */
     GOOGLE_CLIENT_ID?: string;
     GOOGLE_CLIENT_SECRET?: string;
+    /** Bearer token gating the admin endpoints the studio + platform tools call. */
+    LUNORA_ADMIN_TOKEN?: string;
     /** Sender address for auth (verification / reset) email; captured in dev. */
     MAIL_FROM?: string;
     SHARD: ShardNamespaceLike;
@@ -336,7 +336,7 @@ const handleQueueBatch = async (batch: QueueBatchLike, env: Env): Promise<void> 
  * `@lunora/mail` (captured into the studio Mail tab in dev), optional GitHub/
  * Google OAuth when configured, better-auth's built-in request rate limiting,
  * and the `admin` (user management) / `twoFactor` / `passkey` plugins the
- * studio's auth dashboard adapts to. Org membership stays the Cirrus
+ * studio's auth dashboard adapts to. Org membership stays the Lunora
  * `organizations`/`members` model — the better-auth `organization` plugin is
  * deliberately omitted to avoid two parallel org models.
  */
@@ -356,13 +356,13 @@ const authOptions = (env: Env): LunoraAuthOptions => {
             enabled: true,
             // Mail the reset link; in dev it's captured into the studio Mail tab.
             sendResetPassword: async ({ url, user }) => {
-                await mailer().send({ subject: "Reset your Cirrus Cloud password", text: `Reset your password:\n${url}`, to: user.email });
+                await mailer().send({ subject: "Reset your Lunora Cloud password", text: `Reset your password:\n${url}`, to: user.email });
             },
         },
         emailVerification: {
             sendOnSignUp: true,
             sendVerificationEmail: async ({ url, user }) => {
-                await mailer().send({ subject: "Verify your Cirrus Cloud email", text: `Verify your email:\n${url}`, to: user.email });
+                await mailer().send({ subject: "Verify your Lunora Cloud email", text: `Verify your email:\n${url}`, to: user.email });
             },
         },
         plugins: [admin({ defaultRole: "user" }), twoFactor(), passkey()],
@@ -375,7 +375,7 @@ const authOptions = (env: Env): LunoraAuthOptions => {
 
 const buildWorker = (env: Env): ReturnType<typeof createWorker> =>
     createWorker({
-        adminToken: env.CIRRUS_ADMIN_TOKEN,
+        adminToken: env.LUNORA_ADMIN_TOKEN,
         // Dispatch better-auth's `/api/auth/*` routes inside the worker so the
         // studio SPA + the control plane share an origin.
         authAdmin: auth ? createAuthAdmin(auth) : undefined,

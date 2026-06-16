@@ -9,7 +9,7 @@ import type { Provisioner } from "../src/provision";
 const target: DeployTarget = { organizationId: "org_1", projectId: "proj_1", type: "production" };
 
 const okProvisioner: Provisioner = {
-    deploy: () => Promise.resolve({ bundleHash: "h1", scriptName: "s", url: "https://proj.cirrus.app" }),
+    deploy: () => Promise.resolve({ bundleHash: "h1", scriptName: "s", url: "https://proj.lunora.app" }),
     destroy: () => Promise.resolve(),
 };
 
@@ -24,7 +24,7 @@ const deps = (backend: DeployBackend, provisioner: Provisioner): DeployHandlerDe
     return {
         backend,
         cell: "cell-1",
-        dispatchNamespace: (kind) => `cirrus-${kind}`,
+        dispatchNamespace: (kind) => `lunora-${kind}`,
         provisioner,
         scheduler: new CellScheduler({ bucket: new TokenBucket({ capacity: 100, refillPerWindow: 100, windowMs: 1000 }) }),
     };

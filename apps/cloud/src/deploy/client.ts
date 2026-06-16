@@ -1,5 +1,5 @@
 /**
- * Deploy client (CLOUD-PLAN.md §2.2 / Phase 1) — the core of `cirrus deploy`
+ * Deploy client (CLOUD-PLAN.md §2.2 / Phase 1) — the core of `lunora deploy`
  * against the managed cloud. POSTs to the deploy API with the deploy key and
  * consumes the NDJSON progress stream, invoking `onEvent` per line. Pure: the
  * `fetch` is injectable, so the streaming consumer is unit-testable.

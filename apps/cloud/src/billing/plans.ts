@@ -1,7 +1,7 @@
 import type { Entitlements, EntitlementsConfig } from "@lunora/payment";
 
 /**
- * Cirrus Cloud plans + quota evaluation (CLOUD-PLAN.md §4 / Phase 4). Built on
+ * Lunora Cloud plans + quota evaluation (CLOUD-PLAN.md §4 / Phase 4). Built on
  * `@lunora/payment`'s entitlements model: a plan grants numeric `limits` and
  * `features` when an active subscription holds one of its `priceIds`. An org
  * with no active subscription resolves to no entitlements, so we fall back to
@@ -11,7 +11,7 @@ import type { Entitlements, EntitlementsConfig } from "@lunora/payment";
  * per environment when the payment provider (Stripe/Polar via `@lunora/payment`)
  * is wired.
  */
-export const CIRRUS_CLOUD_PLANS: EntitlementsConfig = {
+export const LUNORA_CLOUD_PLANS: EntitlementsConfig = {
     plans: {
         enterprise: {
             features: ["customDomains", "logStreams", "sso", "dedicatedCell"],
@@ -32,7 +32,7 @@ export const CIRRUS_CLOUD_PLANS: EntitlementsConfig = {
 };
 
 /** Baseline limits for an org with no active subscription. */
-export const FREE_LIMITS: Record<string, number> = CIRRUS_CLOUD_PLANS.plans["free"]?.limits ?? {};
+export const FREE_LIMITS: Record<string, number> = LUNORA_CLOUD_PLANS.plans["free"]?.limits ?? {};
 
 export type QuotaResource = "members" | "previewDeployments" | "projects";
 

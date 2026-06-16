@@ -50,7 +50,7 @@ export const Login = (): ReactElement => {
                     })();
                 }}
             >
-                <h1>Cirrus Cloud</h1>
+                <h1>Lunora Cloud</h1>
                 <p className="muted">{mode === "signin" ? "Sign in to your control plane" : "Create your account"}</p>
                 {mode === "signup" ? (
                     <label htmlFor="login-name">

@@ -1,8 +1,8 @@
 {
     "$schema": "node_modules/wrangler/config-schema.json",
-    // The Cirrus Cloud CONTROL-PLANE worker (the platform itself), not a tenant
+    // The Lunora Cloud CONTROL-PLANE worker (the platform itself), not a tenant
     // worker. See CLOUD-PLAN.md.
-    "name": "cirrus-cloud",
+    "name": "lunora-cloud",
     "main": "src/server.ts",
     "compatibility_date": "2026-06-10",
     "compatibility_flags": ["nodejs_compat"],
@@ -14,18 +14,18 @@
         {
             // Control-plane DB: cells + organizations (the `.global()` tables).
             "binding": "DB",
-            "database_name": "cirrus-cloud",
+            "database_name": "lunora-cloud",
             "database_id": "<replace-with-d1-create-id>",
         },
     ],
     // Bind the dispatch namespace so the every-minute tick can fan tenant cron
     // jobs out to namespaced workers (WfP drops their own triggers.crons; §2.4).
-    "dispatch_namespaces": [{ "binding": "DISPATCHER", "namespace": "cirrus-production" }],
+    "dispatch_namespaces": [{ "binding": "DISPATCHER", "namespace": "lunora-production" }],
     // Platform-owned queue consumer (§2.4): tenants can't be queue consumers under
     // WfP, so the control plane drains a shared queue and forwards each message to
     // its tenant's /_lunora/queue. Tenant producers tag messages with their script.
     "queues": {
-        "consumers": [{ "queue": "cirrus-tenant-queue", "max_batch_size": 100, "max_batch_timeout": 5 }],
+        "consumers": [{ "queue": "lunora-tenant-queue", "max_batch_size": 100, "max_batch_timeout": 5 }],
     },
     "triggers": {
         // `0 */1 * * *` fires the control plane's own code crons (preview cleanup,
@@ -37,8 +37,8 @@
         // The Cloudflare account this cell provisions into.
         "CLOUDFLARE_ACCOUNT_ID": "<replace-with-cf-account-id>",
         // Cell id + the apex the dispatcher routes tenant scripts under.
-        "CIRRUS_CELL": "default",
-        "CIRRUS_APP_DOMAIN": "cirrus.app",
+        "LUNORA_CELL": "default",
+        "LUNORA_APP_DOMAIN": "lunora.app",
     },
     "analytics_engine_datasets": [
         {
