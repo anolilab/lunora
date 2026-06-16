@@ -56,6 +56,7 @@ const toAdvisorSchema = (schema: SchemaIR): AdvisorSchema => {
     return {
         tables: schema.tables.map((table) => {
             return {
+                externallyManaged: table.externallyManaged ?? false,
                 fields: Object.keys(table.shape),
                 indexes: flattenIndexes(table),
                 name: table.name,

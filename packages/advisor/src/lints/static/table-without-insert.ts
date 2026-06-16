@@ -12,6 +12,11 @@ import type { Lint } from "../../types";
  * cross-region replication, the `ctx.orm.insert(...)` builder, or a trusted
  * snapshot import. Hence `INFO`/`INTERNAL`: a nudge to confirm intent, not an error.
  *
+ * A table declared `.externallyManaged()` is skipped — that flag is the explicit
+ * acknowledgement that its rows are written outside Lunora (an adapter/migration/
+ * middleware), so `@lunora/auth`'s better-auth tables and `@lunora/ratelimit`'s
+ * store never flag here.
+ *
  * Only runs when the write feeder supplied evidence (`context.inserts` present);
  * a runtime caller with no insert signal flags nothing rather than every table.
  */
@@ -35,7 +40,9 @@ const tableWithoutInsert: Lint = {
         const findings = [];
 
         for (const table of context.schema.tables) {
-            if (insertedTables.has(table.name)) {
+            // Skip tables that already insert, and those explicitly acknowledged
+            // as written outside Lunora via `.externallyManaged()`.
+            if (insertedTables.has(table.name) || table.externallyManaged === true) {
                 continue;
             }
 

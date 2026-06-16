@@ -92,6 +92,15 @@ interface InlineRankIndexOptions<Shape extends Record<string, Validator> = Recor
 interface TableBuilder<Shape extends Record<string, Validator> = Record<string, Validator>> extends TableDefinition<Shape> {
     /** Declare an aggregate (counter/sum/…) maintained by triggers for O(1) reads. */
     aggregateIndex: (name: string, options?: InlineAggregateIndexOptions<Shape>) => TableBuilder<Shape>;
+
+    /**
+     * Mark this table as written outside Lunora's discoverable insert path —
+     * by an adapter, a migration, or framework middleware (e.g. `@lunora/auth`'s
+     * better-auth tables, `@lunora/ratelimit`'s store). Advisor insert-path lints
+     * (`table_without_insert`) then skip it instead of flagging the absent
+     * `ctx.db.insert(...)`.
+     */
+    externallyManaged: () => TableBuilder<Shape>;
     /** Mark this table as global (D1-backed, cross-shard). */
     global: () => TableBuilder<Shape>;
     /** Add a secondary index. */
@@ -180,6 +189,7 @@ const defineTable = <Shape extends Record<string, Validator>>(shape: Shape): Tab
     const triggerBuilder = createTriggerBuilder<Shape>();
     const vectorIndexes: TableVectorIndex[] = [];
     let shardMode: ShardMode = { kind: "root" };
+    let isExternallyManaged = false;
 
     const builder: TableBuilder<Shape> = {
         aggregateIndex(name, options) {
@@ -206,10 +216,18 @@ const defineTable = <Shape extends Record<string, Validator>>(shape: Shape): Tab
         get aggregateIndexes() {
             return aggregateIndexes;
         },
+        externallyManaged() {
+            isExternallyManaged = true;
+
+            return builder;
+        },
         global() {
             shardMode = { kind: "global" };
 
             return builder;
+        },
+        get isExternallyManaged() {
+            return isExternallyManaged;
         },
         index(name, fields, options) {
             indexes.push({ fields, name, unique: options?.unique ?? false });

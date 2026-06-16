@@ -19,6 +19,24 @@ const projectWith = (schemaSource: string): { project: Project; schemaPath: stri
 };
 
 describe("discoverSchema", () => {
+    it("captures `.externallyManaged()` into the table IR; defaults to false", () => {
+        expect.assertions(2);
+
+        const { project, schemaPath } = projectWith(`
+            import { defineSchema, defineTable, v } from "@lunora/server";
+
+            export const schema = defineSchema({
+                rateLimits: defineTable({ key: v.string() }).externallyManaged().index("by_key", ["key"]),
+                messages: defineTable({ text: v.string() }),
+            });
+        `);
+
+        const schema = discoverSchema(project, schemaPath);
+
+        expect(schema.tables.find((table) => table.name === "rateLimits")?.externallyManaged).toBe(true);
+        expect(schema.tables.find((table) => table.name === "messages")?.externallyManaged).toBe(false);
+    });
+
     it("captures searchIndex name + field + filterFields", () => {
         expect.assertions(3);
 

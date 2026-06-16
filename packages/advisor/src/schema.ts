@@ -14,6 +14,14 @@ export interface AdvisorSchema {
 /** A table plus the column/index/relation metadata lints inspect. */
 export interface AdvisorTable {
     /**
+     * `true` when the table is written outside Lunora's discoverable insert path
+     * — declared via `.externallyManaged()` (e.g. `@lunora/auth`'s better-auth
+     * tables, `@lunora/ratelimit`'s store). Insert-path lints
+     * (`table_without_insert`) skip such tables. Defaults to `false`.
+     */
+    externallyManaged?: boolean;
+
+    /**
      * Declared column names (the `defineTable({...})` keys). Excludes the
      * framework-managed system fields `_id` / `_creationTime`, which every table
      * has implicitly — lints that resolve a column treat those as always valid.
@@ -23,6 +31,7 @@ export interface AdvisorTable {
     indexes: ReadonlyArray<AdvisorIndex>;
     /** Table name. */
     name: string;
+
     /**
      * Column names that are optional or nullable and therefore may legally hold
      * `null` / `undefined` in stored rows. Populated by {@link fromServerSchema}
@@ -109,13 +118,14 @@ export const fromServerSchema = (schema: Schema): AdvisorSchema => {
                     // matches the same pattern used in isOrWrapsFromValidator.
                     const column = (validator as { _meta?: { column?: { notNull?: boolean } } })._meta?.column;
 
-                    if (column !== undefined && column.notNull === false) {
+                    if (column?.notNull === false) {
                         optionalFields.add(fieldName);
                     }
                 }
             }
 
             return {
+                externallyManaged: table.isExternallyManaged ?? false,
                 fields: Object.keys(table.shape),
                 indexes,
                 name,

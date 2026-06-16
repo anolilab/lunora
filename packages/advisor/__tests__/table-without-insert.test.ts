@@ -53,4 +53,22 @@ describe("table_without_insert", () => {
 
         expect(run(inserts)).toHaveLength(2);
     });
+
+    it("skips a table marked `.externallyManaged()` (written outside Lunora)", () => {
+        expect.assertions(1);
+
+        // End-to-end through the runtime path: the builder method sets the flag,
+        // `fromServerSchema` surfaces it, and the lint suppresses that one table.
+        const advisorSchema = fromServerSchema(
+            defineSchema({
+                channels: defineTable({ name: v.string() }),
+                rateLimits: defineTable({ key: v.string() }).externallyManaged(),
+            }),
+        );
+
+        // Feeder ran with no inserts → `channels` flagged, `rateLimits` suppressed.
+        const findings = tableWithoutInsert.run({ inserts: [], schema: advisorSchema });
+
+        expect(findings.map((finding) => finding.metadata.table)).toStrictEqual(["channels"]);
+    });
 });

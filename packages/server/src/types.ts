@@ -146,6 +146,16 @@ interface TableDefinition<Shape extends Record<string, Validator> = Record<strin
     indexes: ReadonlyArray<IndexDefinition>;
 
     /**
+     * `true` when `.externallyManaged()` was called — the table's rows are
+     * written outside Lunora's discoverable insert path (an adapter, a
+     * migration, or framework middleware), e.g. `@lunora/auth`'s better-auth
+     * tables or `@lunora/ratelimit`'s store. Advisor insert-path lints
+     * (`table_without_insert`) skip such tables instead of flagging the absent
+     * `ctx.db.insert(...)`.
+     */
+    isExternallyManaged?: boolean;
+
+    /**
      * Rank indexes declared via `.rankIndex(name, opts)`. The runtime maintains
      * a sorted companion table per declared rank with a btree on
      * `(partition, sortBy)` so `rank(row)` returns the row's 1-based position

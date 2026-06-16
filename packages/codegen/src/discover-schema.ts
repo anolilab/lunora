@@ -270,6 +270,7 @@ const parseVectorizeCall = (args: ReadonlyArray<Node>, table: string): VectorInd
 
 /** Accumulator the builder-chain walk mutates as it unwinds a `defineTable(...)` chain. */
 interface TableBuilderAccumulator {
+    externallyManaged: boolean;
     indexes: IndexIR[];
     rankIndexes: RankIndexIR[];
     relations: RelationIR[];
@@ -281,6 +282,12 @@ interface TableBuilderAccumulator {
 /** Apply one chained method call (`.index`, `.shardBy`, …) to the accumulator. */
 const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, args: ReadonlyArray<Node>, name: string): void => {
     switch (method) {
+        case "externallyManaged": {
+            accumulator.externallyManaged = true;
+
+            break;
+        }
+
         case "global": {
             accumulator.shardMode = "global";
 
@@ -340,7 +347,15 @@ const applyTableMethod = (accumulator: TableBuilderAccumulator, method: string, 
 };
 
 const parseTableBuilder = (expression: Expression, name: string): TableIR => {
-    const accumulator: TableBuilderAccumulator = { indexes: [], rankIndexes: [], relations: [], searchIndexes: [], shardMode: "root", vectorIndexes: [] };
+    const accumulator: TableBuilderAccumulator = {
+        externallyManaged: false,
+        indexes: [],
+        rankIndexes: [],
+        relations: [],
+        searchIndexes: [],
+        shardMode: "root",
+        vectorIndexes: [],
+    };
     let shape: Record<string, ValidatorIR> = {};
     let current: Expression = expression;
 
@@ -367,6 +382,7 @@ const parseTableBuilder = (expression: Expression, name: string): TableIR => {
     }
 
     return {
+        externallyManaged: accumulator.externallyManaged,
         indexes: accumulator.indexes,
         name,
         rankIndexes: accumulator.rankIndexes,

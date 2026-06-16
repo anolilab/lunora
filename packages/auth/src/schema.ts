@@ -135,7 +135,10 @@ const authTables = (options: LunoraAuthOptions): Record<string, TableDefinition>
             shape[attribute.fieldName ?? fieldKey] = fieldValidator(attribute);
         }
 
-        schema[table.modelName] = defineTable(shape);
+        // better-auth owns these rows — they're written by its adapter, never by
+        // a hand-written `ctx.db.insert(...)`. Mark them externally-managed so the
+        // advisor's `table_without_insert` lint doesn't flag every auth table.
+        schema[table.modelName] = defineTable(shape).externallyManaged();
     }
 
     return schema;

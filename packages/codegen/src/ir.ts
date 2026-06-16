@@ -103,6 +103,13 @@ export interface RelationIR {
 }
 
 export interface TableIR {
+    /**
+     * `true` when the table chain carried `.externallyManaged()` — its rows are
+     * written outside Lunora's discoverable insert path (adapter/migration/
+     * middleware), so advisor insert-path lints skip it. Optional: hand-built
+     * IR and the runtime `fromServerSchema` path default it to `false`.
+     */
+    externallyManaged?: boolean;
     indexes: ReadonlyArray<IndexIR>;
     name: string;
     /** Rank indexes declared inline via `.rankIndex(name, …)`. */

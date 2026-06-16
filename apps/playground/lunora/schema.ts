@@ -31,14 +31,16 @@ export default defineSchema({
 
     // Backing table for `@lunora/ratelimit`'s `createDbStore` — one row per
     // `(limit, key)` bucket, looked up by the opaque storage key. Written only by
-    // the rate-limit middleware (via `ctx.db`), never by a hand-written mutation,
-    // so the `table_without_insert` advisory is expected here.
+    // the rate-limit middleware (via `ctx.db`), never by a hand-written mutation —
+    // `.externallyManaged()` tells the advisor not to flag the absent insert path.
     rateLimits: defineTable({
         key: v.string(),
         prev: v.optional(v.number()),
         ts: v.number(),
         value: v.number(),
-    }).index("by_key", ["key"]),
+    })
+        .externallyManaged()
+        .index("by_key", ["key"]),
 
     messages: defineTable({
         channelId: v.id("channels"),
@@ -52,10 +54,14 @@ export default defineSchema({
         // (`createdAt < cutoff`) instead of loading every row and filtering in memory.
         .index("by_created", ["createdAt"]),
 
+    // Mirror of the better-auth user rows (id + display name), owned by
+    // `@lunora/auth`'s adapter rather than a hand-written mutation — hence
+    // `.externallyManaged()`.
     users: defineTable({
         email: v.string(),
         name: v.string(),
     })
+        .externallyManaged()
         .global()
         .index("by_email", ["email"], { unique: true }),
 });
