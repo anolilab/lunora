@@ -43,7 +43,7 @@ const pathnameOf = (url: string): string => {
 };
 
 /** Loopback hostnames the studio server accepts in the `Host` header (sans port). */
-const LOOPBACK_HOST_NAMES = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+const LOOPBACK_HOST_NAMES = new Set(["127.0.0.1", "::1", "[::1]", "localhost"]);
 
 /**
  * Anti-DNS-rebinding guard: the studio HTML embeds the worker admin token and the
@@ -193,6 +193,35 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
         response.end(deniedMessage);
     };
 
+    const serveStaticAsset = (pathname: string, response: ServerResponse): boolean => {
+        if (pathname !== "/studio.js" && pathname !== "/styles.css") {
+            return false;
+        }
+
+        // Re-read the bytes when the built studio files change on disk so a
+        // mid-session `@lunora/studio` rebuild is served without a restart.
+        const stamp = studioAssetsStamp(import.meta.url);
+
+        if (stamp !== assetsStamp) {
+            assets = loadStudioAssets(options.logger, import.meta.url);
+            assetsStamp = stamp;
+        }
+
+        if (assets === undefined) {
+            response.statusCode = 501;
+            response.setHeader("Content-Type", "text/plain");
+            response.end("Lunora studio assets not found — install and build @lunora/studio.");
+
+            return true;
+        }
+
+        const isScript = pathname === "/studio.js";
+
+        sendAsset(response, isScript ? assets.script : assets.styles, isScript ? "text/javascript; charset=utf-8" : "text/css; charset=utf-8");
+
+        return true;
+    };
+
     const document = Buffer.from(html);
     const server: Server = createServer((request, response) => {
         const pathname = pathnameOf(request.url ?? "/");
@@ -249,29 +278,7 @@ export const startStudioServer = async (options: StudioServerOptions): Promise<S
             return;
         }
 
-        // Static assets are exact paths.
-        if (pathname === "/studio.js" || pathname === "/styles.css") {
-            // Re-read the bytes when the built studio files change on disk so a
-            // mid-session `@lunora/studio` rebuild is served without a restart.
-            const stamp = studioAssetsStamp(import.meta.url);
-
-            if (stamp !== assetsStamp) {
-                assets = loadStudioAssets(options.logger, import.meta.url);
-                assetsStamp = stamp;
-            }
-
-            if (assets === undefined) {
-                response.statusCode = 501;
-                response.setHeader("Content-Type", "text/plain");
-                response.end("Lunora studio assets not found — install and build @lunora/studio.");
-
-                return;
-            }
-
-            const isScript = pathname === "/studio.js";
-
-            sendAsset(response, isScript ? assets.script : assets.styles, isScript ? "text/javascript; charset=utf-8" : "text/css; charset=utf-8");
-
+        if (serveStaticAsset(pathname, response)) {
             return;
         }
 
