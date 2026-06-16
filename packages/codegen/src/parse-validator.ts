@@ -56,6 +56,16 @@ const applyColumnModifier = (base: ValidatorIR, modifier: string): ValidatorIR =
 const SCALAR_KINDS = new Set(["any", "bigint", "boolean", "bytes", "date", "null", "number", "string", "timestamp"]);
 
 /**
+ * Refinement/annotation modifiers that hang off any base `v.*` validator
+ * (`.check(pred, …)` adds a runtime predicate; `.meta({ schema })` merges a
+ * JSON Schema fragment). Neither changes the validator's *kind* or the TS type
+ * it emits, so codegen unwraps them to the base validator's IR. Without this the
+ * parser would treat `check`/`meta` as unknown kinds and throw — even though the
+ * `unbounded_string_arg` advisor explicitly recommends them for length bounds.
+ */
+const TRANSPARENT_MODIFIERS = new Set(["check", "meta"]);
+
+/**
  * Convert a v.* call expression (or any other expression) into a {@link ValidatorIR}.
  * Used by both schema discovery and function-args discovery so the rendered
  * TS types are identical regardless of where a validator appears.
@@ -194,6 +204,14 @@ const parseValidatorCall = (call: CallExpression): ValidatorIR => {
         const base = Node.isExpression(receiver) ? parseValidator(receiver) : { kind: "any" };
 
         return applyColumnModifier(base, member);
+    }
+
+    // `.check(...)` / `.meta(...)` refine or annotate the base validator without
+    // altering its kind — unwrap to the receiver's IR unchanged.
+    if (TRANSPARENT_MODIFIERS.has(member)) {
+        const receiver = callee.getExpression();
+
+        return Node.isExpression(receiver) ? parseValidator(receiver) : { kind: "any" };
     }
 
     return parseBuilderMember(member, args);
