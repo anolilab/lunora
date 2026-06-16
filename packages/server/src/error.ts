@@ -34,6 +34,17 @@ const CODE_STATUS = {
     MASK_UNSUPPORTED: 422,
     NOT_FOUND: 404,
     NOT_IMPLEMENTED: 501,
+
+    /**
+     * A write policy's `when` returned a relation-crossing predicate
+     * (`some`/`none`/`every`/`is`/`isNot`). The in-memory write-policy evaluator
+     * has no child fetcher and cannot resolve a relation node, so the policy is
+     * unsupported as written. Relation predicates are valid in *read* policies
+     * and query `where` clauses (the pre-resolver handles them there). The
+     * request is well-formed; this is a 422 (semantic conflict), mirroring the
+     * sibling `*_UNSUPPORTED` codes.
+     */
+    RELATION_PREDICATE_UNSUPPORTED: 422,
     TOO_MANY_REQUESTS: 429,
     UNAUTHORIZED: 401,
     UNPROCESSABLE: 422,

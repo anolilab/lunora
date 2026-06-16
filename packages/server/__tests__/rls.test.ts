@@ -716,6 +716,33 @@ describe("rls — write policies returning a WhereInput predicate", () => {
         });
     });
 
+    it("rejects a relation-crossing predicate in a write policy with RELATION_PREDICATE_UNSUPPORTED", async () => {
+        expect.assertions(2);
+
+        // The in-memory write evaluator has no child fetcher, so a relation
+        // predicate (`is`/`some`/…) can't be resolved against a single candidate
+        // row. It must fail loudly rather than silently deny — relation
+        // predicates belong in read policies / query `where`, not write policies.
+        const policy = definePolicy<TestContext>({
+            on: "insert",
+            table: "documents",
+            when: ({ auth }) => {
+                return { author: { is: { _id: { eq: auth.userId } } } };
+            },
+        });
+        const database = createFakeDatabase([]);
+
+        const handler = lunora.mutation
+            .use(rlsForTest<TestContext>([policy]))
+            .mutation(async ({ ctx }) => ctx.db.insert("documents", { ownerId: "u1", title: "x" }));
+
+        await expect(handler.handler(makeContext(database, "u1"), {})).rejects.toMatchObject({
+            code: "RELATION_PREDICATE_UNSUPPORTED",
+            name: "LunoraError",
+        });
+        expect(database.calls.some((call) => call.method === "insert")).toBe(false);
+    });
+
     it("operator coverage: lt / in / contains / AND honored on writes", async () => {
         expect.assertions(5);
 

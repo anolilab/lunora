@@ -61,6 +61,63 @@ export interface QueryArgs<TDocument> {
     where?: Where<TDocument>;
 }
 
+/**
+ * A to-one relation predicate node. `is` matches rows whose related record
+ * satisfies `W`; `isNot` matches rows whose related record fails `W` *or* has
+ * no related record at all (a null/dangling FK) — Prisma's semantics.
+ */
+export interface OneRelationWhere<W> {
+    is?: W;
+    isNot?: W;
+}
+
+/**
+ * A to-many relation predicate node. `some` ⇒ at least one related row matches
+ * `W`; `none` ⇒ no related row matches (childless parents included); `every` ⇒
+ * every *readable* related row matches (vacuously true for childless parents).
+ */
+export interface ManyRelationWhere<W> {
+    every?: W;
+    none?: W;
+    some?: W;
+}
+
+/**
+ * The relation-predicate portion of {@link WhereOf}: each declared relation on
+ * `T` contributes a kind-dispatched node — `one` → `{ is?; isNot? }`, `many` →
+ * `{ some?; none?; every? }` — whose inner type is the target table's own
+ * relation-aware `where` (so multi-hop predicates type-check inside-out).
+ */
+type RelationWhere<DM, REL extends Record<keyof DM, object>, T extends keyof DM> = {
+    [K in keyof REL[T]]?: REL[T][K] extends { __relationKind: "one"; __target: infer Target extends keyof DM }
+        ? OneRelationWhere<WhereOf<DM, REL, Target>>
+        : REL[T][K] extends { __relationKind: "many"; __target: infer Target extends keyof DM }
+          ? ManyRelationWhere<WhereOf<DM, REL, Target>>
+          : never;
+};
+
+/**
+ * Relation-aware `where` tree — the column predicates of {@link Where} plus
+ * Prisma-style relation predicates resolved by the `@lunora/do` pre-resolver.
+ * `Where&lt;DM[T]>` stays the column-only structural mirror for back-compat; the
+ * table facade threads `REL` through this richer form.
+ */
+export type WhereOf<DM, REL extends Record<keyof DM, object>, T extends keyof DM> = RelationWhere<DM, REL, T> & {
+    [K in keyof DM[T]]?: DM[T][K] | WhereOperators<DM[T][K]>;
+} & {
+    AND?: WhereOf<DM, REL, T>[];
+    NOT?: WhereOf<DM, REL, T>;
+    OR?: WhereOf<DM, REL, T>[];
+};
+
+/** {@link QueryArgs} with the relation-aware {@link WhereOf} `where` typing. */
+export interface QueryArgsOf<DM, REL extends Record<keyof DM, object>, T extends keyof DM> {
+    cursor?: null | string;
+    limit?: number;
+    orderBy?: OrderBy<DM[T]>[];
+    where?: WhereOf<DM, REL, T>;
+}
+
 export interface QueryPage<TDocument> {
     continueCursor: null | string;
     isDone: boolean;
@@ -209,9 +266,9 @@ export interface TableReaderFacade<
      * uses to inject `baseWhere` and `restrictsCounts`.
      */
     count: (where?: RestrictableQueryOptions<DM[T]> | Where<DM[T]>) => Promise<number>;
-    findFirst: <W extends WithArg<DM, REL, T> = {}>(args?: QueryArgs<DM[T]> & { with?: W }) => Promise<LoadWith<DM, REL, T, W> | null>;
-    findFirstOrThrow: <W extends WithArg<DM, REL, T> = {}>(args?: QueryArgs<DM[T]> & { with?: W }) => Promise<LoadWith<DM, REL, T, W>>;
-    findMany: <W extends WithArg<DM, REL, T> = {}>(args?: QueryArgs<DM[T]> & { with?: W }) => Promise<QueryPage<LoadWith<DM, REL, T, W>>>;
+    findFirst: <W extends WithArg<DM, REL, T> = {}>(args?: QueryArgsOf<DM, REL, T> & { with?: W }) => Promise<LoadWith<DM, REL, T, W> | null>;
+    findFirstOrThrow: <W extends WithArg<DM, REL, T> = {}>(args?: QueryArgsOf<DM, REL, T> & { with?: W }) => Promise<LoadWith<DM, REL, T, W>>;
+    findMany: <W extends WithArg<DM, REL, T> = {}>(args?: QueryArgsOf<DM, REL, T> & { with?: W }) => Promise<QueryPage<LoadWith<DM, REL, T, W>>>;
     get: (id: Id<string & T>) => Promise<DM[T] | null>;
 
     /**

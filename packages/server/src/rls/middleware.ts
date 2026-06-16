@@ -426,6 +426,41 @@ const isCombinatorKey = (key: string): key is "AND" | "NOT" | "OR" => key === "A
 const isOperatorBag = (value: unknown): value is Record<string, unknown> =>
     isPlainObject(value) && Object.keys(value).every((k) => (OPERATOR_KEYS as ReadonlyArray<string>).includes(k));
 
+/** Prisma-style relation operators (mirrors `relation-predicates.ts` in `@lunora/do`). */
+const RELATION_OPERATOR_KEYS = ["every", "is", "isNot", "none", "some"] as const;
+
+/**
+ * A value is a relation predicate when it is a plain object whose every key is a
+ * known relation operator — the same "all keys known" disambiguation the
+ * pre-resolver uses. Structural (no schema needed): the middleware closure has
+ * no relation map, but a relation node is recognizable by shape alone.
+ */
+const isRelationPredicateValue = (value: unknown): boolean =>
+    isPlainObject(value) && Object.keys(value).length > 0 && Object.keys(value).every((k) => (RELATION_OPERATOR_KEYS as ReadonlyArray<string>).includes(k));
+
+/**
+ * Does `where` contain a relation-crossing predicate anywhere? The in-memory
+ * {@link matchesWhere} evaluator has no `fetcher` and cannot resolve a relation
+ * node, so a write policy carrying one must be rejected with a clear error
+ * rather than silently denied (a non-relation key holding such a value can't be
+ * distinguished from a real relation here, so we treat any relation-shaped node
+ * as one — relation operator names don't collide with column-operator names).
+ */
+const containsRelationPredicate = (where: WhereInput): boolean =>
+    Object.keys(where).some((key) => {
+        const value = where[key];
+
+        if (isCombinatorKey(key)) {
+            if (key === "NOT") {
+                return containsRelationPredicate((value ?? {}) as WhereInput);
+            }
+
+            return Array.isArray(value) && value.some((branch) => containsRelationPredicate((branch ?? {}) as WhereInput));
+        }
+
+        return isRelationPredicateValue(value);
+    });
+
 /**
  * JS-side `WhereInput` evaluator. Used by the legacy `query()` wrapper to
  * push read predicates down as `.filter()`, and by {@link evaluateWrite} to
@@ -527,6 +562,15 @@ const evaluateWrite = <Context>(
 
         if (decision === false) {
             return false;
+        }
+
+        // Relation-crossing predicates need a child fetch the in-memory
+        // evaluator can't perform — reject loudly instead of silently denying.
+        if (containsRelationPredicate(decision)) {
+            throw new LunoraError(
+                "RELATION_PREDICATE_UNSUPPORTED",
+                "relation predicates are not supported in write policies; use a read policy or a flat column check",
+            );
         }
 
         // WhereInput predicate — the row qualifies only if it matches.
