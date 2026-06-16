@@ -116,7 +116,7 @@ describe("lunora env", () => {
         ])("set rejects a value containing a %s rather than corrupting the round-trip", async (_label, value) => {
             expect.assertions(2);
 
-            const { logger, recorded } = recordingLogger();
+            const { logger } = recordingLogger();
 
             const result = await runEnvCommand({ cwd: workdir, key: "SECRET", logger, subcommand: "set", value });
 

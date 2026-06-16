@@ -117,7 +117,7 @@ const generateValue = (validator: Validator, fieldName: string, input: unknown):
             // ArrayBuffer / Uint8Array before insert; JSON-over-HTTP adapters
             // (CLI NDJSON, studio) already transmit byte arrays to the worker,
             // which reconstructs the buffer from the wire representation.
-            return Array.from<number>({ length: 8 }, (_, index) => copycat.int([input, index], { max: 255, min: 0 }));
+            return Array.from({ length: 8 }, (_, index) => copycat.int([input, index], { max: 255, min: 0 }));
         }
 
         case "date":

@@ -523,6 +523,8 @@ const MESSAGE_IDS = [
     "Security headers are off",
     "Live admin subscriptions are ungated",
     "Request log keeps un-redacted args",
+    "Unknown security finding",
+    "Update your worker to a version of Lunora that describes this finding.",
     "Your admin token is {length} characters — use at least {min} for a brute-force-resistant secret.",
     "Your auth secret is {length} characters — use at least {min} (e.g. `openssl rand -hex 32`) to sign sessions safely.",
     "BETTER_AUTH_URL is a plaintext http:// origin, so session cookies cannot be Secure and ride in cleartext. Serve auth over https:// in production.",
