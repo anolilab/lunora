@@ -18,8 +18,26 @@ type SecurityFindingLevel = "error" | "info" | "warning";
  * `ws-gate-open`: admin HTTP RPCs require the bearer, but `LUNORA_WS_BEARER` is unset so the WebSocket upgrade gate defaults open — live admin subscriptions (Logs, Metrics, …) are reachable without a credential.
  *
  * `dev-args-unredacted`: the worker reports a development environment, so the durable request log captures raw, un-redacted args and identity (PII). A production deploy mislabeled as dev would persist sensitive payloads.
+ *
+ * `auth-secret-weak`: `AUTH_SECRET` / `BETTER_AUTH_SECRET` is set but shorter than 32 chars — too little entropy to sign session tokens safely. Pairs with `admin-token-weak`.
+ *
+ * `cors-wildcard-credentials`: `LUNORA_ALLOWED_ORIGINS` includes a `*` wildcard while `LUNORA_CORS_ALLOW_CREDENTIALS` is on — browsers reject the combination and it defeats the allowlist, so credentialed cross-origin requests are effectively unguarded.
+ *
+ * `security-headers-disabled`: the deployment set `LUNORA_SECURITY_HEADERS` off, so HSTS / CSP / nosniff / frame-options are not applied — a real exposure on a production worker.
+ *
+ * `csrf-disabled`: the deployment set `LUNORA_SECURITY_CSRF` off, so the cross-origin state-change guard is down — cookie-authenticated mutations are forgeable on a production worker.
+ *
+ * `cookies-insecure`: `BETTER_AUTH_URL` is a plaintext `http://` origin on a non-dev worker, so session cookies cannot carry the `Secure` attribute and ride in cleartext.
  */
-type SecurityFindingKind = "admin-token-weak" | "dev-args-unredacted" | "ws-gate-open";
+type SecurityFindingKind =
+    | "admin-token-weak"
+    | "auth-secret-weak"
+    | "cookies-insecure"
+    | "cors-wildcard-credentials"
+    | "csrf-disabled"
+    | "dev-args-unredacted"
+    | "security-headers-disabled"
+    | "ws-gate-open";
 
 /**
  * One detected security issue. `detail` carries kind-specific context the studio
@@ -45,8 +63,81 @@ interface SecurityAuditResult {
  */
 const MIN_ADMIN_TOKEN_LENGTH = 24;
 
+/**
+ * Minimum `AUTH_SECRET` / `BETTER_AUTH_SECRET` length. better-auth signs session
+ * tokens with this secret; 32 chars (≈ `openssl rand -hex 32` → 32 bytes hex, or
+ * 192 bits of base64) is the floor below which the signing key is brute-forceable.
+ */
+const MIN_AUTH_SECRET_LENGTH = 32;
+
 /** error first, then warning, then info — so the worst findings sort to the top. */
 const LEVEL_ORDER: Record<SecurityFindingLevel, number> = { error: 0, info: 2, warning: 1 };
+
+/** Env values that read as "this security layer is turned off" for the `LUNORA_SECURITY_*` opt-out vars. */
+const DISABLED_ENV_VALUES = new Set(["0", "disabled", "false", "no", "off"]);
+
+/** Truthy env values for a boolean-ish flag like `LUNORA_CORS_ALLOW_CREDENTIALS`. */
+const ENABLED_ENV_VALUES = new Set(["1", "enabled", "on", "true", "yes"]);
+
+/** Read a string env var, trimmed and lowercased, or `undefined` when absent/non-string. */
+const readFlag = (value: unknown): string | undefined => (typeof value === "string" ? value.trim().toLowerCase() : undefined);
+
+/**
+ * Auth sessions are signed with `AUTH_SECRET` / `BETTER_AUTH_SECRET`; a short one
+ * (set but under the floor) is brute-forceable. An *unset* secret is
+ * `@lunora/auth`'s own startup concern, not a length finding here.
+ */
+const auditAuthSecret = (env: Record<string, unknown>): SecurityFinding[] => {
+    const authSecret = env["AUTH_SECRET"] ?? env["BETTER_AUTH_SECRET"];
+
+    if (typeof authSecret === "string" && authSecret.length > 0 && authSecret.length < MIN_AUTH_SECRET_LENGTH) {
+        return [{ detail: { length: authSecret.length, min: MIN_AUTH_SECRET_LENGTH }, kind: "auth-secret-weak", level: "warning" }];
+    }
+
+    return [];
+};
+
+/**
+ * A wildcard CORS origin paired with credentials: browsers reject it and it
+ * defeats the allowlist. The worker rejects this at construction when set in
+ * code, but an env-driven allowlist can still reach a live deployment.
+ */
+const auditCors = (env: Record<string, unknown>): SecurityFinding[] => {
+    const allowedOrigins = readFlag(env["LUNORA_ALLOWED_ORIGINS"]);
+    const corsCredentials = ENABLED_ENV_VALUES.has(readFlag(env["LUNORA_CORS_ALLOW_CREDENTIALS"]) ?? "");
+    const hasWildcard = allowedOrigins?.split(",").some((entry) => entry.trim() === "*") ?? false;
+
+    return hasWildcard && corsCredentials ? [{ kind: "cors-wildcard-credentials", level: "error" }] : [];
+};
+
+/**
+ * The `LUNORA_SECURITY_*` opt-out vars relax the secure-by-default edge; in
+ * production that drops real protections (and these mirror the same vars the
+ * worker's `resolveSecurity` honors, so audit and runtime agree). A plaintext
+ * `BETTER_AUTH_URL` likewise means session cookies cannot be `Secure`. On a dev
+ * worker the relaxation is expected, so none of these are surfaced.
+ */
+const auditSecurityLayers = (env: Record<string, unknown>, dev: boolean): SecurityFinding[] => {
+    if (dev) {
+        return [];
+    }
+
+    const findings: SecurityFinding[] = [];
+
+    if (DISABLED_ENV_VALUES.has(readFlag(env["LUNORA_SECURITY_HEADERS"]) ?? "")) {
+        findings.push({ kind: "security-headers-disabled", level: "warning" });
+    }
+
+    if (DISABLED_ENV_VALUES.has(readFlag(env["LUNORA_SECURITY_CSRF"]) ?? "")) {
+        findings.push({ kind: "csrf-disabled", level: "warning" });
+    }
+
+    if (readFlag(env["BETTER_AUTH_URL"])?.startsWith("http://") === true) {
+        findings.push({ kind: "cookies-insecure", level: "warning" });
+    }
+
+    return findings;
+};
 
 /**
  * Audit the Worker `env` for deployment-level security misconfigurations the
@@ -85,8 +176,10 @@ const buildSecurityAudit = (rawEnv: unknown): SecurityAuditResult => {
         findings.push({ kind: "dev-args-unredacted", level: "warning" });
     }
 
+    findings.push(...auditAuthSecret(env), ...auditCors(env), ...auditSecurityLayers(env, dev));
+
     return { findings: findings.toSorted((a, b) => LEVEL_ORDER[a.level] - LEVEL_ORDER[b.level]) };
 };
 
-export { buildSecurityAudit, MIN_ADMIN_TOKEN_LENGTH };
+export { buildSecurityAudit, MIN_ADMIN_TOKEN_LENGTH, MIN_AUTH_SECRET_LENGTH };
 export type { SecurityAuditResult, SecurityFinding, SecurityFindingKind, SecurityFindingLevel };

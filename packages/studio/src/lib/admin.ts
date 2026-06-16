@@ -786,7 +786,15 @@ export type SecurityFindingLevel = "error" | "info" | "warning";
  * explanation, and remediation hint; the wire payload carries only the kind,
  * level, and optional `detail`.
  */
-export type SecurityFindingKind = "admin-token-weak" | "dev-args-unredacted" | "ws-gate-open";
+export type SecurityFindingKind =
+    | "admin-token-weak"
+    | "auth-secret-weak"
+    | "cookies-insecure"
+    | "cors-wildcard-credentials"
+    | "csrf-disabled"
+    | "dev-args-unredacted"
+    | "security-headers-disabled"
+    | "ws-gate-open";
 
 /**
  * One detected security issue from `__lunora_admin__:getSecurityAudit`, mirroring
