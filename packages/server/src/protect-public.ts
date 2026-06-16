@@ -53,6 +53,11 @@ const protectPublic = <Context>(options: ProtectPublicOptions<Context>): Middlew
         (middleware): middleware is Middleware<Context, Context> => middleware !== undefined,
     );
 
+    // `runMiddlewareChain` is the shared onion executor, typed over `unknown` so
+    // it can host any builder's context. The casts below are that boundary's tax,
+    // not a loose contract: every `chain` element is a `Middleware<Context, Context>`
+    // (a structural subtype of the `unknown` form), and the terminal/result are the
+    // same `Context` the executor threads through untouched.
     const composed: Middleware<Context, Context> = async ({ ctx, next }) =>
         runMiddlewareChain(chain as ReadonlyArray<Middleware<unknown, unknown>>, ctx, (context) =>
             next({ ctx: context as Record<string, unknown> }),
