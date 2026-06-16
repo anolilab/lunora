@@ -15,6 +15,7 @@ import discoverProcedureMiddleware from "../src/discover-procedure-middleware";
 // eslint-disable-next-line no-secrets/no-secrets -- inline TS fixture; a generic-interface identifier trips the entropy heuristic, not a real secret
 const PREAMBLE = `
     declare const rateLimit: (options?: unknown) => (options: { ctx: unknown }) => unknown;
+    declare const dbRateLimit: (config?: unknown, name?: unknown, options?: unknown) => (options: { ctx: unknown }) => unknown;
     declare const verifyTurnstile: (options?: unknown) => (options: { ctx: unknown }) => unknown;
     declare const protectPublic: (options: { rateLimit?: unknown; captcha?: unknown }) => (options: { ctx: unknown }) => unknown;
     declare const mutation: <R>(config: { args: Record<string, unknown>; handler: (ctx: unknown) => R }) => { kind: "mutation" };
@@ -44,6 +45,15 @@ const BARE_SIGNUP = `
 const RATE_LIMITED = `${PREAMBLE}
     export const send = c.mutation
         .use(rateLimit({ limit: 5 }))
+        .mutation(async ({ ctx }) => {
+            await ctx.db.insert("messages", {});
+        });
+`;
+
+/** A builder-form mutation guarded by `.use(dbRateLimit())` (the DB-backed sugar). */
+const DB_RATE_LIMITED = `${PREAMBLE}
+    export const send = c.mutation
+        .use(dbRateLimit({}, "send"))
         .mutation(async ({ ctx }) => {
             await ctx.db.insert("messages", {});
         });
@@ -107,6 +117,16 @@ describe("discoverProcedureMiddleware", () => {
         expect.assertions(1);
 
         writeFileSync(join(workdir, "lunora", "send.ts"), RATE_LIMITED, "utf8");
+
+        const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
+
+        expect(found[0]).toMatchObject({ exportName: "send", usesCaptcha: false, usesRateLimit: true });
+    });
+
+    it("records a `.use(dbRateLimit())` builder chain as rate-limited", () => {
+        expect.assertions(1);
+
+        writeFileSync(join(workdir, "lunora", "send.ts"), DB_RATE_LIMITED, "utf8");
 
         const found = discoverProcedureMiddleware(project, join(workdir, "lunora"));
 

@@ -11,6 +11,7 @@ import type { ProcedureMiddlewareIR } from "./ir";
  * origin, so degraded type info doesn't blind the lint.
  */
 const MIDDLEWARE_FLAGS: Record<string, "usesCaptcha" | "usesMask" | "usesRateLimit" | "usesRls"> = {
+    dbRateLimit: "usesRateLimit",
     mask: "usesMask",
     rateLimit: "usesRateLimit",
     rls: "usesRls",
