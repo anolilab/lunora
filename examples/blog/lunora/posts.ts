@@ -15,7 +15,7 @@ interface PostDoc {
  * Public feed — list every post, newest first. Open to anonymous readers.
  */
 export const list = query.query(async ({ ctx }): Promise<PostDoc[]> => {
-    const rows = (await ctx.db.query("posts").withIndex("by_published").collect()) as unknown as PostDoc[];
+    const rows = await ctx.db.query("posts").withIndex("by_published").collect();
 
     return [...rows].sort((a, b) => b.publishedAt - a.publishedAt);
 });

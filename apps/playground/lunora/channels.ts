@@ -1,5 +1,5 @@
 import type { RateLimitConfigMap } from "@lunora/ratelimit";
-import { createDbStore, rateLimit, RateLimiter } from "@lunora/ratelimit";
+import { dbRateLimit } from "@lunora/ratelimit";
 
 // eslint-disable-next-line unicorn/prevent-abbreviations -- "Doc" is the generated dataModel type name; aliasing it breaks codegen
 import type { Doc } from "./_generated/dataModel.js";
@@ -38,11 +38,7 @@ export const create = mutation
         id: v.optional(v.string().meta({ schema: { maxLength: 64 } })),
         name: v.string().meta({ schema: { maxLength: 128 } }),
     })
-    .use(
-        rateLimit((ctx) => new RateLimiter({ config: limits, store: createDbStore({ db: ctx.db }) }), "create", {
-            key: (ctx) => ctx.auth.userId ?? "anonymous",
-        }),
-    )
+    .use(dbRateLimit(limits, "create", { key: (ctx) => ctx.auth.userId ?? "anonymous" }))
     .mutation(async ({ args, ctx }): Promise<Id<"channels">> => {
         const { createdAt, id, name } = args;
         const userId = (ctx.auth.userId ?? "anonymous") as Id<"users">;

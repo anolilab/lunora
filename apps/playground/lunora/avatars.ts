@@ -1,5 +1,5 @@
 import type { RateLimitConfigMap } from "@lunora/ratelimit";
-import { createDbStore, rateLimit, RateLimiter } from "@lunora/ratelimit";
+import { dbRateLimit } from "@lunora/ratelimit";
 
 import { action, query, v } from "./_generated/server.js";
 
@@ -20,11 +20,7 @@ export const uploadAvatar = action
         contentType: v.string().meta({ schema: { maxLength: 128 } }),
         key: v.string().meta({ schema: { maxLength: 256 } }),
     })
-    .use(
-        rateLimit((ctx) => new RateLimiter({ config: limits, store: createDbStore({ db: ctx.db }) }), "uploadAvatar", {
-            key: (ctx) => ctx.auth.userId ?? "anonymous",
-        }),
-    )
+    .use(dbRateLimit(limits, "uploadAvatar", { key: (ctx) => ctx.auth.userId ?? "anonymous" }))
     .action(async ({ args, ctx }): Promise<{ key: string; url: string }> => {
         const userId = ctx.auth.userId ?? "anonymous";
         const scopedKey = `avatars/${userId}/${args.key}`;

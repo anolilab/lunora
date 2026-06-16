@@ -19,10 +19,10 @@ interface CursorDoc {
  * stream of deltas.
  */
 export const listCursors = query.input({ roomId: v.string() }).query(async ({ args: { roomId }, ctx }): Promise<CursorDoc[]> => {
-    const rows = (await ctx.db
+    const rows = await ctx.db
         .query("cursors")
         .withIndex("by_room_session", (q) => q.eq("roomId", roomId))
-        .collect()) as unknown as CursorDoc[];
+        .collect();
 
     return rows;
 });
@@ -39,10 +39,10 @@ export const joinRoom = mutation
         color: v.string(),
     })
     .mutation(async ({ args: { roomId, sessionId, name, color }, ctx }): Promise<void> => {
-        const existing = (await ctx.db
+        const existing = await ctx.db
             .query("cursors")
             .withIndex("by_room_session", (q) => q.eq("roomId", roomId).eq("sessionId", sessionId))
-            .first()) as { _id: Id<"cursors"> } | null;
+            .first();
 
         if (existing) {
             await ctx.db.patch(existing._id, { name, color, lastSeen: Date.now() });
@@ -73,10 +73,10 @@ export const updateCursor = mutation
         y: v.number(),
     })
     .mutation(async ({ args: { roomId, sessionId, x, y }, ctx }): Promise<void> => {
-        const existing = (await ctx.db
+        const existing = await ctx.db
             .query("cursors")
             .withIndex("by_room_session", (q) => q.eq("roomId", roomId).eq("sessionId", sessionId))
-            .first()) as { _id: Id<"cursors"> } | null;
+            .first();
 
         if (!existing) {
             return;

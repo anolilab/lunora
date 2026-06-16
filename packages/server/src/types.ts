@@ -404,10 +404,17 @@ interface PaginationResult<T = Record<string, unknown>> {
     splitCursor?: null | string;
 }
 
-interface TableReader {
-    collect: () => Promise<Record<string, unknown>[]>;
-    filter: (predicate: (document: Record<string, unknown>) => boolean) => TableReader;
-    first: () => Promise<Record<string, unknown> | null>;
+/**
+ * The fluent `ctx.db.query(table)` reader. Generic over the document type
+ * `Row` so the generated `ctx.db` can bind it to `Doc&lt;table>` (the chain and
+ * every terminal then resolve typed rows — no `as unknown as Doc&lt;...>` casts).
+ * Defaults to the untyped `Record&lt;string, unknown>` shape for the base
+ * (schema-agnostic) `@lunora/server` reader.
+ */
+interface TableReader<Row = Record<string, unknown>> {
+    collect: () => Promise<Row[]>;
+    filter: (predicate: (document: Row) => boolean) => TableReader<Row>;
+    first: () => Promise<Row | null>;
 
     /**
      * Set the result order. Orders by the active `.withIndex()` (or by
@@ -416,16 +423,16 @@ interface TableReader {
      * terminal (`collect`/`first`/`take`/`paginate`/`unique`). Mirrors Convex's
      * `.order("asc" | "desc")`.
      */
-    order: (direction: "asc" | "desc") => TableReader;
-    paginate: (options: PaginationOptions) => Promise<PaginationResult>;
-    take: (limit: number) => Promise<Record<string, unknown>[]>;
+    order: (direction: "asc" | "desc") => TableReader<Row>;
+    paginate: (options: PaginationOptions) => Promise<PaginationResult<Row>>;
+    take: (limit: number) => Promise<Row[]>;
 
     /**
      * Return the single matching document. Returns `null` when nothing matches
      * and throws when more than one row matches. Mirrors Convex's `.unique()`.
      */
-    unique: () => Promise<Record<string, unknown> | null>;
-    withIndex: (indexName: string, range?: (q: IndexRangeBuilder) => IndexRangeBuilder) => TableReader;
+    unique: () => Promise<Row | null>;
+    withIndex: (indexName: string, range?: (q: IndexRangeBuilder) => IndexRangeBuilder) => TableReader<Row>;
 
     /**
      * Restrict the query to a declared `.searchIndex()`. The builder's
@@ -434,7 +441,7 @@ interface TableReader {
      * field. Results come back ordered by relevance — pair with `.take(n)`
      * (`.paginate()` is not supported on a search query).
      */
-    withSearchIndex: (indexName: string, search: (q: SearchFilterBuilder) => SearchFilterBuilder) => TableReader;
+    withSearchIndex: (indexName: string, search: (q: SearchFilterBuilder) => SearchFilterBuilder) => TableReader<Row>;
 }
 
 interface IndexRangeBuilder {

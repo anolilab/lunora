@@ -115,10 +115,29 @@ export const send = mutation
             key: (ctx) => ctx.auth.userId,
         }),
     )
-    .mutation(async (ctx) => {
+    .mutation(async ({ ctx, args }) => {
         // …
     });
 ```
+
+For the common DB-backed case, `dbRateLimit(config, name, options)` is shorthand
+for the resolver above — it builds the per-call `RateLimiter` + `createDbStore`
+for you:
+
+```ts
+import { dbRateLimit } from "@lunora/ratelimit";
+
+import { mutation } from "./_generated/server";
+
+const config = { send: { kind: "token bucket", period: 1_000, rate: 10 } } satisfies RateLimitConfigMap;
+
+export const send = mutation.use(dbRateLimit(config, "send", { key: (ctx) => ctx.auth.userId ?? "anonymous" })).mutation(async ({ ctx, args }) => {
+    // …
+});
+```
+
+Pass `options.store` to point at a non-default backing table/index/key column;
+the rest of `options` matches `rateLimit`'s.
 
 `RateLimitMiddlewareOptions`:
 

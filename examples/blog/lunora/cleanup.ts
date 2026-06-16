@@ -1,4 +1,3 @@
-import type { Id } from "./_generated/server.js";
 import { mutation } from "./_generated/server.js";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
@@ -12,10 +11,10 @@ const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
  */
 export const purgeStaleDrafts = mutation.mutation(async ({ ctx }): Promise<{ deleted: number }> => {
     const cutoff = Date.now() - THIRTY_DAYS_MS;
-    const stale = (await ctx.db
+    const stale = await ctx.db
         .query("drafts")
         .filter((doc) => typeof doc.updatedAt === "number" && doc.updatedAt < cutoff)
-        .collect()) as { _id: Id<"drafts"> }[];
+        .collect();
 
     for (const draft of stale) {
         await ctx.db.delete(draft._id);

@@ -54,7 +54,7 @@ export const portal = action.action(
 
 /** Reactive read of the webhook-synced subscriptions for the demo reference. */
 export const mySubscriptions = query.query(async ({ ctx }): Promise<SubscriptionRow[]> => {
-    const rows = (await ctx.db.query("subscriptions").withIndex("by_reference").collect()) as unknown as SubscriptionRow[];
+    const rows = await ctx.db.query("subscriptions").withIndex("by_reference").collect();
 
     return rows.filter((subscription) => subscription.referenceId === DEMO_REFERENCE);
 });

@@ -1,5 +1,5 @@
 import type { RateLimitConfigMap } from "@lunora/ratelimit";
-import { createDbStore, rateLimit, RateLimiter } from "@lunora/ratelimit";
+import { dbRateLimit } from "@lunora/ratelimit";
 
 // eslint-disable-next-line unicorn/prevent-abbreviations -- "Doc" is the generated dataModel type name; aliasing it breaks codegen
 import type { Doc } from "./_generated/dataModel.js";
@@ -35,7 +35,7 @@ export const onEmail = mutation
         text: v.optional(v.string().meta({ schema: { maxLength: 100_000 } })),
         to: v.array(v.string().meta({ schema: { maxLength: 320 } })),
     })
-    .use(rateLimit((ctx) => new RateLimiter({ config: limits, store: createDbStore({ db: ctx.db }) }), "onEmail"))
+    .use(dbRateLimit(limits, "onEmail"))
     .mutation(async ({ args, ctx }): Promise<Id<"inbox">> => {
         const { from, messageId, receivedAt, subject, text, to } = args;
 
@@ -51,11 +51,9 @@ export const onEmail = mutation
 
 /** Most-recently-received inbox messages, newest first via the `by_received` index. */
 export const list = query.input({ limit: v.optional(v.number()) }).query(async ({ args, ctx }): Promise<Doc<"inbox">[]> => {
-    const rows = await ctx.db
+    return ctx.db
         .query("inbox")
         .withIndex("by_received")
         .order("desc")
         .take(args.limit ?? 50);
-
-    return rows as unknown as Doc<"inbox">[];
 });

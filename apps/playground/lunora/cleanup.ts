@@ -1,4 +1,3 @@
-import type { Id } from "./_generated/server.js";
 import { internalMutation, v } from "./_generated/server.js";
 
 const THIRTY_DAYS_MS = 30 * 24 * 60 * 60 * 1000;
@@ -21,11 +20,12 @@ export const cleanupOldMessages = internalMutation.input({ now: v.number() }).mu
     const cutoff = args.now - THIRTY_DAYS_MS;
     // Indexed range scan on `by_created` — reads only the stale rows
     // (`createdAt < cutoff`) instead of loading every message and filtering
-    // in memory.
-    const stale = (await ctx.db
+    // in memory. `collect()` is typed to `Doc<"messages">[]`, so `row._id` is
+    // already an `Id<"messages">` — no cast needed.
+    const stale = await ctx.db
         .query("messages")
         .withIndex("by_created", (q) => q.lt("createdAt", cutoff))
-        .collect()) as { _id: Id<"messages"> }[];
+        .collect();
 
     for (const row of stale) {
         // eslint-disable-next-line no-await-in-loop -- deletes share one DB handle; parallelizing would interleave statements on a single connection.

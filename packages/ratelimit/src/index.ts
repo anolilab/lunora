@@ -1,5 +1,6 @@
 export type { EvaluateOptions, EvaluateResult } from "./algorithms";
 export { availableAt, evaluate } from "./algorithms";
+export { default as dbRateLimit } from "./database-middleware";
 export { default as RateLimitError } from "./error";
 export type { LimiterResolver, RateLimitMiddlewareOptions } from "./middleware";
 export { rateLimit } from "./middleware";

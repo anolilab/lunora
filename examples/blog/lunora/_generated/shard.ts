@@ -193,17 +193,17 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "title": "Table has no insert path"
     },
     {
-        "cacheKey": "filter_without_index:cleanup:15:drafts",
+        "cacheKey": "filter_without_index:cleanup:14:drafts",
         "categories": [
             "PERFORMANCE"
         ],
         "description": "A query calls `.filter()` without a `.withIndex()` / `.withSearchIndex()`, so it loads every row in the table and filters in memory — a full table scan that gets linearly slower as the table grows.",
-        "detail": "Query on \"drafts\" at cleanup:15 calls .filter() without an index — it loads every row of \"drafts\" and filters in memory.",
+        "detail": "Query on \"drafts\" at cleanup:14 calls .filter() without an index — it loads every row of \"drafts\" and filters in memory.",
         "facing": "EXTERNAL",
         "level": "WARN",
         "metadata": {
             "file": "cleanup",
-            "line": 15,
+            "line": 14,
             "table": "drafts"
         },
         "name": "filter_without_index",
@@ -211,12 +211,12 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
         "title": "Filter without index"
     },
     {
-        "cacheKey": "nondeterministic_query_mutation:cleanup:14:Date.now",
+        "cacheKey": "nondeterministic_query_mutation:cleanup:13:Date.now",
         "categories": [
             "SCHEMA"
         ],
         "description": "A `query`/`mutation` handler calls a non-deterministic API (`Date.now`, `Math.random`, `crypto.randomUUID`, `crypto.getRandomValues`, or `fetch`). These handlers may be re-run on OCC retry / subscription re-evaluation, so they must be deterministic — time, randomness, and network belong in an `action`.",
-        "detail": "`Date.now(…)` in purgeStaleDrafts (cleanup:14) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
+        "detail": "`Date.now(…)` in purgeStaleDrafts (cleanup:13) runs inside a mutation handler — query/mutation handlers must be deterministic. Compute it in an `action` and pass the value into the mutation as an argument.",
         "facing": "EXTERNAL",
         "level": "WARN",
         "metadata": {
@@ -224,7 +224,7 @@ const LUNORA_ADVISORIES: AdvisoryFinding[] = [
             "exportName": "purgeStaleDrafts",
             "file": "cleanup",
             "kind": "mutation",
-            "line": 14
+            "line": 13
         },
         "name": "nondeterministic_query_mutation",
         "remediation": "Move the non-deterministic call into an `action(...)` (which runs once and may use ambient APIs), then pass the computed value into the mutation as an argument — e.g. compute `Date.now()` in the action and call `ctx.runMutation(api.…, { now })`. Take generated ids/timestamps as args instead of producing them in the handler.",

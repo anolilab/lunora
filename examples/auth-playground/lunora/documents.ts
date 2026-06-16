@@ -39,10 +39,10 @@ const assertSignedIn = (userId: null | string): string => {
 export const list = query.input({ organizationId: v.string() }).query(async ({ args: { organizationId }, ctx }): Promise<DocumentRow[]> => {
     assertSignedIn(ctx.auth.userId);
 
-    const rows = (await ctx.db
+    const rows = await ctx.db
         .query("documents")
         .withIndex("by_org_created", (range) => range.eq("organizationId", organizationId))
-        .collect()) as unknown as DocumentRow[];
+        .collect();
 
     return [...rows].sort((a, b) => b.createdAt - a.createdAt);
 });

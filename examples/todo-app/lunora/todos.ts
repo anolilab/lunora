@@ -13,7 +13,7 @@ interface TodoDoc {
  * `add` / `toggle` / `remove` mutate the table.
  */
 export const list = query.query(async ({ ctx }): Promise<TodoDoc[]> => {
-    const rows = (await ctx.db.query("todos").withIndex("by_creation").collect()) as unknown as TodoDoc[];
+    const rows = await ctx.db.query("todos").withIndex("by_creation").collect();
 
     return [...rows].sort((a, b) => b.createdAt - a.createdAt);
 });

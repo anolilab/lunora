@@ -18,9 +18,10 @@ import type {
     QueryCtx as QueryCtxBase,
     ReadOnlyStorage,
     Storage as StorageBase,
+    TableReader,
 } from "@lunora/server";
 
-import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Id as IdOfTable, OrmReader, OrmWriter, TableName } from "./dataModel.js";
+import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, Id as IdOfTable, OrmReader, OrmWriter, TableName } from "./dataModel.js";
 
 export type { DataModel, Doc, Id, TableName } from "./dataModel.js";
 
@@ -51,20 +52,33 @@ export type Env = CloudflareBindings;
  * `db.get`/`db.query` surface for back-compat, and `storage` is narrowed so
  * `ctx.storage.bucket(name)` autocompletes the declared buckets.
  */
+/**
+ * The Convex-style fluent reader `ctx.db.query(table)`, bound to this schema:
+ * a table-name literal narrows the row type, so `.collect()` / `.first()` /
+ * `.take()` (and the `.withIndex()` / `.filter()` / `.order()` chain) resolve
+ * as `Doc<table>` with no `as unknown as Doc<...>` casts. The per-table accessor
+ * `ctx.db.<table>` stays available alongside it via the facade.
+ *
+ * Intersected with the wide `(string) => TableReader` signature so the bound
+ * `ctx.db` is still structurally assignable to schema-agnostic consumers that
+ * call `db.query(someString)` (e.g. `@lunora/ratelimit`'s `createDbStore`).
+ */
+type TypedTableQuery = (<T extends TableName>(table: T) => TableReader<Doc<T>>) & ((table: string) => TableReader);
+
 export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage"> {
-    readonly db: DatabaseReader & DatabaseReaderFacade;
+    readonly db: Omit<DatabaseReader, "query"> & DatabaseReaderFacade & { query: TypedTableQuery };
     readonly orm: OrmReader;
     readonly storage: ReadOnlyStorage<StorageBucketName>;
 }
 
 export interface MutationCtx extends Omit<MutationCtxBase, "db" | "storage"> {
-    readonly db: DatabaseWriter & DatabaseWriterFacade;
+    readonly db: Omit<DatabaseWriter, "query"> & DatabaseWriterFacade & { query: TypedTableQuery };
     readonly orm: OrmWriter;
     readonly storage: ReadOnlyStorage<StorageBucketName>;
 }
 
 export interface ActionCtx extends Omit<ActionCtxBase, "db" | "storage"> {
-    readonly db: DatabaseWriter & DatabaseWriterFacade;
+    readonly db: Omit<DatabaseWriter, "query"> & DatabaseWriterFacade & { query: TypedTableQuery };
     readonly orm: OrmWriter;
     readonly storage: StorageBase<StorageBucketName>;
 }

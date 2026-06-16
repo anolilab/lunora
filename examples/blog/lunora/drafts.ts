@@ -17,7 +17,7 @@ export const listMine = query.query(async ({ ctx }): Promise<DraftDoc[]> => {
         return [];
     }
 
-    const rows = (await ctx.db.query("drafts").withIndex("by_updated").collect()) as unknown as DraftDoc[];
+    const rows = await ctx.db.query("drafts").withIndex("by_updated").collect();
 
     return rows.filter((draft) => draft.authorId === (ctx.auth.userId as Id<"users">));
 });

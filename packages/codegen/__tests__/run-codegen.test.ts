@@ -322,14 +322,14 @@ export default crons;
             // The typed contexts widen `db` to the generated per-table facade while
             // intersecting the legacy structural reader/writer for back-compat.
             expect(result.generated.server).toContain('export interface QueryCtx extends Omit<QueryCtxBase, "db" | "storage">');
-            expect(result.generated.server).toContain("readonly db: DatabaseReader & DatabaseReaderFacade;");
-            expect(result.generated.server).toContain("readonly db: DatabaseWriter & DatabaseWriterFacade;");
+            expect(result.generated.server).toContain('readonly db: Omit<DatabaseReader, "query"> & DatabaseReaderFacade & { query: TypedTableQuery };');
+            expect(result.generated.server).toContain('readonly db: Omit<DatabaseWriter, "query"> & DatabaseWriterFacade & { query: TypedTableQuery };');
             // server.ts is the builder file user code imports, so it must NOT import
             // the user function modules (that cycle lives in functions.ts). `Id as
             // IdOfTable` + `TableName` back the typed `v.id(...)`.
             expect(result.generated.server).not.toContain("import * as lunora_");
             expect(result.generated.server).toContain(
-                'import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Id as IdOfTable, OrmReader, OrmWriter, TableName } from "./dataModel.js"',
+                'import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, Id as IdOfTable, OrmReader, OrmWriter, TableName } from "./dataModel.js"',
             );
             // The typed `v` whose `id(...)` autocompletes the schema's tables.
             // eslint-disable-next-line no-secrets/no-secrets -- generated TS type signature, not a credential
@@ -1640,7 +1640,7 @@ export const ping = query({ args: { id: v.string() }, handler: async (_context, 
             expect(output).toContain("export const mutation = lunoraBuilders.mutation as unknown as");
             // The facade import stays minimal (ORM types are always pulled in).
             expect(output).toContain(
-                'import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Id as IdOfTable, OrmReader, OrmWriter, TableName } from "./dataModel.js";',
+                'import type { DataModel, DatabaseReaderFacade, DatabaseWriterFacade, Doc, Id as IdOfTable, OrmReader, OrmWriter, TableName } from "./dataModel.js";',
             );
         });
     });
