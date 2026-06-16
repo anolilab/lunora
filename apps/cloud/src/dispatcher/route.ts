@@ -13,7 +13,7 @@ export interface TenantRoute {
 }
 
 export interface ResolveTenantOptions {
-    /** The platform apex, e.g. `cirrus.app`. */
+    /** The platform apex, e.g. `lunora.app`. */
     appDomain: string;
     /** Resolve a custom (non-apex) hostname to a script id, or null if unknown. */
     resolveCustomDomain?: (hostname: string) => Promise<null | string>;
@@ -29,7 +29,7 @@ export const resolveTenant = async (hostname: string, options: ResolveTenantOpti
         if (host.endsWith(suffix)) {
             const label = host.slice(0, -suffix.length);
 
-            // Single-label subdomains only (`proj.cirrus.app`, not `a.b.cirrus.app`).
+            // Single-label subdomains only (`proj.lunora.app`, not `a.b.lunora.app`).
             return label !== "" && !label.includes(".") ? label : null;
         }
 

@@ -8,9 +8,9 @@ const spec: TenantDeploymentSpec = {
     bindings: { d1: { binding: "DB" }, durableObjects: [{ binding: "SHARD", className: "ShardDO" }], r2: { binding: "FILES" } },
     bundle: new TextEncoder().encode("export default {}").buffer,
     cell: "cell-1",
-    dispatchNamespace: "cirrus-production",
+    dispatchNamespace: "lunora-production",
     scriptName: "org__project",
-    secrets: { CIRRUS_ADMIN_TOKEN: "s3cret" },
+    secrets: { LUNORA_ADMIN_TOKEN: "s3cret" },
     tags: ["org:org", "project:project", "env:production"],
 };
 
@@ -47,11 +47,11 @@ const fakeApi = (): { api: CloudflareApi; deletes: string[]; puts: PutScriptInpu
 describe(createCloudflareProvisioner, () => {
     it("provisions D1 + R2, uploads the script with bindings + DO migration, applies secrets", async () => {
         const { api, puts, secrets } = fakeApi();
-        const provisioner = createCloudflareProvisioner({ api, urlForScript: (script) => `https://${script}.cirrus.app` });
+        const provisioner = createCloudflareProvisioner({ api, urlForScript: (script) => `https://${script}.lunora.app` });
 
         const result = await provisioner.deploy(spec);
 
-        expect(result).toMatchObject({ scriptName: "org__project", url: "https://org__project.cirrus.app" });
+        expect(result).toMatchObject({ scriptName: "org__project", url: "https://org__project.lunora.app" });
         expect(result.bundleHash).toMatch(/^[0-9a-f]{64}$/u);
         expect(api.createD1Database).toHaveBeenCalledWith("org__project-db");
         expect(api.createR2Bucket).toHaveBeenCalledWith("org__project-files");
@@ -64,14 +64,14 @@ describe(createCloudflareProvisioner, () => {
             { class_name: "ShardDO", name: "SHARD", type: "durable_object_namespace" },
         ]);
         expect(put.newSqliteClasses).toStrictEqual(["ShardDO"]);
-        expect(secrets).toStrictEqual(["CIRRUS_ADMIN_TOKEN"]);
+        expect(secrets).toStrictEqual(["LUNORA_ADMIN_TOKEN"]);
     });
 
     it("destroys by deleting the dispatch script", async () => {
         const { api, deletes } = fakeApi();
         const provisioner = createCloudflareProvisioner({ api, urlForScript: (script) => script });
 
-        await provisioner.destroy({ dispatchNamespace: "cirrus-preview", scriptName: "org__project-pr-x" });
+        await provisioner.destroy({ dispatchNamespace: "lunora-preview", scriptName: "org__project-pr-x" });
 
         expect(deletes).toStrictEqual(["org__project-pr-x"]);
     });

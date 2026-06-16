@@ -10,7 +10,7 @@ const spec: TenantDeploymentSpec = {
     bindings: { d1: { binding: "DB" } },
     bundle: new ArrayBuffer(8),
     cell: "cell-1",
-    dispatchNamespace: "cirrus-production",
+    dispatchNamespace: "lunora-production",
     scriptName: "org__project",
     secrets: {},
     tags: ["org:org", "project:project", "env:production"],
@@ -22,7 +22,7 @@ describe(runDeployment, () => {
     it("emits queued → provisioning → live and returns the result on success", async () => {
         const progress: DeployProgress[] = [];
         const provisioner: Provisioner = {
-            deploy: () => Promise.resolve({ bundleHash: "abc123", scriptName: "org__project", url: "https://project.cirrus.app" }),
+            deploy: () => Promise.resolve({ bundleHash: "abc123", scriptName: "org__project", url: "https://project.lunora.app" }),
             destroy: () => Promise.resolve(),
         };
 
@@ -35,8 +35,8 @@ describe(runDeployment, () => {
         });
 
         expect(progress.map((p) => p.phase)).toStrictEqual(["queued", "provisioning", "live"]);
-        expect(outcome).toStrictEqual({ result: { bundleHash: "abc123", scriptName: "org__project", url: "https://project.cirrus.app" }, status: "live" });
-        expect(progress.at(-1)).toMatchObject({ bundleHash: "abc123", url: "https://project.cirrus.app" });
+        expect(outcome).toStrictEqual({ result: { bundleHash: "abc123", scriptName: "org__project", url: "https://project.lunora.app" }, status: "live" });
+        expect(progress.at(-1)).toMatchObject({ bundleHash: "abc123", url: "https://project.lunora.app" });
     });
 
     it("emits a failed event and surfaces the error message when provisioning throws", async () => {
@@ -71,8 +71,8 @@ describe(destroyDeployment, () => {
             },
         };
 
-        await destroyDeployment({ dispatchNamespace: "cirrus-preview", scriptName: "org__project" }, { provisioner, scheduler: ampleScheduler() });
+        await destroyDeployment({ dispatchNamespace: "lunora-preview", scriptName: "org__project" }, { provisioner, scheduler: ampleScheduler() });
 
-        expect(destroyed).toStrictEqual([{ dispatchNamespace: "cirrus-preview", scriptName: "org__project" }]);
+        expect(destroyed).toStrictEqual([{ dispatchNamespace: "lunora-preview", scriptName: "org__project" }]);
     });
 });

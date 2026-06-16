@@ -4,7 +4,7 @@ import { createMailerFromEnv } from "@lunora/mail";
  * Transactional email for the control plane (CLOUD-PLAN.md §3). Built on
  * `@lunora/mail`'s env-driven mailer: a Resend transport in production (or the
  * Worker `send_email` binding), captured into the studio Mail tab in dev. These
- * run at the Worker edge (the deploy router), where `env` is available — Cirrus
+ * run at the Worker edge (the deploy router), where `env` is available — Lunora
  * mutations can't do I/O, so the email is sent here rather than inside the
  * `invitations.invite` mutation.
  */
@@ -23,8 +23,8 @@ export const sendInvitationEmail = async (env: Record<string, unknown>, invitati
     const org = invitation.organizationName ? ` to ${invitation.organizationName}` : "";
 
     await createMailerFromEnv(env).send({
-        subject: `You've been invited${org} on Cirrus Cloud`,
-        text: `You've been invited${org} on Cirrus Cloud.\n\nAccept your invitation:\n${invitation.acceptUrl}`,
+        subject: `You've been invited${org} on Lunora Cloud`,
+        text: `You've been invited${org} on Lunora Cloud.\n\nAccept your invitation:\n${invitation.acceptUrl}`,
         to: invitation.to,
     });
 };

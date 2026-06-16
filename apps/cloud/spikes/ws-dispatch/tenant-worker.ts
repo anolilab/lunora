@@ -6,7 +6,7 @@
  * Workers-for-Platforms dispatch namespace so the spike can drive it through the
  * cloud dispatcher's `env.DISPATCHER.get(script).fetch(...)`.
  *
- * It is intentionally framework-free (no Cirrus runtime) so the spike validates
+ * It is intentionally framework-free (no Lunora runtime) so the spike validates
  * the WfP × DO-hibernation × per-invocation-limits primitives in isolation. The
  * `probe.mjs` script exercises three things end-to-end through the dispatcher:
  *   1. a WebSocket UPGRADE survives the dispatch hop (101 + live socket),
