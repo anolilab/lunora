@@ -1,8 +1,8 @@
-import { createMailerFromEnv } from "@cirrus/mail";
+import { createMailerFromEnv } from "@lunora/mail";
 
 /**
  * Transactional email for the control plane (CLOUD-PLAN.md §3). Built on
- * `@cirrus/mail`'s env-driven mailer: a Resend transport in production (or the
+ * `@lunora/mail`'s env-driven mailer: a Resend transport in production (or the
  * Worker `send_email` binding), captured into the studio Mail tab in dev. These
  * run at the Worker edge (the deploy router), where `env` is available — Cirrus
  * mutations can't do I/O, so the email is sent here rather than inside the

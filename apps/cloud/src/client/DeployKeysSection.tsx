@@ -1,8 +1,8 @@
-import { useMutation, useQuery } from "@cirrus/react";
+import { useMutation, useQuery } from "@lunora/react";
 import type { ReactElement } from "react";
 import { useState } from "react";
 
-import { api } from "../../cirrus/_generated/api.js";
+import { api } from "../../lunora/_generated/api.js";
 import { AsyncList } from "./AsyncList";
 import type { OrgId } from "./types";
 

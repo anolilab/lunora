@@ -1,4 +1,4 @@
-import { CirrusError } from "@cirrus/server";
+import { LunoraError } from "@lunora/server";
 
 import type { Id } from "./_generated/dataModel.js";
 import { mutation, query, v } from "./_generated/server.js";
@@ -14,7 +14,7 @@ interface OrganizationRow {
 
 const assertSignedIn = (userId: null | string): string => {
     if (!userId) {
-        throw new CirrusError("UNAUTHORIZED", "not signed in");
+        throw new LunoraError("UNAUTHORIZED", "not signed in");
     }
 
     return userId;

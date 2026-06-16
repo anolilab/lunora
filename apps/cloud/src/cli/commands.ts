@@ -5,7 +5,7 @@ import type { CliConfig, ConfigStore } from "./config";
 /**
  * `cirrus` cloud CLI commands (CLOUD-PLAN.md §2.2). Pure logic over a
  * {@link ConfigStore} + the deploy client; the cerebro/CLI wiring in
- * `@cirrus/cli` calls these.
+ * `@lunora/cli` calls these.
  */
 
 /** `cirrus login` — persist the API endpoint + deploy key. */
