@@ -16,7 +16,7 @@ const formatTime = (ms: number): string => new Date(ms).toLocaleString();
 
 /**
  * A project's deployments (live). Deploys themselves are created out-of-band —
- * by the CLI (`cirrus deploy`) or the GitHub webhook — so this view is
+ * by the CLI (`lunora deploy`) or the GitHub webhook — so this view is
  * read-only: it surfaces each deployment's kind, status, live URL, and the
  * branch/commit it came from.
  */
@@ -34,7 +34,7 @@ export const DeploymentsSection = ({ onBack, organizationId, projectId, projectN
 
             <section className="card">
                 <h3>Deployments</h3>
-                <p className="muted">Deployments are created by the CLI (`cirrus deploy`) or the GitHub integration.</p>
+                <p className="muted">Deployments are created by the CLI (`lunora deploy`) or the GitHub integration.</p>
                 <AsyncList
                     empty="No deployments yet."
                     render={(rows) => (
