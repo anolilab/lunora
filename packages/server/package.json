@@ -54,6 +54,10 @@
             "types": "./dist/data-model.d.ts",
             "import": "./dist/data-model.mjs"
         },
+        "./rls/testing": {
+            "types": "./dist/rls/testing.d.ts",
+            "import": "./dist/rls/testing.mjs"
+        },
         "./package.json": "./package.json"
     },
     "scripts": {

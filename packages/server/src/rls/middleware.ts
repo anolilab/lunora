@@ -1134,3 +1134,13 @@ const rls = <Context extends RlsContextIn = RlsContextIn>(policies: ReadonlyArra
 export { rls };
 
 export type { RlsDatabase };
+
+/**
+ * Internal policy-evaluation primitives, exported for the in-process RLS test
+ * harness (`@lunora/server/rls/testing`) so it evaluates policies through the
+ * exact same logic the middleware uses at request time — never a parallel
+ * re-implementation that could drift. Not part of the package's public API; the
+ * package root does not re-export them.
+ * @internal
+ */
+export { computeReadBaseWhere, evaluateWrite, indexRolePermissions, matchesWhere, permissionName };

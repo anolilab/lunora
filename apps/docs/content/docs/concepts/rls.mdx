@@ -190,6 +190,40 @@ _post_ does. The same holds on the same-shard `EXISTS` fast path (the subquery
 stamps the child) and for a global (D1) child (a conservative table-level
 dependency is stamped, since D1 has no per-row reactive tracker).
 
+## Testing policies
+
+Policies are pure functions, so you can assert their behaviour in a plain unit
+test — no Worker, Durable Object, or live socket. `expectPolicy(policies)` from
+`@lunora/server/rls/testing` evaluates them through the **same** primitives the
+`rls()` middleware runs at request time, so a green test means the policy
+behaves identically in production:
+
+```ts
+import { definePolicies, definePolicy } from "@lunora/server";
+import { expectPolicy } from "@lunora/server/rls/testing";
+
+const policies = definePolicies([
+    definePolicy({ table: "docs", on: "read", when: ({ auth }) => ({ ownerId: auth.userId }) }),
+    definePolicy({ table: "docs", on: "insert", when: ({ auth, row }) => row?.ownerId === auth.userId }),
+]);
+
+const ada = expectPolicy(policies).as({ userId: "ada" });
+
+ada.can("read", "docs", { ownerId: "ada" }); // true  — her row is visible
+ada.cannot("read", "docs", { ownerId: "linus" }); // true  — filtered out
+ada.can("insert", "docs", { ownerId: "ada" }); // true
+ada.cannot("insert", "docs", { ownerId: "x" }); // true  — write denied
+```
+
+`.as(identity)` binds a caller (`userId` / `roles` / `identity`, all optional —
+an omitted identity is the anonymous caller). For `read`, `.can(...)` answers
+"is this row visible?" (the effective read `baseWhere` matches it); for writes
+it answers allow/deny exactly as the middleware would, including default-DENY on
+a participating table with no policy for the op. Pass the `roles` registry via
+`expectPolicy(policies, { roles })` to resolve `auth.can(...)`, and a `ctx` to
+back any `ctx`-reading policy. For an `update` WITH CHECK, pass the post-image as
+the fourth argument: `can("update", "docs", oldRow, nextRow)`.
+
 ## See also
 
 - [Data masking](/docs/concepts/masking) — column-level redaction, the read-path
