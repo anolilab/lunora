@@ -25,6 +25,7 @@ import type {
     RankResult,
     SchedulerLike,
     SchemaLike,
+    ServerDefaultContextLike,
     TableDefinitionLike,
     TableReaderLike,
     TriggerContextLike,
@@ -94,6 +95,14 @@ interface D1Exec {
 }
 
 interface D1ContextDatabaseOptions {
+    /**
+     * Resolved request auth handed to `.serverDefault(fn)` column factories so
+     * server-trusted columns (owner/tenant ids) stamp from the verified caller,
+     * never the client. The generated worker passes the per-request identity;
+     * absent it, server-trusted columns stamp the anonymous slice (`userId: null`).
+     */
+    auth?: ServerDefaultContextLike["auth"];
+
     /**
      * Opt into change-data-capture: when `true`, every committed write appends a
      * post-image to the `__cdc_log` table (created lazily alongside the other
@@ -370,11 +379,25 @@ const decodeRow = (definition: TableDefinitionLike, row: Record<string, unknown>
  * Fill any field absent from `document` that declares a `.default()` literal or
  * `.$defaultFn()` factory. The factory wins when both are present; a literal is
  * applied on presence so `null`/`false`/`0` defaults survive.
+ *
+ * A `.serverDefault(fn)` column is SERVER-trusted: it is always stamped from
+ * `auth` (overwriting any client-supplied value), so owner/tenant ids can never
+ * be set by the client.
  */
-const applyInsertDefaults = (definition: TableDefinitionLike, document: Record<string, unknown>): Record<string, unknown> => {
+const applyInsertDefaults = (
+    definition: TableDefinitionLike,
+    document: Record<string, unknown>,
+    auth: ServerDefaultContextLike["auth"],
+): Record<string, unknown> => {
     const result = { ...document };
 
     for (const [field, column] of tableColumns(definition)) {
+        if (column.serverDefault) {
+            result[field] = column.serverDefault({ auth });
+
+            continue;
+        }
+
         if (result[field] !== undefined) {
             continue;
         }
@@ -390,8 +413,25 @@ const applyInsertDefaults = (definition: TableDefinitionLike, document: Record<s
 };
 
 /** Recompute every `.$onUpdateFn()` field the caller did not set explicitly, mutating `target` in place. */
-const applyOnUpdate = (definition: TableDefinitionLike, provided: Record<string, unknown>, target: Record<string, unknown>): void => {
+const applyOnUpdate = (
+    definition: TableDefinitionLike,
+    provided: Record<string, unknown>,
+    target: Record<string, unknown>,
+    auth: ServerDefaultContextLike["auth"],
+): void => {
     for (const [field, column] of tableColumns(definition)) {
+        if (column.serverDefault) {
+            // Server-trusted: if the client tried to set this field, overwrite it
+            // with the server value so the column is never client-controllable. An
+            // untouched field keeps its stored value (no re-stamp to the caller).
+            if (field in provided) {
+                // eslint-disable-next-line no-param-reassign -- documented mutate-in-place contract (see jsdoc above)
+                target[field] = column.serverDefault({ auth });
+            }
+
+            continue;
+        }
+
         if (column.onUpdateFn && !(field in provided)) {
             // Deliberate in-place mutation: callers pass the row they want
             // updated (e.g. `merged`/`replaced`) so the recomputed onUpdate
@@ -1197,6 +1237,10 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
     const clock = options.clock ?? (() => Date.now());
     const generateId = options.idGenerator ?? (() => crypto.randomUUID());
     const cdcEnabled = options.cdc ?? false;
+    // Resolved request auth for `.serverDefault(fn)` column factories; defaults
+    // to the anonymous slice when the writer is built without a caller identity.
+    // eslint-disable-next-line unicorn/no-null -- the auth slice models the anonymous caller as null identity/userId (mirrors `ServerDefaultContext`)
+    const auth: ServerDefaultContextLike["auth"] = options.auth ?? { identity: null, userId: null };
 
     /**
      * Append a post-image to the changelog when CDC is enabled; a no-op
@@ -2494,7 +2538,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             // INSERT against the fts/agg/rank tables.
             await ensureMigrated();
 
-            const withDefaults = applyInsertDefaults(definition, document);
+            const withDefaults = applyInsertDefaults(definition, document, auth);
 
             // Refinements declared via `.check(predicate)` fire on the
             // post-default row so a defaulted value still passes its checks.
@@ -2586,7 +2630,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
 
             const merged: Record<string, unknown> = { ...existing, ...patch, _id: id };
 
-            applyOnUpdate(definition, patch, merged);
+            applyOnUpdate(definition, patch, merged, auth);
 
             // Refinement checks fire on the merged row so a patch that flips
             // a field to an invalid value is rejected before D1 sees it.
@@ -2936,7 +2980,7 @@ const createD1ContextDatabase = (options: D1ContextDatabaseOptions): DatabaseWri
             const creationTime = typeof document["_creationTime"] === "number" ? document["_creationTime"] : clock();
             const replaced: Record<string, unknown> = { ...document, _creationTime: creationTime, _id: id };
 
-            applyOnUpdate(definition, document, replaced);
+            applyOnUpdate(definition, document, replaced, auth);
 
             // Refinement checks fire on the post-onUpdate row so a defaulted
             // field still has to satisfy its `.check()` predicate.

@@ -2343,8 +2343,12 @@ const vectorsStub: VectorSearchLike = {
         : "";
 
     const globalDatabaseField = hasGlobalTables ? "\n                globalDb," : "";
+    // Resolved request auth handed to `.serverDefault(fn)` column factories so
+    // server-trusted columns (owner/tenant ids) stamp from the verified caller,
+    // never the client. `userId`/`identity` are resolved above in `buildCtx`.
+    const authField = "\n                auth: { identity: identity ?? null, userId: userId ?? null },";
     const databaseOptions = hasVectors
-        ? `{
+        ? `{${authField}
                 broadcast: (delta) => {
                     this.recordChangedTable(delta.table);
                 },
@@ -2357,7 +2361,7 @@ const vectorsStub: VectorSearchLike = {
                 sql: this.sql as SqlExec,
                 storage,${globalDatabaseField}
             }`
-        : `{
+        : `{${authField}
                 broadcast: (delta) => {
                     this.recordChangedTable(delta.table);
                 },

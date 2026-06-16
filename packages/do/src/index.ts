@@ -54,6 +54,7 @@ export type {
     ReadHook,
     SchemaLike,
     SearchFilterBuilderLike,
+    ServerDefaultContextLike,
     SqlCursor,
     SqlExec,
     TableDefinitionLike,

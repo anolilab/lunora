@@ -674,6 +674,7 @@ export const createShardDO = (config: ShardDOConfig = {}): new (state: ShardDOSt
             const storage = asBucketStorage(config.storage?.(env) ?? storageStub) as unknown as SystemReaderStorageLike;
             const globalDb: DatabaseWriterLike = config.d1?.(env, { identity, userId }) ?? globalDbStub;
             const db: DatabaseWriterLike = createShardCtxDb({
+                auth: { identity: identity ?? null, userId: userId ?? null },
                 broadcast: (delta) => {
                     this.recordChangedTable(delta.table);
                 },

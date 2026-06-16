@@ -106,6 +106,9 @@ export const ShardDO = createShardDO({
                       crossShardReader: crossShard.crossShardReader,
                   }
                 : {}),
+            // Forward the resolved caller identity so `.serverDefault(fn)` columns
+            // on `.global()` tables stamp from the verified auth, not the client.
+            auth: { identity: request?.identity ?? null, userId: request?.userId ?? null },
             exec: buildExec(shardEnv.DB),
             schema: schema as unknown as D1CtxDbOptions["schema"],
         });

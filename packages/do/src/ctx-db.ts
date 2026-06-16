@@ -129,7 +129,27 @@ interface ColumnMetaLike {
     readonly defaultValue?: unknown;
     readonly notNull?: boolean;
     readonly onUpdateFn?: () => unknown;
+
+    /**
+     * SERVER-trusted value factory. When present the write layer runs it on
+     * every insert/update with the resolved request auth and OVERWRITES any
+     * client-supplied value (server wins), so owner/tenant columns are never
+     * client-controllable. Mirrors `ColumnMeta.serverDefault` in `@lunora/values`.
+     */
+    readonly serverDefault?: (context: ServerDefaultContextLike) => unknown;
     readonly unique?: boolean;
+}
+
+/**
+ * Auth slice handed to a `.serverDefault(fn)` factory at write time. Mirrors
+ * `ServerDefaultContext` in `@lunora/values` (kept local for the same
+ * no-runtime-dependency reason as {@link ColumnMetaLike}).
+ */
+interface ServerDefaultContextLike {
+    readonly auth: {
+        readonly identity: Record<string, unknown> | null;
+        readonly userId: null | string;
+    };
 }
 
 interface ValidatorLike {
@@ -223,6 +243,13 @@ interface WriteEvent {
 type WriteHook = (event: WriteEvent) => Promise<void> | void;
 
 interface CtxDbOptions {
+    /**
+     * Resolved request auth handed to `.serverDefault(fn)` column factories.
+     * The generated `shard.ts` passes the per-request identity (from forwarded
+     * `x-lunora-userid` / `x-lunora-identity` headers); absent it, server-trusted
+     * columns stamp the anonymous slice (`userId: null`).
+     */
+    auth?: ServerDefaultContextLike["auth"];
     broadcast?: BroadcastDelta;
 
     /**
@@ -1289,11 +1316,25 @@ const tableColumns = (definition: TableDefinitionLike): [string, ColumnMetaLike]
  * `.$defaultFn()` factory. The factory wins when both are present; a literal is
  * applied on presence (`"defaultValue" in column`), so `null`/`false`/`0`
  * defaults survive.
+ *
+ * A `.serverDefault(fn)` column is SERVER-trusted: it is always stamped from
+ * `auth` (overwriting any client-supplied value), so owner/tenant ids can never
+ * be set by the client.
  */
-const applyInsertDefaults = (definition: TableDefinitionLike, document: Record<string, unknown>): Record<string, unknown> => {
+const applyInsertDefaults = (
+    definition: TableDefinitionLike,
+    document: Record<string, unknown>,
+    auth: ServerDefaultContextLike["auth"],
+): Record<string, unknown> => {
     const result = { ...document };
 
     for (const [field, column] of tableColumns(definition)) {
+        if (column.serverDefault) {
+            result[field] = column.serverDefault({ auth });
+
+            continue;
+        }
+
         if (result[field] !== undefined) {
             continue;
         }
@@ -1313,11 +1354,27 @@ const applyInsertDefaults = (definition: TableDefinitionLike, document: Record<s
  * mutating `target` in place — so timestamps refresh on `patch`/`replace`
  * unless the caller overrode them.
  */
-const applyOnUpdate = (definition: TableDefinitionLike, provided: Record<string, unknown>, target: Record<string, unknown>): void => {
+const applyOnUpdate = (
+    definition: TableDefinitionLike,
+    provided: Record<string, unknown>,
+    target: Record<string, unknown>,
+    auth: ServerDefaultContextLike["auth"],
+): void => {
     // Mutate the caller-owned record in place; alias so the param isn't reassigned.
     const out = target;
 
     for (const [field, column] of tableColumns(definition)) {
+        if (column.serverDefault) {
+            // Server-trusted: if the client tried to set this field, overwrite it
+            // with the server value so the column is never client-controllable. An
+            // untouched field keeps its stored value (no re-stamp to the caller).
+            if (field in provided) {
+                out[field] = column.serverDefault({ auth });
+            }
+
+            continue;
+        }
+
         if (column.onUpdateFn && !(field in provided)) {
             out[field] = column.onUpdateFn();
         }
@@ -1764,6 +1821,11 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
     const generateId = options.idGenerator ?? (() => crypto.randomUUID());
     const scheduler = options.scheduler ?? throwingScheduler;
     const { globalDb } = options;
+    // Resolved request auth for `.serverDefault(fn)` column factories; defaults
+    // to the anonymous slice so server-trusted columns stamp `null` when the
+    // generated writer is built without a caller identity.
+    // eslint-disable-next-line unicorn/no-null -- the auth slice models the anonymous caller as null identity/userId (mirrors `ServerDefaultContext`)
+    const auth: ServerDefaultContextLike["auth"] = options.auth ?? { identity: null, userId: null };
     const cdcEnabled = options.cdc ?? false;
 
     // `ctx.db.system` reads scheduled functions / storage objects from sources
@@ -3095,7 +3157,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
                 throw new Error(`unknown table: ${tableName}`);
             }
 
-            const withDefaults = applyInsertDefaults(definition, document);
+            const withDefaults = applyInsertDefaults(definition, document, auth);
 
             // Refinements declared via `.check(predicate)` fire here on the
             // post-default row so a defaulted value still passes its checks.
@@ -3206,7 +3268,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
 
             const merged = { ...existing, ...patch, _id: id };
 
-            applyOnUpdate(tableDefinition, patch, merged);
+            applyOnUpdate(tableDefinition, patch, merged, auth);
 
             // Run column refinements on the merged row so a patch that flips a
             // field to an invalid value (e.g. negative amount) is rejected
@@ -3504,7 +3566,7 @@ const createShardCtxDb = (options: CtxDbOptions): DatabaseWriterLike => {
             const creationTime = typeof document["_creationTime"] === "number" ? document["_creationTime"] : clock();
             const replaced: Record<string, unknown> = { ...document, _creationTime: creationTime, _id: id };
 
-            applyOnUpdate(tableDefinition, document, replaced);
+            applyOnUpdate(tableDefinition, document, replaced, auth);
 
             // Refinement checks fire on the post-onUpdate row so a defaulted
             // field still has to satisfy its `.check()` predicate.
@@ -3851,6 +3913,7 @@ export type {
     SchemaLike,
     SearchFilterBuilderLike,
     SearchIndexDefinitionLike,
+    ServerDefaultContextLike,
     SqlCursor,
     SqlExec,
     TableDefinitionLike,
