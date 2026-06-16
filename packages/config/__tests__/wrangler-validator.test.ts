@@ -172,6 +172,54 @@ describe("wrangler-validator", () => {
             expect(report.errors.some((line) => line.includes("docs-body"))).toBe(true);
         });
 
+        it("rejects a wildcard CORS origin paired with credentials in vars", () => {
+            expect.assertions(2);
+
+            const report = validateWranglerConfig({
+                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                compatibility_flags: [REQUIRED_FLAG],
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                vars: { LUNORA_ALLOWED_ORIGINS: "https://app.example.com, *", LUNORA_CORS_ALLOW_CREDENTIALS: "true" },
+            });
+
+            expect(report.valid).toBe(false);
+            expect(report.errors.some((line) => line.includes("LUNORA_ALLOWED_ORIGINS"))).toBe(true);
+        });
+
+        it("allows a wildcard origin without credentials, and credentials without a wildcard", () => {
+            expect.assertions(2);
+
+            const wildcardOnly = validateWranglerConfig({
+                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                compatibility_flags: [REQUIRED_FLAG],
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                vars: { LUNORA_ALLOWED_ORIGINS: "*" },
+            });
+
+            const credentialsOnly = validateWranglerConfig({
+                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                compatibility_flags: [REQUIRED_FLAG],
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                vars: { LUNORA_ALLOWED_ORIGINS: "https://app.example.com", LUNORA_CORS_ALLOW_CREDENTIALS: "true" },
+            });
+
+            expect(wildcardOnly.errors.some((line) => line.includes("LUNORA_ALLOWED_ORIGINS"))).toBe(false);
+            expect(credentialsOnly.errors.some((line) => line.includes("LUNORA_ALLOWED_ORIGINS"))).toBe(false);
+        });
+
+        it("does not throw when vars is absent or non-string", () => {
+            expect.assertions(1);
+
+            const report = validateWranglerConfig({
+                compatibility_date: REQUIRED_COMPATIBILITY_DATE,
+                compatibility_flags: [REQUIRED_FLAG],
+                durable_objects: { bindings: [{ class_name: "ShardDO", name: "SHARD" }] },
+                vars: { LUNORA_ALLOWED_ORIGINS: 123, LUNORA_CORS_ALLOW_CREDENTIALS: true },
+            });
+
+            expect(report.errors.some((line) => line.includes("LUNORA_ALLOWED_ORIGINS"))).toBe(false);
+        });
+
         it("reports an outdated compatibility_date", () => {
             expect.assertions(1);
 

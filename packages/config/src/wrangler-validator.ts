@@ -118,6 +118,11 @@ interface WranglerConfig {
     // Parsed from untrusted JSONC, so individual entries may be `null` or
     // otherwise malformed; the validators below guard against that at runtime.
     tail_consumers?: ReadonlyArray<TailConsumer | null | undefined>;
+    // Plain-text environment variables (`env.*`). Lunora reads a handful of
+    // `LUNORA_*` security knobs from here; `validateCorsVariables` flags an unsafe
+    // CORS combination. Values are untrusted JSONC, so non-string entries are
+    // tolerated and ignored.
+    vars?: Record<string, unknown>;
     vectorize?: ReadonlyArray<{ binding?: string; index_name?: string } | null | undefined>;
     // Parsed from untrusted JSONC, so individual entries may be `null` or
     // otherwise malformed; `validateWorkflows` guards against that at runtime.
@@ -683,6 +688,37 @@ const withTailConsumer = (wrangler: WranglerConfig, consumer: TailConsumer): Wra
     return { ...wrangler, tail_consumers: [...existing, consumer] };
 };
 
+/** Env values that read as "on" for a boolean-ish `LUNORA_*` flag — mirrors the DO security audit. */
+const TRUTHY_ENV_VALUES = new Set(["1", "enabled", "on", "true", "yes"]);
+
+/**
+ * Reject the one CORS combination the worker cannot enforce: a `*` wildcard
+ * origin paired with credentials. The runtime's `resolveSecurity` throws on the
+ * same combination at construction, but an env-driven allowlist
+ * (`LUNORA_ALLOWED_ORIGINS` + `LUNORA_CORS_ALLOW_CREDENTIALS` in wrangler `vars`)
+ * bypasses code config and would otherwise ship a policy browsers silently
+ * refuse — so we catch it at build time too. Non-string values are ignored.
+ */
+const validateCorsVariables = (wrangler: WranglerConfig, errors: string[]): void => {
+    const { vars } = wrangler;
+
+    if (!vars || typeof vars !== "object") {
+        return;
+    }
+
+    const allowedOrigins = vars["LUNORA_ALLOWED_ORIGINS"];
+    const allowCredentials = vars["LUNORA_CORS_ALLOW_CREDENTIALS"];
+
+    const hasWildcard = typeof allowedOrigins === "string" && allowedOrigins.split(",").some((entry) => entry.trim() === "*");
+    const credentialsOn = typeof allowCredentials === "string" && TRUTHY_ENV_VALUES.has(allowCredentials.trim().toLowerCase());
+
+    if (hasWildcard && credentialsOn) {
+        errors.push(
+            'vars.LUNORA_ALLOWED_ORIGINS includes a "*" wildcard while vars.LUNORA_CORS_ALLOW_CREDENTIALS is on — browsers reject this combination and it defeats the allowlist; name explicit origins or drop credentials',
+        );
+    }
+};
+
 /**
  * Pure validator: given a parsed `WranglerConfig` object and an optional
  * `SchemaInfo`, produce a structured report. Performs no I/O.
@@ -761,6 +797,7 @@ const validateWranglerConfig = (wrangler: WranglerConfig | undefined, schema?: S
     validateLogpush(wrangler, errors);
     validatePlacement(wrangler, errors);
     validateAssets(wrangler, errors);
+    validateCorsVariables(wrangler, errors);
 
     return { errors, valid: errors.length === 0, warnings };
 };
