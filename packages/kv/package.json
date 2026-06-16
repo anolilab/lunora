@@ -25,7 +25,8 @@
     "files": [
         "dist",
         "README.md",
-        "LICENSE.md"
+        "LICENSE.md",
+        "__assets__"
     ],
     "type": "module",
     "sideEffects": false,

@@ -47,7 +47,8 @@
     "files": [
         "dist",
         "README.md",
-        "LICENSE.md"
+        "LICENSE.md",
+        "__assets__"
     ],
     "scripts": {
         "build": "pnpm exec packem build --development",
