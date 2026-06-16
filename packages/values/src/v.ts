@@ -119,8 +119,34 @@ interface ColumnMeta {
     notNull: boolean;
     /** `.$onUpdateFn(fn)` — recomputed on every patch/replace. */
     onUpdateFn?: () => unknown;
+
+    /**
+     * `.serverDefault(fn)` — a SERVER-trusted value factory. Unlike
+     * `.$defaultFn` (which only fills an absent field), this runs on every
+     * insert/update and SILENTLY OVERWRITES any client-supplied value with
+     * `fn({ auth })`, so the column is never client-controllable (e.g.
+     * `ownerId`/`tenantId` stamped from `auth.userId`). Field is optional on
+     * insert. The factory runs server-side with the resolved request auth.
+     */
+    serverDefault?: (context: ServerDefaultContext) => unknown;
     /** `.unique()` — synthesizes a UNIQUE index. */
     unique?: boolean;
+}
+
+/**
+ * Context handed to a `.serverDefault(fn)` factory at write time. Carries the
+ * resolved request identity so a column can be stamped from the caller
+ * (`auth.userId`) rather than trusted from the client. Structurally mirrors the
+ * `auth` slice of the server's procedure context without depending on
+ * `@lunora/server`.
+ */
+interface ServerDefaultContext {
+    readonly auth: {
+        /** The raw identity claims, or `null` for the anonymous/no-resolver case. */
+        readonly identity: Record<string, unknown> | null;
+        /** The resolved caller id, or `null` when unauthenticated. */
+        readonly userId: null | string;
+    };
 }
 
 /**
@@ -153,6 +179,14 @@ interface ColumnValidator<TSelect, TInsert> extends Column<TSelect, TInsert>, Va
     meta: (options: MetaOptions) => ColumnValidator<TSelect, TInsert>;
     /** Allow SQL NULL — widens the select type to `T | null`. */
     nullable: () => ColumnValidator<null | TSelect, null | TInsert>;
+
+    /**
+     * Stamp this column SERVER-side from the request auth on every write,
+     * overwriting any client-supplied value. The field becomes optional on
+     * insert (the server fills it). Use for owner/tenant columns that must never
+     * be client-controllable — e.g. `v.string().serverDefault(({ auth }) => auth.userId)`.
+     */
+    serverDefault: (function_: (context: ServerDefaultContext) => TSelect) => ColumnValidator<TSelect, TInsert | undefined>;
     /** Enforce a UNIQUE constraint (synthesizes a unique index). */
     unique: () => ColumnValidator<TSelect, TInsert>;
 }
@@ -222,6 +256,7 @@ interface InternalColumnValidator<T> extends InternalValidator<T> {
     defaultNow: () => InternalColumnValidator<T>;
     meta: (options: MetaOptions) => InternalColumnValidator<T>;
     nullable: () => InternalColumnValidator<null | T>;
+    serverDefault: (function_: (context: ServerDefaultContext) => T) => InternalColumnValidator<T>;
     unique: () => InternalColumnValidator<T>;
 }
 
@@ -317,6 +352,7 @@ const createValidator = <T>(
     validator.unique = () => rebuild({ unique: true });
     validator.$defaultFn = (function_) => rebuild({ defaultFn: function_ });
     validator.$onUpdateFn = (function_) => rebuild({ onUpdateFn: function_ });
+    validator.serverDefault = (function_) => rebuild({ serverDefault: function_ });
     // `$type` is a compile-time-only override; runtime parsing is unchanged, so
     // it clones the validator and lets the public signature retype the result.
     validator.$type = (() => rebuild({})) as InternalColumnValidator<T>["$type"];
@@ -898,6 +934,7 @@ export type {
     JsonSchemaFragment,
     MetaOptions,
     SelectShape,
+    ServerDefaultContext,
     TimestampColumnValidator,
     Validator,
     ValidatorKind,

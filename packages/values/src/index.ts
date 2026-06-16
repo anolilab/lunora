@@ -17,6 +17,7 @@ export type {
     JsonSchemaFragment,
     MetaOptions,
     SelectShape,
+    ServerDefaultContext,
     TimestampColumnValidator,
     Validator,
     ValidatorKind,

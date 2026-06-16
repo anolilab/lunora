@@ -33,6 +33,13 @@ const updatedAt = v.number().$onUpdateFn(() => Date.now());
 
 type _OnUpdateInsert = Assert<Equal<InferInsert<typeof updatedAt>, number>>;
 
+// `.serverDefault(fn)` leaves select alone but makes insert optional — the
+// server stamps it, so the client need not (and cannot meaningfully) supply it.
+const ownerId = v.string().serverDefault(({ auth }) => auth.userId ?? "anon");
+
+type _ServerDefaultSelect = Assert<Equal<InferSelect<typeof ownerId>, string>>;
+type _ServerDefaultInsert = Assert<Equal<InferInsert<typeof ownerId>, string | undefined>>;
+
 // `.unique()` is type-transparent.
 const title = v.string().unique();
 
@@ -119,6 +126,8 @@ export type {
     _NullableSelect,
     _OnUpdateInsert,
     _SelectShape,
+    _ServerDefaultInsert,
+    _ServerDefaultSelect,
     _TimestampSelect,
     _TypeOverrideInsert,
     _TypeOverrideSelect,

@@ -254,6 +254,42 @@ describe("time validators", () => {
     });
 });
 
+describe(".serverDefault()", () => {
+    type ServerDefaultMeta = { _meta: { column: { serverDefault?: (context: { auth: { identity: unknown; userId: unknown } }) => unknown } } };
+
+    it("records a server-default factory on the column meta", () => {
+        expect.assertions(2);
+
+        const validator = v.string().serverDefault(({ auth }) => auth.userId ?? "anon");
+        const { column } = (validator as unknown as ServerDefaultMeta)._meta;
+
+        expect(column.serverDefault).toBeTypeOf("function");
+        expect(column.serverDefault?.({ auth: { identity: null, userId: "u1" } })).toBe("u1");
+    });
+
+    it("preserves the chain and still parses its base type", () => {
+        expect.assertions(2);
+
+        const validator = v.string().serverDefault(() => "x");
+
+        expect(validator.parse("hello")).toBe("hello");
+        expect(() => validator.parse(42)).toThrow(ValidationError);
+    });
+
+    it("composes with .nullable() without losing the factory", () => {
+        expect.assertions(2);
+
+        const validator = v
+            .string()
+            .serverDefault(({ auth }) => auth.userId ?? "anon")
+            .nullable();
+        const { column } = (validator as unknown as ServerDefaultMeta)._meta;
+
+        expect(column.serverDefault).toBeTypeOf("function");
+        expect(validator.parse(null)).toBeNull();
+    });
+});
+
 describe("$type override", () => {
     it("retypes the validator without changing runtime parsing", () => {
         expect.assertions(2);
