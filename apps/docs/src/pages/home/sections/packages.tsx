@@ -5,7 +5,8 @@ import type { FC } from "react";
 import { useEffect, useState } from "react";
 
 import Section from "@/components/sections/section";
-import SectionTitle from "@/components/sections/section-title";
+import SectionDivider from "@/components/sections/section-divider";
+import SectionHeader from "@/components/sections/section-header";
 import HighlightLink from "@/components/ui/highlight-link";
 import { cn } from "@/lib/utils";
 
@@ -590,12 +591,13 @@ const ReactSection = () => (
 
 const Packages: FC = () => (
     <div className="bg-background">
-        <Section classes={{ childrenWrapper: "items-end", root: "pb-20" }} mode="dark">
-            <SectionTitle
-                classes={{ root: "col-span-2" }}
-                description="From the schema-first server to the live browser client and framework adapters, Lunora ships everything you need for a real-time, end-to-end typed backend on Cloudflare. Explore @lunora/server, @lunora/client, @lunora/react, and more."
-                prefix="Packages"
-                title="Everything for a Real-Time Backend."
+        <SectionDivider />
+        <Section classes={{ childrenWrapper: "items-end", root: "pb-20" }} gridLength={0} mode="dark">
+            <SectionHeader
+                className="col-span-2"
+                eyebrow="Packages"
+                subhead="From the schema-first server to the live browser client and framework adapters — everything for a real-time, end-to-end typed backend on Cloudflare."
+                title="Everything for a real-time backend."
             />
             <div className="hidden lg:col-span-1 lg:block" />
             <div className="col-span-1">
@@ -610,10 +612,9 @@ const Packages: FC = () => (
         <Section classes={{ root: "pt-0" }} mode="dark">
             <div className="col-span-1 hidden lg:block" />
             <div className="col-span-2 flex flex-col gap-16">
-                <SectionTitle
-                    classes={{ root: "text-center" }}
-                    description="Empower your ideas with tools that simplify development, spark creativity, and accelerate delivery. Define your vision, design with elegance, and deploy solutions that shape the future of the web with confidence."
-                    position="center"
+                <SectionHeader
+                    align="center"
+                    subhead="Define your vision, design with elegance, and deploy solutions that shape the future of the web — with confidence."
                     title="Define, design, deploy what's next for the web"
                 />
                 <HighlightLink className="-ml-[2px] w-[calc(100%+1px)] border-r-0 bg-background" icon={<ChevronRight />} mode="dark" to="/packages">
