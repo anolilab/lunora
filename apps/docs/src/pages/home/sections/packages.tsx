@@ -127,7 +127,7 @@ const ServerTerminal = () => {
 
     return (
         <div className="flex h-full flex-col">
-            <div className="flex items-center gap-3 border-b border-white/6 px-4 py-2.5">
+            <div className="flex items-center gap-3 border-b border-white/[0.08] px-4 py-2.5">
                 <div className="flex gap-1.5">
                     <div className="h-2 w-2 bg-white/10" />
                     <div className="h-2 w-2 bg-white/10" />
@@ -180,17 +180,17 @@ const ServerTerminal = () => {
 };
 
 const ServerSection = () => (
-    <Section classes={{ root: "pt-0" }} gridLength={0} mode="dark">
+    <Section classes={{ root: "pt-12" }} gridLength={0} mode="dark">
         <div className="hidden lg:col-span-1 lg:block" />
         <div className="col-span-4 -ml-px flex flex-col xl:col-span-3 bg-background">
-            <div className="relative overflow-hidden border-b border-white/6 bg-gradient-to-br from-sky-sapphire/[0.08] via-transparent to-transparent">
+            <div className="relative overflow-hidden border-b border-white/[0.08] bg-[hsl(240_16%_5%)]">
                 <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-sky-sapphire/60 to-transparent" />
                 <div className="grid grid-cols-2">
-                    <div className="min-h-120 bg-sky-sapphire/[0.04]">
+                    <div className="min-h-120 bg-[hsl(240_16%_4%)]">
                         <ServerTerminal />
                     </div>
 
-                    <div className="z-10 flex w-full flex-col gap-4 px-8 pt-8 pb-14 border-l border-white/6">
+                    <div className="z-10 flex w-full flex-col gap-4 px-8 pt-8 pb-14 border-l border-white/[0.08]">
                         <div className="flex items-center gap-3">
                             <span className="inline-block bg-sky-sapphire/20 px-3 py-1 font-mono text-xs font-medium text-sky-sapphire">Server</span>
                         </div>
@@ -216,23 +216,23 @@ const ServerSection = () => (
                 </div>
             </div>
 
-            <div className="grid grid-cols-2 border-x border-white/6">
+            <div className="grid grid-cols-2 border-x border-white/[0.08]">
                 <FeatureCard accentColor="bg-sky-sapphire/40" title="Schema-first">
                     Declare your tables and validators once with <code className="text-sky-sapphire/80">defineSchema</code> and{" "}
                     <code className="text-sky-sapphire/80">defineTable</code>. Codegen turns that schema into a fully typed data model shared between server and
                     client.
                 </FeatureCard>
-                <FeatureCard accentColor="bg-sky-sapphire/40" className="border-l border-white/6" title="Typed functions">
+                <FeatureCard accentColor="bg-sky-sapphire/40" className="border-l border-white/[0.08]" title="Typed functions">
                     Write <code className="text-sky-sapphire/80">query</code>, <code className="text-sky-sapphire/80">mutation</code>, and{" "}
                     <code className="text-sky-sapphire/80">action</code> handlers. Arguments and return types are inferred end-to-end — no manual API contracts.
                 </FeatureCard>
             </div>
-            <div className="grid grid-cols-2 border-x border-b border-white/6">
-                <FeatureCard accentColor="bg-sky-sapphire/40" className="border-t border-white/6" title="Durable state">
+            <div className="grid grid-cols-2 border-x border-b border-white/[0.08]">
+                <FeatureCard accentColor="bg-sky-sapphire/40" className="border-t border-white/[0.08]" title="Durable state">
                     State lives in a SQLite-backed Durable Object with optimistic concurrency control. Reads and writes are consistent, transactional, and close
                     to your users at the edge.
                 </FeatureCard>
-                <FeatureCard accentColor="bg-sky-sapphire/40" className="border-t border-l border-white/6" title="Scales on demand">
+                <FeatureCard accentColor="bg-sky-sapphire/40" className="border-t border-l border-white/[0.08]" title="Scales on demand">
                     Start with a single Durable Object, then partition by user, tenant, or room with <code className="text-sky-sapphire/80">.shardBy()</code>,
                     or replicate globally with <code className="text-sky-sapphire/80">.global()</code>.
                 </FeatureCard>
@@ -276,7 +276,7 @@ const ClientTerminal = () => {
 
     return (
         <div className="flex h-full flex-col">
-            <div className="flex items-center gap-3 border-b border-white/6 px-4 py-2.5">
+            <div className="flex items-center gap-3 border-b border-white/[0.08] px-4 py-2.5">
                 <div className="flex gap-1.5">
                     <div className="h-2 w-2 bg-white/10" />
                     <div className="h-2 w-2 bg-white/10" />
@@ -314,9 +314,9 @@ const ClientTerminal = () => {
 };
 
 const ClientSection = () => (
-    <Section classes={{ root: "pt-0" }} gridLength={0} mode="dark">
+    <Section classes={{ root: "pt-12" }} gridLength={0} mode="dark">
         <div className="col-span-3 flex flex-col bg-background">
-            <div className="relative overflow-hidden border border-white/6 bg-gradient-to-br from-crimson-energy/[0.08] via-transparent to-transparent">
+            <div className="relative overflow-hidden border border-white/[0.08] bg-[hsl(240_16%_5%)]">
                 <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-crimson-energy/60 to-transparent" />
                 <div className="grid grid-cols-2">
                     <div className="z-10 flex w-full flex-col gap-4 p-8">
@@ -340,28 +340,28 @@ const ClientSection = () => (
                         </div>
                     </div>
 
-                    <div className="min-h-80 w-full border-l border-white/6 bg-crimson-energy/[0.04]">
+                    <div className="min-h-80 w-full border-l border-white/[0.08] bg-[hsl(240_16%_4%)]">
                         <ClientTerminal />
                     </div>
                 </div>
             </div>
 
-            <div className="grid grid-cols-2 border-x border-white/6">
+            <div className="grid grid-cols-2 border-x border-white/[0.08]">
                 <FeatureCard accentColor="bg-crimson-energy/40" title="Live by default">
                     Queries are subscriptions. When a mutation changes the data a query reads, every connected client re-renders automatically — no polling, no
                     manual cache invalidation.
                 </FeatureCard>
-                <FeatureCard accentColor="bg-crimson-energy/40" className="border-l border-white/6" title="Optimistic updates">
+                <FeatureCard accentColor="bg-crimson-energy/40" className="border-l border-white/[0.08]" title="Optimistic updates">
                     Mutations apply locally the instant you call them, then reconcile with the server's authoritative result. Your UI feels instant even at the
                     edge.
                 </FeatureCard>
             </div>
-            <div className="grid grid-cols-2 border-x border-b border-white/6">
-                <FeatureCard accentColor="bg-crimson-energy/40" className="border-t border-white/6" title="Offline queue">
+            <div className="grid grid-cols-2 border-x border-b border-white/[0.08]">
+                <FeatureCard accentColor="bg-crimson-energy/40" className="border-t border-white/[0.08]" title="Offline queue">
                     Lose connection and mutations are durably queued on the client. Reconnect and they flush in order, keyed by client id so retries stay
                     idempotent.
                 </FeatureCard>
-                <FeatureCard accentColor="bg-crimson-energy/40" className="border-t border-l border-white/6" title="Framework adapters">
+                <FeatureCard accentColor="bg-crimson-energy/40" className="border-t border-l border-white/[0.08]" title="Framework adapters">
                     First-class hooks and stores for React, Vue, Solid, and Svelte — all built on the same typed client and generated API.
                 </FeatureCard>
             </div>
@@ -489,7 +489,7 @@ const ReactTerminal = () => {
 
     return (
         <div className="flex h-full flex-col">
-            <div className="flex items-center gap-3 border-b border-white/6 px-4 py-2.5">
+            <div className="flex items-center gap-3 border-b border-white/[0.08] px-4 py-2.5">
                 <div className="flex gap-1.5">
                     <div className="h-2 w-2 bg-white/10" />
                     <div className="h-2 w-2 bg-white/10" />
@@ -532,16 +532,16 @@ const ReactTerminal = () => {
 };
 
 const ReactSection = () => (
-    <Section classes={{ root: "pt-0" }} gridLength={0} mode="dark">
+    <Section classes={{ root: "pt-12" }} gridLength={0} mode="dark">
         <div className="hidden lg:col-span-1 lg:block" />
         <div className="col-span-4 -ml-px flex flex-col xl:col-span-3 bg-background">
-            <div className="relative overflow-hidden border border-white/6 bg-gradient-to-br from-royal-amethyst/[0.08] via-transparent to-transparent">
+            <div className="relative overflow-hidden border border-white/[0.08] bg-[hsl(240_16%_5%)]">
                 <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-royal-amethyst/60 to-transparent" />
                 <div className="grid grid-cols-2">
-                    <div className="min-h-80 w-full bg-royal-amethyst/[0.04]">
+                    <div className="min-h-80 w-full bg-[hsl(240_16%_4%)]">
                         <ReactTerminal />
                     </div>
-                    <div className="z-10 flex w-full flex-col gap-4 p-8 border-l border-white/6">
+                    <div className="z-10 flex w-full flex-col gap-4 p-8 border-l border-white/[0.08]">
                         <div className="flex items-center gap-3">
                             <span className="inline-block bg-royal-amethyst/20 px-3 py-1 font-mono text-xs font-medium text-royal-amethyst">Adapters</span>
                         </div>
@@ -565,22 +565,22 @@ const ReactSection = () => (
                 </div>
             </div>
 
-            <div className="grid grid-cols-2 border-x border-white/6">
+            <div className="grid grid-cols-2 border-x border-white/[0.08]">
                 <FeatureCard accentColor="bg-royal-amethyst/40" title="Inferred end-to-end">
                     Hook arguments and results infer their types straight from your server functions through the generated{" "}
                     <code className="text-royal-amethyst/80">api</code> — rename a field on the server and the client stops compiling.
                 </FeatureCard>
-                <FeatureCard accentColor="bg-royal-amethyst/40" className="border-l border-white/6" title="Reactive loaders">
+                <FeatureCard accentColor="bg-royal-amethyst/40" className="border-l border-white/[0.08]" title="Reactive loaders">
                     Queries subscribe automatically and tear down on unmount. Components stay in sync with server state without{" "}
                     <code className="text-royal-amethyst/80">useEffect</code> plumbing.
                 </FeatureCard>
             </div>
-            <div className="grid grid-cols-2 border-x border-b border-white/6">
-                <FeatureCard accentColor="bg-royal-amethyst/40" className="border-t border-white/6" title="Optimistic mutations">
+            <div className="grid grid-cols-2 border-x border-b border-white/[0.08]">
+                <FeatureCard accentColor="bg-royal-amethyst/40" className="border-t border-white/[0.08]" title="Optimistic mutations">
                     Pass an optimistic updater to <code className="text-royal-amethyst/80">useMutation</code> and the UI updates instantly, then reconciles with
                     the server's confirmed result.
                 </FeatureCard>
-                <FeatureCard accentColor="bg-royal-amethyst/40" className="border-t border-l border-white/6" title="Pick your framework">
+                <FeatureCard accentColor="bg-royal-amethyst/40" className="border-t border-l border-white/[0.08]" title="Pick your framework">
                     Prefer Vue, Solid, or Svelte? The same patterns ship as <code className="text-royal-amethyst/80">@lunora/vue</code>,{" "}
                     <code className="text-royal-amethyst/80">@lunora/solid</code>, and <code className="text-royal-amethyst/80">@lunora/svelte</code>.
                 </FeatureCard>
@@ -609,7 +609,7 @@ const Packages: FC = () => (
         <ServerSection />
         <ClientSection />
         <ReactSection />
-        <Section classes={{ root: "pt-0" }} gridLength={0} mode="dark">
+        <Section classes={{ root: "pt-12" }} gridLength={0} mode="dark">
             <div className="col-span-1 hidden lg:block" />
             <div className="col-span-2 flex flex-col gap-16">
                 <SectionHeader
