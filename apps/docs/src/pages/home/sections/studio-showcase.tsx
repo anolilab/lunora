@@ -1,6 +1,6 @@
-import dashboardImg from "@/assets/studio/home.png";
 import schemaImg from "@/assets/studio/schema.png";
 import sqlImg from "@/assets/studio/sql-editor.png";
+import timeTravelImg from "@/assets/studio/time-travel.png";
 import AuroraMesh from "@/components/sections/aurora-mesh";
 import FeatureScene from "@/components/sections/feature-scene";
 import Section from "@/components/sections/section";
@@ -17,7 +17,7 @@ const StudioShowcase = () => (
                     align="center"
                     className="mx-auto"
                     eyebrow="Lunora Studio"
-                    subhead="Schema, data, SQL, functions, workflows, and observability — a local admin UI that ships with every Lunora app and runs against your live edge database."
+                    subhead="Schema, data, SQL, functions, workflows, and time travel — a local admin UI that ships with every Lunora app and runs against your live edge database."
                     title="A studio for your whole backend."
                 />
             </div>
@@ -45,12 +45,16 @@ const StudioShowcase = () => (
                     title="Browse and query live data."
                 />
                 <FeatureScene
-                    alt="Lunora Studio dashboard with metrics and advisors"
-                    bullets={["Requests, errors, and latency at a glance", "Live WebSocket connection count", "Security and performance advisors"]}
-                    copy="Requests, latency, live connections, and schema advisors — the health of your backend at a glance, updating in real time as traffic flows."
-                    eyebrow="Observability"
-                    image={dashboardImg}
-                    title="See everything, in real time."
+                    alt="Lunora Studio time-travel view with point-in-time restore"
+                    bullets={[
+                        "Point-in-time restore, any moment in the last 30 days",
+                        "Bookmark-based, in-place recovery",
+                        "Snapshot backup tier for older state",
+                    ]}
+                    copy="Every shard is a SQLite database you can rewind. Restore to any moment in the last 30 days from a bookmark, or reach further back with the snapshot backup tier — no extra infrastructure."
+                    eyebrow="Time Travel"
+                    image={timeTravelImg}
+                    title="Rewind your data to any moment."
                 />
             </div>
         </Section>

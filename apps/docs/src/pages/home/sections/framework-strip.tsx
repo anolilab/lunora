@@ -19,16 +19,16 @@ const frameworks: { icon: ComponentType<{ className?: string }>; label: string }
 const FrameworkStrip: FC = () => (
     <div className="bg-background border-y border-white/[0.06]" data-theme="dark">
         <Reveal className="mx-auto flex max-w-6xl flex-col items-center gap-5 px-5 py-7 sm:flex-row sm:justify-between">
-            <span className="font-mono text-[11px] tracking-[0.18em] text-white/35 uppercase">Works with your stack</span>
+            <span className="font-mono text-[11px] tracking-[0.18em] text-white/50 uppercase">Works with your stack</span>
             <div className="flex flex-wrap items-center justify-center gap-x-7 gap-y-3">
                 {frameworks.map(({ icon: Icon, label }) => (
-                    <span className="flex items-center gap-2 text-white/45 transition-colors hover:text-white/80" key={label}>
+                    <span className="flex items-center gap-2 text-white/65 transition-colors hover:text-white" key={label}>
                         <Icon aria-hidden="true" className="size-4" />
                         <span className="text-sm font-medium">{label}</span>
                     </span>
                 ))}
                 <span className="hidden h-4 w-px bg-white/10 sm:block" />
-                <span className="flex items-center gap-2 text-white/45 transition-colors hover:text-white/80">
+                <span className="flex items-center gap-2 text-white/65 transition-colors hover:text-white">
                     <SiCloudflare aria-hidden="true" className="size-4" />
                     <span className="text-sm font-medium">on Cloudflare</span>
                 </span>
