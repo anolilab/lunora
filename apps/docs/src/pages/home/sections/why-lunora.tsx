@@ -177,6 +177,7 @@ const WhyLunora = () => {
                                         <motion.span
                                             className="absolute top-0 left-0 h-full w-0.5 bg-gradient-to-b from-sky-sapphire via-royal-amethyst to-crimson-energy"
                                             layoutId="why-active"
+                                            transition={{ damping: 30, stiffness: 420, type: "spring" }}
                                         />
                                     )}
                                     <span className={cn("text-lg font-medium tracking-tight transition-colors", isActive ? "text-white" : "text-white/55")}>
@@ -189,7 +190,7 @@ const WhyLunora = () => {
                                                 className="overflow-hidden pt-2 text-sm leading-snug text-white/50"
                                                 exit={{ height: 0, opacity: 0 }}
                                                 initial={{ height: 0, opacity: 0 }}
-                                                transition={{ duration: 0.25 }}
+                                                transition={{ duration: 0.2, ease: "easeOut" }}
                                             >
                                                 {item.description}
                                             </motion.p>
@@ -213,11 +214,11 @@ const WhyLunora = () => {
                         <div className="grow p-5">
                             <AnimatePresence mode="wait">
                                 <motion.div
-                                    animate={{ opacity: 1, y: 0 }}
+                                    animate={{ opacity: 1 }}
                                     exit={{ opacity: 0 }}
-                                    initial={{ opacity: 0, y: 8 }}
+                                    initial={{ opacity: 0 }}
                                     key={active}
-                                    transition={{ duration: 0.2, ease: "easeOut" }}
+                                    transition={{ duration: 0.15, ease: "easeOut" }}
                                 >
                                     <CodeLines lines={feature.code} />
                                 </motion.div>

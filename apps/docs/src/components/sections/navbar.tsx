@@ -437,8 +437,8 @@ const Navbar = () => {
                     <Button
                         aria-label={`GitHub repository (${formatStars(stats.stars)} stars)`}
                         asChild
-                        className="h-11 gap-1.5 rounded-none px-5 text-sm font-semibold border-b bg-white"
-                        variant="default"
+                        className="h-11 gap-1.5 rounded-none border border-white/20 bg-transparent px-5 text-sm font-medium text-white hover:border-white/35 hover:bg-white/10 hover:text-white"
+                        variant="outline"
                     >
                         <a href="https://github.com/anolilab/lunora" rel="noreferrer" target="_blank">
                             <GitHubLogoIcon className="size-4 fill-current" title="Lunora on GitHub" />
