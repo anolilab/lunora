@@ -1,4 +1,4 @@
-import { httpAction, httpRouter } from "@lunora/server";
+import { httpAction, httpRouter } from "lunora/server";
 
 import { processWebhook } from "./billing.js";
 

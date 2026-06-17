@@ -15,10 +15,11 @@ import { describe, expect, test } from "vitest";
  * otherwise silently drift —
  *
  *  1. the `{{name}}` placeholder + `private: true` contract,
- *  2. every `@lunora/*` dependency names a package that actually exists under
- *     `packages/` (catches a renamed/dropped package or a typo'd scope),
- *  3. `@lunora/*` deps use the `^0.0.0` contract (never `workspace:*` — a
- *     rendered template is a standalone app that installs from the registry),
+ *  2. every Lunora dependency (the `lunora` umbrella or any `@lunora/*`) names a
+ *     package that actually exists under `packages/` (catches a renamed/dropped
+ *     package or a typo'd scope),
+ *  3. Lunora deps use the `^0.0.0` contract (never `workspace:*` — a rendered
+ *     template is a standalone app that installs from the registry),
  *  4. each template depends on the Lunora client adapter its framework needs,
  *  5. external framework deps track the latest supported MAJOR (the manifest
  *     below) — so a template can't quietly fall a major behind the ecosystem.
@@ -45,11 +46,14 @@ const listDirectories = (parent: string): string[] =>
         .filter((entry) => !entry.startsWith("."))
         .filter((entry) => statSync(join(parent, entry)).isDirectory());
 
-/** Real `@lunora/*` package names discovered from `packages/<dir>/package.json`. */
+/** A Lunora-owned dependency: the unscoped `lunora` umbrella or any `@lunora/*` package. */
+const isLunoraDep = (name: string): boolean => name === "lunora" || name.startsWith("@lunora/");
+
+/** Real Lunora package names (the `lunora` umbrella + every `@lunora/*`) discovered from `packages/<dir>/package.json`. */
 const realLunoraPackages = new Set(
     listDirectories(PACKAGES_DIR)
         .map((dir) => readJson(join(PACKAGES_DIR, dir, "package.json")).name)
-        .filter((name): name is string => typeof name === "string" && name.startsWith("@lunora/")),
+        .filter((name): name is string => typeof name === "string" && isLunoraDep(name)),
 );
 
 const templateNames = listDirectories(TEMPLATES_DIR);
@@ -148,21 +152,21 @@ describe("templates/* package.json validation", () => {
             expect(pkg.private).toBe(true);
         });
 
-        test("every @lunora/* dependency names a real package", () => {
-            const lunoraDeps = Object.keys(deps).filter((name) => name.startsWith("@lunora/"));
+        test("every Lunora dependency names a real package", () => {
+            const lunoraDeps = Object.keys(deps).filter(isLunoraDep);
 
-            // Every template wires at least @lunora/runtime + @lunora/server.
-            expect(lunoraDeps).toContain("@lunora/runtime");
-            expect(lunoraDeps).toContain("@lunora/server");
+            // Every template wires the `lunora` umbrella (server + values + runtime
+            // + do + the CLI bin) instead of the granular base packages.
+            expect(lunoraDeps).toContain("lunora");
 
             for (const name of lunoraDeps) {
                 expect(realLunoraPackages, `${templateName} references unknown package ${name}`).toContain(name);
             }
         });
 
-        test("@lunora/* deps use the ^0.0.0 registry contract, never workspace:*", () => {
+        test("Lunora deps use the ^0.0.0 registry contract, never workspace:*", () => {
             for (const [name, range] of Object.entries(deps)) {
-                if (!name.startsWith("@lunora/")) {
+                if (!isLunoraDep(name)) {
                     continue;
                 }
 
@@ -184,7 +188,7 @@ describe("templates/* package.json validation", () => {
 
         test("external framework deps are on the latest supported major", () => {
             for (const [name, range] of Object.entries(deps)) {
-                if (name.startsWith("@lunora/")) {
+                if (isLunoraDep(name)) {
                     continue;
                 }
 

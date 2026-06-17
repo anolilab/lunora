@@ -6,8 +6,8 @@ import { createD1CtxDb, facetGlobalColumn, listGlobalTables, readGlobalTablePage
 import { createMailerFromEnv } from "@lunora/mail";
 import type { ForwardableEmailMessageLike, ShardNamespaceLike as InboundShardNamespaceLike } from "@lunora/mail/inbound";
 import { createInboundEmailHandler, dispatchToLunoraFunction, parseInboundEmail } from "@lunora/mail/inbound";
-import type { ExecutionContextLike, GlobalIntrospector, ScheduledControllerLike, ShardNamespaceLike } from "@lunora/runtime";
-import { createCrossShardRelationCapabilities, createWorker } from "@lunora/runtime";
+import type { ExecutionContextLike, GlobalIntrospector, ScheduledControllerLike, ShardNamespaceLike } from "lunora/runtime";
+import { createCrossShardRelationCapabilities, createWorker } from "lunora/runtime";
 import type { DurableObjectNamespaceLike } from "@lunora/scheduler";
 import { createScheduler } from "@lunora/scheduler";
 import type { R2BucketLike } from "@lunora/storage";

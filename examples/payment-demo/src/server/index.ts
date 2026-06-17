@@ -1,7 +1,7 @@
 import type { StripeClientLike } from "@lunora/payment";
 import { createStripeAdapter } from "@lunora/payment";
-import type { ExecutionContextLike, ShardNamespaceLike } from "@lunora/runtime";
-import { createWorker } from "@lunora/runtime";
+import type { ExecutionContextLike, ShardNamespaceLike } from "lunora/runtime";
+import { createWorker } from "lunora/runtime";
 import Stripe from "stripe";
 
 import { app } from "../../lunora/http.js";

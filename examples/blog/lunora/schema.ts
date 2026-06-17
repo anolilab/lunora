@@ -1,4 +1,4 @@
-import { defineSchema, defineTable, v } from "@lunora/server";
+import { defineSchema, defineTable, v } from "lunora/server";
 
 import { EMBED_DIMENSIONS, embedText } from "./embed.js";
 

@@ -1,4 +1,4 @@
-import { defineSchema, defineTable, v } from "@lunora/server";
+import { defineSchema, defineTable, v } from "lunora/server";
 
 /**
  * realtime-cursors — multi-user cursor positions, sharded per room.

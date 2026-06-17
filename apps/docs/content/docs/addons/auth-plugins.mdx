@@ -151,10 +151,10 @@ package root:
 
 ```ts
 // lunora/contactForm.ts — gate a plain mutation, no auth involved
-import { mutation } from "@lunora/server";
+import { mutation } from "lunora/server";
 import { verifyTurnstileMiddleware } from "@lunora/auth";
 
-import { v } from "@lunora/values";
+import { v } from "lunora/values";
 
 export const submit = mutation
     .input({ message: v.string(), turnstileToken: v.string() })
@@ -241,7 +241,7 @@ only token ever returned is the one from an explicit **Impersonate**.
 surfaces every plugin endpoint on `ctx.authApi`:
 
 ```ts
-import { httpAction } from "@lunora/server";
+import { httpAction } from "lunora/server";
 import { withAuthPlugins } from "@lunora/auth/middleware";
 
 import { auth } from "./auth.js";

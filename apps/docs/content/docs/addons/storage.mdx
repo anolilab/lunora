@@ -20,7 +20,7 @@ export const storage = createStorage({
 ## Direct upload from a mutation
 
 ```ts
-import { mutation, v } from "@lunora/server";
+import { mutation, v } from "lunora/server";
 import { storage } from "./storage";
 
 export const uploadAvatar = mutation.input({ key: v.string(), contentType: v.string() }).mutation(async ({ ctx, args: { key, contentType } }) => {

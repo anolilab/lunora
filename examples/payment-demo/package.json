@@ -7,25 +7,22 @@
     "sideEffects": false,
     "scripts": {
         "build": "vite build",
-        "codegen": "node node_modules/@lunora/cli/dist/bin.mjs codegen",
+        "codegen": "node node_modules/lunora/dist/bin.mjs codegen",
         "deploy": "wrangler deploy",
         "dev": "vite",
         "lint:types": "tsc --noEmit"
     },
     "dependencies": {
         "@lunora/client": "workspace:*",
-        "@lunora/do": "workspace:*",
         "@lunora/payment": "workspace:*",
         "@lunora/react": "workspace:*",
-        "@lunora/runtime": "workspace:*",
-        "@lunora/server": "workspace:*",
         "@lunora/vite": "workspace:*",
+        "lunora": "workspace:*",
         "react": "catalog:frontend",
         "react-dom": "catalog:frontend",
         "stripe": "^22.2.1"
     },
     "devDependencies": {
-        "@lunora/cli": "workspace:*",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@types/node": "catalog:types",
         "@types/react": "catalog:frontend",

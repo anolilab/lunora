@@ -14,7 +14,7 @@ import { createTemplate } from "@visulima/vis/generate";
 import { camelCase, isJsIdentifier } from "./_helpers/case.js";
 import { insertTableIntoSchema } from "./_helpers/insert-table.js";
 
-const freshSchema = (tableName: string): string => `import { defineSchema, defineTable, v } from "@lunora/server";
+const freshSchema = (tableName: string): string => `import { defineSchema, defineTable, v } from "lunora/server";
 
 export const schema = defineSchema({
     ${tableName}: defineTable({

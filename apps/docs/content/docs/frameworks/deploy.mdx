@@ -40,9 +40,9 @@ Lunora owns the Worker entry and drops the framework's SSR handler straight into
 
 ```ts
 // src/server.ts — the wrangler `main`
-import { createWorker } from "@lunora/runtime";
+import { createWorker } from "lunora/runtime";
 
-import { ShardDO } from "@lunora/do";
+import { ShardDO } from "lunora/do";
 import { ssrHandler } from "./framework-entry"; // your framework's SSR fetch handler
 
 export default createWorker({

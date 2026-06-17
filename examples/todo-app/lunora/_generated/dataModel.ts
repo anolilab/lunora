@@ -8,7 +8,7 @@ import type {
     TableReaderFacade as TableReaderFacadeOf,
     TableWriterFacade as TableWriterFacadeOf,
     WithArg as WithArgOf,
-} from "@lunora/server/data-model";
+} from "lunora/server/data-model";
 
 export type {
     AggregateOp,
@@ -19,15 +19,19 @@ export type {
     RankPage,
     RankResult,
     RestrictableQueryOptions,
+    RestrictableQueryOptionsOf,
     SearchFilterBuilder,
     SearchReader,
     TableAggregateOptions,
+    TableAggregateOptionsOf,
     TableGroupByOptions,
+    TableGroupByOptionsOf,
     TableRankOptions,
     TableRankPageOptions,
     Where,
+    WhereOf,
     WhereOperators,
-} from "@lunora/server/data-model";
+} from "lunora/server/data-model";
 
 export type TableName = "todos";
 

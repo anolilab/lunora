@@ -14,7 +14,7 @@ gets back**.
 | `action`   | anything, including `fetch()` | no                           | calling external APIs, queues, sending email |
 
 ```ts
-import { mutation, query, v } from "@lunora/server";
+import { mutation, query, v } from "lunora/server";
 
 export const list = query.input({ channelId: v.id("channels"), limit: v.optional(v.number()) }).query(async ({ ctx, args: { channelId, limit } }) => {
     return ctx.db

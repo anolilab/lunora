@@ -14,7 +14,7 @@ DO instance), broadcasts subscription deltas to connected WebSockets, and
 implements the RPC fan-in.
 
 ```ts
-import { ShardDO } from "@lunora/do";
+import { ShardDO } from "lunora/do";
 
 export class MyShardDO extends ShardDO {
     // Optional: extend with custom RPC methods.
@@ -36,7 +36,7 @@ Stateful session record for `@lunora/auth`. Holds short-lived state
 `SESSION_DO_TTL_DEFAULT` ms of inactivity.
 
 ```ts
-import { SessionDO } from "@lunora/do";
+import { SessionDO } from "lunora/do";
 
 export class MySessionDO extends SessionDO {}
 ```

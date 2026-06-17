@@ -24,7 +24,7 @@ of them share one database — so a write from a mutation is visible to a later
 query.
 
 ```ts
-import { defineSchema, defineTable, mutation, query, v } from "@lunora/server";
+import { defineSchema, defineTable, mutation, query, v } from "lunora/server";
 import { lunoraTest } from "@lunora/testing";
 import { afterEach, expect, test } from "vitest";
 
@@ -140,7 +140,7 @@ enforces that contract: calling one through `t.query` / `t.mutation` /
 system dispatch.
 
 ```ts
-import { internalMutation } from "@lunora/server";
+import { internalMutation } from "lunora/server";
 
 const internalSend = internalMutation.input({ author: v.string(), body: v.string() }).mutation(({ ctx, args }) => ctx.db.insert("messages", args));
 

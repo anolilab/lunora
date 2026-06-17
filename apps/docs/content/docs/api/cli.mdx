@@ -240,7 +240,7 @@ Queries, mutations, and actions are plain TypeScript files under `lunora/`.
 There is no scaffolding command — create the file yourself:
 
 ```ts title="lunora/messages.ts"
-import { mutation, query, v } from "@lunora/server";
+import { mutation, query, v } from "lunora/server";
 
 export const list = query.input({ channelId: v.id("channels"), limit: v.optional(v.number()) }).query(async ({ ctx, args: { channelId, limit } }) => {
     return ctx.db

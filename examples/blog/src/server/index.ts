@@ -1,7 +1,7 @@
 import type { LunoraAuth } from "@lunora/auth";
 import { lunoraD1Adapter, createAuth, ensureMigrated, handleAuthRequest } from "@lunora/auth";
-import type { ExecutionContextLike, Route, ShardNamespaceLike } from "@lunora/runtime";
-import { createWorker } from "@lunora/runtime";
+import type { ExecutionContextLike, Route, ShardNamespaceLike } from "lunora/runtime";
+import { createWorker } from "lunora/runtime";
 import { createScheduler, type DurableObjectNamespaceLike } from "@lunora/scheduler";
 import type { R2BucketLike } from "@lunora/storage";
 import { createStorage } from "@lunora/storage";

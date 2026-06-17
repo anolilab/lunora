@@ -87,7 +87,7 @@ adapter to get a `ctx.sql`. **Do this only inside an action:**
 import { createHyperdrive, fromPostgresJs } from "@lunora/hyperdrive";
 import postgres from "postgres";
 
-import { action, v } from "@lunora/server";
+import { action, v } from "lunora/server";
 
 export const importLegacyOrders = action.input({ orgId: v.string() }).action(async ({ ctx, args: { orgId } }) => {
     const { connectionString } = createHyperdrive(ctx.env.HYPERDRIVE);

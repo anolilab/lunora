@@ -1,4 +1,4 @@
-import { defineSchema, defineTable, v } from "@lunora/server";
+import { defineSchema, defineTable, v } from "lunora/server";
 
 /**
  * Lunora playground schema — wires up every storage tier that ships in v0.1.

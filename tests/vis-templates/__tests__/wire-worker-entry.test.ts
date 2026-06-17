@@ -15,7 +15,7 @@ const write = (relativePath: string, content: string): void => {
     writeFileSync(full, content, "utf8");
 };
 
-const CLASS_BC_ENTRY = `import { createWorker } from "@lunora/runtime";
+const CLASS_BC_ENTRY = `import { createWorker } from "lunora/runtime";
 import { createShardDO } from "../lunora/_generated/shard.js";
 
 export const ShardDO = createShardDO();

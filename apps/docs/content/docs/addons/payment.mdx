@@ -166,7 +166,7 @@ runs at the Worker edge via `httpAction` (no `ctx.db`). It forwards the raw body
 
 ```ts
 // lunora/http.ts
-import { httpAction, httpRouter } from "@lunora/server";
+import { httpAction, httpRouter } from "lunora/server";
 import { processWebhook } from "./billing";
 
 export const app = httpRouter();

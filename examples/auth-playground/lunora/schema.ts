@@ -1,4 +1,4 @@
-import { defineSchema, defineTable, v } from "@lunora/server";
+import { defineSchema, defineTable, v } from "lunora/server";
 
 /**
  * auth-playground — demo schema for the better-auth org/admin plugins.

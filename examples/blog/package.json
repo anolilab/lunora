@@ -7,7 +7,7 @@
     "sideEffects": false,
     "scripts": {
         "build": "vite build",
-        "codegen": "node node_modules/@lunora/cli/dist/bin.mjs codegen",
+        "codegen": "node node_modules/lunora/dist/bin.mjs codegen",
         "deploy": "wrangler deploy",
         "dev": "vite",
         "lint:types": "tsc --noEmit"
@@ -16,20 +16,17 @@
         "@lunora/auth": "workspace:*",
         "@lunora/client": "workspace:*",
         "@lunora/d1": "workspace:*",
-        "@lunora/do": "workspace:*",
         "@lunora/react": "workspace:*",
-        "@lunora/runtime": "workspace:*",
         "@lunora/scheduler": "workspace:*",
-        "@lunora/server": "workspace:*",
         "@lunora/storage": "workspace:*",
         "@lunora/vectors": "workspace:*",
         "@lunora/vite": "workspace:*",
         "better-auth": "catalog:auth",
+        "lunora": "workspace:*",
         "react": "catalog:frontend",
         "react-dom": "catalog:frontend"
     },
     "devDependencies": {
-        "@lunora/cli": "workspace:*",
         "@cloudflare/workers-types": "catalog:cloudflare",
         "@types/node": "catalog:types",
         "@types/react": "catalog:frontend",

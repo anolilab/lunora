@@ -1,4 +1,4 @@
-import { LunoraError } from "@lunora/server";
+import { LunoraError } from "lunora/server";
 
 import type { Id } from "./_generated/server.js";
 import { mutation, query, v } from "./_generated/server.js";

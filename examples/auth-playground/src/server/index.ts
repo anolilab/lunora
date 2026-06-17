@@ -1,6 +1,6 @@
 import { ensureMigrated, handleAuthRequest } from "@lunora/auth";
-import type { ExecutionContextLike, ShardNamespaceLike } from "@lunora/runtime";
-import { createWorker } from "@lunora/runtime";
+import type { ExecutionContextLike, ShardNamespaceLike } from "lunora/runtime";
+import { createWorker } from "lunora/runtime";
 
 import { openApiSpec } from "../../lunora/_generated/openapi.js";
 import { createShardDO } from "../../lunora/_generated/shard.js";
