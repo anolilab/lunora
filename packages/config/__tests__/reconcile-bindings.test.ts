@@ -25,6 +25,7 @@ const baseInferred = (overrides: Partial<InferredBindings> = {}): InferredBindin
         usesHyperdrive: false,
         usesImages: false,
         usesKv: false,
+        usesMail: false,
         usesPayment: false,
         usesPipelines: false,
         usesScheduler: false,

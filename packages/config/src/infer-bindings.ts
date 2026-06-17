@@ -100,6 +100,7 @@ const CAPABILITY_SOURCES = {
     usesHyperdrive: { pattern: /\bfrom\s+["']@lunora\/hyperdrive["']/, source: "@lunora/hyperdrive" },
     usesImages: { pattern: /\bfrom\s+["']@lunora\/images["']/, source: "@lunora/images" },
     usesKv: { pattern: /\bfrom\s+["']@lunora\/kv["']/, source: "@lunora/kv" },
+    usesMail: { pattern: /\bfrom\s+["']@lunora\/mail["']/, source: "@lunora/mail" },
     usesPayment: { pattern: /\bfrom\s+["']@lunora\/payment["']/, source: "@lunora/payment" },
     usesPipelines: { pattern: /\bfrom\s+["']@lunora\/pipelines["']/, source: "@lunora/pipelines" },
     usesScheduler: { pattern: /\bfrom\s+["']@lunora\/scheduler["']/, source: "@lunora/scheduler" },
@@ -168,6 +169,8 @@ interface InferredBindings {
     usesImages: boolean;
     /** `@lunora/kv` is imported (namespace binding name + id are user-defined; hint-only). */
     usesKv: boolean;
+    /** `@lunora/mail` is imported (Resend API key must be set in `.dev.vars`; no binding). */
+    usesMail: boolean;
     /** `@lunora/payment` is imported (provider secrets must be set in `.dev.vars`; no binding). */
     usesPayment: boolean;
     /** `@lunora/pipelines` is imported (binding needs an un-mintable remote pipeline name; hint-only). */
@@ -519,6 +522,7 @@ const describeCapabilitySignals = (capabilities: Capabilities, exported: Readonl
         ],
         [capabilities.usesScheduler && !exported.has("SchedulerDO"), "hint: @lunora/scheduler is imported but no SchedulerDO is exported by the worker entry"],
         [capabilities.usesStorage, "hint: @lunora/storage is imported; add an r2_buckets binding (bucket binding names are user-defined)"],
+        [capabilities.usesMail, "hint: @lunora/mail is imported; set RESEND_API_KEY in .dev.vars (obtain at https://resend.com/api-keys)"],
         [capabilities.usesPayment, `hint: @lunora/payment is imported; set the provider secrets in .dev.vars — ${PAYMENT_PROVIDER_SECRETS}`],
         // Self-describing bindings: the binding name is the whole config (no remote
         // id to mint), so reconcile auto-writes them like the DO/D1 bindings.

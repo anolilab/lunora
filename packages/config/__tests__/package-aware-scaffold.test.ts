@@ -282,6 +282,23 @@ describe("ensureDevVarsExample", () => {
         expect(values.every((value) => isPlaceholderValue(value))).toBe(true);
     });
 
+    it("produces RESEND_API_KEY for a mail-using project (LOW 3 regression)", () => {
+        expect.assertions(3);
+
+        const added = ensureDevVarsExample(dir, ["@lunora/mail"]);
+
+        expect(added).toContain("RESEND_API_KEY");
+
+        const content = readFileSync(join(dir, ".dev.vars.example"), "utf8");
+
+        expect(content).toContain("RESEND_API_KEY=");
+
+        // Must be a placeholder, not a real key.
+        const values = secretEntryValues(content);
+
+        expect(values.every((value) => isPlaceholderValue(value))).toBe(true);
+    });
+
     it("includes description comments and docs URLs in the output", () => {
         expect.assertions(2);
 

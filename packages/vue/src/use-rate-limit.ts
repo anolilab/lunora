@@ -1,7 +1,7 @@
 import type { RateLimitConfig, RateLimitStatus, RateLimitValue } from "@lunora/ratelimit";
 import { evaluate } from "@lunora/ratelimit";
 import type { ComputedRef } from "vue";
-import { computed, onScopeDispose, shallowRef } from "vue";
+import { computed, onScopeDispose, shallowRef, watchEffect } from "vue";
 
 export interface UseRateLimitOptions {
     /** Clock injection for tests. Defaults to `Date.now`. */
@@ -43,22 +43,34 @@ export const useRateLimit = (config: RateLimitConfig, options: UseRateLimitOptio
     const tickMs = options.tickMs ?? 1000;
 
     // Mutable bucket value — not reactive itself; we gate reactivity through
-    // the `epoch` shallowRef which forces re-evaluation of computed refs.
+    // `status`, a shallowRef updated by a `watchEffect` that re-runs on every
+    // `bump()` call.
     let value: RateLimitValue | undefined;
+
+    // `epoch` is a monotonically-incrementing version counter. `watchEffect`
+    // reads it to establish a reactive dependency; every `bump()` increments it,
+    // which invalidates the effect and causes `status` to re-evaluate with a
+    // fresh `now()` call. This is the Vue-idiomatic equivalent of Svelte's
+    // `derived(epoch, () => evaluate(...))` pattern.
     const epoch = shallowRef(0);
 
     const bump = (): void => {
         epoch.value += 1;
     };
 
-    // Reads epoch (reactive dependency) + evaluates current status.
-    // epoch.value is read via addition so the linter sees it used while also
-    // establishing the Vue reactive tracking dependency.
-    const status = computed((): RateLimitStatus => {
-        const ts = now() + epoch.value * 0;
+    const status = shallowRef<RateLimitStatus>(evaluate(config, value, { consume: false, count: 1, now: now(), reserve: false }).status);
 
-        return evaluate(config, value, { consume: false, count: 1, now: ts, reserve: false }).status;
-    });
+    // `watchEffect` re-runs synchronously (flush: "sync") whenever any reactive
+    // dependency inside it changes. Reading `epoch.value` registers it as a
+    // reactive dependency — each `bump()` increments it, which triggers this
+    // effect and re-evaluates `status` with a fresh clock reading.
+    const stopStatusEffect = watchEffect(
+        () => {
+            epoch.value; // reactive dependency: re-run on every bump()
+            status.value = evaluate(config, value, { consume: false, count: 1, now: now(), reserve: false }).status;
+        },
+        { flush: "sync" },
+    );
 
     let intervalHandle: ReturnType<typeof setInterval> | undefined;
 
@@ -83,7 +95,10 @@ export const useRateLimit = (config: RateLimitConfig, options: UseRateLimitOptio
         }, tickMs);
     };
 
-    onScopeDispose(stopInterval);
+    onScopeDispose(() => {
+        stopInterval();
+        stopStatusEffect();
+    });
 
     // Kick off the ticker if we start already throttled.
     startIntervalIfThrottled();

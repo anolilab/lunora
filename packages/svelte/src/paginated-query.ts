@@ -2,7 +2,7 @@ import type { ArgsOf, FunctionReference, LunoraClient, ReturnOf, Unsubscribe } f
 import type { Page, PaginationResult, PaginationStatus } from "@lunora/client/pagination";
 import { applyLoadMore, derivePaginationStatus, initialPages, rebalance } from "@lunora/client/pagination";
 import type { Readable } from "svelte/store";
-import { derived, writable } from "svelte/store";
+import { derived, readable, writable } from "svelte/store";
 
 import { getLunoraClient } from "./context";
 
@@ -63,8 +63,14 @@ const buildPageKey = (functionPath: string, pageArgs: Record<string, unknown>): 
 
 /**
  * Internal pagination engine. Manages page boundaries, subscriptions, results,
- * and split/join maintenance. Returns writable stores for `pages` and `pageResults`
- * plus a `loadMore` action.
+ * and split/join maintenance. Uses the Svelte lazy-readable pattern: subscriptions
+ * are opened inside the `readable` start callback and torn down when the last
+ * subscriber unsubscribes — exactly like `query.ts` does for plain queries.
+ *
+ * The `pendingPageKeys` set suppresses split/join rebalance while a freshly
+ * loaded page is still awaiting its first result — matching Vue's policy so a
+ * shrinking tail edit before `loadMore` resolves cannot silently undo the
+ * loadMore via the JOIN branch.
  */
 const createPaginatedEngine = <T>(
     client: LunoraClient,
@@ -75,26 +81,35 @@ const createPaginatedEngine = <T>(
     loadMore: (numberItems: number) => void;
     pageResults: Readable<(PaginationResult<T> | undefined)[]>;
     status: Readable<PaginationStatus>;
-    teardown: () => void;
 } => {
     const { initialNumItems, shardKey } = options;
 
     const pagesStore = writable<Page[]>(initialPages(initialNumItems));
-    const pageResultsStore = writable<(PaginationResult<T> | undefined)[]>([]);
+    // pageResultsStore is a writable used as the source; pageResults is the
+    // public Readable that the lazy start/stop callback wires up.
+    const pageResultsInternal = writable<(PaginationResult<T> | undefined)[]>([]);
 
     const resultsByKey = new Map<string, PaginationResult<T>>();
     const activeSubs = new Map<string, Unsubscribe>();
 
+    /**
+     * Keys of pages that are still awaiting their first server result after a
+     * `loadMore`. Rebalance is suppressed while this set is non-empty to prevent
+     * the JOIN branch from merging a freshly appended page away before it resolves.
+     */
+    const pendingPageKeys = new Set<string>();
+
     let currentPages: Page[] = initialPages(initialNumItems);
     const currentBaseArgs: "skip" | Record<string, unknown> = baseArgs;
 
+    // Track currentPages from the store so loadMore can read it synchronously.
     pagesStore.subscribe((pages) => {
         currentPages = pages;
     });
 
     const rebuildPageResults = (): void => {
         if (currentBaseArgs === "skip") {
-            pageResultsStore.set([]);
+            pageResultsInternal.set([]);
 
             return;
         }
@@ -105,7 +120,7 @@ const createPaginatedEngine = <T>(
             return resultsByKey.get(key);
         });
 
-        pageResultsStore.set(updated);
+        pageResultsInternal.set(updated);
     };
 
     const syncSubscriptions = (): void => {
@@ -115,7 +130,7 @@ const createPaginatedEngine = <T>(
             }
 
             activeSubs.clear();
-            pageResultsStore.set([]);
+            pageResultsInternal.set([]);
 
             return;
         }
@@ -132,6 +147,7 @@ const createPaginatedEngine = <T>(
             if (!wantedKeys.has(key)) {
                 unsub();
                 activeSubs.delete(key);
+                pendingPageKeys.delete(key);
             }
         }
 
@@ -144,26 +160,38 @@ const createPaginatedEngine = <T>(
                 continue;
             }
 
+            // Mark this page as pending until its first result arrives.
+            pendingPageKeys.add(key);
+
             const unsub = client.subscribe(
                 function_,
                 pageArgs,
                 (value) => {
                     resultsByKey.set(key, value as PaginationResult<T>);
+
+                    // This page has resolved; remove from the pending set.
+                    pendingPageKeys.delete(key);
+
                     rebuildPageResults();
 
-                    // SPLIT/JOIN maintenance.
-                    let updatedResults: (PaginationResult<T> | undefined)[] = [];
+                    // SPLIT/JOIN maintenance: only rebalance when no pages are still
+                    // in their initial-load phase. A newly appended page (from
+                    // `loadMore`) stays in `pendingPageKeys` until its first result
+                    // arrives; joining before that would discard visible content.
+                    if (pendingPageKeys.size === 0) {
+                        let updatedResults: (PaginationResult<T> | undefined)[] = [];
 
-                    pageResultsStore.subscribe((results) => {
-                        updatedResults = results;
-                    })();
+                        pageResultsInternal.subscribe((results) => {
+                            updatedResults = results;
+                        })();
 
-                    const next = rebalance(currentPages, updatedResults);
+                        const next = rebalance(currentPages, updatedResults);
 
-                    if (next) {
-                        pagesStore.set(next);
-                        syncSubscriptions();
-                        rebuildPageResults();
+                        if (next) {
+                            pagesStore.set(next);
+                            syncSubscriptions();
+                            rebuildPageResults();
+                        }
                     }
                 },
                 { shardKey },
@@ -173,14 +201,40 @@ const createPaginatedEngine = <T>(
         }
     };
 
-    // Initialize.
-    if (baseArgs !== "skip") {
-        syncSubscriptions();
-        rebuildPageResults();
-    }
+    const teardownAll = (): void => {
+        for (const unsub of activeSubs.values()) {
+            unsub();
+        }
+
+        activeSubs.clear();
+        resultsByKey.clear();
+        pendingPageKeys.clear();
+    };
+
+    // pageResults is a lazy Svelte readable: subscriptions open on the first
+    // $-read and close when the last subscriber unsubscribes — matching the
+    // pattern used by `query.ts` so no WS handles leak after unmount.
+    const pageResults: Readable<(PaginationResult<T> | undefined)[]> = readable<(PaginationResult<T> | undefined)[]>([], (set) => {
+        // Wire internal store updates through to this readable's subscribers.
+        const unsubInternal = pageResultsInternal.subscribe(set);
+
+        // Eagerly open subscriptions now that someone is watching.
+        if (currentBaseArgs !== "skip") {
+            syncSubscriptions();
+            rebuildPageResults();
+        }
+
+        return () => {
+            unsubInternal();
+            teardownAll();
+            // Reset so a re-subscribe starts clean.
+            pagesStore.set(initialPages(initialNumItems));
+            pageResultsInternal.set([]);
+        };
+    });
 
     const status = derived<Readable<(PaginationResult<T> | undefined)[]>, PaginationStatus>(
-        pageResultsStore,
+        pageResults,
         (results) => derivePaginationStatus(currentBaseArgs === "skip", results).status,
     );
 
@@ -191,7 +245,7 @@ const createPaginatedEngine = <T>(
 
         let currentResults: (PaginationResult<T> | undefined)[] = [];
 
-        pageResultsStore.subscribe((results) => {
+        pageResultsInternal.subscribe((results) => {
             currentResults = results;
         })();
 
@@ -232,16 +286,7 @@ const createPaginatedEngine = <T>(
         rebuildPageResults();
     };
 
-    const teardown = (): void => {
-        for (const unsub of activeSubs.values()) {
-            unsub();
-        }
-
-        activeSubs.clear();
-        resultsByKey.clear();
-    };
-
-    return { loadMore, pageResults: pageResultsStore, status, teardown };
+    return { loadMore, pageResults, status };
 };
 
 /**

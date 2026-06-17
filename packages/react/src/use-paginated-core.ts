@@ -1,8 +1,8 @@
 "use client";
 
 import type { FunctionReference } from "@lunora/client";
-import type { Page,PaginatedCoreResult, PaginationResult } from "@lunora/client/pagination";
-import { applyLoadMore, derivePaginationStatus, initialPages, rebalance, } from "@lunora/client/pagination";
+import type { Page, PaginatedCoreResult, PaginationResult } from "@lunora/client/pagination";
+import { applyLoadMore, derivePaginationStatus, initialPages, rebalance } from "@lunora/client/pagination";
 import type { QueryKey } from "@tanstack/react-query";
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
@@ -50,11 +50,6 @@ import useLazyRef from "./use-lazy-ref";
  * rebalance, derivePaginationStatus, applyLoadMore) lives in
  * `@lunora/client/pagination` so framework-agnostic adapters can reuse it.
  */
-
-// Re-export pure constants so consumers of this module (tests, etc.) that
-// previously imported them from here continue to work unchanged.
-
-
 
 /**
  * The reactive-pagination engine shared by both public hooks. Owns the page
@@ -272,4 +267,4 @@ const usePaginatedCore = <T>(
 
 export { usePaginatedCore };
 
-export {JOIN_FACTOR,type Page, SPLIT_FACTOR} from "@lunora/client/pagination";
+export { JOIN_FACTOR, type Page, SPLIT_FACTOR } from "@lunora/client/pagination";

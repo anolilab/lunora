@@ -85,6 +85,14 @@ const createPaginatedCore = <T>(
     // Active subscriptions keyed by pageKey.
     const activeSubs = new Map<string, Unsubscribe>();
 
+    /**
+     * Keys of pages that are still awaiting their first server result after a
+     * `loadMore`. Rebalance is suppressed while this set is non-empty to prevent
+     * the JOIN branch from merging a freshly appended page away before it resolves —
+     * matching Vue's `pendingPageKeys` policy (see `use-paginated-core.ts`).
+     */
+    const pendingPageKeys = new Set<string>();
+
     const rebuildPageResults = (currentPages: Page[], baseArgs: Record<string, unknown>): void => {
         const updated = currentPages.map((page) => {
             const key = buildPageKey(function_["__lunoraRef"], buildPageArgs(page, baseArgs));
@@ -107,6 +115,7 @@ const createPaginatedCore = <T>(
             if (!wantedKeys.has(key)) {
                 unsub();
                 activeSubs.delete(key);
+                pendingPageKeys.delete(key);
             }
         }
 
@@ -119,11 +128,17 @@ const createPaginatedCore = <T>(
                 continue;
             }
 
+            // Mark this page as pending until its first result arrives.
+            pendingPageKeys.add(key);
+
             const unsub = client.subscribe(
                 function_,
                 pageArgs,
                 (value) => {
                     resultsByKey.set(key, value as PaginationResult<T>);
+
+                    // This page has resolved; remove from the pending set.
+                    pendingPageKeys.delete(key);
 
                     const currentArgs = resolveArgs();
 
@@ -133,11 +148,16 @@ const createPaginatedCore = <T>(
 
                     rebuildPageResults(pages(), currentArgs);
 
-                    // SPLIT/JOIN maintenance.
-                    const next = rebalance(pages(), pageResults());
+                    // SPLIT/JOIN maintenance: only rebalance when no pages are still
+                    // awaiting their first result. A newly appended page (from
+                    // `loadMore`) stays in `pendingPageKeys` until it resolves;
+                    // joining before that would discard visible content.
+                    if (pendingPageKeys.size === 0) {
+                        const next = rebalance(pages(), pageResults());
 
-                    if (next) {
-                        setPages(next);
+                        if (next) {
+                            setPages(next);
+                        }
                     }
                 },
                 { shardKey },
@@ -154,6 +174,7 @@ const createPaginatedCore = <T>(
 
         activeSubs.clear();
         resultsByKey.clear();
+        pendingPageKeys.clear();
     };
 
     // Re-subscribe whenever the base args (or skip) change.

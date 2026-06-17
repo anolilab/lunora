@@ -1,6 +1,6 @@
 import type { ArgsOf, FunctionReference, ReturnOf } from "@lunora/client";
 import type { ShallowRef } from "vue";
-import { onScopeDispose, shallowRef, toValue } from "vue";
+import { onScopeDispose, shallowRef } from "vue";
 
 import { useLunora } from "./lunora-provider";
 
@@ -82,7 +82,7 @@ const usePresence = <H extends HeartbeatReference, L extends ListPresentReferenc
 
     const sendHeartbeat = (): void => {
         const args = {
-            roomId: toValue(roomId),
+            roomId,
             sessionId,
             ...(latestData === undefined ? {} : { data: latestData }),
         } as ArgsOf<H>;
@@ -112,12 +112,12 @@ const usePresence = <H extends HeartbeatReference, L extends ListPresentReferenc
 
     // Register this room/session as the socket's connection context so the server's
     // presence `onDisconnect` hook can delete the row instantly on socket drop.
-    client.setConnectionContext({ roomId: toValue(roomId), sessionId }, { shardKey });
+    client.setConnectionContext({ roomId, sessionId }, { shardKey });
 
     // Subscribe to the live present-list for the room.
     const unsubscribe = client.subscribe(
         listPresent,
-        { roomId: toValue(roomId) } as ArgsOf<L>,
+        { roomId } as ArgsOf<L>,
         (value) => {
             present.value = value;
         },

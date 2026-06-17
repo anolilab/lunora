@@ -142,6 +142,59 @@ describe("createPaginatedQuery (Solid)", () => {
     });
 });
 
+describe("createPaginatedQuery pending-page rebalance guard (BUG 2 regression)", () => {
+    it("shrinking edit on old tail before new page resolves does not undo loadMore", async () => {
+        const fake = createFakeClient();
+        let capturedLoadMore: ((n: number) => void) | undefined;
+        let capturedStatus: (() => string) | undefined;
+        let capturedResults: (() => unknown[]) | undefined;
+
+        render(
+            () => {
+                const { loadMore, results, status } = createPaginatedQuery(fn, {}, { initialNumItems: NUM_ITEMS });
+                capturedLoadMore = loadMore;
+                capturedStatus = status;
+                capturedResults = results;
+
+                return <pre>{status()}</pre>;
+            },
+            { wrapper: (props) => <LunoraProvider client={fake.asClient}>{props.children}</LunoraProvider> },
+        );
+
+        // Deliver a full first page.
+        const firstSub = fake.subscriptions.find(
+            (s) => JSON.stringify(s.args) === JSON.stringify({ paginationOpts: { cursor: null, endCursor: null, numItems: NUM_ITEMS } }),
+        );
+
+        firstSub?.push({ continueCursor: "cur-1", isDone: false, page: firstPageItems });
+        await flushAsync();
+
+        expect(capturedStatus!()).toBe("CanLoadMore");
+
+        // Call loadMore.
+        capturedLoadMore!(NUM_ITEMS);
+        await flushAsync();
+
+        // Page 2 is open but has NOT resolved yet.
+        // Push a shrinking update on the pinned page-1 (1 item < JOIN_FACTOR × 5 = 2.5).
+        // With the original bug, this triggered JOIN which merged away the not-yet-resolved
+        // page-2, silently undoing loadMore.
+        const pinnedFirstSub = fake.subscriptions.find(
+            (s) => JSON.stringify(s.args) === JSON.stringify({ paginationOpts: { cursor: null, endCursor: "cur-1", numItems: NUM_ITEMS } }),
+        );
+
+        pinnedFirstSub?.push({ continueCursor: "cur-1", isDone: false, page: [{ id: "a" }] });
+        await flushAsync();
+
+        // Rebalance must be suppressed — page-2 is still pending.
+        // Status must remain "LoadingMore", NOT "Exhausted" or "CanLoadMore".
+        expect(capturedStatus!()).toBe("LoadingMore");
+
+        // Results must contain only the 1 shrunken item from page-1; page-2 not yet resolved.
+        expect(capturedResults!()).toHaveLength(1);
+    });
+});
+
 describe("createInfiniteQuery (Solid)", () => {
     it("first page loads as first page array", async () => {
         const fake = createFakeClient();

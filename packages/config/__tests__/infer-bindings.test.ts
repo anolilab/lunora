@@ -399,4 +399,30 @@ export { OrderPipelineWorkflow } from "../../lunora/_generated/workflows.js";
         expect(result.usesImages).toBe(false);
         expect(result.usesAnalytics).toBe(false);
     });
+
+    it("infers mail from a @lunora/mail import and emits a hint signal (LOW 3 regression)", async () => {
+        expect.assertions(3);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+        write("lunora/welcome.ts", `import { sendMail } from "@lunora/mail";\nexport const handler = () => sendMail;`);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesMail).toBe(true);
+        // No extra Cloudflare binding — mail secret lives in .dev.vars only.
+        expect(result.durableObjects.map((object) => object.binding)).toEqual(["SHARD"]);
+        expect(result.signals.some((signal) => signal.includes("RESEND_API_KEY"))).toBe(true);
+    });
+
+    it("does not infer mail for a project that does not import @lunora/mail", async () => {
+        expect.assertions(1);
+
+        write("wrangler.jsonc", WRANGLER);
+        write("src/server/index.ts", ENTRY_SHARD_ONLY);
+
+        const result = await inferLunoraBindings({ projectRoot: root });
+
+        expect(result.usesMail).toBe(false);
+    });
 });

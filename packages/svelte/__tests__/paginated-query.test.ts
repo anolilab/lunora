@@ -162,6 +162,153 @@ describe("paginatedQuery (Svelte)", () => {
     });
 });
 
+describe("paginatedQuery teardown (BUG 1 regression)", () => {
+    it("unsubscribing the last subscriber closes all page subscriptions", async () => {
+        const unsubCallCount = { value: 0 };
+        const subscribeCalls: { args: Record<string, unknown>; callback: (data: unknown) => void }[] = [];
+
+        const client = {
+            subscribe: (_fn: FunctionReference, args: Record<string, unknown>, callback: (data: unknown) => void) => {
+                subscribeCalls.push({ args, callback });
+
+                return () => {
+                    unsubCallCount.value += 1;
+                };
+            },
+        } as unknown as import("@lunora/client").LunoraClient;
+
+        const { results, status } = paginatedQuery(client, fn, {}, { initialNumItems: NUM_ITEMS });
+
+        // Subscribe to two derived stores — this opens the lazy readable.
+        const stopStatus = status.subscribe(() => {});
+        const stopResults = results.subscribe(() => {});
+
+        // Deliver first page to confirm the subscription is live.
+        const firstPage: import("@lunora/client/pagination").PaginationResult<{ id: string }> = {
+            continueCursor: "cur-1",
+            isDone: false,
+            page: firstPageItems,
+        };
+
+        subscribeCalls[0]?.callback(firstPage);
+        await flushAsync();
+
+        expect(subscribeCalls).toHaveLength(1);
+        expect(unsubCallCount.value).toBe(0);
+
+        // Unsubscribe — the lazy readable's stop callback must run.
+        stopStatus();
+        stopResults();
+        await flushAsync();
+
+        // The single page subscription must have been closed.
+        expect(unsubCallCount.value).toBe(1);
+    });
+
+    it("loadMore subscriptions are also torn down on unsubscribe", async () => {
+        const unsubCallCount = { value: 0 };
+        const subscribeCalls: { args: Record<string, unknown>; callback: (data: unknown) => void }[] = [];
+
+        const client = {
+            subscribe: (_fn: FunctionReference, args: Record<string, unknown>, callback: (data: unknown) => void) => {
+                subscribeCalls.push({ args, callback });
+
+                return () => {
+                    unsubCallCount.value += 1;
+                };
+            },
+        } as unknown as import("@lunora/client").LunoraClient;
+
+        const { loadMore, results, status } = paginatedQuery(client, fn, {}, { initialNumItems: NUM_ITEMS });
+
+        const stopStatus = status.subscribe(() => {});
+        const stopResults = results.subscribe(() => {});
+
+        // Deliver page 1.
+        subscribeCalls[0]?.callback({ continueCursor: "cur-1", isDone: false, page: firstPageItems });
+        await flushAsync();
+
+        loadMore(NUM_ITEMS);
+        await flushAsync();
+
+        // Deliver page 2.
+        const secondSub = subscribeCalls.find(
+            (c) => JSON.stringify(c.args) === JSON.stringify({ paginationOpts: { cursor: "cur-1", endCursor: null, numItems: NUM_ITEMS } }),
+        );
+        secondSub?.callback({ continueCursor: null, isDone: true, page: secondPageItems });
+        await flushAsync();
+
+        // Before unsubscribe: `loadMore` may have closed the old open-tail sub
+        // (when it was re-keyed to the pinned sub) — that's a legitimate internal
+        // close, not a leak. Record the count now so we can assert the delta.
+        const unsubBeforeStop = unsubCallCount.value;
+
+        // Unsubscribe the last Svelte subscriber — the lazy readable must teardown.
+        stopStatus();
+        stopResults();
+        await flushAsync();
+
+        // After the last subscriber leaves, teardownAll must have closed every
+        // remaining active page subscription (pinned page-1 + page-2 = 2).
+        // unsubBeforeStop accounts for any subs already closed by loadMore re-keying.
+        expect(unsubCallCount.value - unsubBeforeStop).toBeGreaterThanOrEqual(2);
+    });
+});
+
+describe("paginatedQuery pending-page rebalance guard (BUG 2 regression)", () => {
+    it("shrinking edit on old tail before new page resolves does not undo loadMore", async () => {
+        const subscribeCalls: { args: Record<string, unknown>; callback: (data: unknown) => void }[] = [];
+
+        const client = {
+            subscribe: (_fn: FunctionReference, args: Record<string, unknown>, callback: (data: unknown) => void) => {
+                subscribeCalls.push({ args, callback });
+
+                return () => undefined;
+            },
+        } as unknown as import("@lunora/client").LunoraClient;
+
+        const { loadMore, results, status } = paginatedQuery(client, fn, {}, { initialNumItems: NUM_ITEMS });
+
+        const stopStatus = status.subscribe(() => {});
+        const stopResults = results.subscribe(() => {});
+
+        // Deliver a full first page (5 items, isDone: false → CanLoadMore).
+        subscribeCalls[0]?.callback({ continueCursor: "cur-1", isDone: false, page: firstPageItems });
+        await flushAsync();
+
+        expect(get(status)).toBe("CanLoadMore");
+
+        // Call loadMore — this pins the first page and opens a subscription for page 2.
+        loadMore(NUM_ITEMS);
+        await flushAsync();
+
+        // Page 2 subscription is now open but has NOT resolved yet.
+        // Now push a shrinking update on the PINNED page-1 before page-2 resolves.
+        // With the original bug, this triggered JOIN (1 item < 0.5 × 5 = 2.5) which
+        // would merge the not-yet-resolved page-2 away — silently undoing loadMore.
+        const pinnedFirstPageSub = subscribeCalls.find(
+            (c) => JSON.stringify(c.args) === JSON.stringify({ paginationOpts: { cursor: null, endCursor: "cur-1", numItems: NUM_ITEMS } }),
+        );
+
+        // Push only 1 item — well below JOIN_FACTOR × NUM_ITEMS (= 2.5).
+        pinnedFirstPageSub?.callback({ continueCursor: "cur-1", isDone: false, page: [{ id: "a" }] });
+        await flushAsync();
+
+        // Because page-2 is still pending, rebalance must be suppressed.
+        // The status must still be "LoadingMore" (page-2 awaiting), NOT "Exhausted".
+        // If the bug were present, the JOIN would have dropped page-2 and status
+        // would flip to "Exhausted" or "CanLoadMore" before page-2 ever resolved.
+        expect(get(status)).toBe("LoadingMore");
+
+        // The results at this point should contain only the 1 shrunken item from
+        // page-1 — page-2 hasn't resolved, and the guard prevented the JOIN.
+        expect(get(results)).toHaveLength(1);
+
+        stopStatus();
+        stopResults();
+    });
+});
+
 describe("infiniteQuery (Svelte)", () => {
     it("first page loads as first page array", async () => {
         const fake = createFakePaginatedClient();

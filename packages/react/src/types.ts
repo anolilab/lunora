@@ -1,8 +1,6 @@
 import type { OptimisticUpdate, User } from "@lunora/client";
 import type { PaginationStatus } from "@lunora/client/pagination";
 
-
-
 export interface UseQueryOptions {
     shardKey?: string;
 }
@@ -76,4 +74,4 @@ export {
     type ReturnOf,
     type User,
 } from "@lunora/client";
-export {type PaginationResult, type PaginationStatus} from "@lunora/client/pagination";
+export { type PaginationResult, type PaginationStatus } from "@lunora/client/pagination";
