@@ -1,4 +1,4 @@
-export type { TestHarness, TestIdentity } from "./harness";
+export type { FakeScheduledJob, FakeSchedulerControls, FunctionRegistry, LunoraTestOptions, TestHarness, TestIdentity, TestSubscription } from "./harness";
 export { lunoraTest } from "./harness";
 
 /**

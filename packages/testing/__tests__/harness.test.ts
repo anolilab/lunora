@@ -20,7 +20,8 @@ const list = query.query(async ({ ctx }) => ctx.db.query("messages").collect());
 
 const whoAmI = query.query(({ ctx }) => ctx.auth.userId);
 
-const scheduleSomething = mutation.mutation(async ({ ctx }) => ctx.scheduler.runAfter(1000, "noop:fn", {}));
+// ctx.storage is still a v1 stub — used to verify the "not available" error path.
+const touchStorage = mutation.mutation(async ({ ctx }) => ctx.storage.getUrl("fake-id"));
 
 const internalSend = internalMutation
     .input({ author: v.string(), body: v.string() })
@@ -113,12 +114,12 @@ describe("lunoraTest", () => {
         expect(count).toBe(2);
     });
 
-    it("throws a clear error when a handler touches a stubbed surface", async () => {
+    it("throws a clear error when a handler touches a stubbed surface (ctx.storage)", async () => {
         expect.assertions(1);
 
         const t = start();
 
-        await expect(t.mutation(scheduleSomething, {})).rejects.toThrow("ctx.scheduler is not available in the in-memory @lunora/testing harness (v1)");
+        await expect(t.mutation(touchStorage, {})).rejects.toThrow("ctx.storage is not available in the in-memory @lunora/testing harness (v1)");
     });
 
     it("rejects an internal function called on the external surface", async () => {

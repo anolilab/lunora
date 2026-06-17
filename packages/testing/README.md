@@ -93,11 +93,83 @@ test("sees the injected identity", async () => {
 Each `lunoraTest(...)` opens an in-memory SQLite database; call `t.close()`
 (e.g. in an `afterEach`) to release the native handle when a test finishes.
 
-> **v1 scope.** `ctx.storage`, `ctx.scheduler`, `ctx.vectors`, and an action's
-> `ctx.fetch` are clearly-throwing stubs — a handler that touches one fails with
-> a "not available in the in-memory @lunora/testing harness (v1)" error. HTTP
-> actions, scheduled-function draining, real R2 storage, `.global()`/D1 tables,
-> and Vectorize are deferred to a follow-up.
+#### Injectable `ctx.fetch`
+
+Pass a `fetch` option to replace the throwing stub in action contexts:
+
+```ts
+const fakeFetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(Response.json({ ok: true }));
+const t = lunoraTest(schema, { fetch: fakeFetch });
+// ctx.fetch inside any action now calls fakeFetch
+```
+
+Without the option, `ctx.fetch` still throws the v1 error on first access.
+
+#### Controllable in-memory scheduler
+
+`ctx.scheduler` is a fully functional fake. Jobs are enqueued synchronously but
+**only execute** when you advance the virtual clock:
+
+```ts
+const send = mutation.mutation(({ ctx }) => ctx.scheduler.runAfter(5_000, "messages:send", { body: "hello" }));
+
+test("scheduled mutation writes to db after advance", async () => {
+    const t = lunoraTest(schema, {
+        functions: { "messages:send": sendMutation }, // path → registered fn
+    });
+
+    await t.mutation(send, {});
+
+    expect(t.scheduler.list()).toHaveLength(1); // queued, not yet run
+
+    await t.scheduler.advance(10_000); // tick clock past dueAt
+
+    expect(await t.query(list, {})).toHaveLength(1); // mutation ran
+});
+```
+
+Harness controls:
+
+| Method                     | Description                                           |
+| -------------------------- | ----------------------------------------------------- |
+| `t.scheduler.list()`       | Snapshot of all pending jobs (enqueue order)          |
+| `t.scheduler.advance(ms)`  | Tick the virtual clock by `ms`, execute due jobs      |
+| `t.scheduler.runPending()` | Execute all pending jobs regardless of scheduled time |
+
+The virtual clock is **per-harness** — advancing one harness's clock does not
+affect other harnesses, so tests running in parallel are isolated.
+
+Provide a `functions` map (`{ "path:name": registeredFn }`) so the scheduler
+can dispatch jobs. Paths not in the map produce a `console.warn` and are
+silently dropped (matching production behaviour for unknown paths).
+
+#### Subscription testing
+
+`harness.subscribe(query, args)` returns an async iterable that yields the query's
+current result immediately, then re-emits after every `mutation` or `run` call:
+
+```ts
+test("subscription re-emits after mutation", async () => {
+    const t = lunoraTest(schema);
+    const sub = t.subscribe(list, {});
+
+    expect((await sub.next()).value).toHaveLength(0); // initial snapshot
+
+    await t.mutation(send, { author: "ada", body: "hi" });
+
+    expect((await sub.next()).value).toHaveLength(1); // updated snapshot
+
+    await sub.return(); // unsubscribe
+});
+```
+
+Subscriptions are **table-agnostic** — any mutation triggers a re-evaluation.
+Multiple independent subscriptions each maintain their own snapshot stream.
+
+> **v1 stubs (still throwing).** `ctx.storage`, `ctx.vectors`, and `ctx.workflows`
+> are clearly-throwing stubs — a handler that touches one fails with a
+> "not available in the in-memory @lunora/testing harness (v1)" error.
+> These are the next planned follow-ups.
 
 ### Mail-catcher helpers (E2E)
 
