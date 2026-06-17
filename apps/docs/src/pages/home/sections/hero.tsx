@@ -180,7 +180,7 @@ const CodeColumn: FC<{ focused: boolean; writing: boolean }> = ({ focused, writi
                     </button>
                 ))}
             </div>
-            <div className="grow overflow-auto px-3 py-3 font-mono text-[12px] leading-[1.7]">
+            <div className="grow overflow-auto px-4 py-4 font-mono text-[13px] leading-[1.9]">
                 {lines.map((line, index) => (
                     <div
                         className={cn(
@@ -238,7 +238,7 @@ const AppColumn: FC<{
                     </AnimatePresence>
                 }
             />
-            <div className="min-h-0 grow space-y-1 overflow-y-auto px-3 py-2" ref={listRef}>
+            <div className="min-h-0 grow space-y-1.5 overflow-y-auto px-4 py-3" ref={listRef}>
                 <AnimatePresence initial={false}>
                     {todos.map((todo) => (
                         <motion.div
@@ -305,7 +305,7 @@ const TableColumn: FC<{ focused: boolean; todos: Todo[] }> = ({ focused, todos }
             right={<span className="font-mono text-[10px] text-white/30">{todos.length} docs</span>}
         />
         <div className="grow overflow-auto px-2 py-1">
-            <table className="w-full border-separate border-spacing-0 text-left font-mono text-[11px]">
+            <table className="w-full border-separate border-spacing-0 text-left font-mono text-[12px]">
                 <thead>
                     <tr className="text-white/35">
                         {["_id", "text", "category", "done"].map((col) => (
@@ -465,7 +465,7 @@ const LunoraConsole: FC<{ focus: number }> = ({ focus }) => {
     }, [engaged, reduce, autoAdd, settle]);
 
     return (
-        <div className="grid h-auto grid-cols-1 divide-y divide-white/[0.08] bg-[hsl(240_16%_5%)] lg:h-[31rem] lg:grid-cols-3 lg:divide-x lg:divide-y-0">
+        <div className="grid h-auto grid-cols-1 divide-y divide-white/[0.08] bg-[hsl(240_16%_5%)] lg:h-[34rem] lg:grid-cols-3 lg:divide-x lg:divide-y-0">
             <CodeColumn focused={focus === 0} writing={writing} />
             <AppColumn
                 focused={focus === 1}
