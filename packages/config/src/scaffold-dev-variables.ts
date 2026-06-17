@@ -10,6 +10,8 @@ import {
     splitDevVariableLine,
     unquoteDevVariable,
 } from "./dev-variables-format";
+import type { SecretEntry } from "./package-secrets-registry";
+import { secretsForPackages } from "./package-secrets-registry";
 
 /**
  * Scaffolding `.dev.vars` from `.dev.vars.example`.
@@ -376,5 +378,95 @@ const ensureDevVariables = async (deps: EnsureDevVariablesDeps): Promise<EnsureD
     return { addedKeys: augment.missingKeys, generatedKeys: augment.generatedKeys, status: "augmented" };
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Package-aware .dev.vars.example scaffolding
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The block of text that represents a single {@link SecretEntry} in a
+ * `.dev.vars.example` file: a comment block (description + docs URL) followed
+ * by the `KEY="&lt;placeholder>"` assignment.
+ *
+ * Written through the dev-variables-format grammar so the format stays
+ * consistent with every other reader/writer. The value is always a placeholder
+ * — this function never writes a real secret.
+ */
+const secretEntryBlock = (entry: SecretEntry): string => {
+    const lines: string[] = [`# ${entry.description}`, `# Docs: ${entry.docsUrl}`, `${entry.key}="${entry.placeholderValue}"`];
+
+    return lines.join("\n");
+};
+
+/**
+ * Build the text that should be merged into `.dev.vars.example` for the given
+ * set of package names. Only entries whose key is not already present in
+ * `existingKeys` are included (additive / idempotent). Returns an empty string
+ * when there is nothing to add.
+ *
+ * The output is grouped by package with a blank-line separator so the file
+ * reads cleanly when multiple packages each contribute several keys.
+ *
+ * **Safety invariant:** this function never writes a real secret — every value
+ * in the output is the entry's `placeholderValue`.
+ */
+const buildPackageSecretsBlock = (packageNames: ReadonlyArray<string>, existingKeys: ReadonlySet<string>): string => {
+    const entries = secretsForPackages(packageNames).filter((entry) => !existingKeys.has(entry.key));
+
+    if (entries.length === 0) {
+        return "";
+    }
+
+    return entries.map((entry) => secretEntryBlock(entry)).join("\n\n");
+};
+
+/**
+ * Write (or update) `.dev.vars.example` so that it contains the secrets
+ * required by `packageNames`. Existing lines are never removed or rewritten;
+ * new entries are appended (with a blank-line separator after existing content).
+ *
+ * Idempotent: re-running with the same `packageNames` does not duplicate keys
+ * already in the file. Returns the list of keys that were actually appended.
+ *
+ * **Safety invariant:** only placeholder values are written — no real secrets.
+ */
+const ensureDevVariablesExample = (cwd: string, packageNames: ReadonlyArray<string>): string[] => {
+    const examplePath = join(cwd, DEV_VARS_EXAMPLE_FILE);
+    const existing = existsSync(examplePath) ? readFileSync(examplePath, "utf8") : "";
+    const existingKeys = new Set(parseDevVariableEntries(existing).map((entry) => entry.key));
+
+    const block = buildPackageSecretsBlock(packageNames, existingKeys);
+
+    if (block === "") {
+        return [];
+    }
+
+    const separator = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
+    const newContent = `${existing}${separator}\n${block}\n`;
+
+    const temporaryPath = `${examplePath}.tmp-${String(process.pid)}`;
+
+    try {
+        // `.dev.vars.example` is committed and public — no need for 0o600.
+        writeFileSync(temporaryPath, newContent, { encoding: "utf8" });
+        renameSync(temporaryPath, examplePath);
+    } catch (error) {
+        rmSync(temporaryPath, { force: true });
+
+        throw error;
+    }
+
+    // Return the keys we actually added.
+    return secretsForPackages(packageNames)
+        .filter((entry) => !existingKeys.has(entry.key))
+        .map((entry) => entry.key);
+};
+
 export type { AugmentPlan, EnsureDevVariablesDeps, EnsureDevVariablesResult, EnsureDevVariablesStatus, ScaffoldPlan };
-export { ensureDevVariables, isPlaceholderValue, planDevVariablesAugment, planDevVariablesScaffold };
+export {
+    buildPackageSecretsBlock,
+    ensureDevVariables,
+    ensureDevVariablesExample as ensureDevVarsExample,
+    isPlaceholderValue,
+    planDevVariablesAugment,
+    planDevVariablesScaffold,
+};

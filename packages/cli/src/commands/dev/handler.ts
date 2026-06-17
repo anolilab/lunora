@@ -9,9 +9,12 @@ import {
     DEV_VARS_EXAMPLE_FILE,
     DEV_VARS_FILE,
     ensureDevVariables,
+    ensureDevVarsExample,
     formatLunoraEvent,
+    inferLunoraBindings,
     isInteractive,
     materializeRemoteWranglerConfig,
+    packageNamesFromBindings,
     readProjectRemotePreference,
     resolveRemoteEnabled,
 } from "@lunora/config";
@@ -54,6 +57,8 @@ interface DevCommandOptions {
     cwd?: string;
     /** Injection seam for tests — defaults to the real `.dev.vars` scaffolder. */
     ensureEnv?: typeof ensureDevVariables;
+    /** Injection seam for tests — defaults to the real `.dev.vars.example` package-aware scaffolder. */
+    ensureExample?: typeof ensureDevVarsExample;
     logger: Logger;
     /** Injection seam for tests — defaults to the real remote-config materializer. */
     materializeRemote?: typeof materializeRemoteWranglerConfig;
@@ -323,8 +328,31 @@ const teardown = async (handles: Teardown): Promise<void> => {
  * on the first required secret (e.g. `AUTH_SECRET is required`). Non-interactive
  * runs (CI) decline silently rather than block on a prompt, but we log an
  * actionable hint so the user knows how to set up their secrets.
+ *
+ * Phase 1 (package-aware): infer which `@lunora/*` packages the project imports,
+ * then ensure `.dev.vars.example` contains placeholder entries for every secret
+ * those packages require. This is idempotent — existing entries are never
+ * overwritten or duplicated.
+ *
+ * Phase 2 (existing flow): offer to generate (or top up) `.dev.vars` from the
+ * now-complete `.dev.vars.example`, then log the non-interactive hint if declined.
  */
 const offerDevVariablesScaffold = async (options: DevCommandOptions, cwd: string): Promise<void> => {
+    // Phase 1 — seed .dev.vars.example with any package-required secrets that
+    // are not already listed there. Best-effort: a scan failure is non-fatal.
+    try {
+        const bindings = await inferLunoraBindings({ projectRoot: cwd });
+        const packageNames = packageNamesFromBindings(bindings);
+        const addedKeys = (options.ensureExample ?? ensureDevVarsExample)(cwd, packageNames);
+
+        if (addedKeys.length > 0) {
+            options.logger.info(`Updated .dev.vars.example with secrets for: ${packageNames.join(", ")} (${addedKeys.join(", ")})`);
+        }
+    } catch {
+        // Non-fatal — scanning may fail in unusual project layouts.
+    }
+
+    // Phase 2 — offer to generate / top up .dev.vars from the example.
     const result = await (options.ensureEnv ?? ensureDevVariables)({
         confirm: createConfirm(),
         cwd,

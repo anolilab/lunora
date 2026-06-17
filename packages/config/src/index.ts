@@ -14,9 +14,11 @@ export type { DetectedFramework, FrameworkClass, FrameworkDetection } from "./de
 export { detectFramework } from "./detect-framework";
 export { DEV_VARS_EXAMPLE_FILE, DEV_VARS_FILE, DEV_VARS_KEY_PATTERN, parseDevVariableEntries } from "./dev-variables-format";
 export type { InferOptions, InferredBindings, InferredContainer, InferredWorkflow } from "./infer-bindings";
-export { inferLunoraBindings } from "./infer-bindings";
+export { inferLunoraBindings, packageNamesFromBindings } from "./infer-bindings";
 export type { LunoraFormattedLine, LunoraLineLevel } from "./log-format";
 export { formatLunoraEvent, LUNORA_EVENT_SOURCE } from "./log-format";
+export type { SecretEntry } from "./package-secrets-registry";
+export { PACKAGE_SECRETS_REGISTRY, secretsForPackages } from "./package-secrets-registry";
 export type { LunoraProjectConfig, RemotePreference } from "./project-config";
 export { interpretRemote, LUNORA_CONFIG_FILE, readProjectRemotePreference } from "./project-config";
 export type { MultiSelectOption, SelectOption } from "./prompt";
@@ -33,7 +35,14 @@ export {
     resolveRemoteEnabled,
 } from "./remote-bindings";
 export type { AugmentPlan, EnsureDevVariablesDeps, EnsureDevVariablesResult, EnsureDevVariablesStatus, ScaffoldPlan } from "./scaffold-dev-variables";
-export { ensureDevVariables, isPlaceholderValue, planDevVariablesAugment, planDevVariablesScaffold } from "./scaffold-dev-variables";
+export {
+    buildPackageSecretsBlock,
+    ensureDevVariables,
+    ensureDevVarsExample,
+    isPlaceholderValue,
+    planDevVariablesAugment,
+    planDevVariablesScaffold,
+} from "./scaffold-dev-variables";
 export type {
     AddIndexEdit,
     AdditiveEdit,

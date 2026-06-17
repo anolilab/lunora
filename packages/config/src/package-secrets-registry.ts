@@ -1,0 +1,134 @@
+/**
+ * Per-package secret-requirements registry for `.dev.vars` scaffolding.
+ *
+ * Each entry maps a `@lunora/*` package name → the secrets it requires at
+ * runtime, expressed as `{ key, description, docsUrl }` records. The scaffolder
+ * in {@link ./scaffold-dev-variables} reads this registry to emit package-aware
+ * `.dev.vars.example` entries (placeholders + inline doc-pointer comments).
+ *
+ * ## Adding a new add-on
+ *
+ * When a new `@lunora/*` package requires runtime secrets, add one entry to
+ * {@link PACKAGE_SECRETS_REGISTRY} keyed by its exact npm package name. Each
+ * `SecretEntry` in the array needs:
+ *
+ * - `key`         — the env-var name the package reads from `env` (e.g. `RESEND_API_KEY`).
+ * - `description` — one line describing the secret and how to obtain it.
+ * - `docsUrl`     — a stable URL to the package/provider docs.
+ *
+ * The registry lives in `@lunora/config` so that add-ons themselves never need
+ * to depend on it (no circular coupling). Add-ons document their secrets in
+ * their own READMEs; the registry duplicates that knowledge in a machine-readable
+ * form that the scaffolder can consume.
+ *
+ * **Never write a real secret value** in this file — `placeholderValue` entries
+ * are the only allowed values (they must pass `isPlaceholderValue` from
+ * scaffold-dev-variables).
+ */
+
+/** A single secret variable required by a package. */
+interface SecretEntry {
+    /** One sentence describing what this secret is and how to obtain it. */
+    description: string;
+    /** URL to the package or provider docs for this secret. */
+    docsUrl: string;
+    /** The env-var key as it appears in `.dev.vars`, e.g. `AUTH_SECRET`. */
+    key: string;
+
+    /**
+     * The placeholder value written into `.dev.vars.example`.
+     * Must pass `isPlaceholderValue` from scaffold-dev-variables so the
+     * scaffolder regenerates it when generating `.dev.vars`. Use angle-bracket
+     * conventions or a recognised marker like `replace-with-openssl-rand-hex-32`.
+     * Non-secret env-vars (e.g. `AUTH_URL`) may carry a real default value.
+     */
+    placeholderValue: string;
+}
+
+/**
+ * The canonical registry of per-package secret requirements.
+ *
+ * Keys are exact npm package names (e.g. `"@lunora/auth"`). Values are
+ * non-empty arrays of {@link SecretEntry} — one entry per required secret key.
+ *
+ * The scaffolder in `scaffold-dev-variables.ts` calls
+ * {@link secretsForPackages} to resolve the applicable entries from this map
+ * given the set of detected capability package names.
+ */
+const PACKAGE_SECRETS_REGISTRY: Readonly<Record<string, ReadonlyArray<SecretEntry>>> = {
+    "@lunora/auth": [
+        {
+            description: "32-byte random secret used to sign sessions and tokens. Generate with: openssl rand -hex 32",
+            docsUrl: "https://lunora.sh/docs/packages/auth#secrets",
+            key: "AUTH_SECRET",
+            placeholderValue: "replace-with-openssl-rand-hex-32",
+        },
+        {
+            description:
+                "Public base URL of your worker (used by better-auth for redirects and cookie domain). For local dev this is typically http://localhost:8787",
+            docsUrl: "https://lunora.sh/docs/packages/auth#secrets",
+            key: "AUTH_URL",
+            placeholderValue: "http://localhost:8787",
+        },
+    ],
+    "@lunora/mail": [
+        {
+            description: "Resend API key for sending transactional email via @lunora/mail. Obtain at https://resend.com/api-keys",
+            docsUrl: "https://lunora.sh/docs/packages/mail#secrets",
+            key: "RESEND_API_KEY",
+            placeholderValue: "<your-resend-api-key>",
+        },
+    ],
+    "@lunora/payment": [
+        {
+            description: "Stripe secret key (sk_test_…). Required when using the Stripe adapter. Obtain at https://dashboard.stripe.com/apikeys",
+            docsUrl: "https://lunora.sh/docs/packages/payment#stripe",
+            key: "STRIPE_SECRET_KEY",
+            placeholderValue: "<your-stripe-secret-key>",
+        },
+        {
+            description: "Stripe webhook signing secret (whsec_…) for verifying event payloads. Obtain at https://dashboard.stripe.com/webhooks",
+            docsUrl: "https://lunora.sh/docs/packages/payment#stripe",
+            key: "STRIPE_WEBHOOK_SECRET",
+            placeholderValue: "<your-stripe-webhook-secret>",
+        },
+        {
+            description: "Polar access token for the Polar payment adapter. Obtain at https://polar.sh/settings/tokens",
+            docsUrl: "https://lunora.sh/docs/packages/payment#polar",
+            key: "POLAR_ACCESS_TOKEN",
+            placeholderValue: "<your-polar-access-token>",
+        },
+        {
+            description: "Polar webhook secret for verifying event payloads from Polar. Obtain at https://polar.sh/settings/webhooks",
+            docsUrl: "https://lunora.sh/docs/packages/payment#polar",
+            key: "POLAR_WEBHOOK_SECRET",
+            placeholderValue: "<your-polar-webhook-secret>",
+        },
+    ],
+};
+
+/**
+ * Collect all secret entries required by the given set of package names. The
+ * order follows the order of `packageNames` (stable, predictable output), and
+ * within each package the entries are returned in registry declaration order.
+ *
+ * Only packages present in {@link PACKAGE_SECRETS_REGISTRY} contribute entries;
+ * unknown package names are silently ignored — this makes the call site resilient
+ * to future capability flags whose packages have no secrets.
+ */
+const secretsForPackages = (packageNames: ReadonlyArray<string>): SecretEntry[] => {
+    const result: SecretEntry[] = [];
+
+    for (const name of packageNames) {
+        const entries = PACKAGE_SECRETS_REGISTRY[name];
+
+        if (entries !== undefined) {
+            result.push(...entries);
+        }
+    }
+
+    return result;
+};
+
+export type { SecretEntry };
+export { PACKAGE_SECRETS_REGISTRY, secretsForPackages };

@@ -603,5 +603,27 @@ const inferLunoraBindings = async (options: InferOptions): Promise<InferredBindi
     };
 };
 
+/**
+ * Derive the list of `@lunora/*` package names that are actively used by a
+ * project, based on its already-resolved {@link InferredBindings}.
+ *
+ * This is the canonical bridge between binding inference and the package-aware
+ * `.dev.vars.example` scaffolding in `scaffold-dev-variables.ts`. The result is
+ * a stable, predictable slice of {@link CAPABILITY_SOURCES} source values,
+ * filtered to the flags that are `true` in `bindings` — in CAPABILITY_SOURCES
+ * declaration order.
+ */
+const packageNamesFromBindings = (bindings: InferredBindings): string[] => {
+    const names: string[] = [];
+
+    for (const flag of CAPABILITY_FLAGS) {
+        if (bindings[flag]) {
+            names.push(CAPABILITY_SOURCES[flag].source);
+        }
+    }
+
+    return names;
+};
+
 export type { DurableObjectClass, DurableObjectSpec, InferOptions, InferredBindings, InferredContainer, InferredWorkflow };
-export { inferLunoraBindings };
+export { inferLunoraBindings, packageNamesFromBindings };
