@@ -80,7 +80,7 @@
         "esbuild": "catalog:build",
         "jsdom": "catalog:frontend",
         "react": "catalog:frontend",
-        "react-doctor": "0.5.4",
+        "react-doctor": "0.5.6",
         "react-dom": "catalog:frontend",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
