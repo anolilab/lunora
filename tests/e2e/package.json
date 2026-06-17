@@ -21,5 +21,8 @@
         "playwright": "catalog:e2e",
         "typescript": "catalog:tsc",
         "wrangler": "catalog:cloudflare"
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.11.0"
     }
 }

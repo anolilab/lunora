@@ -14,5 +14,8 @@
         "ts-morph": "catalog:tooling",
         "typescript": "catalog:tsc",
         "vitest": "catalog:test"
+    },
+    "engines": {
+        "node": "^22.15.0 || >=24.11.0"
     }
 }
