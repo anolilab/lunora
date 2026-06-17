@@ -44,6 +44,13 @@ interface DeployCommandOptions {
     cwd?: string;
     /** Docker-availability probe injected in tests. Defaults to a real `docker info` check. */
     dockerAvailable?: DockerProbe;
+
+    /**
+     * Validate, bundle, and run all pre-deploy gates without publishing
+     * (`wrangler deploy --dry-run`). Post-deploy steps (data migrations, schema
+     * baseline re-bless) are skipped since nothing shipped.
+     */
+    dryRun?: boolean;
     env?: string;
     /** Fetch implementation injected in tests for `--migrate` RPC calls. */
     fetchImpl?: FetchLike;
@@ -82,7 +89,7 @@ interface DeployCommandOptions {
     /**
      * Confirm a production data migration triggered via `--migrate` (the
      * `migrate up --prod` confirmation the standalone command requires). Without
-     * it a `--migrate --migrate-url <prod>` deploy refuses to run the migration.
+     * it a `--migrate --migrate-url &lt;prod>` deploy refuses to run the migration.
      */
     migrateYes?: boolean;
     /** Railpack-availability probe injected in tests. Defaults to a real `railpack --version` + `BUILDKIT_HOST` check. */
@@ -114,7 +121,27 @@ interface WranglerD1Entry {
 interface WranglerD1Shape {
     containers?: ReadonlyArray<{ image?: string } | null | undefined>;
     d1_databases?: ReadonlyArray<WranglerD1Entry>;
+    vars?: Record<string, unknown>;
 }
+
+/**
+ * Worker-origin `vars` that must resolve to the deployed worker's public URL.
+ * A Cloudflare Worker can't reach `localhost`, so a localhost value here means
+ * scheduled-job dispatch (SchedulerDO → `LUNORA_ORIGIN_URL`) and auth callbacks
+ * (`AUTH_URL`) silently break in production.
+ */
+const ORIGIN_VAR_NAMES = ["LUNORA_ORIGIN_URL", "LUNORA_WORKER_ORIGIN", "AUTH_URL"] as const;
+
+/** True when a URL string resolves to a loopback host (localhost / 127.0.0.1 / ::1). */
+const isLocalhostUrl = (value: string): boolean => {
+    try {
+        const { hostname } = new URL(value);
+
+        return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]";
+    } catch {
+        return false;
+    }
+};
 
 /** Mirrors the validator's heuristic: a container image that is a local path (vs a registry reference). */
 const isLocalImagePath = (image: string): boolean => image.startsWith("./") || image.startsWith("../") || image.startsWith("/") || image.includes("Dockerfile");
@@ -398,7 +425,9 @@ const runPostDeployMigrations = async (options: DeployCommandOptions, cwd: strin
  * worker has already been replaced by `wrangler deploy`.
  */
 const validateMigrateDeployPreflight = (options: DeployCommandOptions): string | undefined => {
-    if (!options.migrate) {
+    // A dry run never publishes, so post-deploy migrations don't run — don't
+    // demand `--migrate-url`/`--migrate-yes` for a `--dry-run --migrate` combo.
+    if (!options.migrate || options.dryRun) {
         return undefined;
     }
 
@@ -408,7 +437,8 @@ const validateMigrateDeployPreflight = (options: DeployCommandOptions): string |
     // and ship the production admin bearer to whatever listens on that port.
     // Refuse before deploying rather than silently targeting localhost later.
     if (options.migrateUrl === undefined) {
-        const message = "--migrate requires --migrate-url <https://your-worker> — the deploy target URL is not captured automatically, refusing to default to localhost";
+        const message =
+            "--migrate requires --migrate-url <https://your-worker> — the deploy target URL is not captured automatically, refusing to default to localhost";
 
         options.logger.error(message);
 
@@ -493,6 +523,45 @@ const checkD1Placeholder = (cwd: string, logger: Logger): string | undefined => 
 };
 
 /**
+ * Hard-block a deploy when a worker-origin `var` still points at localhost.
+ * `lunora deploy` always targets Cloudflare (the dev loop is `lunora dev`), and
+ * a Worker can't reach a loopback address — so a localhost origin silently
+ * breaks scheduled jobs / auth callbacks in production. Mirrors the
+ * D1-placeholder hard-block. Returns the error message, or `undefined` when
+ * clean (or when wrangler.jsonc is absent/unparseable — the validator handles
+ * that).
+ */
+const checkLocalhostOriginVariables = (cwd: string, logger: Logger): string | undefined => {
+    const wranglerPath = findWranglerFile(cwd);
+
+    if (!wranglerPath) {
+        return undefined;
+    }
+
+    const { parsed } = readWranglerJsonc<WranglerD1Shape>(wranglerPath);
+    const variables = parsed?.vars;
+
+    if (!variables) {
+        return undefined;
+    }
+
+    const offenders = ORIGIN_VAR_NAMES.filter((name) => typeof variables[name] === "string" && isLocalhostUrl(variables[name]));
+
+    if (offenders.length === 0) {
+        return undefined;
+    }
+
+    const message =
+        `deploy blocked: ${offenders.join(", ")} in wrangler.jsonc point at localhost. A deployed Worker can't reach a loopback ` +
+        `address, so this silently breaks scheduled-job dispatch / auth callbacks. Set each to the deployed worker's public URL ` +
+        `(or move it to a secret with \`wrangler secret put\`) before deploying.`;
+
+    logger.error(message);
+
+    return message;
+};
+
+/**
  * After a successful `wrangler deploy`, run any requested data migrations and —
  * only when the whole operation succeeded — advance the committed schema
  * baseline via the gate's deferred `rebless`. Extracted from `executeDeploy` to
@@ -538,6 +607,12 @@ const runPreDeployGates = async (cwd: string, options: DeployCommandOptions): Pr
         return d1Error;
     }
 
+    const localhostOriginError = checkLocalhostOriginVariables(cwd, options.logger);
+
+    if (localhostOriginError !== undefined) {
+        return localhostOriginError;
+    }
+
     const sourceError = checkContainerSourcesExist(cwd, options.logger);
 
     if (sourceError !== undefined) {
@@ -551,6 +626,37 @@ const runPreDeployGates = async (cwd: string, options: DeployCommandOptions): Pr
     }
 
     return buildContainerImages(cwd, options);
+};
+
+/**
+ * Assemble the `pnpm exec wrangler deploy …` argv: the class-B composed-entry
+ * positional (when present), `--env`, and `--dry-run`. Extracted from
+ * {@link executeDeploy} to keep its cognitive complexity within budget.
+ */
+const buildWranglerDeployArgs = (cwd: string, options: DeployCommandOptions): string[] => {
+    const args = ["exec", "wrangler", "deploy"];
+
+    // Class-B composition: bundle the `src/worker.ts` wrapper (which the
+    // framework's CF adapter can't clobber) instead of the adapter-owned `main`.
+    const composedEntry = resolveComposedWorkerEntry(cwd);
+
+    if (composedEntry !== undefined) {
+        args.push(composedEntry);
+        options.logger.info(`class-B composition: deploying ${composedEntry} (overrides wrangler main)`);
+    }
+
+    if (options.env !== undefined) {
+        args.push("--env", options.env);
+    }
+
+    // `--dry-run` validates + bundles without publishing. Nothing ships, so the
+    // post-deploy finalize (migrations, baseline re-bless) is skipped by the caller.
+    if (options.dryRun) {
+        args.push("--dry-run");
+        options.logger.info("dry run: validating + bundling without publishing");
+    }
+
+    return args;
 };
 
 const executeDeploy = async (options: DeployCommandOptions): Promise<DeployCommandResult> => {
@@ -646,23 +752,8 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
     // deployed worker with stale/missing secrets silently (Supabase #45242).
     warnDevVariablesNotPushed(cwd, options.logger);
 
-    const args = ["exec", "wrangler", "deploy"];
-
-    // Class-B composition: bundle the `src/worker.ts` wrapper (which the
-    // framework's CF adapter can't clobber) instead of the adapter-owned `main`.
-    const composedEntry = resolveComposedWorkerEntry(cwd);
-
-    if (composedEntry !== undefined) {
-        args.push(composedEntry);
-        options.logger.info(`class-B composition: deploying ${composedEntry} (overrides wrangler main)`);
-    }
-
-    if (options.env !== undefined) {
-        args.push("--env", options.env);
-    }
-
     const descriptor: SpawnDescriptor = {
-        args,
+        args: buildWranglerDeployArgs(cwd, options),
         command: "pnpm",
         cwd,
         // In `--format json` mode stdout is reserved for the single JSON document,
@@ -677,6 +768,12 @@ const executeDeploy = async (options: DeployCommandOptions): Promise<DeployComma
 
     if (result.code !== 0) {
         return { code: result.code, descriptor, validation };
+    }
+
+    // A dry run published nothing — never run migrations or advance the schema
+    // baseline against a deploy that didn't happen.
+    if (options.dryRun) {
+        return { code: 0, descriptor, validation };
     }
 
     return finalizeSuccessfulDeploy(options, cwd, descriptor, validation, reblessSchemaBaseline);
@@ -711,6 +808,7 @@ const execute: CommandHandler<DeployOptions> = defineHandler<DeployOptions>(asyn
         allowSchemaDrift: options.allowSchemaDrift === true,
         apiSpec: parseApiSpec(options.apiSpec),
         cwd,
+        dryRun: options.dryRun === true,
         env: options.env,
         format: options.format,
         logger,

@@ -50,7 +50,7 @@ export type { DynamicShardRegistry, DynamicShardRegistryOptions } from "./dynami
 export { createDynamicShardRegistry, DEFAULT_REGISTRY_CACHE_TTL_MS, SHARD_REGISTRY_DO_NAME } from "./dynamic-shard-registry";
 export type { LunoraErrorBody } from "./errors";
 export { LunoraError, toErrorResponse } from "./errors";
-export type { LogEvent, LogLevel, ObservabilityEvent, ObservabilitySink } from "./observability";
+export type { LogEvent, LogLevel, ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext } from "./observability";
 export { emitLogEvent, emitRpcEvent } from "./observability";
 export type {
     AnalyticsEngineDataPointLike,

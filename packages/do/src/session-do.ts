@@ -42,6 +42,13 @@ const SESSION_DO_TTL_DEFAULT: number = 7 * 24 * 60 * 60;
 /** Hard ceiling on the requested TTL — 90 days. Longer sessions should ride on top via refresh. */
 const SESSION_DO_TTL_MAX: number = 90 * 24 * 60 * 60;
 
+/**
+ * How often the GC alarm sweeps expired session records (daily). Lazy
+ * expiry-on-read still applies; this only reclaims storage for sessions that are
+ * never read again (e.g. an abandoned token), keeping residue bounded to ~1 day.
+ */
+const SESSION_GC_INTERVAL_MS: number = 24 * 60 * 60 * 1000;
+
 /** Header used to authenticate the calling worker to the SessionDO. */
 const SESSION_SECRET_HEADER = "x-lunora-session-do-secret";
 
@@ -73,7 +80,14 @@ interface SessionDOState {
     storage: {
         delete: (key: string) => Promise<boolean | number>;
         get: <T = unknown>(key: string) => Promise<T | undefined>;
+        // Alarm + list are used by the optional GC sweep. Declared optional so
+        // the plain-object doubles in the unit tests (which only exercise
+        // create/get/revoke) still satisfy the structural shape — the alarm path
+        // is a no-op when the runtime/double doesn't provide them.
+        getAlarm?: () => Promise<number | null>;
+        list?: <T = unknown>(options?: { prefix?: string }) => Promise<Map<string, T>>;
         put: (key: string, value: unknown) => Promise<void>;
+        setAlarm?: (scheduledTime: number) => Promise<void>;
     };
 }
 
@@ -221,6 +235,42 @@ class SessionDO {
         return jsonResponse(404, { error: { code: "NOT_FOUND", message: "no such session route" } });
     }
 
+    /**
+     * Sweep expired session records. Lazy expiry-on-read ({@link handleGet})
+     * already keeps reads correct; this reclaims storage for sessions that are
+     * never read again. Re-arms itself while any sessions remain so the DO goes
+     * fully idle (no billable alarm) once it's empty.
+     */
+    public async alarm(): Promise<void> {
+        const { storage } = this.state;
+
+        if (!storage.list) {
+            return;
+        }
+
+        const now = Date.now();
+        const entries = await storage.list<SessionRecord>({ prefix: "s:" });
+        const expired: string[] = [];
+        let remaining = 0;
+
+        for (const [key, record] of entries) {
+            if (record.expiresAt < now) {
+                expired.push(key);
+            } else {
+                remaining += 1;
+            }
+        }
+
+        for (const key of expired) {
+            // eslint-disable-next-line no-await-in-loop -- bounded GC sweep; storage.delete takes one key in this structural surface
+            await storage.delete(key);
+        }
+
+        if (remaining > 0 && storage.setAlarm) {
+            await storage.setAlarm(now + SESSION_GC_INTERVAL_MS);
+        }
+    }
+
     private async handleCreate(request: Request): Promise<Response> {
         let body: { token?: unknown; ttlSeconds?: unknown; userId?: unknown };
 
@@ -252,8 +302,29 @@ class SessionDO {
         const record: SessionRecord = { createdAt: now, expiresAt: now + ttlSeconds * 1000, userId };
 
         await this.state.storage.put(`s:${token}`, record);
+        await this.armGcAlarm();
 
         return jsonResponse(201, { token, ...record });
+    }
+
+    /**
+     * Ensure a GC alarm is pending. Only sets one when none is currently
+     * scheduled, so a burst of `create`s arms a single recurring sweep rather
+     * than thrashing the alarm. A no-op when the runtime/double doesn't expose
+     * the alarm API.
+     */
+    private async armGcAlarm(): Promise<void> {
+        const { storage } = this.state;
+
+        if (!storage.getAlarm || !storage.setAlarm) {
+            return;
+        }
+
+        const existing = await storage.getAlarm();
+
+        if (existing === null) {
+            await storage.setAlarm(Date.now() + SESSION_GC_INTERVAL_MS);
+        }
     }
 
     private async handleGet(request: Request): Promise<Response> {
@@ -269,7 +340,8 @@ class SessionDO {
             return jsonResponse(404, { error: { code: "NOT_FOUND", message: "session not found" } });
         }
 
-        // Expire lazily on read so we don't need an alarm just to GC.
+        // Expire lazily on read for correctness; the GC alarm ({@link alarm})
+        // separately reclaims storage for sessions that are never read again.
         if (record.expiresAt < Date.now()) {
             await this.state.storage.delete(`s:${token}`);
 

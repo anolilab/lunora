@@ -10,10 +10,10 @@
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
     },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
-    "vars": {
-        // Dev-only placeholders so `wrangler dev` boots. Set the real values as
-        // secrets for production (`wrangler secret put STRIPE_SECRET_KEY`, …).
-        "STRIPE_SECRET_KEY": "sk_test_replace_me",
-        "STRIPE_WEBHOOK_SECRET": "whsec_replace_me",
-    },
+    "observability": { "enabled": true, "head_sampling_rate": 1 },
+    // Secrets are NOT declared here — `vars` ship in the deployed config and are
+    // visible in the dashboard. `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET`
+    // live in `.dev.vars` for local dev (see `.dev.vars.example`, auto-loaded by
+    // `wrangler dev` / the Vite plugin) and are pushed to production with
+    // `wrangler secret put STRIPE_SECRET_KEY` (or `lunora env push`).
 }

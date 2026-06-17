@@ -78,6 +78,14 @@ export interface R2ObjectLike {
     checksums?: { sha256?: ArrayBuffer };
     customMetadata?: Record<string, string>;
     etag: string;
+
+    /**
+     * The quoted form of {@link R2ObjectLike.etag} (e.g. `"abc123"`), suitable
+     * for emitting directly as an HTTP `ETag` header. The real binding always
+     * provides it; declared optional so existing doubles that only set `etag`
+     * still type-check (callers fall back to quoting `etag`).
+     */
+    httpEtag?: string;
     httpMetadata?: { contentType?: string };
     key: string;
 
@@ -159,8 +167,12 @@ export interface UploadOptions {
     customMetadata?: Record<string, string>;
 
     /**
-     * Maximum body size in bytes. Enforced for `ArrayBuffer`/`Blob` sources
-     * whose length is known synchronously; ignored for `ReadableStream`.
+     * Maximum body size in bytes. For `ArrayBuffer`/`Blob` sources the length is
+     * known up front and rejected before the upload starts. For a
+     * `ReadableStream` the length isn't known synchronously, so the stream is
+     * piped through a byte counter that aborts the upload once the limit is
+     * exceeded — this also guards against R2 silently accepting/truncating an
+     * unbounded stream.
      */
     maxSize?: number;
 }
@@ -263,6 +275,6 @@ export interface Storage {
      * alias for {@link Storage.upload} — it accepts the same {@link UploadOptions}
      * so the `maxSize` / `allowedContentTypes` guards aren't lost behind the alias.
      */
-    store: (key: string, body: ReadableStream | ArrayBuffer | Blob, options?: UploadOptions) => Promise<{ etag: string; key: string }>;
-    upload: (key: string, body: ReadableStream | ArrayBuffer | Blob, options?: UploadOptions) => Promise<{ etag: string; key: string }>;
+    store: (key: string, body: ReadableStream | ArrayBuffer | Blob, options?: UploadOptions) => Promise<{ etag: string; httpEtag: string; key: string }>;
+    upload: (key: string, body: ReadableStream | ArrayBuffer | Blob, options?: UploadOptions) => Promise<{ etag: string; httpEtag: string; key: string }>;
 }

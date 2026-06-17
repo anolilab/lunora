@@ -86,28 +86,41 @@ export interface LogEvent {
 }
 
 /**
+ * Per-event context handed to a sink alongside the event. Lets a sink register
+ * background work (e.g. a telemetry POST) with the request's `ctx.waitUntil` so
+ * it survives isolate teardown after the response returns. Absent (`undefined`
+ * `waitUntil`) on paths with no request context (e.g. the in-process
+ * `serverQuery` fast-path), where the sink falls back to fire-and-forget.
+ */
+export interface ObservabilitySinkContext {
+    /** Keep a background promise alive past the response (the request's `ctx.waitUntil`). */
+    waitUntil?: (promise: Promise<unknown>) => void;
+}
+
+/**
  * The hook contract. Methods are optional so a sink can opt into only the
  * events it cares about; the runtime no-ops the others.
  */
 export interface ObservabilitySink {
     /** Invoked once per `ctx.log.*` call from a function handler. */
-    onLog?: (event: LogEvent) => void;
+    onLog?: (event: LogEvent, context?: ObservabilitySinkContext) => void;
     /** Invoked once per dispatched RPC (single-shard or fan-out). */
-    onRpc?: (event: ObservabilityEvent) => void;
+    onRpc?: (event: ObservabilityEvent, context?: ObservabilitySinkContext) => void;
 }
 
 /**
  * Invoke `sink.onRpc` with the given event, swallowing any error the sink
  * throws. Use at the dispatch boundary; the runtime should never see a
- * sink-originating throw bubble up past this point.
+ * sink-originating throw bubble up past this point. `context.waitUntil`, when
+ * supplied, lets a network sink keep its send alive past the response.
  */
-export const emitRpcEvent = (sink: ObservabilitySink | undefined, event: ObservabilityEvent): void => {
+export const emitRpcEvent = (sink: ObservabilitySink | undefined, event: ObservabilityEvent, context?: ObservabilitySinkContext): void => {
     if (!sink?.onRpc) {
         return;
     }
 
     try {
-        sink.onRpc(event);
+        sink.onRpc(event, context);
     } catch {
         // Swallow — a buggy sink must not break user-facing dispatch. We
         // deliberately do not console.error here either: in a Workers runtime
@@ -121,13 +134,13 @@ export const emitRpcEvent = (sink: ObservabilitySink | undefined, event: Observa
  * throws. The same failure model as {@link emitRpcEvent}: a buggy log sink must
  * never break the handler that emitted the line.
  */
-export const emitLogEvent = (sink: ObservabilitySink | undefined, event: LogEvent): void => {
+export const emitLogEvent = (sink: ObservabilitySink | undefined, event: LogEvent, context?: ObservabilitySinkContext): void => {
     if (!sink?.onLog) {
         return;
     }
 
     try {
-        sink.onLog(event);
+        sink.onLog(event, context);
     } catch {
         // Swallow — see emitRpcEvent.
     }

@@ -14,6 +14,9 @@ import type {
     UploadOptions,
 } from "./types";
 
+/** Accepted upload body shapes (bytes, blob, or a byte stream). */
+type UploadBody = ReadableStream | ArrayBuffer | Blob;
+
 /** R2's documented key-length ceiling. */
 const MAX_KEY_LENGTH = 1024;
 
@@ -120,6 +123,43 @@ const toMetadata = (object: R2ObjectLike): ObjectMetadata => {
     };
 };
 
+/**
+ * Wrap a byte stream so the upload aborts once more than `maxSize` bytes have
+ * flowed through. A `ReadableStream`'s length isn't known synchronously, so a
+ * counting `TransformStream` is the only way to bound a streaming upload —
+ * without it R2 would happily accept (or, for an unknown-length stream, silently
+ * truncate) a body larger than the caller intended. Non-byte chunks (no
+ * `byteLength`) are passed through uncounted.
+ */
+const enforceStreamMaxSize = (stream: ReadableStream, maxSize: number): ReadableStream => {
+    let seen = 0;
+
+    const byteLengthOf = (chunk: unknown): number => {
+        if (chunk instanceof ArrayBuffer) {
+            return chunk.byteLength;
+        }
+
+        // Covers Uint8Array and every other typed-array / DataView view.
+        return ArrayBuffer.isView(chunk) ? chunk.byteLength : 0;
+    };
+
+    const counter = new TransformStream({
+        transform(chunk: unknown, controller) {
+            seen += byteLengthOf(chunk);
+
+            if (seen > maxSize) {
+                controller.error(new Error(`@lunora/storage: stream body exceeds maxSize (> ${String(maxSize)} bytes)`));
+
+                return;
+            }
+
+            controller.enqueue(chunk);
+        },
+    });
+
+    return stream.pipeThrough(counter);
+};
+
 /** Trailing-slash trimmer for `publicBaseUrl` — a linear scan (no regex backtracking). */
 const trimTrailingSlashes = (value: string): string => {
     let end = value.length;
@@ -196,11 +236,7 @@ export const createStorage = (options: LunoraStorageOptions): Storage => {
         throw new Error("@lunora/storage: `bucket` is required");
     }
 
-    const upload = async (
-        key: string,
-        body: ReadableStream | ArrayBuffer | Blob,
-        uploadOptions: UploadOptions = {},
-    ): Promise<{ etag: string; key: string }> => {
+    const upload = async (key: string, body: UploadBody, uploadOptions: UploadOptions = {}): Promise<{ etag: string; httpEtag: string; key: string }> => {
         validateKey(key);
 
         // An `allowedContentTypes` allowlist is a security control (e.g. block
@@ -218,10 +254,13 @@ export const createStorage = (options: LunoraStorageOptions): Storage => {
             }
         }
 
-        // `maxSize` is best-effort: enforced for byte sources we can size
-        // synchronously (ArrayBuffer/Blob). ReadableStream byte counts aren't
-        // known up front; callers streaming uploads must rely on the upstream
-        // R2 multipart enforcement or pre-buffer.
+        // `maxSize` enforcement. ArrayBuffer/Blob lengths are known up front and
+        // rejected before the upload starts; a ReadableStream's length isn't, so
+        // it's piped through a byte counter that aborts mid-stream once the limit
+        // is exceeded (also closing R2's silent-truncation gap for unbounded
+        // streams).
+        let putBody: UploadBody = body;
+
         if (typeof uploadOptions.maxSize === "number") {
             let size: number | undefined;
 
@@ -234,14 +273,20 @@ export const createStorage = (options: LunoraStorageOptions): Storage => {
             if (size !== undefined && size > uploadOptions.maxSize) {
                 throw new Error(`@lunora/storage: body exceeds maxSize (${String(size)} > ${String(uploadOptions.maxSize)})`);
             }
+
+            if (body instanceof ReadableStream) {
+                putBody = enforceStreamMaxSize(body, uploadOptions.maxSize);
+            }
         }
 
-        const object = await options.bucket.put(key, body, {
+        const object = await options.bucket.put(key, putBody, {
             customMetadata: uploadOptions.customMetadata,
             httpMetadata: uploadOptions.contentType ? { contentType: uploadOptions.contentType } : undefined,
         });
 
-        return { etag: object.etag, key: object.key };
+        // `httpEtag` is the quoted form for an HTTP `ETag` header; fall back to
+        // quoting `etag` for doubles/older bindings that don't surface it.
+        return { etag: object.etag, httpEtag: object.httpEtag ?? `"${object.etag}"`, key: object.key };
     };
 
     const download = async (key: string, downloadOptions: { range?: R2RangeLike } = {}): Promise<R2ObjectBodyLike | null> => {
@@ -396,7 +441,7 @@ export const createStorage = (options: LunoraStorageOptions): Storage => {
     // `store` is `upload` under Convex's name; it forwards the full
     // `UploadOptions` so the `maxSize` / `allowedContentTypes` guards are
     // available through the alias too, not just `contentType`.
-    const store = async (key: string, body: ReadableStream | ArrayBuffer | Blob, storeOptions: UploadOptions = {}): Promise<{ etag: string; key: string }> =>
+    const store = async (key: string, body: UploadBody, storeOptions: UploadOptions = {}): Promise<{ etag: string; httpEtag: string; key: string }> =>
         upload(key, body, storeOptions);
 
     return {

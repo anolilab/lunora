@@ -70,7 +70,7 @@ interface WranglerShape {
     kv_namespaces?: ReadonlyArray<{ binding?: string; id?: string }>;
     migrations?: ReadonlyArray<MigrationEntry>;
     name?: string;
-    observability?: { enabled?: boolean };
+    observability?: { enabled?: boolean; head_sampling_rate?: number; logs?: { enabled?: boolean; head_sampling_rate?: number } };
     // Hint-only: the `pipeline` name is a remote resource Lunora can't mint — warned, never written.
     pipelines?: ReadonlyArray<{ binding?: string; pipeline?: string }>;
     r2_buckets?: ReadonlyArray<{ binding?: string }>;
@@ -424,32 +424,41 @@ const containerEntryFor = (container: InferredContainer): Record<string, unknown
 };
 
 /**
- * Add any missing `containers[]` entries (matched by `class_name`) and switch
- * `observability` on when the key is entirely absent — container logs are
- * invisible without it, but an explicit `enabled: false` is a user billing
- * decision and is left untouched (`collectWarnings` flags it instead). The
- * Durable Object bindings + migration classes for containers ride through
- * `reconcileDurableObjects` with the built-in DOs. Pure.
+ * Add any missing `containers[]` entries (matched by `class_name`). The Durable
+ * Object bindings + migration classes for containers ride through
+ * `reconcileDurableObjects` with the built-in DOs; `observability` is handled
+ * unconditionally by `reconcileObservability` (not just for containers). Pure.
  */
 const reconcileContainers = (text: string, parsed: WranglerShape, containers: ReadonlyArray<InferredContainer>): ReconcileStep => {
     const existing = parsed.containers ?? [];
     const existingClasses = new Set(existing.map((entry) => entry.class_name));
     const missing = containers.filter((container) => !existingClasses.has(container.className));
 
-    let nextText = text;
-    const added: string[] = [];
-
-    if (missing.length > 0) {
-        nextText = applyModify(nextText, ["containers"], [...existing, ...missing.map((container) => containerEntryFor(container))]);
-        added.push(...missing.map((container) => `containers/${container.className}`));
+    if (missing.length === 0) {
+        return { added: [], text };
     }
 
-    if (parsed.observability === undefined) {
-        nextText = applyModify(nextText, ["observability"], { enabled: true });
-        added.push("observability (container logs)");
+    const nextText = applyModify(text, ["containers"], [...existing, ...missing.map((container) => containerEntryFor(container))]);
+
+    return { added: missing.map((container) => `containers/${container.className}`), text: nextText };
+};
+
+/**
+ * Switch Workers Observability on when the key is entirely absent, so every
+ * Lunora worker ships with Workers Logs + Traces enabled by default (not just
+ * container apps). `head_sampling_rate: 1` keeps all logs initially — a sensible
+ * default users can dial down. An explicit `enabled: false` is a user billing
+ * decision and is left untouched (`collectWarnings` flags the container case).
+ * Pure.
+ */
+const reconcileObservability = (text: string, parsed: WranglerShape): ReconcileStep => {
+    if (parsed.observability !== undefined) {
+        return { added: [], text };
     }
 
-    return { added, text: nextText };
+    const nextText = applyModify(text, ["observability"], { enabled: true, head_sampling_rate: 1 });
+
+    return { added: ["observability"], text: nextText };
 };
 
 /** Render one wrangler `workflows[]` entry from an inferred workflow. Pure. */
@@ -535,6 +544,7 @@ const reconcileWranglerBindings = (projectRoot: string, inferred: InferredBindin
         { enabled: inferred.usesBrowser, run: (text) => reconcileSelfDescribing(text, parsed, "browser", "BROWSER", "BROWSER (Browser Rendering)") },
         { enabled: inferred.usesImages, run: (text) => reconcileSelfDescribing(text, parsed, "images", "IMAGES", "IMAGES (Cloudflare Images)") },
         { enabled: inferred.usesAnalytics, run: (text) => reconcileAnalytics(text, parsed) },
+        { enabled: true, run: (text) => reconcileObservability(text, parsed) },
         { enabled: exportedContainers.length > 0, run: (text) => reconcileContainers(text, parsed, exportedContainers) },
         { enabled: exportedWorkflows.length > 0, run: (text) => reconcileWorkflows(text, parsed, exportedWorkflows) },
     ];

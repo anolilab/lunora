@@ -11,6 +11,7 @@
         ],
     },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO", "SchedulerDO"] }],
+    "observability": { "enabled": true, "head_sampling_rate": 1 },
     // Cloudflare Workflows are NOT Durable Objects — they live in their own
     // `workflows[]` array with no migration entry. `class_name` must be exported
     // by the worker entry (see `ChannelWelcomeWorkflow` in src/server/index.ts).

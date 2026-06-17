@@ -1,4 +1,5 @@
 {
+    "$schema": "node_modules/wrangler/config-schema.json",
     // SINGLE worker for SvelteKit + Lunora realtime (PLAN4 §3, class-B).
     //
     // `main` points at `.svelte-kit/cloudflare/_worker.js` — the handler
@@ -28,4 +29,5 @@
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
     },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "observability": { "enabled": true, "head_sampling_rate": 1 },
 }

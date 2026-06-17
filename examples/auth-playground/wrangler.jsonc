@@ -14,9 +14,10 @@
         { "binding": "DB", "database_name": "lunora-auth-playground", "database_id": "REPLACE_WITH_D1_ID" },
     ],
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
-    "vars": {
-        // Set AUTH_SECRET (>= 32 random bytes, base64) in your wrangler secret store
-        // for production; this is a placeholder so `wrangler dev` boots locally.
-        "AUTH_SECRET": "dev-only-secret-please-replace-with-real-random-bytes",
-    },
+    "observability": { "enabled": true, "head_sampling_rate": 1 },
+    // Secrets are NOT declared here — `vars` ship in the deployed config and are
+    // visible in the dashboard. `AUTH_SECRET` lives in `.dev.vars` for local dev
+    // (see `.dev.vars.example`, auto-loaded by `wrangler dev` / the Vite plugin)
+    // and is pushed to production with `wrangler secret put AUTH_SECRET` (or
+    // `lunora env push`).
 }

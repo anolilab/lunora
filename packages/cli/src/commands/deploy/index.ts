@@ -7,6 +7,7 @@ const deployCommand: Command = {
     examples: [
         ["lunora deploy", "Deploy to Cloudflare"],
         ["lunora deploy --env production", "Deploy to a named environment"],
+        ["lunora deploy --dry-run", "Validate + bundle without publishing"],
         ["lunora deploy --migrate", "Deploy, then run pending data migrations"],
     ],
     group: "Deploy",
@@ -18,11 +19,16 @@ const deployCommand: Command = {
     options: [
         { description: "Override the schema-drift gate (deploy even with breaking schema drift and no migration)", name: "allow-schema-drift", type: Boolean },
         { description: `Which API spec(s) to emit: ${API_SPEC_HELP} (default openapi)`, name: "api-spec", type: String },
+        { description: "Validate, bundle, and run pre-deploy gates without publishing (wrangler deploy --dry-run)", name: "dry-run", type: Boolean },
         { description: "Cloudflare environment name", name: "env", type: String },
         { description: "Output format: pretty (default) or json", name: "format", type: String },
         { description: "After a successful deploy, run pending data migrations against the live worker", name: "migrate", type: Boolean },
         { description: "Admin bearer token for --migrate (falls back to LUNORA_ADMIN_TOKEN)", name: "migrate-token", type: String },
-        { description: "Worker URL for --migrate (REQUIRED with --migrate; the deploy target URL is not captured automatically)", name: "migrate-url", type: String },
+        {
+            description: "Worker URL for --migrate (REQUIRED with --migrate; the deploy target URL is not captured automatically)",
+            name: "migrate-url",
+            type: String,
+        },
         { description: "Confirm running the production data migration triggered by --migrate (required with --migrate)", name: "migrate-yes", type: Boolean },
         {
             description: "Re-bless the committed schema baseline (lunora/.lunora-schema.json) with the current shape",
@@ -37,6 +43,7 @@ export { deployCommand };
 export type DeployOptions = CreateOptions<{
     "allow-schema-drift": boolean | undefined;
     "api-spec": string | undefined;
+    "dry-run": boolean | undefined;
     env: string | undefined;
     format: string | undefined;
     migrate: boolean | undefined;

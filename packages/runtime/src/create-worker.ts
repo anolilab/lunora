@@ -8,7 +8,7 @@ import type { ExportRow } from "./export-stream";
 import { collectKnownTables, streamExportRows } from "./export-stream";
 import { streamingImport } from "./import-stream";
 import { buildIntrospectionAdminRoutes } from "./introspection-admin-routes";
-import type { ObservabilityEvent, ObservabilitySink } from "./observability";
+import type { ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext } from "./observability";
 import { emitRpcEvent } from "./observability";
 import { buildOrchestrationAdminRoutes } from "./orchestration-admin-routes";
 import type { FanOutSpec, QueryCoordinator } from "./query-coordinator";
@@ -1900,6 +1900,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         args: Record<string, unknown>,
         shardKey: string,
         forwardedHeaders: Record<string, string>,
+        sinkContext?: ObservabilitySinkContext,
     ): Promise<Response> => {
         const rpcStartedAt = Date.now();
         const { observability } = options;
@@ -1917,13 +1918,17 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             // A non-2xx from the shard is reported as ok=false even though no
             // exception was thrown — the user-visible result is still an error
             // surface, just one the shard chose to encode in the status code.
-            emitRpcEvent(observability, {
-                durationMs: Date.now() - rpcStartedAt,
-                functionPath,
-                ok: response.ok,
-                shardKey,
-                ...(response.ok ? {} : { error: { code: "SHARD_ERROR", message: `shard returned ${String(response.status)}`, status: response.status } }),
-            });
+            emitRpcEvent(
+                observability,
+                {
+                    durationMs: Date.now() - rpcStartedAt,
+                    functionPath,
+                    ok: response.ok,
+                    shardKey,
+                    ...(response.ok ? {} : { error: { code: "SHARD_ERROR", message: `shard returned ${String(response.status)}`, status: response.status } }),
+                },
+                sinkContext,
+            );
 
             // Propagate the DO's bookmark header so the client can pin reads
             // after a write.
@@ -1939,12 +1944,12 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
             return response;
         } catch (error) {
-            emitRpcEvent(observability, buildErrorEvent(functionPath, Date.now() - rpcStartedAt, error, { shardKey }));
+            emitRpcEvent(observability, buildErrorEvent(functionPath, Date.now() - rpcStartedAt, error, { shardKey }), sinkContext);
             throw error;
         }
     };
 
-    const handleRpc = async (request: Request, env: unknown): Promise<Response> => {
+    const handleRpc = async (request: Request, env: unknown, context?: ExecutionContextLike): Promise<Response> => {
         if (request.method !== "POST") {
             throw new LunoraError("RPC endpoint requires POST", { code: "METHOD_NOT_ALLOWED", status: 405 });
         }
@@ -1994,6 +1999,16 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
             const rpcStartedAt = Date.now();
             const { observability } = options;
 
+            // Hand the request's `ctx.waitUntil` to sinks so a network sink's
+            // POST survives isolate teardown after the response returns.
+            const sinkContext: ObservabilitySinkContext | undefined = context
+                ? {
+                      waitUntil: (promise) => {
+                          context.waitUntil(promise);
+                      },
+                  }
+                : undefined;
+
             if (envelope.fanOut) {
                 // Coordinator presence was checked above; re-assert for the
                 // type system without a non-null assertion.
@@ -2014,16 +2029,20 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                         headers: forwardedHeaders,
                     });
 
-                    emitRpcEvent(observability, {
-                        durationMs: Date.now() - rpcStartedAt,
-                        fanOut: {
-                            failed: result.failed,
-                            shards: result.ok + result.failed,
-                            table: envelope.fanOut.table,
+                    emitRpcEvent(
+                        observability,
+                        {
+                            durationMs: Date.now() - rpcStartedAt,
+                            fanOut: {
+                                failed: result.failed,
+                                shards: result.ok + result.failed,
+                                table: envelope.fanOut.table,
+                            },
+                            functionPath: envelope.functionPath,
+                            ok: true,
                         },
-                        functionPath: envelope.functionPath,
-                        ok: true,
-                    });
+                        sinkContext,
+                    );
 
                     return Response.json(result, {
                         headers: { "content-type": "application/json" },
@@ -2033,6 +2052,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
                     emitRpcEvent(
                         observability,
                         buildErrorEvent(envelope.functionPath, Date.now() - rpcStartedAt, error, { fanOut: { table: envelope.fanOut.table } }),
+                        sinkContext,
                     );
                     throw error;
                 }
@@ -2040,7 +2060,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
             const shardKey = envelope.shardKey ?? defaultShard;
 
-            return dispatchSingleShard(envelope.functionPath, envelope.args ?? {}, shardKey, forwardedHeaders);
+            return dispatchSingleShard(envelope.functionPath, envelope.args ?? {}, shardKey, forwardedHeaders, sinkContext);
         }
     };
 
@@ -2310,7 +2330,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
     // Internal endpoint dispatch table. Keyed by pathname; each handler takes
     // the request (and, where needed, env/url) and returns the response.
-    type InternalRoute = (request: Request, env: unknown, url: URL) => Promise<Response> | Response;
+    type InternalRoute = (request: Request, env: unknown, url: URL, context: ExecutionContextLike) => Promise<Response> | Response;
 
     /**
      * Record one app-level auth attempt for the auth-failure SLO (PLAN3 §2.3).
@@ -2380,7 +2400,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
 
     const internalRoutes: Record<string, InternalRoute> = {
         [WS_PATH]: (request, env, url) => handleWebSocketUpgrade(request, env, url),
-        [RPC_PATH]: (request, env) => handleRpc(request, env),
+        [RPC_PATH]: (request, env, _url, context) => handleRpc(request, env, context),
         [SCHEDULER_DISPATCH_PATH]: (request, env) => handleSchedulerDispatch(request, env),
         [CRON_JOBS_RUN_PATH]: (request, env) => handleRunCronJob(request, env),
         // Extracted handler clusters built above, merged in (mirroring the auth
@@ -2470,7 +2490,7 @@ const createWorker = (options: WorkerOptions): LunoraWorker => {
         const internalRoute = internalRoutes[url.pathname];
 
         if (internalRoute) {
-            return internalRoute(request, env, url);
+            return internalRoute(request, env, url, context);
         }
 
         // HTTP actions are the lowest-priority matcher: explicit routes and the

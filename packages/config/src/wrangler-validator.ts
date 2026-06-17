@@ -98,7 +98,7 @@ interface WranglerConfig {
     // outbound fetch). Cert material lives in Cloudflare, referenced by id. See
     // `validateMtlsCertificates`.
     mtls_certificates?: ReadonlyArray<{ binding?: string; certificate_id?: string } | null | undefined>;
-    observability?: { enabled?: boolean };
+    observability?: { enabled?: boolean; head_sampling_rate?: number; logs?: { enabled?: boolean; head_sampling_rate?: number } };
     // Pipelines (R2-backed streaming ingestion). The `pipeline` name is a remote
     // resource (`wrangler pipelines create`) Lunora can't mint — warn, don't
     // fail. See `validatePipelineBindings`.
@@ -601,6 +601,42 @@ const validatePlacement = (wrangler: WranglerConfig, errors: string[]): void => 
 };
 
 /**
+ * `observability` enables Workers Logs + Traces. Shape-check the block and the
+ * `head_sampling_rate` (a 0–1 fraction, both at the top level and under the
+ * nested `logs` block) so a typo'd key or an out-of-range rate is caught before
+ * deploy instead of being silently ignored by wrangler.
+ */
+const validateObservability = (wrangler: WranglerConfig, errors: string[]): void => {
+    const { observability } = wrangler;
+
+    if (observability === undefined) {
+        return;
+    }
+
+    if (typeof observability !== "object" || Array.isArray(observability)) {
+        errors.push('observability must be an object (e.g. { "enabled": true, "head_sampling_rate": 1 })');
+
+        return;
+    }
+
+    const checkSamplingRate = (rate: unknown, path: string): void => {
+        if (rate !== undefined && (typeof rate !== "number" || Number.isNaN(rate) || rate < 0 || rate > 1)) {
+            errors.push(`${path} must be a number in [0, 1] (the fraction of requests sampled)`);
+        }
+    };
+
+    checkSamplingRate(observability.head_sampling_rate, "observability.head_sampling_rate");
+
+    if (observability.logs !== undefined) {
+        if (typeof observability.logs !== "object" || Array.isArray(observability.logs)) {
+            errors.push("observability.logs must be an object");
+        } else {
+            checkSamplingRate(observability.logs.head_sampling_rate, "observability.logs.head_sampling_rate");
+        }
+    }
+};
+
+/**
  * `assets` is the Workers Static Assets block — serves the client build from the
  * same worker (Cloudflare serves files for free, only invoking the worker on a
  * miss, so the Lunora SSR/API handler is unaffected). NOT Cloudflare Pages,
@@ -796,6 +832,7 @@ const validateWranglerConfig = (wrangler: WranglerConfig | undefined, schema?: S
     validateSendEmail(wrangler, errors, warnings);
     validateLogpush(wrangler, errors);
     validatePlacement(wrangler, errors);
+    validateObservability(wrangler, errors);
     validateAssets(wrangler, errors);
     validateCorsVariables(wrangler, errors);
 

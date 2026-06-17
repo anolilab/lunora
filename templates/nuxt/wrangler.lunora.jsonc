@@ -9,6 +9,7 @@
     // After deploying, set NUXT_PUBLIC_LUNORA_URL to this worker's URL
     // (e.g. https://{{name}}-lunora.workers.dev) so the Nuxt SSR loader and
     // the browser LunoraClient know where to reach `/_lunora/*`.
+    "$schema": "node_modules/wrangler/config-schema.json",
     "name": "{{name}}-lunora",
     "main": "lunora/server.ts",
     "compatibility_date": "2026-06-10",
@@ -17,4 +18,5 @@
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
     },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "observability": { "enabled": true, "head_sampling_rate": 1 },
 }

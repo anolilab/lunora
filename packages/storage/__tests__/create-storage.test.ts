@@ -78,7 +78,7 @@ describe("createStorage", () => {
             customMetadata: { uploadedBy: "alice" },
         });
 
-        expect(result).toEqual({ etag: "etag-new", key: "avatars/alice.png" });
+        expect(result).toEqual({ etag: "etag-new", httpEtag: '"etag-new"', key: "avatars/alice.png" });
         expect(bucket.puts[0]?.options).toMatchObject({
             customMetadata: { uploadedBy: "alice" },
             httpMetadata: { contentType: "image/png" },
@@ -105,20 +105,25 @@ describe("createStorage", () => {
         expect(bucket.puts).toHaveLength(0);
     });
 
-    it("upload() does NOT enforce maxSize for a ReadableStream (documented bypass)", async () => {
-        expect.assertions(2);
+    it("upload() enforces maxSize for a ReadableStream by aborting the wrapped stream when drained", async () => {
+        expect.assertions(3);
 
         const bucket = fakeBucket();
         const storage = createStorage({ bucket });
 
-        // A ReadableStream's byte count isn't known synchronously, so maxSize is
-        // intentionally skipped. Callers streaming uploads must pre-buffer or
-        // rely on R2 multipart enforcement. This test codifies that the stream
-        // is NOT rejected so the documented limitation can't silently regress.
+        // A ReadableStream's byte count isn't known synchronously, so the upload
+        // call itself resolves — R2 reads the body afterwards. We hand R2 a
+        // length-counting wrapper that errors past maxSize, closing the
+        // silent-truncation gap. Draining the wrapped body the bucket received
+        // surfaces that error.
         const stream = new Blob(["streamed body well over the limit"]).stream();
 
         await expect(storage.upload("stream.bin", stream, { maxSize: 4 })).resolves.toMatchObject({ key: "stream.bin" });
         expect(bucket.puts).toHaveLength(1);
+
+        const wrapped = bucket.puts[0]?.body as ReadableStream;
+
+        await expect(new Response(wrapped).arrayBuffer()).rejects.toThrow(/exceeds maxSize/);
     });
 
     it("upload() rejects a matching-but-absent contentType when allowedContentTypes is set", async () => {
@@ -396,7 +401,7 @@ describe("createStorage", () => {
 
         const result = await storage.store("docs/readme.txt", new ArrayBuffer(4), { contentType: "text/plain" });
 
-        expect(result).toEqual({ etag: "etag-new", key: "docs/readme.txt" });
+        expect(result).toEqual({ etag: "etag-new", httpEtag: '"etag-new"', key: "docs/readme.txt" });
         expect(bucket.puts[0]?.options).toMatchObject({ httpMetadata: { contentType: "text/plain" } });
     });
 

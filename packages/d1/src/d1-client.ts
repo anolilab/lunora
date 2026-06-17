@@ -53,6 +53,14 @@ interface D1PreparedStatementLike {
  */
 const STMT_CACHE_CAPACITY = 256;
 
+/**
+ * D1 Sessions-API constraint for a bookmark-less first read: serve from any
+ * replica for the lowest latency. (`"first-primary"` is the strongly-consistent
+ * alternative.) Passed in place of an omitted bookmark so the consistency choice
+ * is explicit rather than relying on the binding's default.
+ */
+const D1_FIRST_UNCONSTRAINED = "first-unconstrained";
+
 /** Thin wrapper over a `D1DatabaseSession` exposing bookmark plumbing. */
 class D1Session {
     private readonly session: D1SessionLike;
@@ -142,9 +150,16 @@ class D1Client {
     /**
      * Open a Sessions-API scoped session. Pass the bookmark forwarded by
      * the client to opt into read-your-writes consistency.
+     *
+     * With no bookmark this is the first request of a session — there is no
+     * prior write to read, so we open with the explicit `"first-unconstrained"`
+     * constraint (Cloudflare's lowest-latency default: the first read may serve
+     * from any replica). Read-your-writes for sequenced requests still flows
+     * through the forwarded bookmark; a caller needing a strongly-consistent
+     * very-first read should pass `"first-primary"` as the bookmark instead.
      */
     public withSession(bookmark?: string): D1Session {
-        const session = bookmark === undefined ? this.db.withSession() : this.db.withSession(bookmark);
+        const session = this.db.withSession(bookmark ?? D1_FIRST_UNCONSTRAINED);
 
         return new D1Session(session);
     }
@@ -214,7 +229,7 @@ class D1Client {
      * as a `D1Database` for driver-construction purposes.
      */
     public drizzleSession(bookmark?: string): DrizzleD1Database<Record<string, unknown>> {
-        const session = bookmark === undefined ? this.db.withSession() : this.db.withSession(bookmark);
+        const session = this.db.withSession(bookmark ?? D1_FIRST_UNCONSTRAINED);
 
         return drizzleD1(session as unknown as D1Database, { logger: false });
     }

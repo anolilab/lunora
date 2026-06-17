@@ -18,7 +18,7 @@
  * third party. Scrub or redact before enabling it against an external service
  * if that is a concern.
  */
-import type { LogEvent, ObservabilityEvent, ObservabilitySink } from "./observability";
+import type { LogEvent, ObservabilityEvent, ObservabilitySink, ObservabilitySinkContext } from "./observability";
 
 /** Shared shape for sinks that can be limited to error events only. */
 interface OnlyErrorsOption {
@@ -136,9 +136,11 @@ export interface WebhookSinkOptions extends OnlyErrorsOption {
  *
  * This covers Axiom, Datadog, and any generic webhook/log-ingestion service —
  * point `url` at the ingestion endpoint and supply auth via `headers`. Each
- * event is sent as its own `fetch`; the promise is intentionally not awaited
- * (there is no `ctx.waitUntil` available inside a sink) and its rejection is
- * swallowed so a flaky endpoint never surfaces to the caller.
+ * event is sent as its own `fetch`. When the runtime supplies a per-event
+ * `context.waitUntil` (the request's `ctx.waitUntil`), the send is registered
+ * with it so it survives isolate teardown after the response returns; otherwise
+ * it degrades to fire-and-forget. Either way its rejection is swallowed so a
+ * flaky endpoint never surfaces to the caller.
  *
  * Privacy: the full event is serialized, including `error.message`, which may
  * contain user input. See the module-level note. Pass a `transform` callback to
@@ -152,7 +154,7 @@ export const webhookSink = (options: WebhookSinkOptions): ObservabilitySink => {
     const mergedHeaders = mergeHeaders({ "content-type": "application/json" }, headers);
 
     return {
-        onRpc: (event) => {
+        onRpc: (event, context?: ObservabilitySinkContext) => {
             if (shouldSkip(event, onlyErrors)) {
                 return;
             }
@@ -174,18 +176,23 @@ export const webhookSink = (options: WebhookSinkOptions): ObservabilitySink => {
                     return;
                 }
 
-                // Fire-and-forget: no await. The `.catch` swallows any
-                // rejection so a failed POST can never reject into the dispatch
-                // path. The settled promise is intentionally not retained.
+                // The `.catch` swallows any rejection so a failed POST can never
+                // reject into the dispatch path.
                 const sent = fetch(url, {
                     body: JSON.stringify(payload),
                     headers: mergedHeaders,
                     method: "POST",
-                });
-
-                sent.catch(() => {
+                }).catch(() => {
                     // Network error / non-OK response — intentionally ignored.
                 });
+
+                // Prefer the request's `ctx.waitUntil` so the send outlives the
+                // response (workerd cancels in-flight promises at isolate
+                // teardown otherwise). Fall back to fire-and-forget when no
+                // request context is available (e.g. the serverQuery fast-path).
+                if (context?.waitUntil) {
+                    context.waitUntil(sent);
+                }
             } catch {
                 // `fetch` itself throwing synchronously (e.g. an invalid URL)
                 // must not break dispatch either.

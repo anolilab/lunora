@@ -8,4 +8,5 @@
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
     },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "observability": { "enabled": true, "head_sampling_rate": 1 },
 }

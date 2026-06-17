@@ -1,4 +1,5 @@
 {
+    "$schema": "node_modules/wrangler/config-schema.json",
     "name": "{{name}}",
     // Astro's @astrojs/cloudflare adapter builds its SSR worker; `src/worker.ts`
     // wraps it with `withLunora` so Lunora realtime mounts in the same worker.
@@ -17,4 +18,5 @@
     // the class-A Vite binding reconciler), so the template ships this explicitly —
     // matching the sveltekit/nuxt class-B templates.
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "observability": { "enabled": true, "head_sampling_rate": 1 },
 }

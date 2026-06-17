@@ -5,8 +5,9 @@ import { validateSessionPolicy } from "./session";
 
 /**
  * A `secret` shorter than this is brute-forceable; better-auth itself accepts
- * any non-empty string, so we warn (not throw, to avoid breaking a quick local
- * spike) and point at `openssl rand -hex 32` (32 bytes hex = 64 chars).
+ * any non-empty string. We throw on an HTTPS (production) deployment and warn on
+ * a local `http://` spike, pointing at `openssl rand -hex 32` (32 bytes hex = 64
+ * chars).
  */
 const MIN_SECRET_LENGTH = 32;
 
@@ -64,11 +65,20 @@ const isHttpsBaseUrl = (baseURL: BetterAuthOptions["baseURL"]): boolean => {
  */
 const hardenAuthOptions = (options: BetterAuthOptions): BetterAuthOptions => {
     if (isWeakSecret(options.secret)) {
+        const message =
+            `@lunora/auth: AUTH_SECRET is only ${String(options.secret?.trim().length)} characters. Use at least ${String(MIN_SECRET_LENGTH)} ` +
+            "for a brute-force-resistant secret — generate one with `openssl rand -hex 32`.";
+
+        // A weak secret on an HTTPS (i.e. production) deployment is a real
+        // brute-force exposure, not a dev inconvenience — fail loudly. Local
+        // `http://` spikes keep the soft warning so a quick prototype isn't
+        // blocked.
+        if (isHttpsBaseUrl(options.baseURL)) {
+            throw new Error(message);
+        }
+
         // eslint-disable-next-line no-console
-        console.warn(
-            `@lunora/auth: AUTH_SECRET is only ${String(options.secret?.length)} characters. Use at least ${String(MIN_SECRET_LENGTH)} ` +
-                "for a brute-force-resistant secret — generate one with `openssl rand -hex 32`.",
-        );
+        console.warn(message);
     }
 
     const advanced = options.advanced ?? {};
@@ -100,6 +110,30 @@ const hardenAuthOptions = (options: BetterAuthOptions): BetterAuthOptions => {
  * field (a `SessionPolicy`); Lunora validates it for obviously-broken
  * durations and forwards it verbatim to better-auth. See `sessionPresets`
  * for ready-made rotation/expiry trade-offs.
+ *
+ * ## Serverless background tasks (Cloudflare Workers)
+ *
+ * better-auth runs some work *after* sending the response — most importantly the
+ * password-reset email, whose background send is what keeps reset responses
+ * constant-time (a timing-attack defence: the response doesn't reveal whether
+ * the account exists). On Cloudflare Workers a promise that isn't handed to
+ * `ctx.waitUntil` can be cancelled the moment the response returns, dropping
+ * that send and weakening the guarantee. Wire your request's `ctx.waitUntil`
+ * into better-auth's background handler so the work survives:
+ *
+ * ```ts
+ * // in your worker fetch handler, where `ctx: ExecutionContext` is in scope
+ * const auth = createAuth({
+ *     secret: env.AUTH_SECRET,
+ *     database: lunoraD1Adapter(env.DB),
+ *     advanced: {
+ *         backgroundTasks: { handler: (promise) => ctx.waitUntil(promise) },
+ *     },
+ * });
+ * ```
+ *
+ * (Lunora can't set this for you — `ctx.waitUntil` is per-request, but
+ * `createAuth` runs once at worker setup.)
  */
 export type LunoraAuthOptions = BetterAuthOptions;
 

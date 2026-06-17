@@ -26,7 +26,7 @@ const createSession = (bookmark: string | null): D1SessionLike => {
 };
 
 describe("d1Client", () => {
-    it("withSession() forwards no bookmark when none is provided", () => {
+    it("withSession() opens an explicit first-unconstrained session when no bookmark is provided", () => {
         expect.assertions(2);
 
         const session = createSession("bookmark-new");
@@ -38,7 +38,9 @@ describe("d1Client", () => {
         const client = new D1Client(database);
         const handle = client.withSession();
 
-        expect(database.withSession).toHaveBeenCalledWith();
+        // The bookmark-less first read uses Cloudflare's lowest-latency
+        // constraint rather than relying on the binding's implicit default.
+        expect(database.withSession).toHaveBeenCalledWith("first-unconstrained");
         expect(handle.getBookmark()).toBe("bookmark-new");
     });
 

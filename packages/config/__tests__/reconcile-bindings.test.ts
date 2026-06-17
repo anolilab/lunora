@@ -43,6 +43,9 @@ const MINIMAL_WRANGLER = `{
         "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }],
     },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    // A fully-synced config carries observability (reconcile turns it on when
+    // absent), so the no-op tests below start from a config that already has it.
+    "observability": { "enabled": true },
 }
 `;
 
@@ -67,6 +70,30 @@ describe("reconcileWranglerBindings", () => {
 
         expect(result.changed).toBe(false);
         expect(result.reason).toContain("in sync");
+    });
+
+    it("turns on observability when the key is absent (not just for container apps)", () => {
+        expect.assertions(3);
+
+        // A plain Worker+DO config with no observability key — reconcile should
+        // enable Workers Logs + Traces by default.
+        writeFileSync(
+            join(root, "wrangler.jsonc"),
+            `{
+    "name": "lunora-app",
+    "compatibility_date": "2026-04-07",
+    "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
+    "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+}
+`,
+            "utf8",
+        );
+
+        const result = reconcileWranglerBindings(root, baseInferred());
+
+        expect(result.changed).toBe(true);
+        expect(result.added).toContain("observability");
+        expect(readConfig().observability).toEqual({ enabled: true, head_sampling_rate: 1 });
     });
 
     it("binds a newly-exported SCHEDULER DO and registers its migration class", () => {
@@ -112,6 +139,7 @@ describe("reconcileWranglerBindings", () => {
     "compatibility_date": "2026-04-07",
     "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "observability": { "enabled": true },
     "ai": { "binding": "AI" },
 }
 `,
@@ -133,6 +161,7 @@ describe("reconcileWranglerBindings", () => {
     "compatibility_date": "2026-04-07",
     "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "observability": { "enabled": true },
     "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "real-id" }],
 }
 `,
@@ -226,6 +255,7 @@ describe("reconcileWranglerBindings", () => {
     "compatibility_date": "2026-04-07",
     "durable_objects": { "bindings": [{ "name": "SHARD", "class_name": "ShardDO" }] },
     "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ShardDO"] }],
+    "observability": { "enabled": true },
     "d1_databases": [{ "binding": "DB", "database_name": "x", "database_id": "real-id" }],
 }
 `,

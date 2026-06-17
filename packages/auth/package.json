@@ -46,6 +46,10 @@
             "types": "./dist/plugins.d.ts",
             "import": "./dist/plugins.mjs"
         },
+        "./plugins/client": {
+            "types": "./dist/plugins-client.d.ts",
+            "import": "./dist/plugins-client.mjs"
+        },
         "./middleware": {
             "types": "./dist/middleware.d.ts",
             "import": "./dist/middleware.mjs"
