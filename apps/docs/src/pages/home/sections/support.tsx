@@ -1,7 +1,9 @@
 import { ArrowRight, BookOpen, CircleDot, GitPullRequest } from "lucide-react";
+import type { ReactNode } from "react";
 
 import Section from "@/components/sections/section";
-import SectionTitle from "@/components/sections/section-title";
+import SectionDivider from "@/components/sections/section-divider";
+import SectionHeader from "@/components/sections/section-header";
 import FlickeringGrid from "@/components/ui/flickering-grid";
 
 const GoodFirstIssueBanner = (
@@ -15,14 +17,14 @@ const SupportCard = ({
     className,
     href,
     icon: Icon,
-    iconColor = "text-gray-600",
+    iconColor = "text-white/50",
     linkColor = "text-sky-sapphire",
     linkText,
     title,
 }: {
     accentColor: string;
-    banner?: React.ReactNode;
-    children: React.ReactNode;
+    banner?: ReactNode;
+    children: ReactNode;
     className?: string;
     href?: string;
     icon: typeof BookOpen;
@@ -32,29 +34,29 @@ const SupportCard = ({
     title: string;
 }) => (
     <div
-        className={`group relative col-span-2 overflow-hidden border-y border-gray-200 bg-ivory transition-all duration-300 hover:bg-gray-50 ${className ?? ""}`}
+        className={`group relative col-span-2 overflow-hidden border-y border-white/[0.08] bg-white/[0.015] transition-all duration-300 hover:bg-white/[0.03] ${className ?? ""}`}
     >
         {banner}
-        <div className={`absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent ${accentColor} to-transparent`} />
+        <div className={`absolute top-0 right-0 left-0 h-px bg-gradient-to-r from-transparent ${accentColor} to-transparent`} />
         <div className="flex flex-col gap-4 p-8">
             <div className="flex items-start gap-4">
-                <div className="flex h-10 w-10 shrink-0 items-center justify-center border border-gray-200 bg-gray-50">
-                    <Icon className={`h-5 w-5 ${iconColor}`} />
+                <div className="flex size-10 shrink-0 items-center justify-center border border-white/10 bg-white/[0.03]">
+                    <Icon className={`size-5 ${iconColor}`} />
                 </div>
                 <div className="flex flex-col gap-2">
-                    <h3 className="text-lg font-bold">{title}</h3>
-                    <span className="text-sm leading-relaxed text-gray-500">{children}</span>
+                    <h3 className="text-lg font-medium text-white">{title}</h3>
+                    <span className="text-sm leading-relaxed text-white/55">{children}</span>
                 </div>
             </div>
             {href && linkText && (
                 <a
-                    className={`group/link ml-14 inline-flex w-fit items-center gap-2 text-sm font-medium ${linkColor} transition-colors hover:text-gray-900`}
+                    className={`group/link ml-14 inline-flex w-fit items-center gap-2 text-sm font-medium ${linkColor} transition-colors hover:text-white`}
                     href={href}
                     rel="noreferrer"
                     target="_blank"
                 >
                     {linkText}
-                    <ArrowRight className="h-4 w-4 transition-transform group-hover/link:translate-x-1" />
+                    <ArrowRight className="size-4 transition-transform group-hover/link:translate-x-1" />
                 </a>
             )}
         </div>
@@ -62,31 +64,21 @@ const SupportCard = ({
 );
 
 const SupportSection = () => (
-    <>
-        <Section classes={{ root: "pb-0" }} mode="light">
+    <div className="bg-background" data-theme="dark">
+        <SectionDivider />
+        <Section classes={{ root: "pb-0" }} gridLength={0} mode="dark">
             <div className="col-span-2">
-                <SectionTitle
-                    description={
-                        <span className="flex flex-col gap-4">
-                            <span>
-                                Community is the heart of open source. The success of our packages wouldn't be possible without the incredible contributions of
-                                users, testers, and developers who collaborate with us every day.
-                            </span>
-                            <span className="text-gray-400">
-                                Want to get involved? Here are some tips on how you can make a meaningful impact on our open source projects.
-                            </span>
-                        </span>
-                    }
-                    mode="light"
-                    prefix="Support"
+                <SectionHeader
+                    eyebrow="Support"
+                    subhead="Community is the heart of open source — its success comes from the users, testers, and developers who collaborate with us. Here are some ways to make a meaningful impact."
                     title="Contribute to our work and keep us going"
                 />
             </div>
         </Section>
-        <Section classes={{ root: "pt-20" }} mode="light">
+        <Section classes={{ root: "pt-20" }} gridLength={0} mode="dark">
             <SupportCard accentColor="via-sky-sapphire/30" className="mr-px" icon={BookOpen} iconColor="text-sky-sapphire/70" title="Ready to help us out?">
-                Be sure to check out the package's contribution guidelines first. They'll walk you through the process on how to properly submit an issue or
-                pull request to our repositories.
+                Be sure to check out the package's contribution guidelines first. They'll walk you through how to properly submit an issue or pull request to
+                our repositories.
             </SupportCard>
             <div className="hidden lg:col-span-2 lg:block" />
 
@@ -111,7 +103,7 @@ const SupportSection = () => (
             </SupportCard>
             <div className="hidden lg:col-span-2 lg:block" />
         </Section>
-    </>
+    </div>
 );
 
 export default SupportSection;

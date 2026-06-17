@@ -5,7 +5,7 @@ import type { FC } from "react";
 import { useState } from "react";
 
 import Section from "@/components/sections/section";
-import SectionTitle from "@/components/sections/section-title";
+import SectionHeader from "@/components/sections/section-header";
 import JsonLd from "@/components/seo/json-ld";
 import { cn } from "@/lib/utils";
 
@@ -75,15 +75,9 @@ const FAQ: FC = () => {
     return (
         <div className="bg-coal border-t border-white/[0.06]">
             <JsonLd data={faqPageJsonLd} />
-            <Section mode="dark" patternColor="royal-amethyst" patternPosition="bottom">
-                <SectionTitle
-                    classes={{ root: "col-span-2 lg:col-span-4" }}
-                    description="Common questions about Lunora."
-                    mode="dark"
-                    position="left"
-                    title="Frequently Asked Questions"
-                />
-                <div className="col-span-2 lg:col-span-4 border-t mt-8">
+            <Section gridLength={0} mode="dark">
+                <SectionHeader className="col-span-2 lg:col-span-4" eyebrow="FAQ" subhead="Common questions about Lunora." title="Frequently asked questions" />
+                <div className="col-span-2 mt-8 border-t border-white/[0.06] lg:col-span-4">
                     {faqs.map((faq, index) => (
                         <FaqItem
                             answer={faq.answer}
