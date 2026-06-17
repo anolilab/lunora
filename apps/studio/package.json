@@ -6,7 +6,7 @@
     "type": "module",
     "sideEffects": false,
     "engines": {
-        "node": "^22.15.0 || >=24.10.0"
+        "node": "^22.15.0 || >=24.11.0"
     },
     "scripts": {
         "build": "vite build",
