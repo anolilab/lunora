@@ -529,7 +529,7 @@ const MainHero: FC = () => {
                     <div className="flex flex-col gap-8 lg:flex-row lg:items-end lg:justify-between">
                         <motion.h1
                             {...fade(0.1)}
-                            className="max-w-3xl text-4xl leading-[1.02] font-bold tracking-tighter text-balance text-white sm:text-5xl md:text-6xl"
+                            className="font-display max-w-3xl text-4xl leading-[1.02] font-bold tracking-tighter text-balance text-white sm:text-5xl md:text-6xl"
                         >
                             Realtime backends, end-to-end typed{" "}
                             <span className="bg-gradient-to-r from-sky-sapphire via-royal-amethyst to-crimson-energy bg-clip-text text-transparent">
@@ -558,7 +558,7 @@ const MainHero: FC = () => {
                     </div>
 
                     {/* console + feature strip */}
-                    <motion.div {...fade(0.4)} className="mt-10 border border-white/10 shadow-2xl shadow-black/40">
+                    <motion.div {...fade(0.4)} className="mt-10 border border-white/10">
                         <LunoraConsole focus={activeFeature} />
                         <div className="grid grid-cols-1 divide-y divide-white/[0.08] border-t border-white/10 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
                             {features.map((feature, index) => {

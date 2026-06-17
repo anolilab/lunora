@@ -112,10 +112,10 @@ export const BackgroundBeams = memo(({ className }: { className?: string }) => (
                             repeat: Infinity,
                         }}
                     >
-                        <stop stopColor="#18CCFC" stopOpacity="0" />
-                        <stop stopColor="#18CCFC" />
-                        <stop offset="32.5%" stopColor="#6344F5" />
-                        <stop offset="100%" stopColor="#AE48FF" stopOpacity="0" />
+                        <stop stopColor="#29D4DF" stopOpacity="0" />
+                        <stop stopColor="#29D4DF" />
+                        <stop offset="32.5%" stopColor="#9277E9" />
+                        <stop offset="100%" stopColor="#EC5CA4" stopOpacity="0" />
                     </motion.linearGradient>
                 ))}
 
