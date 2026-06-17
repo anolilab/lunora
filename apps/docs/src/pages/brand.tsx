@@ -54,7 +54,7 @@ const Logo = () => (
         <div className="col-span-1 col-start-2 flex h-96 flex-col items-center justify-center gap-5 bg-white">
             <LunoraLogo className="text-coal h-48 w-48" />
         </div>
-        <div className="col-span-1 col-start-4 flex h-96 flex-col items-center justify-center gap-5 bg-black">
+        <div className="col-span-1 col-start-4 flex h-96 flex-col items-center justify-center gap-5 bg-dark-coal">
             <LunoraLogo className="h-48 w-48 text-white" />
         </div>
     </>

@@ -2,7 +2,7 @@
 
 import { Check, Copy, Plus } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import type { FC } from "react";
+import type { FC, ReactNode } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import Section from "@/components/sections/section";
@@ -64,21 +64,22 @@ const tabs = {
     "todos.ts": [
         'import { mutation, query, v } from "lunora/server";',
         "",
-        "export const list = query({",
-        '  handler: (ctx) => ctx.db.query("todos"),',
-        "});",
+        "export const list = query.query(",
+        "  async ({ ctx }) =>",
+        '    ctx.db.query("todos").collect(),',
+        ");",
         "",
-        "export const add = mutation({",
-        "  args: { text: v.string(), category: v.string() },",
-        "  handler: (ctx, t) =>",
-        '    ctx.db.insert("todos", { ...t, completed: false }),',
-        "});",
+        "export const add = mutation",
+        "  .input({ text: v.string(), category: v.string() })",
+        "  .mutation(async ({ ctx, args }) =>",
+        '    ctx.db.insert("todos", { ...args, completed: false }),',
+        "  );",
         "",
-        "export const toggle = mutation({",
-        '  args: { id: v.id("todos") },',
-        "  handler: (ctx, { id }) =>",
-        "    ctx.db.patch(id, { completed: true }),",
-        "});",
+        "export const toggle = mutation",
+        '  .input({ id: v.id("todos") })',
+        "  .mutation(async ({ ctx, args }) =>",
+        "    ctx.db.patch(args.id, { completed: true }),",
+        "  );",
     ],
 } as const;
 
@@ -143,43 +144,31 @@ const randomPool: { category: string; text: string }[] = [
 const pickRandom = (): { category: string; text: string } => randomPool[Math.floor(Math.random() * randomPool.length)];
 
 const CategoryBadge: FC<{ category: string }> = ({ category }) => (
-    <span className={cn("shrink-0 rounded px-2 py-0.5 text-[11px] font-medium", categoryTone[category] ?? categoryTone.Other)}>{category}</span>
+    <span className={cn("shrink-0 px-2 py-0.5 text-[11px] font-medium", categoryTone[category] ?? categoryTone.Other)}>{category}</span>
 );
 
-const WindowChrome: FC<{ label: string; tone?: "studio" }> = ({ label, tone }) => (
-    <div className="flex h-8 shrink-0 items-center gap-2 px-3">
-        <span className="flex gap-1.5">
-            <span className="size-2.5 rounded-full bg-white/[0.08]" />
-            <span className="size-2.5 rounded-full bg-white/[0.08]" />
-            <span className="size-2.5 rounded-full bg-white/[0.08]" />
+const ColumnHeader: FC<{ accent?: ReactNode; active: boolean; label: string; right?: ReactNode }> = ({ accent, active, label, right }) => (
+    <div className="flex h-9 shrink-0 items-center justify-between border-b border-white/[0.08] px-3">
+        <span className="flex items-center gap-2">
+            {accent}
+            <span className={cn("font-mono text-[11px] tracking-wide transition-colors", active ? "text-sky-sapphire" : "text-white/40")}>{label}</span>
         </span>
-        <span className="mx-auto flex items-center gap-1.5 rounded bg-white/[0.04] px-3 py-0.5 font-mono text-[11px] text-white/35">
-            {tone === "studio" && <span className="size-2 rounded-full bg-crimson-energy/70" />}
-            {label}
-        </span>
+        {right}
     </div>
 );
 
-const CodePanel: FC<{ focused: boolean; writing: boolean }> = ({ focused, writing }) => {
+const CodeColumn: FC<{ focused: boolean; writing: boolean }> = ({ focused, writing }) => {
     const [active, setActive] = useState<TabName>("todos.ts");
     const lines = tabs[active];
 
     return (
-        <div
-            className={cn(
-                "flex h-full flex-col overflow-hidden rounded-lg bg-[hsl(220_14%_6%)] transition-shadow duration-500",
-                focused && "ring-1 ring-sky-sapphire/40",
-            )}
-        >
-            <WindowChrome label="lunora — editor" />
-            <div className="flex items-center gap-1 px-2 text-xs">
+        <div className={cn("flex min-h-0 flex-col transition-colors duration-500", focused && "bg-sky-sapphire/[0.03]")}>
+            <div className="flex h-9 shrink-0 items-stretch border-b border-white/[0.08]">
                 {(Object.keys(tabs) as TabName[]).map((name) => (
                     <button
                         className={cn(
-                            "flex items-center gap-1.5 border-b-2 px-2.5 py-2 font-mono text-[11px] transition-colors",
-                            active === name
-                                ? "border-b-sky-sapphire/70 bg-white/[0.04] text-white/80"
-                                : "border-b-transparent text-white/35 hover:text-white/60",
+                            "border-r border-white/[0.06] px-3 font-mono text-[11px] tracking-wide transition-colors",
+                            active === name ? "bg-white/[0.04] text-white/80" : "text-white/35 hover:text-white/60",
                         )}
                         key={name}
                         onClick={() => {
@@ -187,17 +176,16 @@ const CodePanel: FC<{ focused: boolean; writing: boolean }> = ({ focused, writin
                         }}
                         type="button"
                     >
-                        <span className="flex size-3.5 items-center justify-center rounded-[3px] bg-sky-sapphire/20 font-bold text-sky-sapphire/80">TS</span>
-                        lunora/{name}
+                        {name}
                     </button>
                 ))}
             </div>
-            <div className="grow overflow-auto bg-[hsl(220_16%_4.5%)] px-3 py-3 font-mono text-[12px] leading-[1.75]">
+            <div className="grow overflow-auto px-3 py-3 font-mono text-[12px] leading-[1.7]">
                 {lines.map((line, index) => (
                     <div
                         className={cn(
-                            "-mx-1 flex rounded-sm px-1 transition-colors duration-300",
-                            writing && active === "todos.ts" && index >= 6 && index <= 10 ? "bg-sky-sapphire/[0.08]" : "",
+                            "-mx-1 flex px-1 transition-colors duration-300",
+                            writing && active === "todos.ts" && index >= 7 && index <= 11 ? "bg-sky-sapphire/[0.08]" : "",
                         )}
                         key={index}
                     >
@@ -210,7 +198,7 @@ const CodePanel: FC<{ focused: boolean; writing: boolean }> = ({ focused, writin
     );
 };
 
-const TodoAppPanel: FC<{
+const AppColumn: FC<{
     focused: boolean;
     inputValue: string;
     onChange: (value: string) => void;
@@ -231,34 +219,31 @@ const TodoAppPanel: FC<{
     }, [todos.length]);
 
     return (
-        <div
-            className={cn(
-                "flex min-h-0 flex-col overflow-hidden rounded-lg bg-[hsl(220_14%_8%)] transition-shadow duration-500",
-                focused && "ring-1 ring-sky-sapphire/40",
-            )}
-        >
-            <WindowChrome label="my-todo-app.app" />
-            <div className="flex items-center justify-between px-4 pt-1 pb-2">
-                <span className="text-sm font-medium text-white/80">Todos</span>
-                <AnimatePresence>
-                    {showHint && (
-                        <motion.span
-                            animate={{ opacity: 1, x: 0 }}
-                            className="flex items-center gap-1 bg-amber-300/90 px-2 py-0.5 text-[10px] font-semibold tracking-tight text-coal"
-                            exit={{ opacity: 0 }}
-                            initial={{ opacity: 0, x: 6 }}
-                        >
-                            Try it — add a todo
-                        </motion.span>
-                    )}
-                </AnimatePresence>
-            </div>
-            <div className="min-h-0 grow space-y-1 overflow-y-auto px-3" ref={listRef}>
+        <div className={cn("flex min-h-0 flex-col transition-colors duration-500", focused && "bg-sky-sapphire/[0.03]")}>
+            <ColumnHeader
+                active={focused}
+                label="app · my-todo-app"
+                right={
+                    <AnimatePresence>
+                        {showHint && (
+                            <motion.span
+                                animate={{ opacity: 1 }}
+                                className="bg-amber-300/90 px-2 py-0.5 text-[10px] font-semibold tracking-tight text-coal"
+                                exit={{ opacity: 0 }}
+                                initial={{ opacity: 0 }}
+                            >
+                                Try it ↓
+                            </motion.span>
+                        )}
+                    </AnimatePresence>
+                }
+            />
+            <div className="min-h-0 grow space-y-1 overflow-y-auto px-3 py-2" ref={listRef}>
                 <AnimatePresence initial={false}>
                     {todos.map((todo) => (
                         <motion.div
                             animate={{ opacity: 1, y: 0 }}
-                            className="flex items-center gap-3 rounded-md px-2 py-2"
+                            className="flex items-center gap-3 px-1 py-1.5"
                             exit={{ opacity: 0 }}
                             initial={{ opacity: 0, y: -8 }}
                             key={todo.id}
@@ -268,7 +253,7 @@ const TodoAppPanel: FC<{
                             <button
                                 aria-label={todo.completed ? "Mark incomplete" : "Mark complete"}
                                 className={cn(
-                                    "flex size-4 shrink-0 cursor-pointer items-center justify-center rounded border transition-colors",
+                                    "flex size-4 shrink-0 cursor-pointer items-center justify-center border transition-colors",
                                     todo.completed ? "border-emerald-400/60 bg-emerald-400/20" : "border-white/20 hover:border-white/40",
                                 )}
                                 onClick={() => {
@@ -284,9 +269,9 @@ const TodoAppPanel: FC<{
                     ))}
                 </AnimatePresence>
             </div>
-            <div className="flex items-center gap-2 p-3">
+            <div className="flex items-center gap-2 border-t border-white/[0.08] p-2.5">
                 <input
-                    className="flex-1 rounded-md bg-white/[0.04] px-3 py-2 text-sm text-white/80 outline-none transition-colors placeholder:text-white/30 focus:bg-white/[0.06] focus:ring-1 focus:ring-white/15"
+                    className="min-w-0 flex-1 bg-white/[0.04] px-3 py-2 text-sm text-white/80 outline-none transition-colors placeholder:text-white/30 focus:bg-white/[0.06] focus:ring-1 focus:ring-white/15"
                     onChange={(event) => {
                         onChange(event.target.value);
                     }}
@@ -299,7 +284,7 @@ const TodoAppPanel: FC<{
                     value={inputValue}
                 />
                 <button
-                    className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-white px-3 py-2 text-xs font-semibold text-coal transition-colors hover:bg-white/90"
+                    className="inline-flex shrink-0 items-center gap-1.5 bg-white px-3 py-2 text-xs font-semibold text-coal transition-colors hover:bg-white/90"
                     onClick={onSubmit}
                     type="button"
                 >
@@ -311,25 +296,19 @@ const TodoAppPanel: FC<{
     );
 };
 
-const StudioTablePanel: FC<{ focused: boolean; todos: Todo[] }> = ({ focused, todos }) => (
-    <div
-        className={cn(
-            "flex min-h-0 flex-col overflow-hidden rounded-lg bg-[hsl(220_14%_8%)] transition-shadow duration-500",
-            focused && "ring-1 ring-sky-sapphire/40",
-        )}
-    >
-        <WindowChrome label="lunora studio" tone="studio" />
-        <div className="flex items-baseline gap-2 px-4 pt-1 pb-2">
-            <span className="font-mono text-sm font-medium text-white/80">todos</span>
-            <span className="text-[11px] text-white/35">
-                table · {todos.length} document{todos.length === 1 ? "" : "s"}
-            </span>
-        </div>
-        <div className="grow overflow-auto px-2 pb-2">
+const TableColumn: FC<{ focused: boolean; todos: Todo[] }> = ({ focused, todos }) => (
+    <div className={cn("flex min-h-0 flex-col transition-colors duration-500", focused && "bg-sky-sapphire/[0.03]")}>
+        <ColumnHeader
+            accent={<span className="size-2 bg-crimson-energy/70" />}
+            active={focused}
+            label="studio · todos"
+            right={<span className="font-mono text-[10px] text-white/30">{todos.length} docs</span>}
+        />
+        <div className="grow overflow-auto px-2 py-1">
             <table className="w-full border-separate border-spacing-0 text-left font-mono text-[11px]">
                 <thead>
                     <tr className="text-white/35">
-                        {["_id", "text", "category", "completed"].map((col) => (
+                        {["_id", "text", "category", "done"].map((col) => (
                             <th className="px-2 py-1.5 font-normal" key={col}>
                                 {col}
                             </th>
@@ -347,7 +326,7 @@ const StudioTablePanel: FC<{ focused: boolean; todos: Todo[] }> = ({ focused, to
                                 transition={{ duration: 1.2 }}
                             >
                                 <td className="truncate px-2 py-1.5 text-white/30">{todo.docId}</td>
-                                <td className="max-w-[7rem] truncate px-2 py-1.5 text-sky-sapphire/70">&quot;{todo.text}&quot;</td>
+                                <td className="max-w-[6rem] truncate px-2 py-1.5 text-sky-sapphire/70">&quot;{todo.text}&quot;</td>
                                 <td className="px-2 py-1.5 text-sky-sapphire/70">&quot;{todo.category}&quot;</td>
                                 <td className={cn("px-2 py-1.5", todo.completed ? "text-emerald-400/80" : "text-white/40")}>{String(todo.completed)}</td>
                             </motion.tr>
@@ -359,7 +338,7 @@ const StudioTablePanel: FC<{ focused: boolean; todos: Todo[] }> = ({ focused, to
     </div>
 );
 
-const LunoraDemo: FC<{ focus: number }> = ({ focus }) => {
+const LunoraConsole: FC<{ focus: number }> = ({ focus }) => {
     const [todos, setTodos] = useState<Todo[]>(() => seedTodos.map((todo) => ({ ...todo, fresh: false })));
     const [writing, setWriting] = useState(false);
     const [inputValue, setInputValue] = useState("");
@@ -483,42 +462,27 @@ const LunoraDemo: FC<{ focus: number }> = ({ focus }) => {
     }, [engaged, autoAdd, settle]);
 
     return (
-        <motion.div
-            animate={{ opacity: 1, y: 0 }}
-            className="rounded-2xl bg-white/[0.025] p-2.5 shadow-2xl shadow-black/40 ring-1 ring-white/[0.06]"
-            initial={{ opacity: 0, y: 30 }}
-            transition={{ delay: 0.5, duration: 0.8, ease: "easeOut" }}
-        >
-            <div className="grid h-[28rem] grid-cols-1 gap-2.5 lg:h-[36rem] lg:grid-cols-2">
-                <CodePanel focused={focus === 0} writing={writing} />
-                <div className="grid min-h-0 grid-rows-2 gap-2.5">
-                    <TodoAppPanel
-                        focused={focus === 1}
-                        inputValue={inputValue}
-                        onChange={handleChange}
-                        onSubmit={handleSubmit}
-                        onToggle={toggleTodo}
-                        placeholder={suggestion.text}
-                        showHint={!engaged}
-                        todos={todos}
-                    />
-                    <StudioTablePanel focused={focus === 1 || focus === 2} todos={todos} />
-                </div>
-            </div>
-        </motion.div>
+        <div className="grid h-auto grid-cols-1 divide-y divide-white/[0.08] bg-[hsl(240_16%_5%)] lg:h-[31rem] lg:grid-cols-3 lg:divide-x lg:divide-y-0">
+            <CodeColumn focused={focus === 0} writing={writing} />
+            <AppColumn
+                focused={focus === 1}
+                inputValue={inputValue}
+                onChange={handleChange}
+                onSubmit={handleSubmit}
+                onToggle={toggleTodo}
+                placeholder={suggestion.text}
+                showHint={!engaged}
+                todos={todos}
+            />
+            <TableColumn focused={focus === 1 || focus === 2} todos={todos} />
+        </div>
     );
 };
 
 const features = [
-    {
-        description: "Schema, queries, mutations, and auth in pure TypeScript — typed end-to-end and generated for you by codegen.",
-        title: "Everything is code",
-    },
-    { description: "useQuery subscribes once. Every mutation pushes live updates to all clients — no refetching, no glue code.", title: "Always in sync" },
-    {
-        description: "Durable Objects, edge runtime, SQLite, scheduling, and global replication — production-ready out of the box.",
-        title: "Built on Cloudflare",
-    },
+    { description: "Schema, queries, and mutations in pure TypeScript — typed end-to-end and generated for you.", title: "Everything is code" },
+    { description: "useQuery subscribes once. Every mutation pushes live updates to all clients — no refetching.", title: "Always in sync" },
+    { description: "Durable Objects, edge runtime, SQLite, and global replication — production-ready by default.", title: "Built on Cloudflare" },
 ];
 
 const fade = (delay: number) => ({
@@ -540,39 +504,45 @@ const MainHero: FC = () => {
     };
 
     return (
-        <div className="relative bg-background">
+        <div className="relative overflow-hidden bg-background">
+            <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-x-0 top-0 -z-0 h-[40rem]"
+                style={{ background: "radial-gradient(60% 50% at 50% -5%, hsl(256 72% 68% / 0.14), transparent 70%)" }}
+            />
             <Section
                 classes={{
                     childrenWrapper: "!grid-cols-1",
-                    root: "min-h-screen !pt-24 !pb-12",
+                    root: "!pt-24 !pb-16",
                 }}
                 gridLength={0}
                 mode="dark"
             >
-                <div className="grid w-full grid-cols-1 items-center gap-12 lg:grid-cols-12 lg:gap-10">
+                <div className="relative z-10 flex w-full flex-col">
                     <p className="sr-only">
                         Lunora is a type-safe, real-time backend framework on Cloudflare Workers and Durable Objects with a Vite-first developer experience.
                         Define a schema and write query, mutation, and action functions on the server; the client gets end-to-end typed data with live
                         subscriptions, optimistic updates, and an offline queue — types sync from server to client automatically via codegen.
                     </p>
 
-                    {/* left rail */}
-                    <div className="flex flex-col gap-8 lg:col-span-4">
-                        <motion.div {...fade(0.1)} className="flex flex-col gap-5">
-                            <h1 className="text-4xl leading-[1.05] font-bold tracking-tight text-balance text-white sm:text-5xl">
-                                Realtime backends, end-to-end typed{" "}
-                                <span className="bg-gradient-to-r from-sky-sapphire via-royal-amethyst to-crimson-energy bg-clip-text text-transparent">
-                                    on Cloudflare&apos;s edge.
-                                </span>
-                            </h1>
-                            <p className="max-w-md text-base text-white/55">
-                                Typed queries, live sync, optimistic updates, and offline — global by default on Cloudflare Workers &amp; Durable Objects.
-                            </p>
-                        </motion.div>
+                    {/* headline */}
+                    <div className="flex flex-col gap-8 lg:flex-row lg:items-end lg:justify-between">
+                        <motion.h1
+                            {...fade(0.1)}
+                            className="max-w-3xl text-4xl leading-[1.02] font-bold tracking-tighter text-balance text-white sm:text-5xl md:text-6xl"
+                        >
+                            Realtime backends, end-to-end typed{" "}
+                            <span className="bg-gradient-to-r from-sky-sapphire via-royal-amethyst to-crimson-energy bg-clip-text text-transparent">
+                                on Cloudflare&apos;s edge.
+                            </span>
+                        </motion.h1>
 
-                        <motion.div {...fade(0.2)} className="flex flex-col gap-3">
+                        <motion.div {...fade(0.2)} className="flex shrink-0 flex-col gap-4 lg:max-w-xs lg:items-end">
+                            <p className="text-sm text-white/55 lg:text-right">
+                                Typed queries, live sync, optimistic updates, and offline — global by default on Workers &amp; Durable Objects.
+                            </p>
                             <button
-                                className="group flex w-fit items-center gap-3 rounded-none border-[0.75px] border-white/12 bg-white/[0.03] px-4 py-2.5 font-mono text-sm text-white/70 transition-colors hover:border-white/20 hover:text-white"
+                                className="group flex w-fit items-center gap-3 border-[0.75px] border-white/15 bg-white/[0.03] px-4 py-2.5 font-mono text-sm text-white/70 transition-colors hover:border-white/25 hover:text-white"
                                 onClick={copyCommand}
                                 type="button"
                             >
@@ -585,60 +555,59 @@ const MainHero: FC = () => {
                                 )}
                             </button>
                         </motion.div>
+                    </div>
 
-                        <motion.div {...fade(0.3)} className="mt-2 flex flex-col">
+                    {/* console + feature strip */}
+                    <motion.div {...fade(0.4)} className="mt-10 border border-white/10 shadow-2xl shadow-black/40">
+                        <LunoraConsole focus={activeFeature} />
+                        <div className="grid grid-cols-1 divide-y divide-white/[0.08] border-t border-white/10 sm:grid-cols-3 sm:divide-x sm:divide-y-0">
                             {features.map((feature, index) => {
                                 const isActive = index === activeFeature;
 
                                 return (
                                     <button
-                                        className="border-t-[0.75px] border-white/[0.08] py-4 text-left"
+                                        className={cn(
+                                            "relative flex flex-col gap-1.5 p-4 text-left transition-colors",
+                                            isActive ? "bg-white/[0.03]" : "hover:bg-white/[0.015]",
+                                        )}
                                         key={feature.title}
                                         onClick={() => {
                                             setActiveFeature(index);
                                         }}
+                                        onMouseEnter={() => {
+                                            setActiveFeature(index);
+                                        }}
                                         type="button"
                                     >
-                                        <span className="flex items-center gap-3">
+                                        {isActive && (
+                                            <motion.span
+                                                className="absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r from-sky-sapphire via-royal-amethyst to-crimson-energy"
+                                                layoutId="feature-accent"
+                                            />
+                                        )}
+                                        <span className="flex items-center gap-2">
                                             <span
                                                 className={cn(
-                                                    "font-mono text-xs tabular-nums transition-colors",
-                                                    isActive ? "text-sky-sapphire" : "text-white/25",
+                                                    "font-mono text-[11px] tabular-nums transition-colors",
+                                                    isActive ? "text-sky-sapphire" : "text-white/30",
                                                 )}
                                             >
                                                 {String(index + 1).padStart(2, "0")}
                                             </span>
                                             <span
                                                 className={cn(
-                                                    "text-lg font-medium tracking-tight transition-colors",
-                                                    isActive ? "text-white" : "text-white/45",
+                                                    "text-sm font-medium tracking-tight transition-colors",
+                                                    isActive ? "text-white" : "text-white/55",
                                                 )}
                                             >
                                                 {feature.title}
                                             </span>
                                         </span>
-                                        <AnimatePresence initial={false}>
-                                            {isActive && (
-                                                <motion.p
-                                                    animate={{ height: "auto", opacity: 1 }}
-                                                    className="overflow-hidden pt-2 pl-7 text-sm leading-snug text-white/50"
-                                                    exit={{ height: 0, opacity: 0 }}
-                                                    initial={{ height: 0, opacity: 0 }}
-                                                    transition={{ duration: 0.25 }}
-                                                >
-                                                    {feature.description}
-                                                </motion.p>
-                                            )}
-                                        </AnimatePresence>
+                                        <span className="text-xs leading-snug text-white/45">{feature.description}</span>
                                     </button>
                                 );
                             })}
-                        </motion.div>
-                    </div>
-
-                    {/* demo */}
-                    <motion.div {...fade(0.4)} className="lg:col-span-8">
-                        <LunoraDemo focus={activeFeature} />
+                        </div>
                     </motion.div>
                 </div>
             </Section>

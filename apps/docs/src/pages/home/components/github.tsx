@@ -6,8 +6,8 @@ import { BackgroundBeams } from "@/components/ui/background-beams";
 import OssChip from "@/components/ui/svgs/oss-chips";
 
 const GitHub = () => (
-    <div className="relative bg-black">
-        <SectionSeparator bgColor="bg-black" fillColor="fill-black" position="top" />
+    <div className="relative bg-dark-coal">
+        <SectionSeparator bgColor="bg-dark-coal" fillColor="fill-dark-coal" position="top" />
         <div className="relative z-10 mx-auto flex flex-col items-center justify-center overflow-hidden py-20 md:px-8">
             <div className="relative flex items-center justify-center">
                 <motion.div
@@ -24,7 +24,7 @@ const GitHub = () => (
             </div>
         </div>
         <BackgroundBeams />
-        <SectionSeparator bgColor="bg-black" fillColor="fill-black" position="bottom" />
+        <SectionSeparator bgColor="bg-dark-coal" fillColor="fill-dark-coal" position="bottom" />
     </div>
 );
 

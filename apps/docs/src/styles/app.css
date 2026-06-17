@@ -60,7 +60,7 @@
     --color-crimson-energy: var(--crimson-energy);
     --color-royal-amethyst: var(--royal-amethyst);
 
-    --color-dark-coal: hsl(0 0% 5%);
+    --color-dark-coal: hsl(240 18% 4%); /* eclipse */
 
     @keyframes button-shine {
         from {
@@ -132,18 +132,18 @@
     :root {
         interpolate-size: allow-keywords;
 
-        /* Primary */
-        --coal: hsl(0 0% 7%);
-        --stone: hsl(0 0% 89%);
-        --ivory: hsl(0 0% 96%);
+        /* Night & moonlight — see design.md §2 */
+        --coal: hsl(240 14% 6%); /* midnight */
+        --stone: hsl(228 12% 86%);
+        --ivory: hsl(228 32% 97%); /* moonlight */
 
-        /* Secondary */
-        --sky-sapphire: hsl(210 100% 45%);
-        --crimson-energy: hsl(1 77% 55%);
-        --royal-amethyst: hsl(282 44% 47%);
+        /* Aurora ramp (legacy names → cyan / violet / rose) */
+        --sky-sapphire: hsl(186 84% 56%); /* aurora cyan */
+        --crimson-energy: hsl(330 80% 64%); /* aurora rose */
+        --royal-amethyst: hsl(256 72% 68%); /* aurora violet */
 
-        --background: hsl(0 0% 7%); /* coal */
-        --foreground: hsl(0 0% 100%);
+        --background: hsl(240 14% 6%); /* midnight */
+        --foreground: hsl(228 30% 96%); /* moonlight */
 
         --card: hsl(0 0% 100%);
         --card-foreground: hsl(224 71.4% 4.1%);
@@ -166,15 +166,15 @@
     }
 
     .dark {
-        --background: hsl(0 0% 7%);
-        --foreground: hsl(0 0% 100%);
+        --background: hsl(240 14% 6%); /* midnight */
+        --foreground: hsl(228 30% 96%); /* moonlight */
 
-        --card: hsl(224 71.4% 4.1%);
-        --card-foreground: hsl(210 20% 98%);
-        --popover: hsl(0 0% 10%);
-        --popover-foreground: hsl(210 20% 98%);
-        --primary: hsl(210 20% 98%);
-        --primary-foreground: hsl(220.9 39.3% 11%);
+        --card: hsl(240 16% 5%);
+        --card-foreground: hsl(228 30% 96%);
+        --popover: hsl(240 14% 9%);
+        --popover-foreground: hsl(228 30% 96%);
+        --primary: hsl(228 32% 97%); /* moonlight */
+        --primary-foreground: hsl(240 20% 8%);
         --secondary: hsl(215 27.9% 16.9%);
         --secondary-foreground: hsl(210 20% 98%);
         --muted: hsl(215 27.9% 16.9%);
