@@ -1,10 +1,75 @@
 ---
 title: "@lunora/kv"
-description: "Typed Workers KV namespaces."
+description: Typed Workers KV for Lunora — scoped key helpers and ctx.kv with JSON get/put/delete/list and optional metadata typing.
 ---
 
-`@lunora/kv` — Typed Workers KV namespaces.
+`@lunora/kv` provides a typed wrapper around Cloudflare Workers KV. KV namespace bindings are user-defined, so the package is opt-in: add a `kv_namespaces` entry to your `wrangler.jsonc` and pass `env.<BINDING>` to `createKv`. Codegen wires `ctx.kv` onto **`ActionCtx` only** — KV is a network call, not available on query/mutation ctx.
 
-> Reference documentation for this package is in progress. In the meantime, see
-> the [getting started guide](/docs/getting-started) and the
-> [concepts](/docs/concepts/schema) section.
+```sh
+pnpm add @lunora/kv
+```
+
+Add the binding to your `wrangler.jsonc`:
+
+```jsonc
+{
+    "kv_namespaces": [{ "binding": "KV", "id": "<your-kv-namespace-id>" }],
+}
+```
+
+## Usage
+
+```ts
+import { createKv } from "@lunora/kv";
+
+const kv = createKv({ namespace: env.KV });
+
+// JSON round-trip (default)
+await kv.put("flags:beta", { enabled: true }, { expirationTtl: 3600, metadata: { owner: "growth" } });
+const flag = await kv.get<{ enabled: boolean }>("flags:beta"); // → { enabled: true } | null
+
+// Raw / typed reads
+const raw = await kv.getRaw("blob", { type: "arrayBuffer" });
+
+// Metadata + listing
+const { value, metadata } = await kv.getWithMetadata<{ enabled: boolean }, { owner: string }>("flags:beta");
+const { keys, cursor, listComplete } = await kv.list({ prefix: "flags:" });
+```
+
+### Multi-tenant key scoping
+
+Pass a `keyPrefix` to namespace every operation to a tenant, or compose keys explicitly with `scopeKey`:
+
+```ts
+import { createKv, scopeKey } from "@lunora/kv";
+
+const tenantKv = createKv({ namespace: env.KV, keyPrefix: `tenant/${tenantId}` });
+await tenantKv.put("session", payload); // writes key `tenant/<id>/session`
+
+// Without an instance prefix:
+await kv.put(scopeKey(`tenant/${tenantId}`, "session"), payload);
+```
+
+## API reference
+
+### `createKv(options)`
+
+| Option      | Type              | Notes                                                    |
+| ----------- | ----------------- | -------------------------------------------------------- |
+| `namespace` | `KVNamespaceLike` | `env.<BINDING>` — the KV namespace binding. Required.    |
+| `keyPrefix` | `string`          | Optional per-instance prefix applied to every operation. |
+
+### `Kv`
+
+| Method            | Signature                                                                        | Notes                                                           |
+| ----------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------- |
+| `get<T>`          | `(key, { cacheTtl? }) → Promise<T \| null>`                                      | JSON-parsed read. Returns `null` when absent.                   |
+| `getRaw<T>`       | `(key, { type?, cacheTtl? }) → Promise<T \| null>`                               | Raw read: `text` \| `json` \| `arrayBuffer` \| `stream`.        |
+| `getWithMetadata` | `(key, { cacheTtl? }) → Promise<{ value: T \| null, metadata: M \| null }>`      | Value + metadata; both `null` when key is absent.               |
+| `put<T>`          | `(key, value, { expirationTtl?, expiration?, metadata?, raw? }) → Promise<void>` | JSON-serialized by default; pass `raw: true` to bypass.         |
+| `delete`          | `(key) → Promise<void>`                                                          | No-op when the key is absent.                                   |
+| `list<M>`         | `({ prefix?, limit?, cursor? }) → Promise<{ keys, cursor?, listComplete }>`      | Up to 1 000 keys per page; continue with `cursor` when present. |
+
+### `scopeKey(prefix, key)`
+
+Validates both halves and composes `prefix/key`, enforcing KV's 512-byte limit. Useful for per-tenant key isolation without creating a separate `createKv` instance.
