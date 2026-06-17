@@ -516,7 +516,7 @@ const MainHero: FC = () => {
             <Section
                 classes={{
                     childrenWrapper: "!grid-cols-1",
-                    root: "!pt-24 !pb-16",
+                    root: "!pt-32 !pb-16 sm:!pt-44",
                 }}
                 gridLength={0}
                 mode="dark"

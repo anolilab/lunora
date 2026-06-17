@@ -17,7 +17,7 @@ const frameworks: { icon: ComponentType<{ className?: string }>; label: string }
 ];
 
 const FrameworkStrip: FC = () => (
-    <div className="border-y border-white/[0.06] bg-white/[0.01]" data-theme="dark">
+    <div className="bg-background border-y border-white/[0.06]" data-theme="dark">
         <Reveal className="mx-auto flex max-w-6xl flex-col items-center gap-5 px-5 py-7 sm:flex-row sm:justify-between">
             <span className="font-mono text-[11px] tracking-[0.18em] text-white/35 uppercase">Works with your stack</span>
             <div className="flex flex-wrap items-center justify-center gap-x-7 gap-y-3">

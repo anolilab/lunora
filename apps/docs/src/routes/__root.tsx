@@ -49,7 +49,7 @@ const RootDocument: FC<PropsWithChildren> = ({ children }) => (
             />
         </head>
         <body>
-            <div className="bg-ivory relative isolate font-sans antialiased">
+            <div className="bg-dark-coal relative isolate font-sans antialiased">
                 <svg aria-hidden="true" height="0" width="0">
                     <defs>
                         <pattern height="4" id="pattern-ivory" patternUnits="userSpaceOnUse" width="1">

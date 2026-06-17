@@ -119,7 +119,7 @@ const Footer: FC = () => (
 
         <div className="relative container mx-auto text-white">
             <div className="flex flex-col items-center justify-between gap-4 border-b border-white/[0.06] py-12 text-xs text-white/25 sm:flex-row">
-                <span>&copy; 2024&ndash;present Lunora &amp; Lunora Contributors</span>
+                <span>&copy; 2026&ndash;present Lunora &amp; Lunora Contributors</span>
                 <span>Code: MIT License. Visual Design &amp; Branding: All Rights Reserved (CC BY-NC-ND 4.0).</span>
             </div>
             <div className="absolute inset-0 z-10" style={{ maskImage: "radial-gradient(85% 100% at 50% 100%, white, transparent 72.5%)" }}>

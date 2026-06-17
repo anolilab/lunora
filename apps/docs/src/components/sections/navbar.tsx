@@ -50,7 +50,7 @@ const formatStars = (count: number): string => {
         return `${(count / 1000).toFixed(1).replace(/\.0$/, "")}k`;
     }
 
-    return count > 0 ? String(count) : "Star";
+    return count > 0 ? String(count) : "GitHub";
 };
 
 interface NavLeaf {
