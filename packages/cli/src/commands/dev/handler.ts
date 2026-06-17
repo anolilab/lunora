@@ -6,8 +6,11 @@ import {
     claimAgentRulesHint,
     createConfirm,
     detectAgentRules,
+    DEV_VARS_EXAMPLE_FILE,
+    DEV_VARS_FILE,
     ensureDevVariables,
     formatLunoraEvent,
+    isInteractive,
     materializeRemoteWranglerConfig,
     readProjectRemotePreference,
     resolveRemoteEnabled,
@@ -318,16 +321,29 @@ const teardown = async (handles: Teardown): Promise<void> => {
 /**
  * Offer to scaffold `.dev.vars` before the worker starts — otherwise it throws
  * on the first required secret (e.g. `AUTH_SECRET is required`). Non-interactive
- * runs (CI) decline silently rather than block on a prompt.
+ * runs (CI) decline silently rather than block on a prompt, but we log an
+ * actionable hint so the user knows how to set up their secrets.
  */
 const offerDevVariablesScaffold = async (options: DevCommandOptions, cwd: string): Promise<void> => {
-    await (options.ensureEnv ?? ensureDevVariables)({
+    const result = await (options.ensureEnv ?? ensureDevVariables)({
         confirm: createConfirm(),
         cwd,
         info: (message) => {
             options.logger.info(message);
         },
     });
+
+    // In CI / non-TTY contexts the scaffolder declines silently. Emit an
+    // actionable hint so engineers know how to get their secrets in place —
+    // otherwise the next failure is a cryptic runtime error from inside the
+    // worker (e.g. `AUTH_SECRET is required`), not a setup prompt.
+    if (result.status === "declined" && !isInteractive()) {
+        options.logger.info(
+            `hint: ${DEV_VARS_FILE} was not scaffolded (non-interactive run). ` +
+                `Copy ${DEV_VARS_EXAMPLE_FILE} → ${DEV_VARS_FILE} and fill in secrets, ` +
+                `or run \`lunora dev\` in an interactive terminal to scaffold automatically.`,
+        );
+    }
 };
 
 /**

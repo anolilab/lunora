@@ -61,9 +61,19 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
         });
     } catch (error: unknown) {
         options.logger.warn(
-            `codegen watch unavailable (${error instanceof Error ? error.message : String(error)}) — run \`lunora codegen\` manually after edits`,
+            `codegen watch unavailable (${error instanceof Error ? error.message : String(error)}) — ` +
+                `schema edits will NOT auto-regenerate. Run \`lunora codegen\` manually after each edit.`,
         );
+
+        return {
+            close: () => {},
+            watchAvailable: false,
+        };
     }
+
+    // At this point the catch block has returned early, so `watcher` was
+    // assigned by `fs.watch` and is guaranteed non-null.
+    const liveWatcher = watcher;
 
     return {
         close: () => {
@@ -71,8 +81,9 @@ export const startCodegenWatch = (options: CodegenWatcherOptions): CodegenWatche
                 clearTimeout(timer);
             }
 
-            watcher?.close();
+            liveWatcher.close();
         },
+        watchAvailable: true,
     };
 };
 
@@ -91,4 +102,12 @@ export interface CodegenWatcherOptions {
 export interface CodegenWatcherHandle {
     /** Stop watching and cancel any pending regeneration. */
     close: () => void;
+
+    /**
+     * `true` when the platform supports recursive watch and the loop is active.
+     * `false` when `fs.watch({ recursive })` threw — startup-only codegen was run
+     * but schema edits will NOT auto-regenerate. Callers can surface this in the
+     * dev banner so the degraded state is visible beyond the single startup warning.
+     */
+    watchAvailable: boolean;
 }

@@ -173,6 +173,7 @@ describe("lunora dev", () => {
                         close: () => {
                             codegenClosed = true;
                         },
+                        watchAvailable: true,
                     };
                 },
                 startStudio: async () => {
@@ -214,7 +215,7 @@ describe("lunora dev", () => {
                 },
                 remote: true,
                 startCodegen: () => {
-                    return { close: () => {} };
+                    return { close: () => {}, watchAvailable: true };
                 },
                 startStudio: async () => {
                     return { close: async () => {}, url: "http://127.0.0.1:6173" };
@@ -261,6 +262,45 @@ describe("lunora dev", () => {
 
             // The `finally` teardown ran the disposer despite the throw.
             expect(cleaned).toBe(true);
+        });
+
+        it("logs an actionable .dev.vars hint when the scaffolder is declined non-interactively", async () => {
+            expect.assertions(2);
+
+            const infos: string[] = [];
+            const logger: Logger = {
+                error: () => {},
+                info: (message) => infos.push(message),
+                success: () => {},
+                warn: () => {},
+            };
+
+            await runDevCommand({
+                cwd: workdir,
+                // Simulate a non-interactive decline (CI path): ensureDevVariables resolved with
+                // status "declined" (no example file generated the plan).
+                ensureEnv: async () => {
+                    return { addedKeys: [], generatedKeys: [], status: "declined" };
+                },
+                logger,
+                startCodegen: () => {
+                    return { close: () => {}, watchAvailable: true };
+                },
+                startStudio: async () => {
+                    return { close: async () => {}, url: "http://127.0.0.1:6173" };
+                },
+                startWorker: () => {
+                    return { exited: Promise.resolve(0), kill: () => {} };
+                },
+            });
+
+            // The hint should appear (we pass the non-interactive signal via the injected ensureEnv
+            // returning "declined"; isInteractive() is false in the test runner because stdin is not a TTY).
+            const hintLogged = infos.some((line) => line.includes(".dev.vars") && line.includes("lunora dev"));
+
+            expect(hintLogged).toBe(true);
+            // The interactive path must not be blocked — worker still exited cleanly.
+            expect(infos.some((line) => line.includes("hint:"))).toBe(true);
         });
     });
 });

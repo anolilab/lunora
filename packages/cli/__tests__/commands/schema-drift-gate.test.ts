@@ -112,6 +112,26 @@ describe("schema-drift gate", () => {
             expect(errors.some((line) => line.includes("deploy blocked"))).toBe(true);
         });
 
+        it("block message names both remediation paths and links docs", async () => {
+            expect.assertions(4);
+
+            // Bless a baseline, then introduce a breaking change.
+            await runDeployCommand({ cwd: workdir, logger: silentLogger().logger, spawner: createRecordingSpawner().spawner });
+            introduceBreakingDrift();
+
+            const { errors, logger } = silentLogger();
+            await runDeployCommand({ cwd: workdir, logger, spawner: createRecordingSpawner().spawner });
+
+            // The error message must mention both remediation paths so the
+            // developer knows what to do without consulting the docs.
+            const blocked = errors.find((line) => line.includes("deploy blocked")) ?? "";
+
+            expect(blocked).toContain("--allow-schema-drift");
+            expect(blocked).toContain("defineMigration");
+            expect(blocked).toContain("lunora migrate");
+            expect(blocked).toContain("lunora.dev");
+        });
+
         it("passes the same breaking change once a new migration id is added", async () => {
             expect.assertions(2);
 

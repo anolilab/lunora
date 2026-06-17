@@ -233,12 +233,19 @@ const codegenPlugin = (options: ResolvedLunoraPluginOptions): Plugin => {
                 onError(error, message) {
                     lastRunFailed = true;
 
+                    // `CodegenDiagnosticError` carries the exact source location;
+                    // for plain errors the location is unavailable in the overlay
+                    // — steer the user to the terminal where the full stack is logged.
                     const loc = error instanceof CodegenDiagnosticError ? { column: error.column, file: error.file, line: error.line } : undefined;
+                    const overlayMessage =
+                        loc === undefined
+                            ? `[lunora] codegen failed: ${message}\n(see terminal for full stack trace and file location)`
+                            : `[lunora] codegen failed: ${message}`;
 
                     devServer?.hot.send({
                         err: {
                             loc,
-                            message: `[lunora] codegen failed: ${message}`,
+                            message: overlayMessage,
                             stack: error instanceof Error ? (error.stack ?? "") : "",
                         },
                         type: "error",

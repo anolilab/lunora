@@ -261,6 +261,36 @@ describe("codegen-plugin", () => {
             expect(payload.err.message).toContain("codegen failed");
         });
 
+        it("non-CodegenDiagnosticError overlay message includes 'see terminal' note (no loc)", async () => {
+            expect.assertions(3);
+
+            // A plain broken schema (no defineSchema call) produces a generic Error,
+            // not a CodegenDiagnosticError — so loc is undefined and the overlay
+            // should include a "see terminal" note to guide the developer.
+            mkdirSync(join(workdir, "lunora"), { recursive: true });
+            writeFileSync(join(workdir, "lunora", "schema.ts"), `export const broken = true;`, "utf8");
+
+            const plugin = codegenPlugin(makeOptions(workdir));
+            const { send, server } = makeStubServer();
+
+            wireServer(plugin, server);
+
+            const onChangeCalls = (server.watcher.on as ReturnType<typeof vi.fn>).mock.calls;
+            const changeListener = onChangeCalls.find((args) => args[0] === "change")?.[1] as ((file: string) => void) | undefined;
+
+            changeListener!(join(workdir, "lunora", "schema.ts"));
+
+            await vi.runAllTimersAsync();
+
+            const payload = send.mock.calls[0]?.[0] as { err: { loc?: unknown; message: string }; type: string };
+
+            // The overlay message should steer the developer to the terminal.
+            expect(payload.err.message).toContain("see terminal");
+            // No location in the overlay (this is a generic error, not a diagnostic).
+            expect(payload.err.loc).toBeUndefined();
+            expect(payload.type).toBe("error");
+        });
+
         it("codegen diagnostic error → payload includes err.loc.file and err.loc.line", async () => {
             expect.assertions(3);
 

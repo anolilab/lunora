@@ -443,9 +443,20 @@ const evaluateSchemaDrift = (options: { allowDrift?: boolean; baseline: SchemaSn
         };
     }
 
+    // "Schema drift" means the current schema differs from the last deployed
+    // shape — so existing data in production may not match the new type
+    // expectations. Breaking drift (removed table/field, changed type) needs a
+    // migration that tells Lunora how to transform existing documents; safe drift
+    // (added optional field, new index) can proceed without one.
     const reason =
-        `deploy blocked: ${String(breaking.length)} breaking schema change(s) need a data migration, but none was added since the last blessed schema baseline:\n${breakingSummary}\n\n` +
-        `Either add a \`defineMigration({ id, table, up })\` in lunora/ to handle the change, then re-run \`lunora codegen\` to re-bless the baseline (lunora/.lunora-schema.json) — or, if the change is intentionally safe, pass \`--allow-schema-drift\` to override.`;
+        `deploy blocked: ${String(breaking.length)} breaking schema change(s) detected since the last blessed schema baseline — ` +
+        `these changes are incompatible with existing data without a migration:\n${breakingSummary}\n\n` +
+        `To fix:\n` +
+        `  • For breaking changes: add a \`defineMigration({ id, table, up })\` in lunora/ for each affected table, ` +
+        `then run \`lunora migrate\` (or \`lunora codegen\`) to apply and re-bless the baseline.\n` +
+        `  • For backward-compatible changes (e.g. adding an optional field): pass \`--allow-schema-drift\` to skip the block.\n` +
+        `  • To accept the new shape without a migration (you know data is compatible): pass \`--update-schema-baseline\`.\n` +
+        `Docs: https://lunora.dev/docs/migrations`;
 
     if (allowDrift) {
         return { blocked: false, changes: drift.changes, newMigrationIds, reason: `${reason}\n\n(overridden by --allow-schema-drift)` };
